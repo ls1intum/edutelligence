@@ -1,4 +1,4 @@
-from athena.submission import Submission, on_submission
+from athena.submission import Exercise, Submission, on_submission, on_exercise_deadline
 from athena.storage import store_submission
 from .clustering import determine_cluster
 
@@ -7,3 +7,9 @@ def process_submission(submission: Submission):
     # determine cluster
     submission.meta.cluster = determine_cluster(submission)
     store_submission(submission)
+
+
+@on_exercise_deadline
+def process_exercise_deadline(exercise: Exercise):
+    ...
+    
