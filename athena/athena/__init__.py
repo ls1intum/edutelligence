@@ -1,4 +1,5 @@
 from fastapi import FastAPI
+import uvicorn
 
 _app = FastAPI()
 
@@ -6,6 +7,5 @@ _app = FastAPI()
 def read_root():
     return {"athene": "module"}
 
-if __name__ == "__main__":
-    import uvicorn
+def start():
     uvicorn.run(_app, host="127.0.0.1", port=8000)
