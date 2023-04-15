@@ -1,18 +1,15 @@
+from typing import List, Callable
+
 from athena import _app
-from .models import Submission
+from .models import Exercise, Submission
 from .storage import store_submission
 
-def on_submission(new_only=True, update_only=False):
-    if new_only and update_only:
-        raise ValueError("new_only and update_only cannot both be True")
-    def decorator(func):
-        @_app.post("/submission")
-        def wrapper(submission: Submission):
-            store_submission(submission)
-            if new_only and submission.id is not None:
-                return
-            if update_only and submission.id is None:
-                return
-            func(submission)
+def received_submissions():
+    def decorator(func: Callable[[Exercise, List[Submission]], None]):
+        @_app.post("/submissions")
+        def wrapper(exercise: Exercise, submissions: List[Submission]):
+            for submission in submissions:
+                store_submission(submission)
+            func(exercise, submissions)
         return wrapper
     return decorator
