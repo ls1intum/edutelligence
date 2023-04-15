@@ -1,7 +1,6 @@
 from typing import List
 
-from athena.models import Exercise, Submission
-from athena.submission import on_exercise_deadline
+from athena import Exercise, Submission, submissions_consumer
 from athena.storage import store_submission
 
 
@@ -9,7 +8,7 @@ def determine_cluster(submission: Submission) -> str:
     return "cluster1"
 
 
-@on_exercise_deadline
+@submissions_consumer
 def receive_submissions(exercise: Exercise, submissions: List[Submission]):
     print(f"Received {len(submissions)} submissions for exercise {exercise.id}")
     for submission in submissions:
