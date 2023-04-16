@@ -1,5 +1,8 @@
 # syntax=docker/dockerfile:1
 
+# This is the general Dockerfile applied to the modules.
+# Input: MODULE_NAME (the folder name, e.g. "module_example")
+
 FROM python:3.11
 
 ARG MODULE_NAME

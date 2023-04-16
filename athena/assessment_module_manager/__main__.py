@@ -1,0 +1,1 @@
+print("Starting assessment module manager...")

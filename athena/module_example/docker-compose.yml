@@ -1,0 +1,9 @@
+version: '3'
+
+services:
+  athena_module_example:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      args:
+        - MODULE_NAME=module_example

@@ -1,11 +1,12 @@
 version: '3'
 
+# This is the docker-compose file for the Athena Assessment Module Manager
+# The Docker Compose configuration files for the individual modules can be found in their respective folders.
+
 services:
-  athena_module_example:
+  athena_assessment_module_manager:
     build:
       context: .
-      dockerfile: ./Dockerfile
-      args:
-        - MODULE_NAME=module_example
+      dockerfile: ./assessment_module_manager/Dockerfile
     ports:
       - "8000:8000"

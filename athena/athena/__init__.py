@@ -11,7 +11,7 @@ from .app import app
 
 @app.get("/")
 def read_root():
-    return {"athene": "module"}
+    return {"athena": "module"}
 
 def start():
     logger.info("Starting athena module")
