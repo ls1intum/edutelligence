@@ -5,8 +5,6 @@
 
 FROM python:3.11
 
-ARG MODULE_NAME
-ENV MODULE_NAME=${MODULE_NAME}
 WORKDIR /code
 
 # Dependencies

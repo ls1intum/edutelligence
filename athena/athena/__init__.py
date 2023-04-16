@@ -22,7 +22,7 @@ def start():
         uvicorn.run(app, host="0.0.0.0", port=8000, proxy_headers=True)
     else:
         logger.warning("Running in DEVELOPMENT mode")
-        uvicorn.run("athena.app:app", host="0.0.0.0", port=8000, reload=True)
+        uvicorn.run("__main__.athena:app", host="0.0.0.0", port=8000, reload=True)
 
 
 __all__ = [

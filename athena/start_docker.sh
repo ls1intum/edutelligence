@@ -21,5 +21,14 @@ for module in $modules; do
   fi
 done
 
+# Build each of the selected modules
+docker-compose -f docker-compose.yml build
+for module in $modules; do
+  if [ -d "$module" ] && [ -f "$module/docker-compose.yml" ]; then
+    echo "Building module '$module'"
+    docker-compose -f $module/docker-compose.yml build
+  fi
+done
+
 # Start all Docker Compose files at once
 docker-compose $compose_files up
