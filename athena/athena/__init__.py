@@ -2,16 +2,18 @@ import os
 
 import uvicorn
 
+from .app import app
+from .logger import logger
 from .models import Exercise, Submission, Feedback
 from .feedback_consumer import feedback_consumer
 from .submissions_consumer import submissions_consumer
 from .feedback_provider import feedback_provider
-from .logger import logger
-from .app import app
+
 
 @app.get("/")
 def read_root():
     return {"athena": "module"}
+
 
 def start():
     logger.info("Starting athena module")
@@ -21,6 +23,7 @@ def start():
     else:
         logger.warning("Running in DEVELOPMENT mode")
         uvicorn.run("athena.app:app", host="0.0.0.0", port=8000, reload=True)
+
 
 __all__ = [
     "Exercise",
