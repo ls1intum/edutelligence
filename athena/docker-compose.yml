@@ -8,5 +8,6 @@ services:
     build:
       context: .
       dockerfile: ./assessment_module_manager/Dockerfile
+    tty: true
     ports:
       - "8000:8000"
