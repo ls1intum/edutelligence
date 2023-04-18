@@ -1,4 +1,6 @@
 import os
+from pathlib import Path
+import inspect
 
 import uvicorn
 
@@ -16,13 +18,22 @@ def read_root():
 
 
 def start():
+    """Start athena. Ensure to have `app` in your module main scope so that it can be imported."""
     logger.info("Starting athena module")
+
+    importing_file = inspect.stack()[1].filename # one stack frame up to find it
+    module_name = Path(importing_file).parent.name # get the parent directory name = module name
+
     if "PRODUCTION" in os.environ:
         logger.info("Running in PRODUCTION mode")
-        uvicorn.run(app, host="0.0.0.0", port=8000, proxy_headers=True)
+        uvicorn.run(f"{module_name}.__main__:app", host="0.0.0.0", port=8000, proxy_headers=True)
     else:
         logger.warning("Running in DEVELOPMENT mode")
-        uvicorn.run("__main__.athena:app", host="0.0.0.0", port=8000, reload=True)
+        uvicorn.run(f"{module_name}.__main__:app", host="0.0.0.0", port=8000, reload=True)
+
+
+# Expose the start function this way to ensure that modules have to import `app`, which uvicorn needs to discover in the module:
+app.start = start
 
 
 __all__ = [
@@ -32,5 +43,5 @@ __all__ = [
     "feedback_consumer",
     "submissions_consumer",
     "feedback_provider",
-    "start"
+    "app"
 ]
