@@ -17,7 +17,7 @@ def read_root():
     return {"athena": "module"}
 
 
-def start():
+def start(port: int = 5001):
     """Start athena. Ensure to have `app` in your module main scope so that it can be imported."""
     logger.info("Starting athena module")
 
@@ -26,10 +26,10 @@ def start():
 
     if "PRODUCTION" in os.environ:
         logger.info("Running in PRODUCTION mode")
-        uvicorn.run(f"{module_name}.__main__:app", host="0.0.0.0", port=8000, proxy_headers=True)
+        uvicorn.run(f"{module_name}.__main__:app", host="0.0.0.0", port=port, proxy_headers=True)
     else:
         logger.warning("Running in DEVELOPMENT mode")
-        uvicorn.run(f"{module_name}.__main__:app", host="0.0.0.0", port=8000, reload=True)
+        uvicorn.run(f"{module_name}.__main__:app", host="0.0.0.0", port=port, reload=True)
 
 
 # Expose the start function this way to ensure that modules have to import `app`, which uvicorn needs to discover in the module:

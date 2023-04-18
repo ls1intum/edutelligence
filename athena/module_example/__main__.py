@@ -39,4 +39,4 @@ def suggest_feedback(exercise: Exercise, submission: Submission) -> Feedback:
 
 
 if __name__ == "__main__":
-    app.start()
+    app.start(port=5001)
