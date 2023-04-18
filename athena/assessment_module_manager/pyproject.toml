@@ -1,0 +1,20 @@
+[tool.poetry]
+name = "assessment-module-manager"
+version = "0.1.0"
+description = "The interface between the Athena modules and external systems. It manages, which modules will be used for incoming submissions and feedback."
+authors = ["Paul Schwind <git@pschwind.de>"]
+license = "MIT"
+
+[tool.poetry.dependencies]
+python = "^3.10"
+fastapi = "^0.95.1"
+uvicorn = "^0.21.1"
+requests = "^2.28.2"
+athena = {path = "../athena", develop = true}
+
+[tool.poetry.scripts]
+assessment_module_manager = "assessment_module_manager.__main__:main"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
