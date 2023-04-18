@@ -1,5 +1,5 @@
 from typing import List, Union
-from .models import Submission, Feedback
+from ..models import Submission, Feedback
 
 def get_stored_submissions(exercise_id: int) -> List[Submission]:
     """Returns a list of submissions for the given exercise."""
