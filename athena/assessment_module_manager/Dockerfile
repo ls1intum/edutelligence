@@ -11,7 +11,7 @@ COPY ./requirements.txt /code/requirements.txt
 RUN pip install --no-cache-dir --upgrade -r /code/requirements.txt
 
 # modules configuration file
-COPY ./modules.docker.ini /code/modules.ini
+COPY ./assessment_module_manager/modules.docker.ini /code/modules.ini
 
 # athena module
 COPY ./athena /code/athena

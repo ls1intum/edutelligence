@@ -1,11 +1,10 @@
-from typing import List
-
 from athena import *
 from athena.storage import *
 
 
 def is_in_same_cluster(submission1: Submission, submission2: Submission) -> bool:
     return submission1.meta.get("cluster") == submission2.meta.get("cluster")
+
 
 @feedback_consumer
 def process_incoming_feedback(exercise: Exercise, submission: Submission, feedback: Feedback):
