@@ -1,6 +1,7 @@
 import os
 from pathlib import Path
 import inspect
+import runpy
 
 import uvicorn
 
@@ -34,6 +35,13 @@ def start(port: int = 5001):
 
 # Expose the start function this way to ensure that modules have to import `app`, which uvicorn needs to discover in the module:
 app.start = start
+
+
+def run_module():
+    """Helper function for nice poetry scripts to start athena modules."""
+    module_parent_path = Path(os.getcwd())
+    module_name = module_parent_path.name
+    runpy.run_module(module_name, run_name="__main__")
 
 
 __all__ = [
