@@ -17,6 +17,5 @@ class Exercise(BaseModel):
     max_points: float = Field(example=1.0)
     problem_statement: str = Field(example="Write a program that prints 'Hello World!'")
     example_solution: str = Field(example="print('Hello World!')")
-    package_name: str = Field(example="exercise_1")
     student_id: int = Field(example=1)
     meta: dict = Field(example={"language": "python"})
