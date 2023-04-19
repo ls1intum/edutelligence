@@ -2,7 +2,7 @@ import requests
 
 from .app import app
 from .logger import logger
-from .module_list import Module, get_module_list
+from .module import Module, get_module_list
 
 
 async def is_healthy(module: Module) -> bool:
