@@ -1,11 +1,10 @@
-from dataclasses import dataclass
+from pydantic import BaseModel, Field
 
-@dataclass
-class Submission:
-    id: int
-    score_in_points: float
-    participation_id: int
-    file_path: str
-    text: str
-    language: str
-    meta: dict
+class Submission(BaseModel):
+    id: int = Field(example=1)
+    score_in_points: float = Field(example=1.0)
+    participation_id: int = Field(example=1)
+    file_path: str = Field(example="exercise_1/solution.py")
+    text: str = Field(example="print('Hello World!')")
+    language: str = Field(example="python")
+    meta: dict = Field(example={})

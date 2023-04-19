@@ -1,17 +1,18 @@
-import requests
+import httpx
 from pydantic import BaseModel, Field
 
+from assessment_module_manager.app import app
+from assessment_module_manager.logger import logger
+from assessment_module_manager.module import Module
 from .modules_endpoint import get_modules
-from ..app import app
-from ..logger import logger
-from ..module import Module
 
 
 async def is_healthy(module: Module) -> bool:
     try:
-        response = requests.get(module.url)
+        async with httpx.AsyncClient(base_url=module.url) as client:
+            response = await client.get('/')
         return response.status_code == 200 and response.json()["status"] == "ok"
-    except requests.exceptions.ConnectionError:
+    except httpx.ConnectError:
         logger.error("Server is not reachable: %s", module)
         return False
     except KeyError:

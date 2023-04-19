@@ -1,11 +1,10 @@
-from dataclasses import dataclass
+from pydantic import BaseModel, Field
 
-@dataclass
-class Feedback:
-    id: int
-    exercise_id: int
-    submission_id: int
-    detail_text: str
-    text: str
-    type: str
-    credits: float
+class Feedback(BaseModel):
+    id: int = Field(example=1)
+    exercise_id: int = Field(example=1)
+    submission_id: int = Field(example=1)
+    detail_text: str = Field(example="Your solution is correct.")
+    text: str = Field(example="Correct")
+    type: str = Field(example="success")
+    credits: float = Field(example=1.0)

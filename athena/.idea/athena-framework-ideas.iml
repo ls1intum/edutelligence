@@ -10,6 +10,9 @@
       <sourceFolder url="file://$MODULE_DIR$/module_example/module_example" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/module_example/test" isTestSource="true" />
       <excludeFolder url="file://$MODULE_DIR$/.venv" />
+      <excludeFolder url="file://$MODULE_DIR$/assessment_module_manager/.venv" />
+      <excludeFolder url="file://$MODULE_DIR$/athena/.venv" />
+      <excludeFolder url="file://$MODULE_DIR$/module_example/.venv" />
     </content>
     <orderEntry type="jdk" jdkName="assessment_module_manager" jdkType="Python SDK" />
     <orderEntry type="sourceFolder" forTests="false" />

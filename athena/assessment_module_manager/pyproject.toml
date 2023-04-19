@@ -9,8 +9,8 @@ license = "MIT"
 python = "^3.10"
 fastapi = "^0.95.1"
 uvicorn = "^0.21.1"
-requests = "^2.28.2"
 athena = {path = "../athena", develop = true}
+httpx = "^0.24.0"
 
 [tool.poetry.scripts]
 assessment_module_manager = "assessment_module_manager.__main__:main"

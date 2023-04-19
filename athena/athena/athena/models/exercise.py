@@ -1,5 +1,6 @@
-from dataclasses import dataclass
 from enum import Enum
+
+from pydantic import BaseModel, Field
 
 
 class ExerciseType(str, Enum):
@@ -8,15 +9,14 @@ class ExerciseType(str, Enum):
     programming = "programming"
 
 
-@dataclass
-class Exercise:
+class Exercise(BaseModel):
     """An exercise that can be solved by students, enhanced with metadata depending on its type."""
-    id: int
-    title: str
-    type: ExerciseType
-    max_points: float
-    problem_statement: str
-    example_solution: str
-    package_name: str
-    student_id: int
-    meta: dict
+    id: int = Field(example=1)
+    title: str = Field(example="Exercise 1")
+    type: ExerciseType = Field(example=ExerciseType.text)
+    max_points: float = Field(example=1.0)
+    problem_statement: str = Field(example="Write a program that prints 'Hello World!'")
+    example_solution: str = Field(example="print('Hello World!')")
+    package_name: str = Field(example="exercise_1")
+    student_id: int = Field(example=1)
+    meta: dict = Field(example={"language": "python"})
