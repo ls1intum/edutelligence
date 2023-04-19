@@ -1,5 +1,6 @@
-from .module import Module, get_module_list
 from athena import Exercise
+from .endpoints.module import get_module_list
+from .module import Module
 
 
 def resolve_module(exercise: Exercise) -> Module:

@@ -1,11 +1,10 @@
-from typing import Annotated
-
 import requests
 from pydantic import BaseModel, Field
 
-from .app import app
-from .logger import logger
-from .module import Module, get_module_list
+from .module import get_module_list
+from ..app import app
+from ..logger import logger
+from ..module import Module
 
 
 async def is_healthy(module: Module) -> bool:

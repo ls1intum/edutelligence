@@ -1,12 +1,12 @@
 import os
-from pathlib import Path
 import runpy
+from pathlib import Path
 
 from .app import app
-from .models import *
 from .feedback_consumer import feedback_consumer
-from .submissions_consumer import submissions_consumer
 from .feedback_provider import feedback_provider
+from .models import *
+from .submissions_consumer import submissions_consumer
 
 
 @app.get("/")
@@ -24,6 +24,7 @@ def run_module():
 
 __all__ = [
     "Exercise",
+    "ExerciseType",
     "Submission",
     "Feedback",
     "feedback_consumer",

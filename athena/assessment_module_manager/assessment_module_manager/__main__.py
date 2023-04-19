@@ -1,8 +1,7 @@
 import uvicorn
 
 from .app import app
-from .health import health
-
+from .endpoints.health import health
 
 # Add things to __all__ just to mark them as important to import
 __all__ = ["app", "health"]
