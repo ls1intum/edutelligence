@@ -10,8 +10,9 @@ from .feedback_provider import feedback_provider
 
 
 @app.get("/")
-def read_root():
-    return {"athena": "module"}
+def module_health():
+    """The root endpoint is used as the health check for the module."""
+    return {"status": "ok"}
 
 
 def run_module():

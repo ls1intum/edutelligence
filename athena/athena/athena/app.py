@@ -25,7 +25,14 @@ class FastAPIWithStart(FastAPI):
             uvicorn.run(f"{module_name}.__main__:app", host="0.0.0.0", port=port, proxy_headers=True)
         else:
             logger.warning("Running in DEVELOPMENT mode")
-            uvicorn.run(f"{module_name}.__main__:app", host="0.0.0.0", port=port, reload=True)
+            uvicorn.run(
+                f"{module_name}.__main__:app",
+                host="0.0.0.0",
+                port=port,
+                # reload on changes to the module or the athena package
+                reload=True,
+                reload_dirs=[module_name, "../athena"],
+            )
 
 
 app: FastAPIWithStart = FastAPIWithStart()

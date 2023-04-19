@@ -1,18 +1,10 @@
-import configparser
+import uvicorn
+
+from .app import app
+from .health import health
 
 
-def main():
-    modules = configparser.ConfigParser()
-    modules.read("modules.ini")
-
-    print("Starting assessment module manager...")
-    for module in modules.sections():
-        print(f"Found module {module}")
-        module_url = modules[module]["url"]
-        print(f"Module {module} is at {module_url}")
-        module_type = modules[module]["type"]
-        print(f"Module {module} is of type {module_type}")
-
-
+# Add things to __all__ just to mark them as important to import
+__all__ = ["app", "health"]
 if __name__ == "__main__":
-    main()
+    uvicorn.run("assessment_module_manager.__main__:app", host="0.0.0.0", port=5000, reload=True)
