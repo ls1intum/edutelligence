@@ -8,7 +8,7 @@ from .app import app
 
 
 class ModuleType(str, Enum):
-    """The type of module."""
+    """The type of content an Athena module accepts."""
     text = "text"
     programming = "programming"
 

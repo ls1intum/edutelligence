@@ -24,6 +24,10 @@ async def is_healthy(module: Module) -> bool:
 
 
 class HealthResponse(BaseModel):
+    """
+    Response indicating whether the Assessment Module Manager is healthy,
+    and whether all the modules are healthy (i.e. reachable).
+    """
     status: str = Field(const=True, default="ok", example="ok")
     modules: dict = Field(
         example=[
