@@ -1,4 +1,7 @@
+from typing import Annotated
+
 import requests
+from pydantic import BaseModel, Field
 
 from .app import app
 from .logger import logger
@@ -20,15 +23,32 @@ async def is_healthy(module: Module) -> bool:
         return False
 
 
+class HealthResponse(BaseModel):
+    status: str = Field(const=True, default="ok", example="ok")
+    modules: dict = Field(
+        example=[
+            {
+                "module_example": {
+                    "url": "http://localhost:5001",
+                    "healthy": True
+                }
+            }
+        ]
+    )
+
+
 @app.get("/health")
-async def health():
-    return {
-        "status": "ok",
-        "modules": {
+async def health() -> HealthResponse:
+    """
+    Health endpoint to find out whether the Assessment Module Manager is healthy,
+    and whether all the modules are healthy (i.e. reachable).
+    """
+    return HealthResponse(
+        modules={
             module.name: {
                 "url": module.url,
                 "healthy": await is_healthy(module),
             }
             for module in get_module_list()
         }
-    }
+    )
