@@ -1,23 +1,17 @@
-from enum import Enum
 from typing import List
 import configparser
 
+from athena import ExerciseType
 from pydantic import BaseModel, Field, AnyHttpUrl
 
 from .app import app
-
-
-class ModuleType(str, Enum):
-    """The type of content an Athena module accepts."""
-    text = "text"
-    programming = "programming"
 
 
 class Module(BaseModel):
     """An Athena module, with the URL to the API as well as the type of module."""
     name: str = Field(example="module_example")
     url: AnyHttpUrl = Field(example="http://localhost:5001")
-    type: ModuleType = Field(example=ModuleType.text)
+    type: ExerciseType = Field(example=ExerciseType.text)
 
 
 @app.get("/modules")

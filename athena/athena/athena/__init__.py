@@ -3,7 +3,7 @@ from pathlib import Path
 import runpy
 
 from .app import app
-from .models import Exercise, Submission, Feedback
+from .models import *
 from .feedback_consumer import feedback_consumer
 from .submissions_consumer import submissions_consumer
 from .feedback_provider import feedback_provider

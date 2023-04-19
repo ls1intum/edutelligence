@@ -32,7 +32,7 @@ def receive_submissions(exercise: Exercise, submissions: List[Submission]):
 
 
 @feedback_provider
-def suggest_feedback(exercise: Exercise, submission: Submission) -> Feedback:
+def suggest_feedback(exercise: Exercise, submission: Submission) -> List[Feedback]:
     print(f"suggest_feedback: Received submission {submission.id} of exercise {exercise.id}.")
     return
 
