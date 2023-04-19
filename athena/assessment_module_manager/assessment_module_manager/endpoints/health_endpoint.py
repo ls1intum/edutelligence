@@ -1,7 +1,7 @@
 import requests
 from pydantic import BaseModel, Field
 
-from .module import get_module_list
+from .modules_endpoint import get_modules
 from ..app import app
 from ..logger import logger
 from ..module import Module
@@ -41,7 +41,7 @@ class HealthResponse(BaseModel):
 
 
 @app.get("/health")
-async def health() -> HealthResponse:
+async def get_health() -> HealthResponse:
     """
     Health endpoint to find out whether the Assessment Module Manager is healthy,
     and whether all the modules are healthy (i.e. reachable).
@@ -52,6 +52,6 @@ async def health() -> HealthResponse:
                 "url": module.url,
                 "healthy": await is_healthy(module),
             }
-            for module in get_module_list()
+            for module in get_modules()
         }
     )
