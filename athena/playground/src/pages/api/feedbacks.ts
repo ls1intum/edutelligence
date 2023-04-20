@@ -16,7 +16,7 @@ const exampleFeedback: Feedback[] = [
         exercise_id: 1,
         submission_id: 1,
         detail_text: 'You\'re missing a semicolon at the end of the line.',
-        text: 'Your program does not print "Hello World" to the console.',
+        text: 'You\'re missing a semicolon at the end of the line.',
         credits: -2.0,
         meta: {},
     },
