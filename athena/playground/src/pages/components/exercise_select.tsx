@@ -11,7 +11,8 @@ export default function ExerciseSelect(
     return (
         <label className="flex flex-col">
             <span className="text-lg font-bold">Exercise</span>
-            <select className="border border-gray-300 rounded-md p-2" value={exercise?.id} onChange={e => onChange(data.find((ex: Exercise) => ex.id === parseInt(e.target.value)))}>
+            <select className="border border-gray-300 rounded-md p-2" value={exercise?.id ?? ""} onChange={e => onChange(data.find((ex: Exercise) => ex.id === parseInt(e.target.value)))}>
+                <option value={""} disabled>Select an exercise</option>
                 {data.map((ex: Exercise) => <option key={ex.id} value={ex.id}>{ex.id} {ex.type}: {ex.title}</option>)}
             </select>
         </label>

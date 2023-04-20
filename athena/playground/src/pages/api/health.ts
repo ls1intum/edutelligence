@@ -1,0 +1,24 @@
+import type {NextApiRequest, NextApiResponse} from 'next';
+import HealthResponse from "@/pages/model/health_response";
+
+
+export default async function handler(
+    req: NextApiRequest,
+    res: NextApiResponse<HealthResponse>
+) {
+    const url = req.query.url;
+    let response;
+    try {
+        response = await fetch(`${url}/health`);
+    } catch (error) {
+        console.error('Fetch failed:', error);
+        res.status(200).json({status: "fetch-failed", modules: {} });
+        return;
+    }
+    const data = await response.json();
+    if (!data.status || !data.modules) {
+        res.status(200).json({status: "no-assessment-module-manager-response", modules: {} });
+        return;
+    }
+    res.status(200).json(data);
+}
