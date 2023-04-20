@@ -1,22 +1,20 @@
-from fastapi import status
-
 from assessment_module_manager.app import app
-from assessment_module_manager.module import resolve_module, request_to_module
+from assessment_module_manager.module import ModuleResponse, request_to_module_by_exercise
 from athena import Exercise, Submission
 
 
-@app.post('/submissions', status_code=status.HTTP_204_NO_CONTENT, responses={
+@app.post('/submissions', responses={
     503: {
         "description": "Module is not available",
     },
 })
-async def consume_submissions(exercise: Exercise, submissions: list[Submission]):
+async def consume_submissions(exercise: Exercise, submissions: list[Submission]) -> ModuleResponse:
     """
     This endpoint is called by the LMS when the exercise deadline is over and
     the submissions need to be processed.
     """
-    await request_to_module(
-        resolve_module(exercise),
+    return await request_to_module_by_exercise(
+        exercise,
         '/submissions',
         {
             'exercise': exercise.dict(),

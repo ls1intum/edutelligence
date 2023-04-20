@@ -23,7 +23,7 @@ const exampleFeedback: Feedback[] = [
     {
         id: 3,
         exercise_id: 2,
-        submission_id: 2,
+        submission_id: 3,
         detail_text: 'You should write your full name.',
         text: 'You should write your full name.',
         credits: -0.5,

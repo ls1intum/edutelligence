@@ -5,8 +5,10 @@ import ExerciseSelect from "@/pages/components/exercise_select";
 import SubmissionSelect from "@/pages/components/submission_select";
 import FeedbackSelect from "@/pages/components/feedback_select";
 import Feedback from "@/pages/model/feedback";
+import ModuleResponse from "@/pages/model/module_response";
+import ModuleResponseView from "@/pages/components/module_response_view";
 
-async function sendFeedback(athenaUrl: string, exercise: Exercise | null, submission: Submission | null, feedback: Feedback | null) {
+async function sendFeedback(athenaUrl: string, exercise: Exercise | null, submission: Submission | null, feedback: Feedback | null): Promise<ModuleResponse | undefined> {
     if (!exercise) {
         alert("Please select an exercise");
         return;
@@ -34,6 +36,7 @@ async function sendFeedback(athenaUrl: string, exercise: Exercise | null, submis
             return;
         }
         alert("Feedback sent successfully!");
+        return await response.json();
     } catch (e) {
         console.error(e);
         alert("Failed to send feedback to Athena: Failed to fetch. Is the URL correct?");
@@ -45,6 +48,7 @@ export default function SendFeedback({ athenaUrl }: { athenaUrl: string }) {
     const [submission, setSubmission] = useState<Submission | null>(null);
     const [feedback, setFeedback] = useState<Feedback | null>(null);
     const [loading, setLoading] = useState<boolean>(false);
+    const [response, setResponse] = useState<ModuleResponse | undefined>(undefined);
 
     return (
         <div className="bg-white rounded-md p-4 mt-8">
@@ -57,11 +61,14 @@ export default function SendFeedback({ athenaUrl }: { athenaUrl: string }) {
             <ExerciseSelect exercise={exercise} onChange={setExercise} />
             <SubmissionSelect exercise_id={exercise?.id} submission={submission} onChange={setSubmission} />
             <FeedbackSelect exercise_id={exercise?.id} submission_id={submission?.id} feedback={feedback} onChange={setFeedback} />
+            <ModuleResponseView response={response} />
             <button
                 className="bg-blue-500 text-white rounded-md p-2 mt-4"
                 onClick={() => {
                     setLoading(true);
-                    sendFeedback(athenaUrl, exercise, submission, feedback).finally(() => setLoading(false));
+                    sendFeedback(athenaUrl, exercise, submission, feedback)
+                        .then(setResponse)
+                        .finally(() => setLoading(false));
                 }}
                 disabled={loading}
             >
