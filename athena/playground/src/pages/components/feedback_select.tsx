@@ -20,7 +20,8 @@ export default function FeedbackSelect(
     return (
         <label className="flex flex-col">
             <span className="text-lg font-bold">Feedback</span>
-            <select className="border border-gray-300 rounded-md p-2" value={feedback?.id} onChange={e => onChange(filteredFeedbacks.find((fb: Feedback) => fb.id === parseInt(e.target.value)))}>
+            <select className="border border-gray-300 rounded-md p-2" value={feedback?.id || ""} onChange={e => onChange(filteredFeedbacks.find((fb: Feedback) => fb.id === parseInt(e.target.value)))}>
+                <option value={""} disabled>Select a feedback</option>
                 {filteredFeedbacks.map((fb: Feedback) => <option key={fb.id} value={fb.id}>{fb.id} {fb.text}</option>)}
             </select>
         </label>

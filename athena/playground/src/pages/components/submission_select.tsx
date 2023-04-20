@@ -14,7 +14,8 @@ export default function SubmissionSelect(
     return (
         <label className="flex flex-col">
             <span className="text-lg font-bold">Submission</span>
-            <select className="border border-gray-300 rounded-md p-2" value={submission?.id} onChange={e => onChange(filteredSubmissions.find((sub: Submission) => sub.id === parseInt(e.target.value)))}>
+            <select className="border border-gray-300 rounded-md p-2" value={submission?.id || ""} onChange={e => onChange(filteredSubmissions.find((sub: Submission) => sub.id === parseInt(e.target.value)))}>
+                <option value={""} disabled>Select a submission</option>
                 {filteredSubmissions.map((sub: Submission) => <option key={sub.id} value={sub.id}>{sub.id} {sub.content.substring(0, 80)}</option>)}
             </select>
         </label>
