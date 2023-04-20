@@ -8,15 +8,7 @@ async function sendSubmissions(athenaUrl: string, exercise: Exercise | null) {
         alert("Please select an exercise");
         return;
     }
-    const submissionsResponse = await fetch(`/api/submissions?${ new URLSearchParams({exercise_id: exercise.id.toString()}) }`, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-            exercise_id: exercise.id
-        })
-    });
+    const submissionsResponse = await fetch(`/api/submissions?${ new URLSearchParams({exercise_id: exercise.id.toString()}) }`);
     const submissions: Submission[] = await submissionsResponse.json();
     let athenaResponse;
     try {
@@ -50,7 +42,11 @@ export default function SendSubmissions(
     return (
         <div className="bg-white rounded-md p-4 mt-8">
             <h1 className="text-2xl font-bold mb-4">Send Submissions</h1>
-            <p className="text-gray-500 mb-4">Send submissions to Athena for grading.</p>
+            <p className="text-gray-500 mb-4">
+                Send all submissions for an exercise to Athena.
+                This usually happens when the exercise deadline is reached in the LMS.
+                The matching module for the exercise will receive the submissions at the function annotated with <code>@submissions_consumer</code>.
+            </p>
             <ExerciseSelect exercise={exercise} onChange={setExercise} />
             <button
                 className="bg-blue-500 text-white rounded-md p-2 mt-4"
