@@ -11,6 +11,6 @@ def feedback_consumer(func: Callable[[Exercise, Submission, Feedback], None]):
     @wraps(func)
     def wrapper(exercise: Exercise, submission: Submission, feedback: Feedback):
         store_feedback(feedback)
-        func(exercise, submission, feedback)
+        return func(exercise, submission, feedback)
 
     return wrapper

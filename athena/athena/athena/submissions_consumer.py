@@ -12,6 +12,6 @@ def submissions_consumer(func: Callable[[Exercise, List[Submission]], None]):
     def wrapper(exercise: Exercise, submissions: List[Submission]):
         for submission in submissions:
             store_submission(submission)
-        func(exercise, submissions)
+        return func(exercise, submissions)
 
     return wrapper
