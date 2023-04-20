@@ -18,7 +18,7 @@ export default function Health(
             </div>
             <div className="flex flex-col">
                 {Object.entries(data.modules).map(([name, {healthy}]) => (
-                    <div className="flex flex-row items-center">
+                    <div className="flex flex-row items-center" key={name}>
                         <span className={healthy ? "bg-green-500 rounded-full w-4 h-4" : "bg-red-500 rounded-full w-4 h-4"}></span>
                         <span className="ml-1">{name}</span>
                     </div>
