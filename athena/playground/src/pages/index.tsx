@@ -3,6 +3,7 @@ import {useState} from "react";
 import AthenaUrlInput from "@/pages/components/athena_url_input";
 import SendSubmissions from "@/pages/components/send_submissions";
 import SendFeedback from "@/pages/components/send_feedback";
+import RequestFeedbackSuggestions from "@/pages/components/request_feedback_suggestions";
 
 const inter = Inter({subsets: ['latin']});
 
@@ -15,6 +16,7 @@ export default function Home() {
             <AthenaUrlInput value={athenaUrl} onChange={setAthenaUrl} />
             <SendSubmissions athenaUrl={athenaUrl} />
             <SendFeedback athenaUrl={athenaUrl} />
+            <RequestFeedbackSuggestions athenaUrl={athenaUrl} />
         </main>
     );
 }

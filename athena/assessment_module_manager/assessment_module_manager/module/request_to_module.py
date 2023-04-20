@@ -15,6 +15,7 @@ class ModuleResponse(BaseModel):
     A response from a module.
     """
     module_name: str
+    status: int
     data: Any
 
 
