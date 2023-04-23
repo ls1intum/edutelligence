@@ -5,4 +5,6 @@ services:
     build:
       context: ..
       dockerfile: Dockerfile
+      args:
+        - MODULE_NAME=module_example
     tty: true

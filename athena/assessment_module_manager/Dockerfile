@@ -1,22 +1,28 @@
 # syntax=docker/dockerfile:1
 
-# This is the general Dockerfile for the assessment module manager.
+# This is the Dockerfile for the assessment module manager.
 
 FROM python:3.11
 
-WORKDIR /code
+RUN mkdir -p /code/assessment_module_manage
+WORKDIR /code/assessment_module_manager
+
+# Poetry
+RUN pip install --no-cache-dir poetry==1.4.2
 
 # Dependencies
-COPY ./requirements.txt /code/requirements.txt
-RUN pip install --no-cache-dir --upgrade -r /code/requirements.txt
-
-# modules configuration file
-COPY ./assessment_module_manager/modules.docker.ini /code/modules.ini
-
-# athena module
+COPY ./assessment_module_manager/pyproject.toml ./pyproject.toml
+COPY ./assessment_module_manager/poetry.lock ./poetry.lock
+# athena module (also a dependency)
 COPY ./athena /code/athena
+# install all dependencies
+RUN poetry config virtualenvs.create false \
+    && poetry install --no-dev --no-interaction --no-ansi
 
-# assessment module manager
-COPY ./assessment_module_manager /code/assessment_module_manager
+# Modules configuration file
+COPY ./assessment_module_manager/modules.docker.ini ./modules.ini
 
-CMD python -m assessment_module_manager
+# Project files
+COPY ./assessment_module_manager .
+
+CMD poetry run assessment_module_manager

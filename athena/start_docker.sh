@@ -1,5 +1,7 @@
 #!/bin/bash
 
+# This script will start all Docker Compose files for the selected modules as well as the assessment module manager.
+
 # Check if any arguments were provided
 if [ $# -eq 0 ]; then
   # No arguments, select all module folders
@@ -21,8 +23,9 @@ for module in $modules; do
   fi
 done
 
-# Build each of the selected modules
+# Build the assessment module manager
 docker-compose -f docker-compose.yml build
+# Build each of the selected modules
 for module in $modules; do
   if [ -d "$module" ] && [ -f "$module/docker-compose.yml" ]; then
     echo "Building module '$module'"

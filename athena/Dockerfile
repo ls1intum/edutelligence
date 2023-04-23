@@ -5,15 +5,22 @@
 
 FROM python:3.11
 
-WORKDIR /code
+ARG MODULE_NAME
+RUN mkdir -p /code${MODULE_NAME}
+WORKDIR /code/${MODULE_NAME}
+
+# Poetry
+RUN pip install --no-cache-dir poetry==1.4.2
 
 # Dependencies
-COPY ./${MODULE_NAME}/requirements.txt /code/requirements.txt
-RUN pip install --no-cache-dir --upgrade -r /code/requirements.txt
-
-# athena module
+COPY ./${MODULE_NAME}/pyproject.toml /code/${MODULE_NAME}/pyproject.toml
+COPY ./${MODULE_NAME}/poetry.lock /code/${MODULE_NAME}/poetry.lock
+# athena module (also a dependency)
 COPY ./athena /code/athena
+# install dependencies
+RUN poetry config virtualenvs.create false \
+    && poetry install --no-dev --no-interaction --no-ansi
 
 COPY ./${MODULE_NAME} /code/${MODULE_NAME}
 
-CMD python -m ${MODULE_NAME}
+CMD poetry run module
