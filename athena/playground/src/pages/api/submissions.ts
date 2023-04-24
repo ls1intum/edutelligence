@@ -33,7 +33,7 @@ export default function handler(
     req: NextApiRequest,
     res: NextApiResponse<Submission[]>
 ) {
-    let exerciseId = req.query.exerciseId;
+    let exerciseId = req.query.exercise_id;
     if (exerciseId) {
         res.status(200).json(exampleSubmissions.filter(submission => submission.exercise_id === parseInt(exerciseId as string)));
         return;
