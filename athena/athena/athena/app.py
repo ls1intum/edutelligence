@@ -1,10 +1,15 @@
-from .logger import logger
-import inspect
+"""
+The main app instance for your module. Try not to use the FastAPI functionality of the app instance directly.
+Instead, use the decorators in the `athena` package.
+The only exception is the `start` method, which is used to start the module.
+"""
 import os
-from pathlib import Path
 
-from fastapi import FastAPI
 import uvicorn
+from dotenv import load_dotenv
+from fastapi import FastAPI
+
+from .logger import logger
 
 
 class FastAPIWithStart(FastAPI):
@@ -13,14 +18,16 @@ class FastAPIWithStart(FastAPI):
     We expose the start function this way to ensure that modules have to import `app`,
     which uvicorn needs to discover in the module.
     """
-    def start(self, port: int = 5001) -> None:
+    def start(self) -> None:
         """Start Athena. You have to ensure to have `app` in your module main scope so that it can be imported."""
         logger.info("Starting athena module")
 
-        importing_file = inspect.stack()[1].filename  # one stack frame up to find it
-        module_name = Path(importing_file).parent.name  # get the parent directory name = module name
+        load_dotenv(".env")
 
-        if "PRODUCTION" in os.environ:
+        module_name = os.environ["MODULE_NAME"]
+        port = int(os.environ["PORT"])
+
+        if "PRODUCTION" in os.environ and os.environ["PRODUCTION"] == "1":
             logger.info("Running in PRODUCTION mode")
             uvicorn.run(f"{module_name}.__main__:app", host="0.0.0.0", port=port, proxy_headers=True)
         else:
@@ -36,5 +43,3 @@ class FastAPIWithStart(FastAPI):
 
 
 app: FastAPIWithStart = FastAPIWithStart()
-
-

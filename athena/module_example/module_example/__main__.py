@@ -35,4 +35,4 @@ def suggest_feedback(exercise: Exercise, submission: Submission) -> List[Feedbac
 
 
 if __name__ == "__main__":
-    app.start(port=5001)
+    app.start()

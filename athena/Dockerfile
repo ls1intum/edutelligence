@@ -9,6 +9,10 @@ ARG MODULE_NAME
 RUN mkdir -p /code${MODULE_NAME}
 WORKDIR /code/${MODULE_NAME}
 
+# Environment variables for modules running in Docker
+ENV PYTHONUNBUFFERED=1
+ENV HOST_NAME_FOR_MODULE_URL=1
+
 # Poetry
 RUN pip install --no-cache-dir poetry==1.4.2
 

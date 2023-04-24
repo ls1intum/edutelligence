@@ -1,10 +1,10 @@
-version: '3'
+version: '3.8'
 
 services:
-  athena_module_example:
+  main:
     build:
       context: ..
       dockerfile: Dockerfile
       args:
-        - MODULE_NAME=module_example
+        - MODULE_NAME
     tty: true
