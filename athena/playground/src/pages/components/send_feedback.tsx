@@ -33,7 +33,11 @@ async function sendFeedback(athenaUrl: string, exercise: Exercise | null, submis
         if (response.status !== 200) {
             console.error(response);
             alert(`Athena responded with status code ${response.status}`);
-            return;
+            return {
+                module_name: "Unknown",
+                status: response.status,
+                data: await response.text()
+            };
         }
         alert("Feedback sent successfully!");
         return await response.json();

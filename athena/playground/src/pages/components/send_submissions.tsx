@@ -12,10 +12,10 @@ async function sendSubmissions(athenaUrl: string, exercise: Exercise | null): Pr
     }
     const submissionsResponse = await fetch(`/api/submissions?${ new URLSearchParams({exercise_id: exercise.id.toString()}) }`);
     const submissions: Submission[] = await submissionsResponse.json();
-    let athenaResponse;
+    let response;
     try {
         const athenaSubmissionsUrl = `${athenaUrl}/submissions`;
-        athenaResponse = await fetch(`/api/athena_request?${ new URLSearchParams({url: athenaSubmissionsUrl}) }`, {
+        response = await fetch(`/api/athena_request?${ new URLSearchParams({url: athenaSubmissionsUrl}) }`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
@@ -27,19 +27,19 @@ async function sendSubmissions(athenaUrl: string, exercise: Exercise | null): Pr
         alert("Failed to send submissions to Athena: Failed to fetch. Is the URL correct?");
         return;
     }
-    if (!athenaResponse.ok) {
-        console.error(athenaResponse);
-        alert(`Athena responded with status code ${athenaResponse.status}`);
+    if (!response.ok) {
+        console.error(response);
+        alert(`Athena responded with status code ${response.status}`);
         return {
             module_name: "Unknown",
-            status: athenaResponse.status,
-            data: await athenaResponse.text()
+            status: response.status,
+            data: await response.text()
         };
     }
     alert(`${submissions.length} submissions sent successfully!`);
     return {
-        ...await athenaResponse.json(),
-        status: athenaResponse.status
+        ...await response.json(),
+        status: response.status
     };
 }
 
