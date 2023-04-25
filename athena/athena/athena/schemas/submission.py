@@ -6,3 +6,6 @@ class Submission(BaseModel):
     content: str = Field(example="https://lms.example.com/assignments/1/submissions/1/download")
     student_id: int = Field(example=1)
     meta: dict = Field(example={})
+
+    class Config:
+        orm_mode = True

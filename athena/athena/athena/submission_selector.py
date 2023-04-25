@@ -6,7 +6,8 @@ from functools import wraps
 from typing import Callable, List
 
 from .app import app
-from .models import Exercise, Submission
+from .logger import logger
+from .schemas import Exercise, Submission
 from .storage import get_stored_submissions
 
 
@@ -35,7 +36,10 @@ def submission_selector(func: Callable[[Exercise, List[Submission]], Submission]
         # only works with the full submission objects.
 
         # Get the full submission objects
-        submissions = get_stored_submissions(exercise.id, submission_ids)
+        submissions = list(get_stored_submissions(exercise.id, submission_ids))
+        if len(submission_ids) != len(submissions):
+            logger.warning("Not all submissions were found in the database! "
+                           "Have you sent all submissions to the submission consumer before?")
         if not submissions:
             # Nothing to select from
             return -1

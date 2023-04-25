@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI
 
 from .logger import logger
+from .storage.database import create_tables
 
 
 class FastAPIWithStart(FastAPI):
@@ -22,7 +23,11 @@ class FastAPIWithStart(FastAPI):
         """Start Athena. You have to ensure to have `app` in your module main scope so that it can be imported."""
         logger.info("Starting athena module")
 
+        logger.debug("Loading environment variables from .env")
         load_dotenv(".env")
+
+        logger.debug("Creating database tables")
+        create_tables()
 
         module_name = os.environ["MODULE_NAME"]
         port = int(os.environ["PORT"])

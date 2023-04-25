@@ -5,7 +5,7 @@ from pathlib import Path
 from .app import app
 from .feedback_consumer import feedback_consumer
 from .feedback_provider import feedback_provider
-from .models import *
+from .schemas import *
 from .submission_selector import submission_selector
 from .submissions_consumer import submissions_consumer
 

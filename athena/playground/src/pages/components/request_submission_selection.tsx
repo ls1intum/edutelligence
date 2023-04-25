@@ -52,8 +52,9 @@ export default function SelectSubmission({ athenaUrl }: { athenaUrl: string }) {
             <p className="text-gray-500 mb-4">
                 Request the submission to grade next out out of many submissions from Athena.
                 The LMS would usually call this right before a tutor can start grading a submission.
-                The matching module for the exercise will receive the request at the function annotated with <code>@submission_selector</code>.<br />
-                The playground currently only allows requesting a choice between all submissions of an exercise, but the LMS can also request a choice between a subset of submissions.
+                The matching module for the exercise will receive the request at the function annotated with <code>@submission_selector</code>.
+                The playground currently only allows requesting a choice between all submissions of an exercise, but the LMS can also request a choice between a subset of submissions. <br />
+                <b>This endpoint will only work properly after the submissions have been sent to Athena before.</b>
             </p>
             <ExerciseSelect exercise={exercise} onChange={setExercise} />
             <ModuleResponseView response={response} />

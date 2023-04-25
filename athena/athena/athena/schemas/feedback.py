@@ -8,3 +8,6 @@ class Feedback(BaseModel):
     text: str = Field(example="Correct")
     credits: float = Field(example=1.0)
     meta: dict = Field(example={})
+
+    class Config:
+        orm_mode = True

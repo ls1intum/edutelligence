@@ -19,3 +19,6 @@ class Exercise(BaseModel):
     example_solution: str = Field(example="print('Hello World!')")
     student_id: int = Field(example=1)
     meta: dict = Field(example={"language": "python"})
+
+    class Config:
+        orm_mode = True

@@ -5,7 +5,7 @@ from functools import wraps
 from typing import Callable
 
 from .app import app
-from .models import Exercise, Submission, Feedback
+from .schemas import Exercise, Submission, Feedback
 from .storage import store_feedback
 
 
