@@ -1,22 +1,22 @@
 import json
-from typing import Any
+from typing import TypeVar, Generic
 
 import httpx
 from fastapi import HTTPException
-from pydantic import BaseModel
+from pydantic.generics import GenericModel
 
 from athena import Exercise
 from .module import Module
 from .resolve_module import resolve_module
 
-
-class ModuleResponse(BaseModel):
+T = TypeVar('T')
+class ModuleResponse(GenericModel, Generic[T]):
     """
     A response from a module.
     """
     module_name: str
     status: int
-    data: Any
+    data: T
 
 
 async def request_to_module(module: Module, path: str, data: dict) -> ModuleResponse:
