@@ -15,6 +15,15 @@ def receive_submissions(exercise: Exercise, submissions: List[Submission]):
     # Do something with the submissions
 
 
+@submission_selector
+def select_submission(exercise: Exercise, submissions: List[Submission]) -> Submission:
+    print(f"select_submission: Received {len(submissions)} submissions for exercise {exercise.id}")
+    for submission in submissions:
+        print(f"- Submission {submission.id}")
+    # Do something with the submissions and return the one that should be assessed next
+    return submissions[0]
+
+
 @feedback_consumer
 def process_incoming_feedback(exercise: Exercise, submission: Submission, feedback: Feedback):
     print(f"process_feedback: Received feedback for submission {submission.id} of exercise {exercise.id}.")

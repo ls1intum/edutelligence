@@ -6,6 +6,7 @@ from .app import app
 from .feedback_consumer import feedback_consumer
 from .feedback_provider import feedback_provider
 from .models import *
+from .submission_selector import submission_selector
 from .submissions_consumer import submissions_consumer
 
 
@@ -29,6 +30,7 @@ __all__ = [
     "Feedback",
     "feedback_consumer",
     "submissions_consumer",
+    "submission_selector",
     "feedback_provider",
     "app"
 ]

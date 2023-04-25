@@ -1,9 +1,13 @@
 from typing import List, Union
+
 from ..models import Submission, Feedback
 
 
-def get_stored_submissions(exercise_id: int) -> List[Submission]:
-    """Returns a list of submissions for the given exercise."""
+def get_stored_submissions(exercise_id: int, only_ids: List[int] | None = None) -> List[Submission]:
+    """
+    Returns a list of submissions for the given exercise and submission ids.
+    If only_ids is None, returns all submissions for the given exercise.
+    """
     return []
 
 

@@ -56,7 +56,7 @@ export default function SendSubmissions(
             <p className="text-gray-500 mb-4">
                 Send all submissions for an exercise to Athena.
                 This usually happens when the exercise deadline is reached in the LMS.
-                The matching module for the exercise will receive the submissions at the function annotated with <code>@submissions_consumer</code>.
+                The matching module for the exercise will receive the submissions at the function annotated with <code>@submission_consumer</code>.
             </p>
             <ExerciseSelect exercise={exercise} onChange={setExercise} />
             <ModuleResponseView response={response} />

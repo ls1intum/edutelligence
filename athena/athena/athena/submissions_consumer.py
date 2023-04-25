@@ -1,3 +1,6 @@
+"""
+This module provides a decorator for submission consumers.
+"""
 from functools import wraps
 from typing import List, Callable
 
