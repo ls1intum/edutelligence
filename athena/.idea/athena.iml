@@ -15,7 +15,7 @@
       <excludeFolder url="file://$MODULE_DIR$/athena/.venv" />
       <excludeFolder url="file://$MODULE_DIR$/module_example/.venv" />
     </content>
-    <orderEntry type="jdk" jdkName="assessment_module_manager" jdkType="Python SDK" />
+    <orderEntry type="jdk" jdkName="moduleexamplesdk" jdkType="Python SDK" />
     <orderEntry type="sourceFolder" forTests="false" />
   </component>
   <component name="PyDocumentationSettings">
