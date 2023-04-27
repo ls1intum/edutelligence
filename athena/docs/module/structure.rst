@@ -2,7 +2,7 @@ Structure of a Module
 ===========================================
 
 An Athena Module must provide functionality by using the provided Python decorators from the ``athena`` package.
-The module essentially just provides a set of functions that are called by the Athena framework. Any decorated function accessible through the ``__main__.py`` entry point of the module will be called by the framework. You can however only have exactly one function per decorator.
+A module essentially just provides a set of functions that are called by the Athena framework. Any decorated function accessible through the ``__main__.py`` entry point of the module will be called by the framework. You can however only have exactly one function per decorator.
 
 Typical File Structure
 --------------------
