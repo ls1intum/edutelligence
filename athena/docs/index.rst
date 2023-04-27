@@ -30,3 +30,4 @@ Athena will use the information it is given and provide the automatic suggestion
     run/pycharm
     run/local
     run/docker
+    run/playground

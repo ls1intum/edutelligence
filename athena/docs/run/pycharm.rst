@@ -12,4 +12,4 @@ To test a module, you need to start two run configurations:
 
 You can also start any of the run configurations in Debug Mode, to use breakpoints and step through the code.
 
-The assessment module manager API will be available at ``http://localhost:5000``.
+The assessment module manager API will be available at http://localhost:5000.

@@ -9,4 +9,4 @@ It is recommended to use the provided Python script ``start_docker.py`` to start
 
         python start_docker.py
 
-The assessment module manager API will be available at ``http://localhost:5000``.
+The assessment module manager API will be available at http://localhost:5000.
