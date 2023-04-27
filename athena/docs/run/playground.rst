@@ -1,7 +1,9 @@
 Run the Playground
 ===========================================
 
-Athena includes a playground that allows you to run and test your modules and queries. To run the playground, run the following command in the ``playground`` folder:
+Athena includes a playground that allows you to run and test your modules and queries.
+The playground is a web application built with `Next.js <https://nextjs.org/>`_.
+To run the playground, run the following command in the ``playground`` folder:
 
     .. code-block:: bash
 

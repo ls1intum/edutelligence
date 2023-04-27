@@ -31,3 +31,11 @@ Athena will use the information it is given and provide the automatic suggestion
     run/local
     run/docker
     run/playground
+
+.. toctree::
+    :caption: Modules
+    :includehidden:
+    :maxdepth: 1
+
+    module/structure
+    module/create
