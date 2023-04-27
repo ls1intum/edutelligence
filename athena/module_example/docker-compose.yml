@@ -8,3 +8,11 @@ services:
       args:
         - MODULE_NAME
     tty: true
+    hostname: ${MODULE_NAME}
+    networks:
+      - athena_network
+
+networks:
+  athena_network:
+    name: athena_network
+    driver: bridge

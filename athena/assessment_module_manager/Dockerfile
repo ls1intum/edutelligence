@@ -19,10 +19,10 @@ COPY ./athena /code/athena
 RUN poetry config virtualenvs.create false \
     && poetry install --no-dev --no-interaction --no-ansi
 
-# Modules configuration file
-COPY ./assessment_module_manager/modules.docker.ini ./modules.ini
-
 # Project files
 COPY ./assessment_module_manager .
+
+# Use modules configuration file for docker
+RUN mv ./modules.docker.ini ./modules.ini
 
 CMD poetry run assessment_module_manager

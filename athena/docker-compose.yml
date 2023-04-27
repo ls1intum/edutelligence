@@ -1,4 +1,4 @@
-version: '3'
+version: '3.8'
 
 # This is the docker-compose file for the Athena Assessment Module Manager
 # The Docker Compose configuration files for the individual modules can be found in their respective folders.
@@ -10,4 +10,12 @@ services:
       dockerfile: ./assessment_module_manager/Dockerfile
     tty: true
     ports:
-      - "8000:8000"
+      - "5000:5000"
+    # Ensure that the containers from other docker-compose files can communicate with each other
+    networks:
+      - athena_network
+
+networks:
+  athena_network:
+    name: athena_network
+    driver: bridge
