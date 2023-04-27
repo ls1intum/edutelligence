@@ -15,9 +15,18 @@ It connects to an LMS (Learning Management System) and provides endpoints for th
 Athena will use the information it is given and provide the automatic suggestions by using sub-modules depending on the exercise type.
 
 .. toctree::
-   :caption: Setup
-   :includehidden:
-   :maxdepth: 3
+    :caption: Setup
+    :includehidden:
+    :maxdepth: 1
 
-   setup/install
-   setup/pycharm
+    setup/install
+    setup/pycharm
+
+.. toctree::
+    :caption: Run
+    :includehidden:
+    :maxdepth: 1
+
+    run/pycharm
+    run/local
+    run/docker
