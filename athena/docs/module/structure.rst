@@ -5,7 +5,7 @@ An Athena Module must provide functionality by using the provided Python decorat
 A module essentially just provides a set of functions that are called by the Athena framework. Any decorated function accessible through the ``__main__.py`` entry point of the module will be called by the framework. You can however only have exactly one function per decorator.
 
 Typical File Structure
---------------------
+----------------------
 You can see a typical module file structure in the provided ``module_example`` in this repository.
 
 .. code-block:: text

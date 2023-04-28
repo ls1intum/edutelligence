@@ -14,3 +14,14 @@ To create a new Athena Module, follow the following steps:
     * ``MODULE_TYPE``: The type of exercise your module supports, e.g. ``text`` or ``programming``
     * ``PORT``: The port your module will run on, e.g. ``5002``. Look for the ports that existing modules are using and use a port that is not already in use. It's best if you just count one up from the highest number (e.g. if the highest used port is 5002, use 5003).
 5. Add your module to the ``assessment_module_manager/modules.ini`` and ``assessment_module_manager/modules.docker.ini`` files. Update the URLs accordingly. The Docker URL for your module should be ``http://module_something:port``.
+6. Add a new Run Configuration to PyCharm:
+    * Run -> Edit Configurations...
+    * Click the ``+`` button and select ``Python``
+    * Name it ``Module Something``
+    * Choose the ``Module Name`` instead of the ``Script Path`` (see screenshot below)
+    * Set all other parameters similar to the ones from the example module
+    * Click ``OK``
+
+    .. image:: ../images/pycharm-run-configuration.png
+        :width: 600px
+        :alt: PyCharm Run Configuration
