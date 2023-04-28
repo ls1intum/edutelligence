@@ -11,6 +11,8 @@ on:
     tags: '[0-9]+.[0-9]+.[0-9]+'
     paths:
     - 'docs/**'
+    - 'athena/athena/**' # Function docstrings might change
+    - 'assessment_module_manager/assessment_module_manager/**' # Function docstrings might change
     - '.github/workflows/docs.yml'
   release:
     types:
