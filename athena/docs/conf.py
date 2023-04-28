@@ -42,6 +42,9 @@ autodoc_mock_imports = [
     'sqlalchemy',
     'uvicorn',
     'dotenv',
+    'fastapi',
+    'pydantic',
+    'httpx',
 ]
 
 # List of patterns, relative to source directory, that match files and
