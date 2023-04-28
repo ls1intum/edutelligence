@@ -1,5 +1,5 @@
-Sphinx==5.0.2
-sphinx-rtd-theme==1.0.0
+Sphinx==6.2.1
+sphinx-rtd-theme==1.2.0
 sphinx-autobuild==2021.3.14
-docutils==0.17
+docutils==0.19
 sphinxcontrib-bibtex==2.5.0
