@@ -25,6 +25,9 @@ To create a new Athena Module, follow the following steps:
     .. image:: ../images/pycharm-run-configuration.png
         :width: 600px
         :alt: PyCharm Run Configuration
-7. Add a new workspace folder entry to VS Code:
+7. Add a new workspace folder entry for VS Code:
     * Edit ``athena-workspace.code-workspace``
     * Add a new entry to the ``folders`` array, similar to the one from the example module
+8. Add a launch configuration for VS Code:
+    * Open the ``.vscode/launch.json`` file
+    * Add a new configuration, similar to the one from the example module
