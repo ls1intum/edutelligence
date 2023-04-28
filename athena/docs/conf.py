@@ -41,6 +41,7 @@ extensions = [
 autodoc_mock_imports = [
     'sqlalchemy',
     'uvicorn',
+    'dotenv',
 ]
 
 # List of patterns, relative to source directory, that match files and
