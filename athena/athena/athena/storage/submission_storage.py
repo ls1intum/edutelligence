@@ -1,11 +1,11 @@
-from typing import List, Iterable
+from typing import List, Iterable, Union
 
 from .database import get_db
 from .models import DBSubmission
 from ..schemas import Submission
 
 
-def get_stored_submissions(exercise_id: int, only_ids: List[int] | None = None) -> Iterable[Submission]:
+def get_stored_submissions(exercise_id: int, only_ids: Union[List[int], None] = None) -> Iterable[Submission]:
     """
     Returns a list of submissions for the given exercise and submission ids.
     If only_ids is None, returns all submissions for the given exercise.
