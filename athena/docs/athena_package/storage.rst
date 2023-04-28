@@ -12,5 +12,5 @@ The ``athena`` package will automatically store all incoming submissions and all
 .. autofunction:: athena.storage.get_stored_submissions
 .. autofunction:: athena.storage.store_feedback
 .. autofunction:: athena.storage.get_stored_feedback
-.. autofunction:: athena.storage.store_feedback_suggestions
+.. autofunction:: athena.storage.store_feedback_suggestion
 .. autofunction:: athena.storage.get_stored_feedback_suggestions

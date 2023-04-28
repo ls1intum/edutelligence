@@ -40,6 +40,7 @@ extensions = [
 # prevent errors for missing imports, when just building the docs with autodoc
 autodoc_mock_imports = [
     'sqlalchemy',
+    'uvicorn',
 ]
 
 # List of patterns, relative to source directory, that match files and
