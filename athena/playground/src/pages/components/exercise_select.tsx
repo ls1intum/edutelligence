@@ -1,5 +1,5 @@
 import useSWR from "swr";
-import Exercise from "@/pages/model/exercise";
+import { Exercise } from "@/pages/model/exercise";
 import fetcher from "@/pages/fetcher";
 
 export default function ExerciseSelect(

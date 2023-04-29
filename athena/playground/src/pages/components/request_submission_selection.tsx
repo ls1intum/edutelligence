@@ -1,5 +1,5 @@
 import {useState} from "react";
-import Exercise from "@/pages/model/exercise";
+import { Exercise } from "@/pages/model/exercise";
 import ExerciseSelect from "@/pages/components/exercise_select";
 import ModuleResponse from "@/pages/model/module_response";
 import ModuleResponseView from "@/pages/components/module_response_view";
