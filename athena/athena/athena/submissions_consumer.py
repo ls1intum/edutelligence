@@ -6,8 +6,9 @@ from typing import List, Callable
 
 from .app import app
 from .schemas import ExerciseTypeVar, Submission
-from .storage import store_submissions
+from .storage import store_submissions, store_exercise
 
+from .logger import logger
 
 def submissions_consumer(func: Callable[[ExerciseTypeVar, List[Submission]], None]):
     """
@@ -17,6 +18,7 @@ def submissions_consumer(func: Callable[[ExerciseTypeVar, List[Submission]], Non
     @app.post("/submissions")
     @wraps(func)
     def wrapper(exercise: ExerciseTypeVar, submissions: List[Submission]):
+        store_exercise(exercise)
         store_submissions(submissions)
         return func(exercise, submissions)
 

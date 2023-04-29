@@ -20,14 +20,14 @@ def get_stored_feedback(exercise_id: int, submission_id: Union[int, None]) -> It
 def store_feedback(feedback: Feedback):
     """Stores the given feedback."""
     with get_db() as db:
-        db.add(DBFeedback(**feedback.dict(), is_suggestion=0))
+        db.add(DBFeedback(**feedback.dict(), is_suggestion=False))
         db.commit()
 
 
 def get_stored_feedback_suggestions(exercise_id: str, submission_id: int) -> Iterable[Feedback]:
     """Returns a list of feedback suggestions for the given exercise in the given submission."""
     with get_db() as db:
-        query = db.query(DBFeedback).filter_by(exercise_id=exercise_id, is_suggestion=1)
+        query = db.query(DBFeedback).filter_by(exercise_id=exercise_id, is_suggestion=True)
         if submission_id is not None:
             query = query.filter_by(submission_id=submission_id)
         return (Feedback(**f) for f in query.all())
