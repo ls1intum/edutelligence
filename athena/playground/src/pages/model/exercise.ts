@@ -20,6 +20,7 @@ export type TextExercise = ExerciseBase & {
 
 export type ProgrammingExercise = ExerciseBase & {
   type: 'programming';
+  programming_language: string;
   solution_repository_url: string;
   template_repository_url: string;
   tests_repository_url: string;

@@ -7,18 +7,14 @@ const exampleSubmissions: Submission[] = [
         exercise_id: 1,
         content: 'http://localhost:3000/api/programming-submissions/1.zip',
         student_id: 1,
-        meta: {
-            language: 'java',
-        }
+        meta: {}
     },
     {
         id: 2,
         exercise_id: 1,
         content: 'http://localhost:3000/api/programming-submissions/2.zip',
         student_id: 2,
-        meta: {
-            language: 'java',
-        }
+        meta: {}
     },
     {
         id: 3,

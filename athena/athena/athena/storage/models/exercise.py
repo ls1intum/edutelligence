@@ -37,6 +37,7 @@ class DBProgrammingExercise(DBExercise):
     __mapper_args__ = {"polymorphic_identity": "programming"}
 
     id = Column(Integer, ForeignKey("exercises.id"), primary_key=True)
+    programming_language = Column(String)
     solution_repository_url = Column(String)
     template_repository_url = Column(String)
     tests_repository_url = Column(String)

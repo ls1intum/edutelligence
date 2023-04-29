@@ -43,6 +43,7 @@ class ProgrammingExercise(Exercise):
     """A programming exercise exercise."""
     type: ExerciseType = Field(default=ExerciseType.programming, const=True)
 
+    programming_language: str = Field(description="The programming language that is used for this exercise.", example="java")
     solution_repository_url: AnyUrl = Field(description="URL to the solution git repository, which contains the reference solution.",
                                             example="http://localhost:3000/api/example-solutions/1")
     template_repository_url: AnyUrl = Field(description="URL to the template git repository, which is the starting point for students.",
