@@ -1,4 +1,4 @@
-from athena import *
+from athena import app, feedback_consumer, feedback_provider, submissions_consumer, submission_selector, ProgrammingExercise
 from athena.helpers import get_programming_submission_zip
 from athena.storage import *
 

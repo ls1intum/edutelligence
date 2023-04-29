@@ -11,6 +11,7 @@ class DBFeedback(Base):
     exercise_id = Column(Integer, ForeignKey("exercises.id", ondelete="CASCADE"), index=True)
     submission_id = Column(Integer, ForeignKey("submissions.id", ondelete="CASCADE"), index=True)
     detail_text = Column(String)
+    reference = Column(String, nullable=True)
     text = Column(String)
     credits = Column(Float)
 
