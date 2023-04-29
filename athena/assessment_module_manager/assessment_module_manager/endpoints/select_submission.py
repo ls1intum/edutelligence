@@ -2,7 +2,7 @@ from typing import List
 
 from assessment_module_manager.app import app
 from assessment_module_manager.module import ModuleResponse, request_to_module_by_exercise
-from athena import Exercise
+from athena import ExerciseTypeVar
 
 
 @app.post('/select_submission', responses={
@@ -10,7 +10,7 @@ from athena import Exercise
         "description": "Module is not available",
     },
 })
-async def select_submission(exercise: Exercise, submission_ids: List[int]) -> ModuleResponse[int]:
+async def select_submission(exercise: ExerciseTypeVar, submission_ids: List[int]) -> ModuleResponse[int]:
     """
     This endpoint is called by the LMS when a tutor wants to assess a submission.
     The LMS will pass the exercise and a list of submission IDs. The resulting submission ID will be given to the tutor.

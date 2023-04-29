@@ -9,12 +9,12 @@ class DBExercise(Base):
     __tablename__ = "exercises"
     __mapper_args__ = {
         "polymorphic_identity": "exercise",
-        "polymorphic_on": "exercise_type",
+        "polymorphic_on": "type",
     }
 
     id = Column(Integer, primary_key=True, index=True)
     title = Column(String, index=True)
-    exercise_type = Column(SqlEnum(ExerciseType), index=True)
+    type = Column(SqlEnum(ExerciseType), index=True)
     max_points = Column(Float, index=True)
     bonus_points = Column(Float, index=True)
     problem_statement = Column(String)

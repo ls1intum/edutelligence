@@ -14,7 +14,7 @@ class Exercise(BaseModel):
     id: int = Field(example=1)
     title: str = Field(description="The title of the exercise.", 
                        example="Exercise 1")
-    exercise_type: ExerciseType = Field(example=ExerciseType.text)
+    type: ExerciseType = Field(example=ExerciseType.text)
     max_points: float = Field(ge=0, 
                               description="The maximum number of points that can be achieved.", 
                               example=1.0)
@@ -34,14 +34,14 @@ class Exercise(BaseModel):
 
 class TextExercise(Exercise):
     """A text exercise."""
-    exercise_type: ExerciseType = Field(default=ExerciseType.text, const=True)
+    type: ExerciseType = Field(default=ExerciseType.text, const=True)
 
     example_solution: str = Field(example="The answer is 42.")
 
 
 class ProgrammingExercise(Exercise):
     """A programming exercise exercise."""
-    exercise_type: ExerciseType = Field(default=ExerciseType.programming, const=True)
+    type: ExerciseType = Field(default=ExerciseType.programming, const=True)
 
     solution_repository_url: AnyUrl = Field(description="URL to the solution git repository, which contains the reference solution.",
                                             example="http://localhost:3000/api/example-solutions/1")
