@@ -1,12 +1,13 @@
 from enum import Enum
+from typing import TypeVar
 
 from pydantic import BaseModel, Field, AnyUrl
-
 
 class ExerciseType(str, Enum):
     """The type of the exercise."""
     text = "text"
     programming = "programming"
+
 
 class Exercise(BaseModel):
     """An exercise that can be solved by students, enhanced with metadata depending on its type."""
@@ -30,11 +31,13 @@ class Exercise(BaseModel):
     class Config:
         orm_mode = True
 
+
 class TextExercise(Exercise):
     """A text exercise."""
     exercise_type: ExerciseType = Field(default=ExerciseType.text, const=True)
 
     example_solution: str = Field(example="The answer is 42.")
+
 
 class ProgrammingExercise(Exercise):
     """A programming exercise exercise."""
@@ -46,3 +49,6 @@ class ProgrammingExercise(Exercise):
                                             example="http://localhost:3000/api/example-template/1")
     tests_repository_url: AnyUrl = Field(description="URL to the tests git repository, which contains the tests that are used to automatically grade the exercise.",
                                          example="http://localhost:3000/api/example-tests/1")
+
+
+ExerciseTypeVar = TypeVar("ExerciseTypeVar", TextExercise, ProgrammingExercise)

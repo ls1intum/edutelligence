@@ -25,6 +25,9 @@ def run_module():
 
 __all__ = [
     "Exercise",
+    "ProgrammingExercise",
+    "TextExercise",
+    "ExerciseTypeVar"
     "ExerciseType",
     "Submission",
     "Feedback",
