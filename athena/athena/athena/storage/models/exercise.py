@@ -25,12 +25,14 @@ class DBExercise(Base):
     submissions = relationship("DBSubmission", back_populates="exercise")
     feedbacks = relationship("DBFeedback", back_populates="exercise")
 
+
 class DBTextExercise(DBExercise):
     __tablename__ = "text_exercises"
     __mapper_args__ = {"polymorphic_identity": "text"}
 
     id = Column(Integer, ForeignKey("exercises.id"), primary_key=True)
     example_solution = Column(String)
+
 
 class DBProgrammingExercise(DBExercise):
     __tablename__ = "programming_exercises"

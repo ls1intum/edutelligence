@@ -1,9 +1,12 @@
-from athena import app, feedback_consumer, feedback_provider, submissions_consumer, submission_selector, ProgrammingExercise
+from typing import List
+
+from athena import app
+from athena.programming import Exercise, Submission, Feedback, feedback_consumer, feedback_provider, submissions_consumer, submission_selector
 from athena.helpers import get_programming_submission_zip
-from athena.storage import *
+
 
 @submissions_consumer
-def receive_submissions(exercise: ProgrammingExercise, submissions: List[Submission]):
+def receive_submissions(exercise: Exercise, submissions: List[Submission]):
     print(f"receive_submissions: Received {len(submissions)} submissions for exercise {exercise.id}")
     for submission in submissions:
         print(f"- Submission {submission.id}")
@@ -15,7 +18,7 @@ def receive_submissions(exercise: ProgrammingExercise, submissions: List[Submiss
 
 
 @submission_selector
-def select_submission(exercise: ProgrammingExercise, submissions: List[Submission]) -> Submission:
+def select_submission(exercise: Exercise, submissions: List[Submission]) -> Submission:
     print(f"select_submission: Received {len(submissions)} submissions for exercise {exercise.id}")
     for submission in submissions:
         print(f"- Submission {submission.id}")
@@ -24,14 +27,14 @@ def select_submission(exercise: ProgrammingExercise, submissions: List[Submissio
 
 
 @feedback_consumer
-def process_incoming_feedback(exercise: ProgrammingExercise, submission: Submission, feedback: Feedback):
+def process_incoming_feedback(exercise: Exercise, submission: Submission, feedback: Feedback):
     print(f"process_feedback: Received feedback for submission {submission.id} of exercise {exercise.id}.")
     print(f"process_feedback: Feedback: {feedback}")
     # Do something with the feedback
 
 
 @feedback_provider
-def suggest_feedback(exercise: ProgrammingExercise, submission: Submission) -> List[Feedback]:
+def suggest_feedback(exercise: Exercise, submission: Submission) -> List[Feedback]:
     print(f"suggest_feedback: Suggestions for submission {submission.id} of exercise {exercise.id} were requested")
     # Do something with the submission and return a list of feedback
     return [

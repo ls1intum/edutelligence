@@ -1,7 +1,10 @@
+import abc
 from enum import Enum
-from typing import TypeVar
 
 from pydantic import BaseModel, Field, AnyUrl
+
+from athena.storage import DBExercise
+
 
 class ExerciseType(str, Enum):
     """The type of the exercise."""
@@ -9,7 +12,7 @@ class ExerciseType(str, Enum):
     programming = "programming"
 
 
-class Exercise(BaseModel):
+class Exercise(BaseModel, abc.ABC):
     """An exercise that can be solved by students, enhanced with metadata depending on its type."""
     id: int = Field(example=1)
     title: str = Field(description="The title of the exercise.", 
@@ -27,6 +30,10 @@ class Exercise(BaseModel):
                                    example="Write a program that prints 'Hello World!'")
 
     meta: dict = Field(example={"internal_id": "5"})
+
+    @abc.abstractmethod
+    def to_db_model(self) -> DBExercise:
+        ...
 
     class Config:
         orm_mode = True
@@ -50,6 +57,3 @@ class ProgrammingExercise(Exercise):
                                             example="http://localhost:3000/api/example-template/1")
     tests_repository_url: AnyUrl = Field(description="URL to the tests git repository, which contains the tests that are used to automatically grade the exercise.",
                                          example="http://localhost:3000/api/example-tests/1")
-
-
-ExerciseTypeVar = TypeVar("ExerciseTypeVar", TextExercise, ProgrammingExercise)

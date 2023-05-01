@@ -5,10 +5,10 @@ import inspect
 from functools import wraps
 from typing import Callable, List
 
-from .app import app
-from .logger import logger
-from .schemas import ExerciseTypeVar, Submission
-from .storage import get_stored_submissions
+from .schemas import Exercise, Submission
+from ..app import app
+from ..logger import logger
+from ..storage import get_stored_submissions
 
 
 def wraps_except_annotations(func: Callable) -> Callable:
@@ -23,7 +23,7 @@ def wraps_except_annotations(func: Callable) -> Callable:
     return wrapper
 
 
-def submission_selector(func: Callable[[ExerciseTypeVar, List[Submission]], Submission]):
+def submission_selector(func: Callable[[Exercise, List[Submission]], Submission]):
     """
     Receive an exercise and some (not necessarily all!) submissions from the Assessment Module Manager and
     return the submission that should ideally be assessed next.
@@ -31,7 +31,7 @@ def submission_selector(func: Callable[[ExerciseTypeVar, List[Submission]], Subm
     """
     @app.post("/select_submission")
     @wraps_except_annotations
-    def wrapper(exercise: ExerciseTypeVar, submission_ids: List[int]) -> int:
+    def wrapper(exercise: Exercise, submission_ids: List[int]) -> int:
         # The wrapper handles only transmitting submission IDs for efficiency, but the actual selection logic
         # only works with the full submission objects.
 

@@ -3,11 +3,8 @@ import runpy
 from pathlib import Path
 
 from .app import app
-from .feedback_consumer import feedback_consumer
-from .feedback_provider import feedback_provider
 from .schemas import *
-from .submission_selector import submission_selector
-from .submissions_consumer import submissions_consumer
+from .common import feedback_consumer, feedback_provider, submission_selector, submissions_consumer
 
 
 @app.get("/")
@@ -27,7 +24,6 @@ __all__ = [
     "Exercise",
     "ProgrammingExercise",
     "TextExercise",
-    "ExerciseTypeVar"
     "ExerciseType",
     "Submission",
     "Feedback",

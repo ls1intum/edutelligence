@@ -2,11 +2,10 @@ from typing import List, Iterable, Union
 
 from .database import get_db
 from .models.exercise import DBExercise, DBTextExercise, DBProgrammingExercise
-from ..schemas import TextExercise, ProgrammingExercise, ExerciseType, ExerciseTypeVar
+from ..schemas import Exercise, TextExercise, ProgrammingExercise, ExerciseType
 
-from ..logger import logger
 
-def _exercise_from_db_model(db_exercise) -> ExerciseTypeVar:
+def _exercise_from_db_model(db_exercise) -> Exercise:
     if db_exercise.type == ExerciseType.text:
         return TextExercise.from_orm(db_exercise)
     elif db_exercise.type == ExerciseType.programming:
@@ -14,7 +13,7 @@ def _exercise_from_db_model(db_exercise) -> ExerciseTypeVar:
     else:
         raise ValueError(f"Unknown exercise type: {db_exercise.type}")
 
-def get_stored_exercises(type: Union[ExerciseTypeVar, None] = None, only_ids: Union[List[int], None] = None) -> Iterable[ExerciseTypeVar]:
+def get_stored_exercises(type: Union[Exercise, None] = None, only_ids: Union[List[int], None] = None) -> Iterable[Exercise]:
     """
     Returns a list of exercises for the given exercise type and exercise ids.
     If type is None, returns all exercises.
@@ -28,7 +27,7 @@ def get_stored_exercises(type: Union[ExerciseTypeVar, None] = None, only_ids: Un
             query = query.filter(DBExercise.id.in_(only_ids))
         return (_exercise_from_db_model(e) for e in query.all())
 
-def store_exercises(exercises: List[ExerciseTypeVar]):
+def store_exercises(exercises: List[Exercise]):
     """Stores the given exercises, all at once."""
     with get_db() as db:
         db_exercises = []
@@ -43,6 +42,6 @@ def store_exercises(exercises: List[ExerciseTypeVar]):
             db.merge(e)
         db.commit()
 
-def store_exercise(exercise: ExerciseTypeVar):
+def store_exercise(exercise: Exercise):
     """Stores the given exercise."""
     store_exercises([exercise])

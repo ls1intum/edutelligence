@@ -4,20 +4,18 @@ This module provides a decorator for submission consumers.
 from functools import wraps
 from typing import List, Callable
 
-from .app import app
-from .schemas import ExerciseTypeVar, Submission
-from .storage import store_submissions, store_exercise
+from .schemas import Exercise, Submission
+from ..app import app
+from ..storage import store_submissions, store_exercise
 
-from .logger import logger
-
-def submissions_consumer(func: Callable[[ExerciseTypeVar, List[Submission]], None]):
+def submissions_consumer(func: Callable[[Exercise, List[Submission]], None]):
     """
     Receive submissions from the Assessment Module Manager and automatically store them in the database.
     The submissions consumer is usually called whenever the deadline for an exercise is reached.
     """
     @app.post("/submissions")
     @wraps(func)
-    def wrapper(exercise: ExerciseTypeVar, submissions: List[Submission]):
+    def wrapper(exercise, submissions):
         store_exercise(exercise)
         store_submissions(submissions)
         return func(exercise, submissions)
