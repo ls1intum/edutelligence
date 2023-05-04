@@ -4,8 +4,9 @@ import ExerciseSelect from "@/pages/components/exercise_select";
 import ModuleResponse from "@/pages/model/module_response";
 import ModuleResponseView from "@/pages/components/module_response_view";
 import Submission from "@/pages/model/submission";
+import {ModuleMeta} from "@/pages/model/health_response";
 
-async function requestSubmissionSelection(athenaUrl: string, exercise: Exercise | null): Promise<ModuleResponse | undefined> {
+async function requestSubmissionSelection(athenaUrl: string, module: ModuleMeta, exercise: Exercise | null): Promise<ModuleResponse | undefined> {
     if (!exercise) {
         alert("Please select an exercise");
         return;
@@ -13,7 +14,7 @@ async function requestSubmissionSelection(athenaUrl: string, exercise: Exercise 
     const submissionsResponse = await fetch(`/api/submissions?${ new URLSearchParams({exercise_id: exercise.id.toString()}) }`);
     const submissions: Submission[] = await submissionsResponse.json();
     try {
-        const athenaSubmissionSelectUrl = `${athenaUrl}/select_submission`;
+        const athenaSubmissionSelectUrl = `${athenaUrl}/modules/${module.type}/${module.name}/select_submission`;
         const response = await fetch(`/api/athena_request?${new URLSearchParams({ url: athenaSubmissionSelectUrl })}`, {
             method: 'POST',
             headers: {
@@ -41,7 +42,7 @@ async function requestSubmissionSelection(athenaUrl: string, exercise: Exercise 
     }
 }
 
-export default function SelectSubmission({ athenaUrl }: { athenaUrl: string }) {
+export default function SelectSubmission({ athenaUrl, module }: { athenaUrl: string, module: ModuleMeta }) {
     const [exercise, setExercise] = useState<Exercise | null>(null);
     const [loading, setLoading] = useState<boolean>(false);
     const [response, setResponse] = useState<ModuleResponse | undefined>(undefined);
@@ -56,13 +57,13 @@ export default function SelectSubmission({ athenaUrl }: { athenaUrl: string }) {
                 The playground currently only allows requesting a choice between all submissions of an exercise, but the LMS can also request a choice between a subset of submissions. <br />
                 <b>This endpoint will only work properly after the submissions have been sent to Athena before.</b>
             </p>
-            <ExerciseSelect exercise={exercise} onChange={setExercise} />
+            <ExerciseSelect exerciseType={module.type} exercise={exercise} onChange={setExercise} />
             <ModuleResponseView response={response} />
             <button
                 className="bg-blue-500 text-white rounded-md p-2 mt-4"
                 onClick={() => {
                     setLoading(true);
-                    requestSubmissionSelection(athenaUrl, exercise)
+                    requestSubmissionSelection(athenaUrl, module, exercise)
                         .then(setResponse)
                         .finally(() => setLoading(false));
                 }}

@@ -44,8 +44,5 @@ async def request_to_module(module: Module, path: str, data: dict) -> ModuleResp
             response_data = response.json()
         except json.JSONDecodeError:
             response_data = response.text
-        raise HTTPException(
-            status_code=response.status_code,
-            detail=ModuleResponse(module_name=module.name, status=response.status_code, data=response_data).dict(),
-        )
+        return ModuleResponse(module_name=module.name, status=response.status_code, data=response_data)
     return ModuleResponse(module_name=module.name, status=response.status_code, data=response.json())

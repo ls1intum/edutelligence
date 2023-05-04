@@ -20,5 +20,10 @@ export default async function handler(
         res.status(200).json({status: "no-assessment-module-manager-response", modules: {} });
         return;
     }
+    // add name to all modules for convenience
+    for (const [key, value] of Object.entries(data.modules)) {
+        // @ts-ignore
+        value.name = key;
+    }
     res.status(200).json(data);
 }

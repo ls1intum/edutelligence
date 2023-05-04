@@ -15,7 +15,7 @@ def get_module_names_with_docs() -> dict:
 
 AvailableModuleNames = Enum(
     "AvailableModuleNames",
-    {name: value for name, (_, value) in get_module_names_with_docs().items()},
+    {name: value for name, (value, _) in get_module_names_with_docs().items()},
     type=str,
     module=__name__,
     qualname="AvailableModuleNames",

@@ -34,6 +34,7 @@ class HealthResponse(BaseModel):
             {
                 "module_example": {
                     "url": "http://localhost:5001",
+                    "type": "programming",
                     "healthy": True
                 }
             }
@@ -51,6 +52,7 @@ async def get_health() -> HealthResponse:
         modules={
             module.name: {
                 "url": module.url,
+                "type": module.type,
                 "healthy": await is_healthy(module),
             }
             for module in get_modules()
