@@ -26,11 +26,12 @@ class FastAPIWithStart(FastAPI):
         logger.debug("Loading environment variables from .env")
         load_dotenv(".env")
 
-        logger.debug("Creating database tables")
-        create_tables()
-
         module_name = os.environ["MODULE_NAME"]
+        module_type = os.environ["MODULE_TYPE"]
         port = int(os.environ["PORT"])
+
+        logger.debug("Creating database tables")
+        create_tables(module_type)
 
         if "PRODUCTION" in os.environ and os.environ["PRODUCTION"] == "1":
             logger.info("Running in PRODUCTION mode")
