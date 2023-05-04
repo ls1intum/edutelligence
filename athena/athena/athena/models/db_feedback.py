@@ -1,10 +1,9 @@
 from sqlalchemy import Column, Integer, Boolean, String, Float, JSON, ForeignKey
-from sqlalchemy.orm import relationship
 
-from athena.database import Base
+from .model import Model
 
 
-class DBFeedback(Base):
+class DBFeedback(Model):
     __tablename__ = "feedbacks"
 
     id = Column(Integer, primary_key=True, index=True)
@@ -19,6 +18,3 @@ class DBFeedback(Base):
 
     # not in the schema, but used in the database to distinguish between feedbacks and feedback suggestions
     is_suggestion = Column(Boolean, default=False)
-
-    exercise = relationship("DBExercise", back_populates="feedbacks")
-    submission = relationship("DBSubmission", back_populates="feedbacks")

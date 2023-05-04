@@ -1,11 +1,12 @@
-import abc
+from abc import ABC
 
-from pydantic import BaseModel, Field
+from pydantic import Field
 
 from . import ExerciseType
+from .schema import Schema
 
 
-class Exercise(BaseModel, abc.ABC):
+class Exercise(Schema, ABC):
     """An exercise that can be solved by students, enhanced with metadata depending on its type."""
     id: int = Field(example=1)
     title: str = Field(description="The title of the exercise.", 
@@ -23,12 +24,6 @@ class Exercise(BaseModel, abc.ABC):
                                    example="Write a program that prints 'Hello World!'")
 
     meta: dict = Field(example={"internal_id": "5"})
-
-    @staticmethod
-    @abc.abstractmethod
-    def get_model_class() -> type:
-        """Returns the database model class for this exercise type."""
-        raise NotImplementedError()
 
     class Config:
         orm_mode = True

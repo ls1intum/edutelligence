@@ -1,7 +1,6 @@
 from pydantic import Field, AnyUrl
 
 from . import ExerciseType, Exercise
-from athena.models.exercise import DBProgrammingExercise
 
 
 class ProgrammingExercise(Exercise):
@@ -16,7 +15,3 @@ class ProgrammingExercise(Exercise):
                                             example="http://localhost:3000/api/example-template/1")
     tests_repository_url: AnyUrl = Field(description="URL to the tests git repository, which contains the tests that are used to automatically grade the exercise.",
                                          example="http://localhost:3000/api/example-tests/1")
-
-    @staticmethod
-    def get_model_class() -> type:
-        return DBProgrammingExercise

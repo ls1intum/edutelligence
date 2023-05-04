@@ -1,50 +1,29 @@
-from typing import List, Iterable, Optional
+from typing import List, Iterable, Optional, Type
 
-from athena.models import DBExercise
 from athena.database import get_db
-from athena.schemas import ExerciseType, Exercise, ProgrammingExercise, TextExercise
+from athena.schemas import Exercise
 
 
-def _exercise_type_to_model(exercise_type: ExerciseType) -> type:
-    """Returns the database model class for this exercise type."""
-    if exercise_type == ExerciseType.text:
-        return TextExercise
-    elif exercise_type == ExerciseType.programming:
-        return ProgrammingExercise
-    else:
-        raise ValueError(f"Unknown exercise type: {exercise_type}")
-
-def _exercise_model_to_schema(db_exercise: DBExercise) -> Exercise:
-    """Converts a database model to a schema."""
-    exercise_type = ExerciseType[db_exercise.type]
-    model_class = DBExercise.model_from_exercise_type(exercise_type)
-    return model_class(**db_exercise.dict())
-
-def _exercise_schema_to_model(schema_exercise) -> DBExercise:
-    """Converts a schema to a database model."""
-    model_class = schema_exercise.get_model_class()
-    return model_class(**schema_exercise.dict())
-
-def get_stored_exercises(exercise_type: Optional[ExerciseType] = None, only_ids: Optional[List[int]] = None) -> Iterable[Exercise]:
+def get_stored_exercises(exercise_cls: Type[Exercise], only_ids: Optional[List[int]] = None) -> Iterable[Exercise]:
     """
     Returns a list of exercises for the given exercise type and exercise ids.
     If type is None, returns all exercises.
     If only_ids is None, returns all exercises for the given exercise type.
     """
+    db_exercise_cls = exercise_cls.get_model_class()
     with get_db() as db:
-        query = db.query(DBExercise)
+        query = db.query(db_exercise_cls)
         if type is not None:
-            query = query.filter_by(type=exercise_type.name)
+            query = query.all()
         if only_ids is not None:
-            query = query.filter(DBExercise.id.in_(only_ids))
-        return (_exercise_model_to_schema(e) for e in query.all())
+            query = query.filter(db_exercise_cls.id.in_(only_ids))
+        return (e.to_schema() for e in query.all())
 
 def store_exercises(exercises: List[Exercise]):
     """Stores the given exercises, all at once."""
     with get_db() as db:
-        db_exercises = (_exercise_schema_to_model(e) for e in exercises)
-        for e in db_exercises:
-            db.merge(e)
+        for e in exercises:
+            db.merge(e.to_model())
         db.commit()
 
 def store_exercise(exercise: Exercise):

@@ -1,8 +1,11 @@
 """Import this to use schemas and decorators specific to programming exercises."""
 import os
 
+from dotenv import load_dotenv
+
 from .schemas import ProgrammingExercise, ProgrammingFeedback, ProgrammingSubmission
 
+load_dotenv(".env")
 module_type = os.environ["MODULE_TYPE"]
 if module_type != "programming":
     raise ImportError(f"Importing athena.programming from a module of type {module_type}. This is probably a mistake, "

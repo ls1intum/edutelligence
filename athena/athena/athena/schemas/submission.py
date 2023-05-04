@@ -1,7 +1,11 @@
-from pydantic import BaseModel, Field
+from abc import ABC
+
+from pydantic import Field
+
+from .schema import Schema
 
 
-class Submission(BaseModel):
+class Submission(Schema, ABC):
     id: int = Field(example=1)
     exercise_id: int = Field(example=1)
     content: str = Field(example="https://lms.example.com/assignments/1/submissions/1/download")

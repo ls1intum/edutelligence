@@ -1,9 +1,12 @@
+from abc import ABC
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import Field
+
+from .schema import Schema
 
 
-class Feedback(BaseModel):
+class Feedback(Schema, ABC):
     id: int = Field(example=1)
     exercise_id: int = Field(example=1)
     submission_id: int = Field(example=1)
