@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, JSON
+from sqlalchemy import Column, Integer, String, JSON, ForeignKey
 
 from .model import Model
 from athena.database import Base
@@ -12,5 +12,4 @@ class DBSubmission(Model, Base):
     student_id = Column(Integer, index=True)
     meta = Column(JSON)
 
-    # exercise_id = Column(Integer, ForeignKey("exercises.id", ondelete="CASCADE"), index=True)
-    # feedback_id = Column(Integer, ForeignKey("feedbacks.id"), index=True)
+    exercise_id = Column(Integer, ForeignKey("exercises.id", ondelete="CASCADE"), index=True)

@@ -20,6 +20,3 @@ class DBExercise(Model, Base):
     problem_statement = Column(String)
     grading_instructions = Column(String)
     meta = Column(JSON)
-
-    # submission_id = Column(Integer, ForeignKey("submissions.id"), index=True)
-    # feedback_id = Column(Integer, ForeignKey("feedbacks.id"), index=True)

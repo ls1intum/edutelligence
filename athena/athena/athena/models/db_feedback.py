@@ -14,8 +14,8 @@ class DBFeedback(Model, Base):
     credits = Column(Float)
     meta = Column(JSON)
 
-    # exercise_id = Column(Integer, ForeignKey("exercises.id", ondelete="CASCADE"), index=True)
-    # submission_id = Column(Integer, ForeignKey("submissions.id", ondelete="CASCADE"), index=True)
+    exercise_id = Column(Integer, ForeignKey("exercises.id", ondelete="CASCADE"), index=True)
+    submission_id = Column(Integer, ForeignKey("submissions.id", ondelete="CASCADE"), index=True)
 
     # not in the schema, but used in the database to distinguish between feedbacks and feedback suggestions
     is_suggestion = Column(Boolean, default=False)

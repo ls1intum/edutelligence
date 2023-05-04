@@ -13,5 +13,5 @@ class DBProgrammingExercise(DBExercise):
     template_repository_url = Column(String)
     tests_repository_url = Column(String)
 
-    # submissions = relationship("DBProgrammingSubmission", back_populates="exercise")
-    # feedbacks = relationship("DBProgrammingFeedback", back_populates="exercise")
+    submissions = relationship("DBProgrammingSubmission", back_populates="exercise")
+    feedbacks = relationship("DBProgrammingFeedback", back_populates="exercise")
