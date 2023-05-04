@@ -3,10 +3,11 @@ from sqlalchemy.orm import relationship
 
 from . import DBExercise, DBFeedback, DBSubmission
 from athena.schemas import ExerciseType
+from athena.database import Base
 
 
-class DBProgrammingExercise(DBExercise):
-    __mapper_args__ = {"polymorphic_identity": ExerciseType.programming}
+class DBProgrammingExercise(DBExercise, Base):
+    __tablename__ = "programming_exercises"
 
     programming_language = Column(String)
     solution_repository_url = Column(String)

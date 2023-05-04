@@ -30,6 +30,7 @@ def submission_selector(func: Callable[[E, List[S]], S]):
     If the selector returns None, the LMS will select a random submission in the end.
     """
     exercise_type = func.__annotations__["exercise"]
+    submission_type = func.__annotations__["return"]
 
     @app.post("/select_submission")
     @wraps_except_annotations
@@ -38,7 +39,7 @@ def submission_selector(func: Callable[[E, List[S]], S]):
         # only works with the full submission objects.
 
         # Get the full submission objects
-        submissions = list(get_stored_submissions(exercise.id, submission_ids))
+        submissions = list(get_stored_submissions(submission_type, exercise.id, submission_ids))
         if len(submission_ids) != len(submissions):
             logger.warning("Not all submissions were found in the database! "
                            "Have you sent all submissions to the submission consumer before?")

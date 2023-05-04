@@ -1,30 +1,31 @@
-from typing import List, Iterable, Union
+from typing import List, Iterable, Union, Type
 
 from athena.models import DBSubmission
 from athena.database import get_db
 from athena.schemas import Submission
 
 
-def get_stored_submissions(exercise_id: int, only_ids: Union[List[int], None] = None) -> Iterable[Submission]:
+def get_stored_submissions(
+        submission_cls: Type[Submission], exercise_id: int, only_ids: Union[List[int], None] = None
+) -> Iterable[Submission]:
     """
     Returns a list of submissions for the given exercise and submission ids.
     If only_ids is None, returns all submissions for the given exercise.
     """
+    db_submission_cls = submission_cls.get_model_class()
     with get_db() as db:
-        query = db.query(DBSubmission).filter_by(exercise_id=exercise_id)
+        query = db.query(db_submission_cls).filter_by(exercise_id=exercise_id)
         if only_ids is not None:
-            query = query.filter(DBSubmission.id.in_(only_ids))
-        return (Submission.from_orm(s) for s in query.all())
+            query = query.filter(db_submission_cls.id.in_(only_ids))
+        return (s.to_schema() for s in query.all())
 
 
 def store_submissions(submissions: List[Submission]):
     """Stores the given submissions, all at once."""
     with get_db() as db:
-        db_submissions = [DBSubmission(**s.dict()) for s in submissions]
-        for s in db_submissions:
-            db.merge(s)
+        for s in submissions:
+            db.merge(s.to_model())
         db.commit()
-
 
 def store_submission(submission: Submission):
     """Stores the given submission."""

@@ -21,5 +21,8 @@ class Feedback(Schema, ABC):
 
     meta: dict = Field(example={})
 
+    def to_model(self, is_suggestion: bool = False):
+        return type(self).get_model_class()(**self.dict(), is_suggestion=is_suggestion)
+
     class Config:
         orm_mode = True

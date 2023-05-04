@@ -5,13 +5,7 @@ from .model import Model
 from athena.database import Base
 
 
-class DBExercise(Model, Base):
-    __tablename__ = "exercises"
-    __mapper_args__ = {
-        "polymorphic_identity": "exercise",
-        "polymorphic_on": "type",
-    }
-
+class DBExercise(Model):
     id = Column(Integer, primary_key=True, index=True)
     title = Column(String, index=True)
     type = Column(SqlEnum(ExerciseType), index=True)

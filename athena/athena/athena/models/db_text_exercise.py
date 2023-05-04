@@ -3,10 +3,11 @@ from sqlalchemy.orm import relationship
 
 from . import DBExercise
 from athena.schemas import ExerciseType
+from athena.database import Base
 
 
-class DBTextExercise(DBExercise):
-    __mapper_args__ = {"polymorphic_identity": ExerciseType.text}
+class DBTextExercise(DBExercise, Base):
+    __tablename__ = "text_exercises"
 
     example_solution = Column(String)
 
