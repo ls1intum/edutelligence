@@ -9,12 +9,12 @@ from ..common.feedback_provider import feedback_provider as common_feedback_prov
 
 
 @wraps(common_submissions_consumer, assigned=("__name__", "__doc__"))
-def submissions_consumer(func: Callable[[Exercise, Submission], None]):
+def submissions_consumer(func: Callable[[Exercise, List[Submission]], None]):
     return common_submissions_consumer(func)
 
 
 @wraps(common_submission_selector, assigned=("__name__", "__doc__"))
-def submission_selector(func: Callable[[Exercise, Submission], Submission]):
+def submission_selector(func: Callable[[Exercise, List[Submission]], Submission]):
     return common_submission_selector(func)
 
 
