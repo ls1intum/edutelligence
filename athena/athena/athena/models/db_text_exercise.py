@@ -10,5 +10,5 @@ class DBTextExercise(DBExercise):
 
     example_solution = Column(String)
 
-    submissions = relationship("DBTextSubmission", back_populates="exercise")
-    feedbacks = relationship("DBTextFeedback", back_populates="exercise")
+    # submissions = relationship("DBTextSubmission", back_populates="exercise")
+    # feedbacks = relationship("DBTextFeedback", back_populates="exercise")
