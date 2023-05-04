@@ -1,15 +1,15 @@
-"""
-This module provides a decorator for submission selectors.
-"""
 import inspect
 from functools import wraps
-from typing import Callable, List
+from typing import TypeVar, Callable, List
 
-from .schemas import Exercise, Submission
 from athena.app import app
 from athena.logger import logger
-from athena.storage import get_stored_submissions
+from athena.schemas import Exercise, Submission, Feedback
+from athena.storage import store_feedback, get_stored_submissions, store_exercise, store_submissions
 
+E = TypeVar('E', bound=Exercise)
+S = TypeVar('S', bound=Submission)
+F = TypeVar('F', bound=Feedback)
 
 def wraps_except_annotations(func: Callable) -> Callable:
     """
@@ -23,7 +23,7 @@ def wraps_except_annotations(func: Callable) -> Callable:
     return wrapper
 
 
-def submission_selector(func: Callable[[Exercise, List[Submission]], Submission]):
+def submission_selector(func: Callable[[E, List[S]], S]):
     """
     Receive an exercise and some (not necessarily all!) submissions from the Assessment Module Manager and
     return the submission that should ideally be assessed next.
@@ -51,5 +51,49 @@ def submission_selector(func: Callable[[Exercise, List[Submission]], Submission]
         if submission is None:
             return -1
         return submission.id
+
+    return wrapper
+
+
+def submissions_consumer(func: Callable[[E, List[S]], None]):
+    """
+    Receive submissions from the Assessment Module Manager and automatically store them in the database.
+    The submissions consumer is usually called whenever the deadline for an exercise is reached.
+    """
+
+    @app.post("/submissions")
+    @wraps(func)
+    def wrapper(exercise, submissions):
+        store_exercise(exercise)
+        store_submissions(submissions)
+        return func(exercise, submissions)
+
+    return wrapper
+
+
+def feedback_consumer(func: Callable[[E, S, F], None]):
+    """
+    Receive feedback from the Assessment Module Manager and automatically store it in the database.
+    The feedback consumer is usually called whenever the LMS gets feedback from a tutor.
+    """
+
+    @app.post("/feedback")
+    @wraps(func)
+    def wrapper(exercise, submission, feedback):
+        store_feedback(feedback)
+        return func(exercise, submission, feedback)
+
+    return wrapper
+
+
+def feedback_provider(func: Callable[[E, S], List[F]]):
+    """
+    Provide feedback to the Assessment Module Manager.
+    The feedback provider is usually called whenever the tutor requests feedback for a submission in the LMS.
+    """
+    @app.post("/feedback_suggestions")
+    @wraps(func)
+    def wrapper(exercise, submission):
+        return func(exercise, submission)
 
     return wrapper

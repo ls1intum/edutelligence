@@ -1,8 +1,8 @@
 from typing import List, Iterable, Union
 
-from .models import DBSubmission
+from athena.models import DBSubmission
 from athena.database import get_db
-from athena.common.schemas import Submission
+from athena.schemas import Submission
 
 
 def get_stored_submissions(exercise_id: int, only_ids: Union[List[int], None] = None) -> Iterable[Submission]:

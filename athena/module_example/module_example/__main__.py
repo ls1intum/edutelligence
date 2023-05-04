@@ -1,9 +1,17 @@
 from typing import List
 
-from athena import app
-from athena.programming.schemas import Exercise, Submission, Feedback
-from athena.programming.decorators import feedback_consumer, feedback_provider, submissions_consumer, submission_selector
+from athena import app, submission_selector, submissions_consumer, feedback_consumer, feedback_provider
+from athena.programming import *
 from athena.helpers import get_programming_submission_zip
+
+
+@submission_selector
+def select_submission(exercise: Exercise, submissions: List[Submission]) -> Submission:
+    print(f"select_submission: Received {len(submissions)} submissions for exercise {exercise.id}")
+    for submission in submissions:
+        print(f"- Submission {submission.id}")
+    # Do something with the submissions and return the one that should be assessed next
+    return submissions[0]
 
 
 @submissions_consumer
@@ -16,15 +24,6 @@ def receive_submissions(exercise: Exercise, submissions: List[Submission]):
         for file in zip_content.namelist():
             print(f"  - {file}")
     # Do something with the submissions
-
-
-@submission_selector
-def select_submission(exercise: Exercise, submissions: List[Submission]) -> Submission:
-    print(f"select_submission: Received {len(submissions)} submissions for exercise {exercise.id}")
-    for submission in submissions:
-        print(f"- Submission {submission.id}")
-    # Do something with the submissions and return the one that should be assessed next
-    return submissions[0]
 
 
 @feedback_consumer

@@ -2,7 +2,7 @@ import abc
 
 from pydantic import BaseModel, Field
 
-from .exercise_type import ExerciseType
+from . import ExerciseType
 
 
 class Exercise(BaseModel, abc.ABC):

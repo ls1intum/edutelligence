@@ -1,18 +1,16 @@
 from typing import List, Iterable, Optional
 
-from .models import DBExercise
+from athena.models import DBExercise
 from athena.database import get_db
-from athena.common.schemas import ExerciseType, Exercise
-from athena.programming.schemas import Exercise as PExercise
-from athena.text.schemas import Exercise as TExercise
+from athena.schemas import ExerciseType, Exercise, ProgrammingExercise, TextExercise
 
 
 def _exercise_type_to_model(exercise_type: ExerciseType) -> type:
     """Returns the database model class for this exercise type."""
     if exercise_type == ExerciseType.text:
-        return TExercise
+        return TextExercise
     elif exercise_type == ExerciseType.programming:
-        return PExercise
+        return ProgrammingExercise
     else:
         raise ValueError(f"Unknown exercise type: {exercise_type}")
 
@@ -39,7 +37,7 @@ def get_stored_exercises(exercise_type: Optional[ExerciseType] = None, only_ids:
             query = query.filter_by(type=exercise_type.name)
         if only_ids is not None:
             query = query.filter(DBExercise.id.in_(only_ids))
-        return (_exercise_model_to_schema(exercise_type, e) for e in query.all())
+        return (_exercise_model_to_schema(e) for e in query.all())
 
 def store_exercises(exercises: List[Exercise]):
     """Stores the given exercises, all at once."""
