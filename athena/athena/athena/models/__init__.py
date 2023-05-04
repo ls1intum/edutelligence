@@ -1,4 +1,7 @@
 """Models are SQLAlchemy classes that represent database tables."""
+# Read
+# https://docs.pylonsproject.org/projects/pyramid_cookbook/en/latest/database/sqlalchemy.html#importing-all-sqlalchemy-models
+# about possible issues with circular imports here.
 
 from .db_exercise import DBExercise
 from .db_submission import DBSubmission
