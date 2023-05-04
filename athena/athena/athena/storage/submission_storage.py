@@ -1,6 +1,5 @@
 from typing import List, Iterable, Union, Type
 
-from athena.models import DBSubmission
 from athena.database import get_db
 from athena.schemas import Submission
 

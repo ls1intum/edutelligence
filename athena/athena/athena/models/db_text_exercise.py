@@ -1,9 +1,8 @@
-from sqlalchemy import Column, Integer, ForeignKey, String
+from sqlalchemy import Column, String
 from sqlalchemy.orm import relationship
 
-from . import DBExercise
-from athena.schemas import ExerciseType
 from athena.database import Base
+from . import DBExercise
 
 
 class DBTextExercise(DBExercise, Base):

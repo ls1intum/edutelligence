@@ -1,8 +1,7 @@
-from sqlalchemy import Column, Integer, String, Float, JSON, Enum as SqlEnum, ForeignKey
+from sqlalchemy import Column, Integer, String, Float, JSON, Enum as SqlEnum
 
 from athena.schemas import ExerciseType
 from .model import Model
-from athena.database import Base
 
 
 class DBExercise(Model):

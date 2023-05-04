@@ -1,9 +1,8 @@
 from sqlalchemy import ForeignKey, Integer, Column
 from sqlalchemy.orm import relationship
 
-from . import DBSubmission
-from athena.schemas import ExerciseType
 from athena.database import Base
+from . import DBSubmission
 
 
 class DBTextSubmission(DBSubmission, Base):

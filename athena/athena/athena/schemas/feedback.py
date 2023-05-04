@@ -12,7 +12,8 @@ class Feedback(Schema, ABC):
     submission_id: int = Field(example=1)
     detail_text: str = Field(description="The detailed feedback text that is shown to the student.",
                              example="Your solution is correct.")
-    reference: Optional[str] = Field(description="A optional reference to the location in the submission where the feedback applies.",
+    reference: Optional[str] = Field(description="A optional reference to the location in the submission where the "
+                                                 "feedback applies.",
                                      example="file:src/pe1/MergeSort.java_line:12")
     text: str = Field(description="The title of the feedback that is shown to the student.",
                       example="File src/pe1/MergeSort.java at line 12")

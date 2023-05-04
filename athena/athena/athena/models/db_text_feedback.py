@@ -1,9 +1,8 @@
 from sqlalchemy import Column, Integer, ForeignKey
 from sqlalchemy.orm import relationship
 
-from . import DBFeedback
-from athena.schemas import ExerciseType
 from athena.database import Base
+from . import DBFeedback
 
 
 class DBTextFeedback(DBFeedback, Base):

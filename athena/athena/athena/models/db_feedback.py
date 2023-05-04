@@ -1,7 +1,6 @@
-from sqlalchemy import Column, Integer, Boolean, String, Float, JSON, ForeignKey
+from sqlalchemy import Column, Integer, Boolean, String, Float, JSON
 
 from .model import Model
-from athena.database import Base
 
 
 class DBFeedback(Model):

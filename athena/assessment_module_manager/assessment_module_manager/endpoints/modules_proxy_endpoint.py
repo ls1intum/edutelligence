@@ -6,7 +6,7 @@ from starlette.responses import JSONResponse
 from assessment_module_manager.app import app
 from assessment_module_manager.module import ModuleResponse, AvailableModuleNames, find_module_by_name, \
     request_to_module
-from athena.common.schemas import ExerciseType
+from athena.schemas import ExerciseType
 
 
 @app.post(

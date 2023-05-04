@@ -1,7 +1,6 @@
-from sqlalchemy import Column, Integer, String, JSON, ForeignKey
+from sqlalchemy import Column, Integer, String, JSON
 
 from .model import Model
-from athena.database import Base
 
 
 class DBSubmission(Model):
