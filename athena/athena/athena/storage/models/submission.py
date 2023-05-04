@@ -1,7 +1,7 @@
 from sqlalchemy import Column, Integer, String, JSON, ForeignKey
 from sqlalchemy.orm import relationship
 
-from athena.storage.database import Base
+from athena.database import Base
 
 
 class DBSubmission(Base):

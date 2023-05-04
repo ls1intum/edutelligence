@@ -1,7 +1,8 @@
 from typing import List
 
 from athena import app
-from athena.programming import Exercise, Submission, Feedback, feedback_consumer, feedback_provider, submissions_consumer, submission_selector
+from athena.programming.schemas import Exercise, Submission, Feedback
+from athena.programming.decorators import feedback_consumer, feedback_provider, submissions_consumer, submission_selector
 from athena.helpers import get_programming_submission_zip
 
 

@@ -1,7 +1,7 @@
 from typing import Iterable, Union
 
-from .database import get_db
 from .models import DBFeedback
+from athena.database import get_db
 from athena.common.schemas import Feedback
 
 

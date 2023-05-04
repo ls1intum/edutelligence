@@ -7,11 +7,10 @@ import os
 
 import uvicorn
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI
 
 from .logger import logger
-from .storage.database import create_tables
+from .database import create_tables
 
 
 class FastAPIWithStart(FastAPI):

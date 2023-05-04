@@ -3,7 +3,6 @@ import abc
 from pydantic import BaseModel, Field
 
 from .exercise_type import ExerciseType
-# from athena.storage.models.exercise import DBExercise
 
 
 class Exercise(BaseModel, abc.ABC):
@@ -25,9 +24,11 @@ class Exercise(BaseModel, abc.ABC):
 
     meta: dict = Field(example={"internal_id": "5"})
 
+    @staticmethod
     @abc.abstractmethod
-    def to_db_model(self):# -> DBExercise: # TODO: add type again here
-        ...
+    def get_model_class() -> type:
+        """Returns the database model class for this exercise type."""
+        raise NotImplementedError()
 
     class Config:
         orm_mode = True
