@@ -18,6 +18,15 @@ class ModuleResponse(GenericModel, Generic[T]):
     data: T
 
 
+async def find_module_by_name(module_name: AvailableModuleNames) -> Module:
+    """
+    Helper function to find a module by name.
+    """
+    for module in list_modules():
+        if module.name == module_name:
+            return module
+
+
 async def request_to_module(module: Module, path: str, data: dict) -> ModuleResponse:
     """
     Helper function to send a request to a module.
@@ -40,13 +49,3 @@ async def request_to_module(module: Module, path: str, data: dict) -> ModuleResp
             detail=ModuleResponse(module_name=module.name, status=response.status_code, data=response_data).dict(),
         )
     return ModuleResponse(module_name=module.name, status=response.status_code, data=response.json())
-
-
-async def request_to_module_by_name(module_name: AvailableModuleNames, path: str, data: dict) -> ModuleResponse:
-    """
-    Helper function to send a request to a module by finding it by name.
-    """
-    for module in list_modules():
-        if module.name == module_name:
-            return await request_to_module(module, path, data)
-    raise HTTPException(status_code=503, detail=f"Module {module_name} is not available")
