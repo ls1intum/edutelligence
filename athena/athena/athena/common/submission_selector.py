@@ -29,9 +29,11 @@ def submission_selector(func: Callable[[Exercise, List[Submission]], Submission]
     return the submission that should ideally be assessed next.
     If the selector returns None, the LMS will select a random submission in the end.
     """
+    exercise_type = func.__annotations__["exercise"]
+
     @app.post("/select_submission")
     @wraps_except_annotations
-    def wrapper(exercise: Exercise, submission_ids: List[int]) -> int:
+    def wrapper(exercise: exercise_type, submission_ids: List[int]) -> int:
         # The wrapper handles only transmitting submission IDs for efficiency, but the actual selection logic
         # only works with the full submission objects.
 
