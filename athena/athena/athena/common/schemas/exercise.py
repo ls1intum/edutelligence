@@ -1,6 +1,6 @@
 import abc
 
-from pydantic import BaseModel, Field, AnyUrl
+from pydantic import BaseModel, Field
 
 from .exercise_type import ExerciseType
 # from athena.storage.models.exercise import DBExercise
@@ -25,29 +25,9 @@ class Exercise(BaseModel, abc.ABC):
 
     meta: dict = Field(example={"internal_id": "5"})
 
-    #@abc.abstractmethod
-    #def to_db_model(self) -> DBExercise:
-    #    ...
+    @abc.abstractmethod
+    def to_db_model(self):# -> DBExercise: # TODO: add type again here
+        ...
 
     class Config:
         orm_mode = True
-
-
-class TextExercise(Exercise):
-    """A text exercise."""
-    type: ExerciseType = Field(default=ExerciseType.text, const=True)
-
-    example_solution: str = Field(example="The answer is 42.")
-
-
-class ProgrammingExercise(Exercise):
-    """A programming exercise exercise."""
-    type: ExerciseType = Field(default=ExerciseType.programming, const=True)
-
-    programming_language: str = Field(description="The programming language that is used for this exercise.", example="java")
-    solution_repository_url: AnyUrl = Field(description="URL to the solution git repository, which contains the reference solution.",
-                                            example="http://localhost:3000/api/example-solutions/1")
-    template_repository_url: AnyUrl = Field(description="URL to the template git repository, which is the starting point for students.",
-                                            example="http://localhost:3000/api/example-template/1")
-    tests_repository_url: AnyUrl = Field(description="URL to the tests git repository, which contains the tests that are used to automatically grade the exercise.",
-                                         example="http://localhost:3000/api/example-tests/1")

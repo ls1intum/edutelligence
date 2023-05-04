@@ -5,9 +5,8 @@ import httpx
 from fastapi import HTTPException
 from pydantic.generics import GenericModel
 
-from athena.common.schemas import Exercise  # TODO: should be specific to exercise type
+from . import AvailableModuleNames, list_modules
 from .module import Module
-from .resolve_module import resolve_module
 
 T = TypeVar('T')
 class ModuleResponse(GenericModel, Generic[T]):
@@ -43,13 +42,11 @@ async def request_to_module(module: Module, path: str, data: dict) -> ModuleResp
     return ModuleResponse(module_name=module.name, status=response.status_code, data=response.json())
 
 
-async def request_to_module_by_exercise(exercise: Exercise, path: str, data: dict) -> ModuleResponse:
+async def request_to_module_by_name(module_name: AvailableModuleNames, path: str, data: dict) -> ModuleResponse:
     """
-    Helper function to send a request to a module by resolving the module from the exercise.
-    It raises appropriate FastAPI HTTPException if the request fails or if no fitting module is found.
+    Helper function to send a request to a module by finding it by name.
     """
-    try:
-        module = resolve_module(exercise)
-    except ValueError:
-        raise HTTPException(status_code=422, detail=f"No module found for exercise {exercise.id} of type {exercise.type}")
-    return await request_to_module(module, path, data)
+    for module in list_modules():
+        if module.name == module_name:
+            return await request_to_module(module, path, data)
+    raise HTTPException(status_code=503, detail=f"Module {module_name} is not available")
