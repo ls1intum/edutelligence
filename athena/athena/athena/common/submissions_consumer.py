@@ -6,7 +6,7 @@ from typing import List, Callable
 
 from .schemas import Exercise, Submission
 from ..app import app
-from ..storage import store_submissions, store_exercise
+from athena.storage import store_submissions, store_exercise
 
 def submissions_consumer(func: Callable[[Exercise, List[Submission]], None]):
     """

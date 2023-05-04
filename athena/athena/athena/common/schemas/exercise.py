@@ -1,15 +1,9 @@
 import abc
-from enum import Enum
 
 from pydantic import BaseModel, Field, AnyUrl
 
-from athena.storage import DBExercise
-
-
-class ExerciseType(str, Enum):
-    """The type of the exercise."""
-    text = "text"
-    programming = "programming"
+from .exercise_type import ExerciseType
+# from athena.storage.models.exercise import DBExercise
 
 
 class Exercise(BaseModel, abc.ABC):
@@ -31,9 +25,9 @@ class Exercise(BaseModel, abc.ABC):
 
     meta: dict = Field(example={"internal_id": "5"})
 
-    @abc.abstractmethod
-    def to_db_model(self) -> DBExercise:
-        ...
+    #@abc.abstractmethod
+    #def to_db_model(self) -> DBExercise:
+    #    ...
 
     class Config:
         orm_mode = True

@@ -5,8 +5,8 @@ from functools import wraps
 from typing import Callable
 
 from .schemas import Exercise, Submission, Feedback
-from ..app import app
-from ..storage import store_feedback
+from athena.app import app
+from athena.storage import store_feedback
 
 
 def feedback_consumer(func: Callable[[Exercise, Submission, Feedback], None]):

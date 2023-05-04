@@ -5,7 +5,7 @@ import httpx
 from fastapi import HTTPException
 from pydantic.generics import GenericModel
 
-from athena import ExerciseTypeVar
+from athena.common.schemas import Exercise  # TODO: should be specific to exercise type
 from .module import Module
 from .resolve_module import resolve_module
 
@@ -43,7 +43,7 @@ async def request_to_module(module: Module, path: str, data: dict) -> ModuleResp
     return ModuleResponse(module_name=module.name, status=response.status_code, data=response.json())
 
 
-async def request_to_module_by_exercise(exercise: ExerciseTypeVar, path: str, data: dict) -> ModuleResponse:
+async def request_to_module_by_exercise(exercise: Exercise, path: str, data: dict) -> ModuleResponse:
     """
     Helper function to send a request to a module by resolving the module from the exercise.
     It raises appropriate FastAPI HTTPException if the request fails or if no fitting module is found.

@@ -3,7 +3,7 @@ import runpy
 from pathlib import Path
 
 from .app import app
-from .schemas import *
+from .common.schemas import ExerciseType
 from .common import feedback_consumer, feedback_provider, submission_selector, submissions_consumer
 
 
@@ -21,12 +21,7 @@ def run_module():
 
 
 __all__ = [
-    "Exercise",
-    "ProgrammingExercise",
-    "TextExercise",
     "ExerciseType",
-    "Submission",
-    "Feedback",
     "feedback_consumer",
     "submissions_consumer",
     "submission_selector",

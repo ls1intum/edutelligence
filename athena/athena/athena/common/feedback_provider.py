@@ -2,7 +2,7 @@ from functools import wraps
 from typing import Callable, List
 
 from .schemas import Exercise, Submission, Feedback
-from ..app import app
+from athena.app import app
 
 
 def feedback_provider(func: Callable[[Exercise, Submission], List[Feedback]]):

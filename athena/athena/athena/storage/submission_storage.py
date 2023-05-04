@@ -2,7 +2,7 @@ from typing import List, Iterable, Union
 
 from .database import get_db
 from .models import DBSubmission
-from ..schemas import Submission
+from athena.common.schemas import Submission
 
 
 def get_stored_submissions(exercise_id: int, only_ids: Union[List[int], None] = None) -> Iterable[Submission]:

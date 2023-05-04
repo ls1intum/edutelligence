@@ -1,9 +1,11 @@
-from athena import ExerciseTypeVar
+# TODO: The module resolver should work based on URL, automatically
+
 from .list_modules import list_modules
 from .module import Module
+from athena.common.schemas import Exercise
 
 
-def resolve_module(exercise: ExerciseTypeVar) -> Module:
+def resolve_module(exercise: Exercise) -> Module:
     """
     Find an available module fitting for the given exercise.
     """

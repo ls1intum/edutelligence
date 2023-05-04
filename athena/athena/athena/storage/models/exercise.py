@@ -1,7 +1,7 @@
 from sqlalchemy import Column, Integer, String, Float, JSON, Enum as SqlEnum, ForeignKey
 from sqlalchemy.orm import relationship
 
-from athena.schemas import ExerciseType
+from athena.common.schemas.exercise_type import ExerciseType
 from athena.storage.database import Base
 
 

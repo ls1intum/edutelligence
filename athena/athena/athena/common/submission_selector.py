@@ -6,9 +6,9 @@ from functools import wraps
 from typing import Callable, List
 
 from .schemas import Exercise, Submission
-from ..app import app
-from ..logger import logger
-from ..storage import get_stored_submissions
+from athena.app import app
+from athena.logger import logger
+from athena.storage import get_stored_submissions
 
 
 def wraps_except_annotations(func: Callable) -> Callable:

@@ -2,7 +2,7 @@ from typing import List, Iterable, Union
 
 from .database import get_db
 from .models.exercise import DBExercise, DBTextExercise, DBProgrammingExercise
-from ..schemas import Exercise, TextExercise, ProgrammingExercise, ExerciseType
+from athena.common.schemas import Exercise, ExerciseType
 
 
 def _exercise_from_db_model(db_exercise) -> Exercise:

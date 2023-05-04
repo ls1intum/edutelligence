@@ -2,7 +2,7 @@ from typing import List
 
 from assessment_module_manager.app import app
 from assessment_module_manager.module import ModuleResponse, request_to_module_by_exercise
-from athena import ExerciseTypeVar, Submission, Feedback
+from athena.common.schemas import Exercise, Submission, Feedback  # TODO: should be specific to exercise type
 
 
 @app.post('/feedback_suggestions', responses={
@@ -10,7 +10,7 @@ from athena import ExerciseTypeVar, Submission, Feedback
         "description": "Module is not available",
     },
 })
-async def get_feedback_suggestions(exercise: ExerciseTypeVar, submission: Submission) -> ModuleResponse[List[Feedback]]:
+async def get_feedback_suggestions(exercise: Exercise, submission: Submission) -> ModuleResponse[List[Feedback]]:
     """
     This endpoint is called by the LMS to get suggestions for feedback.
     """

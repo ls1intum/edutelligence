@@ -2,7 +2,7 @@ from typing import Iterable, Union
 
 from .database import get_db
 from .models import DBFeedback
-from ..schemas import Feedback
+from athena.common.schemas import Feedback
 
 
 def get_stored_feedback(exercise_id: int, submission_id: Union[int, None]) -> Iterable[Feedback]:

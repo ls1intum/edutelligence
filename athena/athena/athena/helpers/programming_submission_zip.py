@@ -3,7 +3,7 @@ from tempfile import NamedTemporaryFile
 
 import httpx
 
-from athena import Submission
+from athena.programming import Submission
 
 
 def get_programming_submission_zip(submission: Submission) -> zipfile.ZipFile:
