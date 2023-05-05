@@ -1,6 +1,8 @@
+from pydantic import Field
+
 from . import Submission
 
 
 class TextSubmission(Submission):
     """Submission on a text exercise."""
-    pass
+    content: str = Field(example="Lorem ipsum dolor sit amet, consectetur adipiscing elit.")

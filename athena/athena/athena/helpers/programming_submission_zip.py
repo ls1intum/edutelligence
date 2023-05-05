@@ -3,15 +3,15 @@ from tempfile import NamedTemporaryFile
 
 import httpx
 
-from athena.programming import Submission
+from athena.schemas import ProgrammingSubmission
 
 
-def get_programming_submission_zip(submission: Submission) -> zipfile.ZipFile:
+def get_programming_submission_zip(submission: ProgrammingSubmission) -> zipfile.ZipFile:
     """
     Get the programming submission content, which is a zip file of the code.
     This will download the submission and return a ZipFile object.
     """
-    url = submission.content
+    url = submission.repository_url
     with httpx.stream("GET", url) as response:
         response.raise_for_status()
         temp_file = NamedTemporaryFile()
