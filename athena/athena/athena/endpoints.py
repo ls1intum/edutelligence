@@ -1,6 +1,6 @@
 import inspect
 from functools import wraps
-from typing import TypeVar, Callable, List
+from typing import TypeVar, Callable, List, Annotated
 
 from athena.app import app
 from athena.logger import logger
@@ -29,12 +29,12 @@ def submission_selector(func: Callable[[E, List[S]], S]):
     return the submission that should ideally be assessed next.
     If the selector returns None, the LMS will select a random submission in the end.
     """
-    exercise_type = func.__annotations__["exercise"]
-    submission_type = func.__annotations__["return"]
+    exercise_type = inspect.signature(func).parameters["exercise"].annotation
+    submission_type = inspect.signature(func).parameters["submissions"].annotation.__args__[0]
 
     @app.post("/select_submission")
     @wraps_except_annotations
-    def wrapper(exercise: exercise_type, submission_ids: List[int]) -> int:
+    def wrapper(exercise: Annotated[E, exercise_type], submission_ids: List[int]) -> int:
         # The wrapper handles only transmitting submission IDs for efficiency, but the actual selection logic
         # only works with the full submission objects.
 
