@@ -1,5 +1,5 @@
 import json
-from typing import TypeVar, Generic
+from typing import TypeVar, Generic, Optional
 
 import httpx
 from fastapi import HTTPException
@@ -18,7 +18,7 @@ class ModuleResponse(GenericModel, Generic[T]):
     data: T
 
 
-async def find_module_by_name(module_name: AvailableModuleNames) -> Module:
+async def find_module_by_name(module_name: AvailableModuleNames) -> Optional[Module]:
     """
     Helper function to find a module by name.
     """
