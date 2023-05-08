@@ -7,8 +7,9 @@ import FeedbackSelect from "@/pages/components/feedback_select";
 import Feedback from "@/pages/model/feedback";
 import ModuleResponse from "@/pages/model/module_response";
 import ModuleResponseView from "@/pages/components/module_response_view";
+import {ModuleMeta} from "@/pages/model/health_response";
 
-async function sendFeedback(athenaUrl: string, exercise: Exercise | null, submission: Submission | null, feedback: Feedback | null): Promise<ModuleResponse | undefined> {
+async function sendFeedback(athenaUrl: string, module: ModuleMeta, exercise: Exercise | null, submission: Submission | null, feedback: Feedback | null): Promise<ModuleResponse | undefined> {
     if (!exercise) {
         alert("Please select an exercise");
         return;
@@ -22,7 +23,7 @@ async function sendFeedback(athenaUrl: string, exercise: Exercise | null, submis
         return;
     }
     try {
-        const athenaFeedbackUrl = `${athenaUrl}/feedback`;
+        const athenaFeedbackUrl = `${athenaUrl}/modules/${module.type}/${module.name}/feedback`;
         const response = await fetch(`/api/athena_request?${new URLSearchParams({ url: athenaFeedbackUrl })}`, {
             method: 'POST',
             headers: {
@@ -47,7 +48,7 @@ async function sendFeedback(athenaUrl: string, exercise: Exercise | null, submis
     }
 }
 
-export default function SendFeedback({ athenaUrl }: { athenaUrl: string }) {
+export default function SendFeedback({ athenaUrl, module }: { athenaUrl: string, module: ModuleMeta }) {
     const [exercise, setExercise] = useState<Exercise | null>(null);
     const [submission, setSubmission] = useState<Submission | null>(null);
     const [feedback, setFeedback] = useState<Feedback | null>(null);
@@ -62,7 +63,7 @@ export default function SendFeedback({ athenaUrl }: { athenaUrl: string }) {
                 This usually happens when someone gives feedback on the submission in the LMS.
                 The matching module for the exercise will receive the feedback at the function annotated with <code>@feedback_consumer</code>.
             </p>
-            <ExerciseSelect exercise={exercise} onChange={setExercise} />
+            <ExerciseSelect exerciseType={module.type} exercise={exercise} onChange={setExercise} />
             <SubmissionSelect exercise_id={exercise?.id} submission={submission} onChange={setSubmission} />
             <FeedbackSelect exercise_id={exercise?.id} submission_id={submission?.id} feedback={feedback} onChange={setFeedback} />
             <ModuleResponseView response={response} />
@@ -70,7 +71,7 @@ export default function SendFeedback({ athenaUrl }: { athenaUrl: string }) {
                 className="bg-blue-500 text-white rounded-md p-2 mt-4"
                 onClick={() => {
                     setLoading(true);
-                    sendFeedback(athenaUrl, exercise, submission, feedback)
+                    sendFeedback(athenaUrl, module, exercise, submission, feedback)
                         .then(setResponse)
                         .finally(() => setLoading(false));
                 }}

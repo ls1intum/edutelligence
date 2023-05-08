@@ -1,18 +1,18 @@
 import type {NextApiRequest, NextApiResponse} from 'next';
-import type Submission from '@/pages/model/submission';
+import type {Submission} from '@/pages/model/submission';
 
 const exampleSubmissions: Submission[] = [
     {
         id: 1,
         exercise_id: 1,
-        content: 'http://localhost:3000/api/programming-submissions/1.zip',
+        repository_url: 'http://localhost:3000/api/programming-submissions/1.zip',
         student_id: 1,
         meta: {}
     },
     {
         id: 2,
         exercise_id: 1,
-        content: 'http://localhost:3000/api/programming-submissions/2.zip',
+        repository_url: 'http://localhost:3000/api/programming-submissions/2.zip',
         student_id: 2,
         meta: {}
     },

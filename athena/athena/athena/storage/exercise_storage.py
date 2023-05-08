@@ -1,48 +1,31 @@
-from typing import List, Iterable, Union
+from typing import List, Iterable, Optional, Type
 
-from .database import get_db
-from .models.exercise import DBExercise, DBTextExercise, DBProgrammingExercise
-from ..schemas import TextExercise, ProgrammingExercise, ExerciseType, ExerciseTypeVar
+from athena.database import get_db
+from athena.schemas import Exercise
 
-from ..logger import logger
 
-def _exercise_from_db_model(db_exercise) -> ExerciseTypeVar:
-    if db_exercise.type == ExerciseType.text:
-        return TextExercise.from_orm(db_exercise)
-    elif db_exercise.type == ExerciseType.programming:
-        return ProgrammingExercise.from_orm(db_exercise)
-    else:
-        raise ValueError(f"Unknown exercise type: {db_exercise.type}")
-
-def get_stored_exercises(type: Union[ExerciseTypeVar, None] = None, only_ids: Union[List[int], None] = None) -> Iterable[ExerciseTypeVar]:
+def get_stored_exercises(exercise_cls: Type[Exercise], only_ids: Optional[List[int]] = None) -> Iterable[Exercise]:
     """
     Returns a list of exercises for the given exercise type and exercise ids.
     If type is None, returns all exercises.
     If only_ids is None, returns all exercises for the given exercise type.
     """
+    db_exercise_cls = exercise_cls.get_model_class()
     with get_db() as db:
-        query = db.query(DBExercise)
+        query = db.query(db_exercise_cls)
         if type is not None:
-            query = query.filter_by(type=type)
+            query = query.all()
         if only_ids is not None:
-            query = query.filter(DBExercise.id.in_(only_ids))
-        return (_exercise_from_db_model(e) for e in query.all())
+            query = query.filter(db_exercise_cls.id.in_(only_ids))
+        return (e.to_schema() for e in query.all())
 
-def store_exercises(exercises: List[ExerciseTypeVar]):
+def store_exercises(exercises: List[Exercise]):
     """Stores the given exercises, all at once."""
     with get_db() as db:
-        db_exercises = []
         for e in exercises:
-            if isinstance(e, TextExercise):
-                db_exercises.append(DBTextExercise(**e.dict()))
-            elif isinstance(e, ProgrammingExercise):
-                db_exercises.append(DBProgrammingExercise(**e.dict()))
-            else:
-                raise ValueError(f"Unknown exercise type: {type(e)}")
-        for e in db_exercises:
-            db.merge(e)
+            db.merge(e.to_model())
         db.commit()
 
-def store_exercise(exercise: ExerciseTypeVar):
+def store_exercise(exercise: Exercise):
     """Stores the given exercise."""
     store_exercises([exercise])

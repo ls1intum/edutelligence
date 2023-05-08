@@ -1,40 +1,45 @@
-from typing import Iterable, Union
+from typing import Iterable, Union, Type
 
-from .database import get_db
-from .models import DBFeedback
-from ..schemas import Feedback
+from athena.database import get_db
+from athena.schemas import Feedback
 
 
-def get_stored_feedback(exercise_id: int, submission_id: Union[int, None]) -> Iterable[Feedback]:
+def get_stored_feedback(
+        feedback_cls: Type[Feedback], exercise_id: int, submission_id: Union[int, None]
+) -> Iterable[Feedback]:
     """
     Returns a list of feedbacks for the given exercise in the given submission.
     If submission_id is None, returns all feedbacks for the given exercise.
     """
+    db_feedback_cls = feedback_cls.get_model_class()
     with get_db() as db:
-        query = db.query(DBFeedback).filter_by(exercise_id=exercise_id, is_suggestion=0)
+        query = db.query(db_feedback_cls).filter_by(exercise_id=exercise_id, is_suggestion=0)
         if submission_id is not None:
             query = query.filter_by(submission_id=submission_id)
-        return (Feedback.from_orm(f) for f in query.all())
+        return (f.to_schema() for f in query.all())
 
 
 def store_feedback(feedback: Feedback):
     """Stores the given feedback."""
     with get_db() as db:
-        db.add(DBFeedback(**feedback.dict(), is_suggestion=False))
+        db.add(feedback.to_model())
         db.commit()
 
 
-def get_stored_feedback_suggestions(exercise_id: str, submission_id: int) -> Iterable[Feedback]:
+def get_stored_feedback_suggestions(
+        feedback_cls: Type[Feedback], exercise_id: str, submission_id: int
+) -> Iterable[Feedback]:
     """Returns a list of feedback suggestions for the given exercise in the given submission."""
+    db_feedback_cls = feedback_cls.get_model_class()
     with get_db() as db:
-        query = db.query(DBFeedback).filter_by(exercise_id=exercise_id, is_suggestion=True)
+        query = db.query(db_feedback_cls).filter_by(exercise_id=exercise_id, is_suggestion=True)
         if submission_id is not None:
             query = query.filter_by(submission_id=submission_id)
-        return (Feedback(**f) for f in query.all())
+        return (f.to_schema() for f in query.all())
 
 
 def store_feedback_suggestion(feedback: Feedback):
     """Stores the given feedback as a suggestion."""
     with get_db() as db:
-        db.add(DBFeedback(**feedback.dict(), is_suggestion=1))
+        db.add(feedback.to_model(is_suggestion=True))
         db.commit()

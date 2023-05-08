@@ -1,10 +1,10 @@
 import httpx
 from pydantic import BaseModel, Field
 
+from .modules_endpoint import get_modules
 from assessment_module_manager.app import app
 from assessment_module_manager.logger import logger
 from assessment_module_manager.module import Module
-from .modules_endpoint import get_modules
 
 
 async def is_healthy(module: Module) -> bool:
@@ -34,6 +34,7 @@ class HealthResponse(BaseModel):
             {
                 "module_example": {
                     "url": "http://localhost:5001",
+                    "type": "programming",
                     "healthy": True
                 }
             }
@@ -51,6 +52,7 @@ async def get_health() -> HealthResponse:
         modules={
             module.name: {
                 "url": module.url,
+                "type": module.type,
                 "healthy": await is_healthy(module),
             }
             for module in get_modules()

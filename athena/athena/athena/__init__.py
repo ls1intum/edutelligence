@@ -3,11 +3,8 @@ import runpy
 from pathlib import Path
 
 from .app import app
-from .feedback_consumer import feedback_consumer
-from .feedback_provider import feedback_provider
-from .schemas import *
-from .submission_selector import submission_selector
-from .submissions_consumer import submissions_consumer
+from .schemas import ExerciseType
+from .endpoints import submission_selector, submissions_consumer, feedback_consumer, feedback_provider
 
 
 @app.get("/")
@@ -24,16 +21,10 @@ def run_module():
 
 
 __all__ = [
-    "Exercise",
-    "ProgrammingExercise",
-    "TextExercise",
-    "ExerciseTypeVar"
-    "ExerciseType",
-    "Submission",
-    "Feedback",
-    "feedback_consumer",
-    "submissions_consumer",
     "submission_selector",
+    "submissions_consumer",
+    "feedback_consumer",
     "feedback_provider",
+    "ExerciseType",
     "app"
 ]

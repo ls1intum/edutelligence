@@ -4,8 +4,9 @@ import { Exercise } from "@/pages/model/exercise";
 import ExerciseSelect from "@/pages/components/exercise_select";
 import ModuleResponse from "@/pages/model/module_response";
 import ModuleResponseView from "@/pages/components/module_response_view";
+import {ModuleMeta} from "@/pages/model/health_response";
 
-async function sendSubmissions(athenaUrl: string, exercise: Exercise | null): Promise<ModuleResponse | undefined> {
+async function sendSubmissions(athenaUrl: string, module: ModuleMeta, exercise: Exercise | null): Promise<ModuleResponse | undefined> {
     if (!exercise) {
         alert("Please select an exercise");
         return;
@@ -14,7 +15,7 @@ async function sendSubmissions(athenaUrl: string, exercise: Exercise | null): Pr
     const submissions: Submission[] = await submissionsResponse.json();
     let response;
     try {
-        const athenaSubmissionsUrl = `${athenaUrl}/submissions`;
+        const athenaSubmissionsUrl = `${athenaUrl}/modules/${module.type}/${module.name}/submissions`;
         response = await fetch(`/api/athena_request?${ new URLSearchParams({url: athenaSubmissionsUrl}) }`, {
             method: 'POST',
             headers: {
@@ -44,7 +45,7 @@ async function sendSubmissions(athenaUrl: string, exercise: Exercise | null): Pr
 }
 
 export default function SendSubmissions(
-    { athenaUrl }: { athenaUrl: string }
+    { athenaUrl, module }: { athenaUrl: string, module: ModuleMeta }
 ) {
     const [exercise, setExercise] = useState<Exercise | null>(null);
     const [loading, setLoading] = useState<boolean>(false);
@@ -58,13 +59,13 @@ export default function SendSubmissions(
                 This usually happens when the exercise deadline is reached in the LMS.
                 The matching module for the exercise will receive the submissions at the function annotated with <code>@submission_consumer</code>.
             </p>
-            <ExerciseSelect exercise={exercise} onChange={setExercise} />
+            <ExerciseSelect exerciseType={module.type} exercise={exercise} onChange={setExercise} />
             <ModuleResponseView response={response} />
             <button
                 className="bg-blue-500 text-white rounded-md p-2 mt-4"
                 onClick={() => {
                     setLoading(true);
-                    sendSubmissions(athenaUrl, exercise)
+                    sendSubmissions(athenaUrl, module, exercise)
                         .then(setResponse)
                         .finally(() => setLoading(false));
                 } }

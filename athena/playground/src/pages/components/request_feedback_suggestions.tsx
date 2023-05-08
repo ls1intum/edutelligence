@@ -5,8 +5,9 @@ import ExerciseSelect from "@/pages/components/exercise_select";
 import SubmissionSelect from "@/pages/components/submission_select";
 import ModuleResponse from "@/pages/model/module_response";
 import ModuleResponseView from "@/pages/components/module_response_view";
+import {ModuleMeta} from "@/pages/model/health_response";
 
-async function requestFeedbackSuggestions(athenaUrl: string, exercise: Exercise | null, submission: Submission | null): Promise<ModuleResponse | undefined> {
+async function requestFeedbackSuggestions(athenaUrl: string, module: ModuleMeta, exercise: Exercise | null, submission: Submission | null): Promise<ModuleResponse | undefined> {
     if (!exercise) {
         alert("Please select an exercise");
         return;
@@ -16,7 +17,7 @@ async function requestFeedbackSuggestions(athenaUrl: string, exercise: Exercise 
         return;
     }
     try {
-        const athenaFeedbackUrl = `${athenaUrl}/feedback_suggestions`;
+        const athenaFeedbackUrl = `${athenaUrl}/modules/${module.type}/${module.name}/feedback_suggestions`;
         const response = await fetch(`/api/athena_request?${new URLSearchParams({ url: athenaFeedbackUrl })}`, {
             method: 'POST',
             headers: {
@@ -41,7 +42,7 @@ async function requestFeedbackSuggestions(athenaUrl: string, exercise: Exercise 
     }
 }
 
-export default function RequestFeedbackSuggestions({ athenaUrl }: { athenaUrl: string }) {
+export default function RequestFeedbackSuggestions({ athenaUrl, module }: { athenaUrl: string, module: ModuleMeta }) {
     const [exercise, setExercise] = useState<Exercise | null>(null);
     const [submission, setSubmission] = useState<Submission | null>(null);
     const [loading, setLoading] = useState<boolean>(false);
@@ -55,14 +56,14 @@ export default function RequestFeedbackSuggestions({ athenaUrl }: { athenaUrl: s
                 The LMS would usually call this when a tutor starts grading a submission.
                 The matching module for the exercise will receive the request at the function annotated with <code>@feedback_provider</code>.
             </p>
-            <ExerciseSelect exercise={exercise} onChange={setExercise} />
+            <ExerciseSelect exerciseType={module.type} exercise={exercise} onChange={setExercise} />
             <SubmissionSelect exercise_id={exercise?.id} submission={submission} onChange={setSubmission} />
             <ModuleResponseView response={response} />
             <button
                 className="bg-blue-500 text-white rounded-md p-2 mt-4"
                 onClick={() => {
                     setLoading(true);
-                    requestFeedbackSuggestions(athenaUrl, exercise, submission)
+                    requestFeedbackSuggestions(athenaUrl, module, exercise, submission)
                         .then(setResponse)
                         .finally(() => setLoading(false));
                 }}

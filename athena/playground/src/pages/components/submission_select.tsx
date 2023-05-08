@@ -1,5 +1,5 @@
 import useSWR from "swr";
-import Submission from "@/pages/model/submission";
+import {ProgrammingSubmission, Submission, TextSubmission} from "@/pages/model/submission";
 import fetcher from "@/pages/fetcher";
 
 export default function SubmissionSelect(
@@ -16,7 +16,14 @@ export default function SubmissionSelect(
             <span className="text-lg font-bold">Submission</span>
             <select className="border border-gray-300 rounded-md p-2" value={submission?.id || ""} onChange={e => onChange(filteredSubmissions.find((sub: Submission) => sub.id === parseInt(e.target.value)))}>
                 <option value={""} disabled>Select a submission</option>
-                {filteredSubmissions.map((sub: Submission) => <option key={sub.id} value={sub.id}>{sub.id} {sub.content.substring(0, 80)}</option>)}
+                {filteredSubmissions.map((sub: Submission) => {
+                    const contentPreview = (sub as TextSubmission)?.content || (sub as ProgrammingSubmission)?.repository_url || "?";
+                    return <option
+                        key={sub.id}
+                        value={sub.id}>
+                        {sub.id} {contentPreview.substring(0, 80)}
+                    </option>;
+                })}
             </select>
         </label>
     );

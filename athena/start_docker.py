@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+"""
+Helper script to start all docker-compose files
+for the assessment module manager and all assessment modules.
+"""
 
 import os
 import subprocess
@@ -11,9 +15,12 @@ logger = getLogger(__name__)
 
 def get_module_folders(args):
     if not args:
-        return [dir_name for dir_name in os.listdir() if os.path.isdir(dir_name) and dir_name.startswith('module_')]
-    else:
-        return args
+        return [
+            dir_name
+            for dir_name in os.listdir()
+            if os.path.isdir(dir_name) and dir_name.startswith('module_')
+        ]
+    return args
 
 
 def filter_valid_modules(modules):
@@ -22,7 +29,7 @@ def filter_valid_modules(modules):
         if os.path.isdir(module) and os.path.isfile(os.path.join(module, "docker-compose.yml")):
             valid_modules.append(module)
         else:
-            logger.warning(f"Skipping module '{module}' because it is not a valid module folder")
+            logger.warning("Skipping module '%s' because it is not a valid module folder", module)
     return valid_modules
 
 
@@ -42,6 +49,9 @@ def start_docker_compose_files(compose_files, env_files):
 
 
 def main():
+    """
+    Actually start the docker-compose files
+    """
     modules = get_module_folders(sys.argv[1:])
     valid_modules = filter_valid_modules(modules)
 
@@ -52,7 +62,7 @@ def main():
 
     logger.info("Building docker-compose file for assessment module manager...")
     for module, compose_file in zip(valid_modules, compose_files):
-        logger.info(f"Building docker-compose.yml for '{module}'...")
+        logger.info("Building docker-compose.yml for '%s'...", module)
         build_docker_compose_files(["-f", compose_file])
 
     logger.info("Starting docker-compose files...")
