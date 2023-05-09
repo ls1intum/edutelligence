@@ -2,7 +2,6 @@ from typing import List
 
 from athena import app, submission_selector, submissions_consumer, feedback_consumer, feedback_provider
 from athena.programming import *
-from athena.helpers import get_programming_submission_zip
 
 
 @submission_selector
@@ -19,7 +18,7 @@ def receive_submissions(exercise: Exercise, submissions: List[Submission]):
     print(f"receive_submissions: Received {len(submissions)} submissions for exercise {exercise.id}")
     for submission in submissions:
         print(f"- Submission {submission.id}")
-        zip_content = get_programming_submission_zip(submission)
+        zip_content = submission.get_zip()
         # list the files in the zip
         for file in zip_content.namelist():
             print(f"  - {file}")
