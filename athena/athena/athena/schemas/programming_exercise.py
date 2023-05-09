@@ -1,5 +1,9 @@
 from pydantic import Field, AnyUrl
+from zipfile import ZipFile
 
+from git import Repo
+
+from athena.helpers.code_repository import get_repository_zip, get_repository
 from . import ExerciseType, Exercise
 
 
@@ -18,3 +22,33 @@ class ProgrammingExercise(Exercise):
     tests_repository_url: AnyUrl = Field(description="URL to the tests git repository, which contains the tests that "
                                                      "are used to automatically grade the exercise.",
                                          example="http://localhost:3000/api/example-tests/1")
+
+
+    def get_solution_zip(self) -> ZipFile:
+        """Return the solution repository as a ZipFile object."""
+        return get_repository_zip(self.solution_repository_url)
+
+
+    def get_solution_repository(self) -> Repo:
+        """Return the solution repository as a Repo object."""
+        return get_repository(self.solution_repository_url)
+
+
+    def get_template_zip(self) -> ZipFile:
+        """Return the template repository as a ZipFile object."""
+        return get_repository_zip(self.template_repository_url)
+
+
+    def get_template_repository(self) -> Repo:
+        """Return the template repository as a Repo object."""
+        return get_repository(self.template_repository_url)
+
+
+    def get_tests_zip(self) -> ZipFile:
+        """Return the tests repository as a ZipFile object."""
+        return get_repository_zip(self.tests_repository_url)
+
+
+    def get_tests_repository(self) -> Repo:
+        """Return the tests repository as a Repo object."""
+        return get_repository(self.tests_repository_url)
