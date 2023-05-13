@@ -1,6 +1,6 @@
 from pydantic import Field
 
-from . import Submission
+from .submission import Submission
 
 
 class TextSubmission(Submission):

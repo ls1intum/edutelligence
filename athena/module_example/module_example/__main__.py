@@ -1,7 +1,10 @@
+"""
+Entry point for the module_example module.
+"""
 from typing import List
 
 from athena import app, submission_selector, submissions_consumer, feedback_consumer, feedback_provider
-from athena.programming import *
+from athena.programming import Exercise, Submission, Feedback
 
 
 @submission_selector

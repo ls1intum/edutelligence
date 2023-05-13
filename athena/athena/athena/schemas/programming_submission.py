@@ -1,10 +1,9 @@
 from pydantic import Field
 from zipfile import ZipFile
-
 from git import Repo
 
 from athena.helpers.code_repository import get_repository_zip, get_repository
-from . import Submission
+from .submission import Submission
 
 
 class ProgrammingSubmission(Submission):

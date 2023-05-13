@@ -14,6 +14,9 @@ logger = getLogger(__name__)
 
 
 def get_module_folders(args):
+    """
+    Get all module folders from the command line arguments.
+    """
     if not args:
         return [
             dir_name
@@ -24,6 +27,9 @@ def get_module_folders(args):
 
 
 def filter_valid_modules(modules):
+    """
+    Filter out all modules that are not valid.
+    """
     valid_modules = []
     for module in modules:
         if os.path.isdir(module) and os.path.isfile(os.path.join(module, "docker-compose.yml")):
@@ -34,14 +40,20 @@ def filter_valid_modules(modules):
 
 
 def build_docker_compose_files(compose_files):
-    subprocess.run(["docker-compose"] + compose_files + ["build"])
+    """
+    Build all the docker-compose files.
+    """
+    subprocess.run(["docker-compose"] + compose_files + ["build"], check=True)
 
 
 def start_docker_compose_files(compose_files, env_files):
+    """
+    Start all the docker-compose files.
+    """
     processes = []
     for compose_file, env_file in zip(compose_files, env_files):
-        process = subprocess.Popen(["docker-compose", "-f", compose_file, "--env-file", env_file, "up"])
-        processes.append(process)
+        with subprocess.Popen(["docker-compose", "-f", compose_file, "--env-file", env_file, "up"]) as process:
+            processes.append(process)
 
     # Wait for all processes to complete
     for process in processes:

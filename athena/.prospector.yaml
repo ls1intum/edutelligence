@@ -1,0 +1,13 @@
+strictness: low
+
+ignore-paths:
+  - docs
+
+pycodestyle:
+  disable:
+    - R0903
+  max-line-length: 120
+
+pylint:
+    disable:
+        - too-few-public-methods

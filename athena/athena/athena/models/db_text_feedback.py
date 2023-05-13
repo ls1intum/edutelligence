@@ -2,7 +2,7 @@ from sqlalchemy import Column, Integer, ForeignKey
 from sqlalchemy.orm import relationship
 
 from athena.database import Base
-from . import DBFeedback
+from .db_feedback import DBFeedback
 
 
 class DBTextFeedback(DBFeedback, Base):

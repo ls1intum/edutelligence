@@ -2,7 +2,7 @@ from sqlalchemy import ForeignKey, Integer, Column, String
 from sqlalchemy.orm import relationship
 
 from athena.database import Base
-from . import DBSubmission
+from .db_submission import DBSubmission
 
 
 class DBTextSubmission(DBSubmission, Base):

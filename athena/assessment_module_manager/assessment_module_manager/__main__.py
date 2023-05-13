@@ -1,13 +1,19 @@
+"""
+Entry point for the assessment module manager.
+"""
 import os
 
 import uvicorn
 
 from .app import app
-from .endpoints import endpoints
+from . import endpoints
 from .logger import logger
 
 
 def main():
+    """
+    Start the assessment module manager using uvicorn.
+    """
     logger.info("Starting assessment module manager")
 
     if "PRODUCTION" in os.environ:

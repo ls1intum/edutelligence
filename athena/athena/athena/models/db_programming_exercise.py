@@ -2,7 +2,7 @@ from sqlalchemy import Column, String
 from sqlalchemy.orm import relationship
 
 from athena.database import Base
-from . import DBExercise
+from .db_exercise import DBExercise
 
 
 class DBProgrammingExercise(DBExercise, Base):

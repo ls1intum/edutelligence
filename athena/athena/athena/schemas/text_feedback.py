@@ -1,4 +1,4 @@
-from . import Feedback
+from .feedback import Feedback
 
 
 class TextFeedback(Feedback):

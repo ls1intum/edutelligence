@@ -1,6 +1,7 @@
 from pydantic import Field
 
-from . import ExerciseType, Exercise
+from .exercise_type import ExerciseType
+from .exercise import Exercise
 
 
 class TextExercise(Exercise):

@@ -1,10 +1,10 @@
 from pydantic import Field, AnyUrl
 from zipfile import ZipFile
-
 from git import Repo
 
 from athena.helpers.code_repository import get_repository_zip, get_repository
-from . import ExerciseType, Exercise
+from .exercise_type import ExerciseType
+from .exercise import Exercise
 
 
 class ProgrammingExercise(Exercise):

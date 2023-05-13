@@ -1,0 +1,21 @@
+[tool.poetry]
+name = "athena-modularized"
+version = "0.1.0"
+description = ""
+authors = ["Paul Schwind <git@pschwind.de>"]
+license = "MIT"
+readme = "README.md"
+packages = []
+
+[tool.poetry.dependencies]
+python = "^3.10"
+prospector = {extras = ["with-bandit", "with-mypy"], version = "^1.9.0"}
+assessment_module_manager = {path = "./assessment_module_manager", develop = true}
+athena = {path = "./athena", develop = true}
+module_example = {path = "./module_example", develop = true}
+
+# start linter with `poetry run prospector`
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
