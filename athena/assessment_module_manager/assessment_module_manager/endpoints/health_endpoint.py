@@ -47,6 +47,8 @@ async def get_health() -> HealthResponse:
     """
     Health endpoint to find out whether the Assessment Module Manager is healthy,
     and whether all the modules are healthy (i.e. reachable).
+
+    This endpoint is not authenticated.
     """
     return HealthResponse(
         modules={

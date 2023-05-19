@@ -9,6 +9,11 @@ def list_modules() -> List[Module]:
     modules_config = configparser.ConfigParser()
     modules_config.read("modules.ini")
     return [
-        Module(name=module, url=modules_config[module]["url"], type=modules_config[module]["type"])
+        Module(
+            name=module,
+            url=modules_config[module]["url"],
+            type=modules_config[module]["type"],
+            secret=modules_config[module]["secret"]
+        )
         for module in modules_config.sections()
     ]

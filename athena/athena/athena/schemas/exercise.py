@@ -7,7 +7,7 @@ from .schema import Schema
 
 
 class Exercise(Schema, ABC):
-    """An exercise that can be solved by students, enhanced with metadata depending on its type."""
+    """An exercise that can be solved by students, enhanced with module-specific metadata."""
     id: int = Field(example=1)
     title: str = Field(description="The title of the exercise.",
                        example="Exercise 1")

@@ -16,7 +16,7 @@ def main():
     """
     logger.info("Starting assessment module manager")
 
-    if "PRODUCTION" in os.environ:
+    if os.environ.get("PRODUCTION", "1") == "1":
         logger.info("Running in PRODUCTION mode")
         uvicorn.run("assessment_module_manager.__main__:app", host="0.0.0.0", port=5000)
     else:

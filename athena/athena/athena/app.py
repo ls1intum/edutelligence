@@ -33,7 +33,7 @@ class FastAPIWithStart(FastAPI):
         logger.debug("Creating database tables")
         create_tables(module_type)
 
-        if "PRODUCTION" in os.environ and os.environ["PRODUCTION"] == "1":
+        if os.environ.get("PRODUCTION", "1") == "1":
             logger.info("Running in PRODUCTION mode")
             uvicorn.run(f"{module_name}.__main__:app", host="0.0.0.0", port=port, proxy_headers=True)
         else:

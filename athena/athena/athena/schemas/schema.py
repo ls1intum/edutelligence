@@ -3,6 +3,8 @@ import importlib
 
 from pydantic import BaseModel
 
+from athena.database import Base
+
 
 class Schema(BaseModel, abc.ABC):
     @classmethod
@@ -15,4 +17,8 @@ class Schema(BaseModel, abc.ABC):
         return getattr(model_module, model_class_name)
 
     def to_model(self):
-        return type(self).get_model_class()(**self.dict())
+        model_class = type(self).get_model_class()
+        if not issubclass(model_class, Base):
+            raise TypeError(f"Expected {model_class} to be a subclass of Base. Did you use the correct subclass (e.g. "
+                            f"TextExercise instead of Exercise)? My class name: {self.__class__.__name__}")
+        return model_class(**self.dict())
