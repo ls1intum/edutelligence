@@ -4,6 +4,7 @@
 # Input: MODULE_NAME (the folder name, e.g. "module_example")
 
 FROM python:3.11
+LABEL org.opencontainers.image.source=https://github.com/pal03377/Athena-New
 
 ARG MODULE_NAME
 RUN mkdir -p /code${MODULE_NAME}

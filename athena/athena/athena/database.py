@@ -6,12 +6,14 @@ from sqlalchemy import create_engine, inspect
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 SQLALCHEMY_DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///../data/data.sqlite")
-Base = declarative_base()
 
 # SQLite specific configuration
 is_sqlite = SQLALCHEMY_DATABASE_URL.startswith("sqlite:///")
 if is_sqlite:
     connect_args = {"check_same_thread": False}
+    # create the data directory if it does not exist
+    data_dir = os.path.dirname(SQLALCHEMY_DATABASE_URL[10:])
+    os.makedirs(data_dir, exist_ok=True)
 else:
     connect_args = {}
 
@@ -20,7 +22,6 @@ engine = create_engine(
 )
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-
 Base = declarative_base()
 
 def create_tables(exercise_type: str):

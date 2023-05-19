@@ -14,7 +14,8 @@ To create a new Athena Module, follow the following steps:
     * ``MODULE_TYPE``: The type of exercise your module supports, e.g. ``text`` or ``programming``
     * ``PORT``: The port your module will run on, e.g. ``5002``. Look for the ports that existing modules are using and use a port that is not already in use. It's best if you just count one up from the highest number (e.g. if the highest used port is 5002, use 5003).
 5. Add your module to the ``assessment_module_manager/modules.ini`` and ``assessment_module_manager/modules.docker.ini`` files. Update the URLs accordingly. The Docker URL for your module should be ``http://module_something:port``.
-6. Add a new Run Configuration to PyCharm:
+6. Adapt the module name in ``module_something/docker-compose.prod.yml`` so that the image can be found.
+7. Add a new Run Configuration to PyCharm:
     * Run -> Edit Configurations...
     * Click the ``+`` button and select ``Python``
     * Name it ``Module Something``
@@ -25,9 +26,9 @@ To create a new Athena Module, follow the following steps:
     .. image:: ../images/pycharm-run-configuration.png
         :width: 600px
         :alt: PyCharm Run Configuration
-7. Add a new workspace folder entry for VS Code:
+8. Add a new workspace folder entry for VS Code:
     * Edit ``athena-workspace.code-workspace``
     * Add a new entry to the ``folders`` array, similar to the one from the example module
-8. Add a launch configuration for VS Code:
+9. Add a launch configuration for VS Code:
     * Open the ``.vscode/launch.json`` file
     * Add a new configuration, similar to the one from the example module

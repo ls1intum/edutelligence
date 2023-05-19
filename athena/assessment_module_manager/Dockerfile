@@ -3,6 +3,7 @@
 # This is the Dockerfile for the assessment module manager.
 
 FROM python:3.11
+LABEL org.opencontainers.image.source=https://github.com/pal03377/Athena-New
 
 RUN mkdir -p /code/assessment_module_manage
 WORKDIR /code/assessment_module_manager

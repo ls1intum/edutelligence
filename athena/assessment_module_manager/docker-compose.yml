@@ -5,12 +5,7 @@ version: '3.8'
 
 services:
   athena_assessment_module_manager:
-    build:
-      context: .
-      dockerfile: ./assessment_module_manager/Dockerfile
     tty: true
-    ports:
-      - "5000:5000"
     # Ensure that the containers from other docker-compose files can communicate with each other
     networks:
       - athena_network

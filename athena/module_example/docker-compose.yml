@@ -1,14 +1,10 @@
 version: '3.8'
 
+# common module configuration
+
 services:
   main:
-    build:
-      context: ..
-      dockerfile: Dockerfile
-      args:
-        - MODULE_NAME
     tty: true
-    hostname: ${MODULE_NAME}
     networks:
       - athena_network
 

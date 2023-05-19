@@ -1,0 +1,12 @@
+version: '3.8'
+
+# local module configuration
+
+services:
+  main:
+    hostname: ${MODULE_NAME}
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      args:
+        - MODULE_NAME
