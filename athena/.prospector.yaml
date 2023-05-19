@@ -1,5 +1,7 @@
 strictness: low
 
+auto-detect: false
+
 ignore-paths:
   - docs
 
