@@ -1,13 +1,13 @@
 import {useState} from "react";
-import Submission from "@/pages/model/submission";
-import { Exercise } from "@/pages/model/exercise";
-import ExerciseSelect from "@/pages/components/exercise_select";
-import SubmissionSelect from "@/pages/components/submission_select";
-import FeedbackSelect from "@/pages/components/feedback_select";
-import Feedback from "@/pages/model/feedback";
-import ModuleResponse from "@/pages/model/module_response";
-import ModuleResponseView from "@/pages/components/module_response_view";
-import {ModuleMeta} from "@/pages/model/health_response";
+import { Submission } from "@/model/submission";
+import { Exercise } from "@/model/exercise";
+import ExerciseSelect from "@/components/exercise_select";
+import SubmissionSelect from "@/components/submission_select";
+import FeedbackSelect from "@/components/feedback_select";
+import Feedback from "@/model/feedback";
+import ModuleResponse from "@/model/module_response";
+import ModuleResponseView from "@/components/module_response_view";
+import {ModuleMeta} from "@/model/health_response";
 
 async function sendFeedback(athenaUrl: string, module: ModuleMeta, exercise: Exercise | null, submission: Submission | null, feedback: Feedback | null): Promise<ModuleResponse | undefined> {
     if (!exercise) {

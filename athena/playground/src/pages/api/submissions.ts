@@ -1,5 +1,5 @@
 import type {NextApiRequest, NextApiResponse} from 'next';
-import type {Submission} from '@/pages/model/submission';
+import type {Submission} from '@/model/submission';
 
 const exampleSubmissions: Submission[] = [
     {

@@ -1,5 +1,5 @@
 import type {NextApiRequest, NextApiResponse} from 'next';
-import type { Exercise } from '@/pages/model/exercise';
+import type { Exercise } from '@/model/exercise';
 
 const exampleExercises: Exercise[] = [
     {

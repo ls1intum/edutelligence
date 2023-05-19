@@ -1,4 +1,4 @@
-import ModuleResponse from "@/pages/model/module_response";
+import ModuleResponse from "@/model/module_response";
 
 
 export default function ModuleResponseView(

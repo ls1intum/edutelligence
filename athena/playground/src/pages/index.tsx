@@ -1,10 +1,10 @@
 import React, {useEffect, useState} from "react";
-import BaseInfoHeader from "@/pages/components/base_info_header";
-import SendSubmissions from "@/pages/components/send_submissions";
-import SendFeedback from "@/pages/components/send_feedback";
-import RequestFeedbackSuggestions from "@/pages/components/request_feedback_suggestions";
-import SelectSubmission from "@/pages/components/request_submission_selection";
-import {ModuleMeta} from "@/pages/model/health_response";
+import BaseInfoHeader from "@/components/base_info_header";
+import SendSubmissions from "@/components/send_submissions";
+import SendFeedback from "@/components/send_feedback";
+import RequestFeedbackSuggestions from "@/components/request_feedback_suggestions";
+import SelectSubmission from "@/components/request_submission_selection";
+import {ModuleMeta} from "@/model/health_response";
 
 export default function Home() {
     const [athenaUrl, setAthenaUrl] = useState<string>("http://127.0.0.1:5000");

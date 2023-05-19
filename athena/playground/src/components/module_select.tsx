@@ -1,6 +1,6 @@
 import useSWR from "swr";
-import fetcher from "@/pages/fetcher";
-import HealthResponse, {ModuleMeta} from "@/pages/model/health_response";
+import fetcher from "@/helpers/fetcher";
+import HealthResponse, {ModuleMeta} from "@/model/health_response";
 
 export default function ModuleSelect(
     { url, module, onChange }: { url: string, module: ModuleMeta | undefined, onChange: (module: ModuleMeta) => void }

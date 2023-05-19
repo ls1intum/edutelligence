@@ -1,6 +1,6 @@
 import useSWR from "swr";
-import fetcher from "@/pages/fetcher";
-import HealthResponse from "@/pages/model/health_response";
+import fetcher from "@/helpers/fetcher";
+import HealthResponse from "@/model/health_response";
 
 export default function Health(
     { url }: { url: string }

@@ -1,5 +1,5 @@
 import type {NextApiRequest, NextApiResponse} from 'next';
-import HealthResponse from "@/pages/model/health_response";
+import HealthResponse from "@/model/health_response";
 
 
 export default async function handler(

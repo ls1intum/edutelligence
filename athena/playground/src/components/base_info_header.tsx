@@ -1,6 +1,6 @@
-import Health from "@/pages/components/health";
-import ModuleSelect from "@/pages/components/module_select";
-import {ModuleMeta} from "@/pages/model/health_response";
+import Health from "@/components/health";
+import ModuleSelect from "@/components/module_select";
+import {ModuleMeta} from "@/model/health_response";
 
 export default function BaseInfoHeader(
     {athenaUrl, onChangeAthenaUrl, module, onChangeModule}: {

@@ -1,6 +1,6 @@
 import useSWR from "swr";
-import Feedback from "@/pages/model/feedback";
-import fetcher from "@/pages/fetcher";
+import Feedback from "@/model/feedback";
+import fetcher from "@/helpers/fetcher";
 
 export default function FeedbackSelect(
     {exercise_id, submission_id, feedback, onChange}: { exercise_id?: number, submission_id?: number, feedback: Feedback | null, onChange: (feedback: Feedback) => void}

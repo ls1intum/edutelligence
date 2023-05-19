@@ -1,10 +1,10 @@
 import {useState} from "react";
-import Submission from "@/pages/model/submission";
-import { Exercise } from "@/pages/model/exercise";
-import ExerciseSelect from "@/pages/components/exercise_select";
-import ModuleResponse from "@/pages/model/module_response";
-import ModuleResponseView from "@/pages/components/module_response_view";
-import {ModuleMeta} from "@/pages/model/health_response";
+import { Submission } from "@/model/submission";
+import { Exercise } from "@/model/exercise";
+import ExerciseSelect from "@/components/exercise_select";
+import ModuleResponse from "@/model/module_response";
+import ModuleResponseView from "@/components/module_response_view";
+import {ModuleMeta} from "@/model/health_response";
 
 async function sendSubmissions(athenaUrl: string, module: ModuleMeta, exercise: Exercise | null): Promise<ModuleResponse | undefined> {
     if (!exercise) {

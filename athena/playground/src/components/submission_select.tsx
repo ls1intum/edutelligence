@@ -1,6 +1,6 @@
 import useSWR from "swr";
-import {ProgrammingSubmission, Submission, TextSubmission} from "@/pages/model/submission";
-import fetcher from "@/pages/fetcher";
+import {ProgrammingSubmission, Submission, TextSubmission} from "@/model/submission";
+import fetcher from "@/helpers/fetcher";
 
 export default function SubmissionSelect(
     {exercise_id, submission, onChange}: { exercise_id?: number, submission: Submission | null, onChange: (submission: Submission) => void}
