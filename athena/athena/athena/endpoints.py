@@ -1,6 +1,5 @@
 import inspect
-from typing import TypeVar, Callable, List, Annotated
-from functools import wraps
+from typing import TypeVar, Callable, List
 
 from athena.app import app
 from athena.authenticate import authenticated
@@ -33,7 +32,7 @@ def submissions_consumer(func: Callable[[E, List[S]], None]):
 
     @app.post("/submissions", responses=module_responses)
     @authenticated
-    def wrapper(
+    async def wrapper(
             exercise: exercise_type,
             submissions: List[submission_type]):
         # Retrieve existing metadata for the exercise and submissions
@@ -47,7 +46,10 @@ def submissions_consumer(func: Callable[[E, List[S]], None]):
         submissions = list(submissions_dict.values())
 
         # Call the actual consumer
-        func(exercise, submissions)
+        if inspect.iscoroutinefunction(func):
+            await func(exercise, submissions)
+        else:
+            func(exercise, submissions)
 
     return wrapper
 
@@ -63,7 +65,7 @@ def submission_selector(func: Callable[[E, List[S]], S]):
 
     @app.post("/select_submission", responses=module_responses)
     @authenticated
-    def wrapper(
+    async def wrapper(
             exercise: exercise_type,
             submission_ids: List[int]) -> int:
         # The wrapper handles only transmitting submission IDs for efficiency, but the actual selection logic
@@ -81,7 +83,10 @@ def submission_selector(func: Callable[[E, List[S]], S]):
             return -1
 
         # Select the submission
-        submission = func(exercise, submissions)
+        if inspect.iscoroutinefunction(func):
+            submission = await func(exercise, submissions)
+        else:
+            submission = func(exercise, submissions)
 
         if submission is None:
             return -1
@@ -101,7 +106,7 @@ def feedback_consumer(func: Callable[[E, S, F], None]):
 
     @app.post("/feedback", responses=module_responses)
     @authenticated
-    def wrapper(
+    async def wrapper(
             exercise: exercise_type,
             submission: submission_type,
             feedback: feedback_type):
@@ -113,7 +118,10 @@ def feedback_consumer(func: Callable[[E, S, F], None]):
         store_feedback(feedback)
 
         # Call the actual consumer
-        func(exercise, submission, feedback)
+        if inspect.iscoroutinefunction(func):
+            await func(exercise, submission, feedback)
+        else:
+            func(exercise, submission, feedback)
 
     return wrapper
 
@@ -128,7 +136,7 @@ def feedback_provider(func: Callable[[E, S], List[F]]):
 
     @app.post("/feedback_suggestions", responses=module_responses)
     @authenticated
-    def wrapper(
+    async def wrapper(
             exercise: exercise_type,
             submission: submission_type):
         # Retrieve existing metadata for the exercise, submission and feedback
@@ -139,7 +147,11 @@ def feedback_provider(func: Callable[[E, S], List[F]]):
         store_submissions([submission])
 
         # Call the actual provider
-        feedbacks = func(exercise, submission)
+        if inspect.iscoroutinefunction(func):
+            feedbacks = await func(exercise, submission)
+        else:
+            feedbacks = func(exercise, submission)
+    
         store_feedback_suggestions(feedbacks)
 
         return feedbacks
