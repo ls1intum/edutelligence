@@ -1,0 +1,63 @@
+name: Docker Image
+
+# Build the Docker images for the the assessment module manager, the modules and the playground.
+# Because the Python images depend on the athena Python package, the package is built first.
+
+on:
+  pull_request:
+    branches:
+      - develop
+  push:
+    branches:
+      - develop
+  workflow_dispatch:
+    inputs:
+      push:
+        description: 'Push to GitHub Container Registry'
+        required: true
+        default: 'false'
+
+jobs:
+  find_images_to_build:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+      - name: Set Matrix
+        id: set-matrix
+        run: |
+          IMAGE_NAMES=$(ls -d assessment_module_manager module_* playground | jq -R -s -c 'split("\n")[:-1]')
+          echo "matrix=${IMAGE_NAMES}" > $GITHUB_OUTPUT
+
+  build_image:
+    needs: find_images_to_build
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        image: ${{fromJson(needs.find_images_to_build.outputs.matrix)}}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Build athena image
+        id: set-image
+        run: |
+          cd athena
+          docker build -t athena .
+          cd ..
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v2
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GHCR_PAT }}
+
+      - name: Build (and push) Docker image
+        uses: docker/build-push-action@v4
+        with:
+          context: ${{ matrix.image }}
+          push: ${{ github.event.pull_request.base.ref == 'develop' || github.event.inputs.push == 'true' }}
+          tags: ghcr.io/${{ github.repository_owner }}/athena_${{ matrix.image }}:latest
