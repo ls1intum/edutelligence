@@ -7,7 +7,7 @@ from .schema import Schema
 
 
 class Feedback(Schema, ABC):
-    id: int = Field(example=1)
+    id: Optional[int] = Field(None, example=1)
     exercise_id: int = Field(example=1)
     submission_id: int = Field(example=1)
     detail_text: str = Field(description="The detailed feedback text that is shown to the student.",
