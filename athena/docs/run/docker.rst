@@ -3,10 +3,19 @@ From Docker
 
 You can start the Assessment Module Manager and all available modules in this repository using Docker.
 
-It is recommended to use the provided Python script ``start_docker.py`` to start the Docker containers. This script will find the dockerfiles in the assessment module manager and in all modules, automatically build the Docker images if they are not available yet and start all containers using the ``.env`` environment files from the different folders. To run it:
+Build and start with local images
 
     .. code-block:: bash
 
-        python start_docker.py
+        docker-compose up --build
 
 The assessment module manager API will be available at http://localhost:5000.
+
+Start with remote images
+
+    .. code-block:: bash
+
+        ATHENA_ENV_DIR=some-path ATHENA_DOMAIN=athena.example.com docker-compose -f docker-compose.prod.yml up
+
+The ``ATHENA_ENV_DIR`` is expected to contain environment files ``assessment_module_manager.env`` and ``module_something.env``. The ``ATHENA_DOMAIN`` environment variable is used to configure the domain name of the assessment module manager API.
+The assessment module manager API will be available at https://athena.example.com (depending on the ``ATHENA_DOMAIN`` environment variable).

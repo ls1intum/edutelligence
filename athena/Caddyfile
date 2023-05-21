@@ -1,0 +1,6 @@
+{
+    email paul.schwind@tum.de
+}
+{$ATHENA_DOMAIN}
+
+reverse_proxy http://assessment_module_manager:5000

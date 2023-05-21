@@ -1,7 +1,0 @@
-version: '3.8'
-
-# This is the docker-compose override file for the Athena Assessment Module Manager in production.
-
-services:
-  athena_assessment_module_manager:
-    image: ghcr.io/pal03377/athena_assessment_module_manager:latest

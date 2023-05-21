@@ -1,8 +1,0 @@
-version: '3.8'
-
-# local module configuration
-
-services:
-  main:
-    hostname: module_example
-    image: ghcr.io/pal03377/athena_module_example:latest

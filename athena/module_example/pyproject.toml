@@ -2,7 +2,7 @@
 name = "module_example"
 version = "0.1.0"
 description = "An example module to demonstrate how to create new modules for Athena."
-authors = ["Paul Schwind <git@pschwind.de>"]
+authors = ["Paul Schwind <paul.schwind@tum.de>"]
 license = "MIT"
 
 [tool.poetry.dependencies]

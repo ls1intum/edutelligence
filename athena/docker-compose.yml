@@ -1,0 +1,24 @@
+version: '3.8'
+
+# Development version of docker-compose.yml
+
+services:
+  athena:
+    build: ./athena
+    image: athena
+    command: echo "Athena build succeeded, exiting (this is normal)"
+
+  assessment_module_manager:
+    build: ./assessment_module_manager
+    depends_on:
+      - athena
+    ports:
+      - "5000:5000"
+
+  module_example:
+    hostname: module_example
+    build: ./module_example
+    depends_on:
+      - athena
+    ports:
+      - "5001:5001"

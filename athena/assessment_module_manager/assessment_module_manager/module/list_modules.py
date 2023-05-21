@@ -1,5 +1,9 @@
 import configparser
-from typing import List
+from typing import List, cast
+
+from pydantic import AnyHttpUrl
+
+from athena import ExerciseType
 
 from .module import Module
 
@@ -11,9 +15,8 @@ def list_modules() -> List[Module]:
     return [
         Module(
             name=module,
-            url=modules_config[module]["url"],
-            type=modules_config[module]["type"],
-            secret=modules_config[module]["secret"]
+            url=cast(AnyHttpUrl, modules_config[module]["url"]),
+            type=ExerciseType(modules_config[module]["type"]),
         )
         for module in modules_config.sections()
     ]

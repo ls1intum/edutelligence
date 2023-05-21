@@ -1,0 +1,26 @@
+version: '3.8'
+
+# The production version directly uses the Docker images from the registry.
+
+services:
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      - ATHENA_DOMAIN
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+
+  assessment_module_manager:
+    env_file:
+      - ${ATHENA_ENV_DIR}/assessment_module_manager.env
+    image: ghcr.io/pal03377/athena_assessment_module_manager:latest
+
+  module_example:
+    hostname: module_example
+    env_file:
+      - ${ATHENA_ENV_DIR}/module_example.env
+    image: ghcr.io/pal03377/athena_module_example:latest

@@ -1,0 +1,26 @@
+# Service file, save to /etc/systemd/system/athena.service
+# To use:
+#  systemctl start athena  # start service
+#  systemctl enable athena # enable on boot
+#  systemctl status athena # view status (up or not)
+#  systemctl stop athena   # stop service
+#  systemctl daemon-reload # reload service file after changes
+# in Athena-New folder: view logs
+#  docker compose -f docker-compose.prod.yml -f docker-compose.cofee.yml logs --tail 200 -f
+
+[Unit]
+Description=Athena
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+User=user # TODO: change to your user
+Group=docker
+WorkingDirectory=/home/user/Athena-New # TODO: change to actual path
+EnvironmentFile=/home/user/Athena-New/.env # TODO: potentially change to actual path
+ExecStart=/usr/bin/docker compose -f docker-compose.prod.yml -f docker-compose.cofee.yml up --pull always -d
+ExecStop=/usr/bin/docker compose -f docker-compose.prod.yml -f docker-compose.cofee.yml stop
+
+[Install]
+WantedBy=multi-user.target

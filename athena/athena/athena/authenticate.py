@@ -3,25 +3,22 @@ import os
 from functools import wraps
 from typing import Callable
 
-from dotenv import load_dotenv
 from fastapi import HTTPException, Depends
 from fastapi.security import APIKeyHeader
 
+from athena import env
 from athena.logger import logger
 
-load_dotenv(".env")
 SECRET = os.getenv("SECRET")
-DEBUG = os.environ["PRODUCTION"] == "0"
 
 api_key_header = APIKeyHeader(name='X-API-Secret', auto_error=False)
 
 
 def verify_secret(secret: str):
     if secret != SECRET:
-        if DEBUG:
-            logger.warning("DEBUG MODE: Ignoring invalid API secret.")
-        else:
+        if env.PRODUCTION:
             raise HTTPException(status_code=401, detail="Invalid API secret.")
+        logger.warning("DEBUG MODE: Ignoring invalid API secret.")
 
 
 def authenticated(func: Callable) -> Callable:

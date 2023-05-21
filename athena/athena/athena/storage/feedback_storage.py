@@ -29,7 +29,7 @@ def get_stored_feedback_meta(feedback: Feedback) -> Optional[dict]:
 def store_feedback(feedback: Feedback):
     """Stores the given feedback."""
     with get_db() as db:
-        db.add(feedback.to_model())
+        db.merge(feedback.to_model())
         db.commit()
 
 
