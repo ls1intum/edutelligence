@@ -4,7 +4,7 @@ from pathlib import Path
 
 from .app import app
 from .schemas import ExerciseType
-from .endpoints import submission_selector, submissions_consumer, feedback_consumer, feedback_provider
+from .endpoints import submission_selector, submissions_consumer, feedback_consumer, feedback_provider  # type: ignore
 
 
 @app.get("/")

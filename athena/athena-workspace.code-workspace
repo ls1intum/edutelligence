@@ -12,5 +12,9 @@
 		{
 			"path": "module_example"
 		}
-	]
+	],
+	"settings": {
+		"python.linting.prospectorEnabled": true,
+		"python.linting.mypyEnabled": true
+	}
 }

@@ -23,7 +23,7 @@ def get_stored_feedback_meta(feedback: Feedback) -> Optional[dict]:
     """Returns the stored metadata associated with the feedback."""
     db_feedback_cls = feedback.__class__.get_model_class()
     with get_db() as db:
-        return db.query(db_feedback_cls.meta).filter_by(id=feedback.id).scalar()
+        return db.query(db_feedback_cls.meta).filter_by(id=feedback.id).scalar()  # type: ignore
 
 
 def store_feedback(feedback: Feedback):

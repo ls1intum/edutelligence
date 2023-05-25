@@ -13,7 +13,7 @@ def get_module_names_with_docs() -> dict:
     return module_names_with_docs
 
 
-AvailableModuleNames = Enum(
+AvailableModuleNames = Enum(  # type: ignore
     "AvailableModuleNames",
     {name: value for name, (value, _) in get_module_names_with_docs().items()},
     type=str,

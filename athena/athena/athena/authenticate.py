@@ -43,6 +43,6 @@ def authenticated(func: Callable) -> Callable:
     params = list(sig.parameters.values())
     params.append(inspect.Parameter('secret', inspect.Parameter.POSITIONAL_OR_KEYWORD, default=Depends(api_key_header)))
     new_sig = sig.replace(parameters=params)
-    wrapper.__signature__ = new_sig
+    wrapper.__signature__ = new_sig  # type: ignore # https://github.com/python/mypy/issues/12472
 
     return wrapper

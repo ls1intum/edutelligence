@@ -15,7 +15,7 @@ def get_stored_submissions(
     with get_db() as db:
         query = db.query(db_submission_cls).filter_by(exercise_id=exercise_id)
         if only_ids is not None:
-            query = query.filter(db_submission_cls.id.in_(only_ids))
+            query = query.filter(db_submission_cls.id.in_(only_ids))  # type: ignore
         return (s.to_schema() for s in query.all())
 
 
@@ -23,7 +23,7 @@ def get_stored_submission_meta(submission: Submission) -> Optional[dict]:
     """Returns the stored metadata associated with the submission."""
     db_submission_cls = submission.__class__.get_model_class()
     with get_db() as db:
-        return db.query(db_submission_cls.meta).filter_by(id=submission.id).scalar()
+        return db.query(db_submission_cls.meta).filter_by(id=submission.id).scalar()  # type: ignore
 
 
 def store_submissions(submissions: List[Submission]):

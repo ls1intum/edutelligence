@@ -20,13 +20,16 @@ class ModuleResponse(GenericModel, Generic[T]):
     data: T
 
 
-async def find_module_by_name(module_name: AvailableModuleNames) -> Optional[Module]:
+async def find_module_by_name(
+    module_name: AvailableModuleNames  # type: ignore
+) -> Optional[Module]:
     """
     Helper function to find a module by name.
     """
     for module in list_modules():
         if module.name == module_name:
             return module
+    return None
 
 
 async def request_to_module(module: Module, path: str, data: dict) -> ModuleResponse:

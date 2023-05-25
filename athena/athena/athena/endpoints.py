@@ -1,3 +1,4 @@
+# type: ignore # too much weird behavior of mypy with decorators
 import inspect
 from typing import TypeVar, Callable, List
 
