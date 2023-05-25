@@ -6,7 +6,7 @@ import ModuleResponse from "@/model/module_response";
 import ModuleResponseView from "@/components/module_response_view";
 import {ModuleMeta} from "@/model/health_response";
 
-async function sendSubmissions(athenaUrl: string, module: ModuleMeta, exercise: Exercise | null): Promise<ModuleResponse | undefined> {
+async function sendSubmissions(athenaUrl: string, athenaSecret: string, module: ModuleMeta, exercise: Exercise | null): Promise<ModuleResponse | undefined> {
     if (!exercise) {
         alert("Please select an exercise");
         return;
@@ -19,7 +19,8 @@ async function sendSubmissions(athenaUrl: string, module: ModuleMeta, exercise: 
         response = await fetch(`/api/athena_request?${ new URLSearchParams({url: athenaSubmissionsUrl}) }`, {
             method: 'POST',
             headers: {
-                'Content-Type': 'application/json'
+                'Content-Type': 'application/json',
+                'X-API-Secret': athenaSecret
             },
             body: JSON.stringify({exercise, submissions})
         });
@@ -45,7 +46,7 @@ async function sendSubmissions(athenaUrl: string, module: ModuleMeta, exercise: 
 }
 
 export default function SendSubmissions(
-    { athenaUrl, module }: { athenaUrl: string, module: ModuleMeta }
+    { athenaUrl, athenaSecret, module }: { athenaUrl: string, athenaSecret: string, module: ModuleMeta }
 ) {
     const [exercise, setExercise] = useState<Exercise | null>(null);
     const [loading, setLoading] = useState<boolean>(false);
@@ -65,7 +66,7 @@ export default function SendSubmissions(
                 className="bg-blue-500 text-white rounded-md p-2 mt-4"
                 onClick={() => {
                     setLoading(true);
-                    sendSubmissions(athenaUrl, module, exercise)
+                    sendSubmissions(athenaUrl, athenaSecret, module, exercise)
                         .then(setResponse)
                         .finally(() => setLoading(false));
                 } }

@@ -8,17 +8,22 @@ import {ModuleMeta} from "@/model/health_response";
 
 export default function Home() {
     const [athenaUrl, setAthenaUrl] = useState<string>("http://127.0.0.1:5000");
+    const [athenaSecret, setAthenaSecret] = useState<string>("");
     const [module, setModule] = useState<ModuleMeta | undefined>(undefined);
 
     return (
         <main className="flex min-h-screen flex-col p-24">
             <h1 className="text-6xl font-bold text-white mb-8">Playground</h1>
-            <BaseInfoHeader athenaUrl={athenaUrl} onChangeAthenaUrl={setAthenaUrl} module={module} onChangeModule={setModule}/>
+            <BaseInfoHeader
+                athenaUrl={athenaUrl} onChangeAthenaUrl={setAthenaUrl}
+                athenaSecret={athenaSecret} onChangeAthenaSecret={setAthenaSecret}
+                module={module} onChangeModule={setModule}
+            />
             {module && <>
-                <SendSubmissions athenaUrl={athenaUrl} module={module}/>
-                <SelectSubmission athenaUrl={athenaUrl} module={module}/>
-                <SendFeedback athenaUrl={athenaUrl} module={module}/>
-                <RequestFeedbackSuggestions athenaUrl={athenaUrl} module={module}/>
+                <SendSubmissions athenaUrl={athenaUrl} athenaSecret={athenaSecret} module={module}/>
+                <SelectSubmission athenaUrl={athenaUrl} athenaSecret={athenaSecret} module={module}/>
+                <SendFeedback athenaUrl={athenaUrl} athenaSecret={athenaSecret} module={module}/>
+                <RequestFeedbackSuggestions athenaUrl={athenaUrl} athenaSecret={athenaSecret} module={module}/>
             </>}
         </main>
     );

@@ -9,7 +9,7 @@ import ModuleResponse from "@/model/module_response";
 import ModuleResponseView from "@/components/module_response_view";
 import {ModuleMeta} from "@/model/health_response";
 
-async function sendFeedback(athenaUrl: string, module: ModuleMeta, exercise: Exercise | null, submission: Submission | null, feedback: Feedback | null): Promise<ModuleResponse | undefined> {
+async function sendFeedback(athenaUrl: string, athenaSecret: string, module: ModuleMeta, exercise: Exercise | null, submission: Submission | null, feedback: Feedback | null): Promise<ModuleResponse | undefined> {
     if (!exercise) {
         alert("Please select an exercise");
         return;
@@ -27,7 +27,8 @@ async function sendFeedback(athenaUrl: string, module: ModuleMeta, exercise: Exe
         const response = await fetch(`/api/athena_request?${new URLSearchParams({ url: athenaFeedbackUrl })}`, {
             method: 'POST',
             headers: {
-                'Content-Type': 'application/json'
+                'Content-Type': 'application/json',
+                'X-API-Secret': athenaSecret
             },
             body: JSON.stringify({ exercise, submission, feedback })
         });
@@ -48,7 +49,9 @@ async function sendFeedback(athenaUrl: string, module: ModuleMeta, exercise: Exe
     }
 }
 
-export default function SendFeedback({ athenaUrl, module }: { athenaUrl: string, module: ModuleMeta }) {
+export default function SendFeedback(
+    { athenaUrl, athenaSecret, module }: { athenaUrl: string, athenaSecret: string, module: ModuleMeta }
+) {
     const [exercise, setExercise] = useState<Exercise | null>(null);
     const [submission, setSubmission] = useState<Submission | null>(null);
     const [feedback, setFeedback] = useState<Feedback | null>(null);
@@ -71,7 +74,7 @@ export default function SendFeedback({ athenaUrl, module }: { athenaUrl: string,
                 className="bg-blue-500 text-white rounded-md p-2 mt-4"
                 onClick={() => {
                     setLoading(true);
-                    sendFeedback(athenaUrl, module, exercise, submission, feedback)
+                    sendFeedback(athenaUrl, athenaSecret, module, exercise, submission, feedback)
                         .then(setResponse)
                         .finally(() => setLoading(false));
                 }}

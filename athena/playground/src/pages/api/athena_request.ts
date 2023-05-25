@@ -10,12 +10,18 @@ export default async function handler(
     // TODO: check the security implications of this
     const url = req.query.url;
     let response;
+    const secret = req.headers['X-API-Secret'] as string;
+    if (!secret) {
+        console.warn('No secret provided');
+    }
     try {
         response = await fetch(
             url as string,
             {
                 headers: {
                     'Content-Type': 'application/json',
+                    'Accept': 'application/json',
+                    'X-API-Secret': secret,
                 },
                 method: req.method,
                 body: JSON.stringify(req.body)
@@ -23,7 +29,7 @@ export default async function handler(
         );
     } catch (error) {
         console.error('Fetch failed:', error);
-        res.status(503);
+        res.status(503).end();
         return;
     }
     if (!response.ok) {
