@@ -2,6 +2,7 @@ type ExerciseType = 'text' | 'programming';
 
 type ExerciseBase = {
   id: number;
+  course_id: number;
   title: string;
   type: ExerciseType;
   max_points: number;

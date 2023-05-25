@@ -1,0 +1,48 @@
+{
+    "id": 1,
+    "course_id": 1,
+    "title": "Hello World",
+    "type": "programming",
+    "max_points": 10,
+    "bonus_points": 0,
+    "problem_statement": "Write a program that prints \"Hello World\" to the console.",
+    "grading_instructions": "Check if the program prints \"Hello World\" to the console. 10 points if it does, 0 points otherwise.",
+    "programming_language": "java",
+    "solution_repository_url": "http://localhost:3000/api/example-solutions/1",
+    "template_repository_url": "http://localhost:3000/api/example-template/1",
+    "tests_repository_url": "http://localhost:3000/api/example-tests/1",
+    "meta": {},
+
+    "submissions": [
+        {
+            "id": 101,
+            "repository_url": "http://localhost:3000/api/programming-submissions/1.zip",
+            "student_id": 1,
+            "meta": {},
+
+            "feedbacks": [
+                {
+                    "id": 101,
+                    "detail_text": "Your program does not print \"Hello World\" to the console.",
+                    "text": "Your program does not print \"Hello World\" to the console.",
+                    "credits": -2.0,
+                    "meta": {}
+                },
+                {
+                    "id": 102,
+                    "detail_text": "You're missing a semicolon at the end of the line.",
+                    "text": "You're missing a semicolon at the end of the line.",
+                    "credits": -2.0,
+                    "meta": {}
+                }
+            ]
+        },
+        {
+            "id": 102,
+            "exercise_id": 1,
+            "repository_url": "http://localhost:3000/api/programming-submissions/2.zip",
+            "student_id": 2,
+            "meta": {}
+        }
+    ]
+}

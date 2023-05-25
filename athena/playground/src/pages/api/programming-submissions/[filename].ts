@@ -8,7 +8,7 @@ const handler = async (req: NextApiRequest, res: NextApiResponse) => {
 
   // Set the folder path based on the filename without the .zip extension
   const folderName = filename.replace('.zip', '');
-  const folderPath = join(process.cwd(), 'submissions', folderName);
+  const folderPath = join(process.cwd(), 'examples', 'programming-submissions', folderName);
 
   // Check if the folder exists
   await fs.access(folderPath);

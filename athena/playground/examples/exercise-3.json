@@ -1,0 +1,103 @@
+{
+    "id": 3,
+    "course_id": 1,
+    "title": "Test Exercise with only 2 answers (but 10 submissions)",
+    "type": "text",
+    "max_points": 100,
+    "bonus_points": 0,
+    "grading_instructions": "",
+    "problem_statement": "Test",
+    "example_solution": "",
+    "meta": {},
+    "submissions": [
+        {
+            "id": 301,
+            "content": "Hello world\nThis is a test\nPlease cluster me into cluster one\none one one",
+            "student_id": 1,
+            "meta": {},
+            "feedbacks": [
+                {
+                    "id": 301,
+                    "detail_text": "This is a test",
+                    "reference": "28-32",
+                    "text": "This is a test",
+                    "credits": 80,
+                    "meta": {}
+                }
+            ]
+        },
+        {
+            "id": 302,
+            "content": "Hello world\nThis is a test\nPlease cluster me into cluster one\none one one",
+            "student_id": 1,
+            "meta": {},
+
+            "feedbacks": [
+                {
+                    "id": 302,
+                    "detail_text": "This is a test",
+                    "reference": "28-32",
+                    "text": "This is a test",
+                    "credits": 80,
+                    "meta": {}
+                },
+                {
+                    "id": 303,
+                    "detail_text": "This is a test",
+                    "reference": "28-32",
+                    "text": "This is a test",
+                    "credits": 80,
+                    "meta": {}
+                }
+            ]
+        },
+        {
+            "id": 303,
+            "content": "Hello world\nThis is a test\nPlease cluster me into cluster one\none one one",
+            "student_id": 1,
+            "meta": {}
+        },
+        {
+            "id": 304,
+            "content": "Hello world\nThis is a test\nPlease cluster me into cluster one\none one one",
+            "student_id": 1,
+            "meta": {}
+        },
+        {
+            "id": 305,
+            "content": "Hello world\nThis is a test\nPlease cluster me into cluster one\none one one",
+            "student_id": 1,
+            "meta": {}
+        },
+        {
+            "id": 306,
+            "content": "Hello world\nThis is a test\nPlease cluster me into the second cluster!\ntwo two two",
+            "student_id": 1,
+            "meta": {}
+        },
+        {
+            "id": 307,
+            "content": "Hello world\nThis is a test\nPlease cluster me into the second cluster!\ntwo two two",
+            "student_id": 1,
+            "meta": {}
+        },
+        {
+            "id": 308,
+            "content": "Hello world\nThis is a test\nPlease cluster me into the second cluster!\ntwo two two",
+            "student_id": 1,
+            "meta": {}
+        },
+        {
+            "id": 309,
+            "content": "Hello world\nThis is a test\nPlease cluster me into the second cluster!\ntwo two two",
+            "student_id": 1,
+            "meta": {}
+        },
+        {
+            "id": 310,
+            "content": "Hello world\nThis is a test\nPlease cluster me into the second cluster!\ntwo two two",
+            "student_id": 1,
+            "meta": {}
+        }
+    ]
+}
