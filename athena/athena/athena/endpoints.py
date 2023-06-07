@@ -1,6 +1,6 @@
 # type: ignore # too much weird behavior of mypy with decorators
 import inspect
-from typing import TypeVar, Callable, List
+from typing import TypeVar, Callable, List, Union, Any, Coroutine
 
 from athena.app import app
 from athena.authenticate import authenticated
@@ -23,7 +23,7 @@ module_responses = {
 }
 
 
-def submissions_consumer(func: Callable[[E, List[S]], None]):
+def submissions_consumer(func: Union[Callable[[E, List[S]], None], Callable[[E, List[S]], Coroutine[Any, Any, None]]]):
     """
     Receive submissions from the Assessment Module Manager.
     The submissions consumer is usually called whenever the deadline for an exercise is reached.
@@ -55,7 +55,7 @@ def submissions_consumer(func: Callable[[E, List[S]], None]):
     return wrapper
 
 
-def submission_selector(func: Callable[[E, List[S]], S]):
+def submission_selector(func: Union[Callable[[E, List[S]], S], Callable[[E, List[S]], Coroutine[Any, Any, S]]]):
     """
     Receive an exercise and some (not necessarily all!) submissions from the Assessment Module Manager and
     return the submission that should ideally be assessed next.
@@ -96,7 +96,7 @@ def submission_selector(func: Callable[[E, List[S]], S]):
     return wrapper
 
 
-def feedback_consumer(func: Callable[[E, S, F], None]):
+def feedback_consumer(func: Union[Callable[[E, S, F], None], Callable[[E, S, F], Coroutine[Any, Any, None]]]):
     """
     Receive feedback from the Assessment Module Manager.
     The feedback consumer is usually called whenever the LMS gets feedback from a tutor.
@@ -127,7 +127,7 @@ def feedback_consumer(func: Callable[[E, S, F], None]):
     return wrapper
 
 
-def feedback_provider(func: Callable[[E, S], List[F]]):
+def feedback_provider(func: Union[Callable[[E, S], List[F]], Callable[[E, S], Coroutine[Any, Any, List[F]]]]):
     """
     Provide feedback to the Assessment Module Manager.
     The feedback provider is usually called whenever the tutor requests feedback for a submission in the LMS.

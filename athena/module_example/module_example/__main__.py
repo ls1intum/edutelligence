@@ -19,16 +19,16 @@ def receive_submissions(exercise: Exercise, submissions: List[Submission]):
         for file in zip_content.namelist():
             logger.info("  - %s", file)
     # Do something with the submissions
-    print("Doing stuff")
+    logger.info("Doing stuff")
 
     # Add data to exercise
     exercise.meta["some_data"] = "some_value"
-    print(f"- Exercise meta: {exercise.meta}")
+    logger.info("- Exercise meta: %s", exercise.meta)
 
     # Add data to submission
     for submission in submissions:
         submission.meta["some_data"] = "some_value"
-        print(f"- Submission {submission.id} meta: {submission.meta}")
+        logger.info("- Submission %d meta: %s", submission.id, submission.meta)
     
     store_exercise(exercise)
     store_submissions(submissions)
@@ -36,9 +36,9 @@ def receive_submissions(exercise: Exercise, submissions: List[Submission]):
 
 @submission_selector
 def select_submission(exercise: Exercise, submissions: List[Submission]) -> Submission:
-    print(f"select_submission: Received {len(submissions)} submissions for exercise {exercise.id}")
+    logger.info("select_submission: Received %d submissions for exercise %d", len(submissions), exercise.id)
     for submission in submissions:
-        print(f"- Submission {submission.id}")
+        logger.info("- Submission %d", submission.id)
     # Do something with the submissions and return the one that should be assessed next
     return submissions[0]
 
@@ -64,8 +64,8 @@ def suggest_feedback(exercise: Exercise, submission: Submission) -> List[Feedbac
             exercise_id=exercise.id,
             submission_id=submission.id,
             detail_text="There is something wrong here.",
-            text="Correct",
-            reference=None,
+            file_path=None,
+            line=None,
             credits=-1.0,
             meta={},
         )

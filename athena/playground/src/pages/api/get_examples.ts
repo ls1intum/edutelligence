@@ -6,11 +6,42 @@ import {Submission} from "@/model/submission";
 import Feedback from "@/model/feedback";
 
 
+function replaceFileReferences(json: any, exerciseId: number) {
+    // Replace all file references found anywhere in the json with the file contents from examples/<reference>
+    // File references look like this: `-> file:example.txt`
+    const result: any = {};
+    for (const key in json) {
+        if (json.hasOwnProperty(key)) {
+            const value = json[key];
+            if (typeof value === 'string') {
+                if (value.startsWith('-> file:')) {
+                    const filePath = path.join(process.cwd(), 'examples', 'exercise-' + exerciseId, value.split(':')[1]);
+                    if (fs.existsSync(filePath)) {
+                        result[key] = fs.readFileSync(filePath, 'utf8');
+                    } else {
+                        throw new Error(`File ${filePath} not found`);
+                    }
+                } else {
+                    result[key] = value;
+                }
+            } else if (Array.isArray(value)) {
+                result[key] = value.map((item) => replaceFileReferences(item, exerciseId));
+            } else if (typeof value === 'object') {
+                result[key] = replaceFileReferences(value, exerciseId);
+            } else {
+                result[key] = value;
+            }
+        }
+    }
+    return result;
+}
+
 function getExampleExerciseJSON(exerciseId: number): any {
     // find in cwd/examples/submissions/<exerciseId>.json
     const submissionsPath = path.join(process.cwd(), 'examples', `exercise-${exerciseId}.json`);
     if (fs.existsSync(submissionsPath)) {
-        return JSON.parse(fs.readFileSync(submissionsPath, 'utf8'));
+        const exerciseJson = JSON.parse(fs.readFileSync(submissionsPath, 'utf8'));
+        return replaceFileReferences(exerciseJson, exerciseId);
     }
     throw new Error(`No example submissions found for exercise ${exerciseId}`);
 }

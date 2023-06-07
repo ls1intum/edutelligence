@@ -19,6 +19,14 @@
             "cwd": "${workspaceFolder}/module_example",
             "module": "module_example",
             "justMyCode": true
+        },
+        {
+            "name": "Module Programming LLM",
+            "type": "python",
+            "request": "launch",
+            "cwd": "${workspaceFolder}/module_programming_llm",
+            "module": "module_programming_llm",
+            "justMyCode": true
         }
     ]
 }

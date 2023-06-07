@@ -11,6 +11,9 @@
 		},
 		{
 			"path": "module_example"
+		},
+		{
+			"path": "module_programming_llm"
 		}
 	],
 	"settings": {

@@ -5,18 +5,18 @@
     "type": "programming",
     "max_points": 10,
     "bonus_points": 0,
-    "problem_statement": "Write a program that prints \"Hello World\" to the console.",
-    "grading_instructions": "Check if the program prints \"Hello World\" to the console. 10 points if it does, 0 points otherwise.",
+    "problem_statement": "-> file:problem-statement.md",
+    "grading_instructions": "-> file:grading-instructions.md",
     "programming_language": "java",
-    "solution_repository_url": "http://localhost:3000/api/example-solutions/1",
-    "template_repository_url": "http://localhost:3000/api/example-template/1",
-    "tests_repository_url": "http://localhost:3000/api/example-tests/1",
+    "solution_repository_url": "http://localhost:3000/api/material/1/solution.zip",
+    "template_repository_url": "http://localhost:3000/api/material/1/template.zip",
+    "tests_repository_url": "http://localhost:3000/api/material/1/tests.zip",
     "meta": {},
 
     "submissions": [
         {
             "id": 101,
-            "repository_url": "http://localhost:3000/api/programming-submissions/1.zip",
+            "repository_url": "http://localhost:3000/api/material/1/submissions/101.zip",
             "student_id": 1,
             "meta": {},
 
@@ -39,9 +39,14 @@
         },
         {
             "id": 102,
-            "exercise_id": 1,
-            "repository_url": "http://localhost:3000/api/programming-submissions/2.zip",
+            "repository_url": "http://localhost:3000/api/material/1/submissions/102.zip",
             "student_id": 2,
+            "meta": {}
+        },
+        {
+            "id": 103,
+            "repository_url": "http://localhost:3000/api/material/1/submissions/103.zip",
+            "student_id": 3,
             "meta": {}
         }
     ]

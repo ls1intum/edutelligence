@@ -8,3 +8,4 @@ data/*
 !data/.gitkeep
 .idea
 .env
+**/.env
