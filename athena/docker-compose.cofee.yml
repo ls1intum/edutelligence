@@ -1,0 +1,107 @@
+# Additional dockerfile for starting the CoFee server as well
+# To run in production:
+# docker-compose -f docker-compose.prod.yml -f docker-compose.cofee.yml up
+
+# Old CoFee server, needed here because it's a separate system
+
+services:
+  # http://localhost:9081/api
+  # http://localhost:9081/dashboard
+  traefik:
+    image: traefik:v2.9.6
+    container_name: cofee-traefik
+    hostname: module_text_cofee_old
+    restart: unless-stopped
+    depends_on:
+      # These components have API endpoints managed by traefik
+      - load-balancer
+      - embedding
+    expose:
+      - 4999
+      - 8080
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./module_text_cofee/traefik.docker.yml:/etc/traefik/traefik.yml
+
+  # http://localhost/queueStatus
+  # http://localhost/submit
+  # http://localhost/getTask
+  # http://localhost/sendTaskResult
+  load-balancer:
+    image: ghcr.io/ls1intum/athene/athene-load-balancer:protobuf-build-version # TODO: go back to latest
+    container_name: cofee-load-balancer
+    restart: unless-stopped
+    expose:
+       - 8000
+    env_file:
+      - ${ATHENA_ENV_DIR:-./env_example}/cofee.env
+    working_dir: /usr/src/app
+    volumes:
+      - ./module_text_cofee/node_config.docker.yml:/config/node_config.docker.yml
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.balancer.rule=Path(`/queueStatus`,`/submit`,`/getTask`,`/sendTaskResult`)
+      - traefik.http.routers.balancer.entrypoints=web
+
+  segmentation:
+    image: ghcr.io/ls1intum/athene/athene-segmentation:latest
+    container_name: cofee-segmentation
+    restart: unless-stopped
+    depends_on:
+      - load-balancer
+    expose:
+       - 8000
+    env_file:
+      - ${ATHENA_ENV_DIR:-./env_example}/cofee.env
+    working_dir: /usr/src/app
+    labels:
+      - traefik.enable=true
+      - traefik.http.services.cofee-segmentation.loadbalancer.server.port=8000 # set service name this way
+
+  # http://localhost/upload
+  # http://localhost/feedback_consistency
+  embedding:
+    image: ghcr.io/ls1intum/athene/athene-embedding:latest
+    container_name: cofee-embedding
+    restart: unless-stopped
+    depends_on:
+      - load-balancer
+      - database
+    expose:
+       - 8000
+    env_file:
+      - ${ATHENA_ENV_DIR:-./env_example}/cofee.env
+    working_dir: /usr/src/app
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.upload.rule=Path(`/upload`,`/feedback_consistency`)
+      - traefik.http.routers.upload.entrypoints=web
+      - traefik.http.services.cofee-embedding.loadbalancer.server.port=8000 # set service name this way
+
+  clustering:
+    image: ghcr.io/ls1intum/athene/athene-clustering:latest
+    container_name: cofee-clustering
+    restart: unless-stopped
+    depends_on:
+      - load-balancer
+      - database
+    expose:
+       - 8000
+    env_file:
+      - ${ATHENA_ENV_DIR:-./env_example}/cofee.env
+    working_dir: /usr/src/app
+    labels:
+      - traefik.enable=true
+      - traefik.http.services.cofee-clustering.loadbalancer.server.port=8000 # set service name this way
+
+  database:
+    image: mongo:latest
+    container_name: cofee-mongodb
+    restart: unless-stopped
+    expose:
+      - 27017
+    env_file:
+      - ${ATHENA_ENV_DIR:-./env_example}/cofee.env
+    volumes:
+      - ./module_text_cofee/init-mongo.js:/docker-entrypoint-initdb.d/init-mongo.js:ro
+      - ./data/cofee_db:/data/db

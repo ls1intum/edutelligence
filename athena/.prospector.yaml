@@ -4,7 +4,7 @@ autodetect: false
 
 ignore-paths:
   - docs
-  - module_cofee/module_cofee/protobuf
+  - module_text_cofee/module_text_cofee/protobuf
 
 mypy:
   run: true

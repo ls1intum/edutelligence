@@ -30,3 +30,11 @@ services:
       - athena
     ports:
       - "5002:5002"
+
+  module_text_cofee:
+    hostname: module_text_cofee
+    build: ./module_text_cofee
+    depends_on:
+      - athena
+    ports:
+      - "5003:5003"

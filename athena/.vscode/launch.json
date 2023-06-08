@@ -27,6 +27,13 @@
             "cwd": "${workspaceFolder}/module_programming_llm",
             "module": "module_programming_llm",
             "justMyCode": true
-        }
+        },
+        {
+            "name": "Module Text CoFee",
+            "type": "python",
+            "request": "launch",
+            "cwd": "${workspaceFolder}/module_text_cofee",
+            "module": "module_text_cofee",
+        },
     ]
 }
