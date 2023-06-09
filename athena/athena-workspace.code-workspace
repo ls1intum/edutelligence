@@ -16,6 +16,9 @@
 			"path": "module_programming_llm"
 		},
 		{
+			"path": "module_text_llm"
+		},
+		{
 			"path": "module_text_cofee"
 		},
 	],

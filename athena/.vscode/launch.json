@@ -29,6 +29,14 @@
             "justMyCode": true
         },
         {
+            "name": "Module Text LLM",
+            "type": "python",
+            "request": "launch",
+            "cwd": "${workspaceFolder}/module_text_llm",
+            "module": "module_text_llm",
+            "justMyCode": true
+        },
+        {
             "name": "Module Text CoFee",
             "type": "python",
             "request": "launch",

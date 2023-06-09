@@ -14,6 +14,7 @@ assessment_module_manager = {path = "./assessment_module_manager", develop = tru
 athena = {path = "./athena", develop = true}
 module_example = {path = "./module_example", develop = true}
 module_programming_llm = {path = "./module_programming_llm", develop = true}
+module_text_llm = {path = "./module_text_llm", develop = true}
 module_text_cofee = {path = "./module_text_cofee", develop = true}
 
 # start linter with `poetry run prospector`
