@@ -1,12 +1,13 @@
 import useSWR from "swr";
 import fetcher from "@/helpers/fetcher";
 import HealthResponse from "@/model/health_response";
+import baseUrl from "@/helpers/base_url";
 
 export default function Health(
     { url }: { url: string }
 ) {
     // show red and green dots for module health
-    const { data, error } = useSWR<HealthResponse>("api/health?url=" + encodeURIComponent(url), fetcher);
+    const { data, error } = useSWR<HealthResponse>(`${baseUrl}/api/health?url=${encodeURIComponent(url)}`, fetcher);
     if (error) return <div>failed to load</div>;
     if (!data) return <div>loading...</div>;
     return (

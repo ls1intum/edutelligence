@@ -1,11 +1,12 @@
 import useSWR from "swr";
 import {ProgrammingSubmission, Submission, TextSubmission} from "@/model/submission";
 import fetcher from "@/helpers/fetcher";
+import baseUrl from "@/helpers/base_url";
 
 export default function SubmissionSelect(
     { exercise_id, submission, onChange, isAllSubmissions, setIsAllSubmissions }: { exercise_id?: number, submission: Submission | null, onChange: (submission: Submission) => void, isAllSubmissions?: boolean, setIsAllSubmissions?: (isAllSubmissions: boolean) => void }
 ) {
-    const {data, error, isLoading} = useSWR("/api/submissions", fetcher);
+    const {data, error, isLoading} = useSWR(`${baseUrl}/api/submissions`, fetcher);
     if (error) return <div>failed to load</div>;
     if (isLoading) return <div>loading...</div>;
 

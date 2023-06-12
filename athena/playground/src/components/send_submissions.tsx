@@ -5,18 +5,19 @@ import ExerciseSelect from "@/components/exercise_select";
 import ModuleResponse from "@/model/module_response";
 import ModuleResponseView from "@/components/module_response_view";
 import {ModuleMeta} from "@/model/health_response";
+import baseUrl from "@/helpers/base_url";
 
 async function sendSubmissions(athenaUrl: string, athenaSecret: string, module: ModuleMeta, exercise: Exercise | null): Promise<ModuleResponse | undefined> {
     if (!exercise) {
         alert("Please select an exercise");
         return;
     }
-    const submissionsResponse = await fetch(`/api/submissions?${ new URLSearchParams({exercise_id: exercise.id.toString()}) }`);
+    const submissionsResponse = await fetch(`${baseUrl}/api/submissions?${ new URLSearchParams({exercise_id: exercise.id.toString()}) }`);
     const submissions: Submission[] = await submissionsResponse.json();
     let response;
     try {
         const athenaSubmissionsUrl = `${athenaUrl}/modules/${module.type}/${module.name}/submissions`;
-        response = await fetch(`/api/athena_request?${ new URLSearchParams({url: athenaSubmissionsUrl}) }`, {
+        response = await fetch(`${baseUrl}/api/athena_request?${ new URLSearchParams({url: athenaSubmissionsUrl}) }`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',

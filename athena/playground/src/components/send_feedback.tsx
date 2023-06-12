@@ -8,6 +8,7 @@ import Feedback from "@/model/feedback";
 import ModuleResponse from "@/model/module_response";
 import ModuleResponseView from "@/components/module_response_view";
 import {ModuleMeta} from "@/model/health_response";
+import baseUrl from "@/helpers/base_url";
 
 async function sendFeedback(
     athenaUrl: string,
@@ -32,7 +33,7 @@ async function sendFeedback(
     }
     try {
         const athenaFeedbackUrl = `${athenaUrl}/modules/${module.type}/${module.name}/feedback`;
-        const response = await fetch(`/api/athena_request?${new URLSearchParams({ url: athenaFeedbackUrl })}`, {
+        const response = await fetch(`${baseUrl}/api/athena_request?${new URLSearchParams({ url: athenaFeedbackUrl })}`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -70,7 +71,7 @@ async function sendAllExerciseFeedbacks(
         return;
     }
     // fetch submissions for exercise from /api/submissions
-    const submissionResponse = await fetch(`/api/submissions?${new URLSearchParams({ exercise_id: exercise.id.toString() })}`);
+    const submissionResponse = await fetch(`${baseUrl}/api/submissions?${new URLSearchParams({ exercise_id: exercise.id.toString() })}`);
     if (submissionResponse.status !== 200) {
         console.error(submissionResponse);
         alert(`Failed to fetch submissions for exercise ${exercise.id}`);
@@ -78,7 +79,7 @@ async function sendAllExerciseFeedbacks(
     }
     const submissions: Submission[] = await submissionResponse.json();
     // fetch feedbacks for exercise from /api/feedbacks
-    const feedbackResponse = await fetch(`/api/feedbacks?${new URLSearchParams({ exercise_id: exercise.id.toString() })}`);
+    const feedbackResponse = await fetch(`${baseUrl}/api/feedbacks?${new URLSearchParams({ exercise_id: exercise.id.toString() })}`);
     if (feedbackResponse.status !== 200) {
         console.error(feedbackResponse);
         alert(`Failed to fetch feedbacks for exercise ${exercise.id}`);

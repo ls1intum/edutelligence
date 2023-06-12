@@ -1,4 +1,4 @@
-import React, {useEffect, useState} from "react";
+import React, { useState } from "react";
 import BaseInfoHeader from "@/components/base_info_header";
 import SendSubmissions from "@/components/send_submissions";
 import SendFeedback from "@/components/send_feedback";
@@ -7,7 +7,15 @@ import SelectSubmission from "@/components/request_submission_selection";
 import {ModuleMeta} from "@/model/health_response";
 
 export default function Home() {
-    const [athenaUrl, setAthenaUrl] = useState<string>("http://127.0.0.1:5000");
+    const [athenaUrl, setAthenaUrl] = useState<string>(() => {
+        // Default value if location is not defined (for server-side rendering)
+        let defaultUrl = "http://127.0.0.1:5000";
+        if (typeof window !== 'undefined' && window.location.hostname !== "localhost") {
+            // default url for non-local development is the origin of the current page
+            defaultUrl = window.location.origin;
+        }
+        return defaultUrl;
+    });
     const [athenaSecret, setAthenaSecret] = useState<string>("");
     const [module, setModule] = useState<ModuleMeta | undefined>(undefined);
 

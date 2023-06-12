@@ -1,11 +1,12 @@
 import useSWR from "swr";
 import { Exercise } from "@/model/exercise";
 import fetcher from "@/helpers/fetcher";
+import baseUrl from "@/helpers/base_url";
 
 export default function ExerciseSelect(
     {exercise, exerciseType, onChange}: { exercise: Exercise | null, exerciseType: string, onChange: (exercise: Exercise) => void}
 ) {
-    const {data, error, isLoading} = useSWR("/api/exercises", fetcher);
+    const {data, error, isLoading} = useSWR(`${baseUrl}/api/exercises`, fetcher);
     if (error) return <div>failed to load</div>;
     if (isLoading) return <div>loading...</div>;
     return (

@@ -1,6 +1,7 @@
 import type {NextApiRequest, NextApiResponse} from 'next';
 import type Feedback from "@/model/feedback";
 import {getExampleFeedbacks} from "@/pages/api/get_examples";
+import getOriginFromRequest from '@/helpers/origin_from_req';
 
 
 export default function handler(
@@ -11,5 +12,5 @@ export default function handler(
     if (req.query.exercise_id) {
         exerciseId = parseInt(req.query.exercise_id as string);
     }
-    res.status(200).json(getExampleFeedbacks(exerciseId));
+    res.status(200).json(getExampleFeedbacks(exerciseId, getOriginFromRequest(req)));
 }

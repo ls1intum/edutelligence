@@ -1,0 +1,10 @@
+version: '3.8'
+
+# This hosts the playground image in production. It only works in combination with docker-compose.prod.yml
+# Usage: docker compose -f docker-compose.prod.yml -f docker-compose.playground.prod.yml up -d
+
+services:
+
+  playground:
+    hostname: playground
+    image: ghcr.io/pal03377/athena_playground:latest

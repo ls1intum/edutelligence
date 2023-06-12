@@ -1,11 +1,12 @@
 import useSWR from "swr";
 import Feedback from "@/model/feedback";
 import fetcher from "@/helpers/fetcher";
+import baseUrl from "@/helpers/base_url";
 
 export default function FeedbackSelect(
     {exercise_id, submission_id, feedback, onChange}: { exercise_id?: number, submission_id?: number, feedback: Feedback | null, onChange: (feedback: Feedback) => void}
 ) {
-    const {data, error, isLoading} = useSWR("/api/feedbacks", fetcher);
+    const {data, error, isLoading} = useSWR(`${baseUrl}/api/feedbacks`, fetcher);
     if (error) return <div>failed to load</div>;
     if (isLoading) return <div>loading...</div>;
 
