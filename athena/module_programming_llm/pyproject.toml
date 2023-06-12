@@ -8,11 +8,11 @@ license = "MIT"
 [tool.poetry.dependencies]
 python = "^3.10"
 athena = {path = "../athena", develop = true}
-openai = "^0.27.5"
-langchain = "0.0.191"
+openai = "^0.27.8"
+langchain = "^0.0.194"
 gitpython = "^3.1.31"
-tiktoken = "^0.3.3"
-promptlayer = "^0.1.80"
+tiktoken = "^0.4.0"
+promptlayer = "^0.1.85"
 python-dotenv = "^1.0.0"
 
 [tool.poetry.scripts]
