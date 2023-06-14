@@ -1,5 +1,5 @@
 import pickle
-from typing import List
+from typing import List, cast
 
 from sqlalchemy import Column, Integer, LargeBinary, ForeignKey, Boolean
 from sqlalchemy.orm import relationship
@@ -26,7 +26,7 @@ class DBTextCluster(Base):
     @property
     def distance_matrix(self) -> List[List[float]]:
         """Return the distance matrix as a list of lists of floats."""
-        return pickle.loads(self.distance_matrix_binary)
+        return pickle.loads(cast(bytes, self.distance_matrix_binary))
 
     @distance_matrix.setter
     def distance_matrix(self, value: List[List[float]]):
@@ -42,6 +42,12 @@ class DBTextCluster(Base):
         if block2_index == -1:
             raise ValueError(f"Block {block2} is not in this cluster")
         return self.distance_matrix[block1_index][block2_index]
+
+    def get_number_of_ungraded_blocks(self, ungraded_submission_ids: List[int]) -> int:
+        """
+        Return the number of blocks in this cluster whose submission has not been graded yet according to the given list.
+        """
+        return sum(1 for block in self.blocks if block.submission_id not in ungraded_submission_ids)
 
     def __str__(self):
         return f"TextCluster{{id={self.id}, exercise_id={self.exercise_id}, probabilities={self.probabilities}, distance_matrix={self.distance_matrix}, disabled={self.disabled}}}"

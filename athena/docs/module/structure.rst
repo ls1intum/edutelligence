@@ -48,7 +48,7 @@ Example:
 
 Select Submission
 ~~~~~~~~~~~~~~~~~
-Select the submission to grade next out out of many submissions. The LMS would usually call this right before a tutor can start grading a submission. The module will receive the request at the function annotated with ``@submission_selector``.
+Select the submission to grade next out out of many submissions. The LMS would usually call this right before a tutor can start grading a submission. You should get a list of all submissions that are not graded yet. The module will receive the request at the function annotated with ``@submission_selector``.
 
 Example:
     .. code-block:: python

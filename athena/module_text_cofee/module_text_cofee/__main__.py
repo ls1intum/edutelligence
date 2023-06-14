@@ -8,7 +8,8 @@ from athena.storage import store_feedback
 from athena.text import Exercise, Submission, Feedback
 from athena.logger import logger
 
-from module_text_cofee import adapter # type: ignore
+from module_text_cofee import adapter
+from module_text_cofee.information_gain import calculate_information_gain # type: ignore
 from module_text_cofee.link_feedback_to_block import link_feedback_to_block
 from module_text_cofee.suggest_feedback import suggest_feedback_for_submission
 
@@ -17,10 +18,11 @@ from module_text_cofee.suggest_feedback import suggest_feedback_for_submission
 def select_submission(exercise: Exercise, submissions: List[Submission]) -> Submission:
     logger.info("select_submission: Received %d submissions for exercise %d", len(submissions), exercise.id)
     for submission in submissions:
-        logger.info("- Submission %d", submission.id)
-    # TODO: select submission with highest information gain
-    # For now, just return the first one:
-    return submissions[0]
+        logger.debug("- Submission %d", submission.id)
+    return max(
+        submissions,
+        key=lambda submission: calculate_information_gain(submission, [s.id for s in submissions])
+    )
 
 
 @submissions_consumer
