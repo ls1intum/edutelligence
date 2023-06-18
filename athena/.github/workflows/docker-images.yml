@@ -59,12 +59,9 @@ jobs:
         uses: docker/metadata-action@v4
         with:
           images: ghcr.io/${{ github.repository_owner }}/athena_${{ matrix.image }}
-
-      - name: Add latest tag to develop build
-        if: github.ref == 'refs/heads/develop'
-        run: |
-          echo "::set-output name=tags::${{ steps.meta.outputs.tags }},latest"
-          echo "::set-output name=labels::${{ steps.meta.outputs.labels }},latest"
+          tags: |
+            # set latest tag for develop branch
+            type=raw,value=latest,enable=${{ github.ref == format('refs/heads/{0}', 'develop') }}
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v4
