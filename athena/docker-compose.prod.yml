@@ -10,7 +10,7 @@ services:
       - "80:80"
       - "443:443"
     environment:
-      - ${ATHENA_DOMAIN:-localhost}
+      - ATHENA_DOMAIN=${ATHENA_DOMAIN:-http://localhost}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile
 

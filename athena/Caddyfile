@@ -1,7 +1,7 @@
 {
 	email paul.schwind@tum.de
 }
-{$ATHENA_DOMAIN}
-
-reverse_proxy /playground* http://playground:3000
-reverse_proxy http://assessment_module_manager:5000
+{$ATHENA_DOMAIN} {
+	reverse_proxy /playground* http://playground:3000
+	reverse_proxy http://assessment_module_manager:5000
+}
