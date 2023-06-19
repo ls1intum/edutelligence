@@ -1,0 +1,30 @@
+[tool.black]
+line-length = 79
+
+[tool.poetry]
+name = "pyris"
+version = "0.1.0"
+description = ""
+authors = ["Khoa Nguyen <khoa.nguyen@tum.de>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.11"
+fastapi = "^0.97.0"
+uvicorn = "^0.22.0"
+httpx = "^0.24.1"
+orjson = "^3.9.1"
+pydantic = "^1.10.9"
+python-dotenv = "^1.0.0"
+pytest-dotenv = "^0.5.2"
+pytest = "^7.3.2"
+pytest-mock = "^3.11.1"
+freezegun = "^1.2.2"
+guidance = "0.0.61"
+black = "^23.3.0"
+flake8 = "^6.0.0"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
