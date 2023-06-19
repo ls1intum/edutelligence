@@ -1,0 +1,32 @@
+version: '3'
+
+tasks:
+  build:
+    cmds:
+      - docker compose build
+
+  up:
+    cmds:
+      - docker compose up -d
+
+  down:
+    cmds:
+      - docker compose down
+
+  test:
+    cmds:
+      - docker compose run --rm --entrypoint="poetry run pytest" server
+
+  format:
+    aliases: [ fmt ]
+    cmds:
+      - docker compose run --rm --entrypoint="poetry run black ." server
+
+  lint:
+    cmds:
+      - docker compose run --rm --entrypoint="poetry run flake8" server
+      - docker compose run --rm --entrypoint="poetry run black . --check" server
+
+  logs:
+    cmds:
+      - docker compose logs -f server
