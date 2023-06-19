@@ -28,7 +28,7 @@ services:
   # http://localhost/getTask
   # http://localhost/sendTaskResult
   load-balancer:
-    image: ghcr.io/ls1intum/athena/load-balancer:embedding-numpy # TODO: go back to latest
+    image: ghcr.io/ls1intum/athena/load-balancer
     container_name: cofee-load-balancer
     restart: unless-stopped
     expose:
@@ -44,7 +44,7 @@ services:
       - traefik.http.routers.balancer.entrypoints=web
 
   segmentation:
-    image: ghcr.io/ls1intum/athena/segmentation:embedding-numpy # TODO: go back to latest
+    image: ghcr.io/ls1intum/athena/segmentation
     container_name: cofee-segmentation
     restart: unless-stopped
     depends_on:
@@ -61,7 +61,7 @@ services:
   # http://localhost/upload
   # http://localhost/feedback_consistency
   embedding:
-    image: ghcr.io/ls1intum/athena/embedding:embedding-numpy # TODO: go back to latest
+    image: ghcr.io/ls1intum/athena/embedding
     container_name: cofee-embedding
     restart: unless-stopped
     depends_on:
@@ -79,7 +79,7 @@ services:
       - traefik.http.services.cofee-embedding.loadbalancer.server.port=8000 # set service name this way
 
   clustering:
-    image: ghcr.io/ls1intum/athena/clustering:embedding-numpy # TODO: go back to latest
+    image: ghcr.io/ls1intum/athena/clustering
     container_name: cofee-clustering
     restart: unless-stopped
     depends_on:
