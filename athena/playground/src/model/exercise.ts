@@ -1,4 +1,4 @@
-type ExerciseType = 'text' | 'programming';
+type ExerciseType = "text" | "programming";
 
 type ExerciseBase = {
   id: number;
@@ -15,12 +15,12 @@ type ExerciseBase = {
 };
 
 export type TextExercise = ExerciseBase & {
-  type: 'text';
+  type: "text";
   example_solution: string;
 };
 
 export type ProgrammingExercise = ExerciseBase & {
-  type: 'programming';
+  type: "programming";
   programming_language: string;
   solution_repository_url: string;
   template_repository_url: string;

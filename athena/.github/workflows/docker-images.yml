@@ -59,9 +59,11 @@ jobs:
         uses: docker/metadata-action@v4
         with:
           images: ghcr.io/${{ github.repository_owner }}/athena_${{ matrix.image }}
-          tags: |
-            # set latest tag for develop branch
-            type=raw,value=latest,enable=${{ github.ref == format('refs/heads/{0}', 'develop') }}
+        tags: |
+          # set latest tag for develop branch
+          type=raw,value=latest,enable=${{ github.ref == format('refs/heads/{0}', 'develop') }}
+          # set pr-<number> tag for pull requests
+          type=raw,value=pr-${{ github.event.pull_request.number }},enable=${{ github.event_name == 'pull_request' }}
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v4

@@ -1,1 +1,1 @@
-export default '/playground';
+export default "/playground";

@@ -1,0 +1,51 @@
+{
+  "id": 1,
+  "course_id": 1,
+  "title": "Hello World",
+  "type": "programming",
+  "max_points": 10,
+  "bonus_points": 0,
+  "problem_statement": "-> file:problem-statement.md",
+  "grading_instructions": "-> file:grading-instructions.md",
+  "programming_language": "java",
+  "solution_repository_url": "{{exerciseDataUrl}}/solution.zip",
+  "template_repository_url": "{{exerciseDataUrl}}/template.zip",
+  "tests_repository_url": "{{exerciseDataUrl}}/tests.zip",
+  "meta": {},
+
+  "submissions": [
+    {
+      "id": 101,
+      "repository_url": "{{exerciseDataUrl}}/submissions/101.zip",
+      "student_id": 1,
+      "meta": {},
+
+      "feedbacks": [
+        {
+          "id": 101,
+          "detail_text": "Your program does not print \"Hello World\" to the console.",
+          "credits": -2.0,
+          "meta": {}
+        },
+        {
+          "id": 102,
+          "detail_text": "You're missing a semicolon at the end of the line.",
+          "credits": -2.0,
+          "meta": {}
+        }
+      ]
+    },
+    {
+      "id": 102,
+      "repository_url": "{{exerciseDataUrl}}/submissions/102.zip",
+      "student_id": 2,
+      "meta": {}
+    },
+    {
+      "id": 103,
+      "repository_url": "{{exerciseDataUrl}}/submissions/103.zip",
+      "student_id": 3,
+      "meta": {}
+    }
+  ]
+}
