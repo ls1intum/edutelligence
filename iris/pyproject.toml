@@ -5,7 +5,7 @@ line-length = 79
 name = "pyris"
 version = "0.1.0"
 description = ""
-authors = ["Khoa Nguyen <khoa.nguyen@tum.de>"]
+authors = ["Khoa Nguyen <khoa.nguyen@tum.de>", "Timor Morrien <timor.morrien@tum.de>"]
 readme = "README.md"
 
 [tool.poetry.dependencies]
@@ -23,6 +23,7 @@ guidance = "0.0.61"
 black = "^23.3.0"
 flake8 = "^6.0.0"
 pyaml-env = "^1.2.1"
+gunicorn = "^20.1.0"
 
 
 [build-system]

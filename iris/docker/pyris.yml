@@ -1,0 +1,21 @@
+# ----------------------------------------------------------------------------------------------------------------------
+# Pyris base service
+# ----------------------------------------------------------------------------------------------------------------------
+
+services:
+  pyris-app:
+    container_name: pyris-app
+    image: ghcr.io/ls1intum/pyris:latest
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      pull: true
+    expose:
+      - "8000"
+    networks:
+      - pyris
+
+networks:
+  pyris:
+    driver: "bridge"
+    name: pyris
