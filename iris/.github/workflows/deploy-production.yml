@@ -19,5 +19,5 @@ jobs:
       docker-tag: latest
       branch-name: main
       environment-name: Iris Production
-      environment-url: https://pyris.artemis.cit.tum.de
+      environment-url: https://iris.artemis.cit.tum.de
     secrets: inherit

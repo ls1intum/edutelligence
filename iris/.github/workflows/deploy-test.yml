@@ -156,7 +156,7 @@ jobs:
       docker-tag: ${{ needs.compute-tag.outputs.tag }}
       branch-name: ${{ github.event.pull_request.head.ref }}
       environment-name: Iris Test
-      environment-url: https://pyris-test.artemis.cit.tum.de
+      environment-url: https://iris-test.artemis.cit.tum.de
     secrets: inherit
 
 
