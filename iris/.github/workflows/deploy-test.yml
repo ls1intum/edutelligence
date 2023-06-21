@@ -150,7 +150,7 @@ jobs:
 
   # Deploy to the test servers
   deploy:
-    needs: [ pre-deployment ]
+    needs: [ compute-tag, pre-deployment ]
     uses: ./.github/workflows/deploy.yml
     with:
       docker-tag: ${{ needs.compute-tag.outputs.tag }}
