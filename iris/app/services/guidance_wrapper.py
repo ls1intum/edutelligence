@@ -7,9 +7,6 @@ from app.models.dtos import Content, ContentType, LLMModel
 class GuidanceWrapper:
     """A wrapper service to all guidance package's methods."""
 
-    # TODO: will change to use yml config in the next PR
-    MODELS_MAPPING = {LLMModel.GPT35_TURBO: "gpt-3.5-turbo"}
-
     def __init__(
         self, model: LLMModel, handlebars: str, parameters=None
     ) -> None:
@@ -42,11 +39,5 @@ class GuidanceWrapper:
         return Content(type=ContentType.TEXT, textContent=result["response"])
 
     def _get_llm(self):
-        return guidance.llms.OpenAI(
-            model=self.MODELS_MAPPING[self.model.value],
-            token=settings.openai_token,
-            api_base=settings.openai_api_base,
-            api_type=settings.openai_api_type,
-            api_version=settings.openai_api_version,
-            deployment_id=settings.openai_deployment_id,
-        )
+        llm_credentials = settings.pyris.llm[self.model.value]
+        return guidance.llms.OpenAI(**llm_credentials)

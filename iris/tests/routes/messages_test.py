@@ -4,7 +4,7 @@ from app.services.guidance_wrapper import GuidanceWrapper
 
 
 @freeze_time("2023-06-16 03:21:34 +02:00")
-def test_send_message(test_client, mocker):
+def test_send_message(test_client, headers, mocker):
     mocker.patch.object(
         GuidanceWrapper,
         "query",
@@ -28,7 +28,7 @@ def test_send_message(test_client, mocker):
             "query": "Some query",
         },
     }
-    response = test_client.post("/api/v1/messages", json=body)
+    response = test_client.post("/api/v1/messages", headers=headers, json=body)
     assert response.status_code == 200
     assert response.json() == {
         "usedModel": "GPT35_TURBO",
@@ -39,8 +39,8 @@ def test_send_message(test_client, mocker):
     }
 
 
-def test_send_message_missing_params(test_client):
-    response = test_client.post("/api/v1/messages", json={})
+def test_send_message_missing_params(test_client, headers):
+    response = test_client.post("/api/v1/messages", headers=headers, json={})
     assert response.status_code == 422
     assert response.json() == {
         "detail": [
@@ -63,7 +63,7 @@ def test_send_message_missing_params(test_client):
     }
 
 
-def test_send_message_raise_value_error(test_client, mocker):
+def test_send_message_raise_value_error(test_client, headers, mocker):
     mocker.patch.object(
         GuidanceWrapper, "query", side_effect=ValueError("value error message")
     )
@@ -75,7 +75,7 @@ def test_send_message_raise_value_error(test_client, mocker):
         "preferredModel": "GPT35_TURBO",
         "parameters": {"query": "Some query"},
     }
-    response = test_client.post("/api/v1/messages", json=body)
+    response = test_client.post("/api/v1/messages", headers=headers, json=body)
     assert response.status_code == 422
     assert response.json() == {
         "detail": [
@@ -88,7 +88,7 @@ def test_send_message_raise_value_error(test_client, mocker):
     }
 
 
-def test_send_message_raise_key_error(test_client, mocker):
+def test_send_message_raise_key_error(test_client, headers, mocker):
     mocker.patch.object(
         GuidanceWrapper, "query", side_effect=KeyError("key error message")
     )
@@ -100,7 +100,7 @@ def test_send_message_raise_key_error(test_client, mocker):
         "preferredModel": "GPT35_TURBO",
         "parameters": {"query": "Some query"},
     }
-    response = test_client.post("/api/v1/messages", json=body)
+    response = test_client.post("/api/v1/messages", headers=headers, json=body)
     assert response.status_code == 422
     assert response.json() == {
         "detail": [
@@ -111,3 +111,16 @@ def test_send_message_raise_key_error(test_client, mocker):
             }
         ]
     }
+
+
+def test_send_message_with_wrong_api_key(test_client):
+    headers = {"Authorization": "wrong api key"}
+    response = test_client.post("/api/v1/messages", headers=headers, json={})
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Permission denied"
+
+
+def test_send_message_without_authorization_header(test_client):
+    response = test_client.post("/api/v1/messages", json={})
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Requires authentication"

@@ -1,0 +1,18 @@
+pyris:
+  api_key: secret
+  llm:
+    GPT35_TURBO:
+      model:
+      token:
+      api_base:
+      api_type:
+      api_version:
+      deployment_id:
+    GPT35_TURBO_16K_0613:
+      model:
+      token:
+      chat_mode:
+    GPT35_TURBO_0613:
+      model:
+      token:
+      chat_mode:

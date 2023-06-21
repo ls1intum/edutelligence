@@ -5,6 +5,8 @@ from datetime import datetime
 
 class LLMModel(str, Enum):
     GPT35_TURBO = "GPT35_TURBO"
+    GPT35_TURBO_16K_0613 = "GPT35_TURBO_16K_0613"
+    GPT35_TURBO_0613 = "GPT35_TURBO_0613"
 
 
 class ContentType(str, Enum):

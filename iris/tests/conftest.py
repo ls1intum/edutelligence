@@ -7,3 +7,8 @@ from app.main import app
 def test_client():
     with TestClient(app) as c:
         yield c
+
+
+@pytest.fixture(scope="session")
+def headers():
+    return {"Authorization": "secret"}
