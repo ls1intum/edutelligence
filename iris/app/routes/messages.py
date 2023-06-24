@@ -24,6 +24,10 @@ def send_message(body: SendMessageRequest) -> SendMessageResponse:
     except (KeyError, ValueError) as e:
         raise BadDataException(str(e))
 
+    # Turn content into an array if it's not already
+    if not isinstance(content, list):
+        content = [content]
+
     return SendMessageResponse(
         usedModel=body.preferred_model,
         message=SendMessageResponse.Message(

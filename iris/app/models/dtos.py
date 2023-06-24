@@ -33,7 +33,7 @@ class SendMessageResponse(BaseModel):
         sent_at: datetime = Field(
             alias="sentAt", default_factory=datetime.utcnow
         )
-        content: Content
+        content: list[Content]
 
     used_model: LLMModel = Field(..., alias="usedModel")
     message: Message

@@ -34,7 +34,7 @@ def test_send_message(test_client, headers, mocker):
         "usedModel": "GPT35_TURBO",
         "message": {
             "sentAt": "2023-06-16T01:21:34+00:00",
-            "content": {"textContent": "some content", "type": "text"},
+            "content": [{"textContent": "some content", "type": "text"}],
         },
     }
 
