@@ -1,5 +1,12 @@
 # Athena: A system to support (semi-)automated assessment of exercises
 
+---
+> **Note**
+> **Looking for Athena, the reference implementation of CoFee by Jan-Philip Bernius?**
+> → https://github.com/ls1intum/Athena-CoFee
+---
+
+
 ![Athena Logo](./playground/public/logo.png)
 
 ## What is Athena?
