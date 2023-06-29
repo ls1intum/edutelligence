@@ -1,13 +1,19 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+
 import { Submission } from "@/model/submission";
 import { Exercise } from "@/model/exercise";
-import ExerciseSelect from "@/components/selectors/exercise_select";
-import ModuleResponse from "@/model/module_response";
-import ModuleResponseView from "@/components/module_response_view";
 import { ModuleMeta } from "@/model/health_response";
-import baseUrl from "@/helpers/base_url";
-import { ModuleRequestProps } from ".";
 import { Mode } from "@/model/mode";
+import ModuleResponse from "@/model/module_response";
+
+import ExerciseSelect from "@/components/selectors/exercise_select";
+import ModuleResponseView from "@/components/module_response_view";
+import ExerciseDetail from "@/components/details/exercise_detail";
+import SubmissionList from "@/components/submission_list";
+
+import baseUrl from "@/helpers/base_url";
+
+import { ModuleRequestProps } from ".";
 
 async function sendSubmissions(
   mode: Mode,
@@ -75,6 +81,15 @@ export default function SendSubmissions({
     undefined
   );
 
+  useEffect(() => {
+    // Reset
+    setResponse(undefined);
+  }, [exercise]);
+
+  useEffect(() => {
+    setExercise(undefined);
+  }, [module, mode]);
+
   return (
     <div className="bg-white rounded-md p-4 mb-8">
       <h3 className="text-2xl font-bold mb-4">Send Submissions</h3>
@@ -90,6 +105,12 @@ export default function SendSubmissions({
         exercise={exercise}
         onChange={setExercise}
       />
+      {exercise && (
+        <div className="space-y-1 mt-2">
+          <ExerciseDetail exercise={exercise} mode={mode} />
+          <SubmissionList exercise={exercise} mode={mode} />
+        </div>
+      )}
       <ModuleResponseView response={response} />
       <button
         className="bg-blue-500 text-white rounded-md p-2 mt-4"

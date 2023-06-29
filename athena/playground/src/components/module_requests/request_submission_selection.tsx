@@ -1,13 +1,22 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+
 import { Exercise } from "@/model/exercise";
-import ExerciseSelect from "@/components/selectors/exercise_select";
-import ModuleResponse from "@/model/module_response";
-import ModuleResponseView from "@/components/module_response_view";
-import { Submission } from "@/model/submission";
-import { ModuleMeta } from "@/model/health_response";
-import baseUrl from "@/helpers/base_url";
-import { ModuleRequestProps } from ".";
 import { Mode } from "@/model/mode";
+import { ModuleMeta } from "@/model/health_response";
+import { Submission } from "@/model/submission";
+import ModuleResponse from "@/model/module_response";
+
+import ExerciseSelect from "@/components/selectors/exercise_select";
+import ModuleResponseView from "@/components/module_response_view";
+import ExerciseDetail from "@/components/details/exercise_detail";
+import Disclosure from "@/components/disclosure";
+import SubmissionDetail from "@/components/details/submission_detail";
+import SubmissionList from "@/components/submission_list";
+
+import baseUrl from "@/helpers/base_url";
+import { useSubmissions } from "@/helpers/client/get_data";
+
+import { ModuleRequestProps } from ".";
 
 async function requestSubmissionSelection(
   mode: Mode,
@@ -20,6 +29,7 @@ async function requestSubmissionSelection(
     alert("Please select an exercise");
     return;
   }
+
   const submissionsResponse = await fetch(
     `${baseUrl}/api/mode/${mode}/exercise/${exercise.id}/submissions`
   );
@@ -73,6 +83,42 @@ export default function SelectSubmission({
     undefined
   );
 
+  useEffect(() => {
+    // Reset
+    setResponse(undefined);
+  }, [exercise]);
+
+  useEffect(() => {
+    setExercise(undefined);
+  }, [module, mode]);
+
+  const {
+    submissions,
+    isLoading: submissionsLoading,
+    error: submissionsError,
+  } = useSubmissions(mode, exercise);
+
+  const responseSubmissionView = (response: ModuleResponse | undefined) => {
+    if (!response || response.status !== 200 || typeof response.data !== "number") {
+      return null;
+    }
+    const submissionId = response.data;
+    const submission = submissions?.find(
+      (submission) => submission.id === submissionId
+    );
+    return (
+      submission && (
+        <Disclosure
+          title="Submission"
+          openedInitially
+          className={{ root: "ml-2" }}
+        >
+          <SubmissionDetail submission={submission} />
+        </Disclosure>
+      )
+    );
+  };
+
   return (
     <div className="bg-white rounded-md p-4 mb-8">
       <h3 className="text-2xl font-bold mb-4">
@@ -97,7 +143,15 @@ export default function SelectSubmission({
         exercise={exercise}
         onChange={setExercise}
       />
-      <ModuleResponseView response={response} />
+      {exercise && (
+        <div className="space-y-1 mt-2">
+          <ExerciseDetail exercise={exercise} mode={mode} />
+          <SubmissionList exercise={exercise} mode={mode} />
+        </div>
+      )}
+      <ModuleResponseView response={response}>
+        {responseSubmissionView(response)}
+      </ModuleResponseView>
       <button
         className="bg-blue-500 text-white rounded-md p-2 mt-4"
         onClick={() => {

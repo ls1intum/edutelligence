@@ -16,3 +16,11 @@ export type ProgrammingSubmission = SubmissionBase & {
 };
 
 export type Submission = ProgrammingSubmission | TextSubmission;
+
+export function isProgrammingSubmission(submission: Submission): submission is ProgrammingSubmission {
+  return (submission as ProgrammingSubmission).repository_url !== undefined;
+}
+
+export function isTextSubmission(submission: Submission): submission is TextSubmission {
+  return (submission as TextSubmission).content !== undefined;
+}
