@@ -17,29 +17,29 @@ services:
   assessment_module_manager:
     env_file:
       - ${ATHENA_ENV_DIR:-./env_example}/assessment_module_manager.env
-    image: ghcr.io/pal03377/athena_assessment_module_manager:latest
+    image: ghcr.io/ls1intum/Athena/assessment_module_manager:latest
 
   module_example:
     hostname: module_example
     env_file:
       - ${ATHENA_ENV_DIR:-./env_example}/module_example.env
-    image: ghcr.io/pal03377/athena_module_example:latest
+    image: ghcr.io/ls1intum/Athena/module_example:latest
 
   module_programming_llm:
     hostname: module_programming_llm
     env_file:
       - ${ATHENA_ENV_DIR:-./env_example}/module_programming_llm.env
-    image: ghcr.io/pal03377/athena_module_programming_llm:latest
+    image: ghcr.io/ls1intum/Athena/module_programming_llm:latest
 
   module_text_llm:
     hostname: module_text_llm
     env_file:
       - ${ATHENA_ENV_DIR:-./env_example}/module_text_llm.env
-    image: ghcr.io/pal03377/athena_module_text_llm:latest
+    image: ghcr.io/ls1intum/Athena/module_text_llm:latest
 
   module_text_cofee:
     hostname: module_text_cofee
     env_file:
       - ${ATHENA_ENV_DIR:-./env_example}/module_text_cofee.env
-    image: ghcr.io/pal03377/athena_module_text_cofee:latest
+    image: ghcr.io/ls1intum/Athena/module_text_cofee:latest
 
