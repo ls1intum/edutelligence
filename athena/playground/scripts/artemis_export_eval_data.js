@@ -4,6 +4,9 @@ const fs = require('fs').promises;
 const path = require('path');
 
 const configPath = path.join(__dirname, '.config.json');
+const evaluationDirPath = path.join(__dirname, '..', 'data', 'evaluation');
+
+const textExercisesExportQueryPath = path.join(__dirname, 'export_text_exercises.sql');
 
 const defaultConfig = {
   host: '127.0.0.1',
@@ -54,13 +57,23 @@ async function promptForConfig() {
   return config;
 }
 
-async function connectAndRunQuery(config) {
-  const connection = await mysql.createConnection(config);
+async function executeQuery(config) {
+  const connection = await mysql.createConnection({
+    ...config,
+    multipleStatements: true,
+  });
   console.log('Connected to the database!');
 
   try {
-    const [result] = await connection.query('SELECT COUNT(*) FROM exercise');
-    console.log(result);
+    const sql = await fs.readFile(textExercisesExportQueryPath, 'utf8');
+    const [results] = await connection.query(sql);
+    const [exercises] = results.slice(-1);
+    exercises.forEach(({ exercise_data }) => {
+      const { id } = exercise_data;
+      const filePath = path.join(evaluationDirPath, `exercise-${id}.json`);
+      fs.writeFile(filePath, JSON.stringify(exercise_data, null, 2));
+    });
+    console.log(`Exported ${exercises.length} exercises to ${evaluationDirPath}`);
   } catch (err) {
     throw err;
   } finally {
@@ -69,4 +82,4 @@ async function connectAndRunQuery(config) {
   }
 }
 
-loadConfig().then(connectAndRunQuery).catch(console.error);
+loadConfig().then(executeQuery).catch(console.error);
