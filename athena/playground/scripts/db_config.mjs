@@ -1,8 +1,10 @@
 import fs from "fs/promises";
 import path from "path";
+import { fileURLToPath } from 'url';
 import inquirer from "inquirer";
 
-const configPath = path.join(process.cwd(), "db_config.json");
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const configPath = path.join(__dirname, "db_config.json");
 
 const defaultConfig = {
   host: "127.0.0.1",
