@@ -54,10 +54,10 @@ SELECT
         '\n',
         COALESCE((
             SELECT GROUP_CONCAT(
-                CONCAT('- ', gc.title, ':\n', 
+                CONCAT(gc.title, ':\n', 
                     COALESCE((
                         SELECT GROUP_CONCAT(
-                            CONCAT(' * ', gi.feedback, ' (', gi.credits, ' credits) [', gi.instruction_description, ']')
+                            CONCAT('  - ', gi.feedback, ' (', gi.credits, ' credits) [', gi.instruction_description, ']')
                             SEPARATOR '\n '
                         )
                         FROM grading_instruction gi
@@ -86,7 +86,7 @@ SELECT
 	        JSON_OBJECT(
               'id', f.id,
               'detail_text', f.detail_text,
-              'text', f.text,
+              'text', COALESCE(f.text, ''), -- Might remove fallback in the future
               'reference', CONCAT(tb.start_index, '-', tb.end_index),
               'credits', f.credits,
               'type', f.`type`,
