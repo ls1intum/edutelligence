@@ -20,7 +20,7 @@ async function loadDBConfig() {
   try {
     const data = await fs.readFile(configPath, "utf8");
     const config = JSON.parse(data);
-    console.log(`Previous config found (${configPath}): `, config);
+    console.log(`Previous config found (${configPath}):`, config);
     const answer = await askQuestion(
       "Do you want to use the previous config? (yes/no) "
     );
@@ -39,19 +39,19 @@ function askQuestion(query) {
 
 async function promptForConfig() {
   const host =
-    (await askQuestion(`Enter host: (default: "${defaultConfig.host}") `)) ||
+    (await askQuestion(`Enter host: (default: "${defaultConfig.host}")`)) ||
     defaultConfig.host;
   const user =
     (await askQuestion(
-      `Enter username: (default: "${defaultConfig.user}") `
+      `Enter username: (default: "${defaultConfig.user}")`
     )) || defaultConfig.user;
   const password =
     (await askQuestion(
-      `Enter password: (default: "${defaultConfig.password}") `
+      `Enter password: (default: "${defaultConfig.password}")`
     )) || defaultConfig.password;
   const database =
     (await askQuestion(
-      `Enter database: (default: "${defaultConfig.database}") `
+      `Enter database: (default: "${defaultConfig.database}")`
     )) || defaultConfig.database;
 
   const config = { host, user, password, database };
@@ -60,7 +60,7 @@ async function promptForConfig() {
     await fs.writeFile(configPath, JSON.stringify(config));
     console.log(`Config saved to ${configPath}`);
   } catch (err) {
-    console.log("Error saving config: ", err);
+    console.log("Error saving config:", err);
   }
 
   return config;
