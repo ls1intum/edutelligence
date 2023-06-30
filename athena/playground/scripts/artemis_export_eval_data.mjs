@@ -20,17 +20,16 @@ async function executeQuery(config) {
     const sql = await fs.promises.readFile(textExercisesExportQueryPath, 'utf8');
     const [results] = await connection.query(sql);
     const [exercises] = results.slice(-1);
-    exercises.forEach(({ exercise_data }) => {
+    exercises.forEach(async ({ exercise_data }) => {
       const { id } = exercise_data;
       const filePath = path.join(evaluationDirPath, `exercise-${id}.json`);
-      fs.promises.writeFile(filePath, JSON.stringify(exercise_data, null, 2));
+      await fs.promises.writeFile(filePath, JSON.stringify(exercise_data, null, 2));
     });
     console.log(`Exported ${exercises.length} exercises to ${evaluationDirPath}`);
   } catch (err) {
     throw err;
   } finally {
-    connection.end();
-    process.exit();
+    await connection.end();
   }
 }
 
