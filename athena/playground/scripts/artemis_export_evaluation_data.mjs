@@ -7,7 +7,10 @@ import { loadDBConfig } from './db_config.mjs';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const evaluationDirPath = path.join(__dirname, '..', 'data', 'evaluation');
+const evaluationExercisesPath = path.join(__dirname, 'evaluation_exercises.json');
 const textExercisesExportQueryPath = path.join(__dirname, 'export_text_exercises.sql');
+
+const evaluationExercises = JSON.parse(await fs.promises.readFile(evaluationExercisesPath, 'utf8'));
 
 async function executeQuery(config) {
   const connection = await mysql.createConnection({
@@ -17,8 +20,13 @@ async function executeQuery(config) {
   console.log('Connected to the database!');
 
   try {
-    const sql = await fs.promises.readFile(textExercisesExportQueryPath, 'utf8');
-    const [results] = await connection.query(sql);
+    let sql = await fs.promises.readFile(textExercisesExportQueryPath, 'utf8');
+    const textExerciseIds = evaluationExercises.text.map(({ id }) => id);
+    const placeholders = textExerciseIds.map(() => '?').join(',');
+    sql = sql.replace(":text_exercise_ids", `(${placeholders})`);
+
+    console.log(`Exporting ${textExerciseIds.length} text exercises...`);
+    const [results] = await connection.query(sql, textExerciseIds);
     const [exercises] = results.slice(-1);
     exercises.forEach(async ({ exercise_data }) => {
       const { id } = exercise_data;

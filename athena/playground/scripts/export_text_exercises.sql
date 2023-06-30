@@ -47,7 +47,7 @@ SELECT
   JSON_OBJECT(
     'id', e.id,
     'course_id', te.course_id,
-    'title', e.title,
+    'title', CONCAT(e.title, IFNULL(CONCAT(' (', c.semester, ')'), '')),
     'type', 'text',
     'grading_instructions', CONCAT(
         e.grading_instructions,
@@ -106,11 +106,13 @@ from
 join
 	exercise e on te.id = e.id
 join
+	course c on te.course_id = c.id
+join
 	participation p on p.exercise_id = e.id
 join 
 	submission s on s.participation_id = p.id
 WHERE
-  e.id IN (1215, 1216, 1217, 1274, 1309, 1310, 1324, 1458, 1471, 1594, 1596)
+  e.id IN :text_exercise_ids
   and s.`text` is not null
   and s.submitted = 1
 GROUP BY
