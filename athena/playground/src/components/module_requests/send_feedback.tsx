@@ -1,16 +1,25 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+
 import { Submission } from "@/model/submission";
+import { Mode } from "@/model/mode";
 import { Exercise } from "@/model/exercise";
+import Feedback from "@/model/feedback";
+import ModuleResponse from "@/model/module_response";
+import { ModuleMeta } from "@/model/health_response";
+
 import ExerciseSelect from "@/components/selectors/exercise_select";
 import SubmissionSelect from "@/components/selectors/submission_select";
 import FeedbackSelect from "@/components/selectors/feedback_select";
-import Feedback from "@/model/feedback";
-import ModuleResponse from "@/model/module_response";
 import ModuleResponseView from "@/components/module_response_view";
-import { ModuleMeta } from "@/model/health_response";
+import Disclosure from "@/components/disclosure";
+import ExerciseDetail from "@/components/details/exercise_detail";
+import SubmissionDetail from "@/components/details/submission_detail";
+import SubmissionList from "@/components/submission_list";
+
 import baseUrl from "@/helpers/base_url";
+import { useFeedbacks } from "@/helpers/client/get_data";
+
 import { ModuleRequestProps } from ".";
-import { Mode } from "@/model/mode";
 
 async function sendFeedback(
   athenaUrl: string,
@@ -74,7 +83,8 @@ async function sendAllExerciseFeedbacks(
   athenaUrl: string,
   athenaSecret: string,
   module: ModuleMeta,
-  exercise?: Exercise
+  exercise?: Exercise,
+  submission?: Submission
 ): Promise<ModuleResponse[] | undefined> {
   if (!exercise) {
     alert("Please select an exercise");
@@ -97,9 +107,12 @@ async function sendAllExerciseFeedbacks(
     alert(`Failed to fetch feedbacks for exercise ${exercise.id}`);
     return;
   }
-  const feedbacks: Feedback[] = await feedbackResponse.json();
+  let feedbacks: Feedback[] = await feedbackResponse.json();
+  if (submission) {
+    feedbacks = feedbacks.filter((f) => f.submission_id === submission.id);
+  }
   if (feedbacks.length === 0) {
-    alert("No feedbacks found for exercise");
+    alert(`No feedbacks found for ${submission ? "submission" : "exercise"}`);
     return;
   }
   const responses: ModuleResponse[] = [];
@@ -132,15 +145,44 @@ export default function SendFeedback({
   module,
 }: ModuleRequestProps) {
   const [exercise, setExercise] = useState<Exercise | undefined>(undefined);
+
   const [isAllSubmissions, setIsAllSubmissions] = useState<boolean>(true);
   const [submission, setSubmission] = useState<Submission | undefined>(
     undefined
   );
+
+  const [isAllFeedback, setIsAllFeedback] = useState<boolean>(true);
   const [feedback, setFeedback] = useState<Feedback | undefined>(undefined);
+
   const [loading, setLoading] = useState<boolean>(false);
   const [responses, setResponses] = useState<ModuleResponse[] | undefined>(
     undefined
   );
+
+  const {
+    feedbacks,
+    isLoading: isFeedbackLoading,
+    error: feedbackError,
+  } = useFeedbacks(mode, exercise);
+
+  useEffect(() => {
+    // Reset
+    setResponses(undefined);
+    setIsAllSubmissions(true);
+    setSubmission(undefined);
+    setIsAllFeedback(true);
+    setFeedback(undefined);
+  }, [exercise]);
+
+  useEffect(() => {
+    // Reset
+    setIsAllFeedback(true);
+    setFeedback(undefined);
+  }, [submission, isAllSubmissions]);
+
+  useEffect(() => {
+    setExercise(undefined);
+  }, [module, mode]);
 
   return (
     <div className="bg-white rounded-md p-4 mb-8">
@@ -168,13 +210,6 @@ export default function SendFeedback({
             isAllSubmissions={isAllSubmissions}
             setIsAllSubmissions={setIsAllSubmissions}
           />
-          {isAllSubmissions && (
-            <div className="bg-yellow-50 border-l-4 border-yellow-400 p-4 text-sm text-yellow-700 mt-2">
-              You are about to send feedback for all submissions of this
-              exercise. This will send a request for each feedback of each
-              submission.
-            </div>
-          )}
           {!isAllSubmissions && (
             <FeedbackSelect
               mode={mode}
@@ -182,7 +217,47 @@ export default function SendFeedback({
               submission_id={submission?.id}
               feedback={feedback}
               onChange={setFeedback}
+              isAllFeedback={isAllFeedback}
+              setIsAllFeedback={setIsAllFeedback}
             />
+          )}
+          <div className="space-y-1 mt-2">
+            <ExerciseDetail exercise={exercise} mode={mode} />
+            {submission ? (
+              <Disclosure title="Submission">
+                <SubmissionDetail
+                  submission={submission}
+                  feedbacks={feedback ? [feedback] : feedbacks?.filter(
+                    (f) => f.submission_id === submission.id
+                  )}
+                />
+              </Disclosure>
+            ) : (
+              isAllFeedback && (
+                <SubmissionList exercise={exercise} mode={mode} feedbacks={feedback ? [feedback] : feedbacks} />
+              )
+            )}
+            {isFeedbackLoading && (
+              <div className="text-gray-500 text-sm">Loading feedbacks...</div>
+            )}
+            {feedbackError && (
+              <div className="text-red-500 text-sm">
+                Failed to load feedbacks
+              </div>
+            )}
+          </div>
+          {isAllSubmissions && (
+            <div className="bg-yellow-50 border-l-4 border-yellow-400 p-4 text-sm text-yellow-700 mt-2">
+              You are about to send feedback for all submissions of this
+              exercise. This will send a request for each feedback of each
+              submission.
+            </div>
+          )}
+          {!isAllSubmissions && isAllFeedback && (
+            <div className="bg-yellow-50 border-l-4 border-yellow-400 p-4 text-sm text-yellow-700 mt-2">
+              You are about to send all feedback for the selected submission.
+              This will send a request for each feedback of the submission.
+            </div>
           )}
         </>
       )}
@@ -203,18 +278,29 @@ export default function SendFeedback({
             )
               .then(setResponses)
               .finally(() => setLoading(false));
-            return;
+          } else if (isAllFeedback) {
+            sendAllExerciseFeedbacks(
+              mode,
+              athenaUrl,
+              athenaSecret,
+              module,
+              exercise!,
+              submission!
+            )
+              .then(setResponses)
+              .finally(() => setLoading(false));
+          } else {
+            sendFeedback(
+              athenaUrl,
+              athenaSecret,
+              module,
+              exercise,
+              submission,
+              feedback
+            )
+              .then((resp) => setResponses(resp ? [resp] : undefined))
+              .finally(() => setLoading(false));
           }
-          sendFeedback(
-            athenaUrl,
-            athenaSecret,
-            module,
-            exercise,
-            submission,
-            feedback
-          )
-            .then((resp) => setResponses(resp ? [resp] : undefined))
-            .finally(() => setLoading(false));
         }}
         disabled={loading}
       >

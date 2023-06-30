@@ -13,7 +13,6 @@
     {
       "id": 301,
       "content": "Hello world\nThis is a test\nPlease cluster me into cluster one\none one one",
-      "student_id": 1,
       "meta": {},
       "feedbacks": [
         {
@@ -29,7 +28,6 @@
     {
       "id": 302,
       "content": "Hello world\nThis is a test\nPlease cluster me into cluster one\none one one",
-      "student_id": 1,
       "meta": {},
 
       "feedbacks": [
@@ -54,49 +52,41 @@
     {
       "id": 303,
       "content": "Hello world\nThis is a test\nPlease cluster me into cluster one\none one one",
-      "student_id": 1,
       "meta": {}
     },
     {
       "id": 304,
       "content": "Hello world\nThis is a test\nPlease cluster me into cluster one\none one one",
-      "student_id": 1,
       "meta": {}
     },
     {
       "id": 305,
       "content": "Hello world\nThis is a test\nPlease cluster me into cluster one\none one one",
-      "student_id": 1,
       "meta": {}
     },
     {
       "id": 306,
       "content": "Hello world\nThis is a test\nPlease cluster me into the second cluster!\ntwo two two",
-      "student_id": 1,
       "meta": {}
     },
     {
       "id": 307,
       "content": "Hello world\nThis is a test\nPlease cluster me into the second cluster!\ntwo two two",
-      "student_id": 1,
       "meta": {}
     },
     {
       "id": 308,
       "content": "Hello world\nThis is a test\nPlease cluster me into the second cluster!\ntwo two two",
-      "student_id": 1,
       "meta": {}
     },
     {
       "id": 309,
       "content": "Hello world\nThis is a test\nPlease cluster me into the second cluster!\ntwo two two",
-      "student_id": 1,
       "meta": {}
     },
     {
       "id": 310,
       "content": "Hello world\nThis is a test\nPlease cluster me into the second cluster!\ntwo two two",
-      "student_id": 1,
       "meta": {}
     }
   ]

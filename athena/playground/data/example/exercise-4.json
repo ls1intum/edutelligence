@@ -13,121 +13,116 @@
     {
       "id": 401,
       "content": "MVC test",
-      "student_id": 108,
       "meta": {}
     },
     {
       "id": 402,
       "content": "Bridge Pattern\nState Pattern\nComposite Pattern",
-      "student_id": 8082,
       "meta": {}
     },
     {
       "id": 403,
       "content": "Bridge pattern, Strategy pattern, Singleton pattern",
-      "student_id": 9666,
       "meta": {}
     },
     {
       "id": 404,
       "content": "Builder\nPrototype\nScheduler",
-      "student_id": 9592,
       "meta": {}
     },
     {
       "id": 405,
       "content": "singleton pattern\nbuilder pattern\nobserver pattern\ncontainer pattern\n\n-----------\n\ncreational patterns\nstructural patterns\nbehavioral patterns",
-      "student_id": 9628,
       "meta": {}
     },
     {
       "id": 406,
       "content": "Visitor\nFactory\nInterpreter",
-      "student_id": 10418,
       "meta": {}
     },
     {
       "id": 407,
       "content": "Creational pattern\nStructural pattern\nBehavioral pattern",
-      "student_id": 9275,
       "meta": {}
     },
     {
       "id": 408,
       "content": "visitor pattern\ninterceptor pattern\ninterpreter pattern",
-      "student_id": 9371,
       "meta": {}
     },
     {
       "id": 409,
       "content": "The three major categories are: structural, behavioral and creational patterns.",
-      "student_id": 7202,
       "meta": {}
     },
     {
       "id": 410,
       "content": "kjhkjhkjhkjhiuhbhhkhuhuh",
-      "student_id": 9943,
       "meta": {}
     },
     {
       "id": 411,
       "content": "observer pattern, visitor pattern, interpreter pattern",
-      "student_id": 9122,
       "meta": {}
     },
     {
       "id": 412,
       "content": "Behavioral, creational and structural.",
-      "student_id": 9314,
       "meta": {}
     },
     {
       "id": 413,
       "content": "- Visitor pattern\n- Composite Pattern\n- Model View Controller (Presentator)",
-      "student_id": 7218,
       "meta": {}
     },
     {
       "id": 414,
       "content": "strategy, command, composite",
-      "student_id": 5146,
       "meta": {}
     },
     {
       "id": 415,
       "content": "- Visitor pattern\n- Singleton pattern\n- Decorator pattern",
-      "student_id": 9131,
       "meta": {}
     },
     {
       "id": 416,
       "content": "Observer Pattern\nFacade Pattern\nDecorator Pattern",
-      "student_id": 9170,
       "meta": {}
     },
     {
       "id": 417,
       "content": "Observer Pattern\nAbstract Factory Pattern\nAdapter Pattern",
-      "student_id": 2393,
       "meta": {}
     },
     {
       "id": 418,
       "content": "Singleton\nObserver\nFactory",
-      "student_id": 10445,
       "meta": {}
     },
     {
       "id": 419,
       "content": "Kompositum-Pattern\nMVC-Pattern(Model-View-Controller)\nObserver-Pattern\n",
-      "student_id": 9793,
       "meta": {}
     },
     {
       "id": 420,
       "content": "Proxy Pattern, Bridge Pattern, Observer Pattern",
-      "student_id": 7514,
+      "meta": {}
+    },
+    {
+      "id": 1085082,
+      "content": "Visitor Pattern, Decorator Pattern, Dependency Injection",
+      "meta": {}
+    },
+    {
+      "id": 1085103,
+      "content": "- Creational patterns\n- Structural patterns\n- Behavioral patterns",
+      "meta": {}
+    },
+    {
+      "id": 1085105,
+      "content": "MVC, Blackboard, Bridge",
       "meta": {}
     }
   ]

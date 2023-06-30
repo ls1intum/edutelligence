@@ -9,8 +9,8 @@ export default function Health({ url }: { url: string }) {
     `${baseUrl}/api/health?url=${encodeURIComponent(url)}`,
     fetcher
   );
-  if (error) return <div>failed to load</div>;
-  if (!data) return <div>loading...</div>;
+  if (error) return <div className="text-red-500 text-sm">Failed to load</div>;
+  if (!data) return <div className="text-gray-500 text-sm">Loading...</div>;
   return (
     <div className="flex flex-col mt-4">
       <span className="text-lg font-bold">Health</span>

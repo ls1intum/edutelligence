@@ -1,4 +1,4 @@
-type ExerciseType = "text" | "programming";
+export type ExerciseType = "text" | "programming";
 
 type ExerciseBase = {
   id: number;

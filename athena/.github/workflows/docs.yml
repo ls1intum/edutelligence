@@ -47,7 +47,7 @@ jobs:
     if: github.ref == 'refs/heads/develop'
     environment:
       name: github-pages
-      url: "https://pal03377.github.io/Athena-New"  # TODO: change
+      url: "https://ls1intum.github.io/Athena"
     runs-on: ubuntu-latest
     needs: docs
     steps:
