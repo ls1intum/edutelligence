@@ -104,7 +104,7 @@ async function loadDBDump(config) {
   }
 
   try {
-    console.log("Loading database dump this may take a while...");
+    console.log("Loading database dump this may take a while (+30-60min)...");
 
     const rl = readline.createInterface({
       input: fs.createReadStream(dumpPath),
