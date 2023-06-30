@@ -182,7 +182,7 @@ async function loadDBDump(config) {
       }
     }
 
-    console.log("Done.");
+    console.log("\nDone.");
   } catch (err) {
     console.log(err);
     throw err;
