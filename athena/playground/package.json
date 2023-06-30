@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "artemis-export:load-anonymized-database-dump": "node ./scripts/artemis_load_anonymized_database_dump.js",
+    "artemis-export:load-anonymized-database-dump": "node ./scripts/artemis_load_anonymized_database_dump.mjs",
     "artemis-export:eval-data": "node ./scripts/artemis_export_eval_data.js",
     "artemis-export:materials-and-submissions": "node ./scripts/artemis_export_materials_and_submissions.js"
   },
@@ -27,9 +27,10 @@
     "@types/node": "18.15.11",
     "@types/react": "18.0.37",
     "@types/react-dom": "18.0.11",
-    "mysql2": "^3.4.2",
     "eslint": "8.38.0",
     "eslint-config-next": "13.3.0",
+    "inquirer": "^9.2.7",
+    "mysql2": "^3.4.2",
     "typescript": "5.0.4"
   }
 }

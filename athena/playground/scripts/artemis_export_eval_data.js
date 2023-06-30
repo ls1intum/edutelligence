@@ -2,7 +2,7 @@ const mysql = require('mysql2/promise');
 const fs = require('fs').promises;
 const path = require('path');
 
-const { loadDBConfig } = require('./db_config.js');
+const { loadDBConfig } = require('./db_config.mjs');
 
 const evaluationDirPath = path.join(__dirname, '..', 'data', 'evaluation');
 const textExercisesExportQueryPath = path.join(__dirname, 'export_text_exercises.sql');
