@@ -10,14 +10,15 @@ const evaluationDirPath = path.join(__dirname, '..', 'data', 'evaluation');
 const evaluationExercisesPath = path.join(__dirname, 'evaluation_exercises.json');
 const textExercisesExportQueryPath = path.join(__dirname, 'export_text_exercises.sql');
 
-const evaluationExercises = JSON.parse(await fs.promises.readFile(evaluationExercisesPath, 'utf8'));
-
 async function executeQuery(config) {
   const connection = await mysql.createConnection({
     ...config,
     multipleStatements: true,
   });
   console.log('Connected to the database!');
+
+  const evaluationExercises = JSON.parse(await fs.promises.readFile(evaluationExercisesPath, 'utf8'));
+  console.log(`Loaded evaluation exercises from ${evaluationExercisesPath}`);
 
   try {
     let sql = await fs.promises.readFile(textExercisesExportQueryPath, 'utf8');
