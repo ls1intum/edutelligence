@@ -163,13 +163,14 @@ async function loadDBDump(config) {
               `Query execution timed out after 60 seconds. Your database storage might be full or the query is too complex. Error details: ${err.message}`
             );
           } else if (err.code === "ER_NET_PACKET_TOO_LARGE") {
+            // Just in case the max_allowed_packet is not enough
             process.stdout.clearLine();
             process.stdout.cursorTo(0);
             console.error(
               `Skipped query due to packet size exceeding 'max_allowed_packet'.\n > Query: ${query.substr(
                 0,
                 100
-              )}...\nIf`
+              )}...`
             );
             query = "";
             // We continue the loop
