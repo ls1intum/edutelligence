@@ -7,10 +7,10 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "artemis-export:load-anonymized-database-dump": "node ./scripts/artemis/load_anonymized_database_dump.mjs",
-    "artemis-export:evaluation-data": "node ./scripts/artemis/export_evaluation_data.mjs",
-    "artemis-export:materials-and-submissions": "node ./scripts/artemis/export_materials_and_submissions.mjs",
-    "artemis-export:link-materials-and-submissions": "node ./scripts/artemis/link_materials_and_submissions.js"
+    "export:artemis:1-load-anonymized-database-dump": "node ./scripts/artemis/load_anonymized_database_dump.mjs",
+    "export:artemis:2-evaluation-data": "node ./scripts/artemis/export_evaluation_data.mjs",
+    "export:artemis:3-materials-and-submissions": "node ./scripts/artemis/export_materials_and_submissions.mjs",
+    "export:artemis:4-link-materials-and-submissions": "node ./scripts/artemis/link_materials_and_submissions.mjs"
   },
   "dependencies": {
     "@radix-ui/react-collapsible": "^1.0.3",
