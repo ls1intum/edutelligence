@@ -210,7 +210,9 @@ const main = async () => {
         name: "exerciseId",
         message: "Enter the exercise ID to download:",
       });
-      await download(exerciseId);
+      if (!await download(exerciseId)) {
+        console.log("No exercise was downloaded");
+      }
     }
   } catch (e) {
     console.error(`Error downloading exercise ${e.message}`);
