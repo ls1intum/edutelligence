@@ -9,10 +9,12 @@
     "lint": "next lint",
     "artemis-export:load-anonymized-database-dump": "node ./scripts/artemis/load_anonymized_database_dump.mjs",
     "artemis-export:evaluation-data": "node ./scripts/artemis/export_evaluation_data.mjs",
-    "artemis-export:materials-and-submissions": "node ./scripts/artemis/export_materials_and_submissions.js"
+    "artemis-export:materials-and-submissions": "node ./scripts/artemis/export_materials_and_submissions.mjs",
+    "artemis-export:link-materials-and-submissions": "node ./scripts/artemis/link_materials_and_submissions.js"
   },
   "dependencies": {
     "@radix-ui/react-collapsible": "^1.0.3",
+    "@tailwindcss/typography": "^0.5.9",
     "@types/archiver": "^5.3.2",
     "@types/node": "18.15.11",
     "@types/react": "18.0.37",
@@ -29,14 +31,14 @@
     "rehype-raw": "^6.1.1",
     "swr": "^2.1.3",
     "tailwind-merge": "^1.13.2",
-    "tailwindcss": "3.3.1",
-    "@tailwindcss/typography": "^0.5.9"
+    "tailwindcss": "3.3.1"
   },
   "devDependencies": {
     "@types/archiver": "^5.3.2",
     "@types/node": "18.15.11",
     "@types/react": "18.0.37",
     "@types/react-dom": "18.0.11",
+    "axios": "^1.4.0",
     "eslint": "8.38.0",
     "eslint-config-next": "13.3.0",
     "inquirer": "^9.2.7",
