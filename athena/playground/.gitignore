@@ -3,6 +3,8 @@
 data/evaluation/*
 !data/evaluation/.gitkeep
 
+/scripts/artemis/db_config.json
+
 # dependencies
 /node_modules
 /.pnp
@@ -36,5 +38,3 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
-
-/scripts/artemis/db_config.json
