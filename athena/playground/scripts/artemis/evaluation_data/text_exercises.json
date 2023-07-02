@@ -1,0 +1,130 @@
+{
+  "Introduction to Software Engineering (Summer 2019)": {
+    "course_id": 29,
+    "semester": "SS19",
+    "exercises": [
+      { "id": 500, "title": "H04E01 Coupling and Cohesion" },
+      {
+        "id": 503,
+        "title": "H04E02 Analysis Models & System Design"
+      },
+      { "id": 505, "title": "H04E03 Design Goal Trade-offs" },
+      {
+        "id": 519,
+        "title": "H05E02 Centralized vs Decentralized Designs"
+      },
+      {
+        "id": 536,
+        "title": "H06E04 Inheritance vs. Delegation"
+      },
+      {
+        "id": 538,
+        "title": "H06E03 Specification & Implementation Inheritance"
+      },
+      { "id": 544, "title": "H07E03 MVC & Observer Pattern" },
+      {
+        "id": 598,
+        "title": "H09E01 Advantages and Disadvantages of Scrum"
+      },
+      {
+        "id": 599,
+        "title": "H09E02 Unified Process and Scrum"
+      },
+      { "id": 612, "title": "H10E01 Problems using Git" },
+      {
+        "id": 613,
+        "title": "H10E02 Merge Conflicts & Best Practices"
+      }
+    ]
+  },
+  "Introduction to Software Engineering (Summer 2020)": {
+    "course_id": 48,
+    "semester": "SS20",
+    "exercises": [
+      {
+        "id": 1215,
+        "name": "H04E01 Coupling and Cohesion"
+      },
+      {
+        "id": 1216,
+        "name": "H04E02 Analysis Models & System Design"
+      },
+      {
+        "id": 1217,
+        "name": "H04E03 Design Goal Trade-offs"
+      },
+      {
+        "id": 1274,
+        "name": "H05E02 Centralized vs Decentralized Designs"
+      },
+      {
+        "id": 1309,
+        "name": "H06E03 Specification & Implementation Inheritance"
+      },
+      {
+        "id": 1310,
+        "name": "H06E04 Inheritance vs. Delegation"
+      },
+      {
+        "id": 1324,
+        "name": "H07E03 MVC & Observer Pattern"
+      },
+      {
+        "id": 1458,
+        "name": "H09E01 Advantages and Disadvantages of Scrum"
+      },
+      {
+        "id": 1471,
+        "name": "H09E02 Unified Process and Scrum"
+      },
+      {
+        "id": 1594,
+        "name": "H10E01 Problems using Git"
+      },
+      {
+        "id": 1596,
+        "name": "H10E02 Merge Conflicts & Best Practices"
+      }
+    ]
+  },
+  "Introduction to Software Engineering (IN0006) SS21": {
+    "course_id": 121,
+    "semester": "SS21",
+    "exercises": [
+      { "id": 4160, "title": "H04E01 Coupling and Cohesion" },
+      {
+        "id": 4161,
+        "title": "H04E02 Analysis Model & System Design"
+      },
+      {
+        "id": 4162,
+        "title": "H04E03 Design Goal Trade-offs"
+      },
+      {
+        "id": 4228,
+        "title": "H05E02 Centralized vs. Decentralized Designs"
+      },
+      {
+        "id": 4237,
+        "title": "H06E03 Specification & Implementation Inheritance"
+      },
+      {
+        "id": 4238,
+        "title": "H06E04 Inheritance vs. Delegation"
+      },
+      {
+        "id": 4289,
+        "title": "H07E03 MVC & Observer Pattern"
+      },
+      {
+        "id": 4341,
+        "title": "H09E01 Advantages and Disadvantages of Scrum"
+      },
+      { "id": 4398, "title": "H10E01 Problems using Git" },
+      {
+        "id": 4399,
+        "title": "H10E02 Merge Conflicts & Best Practices"
+      }
+    ]
+  }
+}
