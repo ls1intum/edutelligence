@@ -1,7 +1,5 @@
 # Playground 
 
-<!-- For debugging and evaluation purposes, we provide a playground environment that can be used to test Athena's functionality. The playground is available in the `playground` folder. For more information, please refer to the [playground's README](./playground/README.md). -->
-
 The Playground is a web application that allows you to test Athena's functionality. It uses Next.js as a framework and React as a library and offers a simple user interface to interact with Athena. You can mainly use the Playground to debug and evaluate your Athena modules and to test how they would interact with a learning management system (LMS).
 
 ## Setup
