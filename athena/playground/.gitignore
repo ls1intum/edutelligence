@@ -37,4 +37,4 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
-/scripts/db_config.json
+/scripts/artemis/db_config.json
