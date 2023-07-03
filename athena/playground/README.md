@@ -34,15 +34,20 @@ The Playground comes with some very basic example data that you can use to test 
 
 By default the `playground/data/evaluation` folder is empty. You can use this folder to store your own data that you want to use for evaluation purposes.
 
-If you are working with [Artemis](https://github.com/ls1intum/Artemis) LMS and want to use their data for evaluation, you can request an anonymized copy of their database from the Artemis team. You will need to give a reason for your request and sign a data protection agreement. Please contact the Artemis team for more information.
+If you are working with [Artemis](https://github.com/ls1intum/Artemis) LMS and want to use their data for evaluation, you can request an anonymized copy of their database from the Artemis team. You will need to give a reason for your request and sign a data protection agreement (NDA). Please contact the Artemis team for more information.
 
 Once you get the data, you can export it to the Playground with the following commands:
 
+**Loading the Database Dump:**
 ```bash
 npm run export:artemis:export:artemis:1-load-anonymized-database-dump
 ```
 
-This will load the data into your local Mysql database (just reuse your Artemis database). Then you can export the data to the Playground with the following command:
+This will load the data into your local Mysql database (just reuse your Artemis database). 
+
+**Exporting from the Database:**
+
+Then you can export the data to the Playground with the following command:
 
 ```bash
 npm run export:artemis:2-evaluation-data
@@ -50,13 +55,17 @@ npm run export:artemis:2-evaluation-data
 
 This will export the exercises listed under `playground/scripts/artemis/evaluation` to the `playground/data/evaluation` folder. You can then use this data for evaluation purposes.
 
-If you want to use the programming exercises, you will have to request them separately from the Artemis team. An instructor of the course can export the programming exercises from Artemis using the following command:
+**Getting the Repositories (Programming Exercises):**
+
+If you want to use the programming exercises, you will have to request them separately from the Artemis team, they are not included in the anonymized database dump. An instructor of the course can export the programming exercises from Artemis using the following command:
 
 ```bash
 npm run export:artemis:3-materials-and-submissions
 ```
 
 This will export the programming exercises' materials and submissions to the `playground/data/evaluation` folder. The instructor has to then zip it and send it to you.
+
+**Linking the Repositories (Programming Exercises):**
 
 In order to link the programming exercises' materials and submissions back to the exercises, you will have to run the following command:
 

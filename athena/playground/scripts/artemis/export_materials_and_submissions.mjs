@@ -18,13 +18,11 @@ const auth = async () => {
       type: "input",
       name: "username",
       message: "Enter your Artemis username:",
-      default: "artemis_admin",
     },
     {
       type: "password",
       name: "password",
       message: "Enter your Artemis password:",
-      default: "artemis_admin",
     },
   ]);
 
@@ -174,7 +172,7 @@ const main = async () => {
     type: "input",
     name: "server",
     message: "Enter the Artemis server:",
-    default: "http://localhost:8080",
+    default: "https://artemis.ase.in.tum.de",
   });
   axiosInstance.defaults.baseURL = `${server}/api`;
 
