@@ -7,4 +7,4 @@ services:
 
   playground:
     hostname: playground
-    image: ghcr.io/ls1intum/Athena/athena_playground:latest
+    image: ls1tum/athena_playground:${ATHENA_TAG:-develop}

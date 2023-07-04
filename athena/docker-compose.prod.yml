@@ -10,36 +10,41 @@ services:
       - "80:80"
       - "443:443"
     environment:
-      - ATHENA_DOMAIN=${ATHENA_DOMAIN:-http://localhost}
+      - ATHENA_DOMAIN=${ATHENA_DOMAIN:-localhost}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile
 
   assessment_module_manager:
     env_file:
       - ${ATHENA_ENV_DIR:-./env_example}/assessment_module_manager.env
-    image: ghcr.io/ls1intum/Athena/assessment_module_manager:latest
+    image: ls1tum/athena_assessment_module_manager:${ATHENA_TAG:-develop}
 
   module_example:
     hostname: module_example
     env_file:
       - ${ATHENA_ENV_DIR:-./env_example}/module_example.env
-    image: ghcr.io/ls1intum/Athena/module_example:latest
+    image: ls1tum/athena_module_example:${ATHENA_TAG:-develop}
 
   module_programming_llm:
     hostname: module_programming_llm
     env_file:
       - ${ATHENA_ENV_DIR:-./env_example}/module_programming_llm.env
-    image: ghcr.io/ls1intum/Athena/module_programming_llm:latest
+    image: ls1tum/athena_module_programming_llm:${ATHENA_TAG:-develop}
 
   module_text_llm:
     hostname: module_text_llm
     env_file:
       - ${ATHENA_ENV_DIR:-./env_example}/module_text_llm.env
-    image: ghcr.io/ls1intum/Athena/module_text_llm:latest
+    image: ls1tum/athena_module_text_llm:${ATHENA_TAG:-develop}
 
   module_text_cofee:
     hostname: module_text_cofee
     env_file:
       - ${ATHENA_ENV_DIR:-./env_example}/module_text_cofee.env
-    image: ghcr.io/ls1intum/Athena/module_text_cofee:latest
+    image: ls1tum/athena_module_text_cofee:${ATHENA_TAG:-develop}
 
+  module_programming_themisml:
+    hostname: module_programming_themisml
+    env_file:
+      - ${ATHENA_ENV_DIR:-./env_example}/module_programming_themisml.env
+    image: ls1tum/athena_module_programming_themisml:${ATHENA_TAG:-develop}

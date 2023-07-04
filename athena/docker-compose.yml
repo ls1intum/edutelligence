@@ -46,3 +46,11 @@ services:
       - athena
     ports:
       - "5004:5004"
+
+  module_programming_themisml:
+    hostname: module_programming_themisml
+    build: ./module_programming_themisml
+    depends_on:
+      - athena
+    ports:
+      - "5005:5005"

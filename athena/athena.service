@@ -5,7 +5,7 @@
 #  systemctl status athena # view status (up or not)
 #  systemctl stop athena   # stop service
 #  systemctl daemon-reload # reload service file after changes
-# in Athena-New folder: view logs
+# in Athena folder: view logs
 #  docker compose -f docker-compose.prod.yml -f docker-compose.playground.prod.yml -f docker-compose.cofee.yml logs --tail 200 -f
 
 [Unit]
@@ -17,8 +17,8 @@ After=docker.service
 Type=oneshot
 User=user # TODO: change to your user
 Group=docker
-WorkingDirectory=/home/user/Athena-New # TODO: change to actual path
-EnvironmentFile=/home/user/Athena-New/.env # TODO: potentially change to actual path
+WorkingDirectory=/home/user/Athena # TODO: change to actual path
+EnvironmentFile=/home/user/Athena/.env # TODO: potentially change to actual path
 ExecStart=/usr/bin/docker compose -f docker-compose.prod.yml -f docker-compose.playground.prod.yml -f docker-compose.cofee.yml up --pull always -d
 ExecStop=/usr/bin/docker compose -f docker-compose.prod.yml -f docker-compose.playground.prod.yml -f docker-compose.cofee.yml stop
 

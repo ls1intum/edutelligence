@@ -1,4 +1,4 @@
-name: Docker Image
+name: Build Docker Images
 
 # Build the Docker images for the the assessment module manager, the modules and the playground.
 # Because the Python images depend on the athena Python package, the package is built first.
@@ -15,7 +15,7 @@ on:
 concurrency: 
   group: ${{ github.head_ref || github.ref }}
   cancel-in-progress: true
- 
+
 jobs:
   find_images_to_build:
     runs-on: ubuntu-latest
@@ -67,7 +67,7 @@ jobs:
             ghcr.io/${{ github.repository_owner }}/Athena/${{ matrix.image }}
             ls1tum/athena_${{ matrix.image }}
           tags: |
-            type=raw,value=${{ github.ref == 'refs/heads/develop' && 'latest' || github.sha }}
+            type=raw,value=${{ github.ref == 'refs/heads/develop' && 'develop' || github.sha }}
             type=raw,value=${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.sha }}
 
       - name: Build and push Docker image
