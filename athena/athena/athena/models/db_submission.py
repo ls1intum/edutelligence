@@ -3,5 +3,5 @@ from .model import Model
 
 
 class DBSubmission(Model):
-    id = Column(Integer, primary_key=True, index=True)
-    meta = Column(JSON)
+    id = Column(Integer, primary_key=True, index=True, nullable=False)
+    meta = Column(JSON, nullable=False)

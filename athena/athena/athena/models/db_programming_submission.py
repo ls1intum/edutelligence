@@ -7,7 +7,7 @@ from .db_submission import DBSubmission
 
 class DBProgrammingSubmission(DBSubmission, Base):
     __tablename__ = "programming_submissions"
-    repository_url = Column(String, nullable=False)
+    repository_url: str = Column(String, nullable=False)  # type: ignore
 
     exercise_id = Column(Integer, ForeignKey("programming_exercises.id", ondelete="CASCADE"), index=True)
 

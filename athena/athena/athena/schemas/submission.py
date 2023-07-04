@@ -9,7 +9,7 @@ class Submission(Schema, ABC):
     id: int = Field(example=1)
     exercise_id: int = Field(example=1)
 
-    meta: dict = Field(example={})
+    meta: dict = Field({}, example={})
 
     class Config:
         orm_mode = True

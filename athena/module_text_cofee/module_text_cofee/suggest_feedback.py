@@ -5,6 +5,7 @@ from athena.logger import logger
 from athena.text import Submission, Feedback
 from athena.helpers.text import get_exercise_feedbacks
 from module_text_cofee.models.db_text_block import DBTextBlock
+from module_text_cofee.models.db_text_cluster import DBTextCluster
 
 
 DISTANCE_THRESHOLD = 1.0
@@ -65,6 +66,9 @@ def suggest_feedback_for_block(submission: Submission, block: DBTextBlock) -> Li
             "original_submission_id": submission.id,
             "original_block_id": closest_block.id,
         }
+        # adapt index numbers to new text block
+        copy.index_start = block.index_start
+        copy.index_end = block.index_end
         suggested_feedback.append(copy)
     return suggested_feedback
 

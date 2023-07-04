@@ -4,7 +4,7 @@ from pathlib import Path
 from zipfile import ZipFile
 
 import httpx
-from git import Repo
+from git.repo import Repo
 
 cache_dir = Path(tempfile.mkdtemp())
 

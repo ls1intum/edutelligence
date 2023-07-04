@@ -47,15 +47,18 @@ async def suggest_feedback_basic(exercise: Exercise, submission: Submission) -> 
         except ValueError:
             logger.warning("Could not parse credits from row %s", row)
             continue
+
+        index_start, index_end = parse_line_number_reference_as_span(row["reference"], submission.content)
         
         feedbacks.append(Feedback(
             id=None,
             exercise_id=exercise.id,
             submission_id=submission.id,
-            detail_text=row["text"],
-            reference=parse_line_number_reference_as_span(row["reference"], submission.content),
-            credits=credits,
             text="Feedback",
+            detail_text=row["text"],
+            index_start=index_start,
+            index_end=index_end,
+            credits=credits,
             meta={}
         ))
 

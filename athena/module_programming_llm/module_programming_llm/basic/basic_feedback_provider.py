@@ -38,12 +38,12 @@ async def suggest_feedback(exercise: Exercise, submission: Submission) -> List[F
         if submission_content is None:
             continue
             
-        problem_statement = exercise.meta['file_problem_statements'][file_path]
+        problem_statement = exercise.meta['file_problem_statements'].get(file_path)
         if problem_statement is None:
             logger.info("No problem statement for %s, skipping.", file_path)
             continue
 
-        grading_instructions = exercise.meta['file_grading_instructions'][file_path]
+        grading_instructions = exercise.meta['file_grading_instructions'].get(file_path)
         if grading_instructions is None:
             logger.info("No grading instructions for %s, skipping.", file_path)
             continue
@@ -70,6 +70,8 @@ async def suggest_feedback(exercise: Exercise, submission: Submission) -> List[F
 
     # Completion
     chain = LLMChain(llm=chat, prompt=chat_prompt)
+    if not input_list:
+        return []
     result = await chain.agenerate(input_list)
     
     # Parse result
@@ -94,9 +96,10 @@ async def suggest_feedback(exercise: Exercise, submission: Submission) -> List[F
                     Feedback(
                         exercise_id=exercise.id,
                         submission_id=submission.id,
+                        text=detail_text,
                         detail_text=detail_text,
                         file_path=file_path,
-                        line=line,
+                        line_start=line,
                         credits=credits,
                         meta={},
                     )

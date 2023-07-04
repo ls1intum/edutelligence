@@ -32,8 +32,8 @@ def store_text_blocks(segments: List[cofee_pb2.Segment], clusters: List[cofee_pb
                 id=segment.id,
                 submission_id=segment.submissionId,
                 text=segment.text,
-                start_index=segment.startIndex,
-                end_index=segment.endIndex,
+                index_start=segment.startIndex,
+                index_end=segment.endIndex,
                 cluster_id=cluster_id,
             )
             db.merge(model)
@@ -58,7 +58,6 @@ def store_text_clusters(exercise_id: int, clusters: Iterable[cofee_pb2.Cluster])
                 exercise_id=exercise_id
             )
             model.distance_matrix = distance_matrix
-            print(model)
             db.merge(model)
             db.commit()
 

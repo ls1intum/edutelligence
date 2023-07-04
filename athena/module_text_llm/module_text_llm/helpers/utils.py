@@ -35,7 +35,7 @@ def get_sentence_spans(content: str) -> List[Tuple[int, int]]:
     return sentence_spans
 
 
-def parse_line_number_reference_as_span(reference: str, content: str) -> Optional[str]:
+def parse_line_number_reference_as_span(reference: str, content: str) -> Tuple[Optional[int], Optional[int]]:
     start_line_number = None
     end_line_number = None
 
@@ -55,7 +55,7 @@ def parse_line_number_reference_as_span(reference: str, content: str) -> Optiona
 
     if start_line_number is None or end_line_number is None:
         logger.warning("Could not parse line number from reference %s", reference)
-        return None
+        return None, None
     
     sentence_spans = get_sentence_spans(content)
     start_line_index = int(start_line_number) - 1
@@ -63,7 +63,6 @@ def parse_line_number_reference_as_span(reference: str, content: str) -> Optiona
 
     if len(sentence_spans) <= start_line_index or len(sentence_spans) <= end_line_index:
         logger.warning("Line number out of range for reference %s", reference)
-        return None
+        return None, None
     
-    span_start_index, span_end_index = sentence_spans[start_line_index][0], sentence_spans[end_line_index][1]
-    return f"{span_start_index}-{span_end_index}"
+    return sentence_spans[start_line_index][0], sentence_spans[end_line_index][1]

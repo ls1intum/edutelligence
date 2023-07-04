@@ -2,9 +2,11 @@ type Feedback = {
   id: number;
   exercise_id: number;
   submission_id: number;
-  detail_text?: string;
-  reference?: string;
   text?: string;
+  detail_text?: string;
+  index_start: number;
+  index_end: number;
+  reference?: string;
   credits: number;
   meta: {
     [key: string]: any;

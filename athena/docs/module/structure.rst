@@ -90,7 +90,6 @@ Example:
             ...
             return [
                 Feedback(
-                    id=10,
                     ...
                 )
             ]

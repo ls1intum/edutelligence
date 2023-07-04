@@ -1,0 +1,19 @@
+[tool.poetry]
+name = "module_programming_themisml"
+version = "0.1.0"
+description = "A module generating feedback suggestions somewhat similar to CoFee, but for programming submissions and by using CodeBERT."
+authors = ["Paul Schwind <paul.schwind@tum.de>"]
+license = "MIT"
+
+[tool.poetry.dependencies]
+python = "^3.10"
+athena = {path = "../athena", develop = true}
+antlr4-python3-runtime = "^4.13.0"
+code-bert-score = "^0.4.1"
+
+[tool.poetry.scripts]
+module = "athena:run_module"
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"

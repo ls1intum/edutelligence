@@ -6,7 +6,7 @@ public class BinarySearch implements SearchStrategy {
     @Override
     public int performSearch(List<Chapter> chapters, String chapterName) {
         int low = 0;
-        int high = chapters.size() - 1;
+        int high = chapters.size() - 1
         while (low <= high) {
             int mid = (low + high) / 2;
             int comparison = chapters.get(mid).getName().compareTo(chapterName);

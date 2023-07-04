@@ -21,6 +21,9 @@
 		{
 			"path": "module_text_cofee"
 		},
+		{
+			"path": "module_programming_themisml"
+		},
 	],
 	"settings": {
 		"python.linting.prospectorEnabled": true,
