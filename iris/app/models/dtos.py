@@ -24,7 +24,7 @@ class SendMessageRequest(BaseModel):
         content: str
 
     template: Template
-    preferred_model: LLMModel = Field(..., alias="preferredModel")
+    preferred_model: str = Field(..., alias="preferredModel")
     parameters: dict
 
 
