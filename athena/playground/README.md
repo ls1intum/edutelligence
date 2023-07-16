@@ -50,7 +50,7 @@ This will load the data into your local MySQL database (just reuse your Artemis 
 Then you can export the data to the Playground with the following command:
 
 ```bash
-npm run export:artemis:2-evaluation-data
+npm run export:artemis:2-export-evaluation-data
 ```
 
 This will export the exercises listed under `playground/scripts/artemis/evaluation` to the `playground/data/evaluation` folder. You can then use this data for evaluation purposes.
@@ -60,7 +60,7 @@ This will export the exercises listed under `playground/scripts/artemis/evaluati
 If you want to use the programming exercises, request them separately from the Artemis team: They are not included in the anonymized database dump. An instructor of the course can export the programming exercises from Artemis using the following command:
 
 ```bash
-npm run export:artemis:3-materials-and-submissions
+npm run export:artemis:3-download-programming-repositories
 ```
 
 This will export the programming exercises' materials and submissions to the `playground/data/evaluation` folder. The instructor has to then zip it and send it to you.
@@ -70,7 +70,7 @@ This will export the programming exercises' materials and submissions to the `pl
 In order to link the programming exercises' materials and submissions back to the exercises, you will have to run the following command:
 
 ```bash
-npm run export:artemis:4-link-materials-and-submissions
+npm run export:artemis:4-link-programming-repositories
 ```
 
 This will link the repositories to the `exercise-*.json` files and validate if there are any missing repositories.
