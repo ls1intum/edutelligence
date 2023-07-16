@@ -6,7 +6,7 @@ import { loadDBConfig } from "./db_config.mjs";
 import { text, programming, findExerciseIds, evaluationOutputDirPath } from "./utils.mjs";
 
 /**
- * Exports the exercises from the Artemis database to JSON files for the playground.
+ * Exports exercises of a certain type from the Artemis database to JSON files for the playground.
  * 
  * @param {mysql.Connection} connection - The connection to the database.
  * @param {string} queryPath - The path to the SQL query to execute, doing the export.
@@ -30,6 +30,8 @@ async function exportExercises(
   }
   console.log(`Found ${exerciseIds.length} ${exerciseType} exercises to export in ${inputDataPath}`);
 
+  // The query is a template string, so we have to replace the placeholders with the actual values.
+  // We use the exercise IDs as placeholders, so we have to generate the sa
   let sql = await fs.promises.readFile(queryPath, "utf8");
   const placeholders = exerciseIds.map(() => "?").join(",");
   sql = sql.replace(":exercise_ids", `(${placeholders})`);
@@ -38,7 +40,7 @@ async function exportExercises(
     console.log(`Exporting ${exerciseType} exercises...`);
     const [results] = await connection.query(sql, exerciseIds);
     const [exercises] = results.slice(-1);
-    exercises.forEach(async ({ exercise_data }) => {
+    await Promise.all(exercises.map(async ({ exercise_data }) => {
       const { id } = exercise_data;
       const filePath = path.join(
         evaluationOutputDirPath,
@@ -48,16 +50,20 @@ async function exportExercises(
         filePath,
         JSON.stringify(exercise_data, null, 2)
       );
-    });
-    console.log(
-      `Exported ${exercises.length} ${exerciseType} exercises to ${evaluationOutputDirPath}`
-    );
+    }));
+    console.log(`Exported ${exercises.length} ${exerciseType} exercises to ${evaluationOutputDirPath}`);
   } catch (err) {
     throw err;
   }
 }
 
-async function executeQuery(config) {
+
+/**
+ * Exports all exercises from the Artemis database to JSON files for the playground.
+ * 
+ * @param config - The database config (host, port, user, password, database)
+ */
+async function exportAllExercises(config) {
   const connection = await mysql.createConnection({
     ...config,
     multipleStatements: true,
@@ -65,21 +71,23 @@ async function executeQuery(config) {
   console.log("Connected to the database!");
 
   try {
+    // Export text exercises
     await exportExercises(
       connection,
       text.queryPath,
       text.inputDataPath,
       text.exerciseType
     );
+
+    // Export programming exercises
     await exportExercises(
       connection,
       programming.queryPath,
       programming.inputDataPath,
       programming.exerciseType
     );
-    console.log(
-      "\nNote: For programming exercises you have to still export the materials and submissions and link them using another two npm scripts."
-    );
+    console.log("\nNote: Repositories for programming exercises are not exported, you have to use the corresponding script to download them, and then use the linking script to link them to the exercises.");
+
     console.log("Done!");
   } catch (err) {
     throw err;
@@ -88,4 +96,4 @@ async function executeQuery(config) {
   }
 }
 
-loadDBConfig().then(executeQuery).catch(console.error);
+loadDBConfig().then(exportAllExercises).catch(console.error);
