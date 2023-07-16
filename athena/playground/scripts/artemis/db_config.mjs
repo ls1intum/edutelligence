@@ -8,12 +8,13 @@ const configPath = path.join(__dirname, "db_config.json");
 
 const defaultConfig = {
   host: "127.0.0.1",
+  port: 3306,
   user: "root",
   password: "",
   database: "anonymized_artemis",
 };
 
-async function loadDBConfig() {
+export async function loadDBConfig() {
   try {
     const data = await fs.readFile(configPath, "utf8");
     const config = JSON.parse(data);
@@ -43,6 +44,12 @@ async function promptForConfig() {
     },
     {
       type: "input",
+      name: "port",
+      message: `Enter port:`,
+      default: defaultConfig.port,
+    },
+    {
+      type: "input",
       name: "user",
       message: `Enter username:`,
       default: defaultConfig.user,
@@ -67,10 +74,8 @@ async function promptForConfig() {
     await fs.writeFile(configPath, JSON.stringify(config, null, 2));
     console.log(`Config saved to ${configPath}`);
   } catch (err) {
-    console.log("Error saving config:", err);
+    console.error("Error saving config:", err);
   }
 
   return config;
 }
-
-export { loadDBConfig };

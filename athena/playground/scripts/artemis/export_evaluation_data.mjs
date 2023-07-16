@@ -5,6 +5,14 @@ import { loadDBConfig } from "./db_config.mjs";
 
 import { text, programming, findExerciseIds, evaluationOutputDirPath } from "./utils.mjs";
 
+/**
+ * Exports the exercises from the Artemis database to JSON files for the playground.
+ * 
+ * @param {mysql.Connection} connection - The connection to the database.
+ * @param {string} queryPath - The path to the SQL query to execute, doing the export.
+ * @param {string} inputDataPath - The path to the JSON file containing the input data for the query, i.e. the exercise IDs.
+ * @param {string} exerciseType - The type of the exercises to export, i.e. "text" or "programming".
+ */
 async function exportExercises(
   connection,
   queryPath,
@@ -17,12 +25,10 @@ async function exportExercises(
 
   let exerciseIds = findExerciseIds(inputData);
   if (!exerciseIds.length) {
-    console.log(`No ${exerciseType} exercises to export in ${inputDataPath}`);
+    console.warn(`No ${exerciseType} exercises to export in ${inputDataPath}`);
     return;
   }
-  console.log(
-    `Found ${exerciseIds.length} ${exerciseType} exercises to export in ${inputDataPath}`
-  );
+  console.log(`Found ${exerciseIds.length} ${exerciseType} exercises to export in ${inputDataPath}`);
 
   let sql = await fs.promises.readFile(queryPath, "utf8");
   const placeholders = exerciseIds.map(() => "?").join(",");
