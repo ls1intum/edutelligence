@@ -74,5 +74,3 @@ npm run export:artemis:4-link-materials-and-submissions
 ```
 
 This will link the repositories to the `exercise-*.json` files and validate if there are any missing repositories.
-
-
