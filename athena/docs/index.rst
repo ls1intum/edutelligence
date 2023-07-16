@@ -21,6 +21,9 @@ Athena will use the information it is given and provide the automatic suggestion
 
     setup/install
     setup/pycharm
+    setup/vscode
+    setup/playground
+    setup/evaluation
 
 .. toctree::
     :caption: Run
