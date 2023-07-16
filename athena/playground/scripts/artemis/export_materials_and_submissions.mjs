@@ -163,7 +163,7 @@ const main = async () => {
     type: "input",
     name: "server",
     message: "Enter the Artemis server:",
-    default: "https://artemis.ase.in.tum.de",
+    default: "https://artemis.cit.tum.de",
   });
   axiosInstance.defaults.baseURL = `${server}/api`;
 
