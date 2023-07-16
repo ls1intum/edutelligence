@@ -108,11 +108,7 @@ async function downloadSubmissions(exerciseId) {
     console.log(`Downloaded exercise ${exerciseId}'s submissions`);
     const submissionsZip = new JSZip();
     const submissionsData = await submissionsZip.loadAsync(response.data);
-    const submissionsPath = path.join(
-      evaluationOutputDirPath,
-      `exercise-${exerciseId}`,
-      "submissions"
-    );
+    const submissionsPath = path.join(evaluationOutputDirPath, `exercise-${exerciseId}`, "submissions");
 
     const submissionZipFiles = Object.keys(submissionsData.files);
     await Promise.all(
