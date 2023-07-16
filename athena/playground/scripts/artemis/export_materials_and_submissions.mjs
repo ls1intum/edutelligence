@@ -158,7 +158,7 @@ async function download(exerciseId) {
   }
 };
 
-const main = async () => {
+async function main() {
   const { server } = await inquirer.prompt({
     type: "input",
     name: "server",
