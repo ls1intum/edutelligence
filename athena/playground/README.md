@@ -43,7 +43,7 @@ Once you get the data, you can export it to the Playground with the following co
 npm run export:artemis:export:artemis:1-load-anonymized-database-dump
 ```
 
-This will load the data into your local Mysql database (just reuse your Artemis database). 
+This will load the data into your local MySQL database (just reuse your Artemis database). 
 
 **Exporting from the Database:**
 
