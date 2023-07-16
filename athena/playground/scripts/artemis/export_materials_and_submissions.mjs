@@ -40,7 +40,7 @@ async function auth() {
   }
 };
 
-const downloadMaterial = async (exerciseId) => {
+async function downloadMaterial(exerciseId) {
   const response = await axiosInstance.get(
     `/programming-exercises/${exerciseId}/export-instructor-exercise`,
     { responseType: "arraybuffer" }
