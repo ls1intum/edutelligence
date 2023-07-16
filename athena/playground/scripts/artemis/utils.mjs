@@ -27,7 +27,7 @@ export const programming = {
   ),
 };
 
-export const findExerciseIds = (inputData, acc) => {
+export function findExerciseIds(inputData, acc) {
   acc = acc || [];
   if (inputData.id) {
     acc.push(inputData.id);
