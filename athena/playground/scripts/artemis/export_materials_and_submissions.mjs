@@ -52,8 +52,7 @@ async function downloadMaterial(exerciseId) {
     const materialData = await materialZip.loadAsync(response.data);
     const exercisePath = path.join(evaluationOutputDirPath, `exercise-${exerciseId}`);
 
-    const files = Object.keys(materialData.files);
-    const zipFile = files.find((file) => file.endsWith(".zip"));
+    const zipFile = Object.keys(materialData.files).find((file) => file.endsWith(".zip"));
 
     const zip = await materialData.files[zipFile].async("nodebuffer");
     const materialZipData = await JSZip.loadAsync(zip);
