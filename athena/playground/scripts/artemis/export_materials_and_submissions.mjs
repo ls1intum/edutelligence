@@ -143,7 +143,7 @@ async function downloadSubmissions(exerciseId) {
   }
 };
 
-const download = async (exerciseId) => {
+async function download(exerciseId) {
   try {
     await downloadMaterial(exerciseId);
     await downloadSubmissions(exerciseId);
