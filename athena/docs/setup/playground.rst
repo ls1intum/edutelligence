@@ -14,13 +14,3 @@ Navigate to the `playground` directory and execute the following command to inst
 .. code-block:: bash
 
     npm install
-
-Running the Playground and Athena
-------------------------------------------
-To start the Playground, execute the following command in the `playground` directory:
-
-.. code-block:: bash
-
-    npm run dev
-
-Athena must be running in order to use Playground properly. This can be achieved either by initiating the `assessment_module_manager` and a `module` locally, or by connecting to a remote Athena instance (though you have to somehow make localhost accessible to the remote instance).
