@@ -50,10 +50,7 @@ async function downloadMaterial(exerciseId) {
     console.log(`Downloading exercise ${exerciseId}'s material`);
     const materialZip = new JSZip();
     const materialData = await materialZip.loadAsync(response.data);
-    const exercisePath = path.join(
-      evaluationOutputDirPath,
-      `exercise-${exerciseId}`
-    );
+    const exercisePath = path.join(evaluationOutputDirPath, `exercise-${exerciseId}`);
 
     const files = Object.keys(materialData.files);
     const zipFile = files.find((file) => file.endsWith(".zip"));
