@@ -34,16 +34,23 @@ async function auth() {
     body: JSON.stringify({ username, password }),
   });
 
-  if (response.ok) {
-    const setCookie = response.headers.get('Set-Cookie');
-    if (setCookie) {
-        const cookieArray = setCookie.split(';');
-        authCookie = cookieArray.find((cookie) => cookie.trim().startsWith('jwt='));
-        return
-    }
+  if (!response.ok) {
+    const error = await response.json();
+    console.error(`Failed to authenticate: ${error.title}`);
+    process.exit(1);
   }
-  console.error("Failed to authenticate");
-  process.exit(1);
+
+  const setCookie = response.headers.get('Set-Cookie');
+  if (setCookie) {
+    const cookieArray = setCookie.split(';');
+    authCookie = cookieArray.find((cookie) => cookie.trim().startsWith('jwt='));
+  }
+  if (authCookie) {
+    console.log("Authenticated successfully");
+  } else {
+    console.error("Failed to authenticate: No cookie received");
+    process.exit(1);
+  }
 };
 
 async function downloadMaterial(exerciseId) {
