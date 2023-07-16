@@ -6,7 +6,7 @@ import { loadDBConfig } from "./db_config.mjs";
 
 // To display elapsed time in HH:MM:SS format
 function formatTime(seconds) {
-  return new Date(seconds * 1000).toISOString().substr(11, 8);
+  return new Date(seconds * 1000).toISOString().substring(11, 8);
 }
 
 async function setupDatabase(config) {
