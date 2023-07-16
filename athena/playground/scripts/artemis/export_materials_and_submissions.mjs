@@ -56,10 +56,9 @@ async function downloadMaterial(exerciseId) {
 
     const zip = await materialData.files[zipFile].async("nodebuffer");
     const materialZipData = await JSZip.loadAsync(zip);
-    const materialZipFiles = Object.keys(materialZipData.files);
 
     const writeZip = async (kind) => {
-      const zipFile = materialZipFiles.find((file) =>
+      const zipFile = Object.keys(materialZipData.files).find((file) =>
         file.endsWith(`-${kind}.zip`)
       );
       if (zipFile) {
