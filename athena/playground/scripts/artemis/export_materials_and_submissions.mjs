@@ -92,7 +92,7 @@ async function downloadMaterial(exerciseId) {
   }
 };
 
-const downloadSubmissions = async (exerciseId) => {
+async function downloadSubmissions(exerciseId) {
   const response = await axiosInstance.post(
     `/programming-exercises/${exerciseId}/export-repos-by-participant-identifiers/0`,
     {
