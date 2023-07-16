@@ -12,7 +12,7 @@ import {
 
 const axiosInstance = axios.create();
 
-const auth = async () => {
+async function auth() {
   const { username, password } = await inquirer.prompt([
     {
       type: "input",
