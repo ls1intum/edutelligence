@@ -23,7 +23,7 @@ const exercises = exerciseFilePaths.flatMap((filePath) => {
 let successfulExercises = 0;
 
 // Link the programming exercises with their submissions and materials
-exercises.forEach((exercise) => {
+for (let exercise of exercises) {
   const exercisePath = path.join(evaluationOutputDirPath, `exercise-${exercise.id}`);
   if (!fs.existsSync(exercisePath)) {
     console.log(`Exercise ${exercise.id} has no directory at ${exercisePath}`);
