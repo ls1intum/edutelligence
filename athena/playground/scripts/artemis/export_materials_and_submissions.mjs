@@ -1,4 +1,3 @@
-import axios from "axios";
 import inquirer from "inquirer";
 import JSZip from "jszip";
 import fs from "fs";
@@ -10,7 +9,8 @@ import {
   evaluationOutputDirPath,
 } from "./utils.mjs";
 
-const axiosInstance = axios.create();
+let baseURL = "https://artemis.cit.tum.de/api";
+let authCookie = "";
 
 async function auth() {
   const { username, password } = await inquirer.prompt([
@@ -26,30 +26,41 @@ async function auth() {
     },
   ]);
 
-  const response = await axiosInstance.post("/public/authenticate", {
-    username,
-    password,
+  const response = await fetch(`${baseURL}/public/authenticate`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ username, password }),
   });
 
-  if (response.status === 200) {
-    const jwt = response.headers["set-cookie"][0].split(";")[0].split("=")[1];
-    axiosInstance.defaults.headers.common["Cookie"] = `jwt=${jwt}`;
-  } else {
-    console.error("Failed to authenticate");
-    process.exit(1);
+  if (response.ok) {
+    const setCookie = response.headers.get('Set-Cookie');
+    if (setCookie) {
+        const cookieArray = setCookie.split(';');
+        authCookie = cookieArray.find((cookie) => cookie.trim().startsWith('jwt='));
+        return
+    }
   }
+  console.error("Failed to authenticate");
+  process.exit(1);
 };
 
 async function downloadMaterial(exerciseId) {
-  const response = await axiosInstance.get(
-    `/programming-exercises/${exerciseId}/export-instructor-exercise`,
-    { responseType: "arraybuffer" }
+  const response = await fetch(`${baseURL}/programming-exercises/${exerciseId}/export-instructor-exercise`,
+    {
+      method: "GET",
+      headers: {
+        "Cookie": authCookie
+      }
+    }
   );
 
-  if (response.status === 200) {
+  if (response.ok) {
     console.log(`Downloading exercise ${exerciseId}'s material`);
+    const data = await response.arrayBuffer();
     const materialZip = new JSZip();
-    const materialData = await materialZip.loadAsync(response.data);
+    const materialData = await materialZip.loadAsync(data);
     const exercisePath = path.join(evaluationOutputDirPath, `exercise-${exerciseId}`);
 
     const zipFile = Object.keys(materialData.files).find((file) => file.endsWith(".zip"));
@@ -93,21 +104,26 @@ async function downloadMaterial(exerciseId) {
 };
 
 async function downloadSubmissions(exerciseId) {
-  const response = await axiosInstance.post(
-    `/programming-exercises/${exerciseId}/export-repos-by-participant-identifiers/0`,
+  const response = await fetch(`${baseURL}/programming-exercises/${exerciseId}/export-repos-by-participant-identifiers/0`,
     {
-      excludePracticeSubmissions: true,
-      exportAllParticipants: true,
-      anonymizeStudentCommits: true,
-      hideStudentNameInZippedFolder: true,
-    },
-    { responseType: "arraybuffer" }
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Cookie": authCookie
+      },
+      body: JSON.stringify({
+        excludePracticeSubmissions: true,
+        exportAllParticipants: true,
+        anonymizeRepository: true,
+      })
+    }
   );
 
-  if (response.status === 200) {
+  if (response.ok) {
     console.log(`Downloaded exercise ${exerciseId}'s submissions`);
+    const data = await response.arrayBuffer();
     const submissionsZip = new JSZip();
-    const submissionsData = await submissionsZip.loadAsync(response.data);
+    const submissionsData = await submissionsZip.loadAsync(data);
     const submissionsPath = path.join(evaluationOutputDirPath, `exercise-${exerciseId}`, "submissions");
 
     const submissionZipFiles = Object.keys(submissionsData.files);
@@ -151,9 +167,7 @@ async function download(exerciseId) {
   } catch (e) {
     console.error(`Error downloading exercise ${exerciseId}`);
     console.error(` > ${e.message}`);
-    console.error(
-      " > Either the exercise does not exist or you do not have access to it, skipping"
-    );
+    console.error(" > Either the exercise does not exist or you do not have access to it, skipping");
     return false;
   }
 };
@@ -165,7 +179,8 @@ async function main() {
     message: "Enter the Artemis server:",
     default: "https://artemis.cit.tum.de",
   });
-  axiosInstance.defaults.baseURL = `${server}/api`;
+
+  baseURL = `${server}/api`;
 
   await auth();
 
