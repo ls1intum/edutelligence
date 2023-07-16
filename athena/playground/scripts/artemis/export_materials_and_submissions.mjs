@@ -12,6 +12,9 @@ import {
 let baseURL = "https://artemis.cit.tum.de/api";
 let authCookie = "";
 
+/**
+ * Authenticate with Artemis
+ */
 async function auth() {
   const { username, password } = await inquirer.prompt([
     {
@@ -53,6 +56,21 @@ async function auth() {
   }
 };
 
+/**
+ * Download all material repositories for a given exercise.
+ * 
+ * The material repositories are downloaded to the `evaluationOutputDirPath` directory in the following structure:
+ * {evaluationOutputDirPath}
+ * ├── exercise-{exerciseId}
+ * │   ├── template
+ * │   │   ├── ...
+ * │   ├── solution
+ * │   │   ├── ...
+ * │   ├── tests
+ * │   │   ├── ...
+ * 
+ * @param {number} exerciseId The ID of the exercise
+ */
 async function downloadMaterial(exerciseId) {
   const response = await fetch(`${baseURL}/programming-exercises/${exerciseId}/export-instructor-exercise`,
     {
@@ -69,47 +87,59 @@ async function downloadMaterial(exerciseId) {
   }
 
   console.log(`Downloading exercise ${exerciseId}'s material`);
-  const data = await response.arrayBuffer();
-  const materialZip = new JSZip();
-  const materialData = await materialZip.loadAsync(data);
   const exercisePath = path.join(evaluationOutputDirPath, `exercise-${exerciseId}`);
+  const data = await response.arrayBuffer();
+  const materialData = await JSZip.loadAsync(data);
 
-  const zipFile = Object.keys(materialData.files).find((file) => file.endsWith(".zip"));
-
-  const zip = await materialData.files[zipFile].async("nodebuffer");
+  // There is only one zip file in the material zip, which contains the exercise, solution and tests zips
+  // The material zip also contains problemstatement.md and details.json but we don't need them
+  const zipFile = Object.values(materialData.files).find((file) => file.name.endsWith(".zip"));
+  const zip = await zipFile.async("nodebuffer");
   const materialZipData = await JSZip.loadAsync(zip);
 
-  const writeZip = async (kind) => {
-    const zipFile = Object.keys(materialZipData.files).find((file) =>
-      file.endsWith(`-${kind}.zip`)
-    );
-    if (zipFile) {
-      const zip = await materialZipData.files[zipFile].async("nodebuffer");
-      const unzipPath = path.join(
-        exercisePath,
-        kind === "exercise" ? "template" : kind
-      );
-
-      const zipData = await JSZip.loadAsync(zip);
-      const zipFiles = Object.keys(zipData.files);
-      await Promise.all(
-        zipFiles.map(async (file) => {
-          if (!zipData.files[file].dir) {
-            const data = await zipData.files[file].async("nodebuffer");
-            const filePath = path.join(unzipPath, file);
-            await fs.promises.mkdir(path.dirname(filePath), {
-              recursive: true,
-            });
-            await fs.promises.writeFile(filePath, data);
-          }
-        })
-      );
+  const writeRepositoryZip = async (zipFile) => {
+     // Should either be "exercise", "solution", or "tests"
+    const kind = zipFile.name.match(/-(\w+).zip$/)[1];
+    if (!["exercise", "solution", "tests"].includes(kind)) {
+      console.warn(`Unknown zip file ${zipFile.name} in material zip`);
+      return;
     }
+
+    // Destination path for unzipping (solution, template, tests)
+    const outputDir = path.join(exercisePath, kind === "exercise" ? "template" : kind); // Rename `exercise` to `template`
+
+    const data = await zipFile.async("nodebuffer");
+    const repositoryData = await JSZip.loadAsync(data);
+    await Promise.all(
+      Object.values(repositoryData.files).map(async (file) => {
+        if (!file.dir) {
+          const data = await file.async("nodebuffer");
+          const filePath = path.join(outputDir, file.name);
+          await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
+          await fs.promises.writeFile(filePath, data);
+        }
+      })
+    );
   };
 
-  await Promise.all(["exercise", "solution", "tests"].map(writeZip));
+  await Promise.all(Object.values(materialZipData.files).map(writeRepositoryZip));
 };
 
+/**
+ * Download all submission repositories for a given exercise.
+ * 
+ * The submission repositories are downloaded to the `evaluationOutputDirPath` directory in the following structure:
+ * {evaluationOutputDirPath}
+ * ├── exercise-{exerciseId}
+ * │   ├── submissions
+ * │   │   ├── {submissionId1}
+ * │   │   │   ├── ...
+ * │   │   ├── {submissionId2}
+ * │   │   │   ├── ...
+ * │   │   ├── ...
+ *  
+ * @param {number} exerciseId The ID of the exercise
+ */
 async function downloadSubmissions(exerciseId) {
   const response = await fetch(`${baseURL}/programming-exercises/${exerciseId}/export-repos-by-participant-identifiers/0`,
     {
@@ -130,42 +160,47 @@ async function downloadSubmissions(exerciseId) {
     console.error(`Error downloading exercise ${exerciseId}'s submissions`);
     process.exit(1);
   }
-  
+
   console.log(`Downloaded exercise ${exerciseId}'s submissions`);
-  const data = await response.arrayBuffer();
-  const submissionsZip = new JSZip();
-  const submissionsData = await submissionsZip.loadAsync(data);
   const submissionsPath = path.join(evaluationOutputDirPath, `exercise-${exerciseId}`, "submissions");
 
-  const submissionZipFiles = Object.keys(submissionsData.files);
-  await Promise.all(
-    submissionZipFiles.map(async (file) => {
-      if (!submissionsData.files[file].dir) {
-        const submissionId = file.match(
-          /-(\d+)-student-submission.git.zip$/
-        )[1];
-        const zip = await submissionsData.files[file].async("nodebuffer");
-        const unzipPath = path.join(submissionsPath, submissionId);
+  // The response is a zip file containing a zip file for each submission
+  const data = await response.arrayBuffer();
+  const submissionsData = await JSZip.loadAsync(data);
 
-        const zipData = await JSZip.loadAsync(zip);
-        const zipFiles = Object.keys(zipData.files);
-        await Promise.all(
-          zipFiles.map(async (file) => {
-            if (!zipData.files[file].dir) {
-              const data = await zipData.files[file].async("nodebuffer");
-              const filePath = path.join(unzipPath, file);
-              await fs.promises.mkdir(path.dirname(filePath), {
-                recursive: true,
-              });
-              await fs.promises.writeFile(filePath, data);
-            }
-          })
-        );
+  await Promise.all(
+    Object.values(submissionsData.files).map(async (zipFile) => {
+      if (zipFile.dir) {
+        return;
       }
+
+      const submissionId = zipFile.name.match(/-(\d+)-student-submission.git.zip$/)[1];
+      const submissionZip = await zipFile.async("nodebuffer");
+
+      // Destination path for unzipping the submission repository
+      const outputDir = path.join(submissionsPath, submissionId);
+
+      const submissionData = await JSZip.loadAsync(submissionZip);
+      await Promise.all(
+        Object.values(submissionData.files).map(async (file) => {
+          if (!file.dir) {
+            const data = await file.async("nodebuffer");
+            const filePath = path.join(outputDir, file.name);
+            await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
+            await fs.promises.writeFile(filePath, data);
+          }
+        })
+      );
     })
   );
 };
 
+/**
+ * Download an exercise's material and submission repositories.
+ * 
+ * @param {number} exerciseId The ID of the exercise
+ * @returns {boolean} Whether the exercise was downloaded successfully
+ */
 async function download(exerciseId) {
   try {
     await downloadMaterial(exerciseId);
@@ -179,6 +214,9 @@ async function download(exerciseId) {
   }
 };
 
+/**
+ * Main entry point.
+ */
 async function main() {
   const { server } = await inquirer.prompt({
     type: "input",
@@ -195,10 +233,7 @@ async function main() {
     JSON.parse(await fs.promises.readFile(programming.inputDataPath, "utf8"))
   );
 
-  console.log(
-    `Found the following exercise IDs in ${programming.inputDataPath}:`,
-    exerciseIds
-  );
+  console.log(`Found the following exercise IDs in ${programming.inputDataPath}:`, exerciseIds);
 
   const { shouldDownloadAll } = await inquirer.prompt({
     type: "confirm",
