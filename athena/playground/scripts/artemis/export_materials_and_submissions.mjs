@@ -27,8 +27,8 @@ async function auth() {
   ]);
 
   const response = await axiosInstance.post("/public/authenticate", {
-    username: username,
-    password: password,
+    username,
+    password,
   });
 
   if (response.status === 200) {
