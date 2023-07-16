@@ -57,7 +57,7 @@ This will export the exercises listed under `playground/scripts/artemis/evaluati
 
 **Getting the Repositories (Programming Exercises):**
 
-If you want to use the programming exercises, you will have to request them separately from the Artemis team, they are not included in the anonymized database dump. An instructor of the course can export the programming exercises from Artemis using the following command:
+If you want to use the programming exercises, request them separately from the Artemis team: They are not included in the anonymized database dump. An instructor of the course can export the programming exercises from Artemis using the following command:
 
 ```bash
 npm run export:artemis:3-materials-and-submissions
