@@ -40,7 +40,7 @@ Once you get the data, you can export it to the Playground with the following co
 
 **Loading the Database Dump:**
 ```bash
-npm run export:artemis:export:artemis:1-load-anonymized-database-dump
+npm run export:artemis:1-load-anonymized-database-dump
 ```
 
 This will load the data into your local MySQL database (just reuse your Artemis database). 
