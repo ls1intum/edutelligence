@@ -3,6 +3,8 @@
 data/evaluation/*
 !data/evaluation/.gitkeep
 
+/scripts/artemis/db_config.json
+
 # dependencies
 /node_modules
 /.pnp

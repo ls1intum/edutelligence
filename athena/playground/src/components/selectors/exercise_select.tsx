@@ -36,13 +36,15 @@ export default function ExerciseSelect({
         <option value={""} disabled>
           Select an exercise
         </option>
-        {data.map((ex: Exercise) => {
-          return ex.type === exerciseType ? (
-            <option key={ex.id} value={ex.id}>
-              {ex.id} {ex.type}: {ex.title}
-            </option>
-          ) : null;
-        })}
+        {data
+          .sort((a: Exercise, b: Exercise) => a.id - b.id)
+          .map((ex: Exercise) => {
+            return ex.type === exerciseType ? (
+              <option key={ex.id} value={ex.id}>
+                {ex.id} {ex.type}: {ex.title}
+              </option>
+            ) : null;
+          })}
       </select>
     </label>
   );

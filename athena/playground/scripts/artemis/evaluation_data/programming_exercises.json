@@ -1,0 +1,33 @@
+{
+  "iPraktikum On-Site Intro Course": {
+    "course_id": 208,
+    "semester": "WS22/23",
+    "exercises": [
+      {
+        "id": 7883,
+        "title": "Homework - Swift 2 - Travel Agency"
+      },
+      {
+        "id": 8056,
+        "title": "Homework - App 2 - BirthdayTracker"
+      },
+      {
+        "id": 7923,
+        "title": "Homework - App 3 - TODOList"
+      },
+      {
+        "id": 7874,
+        "title": "Homework - Swift 1 - Course and Developer"
+      },
+      { "id": 8058, "title": "Homework - App 1 - CVApp" },
+      {
+        "id": 7814,
+        "title": "Homework - Swift 3 - User Manager"
+      },
+      {
+        "id": 7907,
+        "title": "Homework - Swift 4 - ReminderServer"
+      }
+    ]
+  }
+}
