@@ -14,8 +14,8 @@ export default function DataSelect({
         <button
           className={`p-2 rounded-l-md ${
             mode === "example"
-              ? "bg-blue-500 text-white"
-              : "bg-gray-200 text-gray-500"
+              ? "bg-primary-500 text-white hover:bg-primary-600"
+              : "bg-gray-200 text-gray-500 hover:bg-gray-300"
           }`}
           onClick={() => onChangeMode("example")}
         >
@@ -24,8 +24,8 @@ export default function DataSelect({
         <button
           className={`p-2 rounded-r-md ${
             mode === "evaluation"
-              ? "bg-blue-500 text-white"
-              : "bg-gray-200 text-gray-500"
+              ? "bg-primary-500 text-white hover:bg-primary-600"
+              : "bg-gray-200 text-gray-500 hover:bg-gray-300"
           }`}
           onClick={() => onChangeMode("evaluation")}
         >

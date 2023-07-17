@@ -4,7 +4,8 @@ from pathlib import Path
 
 from .app import app
 from .schemas import ExerciseType
-from .endpoints import submission_selector, submissions_consumer, feedback_consumer, feedback_provider  # type: ignore
+from .metadata import emit_meta, get_meta
+from .endpoints import submission_selector, submissions_consumer, feedback_consumer, feedback_provider, config_schema_provider  # type: ignore
 
 
 @app.get("/")
@@ -25,6 +26,9 @@ __all__ = [
     "submissions_consumer",
     "feedback_consumer",
     "feedback_provider",
+    "config_schema_provider",
+    "emit_meta",
+    "get_meta",
     "ExerciseType",
     "app"
 ]

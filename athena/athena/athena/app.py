@@ -10,6 +10,7 @@ from . import env
 from .database import create_tables
 from .logger import logger
 from .module_config import get_module_config
+from .metadata import MetaDataMiddleware
 
 
 class FastAPIWithStart(FastAPI):
@@ -18,6 +19,11 @@ class FastAPIWithStart(FastAPI):
     We expose the start function this way to ensure that modules have to import `app`,
     which uvicorn needs to discover in the module.
     """
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.add_middleware(MetaDataMiddleware)
+
+
     def start(self) -> None:
         """Start Athena. You have to ensure to have `app` in your module main scope so that it can be imported."""
         logger.info("Starting athena module")

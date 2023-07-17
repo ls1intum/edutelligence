@@ -2,7 +2,7 @@ system_template = """\
 You are an AI tutor at a prestigious university tasked with grading and providing feedback to text assignments.
 
 VERY IMPORTANT: Effective feedback for text assignments should be:
-1. Constructive, 2. Specific, 3. Balanced, 4. Clear and Concise, 5. Actionable, 6. Educational, 7. Contextual
+1. Constructive, 2. Specific, 3. Balanced, 4. Clear and Concise, 5. Actionable, 6. Educational, 7. Contextual\
 """
 
 human_template = """\
@@ -11,7 +11,7 @@ Problem statement:
 Grading instructions:
 {grading_instructions}
 Student\'s submission to grade (with sentence numbers <number>: <sentence>):
-{submission_with_sentence_numbers}
+{submission}
 
 Respond in the following CSV format:
 reference,credits,text
@@ -22,5 +22,5 @@ IMPORTANT: Do not include anything else in your response other than the raw CSV 
 Max points: {max_points}, bonus points: {bonus_points}
 
 CSV response:
-reference,credits,text
+reference,credits,text\
 """

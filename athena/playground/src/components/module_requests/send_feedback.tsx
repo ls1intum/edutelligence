@@ -25,6 +25,7 @@ async function sendFeedback(
   athenaUrl: string,
   athenaSecret: string,
   module: ModuleMeta,
+  moduleConfig: any,
   exercise?: Exercise,
   submission?: Submission,
   feedback?: Feedback,
@@ -53,6 +54,9 @@ async function sendFeedback(
         headers: {
           "Content-Type": "application/json",
           "X-API-Secret": athenaSecret,
+          ...(moduleConfig && {
+            "X-Module-Config": JSON.stringify(moduleConfig),
+          }),
         },
         body: JSON.stringify({ exercise, submission, feedback }),
       }
@@ -83,6 +87,7 @@ async function sendAllExerciseFeedbacks(
   athenaUrl: string,
   athenaSecret: string,
   module: ModuleMeta,
+  moduleConfig: any,
   exercise?: Exercise,
   submission?: Submission
 ): Promise<ModuleResponse[] | undefined> {
@@ -122,6 +127,7 @@ async function sendAllExerciseFeedbacks(
       athenaUrl,
       athenaSecret,
       module,
+      moduleConfig,
       exercise,
       submission!,
       feedback,
@@ -143,6 +149,7 @@ export default function SendFeedback({
   athenaUrl,
   athenaSecret,
   module,
+  moduleConfig,
 }: ModuleRequestProps) {
   const [exercise, setExercise] = useState<Exercise | undefined>(undefined);
 
@@ -265,7 +272,7 @@ export default function SendFeedback({
         <ModuleResponseView key={i} response={response} />
       ))}
       <button
-        className="bg-blue-500 text-white rounded-md p-2 mt-4"
+        className="bg-primary-500 text-white rounded-md p-2 mt-4 hover:bg-primary-600"
         onClick={() => {
           setLoading(true);
           if (isAllSubmissions) {
@@ -274,6 +281,7 @@ export default function SendFeedback({
               athenaUrl,
               athenaSecret,
               module,
+              moduleConfig,
               exercise!
             )
               .then(setResponses)
@@ -284,6 +292,7 @@ export default function SendFeedback({
               athenaUrl,
               athenaSecret,
               module,
+              moduleConfig,
               exercise!,
               submission!
             )
@@ -294,6 +303,7 @@ export default function SendFeedback({
               athenaUrl,
               athenaSecret,
               module,
+              moduleConfig,
               exercise,
               submission,
               feedback

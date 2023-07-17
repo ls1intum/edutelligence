@@ -13,7 +13,11 @@
     "export:artemis:4-link-programming-repositories": "node ./scripts/artemis/4_link_programming_repositories.mjs"
   },
   "dependencies": {
+    "@monaco-editor/react": "^4.5.1",
     "@radix-ui/react-collapsible": "^1.0.3",
+    "@rjsf/core": "^5.9.0",
+    "@rjsf/utils": "^5.9.0",
+    "@rjsf/validator-ajv8": "^5.9.0",
     "@tailwindcss/typography": "^0.5.9",
     "@types/archiver": "^5.3.2",
     "@types/node": "18.15.11",
@@ -23,6 +27,7 @@
     "autoprefixer": "10.4.14",
     "fs": "^0.0.1-security",
     "jszip": "^3.10.1",
+    "monaco-editor": "^0.40.0",
     "next": "13.3.0",
     "postcss": "8.4.23",
     "react": "18.2.0",

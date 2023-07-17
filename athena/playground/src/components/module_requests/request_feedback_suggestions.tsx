@@ -20,6 +20,7 @@ async function requestFeedbackSuggestions(
   athenaUrl: string,
   athenaSecret: string,
   module: ModuleMeta,
+  moduleConfig: any,
   exercise: Exercise | undefined,
   submission: Submission | undefined
 ): Promise<ModuleResponse | undefined> {
@@ -42,6 +43,9 @@ async function requestFeedbackSuggestions(
         headers: {
           "Content-Type": "application/json",
           "X-API-Secret": athenaSecret,
+          ...(moduleConfig && {
+            "X-Module-Config": JSON.stringify(moduleConfig),
+          }),
         },
         body: JSON.stringify({ exercise, submission }),
       }
@@ -70,6 +74,7 @@ export default function RequestFeedbackSuggestions({
   athenaUrl,
   athenaSecret,
   module,
+  moduleConfig,
 }: ModuleRequestProps) {
   const [exercise, setExercise] = useState<Exercise | undefined>(undefined);
   const [submission, setSubmission] = useState<Submission | undefined>(
@@ -149,13 +154,14 @@ export default function RequestFeedbackSuggestions({
         {responseSubmissionView(response)}
       </ModuleResponseView>
       <button
-        className="bg-blue-500 text-white rounded-md p-2 mt-4"
+        className="bg-primary-500 text-white rounded-md p-2 mt-4 hover:bg-primary-600"
         onClick={() => {
           setLoading(true);
           requestFeedbackSuggestions(
             athenaUrl,
             athenaSecret,
             module,
+            moduleConfig,
             exercise,
             submission
           )

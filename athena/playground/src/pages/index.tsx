@@ -19,6 +19,7 @@ export default function Home() {
   });
   const [athenaSecret, setAthenaSecret] = useState<string>("");
   const [module, setModule] = useState<ModuleMeta | undefined>(undefined);
+  const [moduleConfig, setModuleConfig] = useState<any>(undefined);
   const [mode, setMode] = useState<Mode>("example");
 
   return (
@@ -31,6 +32,8 @@ export default function Home() {
         onChangeAthenaSecret={setAthenaSecret}
         module={module}
         onChangeModule={setModule}
+        moduleConfig={moduleConfig}
+        onChangeModuleConfig={setModuleConfig}
         mode={mode}
         onChangeMode={setMode}
       />
@@ -40,6 +43,7 @@ export default function Home() {
           athenaUrl={athenaUrl}
           athenaSecret={athenaSecret}
           module={module}
+          moduleConfig={moduleConfig}
         />
       )}
     </main>

@@ -20,7 +20,8 @@ async function sendSubmissions(
   athenaUrl: string,
   athenaSecret: string,
   module: ModuleMeta,
-  exercise: Exercise | undefined
+  moduleConfig: any,
+  exercise: Exercise | undefined,
 ): Promise<ModuleResponse | undefined> {
   if (!exercise) {
     alert("Please select an exercise");
@@ -33,6 +34,7 @@ async function sendSubmissions(
   let response;
   try {
     const athenaSubmissionsUrl = `${athenaUrl}/modules/${module.type}/${module.name}/submissions`;
+
     response = await fetch(
       `${baseUrl}/api/athena_request?${new URLSearchParams({
         url: athenaSubmissionsUrl,
@@ -42,6 +44,9 @@ async function sendSubmissions(
         headers: {
           "Content-Type": "application/json",
           "X-API-Secret": athenaSecret,
+          ...(moduleConfig && {
+            "X-Module-Config": JSON.stringify(moduleConfig),
+          }),
         },
         body: JSON.stringify({ exercise, submissions }),
       }
@@ -74,6 +79,7 @@ export default function SendSubmissions({
   athenaUrl,
   athenaSecret,
   module,
+  moduleConfig,
 }: ModuleRequestProps) {
   const [exercise, setExercise] = useState<Exercise | undefined>(undefined);
   const [loading, setLoading] = useState<boolean>(false);
@@ -113,10 +119,17 @@ export default function SendSubmissions({
       )}
       <ModuleResponseView response={response} />
       <button
-        className="bg-blue-500 text-white rounded-md p-2 mt-4"
+        className="bg-primary-500 text-white rounded-md p-2 mt-4 hover:bg-primary-600"
         onClick={() => {
           setLoading(true);
-          sendSubmissions(mode, athenaUrl, athenaSecret, module, exercise)
+          sendSubmissions(
+            mode,
+            athenaUrl,
+            athenaSecret,
+            module,
+            moduleConfig,
+            exercise
+          )
             .then(setResponse)
             .finally(() => setLoading(false));
         }}

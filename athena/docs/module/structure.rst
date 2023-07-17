@@ -94,6 +94,20 @@ Example:
                 )
             ]
 
+Provide Config Schema
+~~~~~~~~~~~~~~~~~~~~~~
+Get a schema for config options of the module as json schema. The config complying to the schema can then be provided in the header of a request `X-Module-Config` to override the default values. The module can decorate one pydantic model with ``@config_schema_provider`` to provide the schema and should have default values set for all fields as default configuration. The configuration class can be appended to the function signature of all other decorators to provide the configuration to the function.
+
+Example:
+    .. code-block:: python
+
+        from athena import *
+
+        @config_schema_provider
+        class Configuration(BaseModel):
+            debug: bool = Field(False, description="Whether the module is in debug mode.")
+            ...
+
 Environment Variables
 ---------------------
 You should provide at least the following environment variables for your module to work properly:

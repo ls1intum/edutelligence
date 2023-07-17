@@ -5,3 +5,123 @@
 body {
   background: black;
 }
+
+
+/* Styling for the rjsf form with className="schema-form" */
+@layer utilities {
+  .border-input {
+    border-color: #e2e8f0;
+  }
+  .ring-offset-background {
+    --tw-ring-offset-shadow: 0 0 #0000;
+  }
+  .ring-ring {
+    --tw-ring-opacity: 1;
+    --tw-ring-color: #4299e1;
+  }
+}
+
+@layer components {
+  .schema-form {
+    /* Left side is not needed due to fieldset left margin */
+    @apply mr-2;
+  }
+  /* Aka sections */
+  .schema-form fieldset > legend {
+    /* Display block doesn't work for some reason. Does not fill parent width which is still a div, not sure why */
+    @apply mb-3 pb-1 w-full border-b pt-4 text-xl font-semibold;
+  }
+  .schema-form fieldset > div {
+    /* Offset to indicate hierarchy */
+    @apply ml-3;
+  }
+  /* Label + component = group */
+  .schema-form .form-group {
+    @apply mb-4;
+  }
+  .schema-form .form-group:last-child {
+    @apply mb-0;
+  }
+  .schema-form label.control-label {
+    @apply block font-bold;
+  }
+
+  /* Checkbox component */
+  .schema-form .form-group .checkbox label {
+    @apply flex items-center;
+  }
+  .schema-form .form-group .checkbox input {
+    @apply w-4 h-4 mr-2;
+  }
+
+  /* Select component, and maybe other .form-control too */
+  .schema-form .form-control {
+    @apply block w-full rounded-md border border-input p-2;
+  }
+  /* Input component */
+  .schema-form input {
+    @apply flex h-10 w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-gray-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  /* Array elements */
+  .schema-form .array-item {
+    /* @apply grid grid-cols-12; */
+    @apply flex flex-row items-end gap-4;
+  }
+  .schema-form .array-item .col-xs-9 {
+    /* @apply col-span-9; */
+    @apply grow;
+  }
+  .schema-form .array-item .col-xs-3 {
+    /* @apply col-span-3; */
+    @apply shrink-0;
+  }
+  .schema-form .array-item .array-item-toolbox {
+    /* mb-4 to match .form-group */
+    @apply mb-4 flex items-center justify-end;
+  }
+  /* Icons */
+  .schema-form .glyphicon {
+    @apply font-normal not-italic;
+  }
+  .schema-form .glyphicon-remove::before {
+    content: 'Remove';
+  }
+  .schema-form .glyphicon-arrow-up::before {
+    content: 'Up';
+  }
+  .schema-form .glyphicon-arrow-down::before {
+    content: 'Down';
+  }
+  .schema-form .glyphicon-plus::before {
+    content: 'Add';
+  }
+  /* Buttons (tends to be icon buttons) */
+  .schema-form .btn {
+    @apply rounded-md p-2 border mx-1;
+  }
+  .schema-form .btn-danger {
+    @apply border-red-200;
+  }
+  .schema-form .btn-add {
+    @apply border-primary-200;
+  }
+  .schema-form button[type='submit'] {
+    @apply bg-primary-500 text-white hover:bg-primary-600;
+  }
+  .schema-form .text-danger {
+    @apply text-red-500;
+  }
+  .schema-form .required {
+    @apply text-red-500;
+  }
+  .schema-form .field-description {
+    @apply prose prose-sm leading-snug max-w-none prose-slate;
+  }
+  .schema-form .panel.panel-danger.errors { 
+    @apply bg-red-100 border border-red-400 rounded-md shadow-sm px-4 py-2 my-2;
+  }
+  .schema-form .panel.panel-danger.errors .panel-heading {
+    @apply text-lg font-semibold text-red-700;
+  }
+}

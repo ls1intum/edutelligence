@@ -9,13 +9,16 @@ license = "MIT"
 python = "^3.10"
 athena = {path = "../athena", develop = true}
 openai = "^0.27.8"
-langchain = "^0.0.194"
+langchain = "^0.0.225"
 python-dotenv = "^1.0.0"
 nltk = "^3.8.1"
 gitpython = "^3.1.31"
 
 [tool.poetry.scripts]
 module = "athena:run_module"
+
+[tool.poetry.group.dev.dependencies]
+prospector = "^1.10.2"
 
 [build-system]
 requires = ["poetry-core>=1.0.0"]

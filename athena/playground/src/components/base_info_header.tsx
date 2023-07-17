@@ -1,8 +1,14 @@
+import useSWR from "swr";
+
+import { Mode } from "@/model/mode";
+import { ModuleMeta } from "@/model/health_response";
+import athenaFetcher from "@/helpers/athena_fetcher";
+
 import Health from "@/components/health";
 import ModuleSelect from "@/components/selectors/module_select";
-import { ModuleMeta } from "@/model/health_response";
-import { Mode } from "@/model/mode";
-import DataSelect from "./selectors/data_select";
+import DataSelect from "@/components/selectors/data_select";
+import ModuleConfig from "@/components/module_config";
+import Disclosure from "@/components/disclosure";
 
 type BaseInfoHeaderProps = {
   athenaUrl: string;
@@ -11,6 +17,8 @@ type BaseInfoHeaderProps = {
   onChangeAthenaSecret: (value: string) => void;
   module: ModuleMeta | undefined;
   onChangeModule: (value: ModuleMeta) => void;
+  moduleConfig: any;
+  onChangeModuleConfig: (value: any) => void;
   mode: Mode;
   onChangeMode: (value: Mode) => void;
 };
@@ -22,9 +30,16 @@ export default function BaseInfoHeader({
   onChangeAthenaSecret,
   module,
   onChangeModule,
+  moduleConfig,
+  onChangeModuleConfig,
   mode,
   onChangeMode,
 }: BaseInfoHeaderProps) {
+  const url = module
+    ? `${athenaUrl}/modules/${module.type}/${module.name}/config_schema`
+    : null;
+  const { data, error, isLoading } = useSWR(url, athenaFetcher(athenaSecret));
+
   return (
     <div className="bg-white rounded-md p-4 mb-8">
       <label className="flex flex-col">
@@ -50,7 +65,64 @@ export default function BaseInfoHeader({
         />
       </label>
       <br />
-      <ModuleSelect url={athenaUrl} module={module} onChange={onChangeModule} />
+      <ModuleSelect
+        url={athenaUrl}
+        module={module}
+        onChange={(value) => {
+          onChangeModule(value);
+          onChangeModuleConfig(undefined);
+        }}
+      />
+      {module && (
+        <div className="mt-2 space-y-1">
+          {isLoading && <p className="text-gray-500">Loading...</p>}
+          {error &&
+            (error.status === 404 ? (
+              <p className="text-gray-500">
+                Config options not available, not implemented in the module
+              </p>
+            ) : (
+              <p className="text-red-500">
+                Failed to get config options from Athena
+              </p>
+            ))}
+          {data && (
+            <>
+              <p className="text-gray-500">
+                This module has a custom configuration. You can use the default
+                configuration or provide your own.
+              </p>
+              <label className="flex items-center cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={moduleConfig !== undefined}
+                  onChange={(e) => {
+                    if (e.target.checked) {
+                      onChangeModuleConfig({});
+                    } else {
+                      onChangeModuleConfig(undefined);
+                    }
+                  }}
+                />
+                <div className="ml-2 text-gray-700 font-normal">
+                  Use custom module config
+                </div>
+              </label>
+              {moduleConfig !== undefined && (
+                <Disclosure title="Configuration" openedInitially>
+                  <ModuleConfig
+                    module={module}
+                    athenaUrl={athenaUrl}
+                    athenaSecret={athenaSecret}
+                    moduleConfig={moduleConfig}
+                    onChangeConfig={onChangeModuleConfig}
+                  />
+                </Disclosure>
+              )}
+            </>
+          )}
+        </div>
+      )}
       <br />
       <DataSelect mode={mode} onChangeMode={onChangeMode} />
     </div>
