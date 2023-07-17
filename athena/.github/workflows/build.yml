@@ -70,6 +70,10 @@ jobs:
             type=raw,value=${{ github.ref == 'refs/heads/develop' && 'develop' || github.sha }}
             type=raw,value=${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.sha }}
 
+      - name: Get the current branch
+        id: branch
+        run: echo "branch=${GITHUB_REF#refs/heads/}" > $GITHUB_OUTPUT
+
       - name: Build and push Docker image
         uses: docker/build-push-action@v4
         with:
@@ -77,3 +81,9 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            ATHENA_IS_DEVELOP=${{ github.ref == 'refs/heads/develop' && 'true' || 'false' }}
+            ATHENA_COMMIT_SHA=${{ github.event.pull_request.head.sha || github.sha }}
+            ATHENA_PR_NUMBER=${{ github.event.pull_request.number }}
+            ATHENA_PR_TITLE=${{ github.event.pull_request.title }}
+            ATHENA_PR_LAST_UPDATE=${{ github.event.pull_request.updated_at }}
