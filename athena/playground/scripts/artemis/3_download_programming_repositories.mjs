@@ -9,7 +9,7 @@ import {
   evaluationOutputDirPath,
 } from "./utils.mjs";
 
-let baseURL = "https://artemis.cit.tum.de/api";
+let baseURL = "";
 let authCookie = "";
 
 /**
