@@ -1,12 +1,25 @@
 import os
-from pydantic import BaseModel
+
 from pyaml_env import parse_config
+from pydantic import BaseModel
+
+
+class LLMModelConfig(BaseModel):
+    name: str
+    description: str
+    llm_credentials: dict
+
+
+class APIKeyConfig(BaseModel):
+    token: str
+    comment: str
+    llm_access: list[str]
 
 
 class Settings(BaseModel):
     class PyrisSettings(BaseModel):
-        api_key: str
-        llm: dict
+        api_keys: list[APIKeyConfig]
+        llms: dict[str, LLMModelConfig]
 
     pyris: PyrisSettings
 

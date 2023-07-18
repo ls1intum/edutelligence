@@ -1,14 +1,14 @@
 import guidance
 
-from app.config import settings
-from app.models.dtos import Content, ContentType, LLMModel
+from app.config import LLMModelConfig
+from app.models.dtos import Content, ContentType
 
 
 class GuidanceWrapper:
     """A wrapper service to all guidance package's methods."""
 
     def __init__(
-        self, model: LLMModel, handlebars: str, parameters=None
+        self, model: LLMModelConfig, handlebars: str, parameters=None
     ) -> None:
         if parameters is None:
             parameters = {}
@@ -39,5 +39,5 @@ class GuidanceWrapper:
         return Content(type=ContentType.TEXT, textContent=result["response"])
 
     def _get_llm(self):
-        llm_credentials = settings.pyris.llm[self.model.value]
+        llm_credentials = self.model.llm_credentials
         return guidance.llms.OpenAI(**llm_credentials)
