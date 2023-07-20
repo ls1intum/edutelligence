@@ -26,11 +26,21 @@ def get_stored_feedback_meta(feedback: Feedback) -> Optional[dict]:
         return db.query(db_feedback_cls.meta).filter_by(id=feedback.id).scalar()  # type: ignore
 
 
-def store_feedback(feedback: Feedback):
-    """Stores the given feedback."""
+def store_feedback(feedback: Feedback, is_lms_id=False) -> Feedback:
+    """Stores the given LMS feedback.
+
+    Args:
+        feedback (Feedback): The feedback to store.
+        is_lms_id (bool, optional): Whether the feedback's ID is an LMS ID. Defaults to False.
+    
+    Returns:
+        Feedback: The stored feedback with its internal ID assigned.
+    """
     with get_db() as db:
-        db.merge(feedback.to_model())
+        stored_feedback_model = db.merge(feedback.to_model(is_lms_id=is_lms_id))
+        db.flush()
         db.commit()
+    return stored_feedback_model.to_schema()
 
 
 def get_stored_feedback_suggestions(
@@ -49,16 +59,16 @@ def store_feedback_suggestions(feedbacks: List[Feedback]) -> List[Feedback]:
     """Stores the given feedbacks as a suggestions.
 
     Returns:
-        List[Feedback]: The stored feedbacks with their IDs assigned.
+        List[Feedback]: The stored feedback suggestions with their internal IDs assigned.
     """
-    stored_feedback_models: List[Feedback] = []
+    stored_feedbacks: List[Feedback] = []
     with get_db() as db:
         for feedback in feedbacks:
             stored_feedback_model = db.merge(feedback.to_model(is_suggestion=True))
             db.flush() # Ensure the ID is generated now
-            stored_feedback_models.append(stored_feedback_model.to_schema())
+            stored_feedbacks.append(stored_feedback_model.to_schema())
         db.commit()
-    return stored_feedback_models
+    return stored_feedbacks
 
 
 def store_feedback_suggestion(feedback: Feedback):

@@ -234,7 +234,7 @@ def feedback_consumer(func: Union[
         submission.meta.update(get_stored_submission_meta(submission) or {})
         feedback.meta.update(get_stored_feedback_meta(feedback) or {})
 
-        store_feedback(feedback)
+        feedback = store_feedback(feedback, is_lms_id=True)
 
         kwargs = {}
         if "module_config" in inspect.signature(func).parameters:

@@ -18,7 +18,7 @@ export default Feedback;
 
 type FeedbackBase = {
   id: number;
-  detail_text: string;
+  title: string;
   text: string;
   credits: number;
   meta: {

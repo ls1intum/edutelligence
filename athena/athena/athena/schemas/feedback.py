@@ -20,8 +20,11 @@ class Feedback(Schema, ABC):
     exercise_id: int = Field(example=1)
     submission_id: int = Field(example=1)
 
-    def to_model(self, is_suggestion: bool = False):
-        return type(self).get_model_class()(**self.dict(), is_suggestion=is_suggestion)
+    def to_model(self, is_suggestion: bool = False, is_lms_id: bool = False):
+        kwargs = self.dict()
+        if is_lms_id:
+            kwargs['lms_id'] = kwargs.pop('id')
+        return type(self).get_model_class()(**kwargs, is_suggestion=is_suggestion)
 
     class Config:
         orm_mode = True
