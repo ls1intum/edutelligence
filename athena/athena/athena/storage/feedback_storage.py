@@ -45,12 +45,20 @@ def get_stored_feedback_suggestions(
         return (f.to_schema() for f in query.all())
 
 
-def store_feedback_suggestions(feedbacks: List[Feedback]):
-    """Stores the given feedbacks as a suggestions."""
+def store_feedback_suggestions(feedbacks: List[Feedback]) -> List[Feedback]:
+    """Stores the given feedbacks as a suggestions.
+
+    Returns:
+        List[Feedback]: The stored feedbacks with their IDs assigned.
+    """
+    stored_feedback_models: List[Feedback] = []
     with get_db() as db:
         for feedback in feedbacks:
-            db.merge(feedback.to_model(is_suggestion=True))
+            stored_feedback_model = db.merge(feedback.to_model(is_suggestion=True))
+            db.flush() # Ensure the ID is generated now
+            stored_feedback_models.append(stored_feedback_model.to_schema())
         db.commit()
+    return stored_feedback_models
 
 
 def store_feedback_suggestion(feedback: Feedback):
