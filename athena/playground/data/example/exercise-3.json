@@ -17,9 +17,10 @@
       "feedbacks": [
         {
           "id": 301,
-          "detail_text": "This is a test",
-          "reference": "28-32",
-          "text": "This is a test",
+          "description": "This is a test",
+          "index_start": 28,
+          "index_end": 32,
+          "title": "This is a test",
           "credits": 80,
           "meta": {}
         }
@@ -29,21 +30,22 @@
       "id": 302,
       "content": "Hello world\nThis is a test\nPlease cluster me into cluster one\none one one",
       "meta": {},
-
       "feedbacks": [
         {
           "id": 302,
-          "detail_text": "This is a test",
-          "reference": "28-32",
-          "text": "This is a test",
+          "description": "Hello World!",
+          "index_start": 0,
+          "index_end": 11,
+          "title": "This is a test",
           "credits": 80,
           "meta": {}
         },
         {
           "id": 303,
-          "detail_text": "This is a test",
-          "reference": "28-32",
-          "text": "This is a test",
+          "description": "This is a test",
+          "index_start": 28,
+          "index_end": 32,
+          "title": "This is a test",
           "credits": 80,
           "meta": {}
         }

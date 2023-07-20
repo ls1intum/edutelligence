@@ -17,8 +17,10 @@
       "feedbacks": [
         {
           "id": 202,
-          "detail_text": "You should write your full name.",
-          "text": "You should write your full name.",
+          "description": "You should write your full name.",
+          "title": "You should write your full name.",
+          "index_start": null,
+          "index_end": null,
           "credits": -0.5,
           "meta": {}
         }
