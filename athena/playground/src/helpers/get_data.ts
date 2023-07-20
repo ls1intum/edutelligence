@@ -141,12 +141,12 @@ function jsonToFeedbacks(json: any): Feedback[] {
         // submission_id is not provided in the json for convenience, so we add it here
         feedback.submission_id = submissionJson.id;
 
-        // replace text and detail_text with undefined if they are not strings (null somehow gets parsed as {})
-        if (typeof feedback.text !== "string") {
-          feedback.text = undefined;
+        // replace title and description with "" if they are not strings (null somehow gets parsed as {})
+        if (typeof feedback.title !== "string") {
+          feedback.title = "";
         }
-        if (typeof feedback.detail_text !== "string") {
-          feedback.detail_text = undefined;
+        if (typeof feedback.description !== "string") {
+          feedback.description = "";
         }
 
         return feedback;

@@ -132,9 +132,9 @@ SELECT
               JSON_OBJECT(
                 'id',
                 f.id,
-                'detail_text',
+                'description',
                 f.detail_text,
-                'text',
+                'title',
                 COALESCE(f.text, ''),
                 -- Might remove fallback in the future
                 'reference',

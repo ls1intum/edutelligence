@@ -22,3 +22,32 @@ export type ProgrammingFeedback = FeedbackBase & {
 };
 
 export type Feedback = TextFeedback | ProgrammingFeedback;
+
+export function isTextFeedback(feedback: Feedback): feedback is TextFeedback {
+  const textFeedback = feedback as TextFeedback;
+  return textFeedback.index_start !== undefined || textFeedback.index_end !== undefined;
+}
+
+export function isProgrammingFeedback(feedback: Feedback): feedback is ProgrammingFeedback {
+  const programmingFeedback = feedback as ProgrammingFeedback;
+  return (
+    programmingFeedback.file_path !== undefined ||
+    programmingFeedback.line_start !== undefined ||
+    programmingFeedback.line_end !== undefined
+  );
+}
+
+export function formatReference(feedback: Feedback): string {
+  if (isTextFeedback(feedback)) {
+    if (feedback.index_start !== undefined && feedback.index_end !== undefined) {
+      return `(${feedback.index_start}-${feedback.index_end})`;
+    }
+  } else if (isProgrammingFeedback(feedback)) {
+    if (feedback.file_path !== undefined && feedback.line_start !== undefined) {
+      return `file:${feedback.file_path}_line:${feedback.line_start}${feedback.line_end !== undefined ? "-" + feedback.line_end : ""}`;
+    } else if (feedback.file_path !== undefined) {
+      return `file:${feedback.file_path}`;
+    }
+  }
+  return "";
+}
