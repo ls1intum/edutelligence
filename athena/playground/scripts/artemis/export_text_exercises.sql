@@ -137,8 +137,10 @@ SELECT
                 'title',
                 COALESCE(f.text, ''),
                 -- Might remove fallback in the future
-                'reference',
-                CONCAT(tb.start_index, '-', tb.end_index),
+                'index_start',
+                tb.start_index,
+                'index_end',
+                tb.end_index,
                 'credits',
                 f.credits,
                 'type',
