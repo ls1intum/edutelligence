@@ -312,7 +312,7 @@ def feedback_provider(func: Union[
         else:
             feedbacks = func(exercise, submission, **kwargs)
 
-        # Store feedback suggestions and assign IDs
+        # Store feedback suggestions and assign internal IDs
         feedbacks = store_feedback_suggestions(feedbacks)
         return feedbacks
     return wrapper
