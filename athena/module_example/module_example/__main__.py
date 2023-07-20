@@ -83,8 +83,8 @@ def suggest_feedback(exercise: Exercise, submission: Submission, module_config: 
         Feedback(
             exercise_id=exercise.id,
             submission_id=submission.id,
-            text="This is a suggestion.",
-            detail_text="There is something wrong here.",
+            title="This is a suggestion.",
+            description="There is something wrong here.",
             credits=-1.0,
         )
     ]
