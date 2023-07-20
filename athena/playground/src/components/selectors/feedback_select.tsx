@@ -1,8 +1,10 @@
+import type { Feedback } from "@/model/feedback";
+import type { Mode } from "@/model/mode";
+
 import useSWR from "swr";
-import Feedback from "@/model/feedback";
+
 import fetcher from "@/helpers/fetcher";
 import baseUrl from "@/helpers/base_url";
-import { Mode } from "@/model/mode";
 
 type FeedbackSelectProps = {
   mode: Mode;

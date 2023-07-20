@@ -1,9 +1,9 @@
+import type { ModuleMeta } from "@/model/health_response";
+
 import { Dispatch, SetStateAction, useEffect, useState } from "react";
 import useSWR from "swr";
 import validator from "@rjsf/validator-ajv8";
 import { getDefaultFormState } from "@rjsf/utils";
-
-import { ModuleMeta } from "@/model/health_response";
 
 import DefaultSchemaFormModuleConfig from "./default_schema_form";
 import ModuleLLMConfig from "./module_llm";

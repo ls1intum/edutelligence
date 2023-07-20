@@ -1,4 +1,5 @@
-import ModuleResponse from "@/model/module_response";
+import type { ModuleResponse } from "@/model/module_response";
+
 import Disclosure from "@/components/disclosure";
 
 export default function ModuleResponseView({

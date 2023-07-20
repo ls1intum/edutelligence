@@ -1,11 +1,12 @@
+import type { Exercise } from "@/model/exercise";
+import type { Submission } from "@/model/submission";
+import type { Feedback } from "@/model/feedback";
+import type { Mode } from "@/model/mode";
+
 import path from "path";
 import fs from "fs";
 
-import { Exercise } from "@/model/exercise";
-import { Submission } from "@/model/submission";
-import Feedback from "@/model/feedback";
 import baseUrl from "@/helpers/base_url";
-import { Mode } from "@/model/mode";
 
 function replaceJsonPlaceholders(
   mode: Mode,

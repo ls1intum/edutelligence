@@ -1,5 +1,6 @@
-import { TextSubmission } from "@/model/submission";
-import Feedback from "@/model/feedback";
+import type { TextSubmission } from "@/model/submission";
+import type { Feedback } from "@/model/feedback";
+
 import Markdown from "@/components/markdown";
 import FeedbackDetail from "@/components/details/feedback";
 

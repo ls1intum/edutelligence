@@ -1,5 +1,6 @@
+import type { HealthResponse, ModuleMeta } from "@/model/health_response";
+
 import useSWR from "swr";
-import HealthResponse, { ModuleMeta } from "@/model/health_response";
 import fetcher from "@/helpers/fetcher";
 import baseUrl from "@/helpers/base_url";
 

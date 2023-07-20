@@ -1,8 +1,10 @@
+import type { Exercise } from "@/model/exercise";
+import type { Mode } from "@/model/mode";
+
 import useSWR from "swr";
-import { Exercise } from "@/model/exercise";
+
 import fetcher from "@/helpers/fetcher";
 import baseUrl from "@/helpers/base_url";
-import { Mode } from "@/model/mode";
 
 type ExerciseSelectProps = {
   mode: Mode;

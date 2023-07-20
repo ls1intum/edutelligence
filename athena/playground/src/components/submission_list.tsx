@@ -1,6 +1,6 @@
-import { Exercise } from "@/model/exercise";
-import { Mode } from "@/model/mode";
-import Feedback from "@/model/feedback";
+import type { Exercise } from "@/model/exercise";
+import type { Mode } from "@/model/mode";
+import type { Feedback } from "@/model/feedback";
 
 import Disclosure from "@/components/disclosure";
 import SubmissionDetail from "@/components/details/submission_detail";

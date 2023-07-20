@@ -1,10 +1,7 @@
-import {
-  Submission,
-  isProgrammingSubmission,
-  isTextSubmission,
-} from "@/model/submission";
-import Feedback from "@/model/feedback";
+import type { Submission } from "@/model/submission";
+import type { Feedback } from "@/model/feedback";
 
+import { isProgrammingSubmission, isTextSubmission } from "@/model/submission";
 import TextSubmissionDetail from "./text";
 import ProgrammingSubmissionDetail from "./programming";
 

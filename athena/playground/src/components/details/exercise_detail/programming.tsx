@@ -1,5 +1,5 @@
-import { ProgrammingExercise } from "@/model/exercise";
-import { Mode } from "@/model/mode";
+import type { ProgrammingExercise } from "@/model/exercise";
+import type { Mode } from "@/model/mode";
 
 import Disclosure from "@/components/disclosure";
 import CodeView from "@/components/details/code_view";

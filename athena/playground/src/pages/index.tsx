@@ -1,8 +1,9 @@
+import type { ModuleMeta } from "@/model/health_response";
+import type { Mode } from "@/model/mode";
+
 import React, { useState } from "react";
 import BaseInfoHeader from "@/components/base_info_header";
 import ModuleRequests from "@/components/module_requests";
-import { ModuleMeta } from "@/model/health_response";
-import { Mode } from "@/model/mode";
 
 export default function Home() {
   const [athenaUrl, setAthenaUrl] = useState<string>(() => {

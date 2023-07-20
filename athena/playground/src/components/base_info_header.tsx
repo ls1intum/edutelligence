@@ -1,7 +1,7 @@
-import useSWR from "swr";
+import type { Mode } from "@/model/mode";
+import type { ModuleMeta } from "@/model/health_response";
 
-import { Mode } from "@/model/mode";
-import { ModuleMeta } from "@/model/health_response";
+import useSWR from "swr";
 import athenaFetcher from "@/helpers/athena_fetcher";
 
 import Health from "@/components/health";

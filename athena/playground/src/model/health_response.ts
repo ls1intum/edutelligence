@@ -4,11 +4,9 @@ export type ModuleMeta = {
   healthy: boolean;
 };
 
-type HealthResponse = {
+export type HealthResponse = {
   status: string;
   modules: {
     [key: string]: ModuleMeta;
   };
 };
-
-export default HealthResponse;

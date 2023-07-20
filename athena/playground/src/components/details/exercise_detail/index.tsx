@@ -1,5 +1,5 @@
-import { Exercise } from "@/model/exercise";
-import { Mode } from "@/model/mode";
+import type { Exercise } from "@/model/exercise";
+import type { Mode } from "@/model/mode";
 
 import Disclosure from "@/components/disclosure";
 

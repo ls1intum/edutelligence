@@ -1,4 +1,4 @@
-import Feedback from "@/model/feedback";
+import type { Feedback } from "@/model/feedback";
 
 type FeedbackDetailProps = {
   feedback: Feedback;

@@ -1,5 +1,6 @@
-import { ProgrammingSubmission } from "@/model/submission";
-import Feedback from "@/model/feedback";
+import type { ProgrammingSubmission } from "@/model/submission";
+import type { Feedback } from "@/model/feedback";
+
 import CodeView from "@/components/details/code_view";
 import FeedbackDetail from "@/components/details/feedback";
 

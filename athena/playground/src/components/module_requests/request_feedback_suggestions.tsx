@@ -1,9 +1,9 @@
-import { useEffect, useState } from "react";
+import type { Submission } from "@/model/submission";
+import type { Exercise } from "@/model/exercise";
+import type { ModuleMeta } from "@/model/health_response";
+import type { ModuleResponse } from "@/model/module_response";
 
-import { Submission } from "@/model/submission";
-import { Exercise } from "@/model/exercise";
-import { ModuleMeta } from "@/model/health_response";
-import ModuleResponse from "@/model/module_response";
+import { useEffect, useState } from "react";
 
 import ExerciseSelect from "@/components/selectors/exercise_select";
 import SubmissionSelect from "@/components/selectors/submission_select";

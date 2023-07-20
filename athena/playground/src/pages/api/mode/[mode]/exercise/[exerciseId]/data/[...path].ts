@@ -1,9 +1,10 @@
-import { NextApiRequest, NextApiResponse } from "next";
+import type { NextApiRequest, NextApiResponse } from "next";
+import type { Mode } from "@/model/mode";
+
 import { promises as fs } from "fs";
 import { join } from "path";
 import Archiver from "archiver";
 import { validateModeMiddleware } from "@/helpers/validate_mode_middleware";
-import { Mode } from "@/model/mode";
 
 const handler = async (req: NextApiRequest, res: NextApiResponse) => {
   const { mode, exerciseId, path } = req.query as {
