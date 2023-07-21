@@ -234,6 +234,7 @@ def feedback_consumer(func: Union[
         submission.meta.update(get_stored_submission_meta(submission) or {})
         feedback.meta.update(get_stored_feedback_meta(feedback) or {})
 
+        # Change the ID of the LMS to an internal ID
         feedback = store_feedback(feedback, is_lms_id=True)
 
         kwargs = {}
