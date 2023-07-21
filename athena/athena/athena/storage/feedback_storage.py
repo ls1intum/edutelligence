@@ -36,11 +36,17 @@ def store_feedback(feedback: Feedback, is_lms_id=False) -> Feedback:
     Returns:
         Feedback: The stored feedback with its internal ID assigned.
     """
+    db_feedback_cls = feedback.__class__.get_model_class()
     with get_db() as db:
-        stored_feedback_model = db.merge(feedback.to_model(is_lms_id=is_lms_id))
-        db.flush()
+        lms_id = None
+        if is_lms_id:
+            lms_id = feedback.id
+            internal_id = db.query(db_feedback_cls.id).filter_by(lms_id=lms_id).scalar()  # type: ignore
+            feedback.id = internal_id
+
+        stored_feedback_model = db.merge(feedback.to_model(lms_id=lms_id))
         db.commit()
-    return stored_feedback_model.to_schema()
+        return stored_feedback_model.to_schema()
 
 
 def get_stored_feedback_suggestions(

@@ -149,6 +149,17 @@ function jsonToFeedbacks(json: any): Feedback[] {
           feedback.description = "";
         }
 
+        // replace index_start, index_end, line_start, line_end with undefined if they are not numbers (null somehow gets parsed as {})
+        ["index_start", "index_end", "line_start", "line_end"].forEach(
+          (key) => {
+            // @ts-ignore
+            if (typeof feedback[key] !== "number") {
+              // @ts-ignore
+              feedback[key] = undefined;
+            }
+          }
+        );
+
         return feedback;
       });
       return feedbacks;
