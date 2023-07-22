@@ -15,12 +15,9 @@ type FileEditorProps = {
 const MyComponent = ({ layoutViewZoneFunc }: { layoutViewZoneFunc?: () => void }) => {
   const [count, setCount] = useState<number>(0);
 
-  useEffect(() => {
-    if (layoutViewZoneFunc) {
-      layoutViewZoneFunc();
-    }
-  }, [layoutViewZoneFunc])
-
+  if (layoutViewZoneFunc) {
+    layoutViewZoneFunc();
+  }
   return <div>
   My first view zone {count}
   <br />
@@ -82,18 +79,11 @@ export default function FileEditor({
         afterLineNumber: 3,
         domNode: zoneNode,
         get heightInPx() {
-          console.log("offsetHeight", overlayDom.offsetHeight)
-          console.log("clientHeight", overlayDom.clientHeight)
-          console.log("scrollHeight", overlayDom.scrollHeight)
-          console.log("styleHeight", overlayDom.style.height)
           return overlayDom.offsetHeight;
         },
         onDomNodeTop: top => {
           overlayDom.style.top = top + "px";
         },
-        // onComputedHeight: height => {
-        //   overlayDom.style.height = height + "px";
-        // }
       });
       setLayoutViewZoneFunc(() => () => {
         console.log("layoutViewZoneFunc")
