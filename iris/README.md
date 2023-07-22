@@ -17,6 +17,7 @@
 
 ## With docker
 - (optional) Install **[Task](https://taskfile.dev)**
+- Copy `application.example.yml` to `application-docker.yml` and change necessary values
 - Build docker: `docker compose build` or `task build`
 - Run server: `docker compose up -d` or `task up`
 - Stop server: `docker compose down` or `task down`

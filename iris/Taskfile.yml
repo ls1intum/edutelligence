@@ -30,3 +30,8 @@ tasks:
   logs:
     cmds:
       - docker compose logs -f server
+
+  console:
+    aliases: [ c ]
+    cmds:
+      - docker attach pyris-server # using <ctrl-p><ctrl-q> to detach

@@ -3,6 +3,12 @@ from pydantic import BaseModel, Field
 from datetime import datetime
 
 
+class LLMStatus(str, Enum):
+    UP = "UP"
+    DOWN = "DOWN"
+    NOT_AVAILABLE = "NOT_AVAILABLE"
+
+
 class ContentType(str, Enum):
     TEXT = "text"
 
@@ -31,6 +37,11 @@ class SendMessageResponse(BaseModel):
 
     used_model: str = Field(..., alias="usedModel")
     message: Message
+
+
+class ModelStatus(BaseModel):
+    model: str
+    status: LLMStatus
 
 
 class LLMModelResponse(BaseModel):

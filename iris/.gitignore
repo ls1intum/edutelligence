@@ -130,6 +130,7 @@ venv.bak/
 
 # Config files
 application.yml
+application-docker.yml
 
 # Spyder project settings
 .spyderproject

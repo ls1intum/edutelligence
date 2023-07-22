@@ -1,19 +1,24 @@
+import pytest
 from freezegun import freeze_time
 from app.models.dtos import Content, ContentType
 from app.services.guidance_wrapper import GuidanceWrapper
 import app.config as config
 
-llm_model_config = config.LLMModelConfig(
-    name="test", description="test", llm_credentials={}
-)
-config.settings.pyris.llms = {"GPT35_TURBO": llm_model_config}
-api_key_config = config.APIKeyConfig(
-    token="secret", comment="test", llm_access=["GPT35_TURBO"]
-)
-config.settings.pyris.api_keys = [api_key_config]
+
+@pytest.fixture(scope="function")
+def model_configs():
+    llm_model_config = config.LLMModelConfig(
+        name="test", description="test", llm_credentials={}
+    )
+    config.settings.pyris.llms = {"GPT35_TURBO": llm_model_config}
+    api_key_config = config.APIKeyConfig(
+        token="secret", comment="test", llm_access=["GPT35_TURBO"]
+    )
+    config.settings.pyris.api_keys = [api_key_config]
 
 
 @freeze_time("2023-06-16 03:21:34 +02:00")
+@pytest.mark.usefixtures("model_configs")
 def test_send_message(test_client, headers, mocker):
     mocker.patch.object(
         GuidanceWrapper,
@@ -77,6 +82,7 @@ def test_send_message_missing_params(test_client, headers):
     }
 
 
+@pytest.mark.usefixtures("model_configs")
 def test_send_message_raise_value_error(test_client, headers, mocker):
     mocker.patch.object(
         GuidanceWrapper, "query", side_effect=ValueError("value error message")
@@ -99,6 +105,7 @@ def test_send_message_raise_value_error(test_client, headers, mocker):
     }
 
 
+@pytest.mark.usefixtures("model_configs")
 def test_send_message_raise_key_error(test_client, headers, mocker):
     mocker.patch.object(
         GuidanceWrapper, "query", side_effect=KeyError("key error message")
@@ -137,4 +144,51 @@ def test_send_message_without_authorization_header(test_client):
     assert response.json()["detail"] == {
         "type": "not_authenticated",
         "errorMessage": "Requires authentication",
+    }
+
+
+@pytest.mark.usefixtures("model_configs")
+def test_send_message_fail_three_times(
+    test_client, mocker, headers, test_cache_store
+):
+    mocker.patch.object(
+        GuidanceWrapper, "query", side_effect=Exception("some error")
+    )
+    body = {
+        "template": {
+            "id": 123,
+            "content": "some template",
+        },
+        "preferredModel": "GPT35_TURBO",
+        "parameters": {"query": "Some query"},
+    }
+
+    for _ in range(3):
+        try:
+            test_client.post("/api/v1/messages", headers=headers, json=body)
+        except Exception:
+            ...
+
+    # Restrict access
+    response = test_client.post("/api/v1/messages", headers=headers, json=body)
+    assert test_cache_store.get("GPT35_TURBO:status") == "OPEN"
+    assert test_cache_store.get("GPT35_TURBO:num_failures") == 3
+    assert response.status_code == 500
+    assert response.json() == {
+        "detail": {
+            "errorMessage": "Too many failures! Please try again later.",
+            "type": "other",
+        }
+    }
+
+    # Can access after TTL
+    test_cache_store.delete("GPT35_TURBO:status")
+    test_cache_store.delete("GPT35_TURBO:num_failures")
+    response = test_client.post("/api/v1/messages", headers=headers, json=body)
+    assert response.status_code == 500
+    assert response.json() == {
+        "detail": {
+            "errorMessage": "some error",
+            "type": "other",
+        }
     }

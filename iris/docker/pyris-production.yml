@@ -20,6 +20,11 @@ services:
     networks:
       - pyris
 
+  cache:
+    image: hazelcast/hazelcast:5.3.1
+    networks:
+      - pyris
+
   nginx:
     extends:
       file: ./nginx.yml

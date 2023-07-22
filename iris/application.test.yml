@@ -1,4 +1,8 @@
 pyris:
+  cache:
+    hazelcast:
+      host: localhost
+      port: 5701
   api_keys:
     - token: "secret"
       comment: "DUMMY"

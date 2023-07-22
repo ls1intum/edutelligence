@@ -7,8 +7,11 @@ from app.models.dtos import Content, ContentType
 class GuidanceWrapper:
     """A wrapper service to all guidance package's methods."""
 
+    def __new__(cls, *_, **__):
+        return super(GuidanceWrapper, cls).__new__(cls)
+
     def __init__(
-        self, model: LLMModelConfig, handlebars: str, parameters=None
+        self, model: LLMModelConfig, handlebars="", parameters=None
     ) -> None:
         if parameters is None:
             parameters = {}
@@ -37,6 +40,27 @@ class GuidanceWrapper:
             raise ValueError("The handlebars do not generate 'response'")
 
         return Content(type=ContentType.TEXT, textContent=result["response"])
+
+    def is_up(self) -> bool:
+        """Check if the chosen LLM model is up.
+
+        Returns:
+            True if the model is up, False otherwise.
+        """
+
+        guidance.llms.OpenAI.cache.clear()
+        handlebars = """
+        {{#user~}}Say 1{{~/user}}
+        {{#assistant~}}
+            {{gen 'response' temperature=0.0 max_tokens=1}}
+        {{~/assistant}}
+        """
+        content = (
+            GuidanceWrapper(model=self.model, handlebars=handlebars)
+            .query()
+            .text_content
+        )
+        return content == "1"
 
     def _get_llm(self):
         llm_credentials = self.model.llm_credentials

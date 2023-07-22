@@ -3,15 +3,30 @@ version: "3.9"
 
 services:
   server:
+    container_name: pyris-server
     build:
       context: .
       dockerfile: Dockerfile.development
+    environment:
+      - DOCKER=1
+    depends_on:
+      - cache
     ports:
       - "8000:8000"
     volumes:
       - .:/app
     networks:
       - pyris
+    stdin_open: true
+    tty: true
+
+  cache:
+    container_name: pyris-cache
+    image: hazelcast/hazelcast:5.3.1
+    networks:
+      - pyris
+    ports:
+      - '5701:5701'
 
 networks:
   pyris:

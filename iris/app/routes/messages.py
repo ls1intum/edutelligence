@@ -11,6 +11,7 @@ from app.core.custom_exceptions import (
 )
 from app.dependencies import TokenPermissionsValidator
 from app.models.dtos import SendMessageRequest, SendMessageResponse
+from app.services.circuit_breaker import CircuitBreaker
 from app.services.guidance_wrapper import GuidanceWrapper
 from app.config import settings
 
@@ -33,7 +34,11 @@ def send_message(body: SendMessageRequest) -> SendMessageResponse:
     )
 
     try:
-        content = guidance.query()
+        content = CircuitBreaker.protected_call(
+            func=guidance.query,
+            cache_key=body.preferred_model,
+            accepted_exceptions=(KeyError, SyntaxError, IncompleteParseError),
+        )
     except KeyError as e:
         raise MissingParameterException(str(e))
     except (SyntaxError, IncompleteParseError) as e:

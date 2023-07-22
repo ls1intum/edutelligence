@@ -44,5 +44,8 @@ jobs:
       run: |
         poetry run flake8 .
 
+    - name: Start cache service
+      run: docker compose up -d --build cache
+
     - name: Test with pytest
       run: poetry run pytest
