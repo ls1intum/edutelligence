@@ -1,5 +1,5 @@
 import { Feedback } from "@/model/feedback";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Monaco, Editor, useMonaco } from "@monaco-editor/react";
 import { editor } from "monaco-editor";
 import * as portals from 'react-reverse-portal';
@@ -25,7 +25,6 @@ const MyComponent = () => {
   </div>
 }
 
-
 export default function FileEditor({
   content,
   filePath,
@@ -35,8 +34,9 @@ export default function FileEditor({
   const editorRef = useRef<editor.IStandaloneCodeEditor>();
   const monaco = useMonaco();
 
-  const portalNode = useMemo(() => portals.createHtmlPortalNode(), []);
-  const resizeObserver = useRef<ResizeObserver | null>(null);
+  const id = useId();
+  const portalNodes = useMemo(() => feedbacks?.map(() => portals.createHtmlPortalNode()), [feedbacks]);
+  const resizeObservers = useRef<(ResizeObserver | null)[]>([]);
 
   useEffect(() => {
     if (monaco) {
@@ -52,41 +52,53 @@ export default function FileEditor({
 
   const handleEditorDidMount = (editor: editor.IStandaloneCodeEditor, monaco: Monaco) => {
     editorRef.current = editor;
-    
-    const overlayDom = document.createElement("div");
-    overlayDom.id = 'overlayId';
-    overlayDom.style.width = '100%';
-    const root = createRoot(overlayDom);
-    root.render(<portals.OutPortal node={portalNode} />);
-    
-    var overlayWidget = {
-      getId: () => "my.overlay.widget",
-      getDomNode: () => overlayDom,
-      getPosition: () => null,
-    };
-    editor.addOverlayWidget(overlayWidget);
 
-    let zoneNode = document.createElement('div');
-    zoneNode.id = "zoneId";
+    let overlayNodes: HTMLDivElement[] = [];
+    feedbacks?.forEach((feedback, index) => {
+      if (!portalNodes) return;
+      const portalNode = portalNodes[index];
+      if (!portalNode) return;
+
+      const overlayNode = document.createElement("div");
+      overlayNode.id = `feedback-${id}-${index}-overlay`;
+      overlayNode.style.width = '100%';
+      const root = createRoot(overlayNode);
+      root.render(<portals.OutPortal node={portalNode} />);
+    
+      var overlayWidget = {
+        getId: () => `feedback-${id}-${index}-widget`,
+        getDomNode: () => overlayNode,
+        getPosition: () => null,
+      };
+      editor.addOverlayWidget(overlayWidget);
+      overlayNodes.push(overlayNode);
+    })
 
     editorRef.current?.changeViewZones(function (changeAccessor) {
-      
-      const zoneId = changeAccessor.addZone({
-        afterLineNumber: 2,
-        afterColumn: 10,
-        domNode: zoneNode,
-        get heightInPx() {
-          return overlayDom.offsetHeight;
-        },
-        onDomNodeTop: top => {
-          overlayDom.style.top = top + "px";
-        },
-      });
-      resizeObserver.current = new ResizeObserver(() => {
-        editor.changeViewZones(accessor => accessor.layoutZone(zoneId));
-      });
-      resizeObserver.current.observe(overlayDom);
-    });
+      feedbacks?.forEach((feedback, index) => {
+        if (!overlayNodes) return;
+        const overlayNode = overlayNodes[index];
+        const zoneNode = document.createElement("div");
+        zoneNode.id = `feedback-${id}-${index}-zone`;
+
+        const zoneId = changeAccessor.addZone({
+          afterLineNumber: 10000,
+          afterColumn: 10,
+          domNode: zoneNode,
+          get heightInPx() {
+            return overlayNode.offsetHeight;
+          },
+          onDomNodeTop: top => {
+            overlayNode.style.top = top + "px";
+          },
+        });
+        const observer = new ResizeObserver(() => {
+          editor.changeViewZones(accessor => accessor.layoutZone(zoneId));
+        });
+        observer.observe(overlayNode);
+        resizeObservers.current.push(observer);
+    }
+    )});
   }
 
   // Cleanup on unmount
@@ -95,8 +107,8 @@ export default function FileEditor({
       handleEditorDidMount(editorRef.current, monaco);
     }
     return () => {
-      resizeObserver.current?.disconnect();
-      resizeObserver.current = null;
+      resizeObservers.current.forEach(observer => observer?.disconnect());
+      resizeObservers.current = [];
     };
   }, []);
 
@@ -119,6 +131,8 @@ export default function FileEditor({
     onMount={handleEditorDidMount}
     // onChange={(value) => onChange(value)}
   />
-  <portals.InPortal node={portalNode}><MyComponent /></portals.InPortal>
+  {portalNodes && feedbacks && feedbacks.map((feedback, index) => {
+    return portalNodes[index] && <portals.InPortal node={portalNodes[index]} key={feedback.id}><MyComponent /></portals.InPortal>;
+  })}
 </div>;
 }
