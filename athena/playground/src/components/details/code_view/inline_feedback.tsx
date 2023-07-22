@@ -12,7 +12,7 @@ export default function InlineFeedback({
   return (
     <div className="m-2 border border-gray-300 rounded-lg">
       <div className="flex items-center justify-between px-4 py-2 border-b border-gray-300 text-xs">
-        Suggestion on {formatReference(feedback)}
+        Feedback on {formatReference(feedback)}
       </div>
       <div className="flex items-center justify-start">
         <div>Points</div>
