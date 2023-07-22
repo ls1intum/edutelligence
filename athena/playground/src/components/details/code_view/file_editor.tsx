@@ -4,6 +4,7 @@ import { Monaco, Editor, useMonaco } from "@monaco-editor/react";
 import { editor } from "monaco-editor";
 import * as portals from 'react-reverse-portal';
 import { createRoot } from "react-dom/client";
+import InlineFeedback from "./inline_feedback";
 
 type FileEditorProps = {
   content: string;
@@ -11,19 +12,6 @@ type FileEditorProps = {
   feedbacks?: Feedback[];
   onFeedbackChange: (feedback: Feedback[]) => void;
 };
-
-const MyComponent = () => {
-  const [count, setCount] = useState<number>(0);
-
-  return <div>
-  My first view zone {count}
-  <br />
-  <button onClick={() => {
-    setCount(count + 1)
-    console.log("Click")
-  }}>Click me</button>
-  </div>
-}
 
 export default function FileEditor({
   content,
@@ -103,7 +91,6 @@ export default function FileEditor({
     if (decorationsCollection) {
       decorationsCollection.clear();
     }
-    console.log(feedbackRanges)
     const newDecorationsCollection = editor.createDecorationsCollection(
       feedbackRanges?.flatMap(range => (
         range ? [{
@@ -144,10 +131,13 @@ export default function FileEditor({
     path={filePath}
     defaultValue="Please select a file"
     onMount={handleEditorDidMount}
-    // onChange={(value) => onChange(value)}
   />
   {portalNodes && feedbacks && feedbacks.map((feedback, index) => {
-    return portalNodes[index] && <portals.InPortal node={portalNodes[index]} key={feedback.id}><MyComponent /></portals.InPortal>;
+    return portalNodes[index] && (
+      <portals.InPortal node={portalNodes[index]} key={feedback.id}>
+        <InlineFeedback feedback={feedback} onFeedbackChange={undefined} />
+      </portals.InPortal>
+    );
   })}
 </div>;
 }
