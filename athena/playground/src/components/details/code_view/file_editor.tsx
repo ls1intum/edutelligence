@@ -12,12 +12,9 @@ type FileEditorProps = {
   onFeedbackChange: (feedback: Feedback[]) => void;
 };
 
-const MyComponent = ({ layoutViewZoneFunc }: { layoutViewZoneFunc?: () => void }) => {
+const MyComponent = () => {
   const [count, setCount] = useState<number>(0);
 
-  if (layoutViewZoneFunc) {
-    layoutViewZoneFunc();
-  }
   return <div>
   My first view zone {count}
   <br />
@@ -39,7 +36,7 @@ export default function FileEditor({
   const monaco = useMonaco();
 
   const portalNode = useMemo(() => portals.createHtmlPortalNode(), []);
-  const [layoutViewZoneFunc, setLayoutViewZoneFunc] = useState<(() => void) | undefined>(undefined);
+  const resizeObserver = useRef<ResizeObserver | null>(null);
 
   useEffect(() => {
     if (monaco) {
@@ -85,14 +82,20 @@ export default function FileEditor({
           overlayDom.style.top = top + "px";
         },
       });
-      setLayoutViewZoneFunc(() => () => {
-        console.log("layoutViewZoneFunc")
-        editorRef.current?.changeViewZones(function (changeAccessor) {
-          changeAccessor.layoutZone(zoneId);
-        });
+      resizeObserver.current = new ResizeObserver(() => {
+        editor.changeViewZones(accessor => accessor.layoutZone(zoneId));
       });
+      resizeObserver.current.observe(overlayDom);
     });
   }
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      resizeObserver.current?.disconnect();
+      resizeObserver.current = null;
+    };
+  }, []);
 
   return <div className="h-[50vh]">
   <Editor
@@ -113,6 +116,6 @@ export default function FileEditor({
     onMount={handleEditorDidMount}
     // onChange={(value) => onChange(value)}
   />
-  <portals.InPortal node={portalNode}><MyComponent layoutViewZoneFunc={layoutViewZoneFunc} /></portals.InPortal>
+  <portals.InPortal node={portalNode}><MyComponent /></portals.InPortal>
 </div>;
 }
