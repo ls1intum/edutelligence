@@ -3,6 +3,7 @@ import type { Feedback } from "@/model/feedback";
 
 import Markdown from "@/components/markdown";
 import FeedbackDetail from "@/components/details/feedback";
+import FileEditor from "@/components/details/code_view/file_editor";
 
 type TextSubmissionDetailProps = {
   submission: TextSubmission;
@@ -15,7 +16,7 @@ export default function TextSubmissionDetail({
 }: TextSubmissionDetailProps) {
   return (
     <>
-      <Markdown content={submission.content} enablePlainTextSwitcher />
+      <FileEditor content={submission.content} feedbacks={feedbacks} onFeedbackChange={() => {}} />
       {feedbacks && feedbacks.length > 0 && (
         <div className="space-y-1 mt-2">
           {feedbacks.map((feedback) => (
