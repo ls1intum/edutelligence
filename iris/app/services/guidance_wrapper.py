@@ -27,6 +27,7 @@ class GuidanceWrapper:
             Text content object with LLM's response.
 
         Raises:
+            Reraises exception from guidance package
             ValueError: if handlebars do not generate 'response'
         """
 
@@ -35,6 +36,9 @@ class GuidanceWrapper:
             llm=self._get_llm(),
             **self.parameters,
         )
+
+        if isinstance(result._exception, Exception):
+            raise result._exception
 
         if "response" not in result:
             raise ValueError("The handlebars do not generate 'response'")
