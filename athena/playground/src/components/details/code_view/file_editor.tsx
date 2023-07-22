@@ -56,7 +56,6 @@ export default function FileEditor({
     const overlayDom = document.createElement("div");
     overlayDom.id = 'overlayId';
     overlayDom.style.width = '100%';
-    // overlayDom.style.background = '#0000ff';
     const root = createRoot(overlayDom);
     root.render(<portals.OutPortal node={portalNode} />);
     
@@ -73,7 +72,8 @@ export default function FileEditor({
     editorRef.current?.changeViewZones(function (changeAccessor) {
       
       const zoneId = changeAccessor.addZone({
-        afterLineNumber: 3,
+        afterLineNumber: 2,
+        afterColumn: 10,
         domNode: zoneNode,
         get heightInPx() {
           return overlayDom.offsetHeight;
@@ -91,6 +91,9 @@ export default function FileEditor({
 
   // Cleanup on unmount
   useEffect(() => {
+    if (editorRef.current && monaco) {
+      handleEditorDidMount(editorRef.current, monaco);
+    }
     return () => {
       resizeObserver.current?.disconnect();
       resizeObserver.current = null;
