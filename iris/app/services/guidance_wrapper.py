@@ -2,6 +2,7 @@ import guidance
 
 from app.config import LLMModelConfig
 from app.models.dtos import Content, ContentType
+from app.services.guidance_functions import truncate
 
 
 class GuidanceWrapper:
@@ -34,6 +35,7 @@ class GuidanceWrapper:
         template = guidance(self.handlebars)
         result = template(
             llm=self._get_llm(),
+            truncate=truncate,
             **self.parameters,
         )
 

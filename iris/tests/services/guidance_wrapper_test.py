@@ -34,6 +34,32 @@ def test_query_success(mocker):
     assert result.text_content == "the output"
 
 
+def test_query_using_truncate_function(mocker):
+    mocker.patch.object(
+        GuidanceWrapper,
+        "_get_llm",
+        return_value=guidance.llms.Mock("the output"),
+    )
+
+    handlebars = """{{#user~}}I want a response to the following query:
+    {{query}}{{~/user}}{{#assistant~}}
+    {{gen 'answer' temperature=0.0 max_tokens=500}}{{~/assistant}}
+    {{set 'response' (truncate answer 3)}}
+    """
+
+    guidance_wrapper = GuidanceWrapper(
+        model=llm_model_config,
+        handlebars=handlebars,
+        parameters={"query": "Some query"},
+    )
+
+    result = guidance_wrapper.query()
+
+    assert isinstance(result, Content)
+    assert result.type == ContentType.TEXT
+    assert result.text_content == "the"
+
+
 def test_query_missing_required_params(mocker):
     mocker.patch.object(
         GuidanceWrapper,
