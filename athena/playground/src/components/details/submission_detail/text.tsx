@@ -1,7 +1,6 @@
 import type { TextSubmission } from "@/model/submission";
 import type { Feedback } from "@/model/feedback";
 
-import Markdown from "@/components/markdown";
 import FeedbackDetail from "@/components/details/feedback";
 import FileEditor from "@/components/details/code_view/file_editor";
 
