@@ -82,7 +82,7 @@ export default function FileEditor({
         zoneNode.id = `feedback-${id}-${index}-zone`;
 
         const zoneId = changeAccessor.addZone({
-          afterLineNumber: feedbackRanges![index]?.endLineNumber || Infinity,
+          afterLineNumber: feedbackRanges![index]?.endLineNumber || 0,
           afterColumn: feedbackRanges![index]?.endColumn,
           domNode: zoneNode,
           get heightInPx() {
