@@ -12,6 +12,26 @@ type FileEditorProps = {
   onFeedbackChange: (feedback: Feedback[]) => void;
 };
 
+const MyComponent = ({ layoutViewZoneFunc }: { layoutViewZoneFunc?: () => void }) => {
+  const [count, setCount] = useState<number>(0);
+
+  useEffect(() => {
+    if (layoutViewZoneFunc) {
+      layoutViewZoneFunc();
+    }
+  }, [layoutViewZoneFunc])
+
+  return <div>
+  My first view zone {count}
+  <br />
+  <button onClick={() => {
+    setCount(count + 1)
+    console.log("Click")
+  }}>Click me</button>
+  </div>
+}
+
+
 export default function FileEditor({
   content,
   filePath,
@@ -21,17 +41,9 @@ export default function FileEditor({
   const editorRef = useRef<editor.IStandaloneCodeEditor>();
   const monaco = useMonaco();
 
-  const [count, setCount] = useState<number>(0);
   const portalNode = useMemo(() => portals.createHtmlPortalNode(), []);
+  const [layoutViewZoneFunc, setLayoutViewZoneFunc] = useState<(() => void) | undefined>(undefined);
 
-  const MyComponent = () => <div>
-    My first view zone {count}
-    <button onClick={() => {
-      setCount(count + 1)
-      console.log("Click")
-    }}>Click me</button>
-  </div>;
-  
   useEffect(() => {
     if (monaco) {
       console.log('here is the monaco instance:', monaco);
@@ -65,16 +77,29 @@ export default function FileEditor({
     zoneNode.id = "zoneId";
 
     editorRef.current?.changeViewZones(function (changeAccessor) {
-      changeAccessor.addZone({
+      
+      const zoneId = changeAccessor.addZone({
         afterLineNumber: 3,
-        heightInLines: 3,
         domNode: zoneNode,
+        get heightInPx() {
+          console.log("offsetHeight", overlayDom.offsetHeight)
+          console.log("clientHeight", overlayDom.clientHeight)
+          console.log("scrollHeight", overlayDom.scrollHeight)
+          console.log("styleHeight", overlayDom.style.height)
+          return overlayDom.offsetHeight;
+        },
         onDomNodeTop: top => {
           overlayDom.style.top = top + "px";
         },
-        onComputedHeight: height => {
-          overlayDom.style.height = height + "px";
-        }
+        // onComputedHeight: height => {
+        //   overlayDom.style.height = height + "px";
+        // }
+      });
+      setLayoutViewZoneFunc(() => () => {
+        console.log("layoutViewZoneFunc")
+        editorRef.current?.changeViewZones(function (changeAccessor) {
+          changeAccessor.layoutZone(zoneId);
+        });
       });
     });
   }
@@ -98,6 +123,6 @@ export default function FileEditor({
     onMount={handleEditorDidMount}
     // onChange={(value) => onChange(value)}
   />
-  <portals.InPortal node={portalNode}><MyComponent /></portals.InPortal>
+  <portals.InPortal node={portalNode}><MyComponent layoutViewZoneFunc={layoutViewZoneFunc} /></portals.InPortal>
 </div>;
 }
