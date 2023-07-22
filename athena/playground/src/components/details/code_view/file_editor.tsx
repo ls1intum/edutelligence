@@ -1,4 +1,4 @@
-import { Feedback, getFeedbackPlacement, isProgrammingFeedback } from "@/model/feedback";
+import { Feedback, getFeedbackRange } from "@/model/feedback";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Monaco, Editor, useMonaco } from "@monaco-editor/react";
 import { editor } from "monaco-editor";
@@ -37,6 +37,7 @@ export default function FileEditor({
   const id = useId();
   const portalNodes = useMemo(() => feedbacks?.map(() => portals.createHtmlPortalNode()), [feedbacks]);
   const resizeObservers = useRef<(ResizeObserver | null)[]>([]);
+  const [decorationsCollection, setDecorationsCollection] = useState<editor.IEditorDecorationsCollection | undefined>(undefined);
 
   useEffect(() => {
     if (monaco) {
@@ -53,11 +54,11 @@ export default function FileEditor({
   const handleEditorDidMount = (editor: editor.IStandaloneCodeEditor, monaco: Monaco) => {
     editorRef.current = editor;
 
+    const feedbackRanges = feedbacks?.map(feedback => getFeedbackRange(content, feedback));
+
     let overlayNodes: HTMLDivElement[] = [];
-    feedbacks?.forEach((feedback, index) => {
-      if (!portalNodes) return;
-      const portalNode = portalNodes[index];
-      if (!portalNode) return;
+    feedbacks?.forEach((_, index) => {
+      const portalNode = portalNodes![index]!;
 
       const overlayNode = document.createElement("div");
       overlayNode.id = `feedback-${id}-${index}-overlay`;
@@ -74,15 +75,15 @@ export default function FileEditor({
       overlayNodes.push(overlayNode);
     })
 
-    editorRef.current?.changeViewZones(function (changeAccessor) {
-      feedbacks?.forEach((feedback, index) => {
-        if (!overlayNodes) return;
+    editor.changeViewZones(function (changeAccessor) {
+      feedbacks?.forEach((_, index) => {
         const overlayNode = overlayNodes[index];
         const zoneNode = document.createElement("div");
         zoneNode.id = `feedback-${id}-${index}-zone`;
 
         const zoneId = changeAccessor.addZone({
-          ...getFeedbackPlacement(content, feedback),
+          afterLineNumber: feedbackRanges![index]?.endLineNumber || Infinity,
+          afterColumn: feedbackRanges![index]?.endColumn,
           domNode: zoneNode,
           get heightInPx() {
             return overlayNode.offsetHeight;
@@ -98,6 +99,21 @@ export default function FileEditor({
         resizeObservers.current.push(observer);
     }
     )});
+    
+    if (decorationsCollection) {
+      decorationsCollection.clear();
+    }
+    console.log(feedbackRanges)
+    const newDecorationsCollection = editor.createDecorationsCollection(
+      feedbackRanges?.flatMap(range => (
+        range ? [{
+          options: {
+            inlineClassName: "bg-primary-300 rounded-md py-1",
+          },
+          range,
+        }] : [])) ?? []
+    );
+    setDecorationsCollection(newDecorationsCollection);
   }
 
   // Cleanup on unmount
@@ -111,7 +127,7 @@ export default function FileEditor({
     };
   }, []);
 
-  return <div className="h-[50vh]">
+  return <div className="h-[50vh] hover:bg-primary-500">
   <Editor
     options={{
       automaticLayout: true,

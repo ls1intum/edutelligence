@@ -1,3 +1,5 @@
+import type { IRange } from "monaco-editor";
+
 type FeedbackBase = {
   id: number;
   title: string;
@@ -53,31 +55,35 @@ export function formatReference(feedback: Feedback): string {
 }
 
 /**
- * Get position of feedback in the content (for monaco editor)
+ * Returns the range of the feedback in the given content (for monaco editor)
  * 
- * @param content - content of the editor
- * @param feedback - feedback to get position from
- * @returns position of feedback in the content
+ * @param content - the content of the editor
+ * @param feedback - the feedback
+ * @returns the range of the feedback in the given content
  */
-export function getFeedbackPlacement(content: string, feedback: Feedback) {
+export function getFeedbackRange(content: string, feedback: Feedback): IRange | undefined {
   if (isProgrammingFeedback(feedback)) {
+    if (feedback.line_start === undefined && feedback.line_end === undefined) {
+      return undefined;
+    }
     return {
-      afterLineNumber: feedback.line_end || feedback.line_start || Infinity,
-      afterColumn: 0,
+      startLineNumber: (feedback.line_start || feedback.line_end)!,
+      startColumn: 0,
+      endLineNumber: (feedback.line_start || feedback.line_end)!,
+      endColumn: Infinity,
     }
   } else if (isTextFeedback(feedback)) {
-    const index = feedback.index_end || feedback.index_start;
-    if (index !== undefined) {
-      const linesBefore = content.slice(0, index).split("\n");
-      return {
-        afterLineNumber: linesBefore.length,
-        afterColumn: linesBefore[linesBefore.length - 1].length,
-      }
+    if (feedback.index_start === undefined && feedback.index_end === undefined) {
+      return undefined;
+    }
+    const linesBeforeStart = content.slice(0, feedback.index_start ?? feedback.index_end).split("\n");
+    const linesBeforeEnd = content.slice(0, feedback.index_end ?? feedback.index_start).split("\n");
+    return {
+      startLineNumber: linesBeforeStart.length,
+      startColumn: linesBeforeStart[linesBeforeStart.length - 1].length,
+      endLineNumber: linesBeforeEnd.length,
+      endColumn: linesBeforeEnd[linesBeforeEnd.length - 1].length,
     }
   }
-  
-  return {
-    afterLineNumber: Infinity,
-    afterColumn: 0,
-  }
+  return undefined;
 }
