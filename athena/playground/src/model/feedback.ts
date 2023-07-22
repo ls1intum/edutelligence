@@ -51,3 +51,33 @@ export function formatReference(feedback: Feedback): string {
   }
   return "";
 }
+
+/**
+ * Get position of feedback in the content (for monaco editor)
+ * 
+ * @param content - content of the editor
+ * @param feedback - feedback to get position from
+ * @returns position of feedback in the content
+ */
+export function getFeedbackPlacement(content: string, feedback: Feedback) {
+  if (isProgrammingFeedback(feedback)) {
+    return {
+      afterLineNumber: feedback.line_end || feedback.line_start || Infinity,
+      afterColumn: 0,
+    }
+  } else if (isTextFeedback(feedback)) {
+    const index = feedback.index_end || feedback.index_start;
+    if (index !== undefined) {
+      const linesBefore = content.slice(0, index).split("\n");
+      return {
+        afterLineNumber: linesBefore.length,
+        afterColumn: linesBefore[linesBefore.length - 1].length,
+      }
+    }
+  }
+  
+  return {
+    afterLineNumber: Infinity,
+    afterColumn: 0,
+  }
+}

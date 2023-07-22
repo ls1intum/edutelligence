@@ -1,4 +1,4 @@
-import { Feedback } from "@/model/feedback";
+import { Feedback, getFeedbackPlacement, isProgrammingFeedback } from "@/model/feedback";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Monaco, Editor, useMonaco } from "@monaco-editor/react";
 import { editor } from "monaco-editor";
@@ -82,8 +82,7 @@ export default function FileEditor({
         zoneNode.id = `feedback-${id}-${index}-zone`;
 
         const zoneId = changeAccessor.addZone({
-          afterLineNumber: 10000,
-          afterColumn: 10,
+          ...getFeedbackPlacement(content, feedback),
           domNode: zoneNode,
           get heightInPx() {
             return overlayNode.offsetHeight;
