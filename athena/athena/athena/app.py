@@ -4,7 +4,9 @@ Instead, use the decorators in the `athena` package.
 The only exception is the `start` method, which is used to start the module.
 """
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 
 from . import env
 from .database import create_tables
@@ -49,3 +51,11 @@ class FastAPIWithStart(FastAPI):
 
 
 app: FastAPIWithStart = FastAPIWithStart()
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    logger.error("Validation error: %s \n Errors: %s\n Request body: %s", exc, exc.errors(), exc.body)
+    return JSONResponse(
+        status_code=422,
+        content={"detail": exc.errors()},
+    )

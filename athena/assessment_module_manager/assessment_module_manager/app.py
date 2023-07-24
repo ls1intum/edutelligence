@@ -1,4 +1,8 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+
+from .logger import logger
 
 description = """
 This is the Athena API. You are interacting with the Assessment Module Manager, 
@@ -15,3 +19,11 @@ app = FastAPI(
     description=description,
     version="0.1.0"
 )
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    logger.error("Validation error: %s \n Errors: %s\n Request body: %s", exc, exc.errors(), exc.body)
+    return JSONResponse(
+        status_code=422,
+        content={"detail": exc.errors()},
+    )
