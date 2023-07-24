@@ -1,3 +1,5 @@
+import type { Feedback } from "@/model/feedback";
+
 import { useEffect, useState } from "react";
 import { Allotment } from "allotment";
 
@@ -8,9 +10,11 @@ import FileEditor from "./file_editor";
 
 type CodeViewProps = {
   repository_url: string;
+  feedbacks?: Feedback[];
+  onFeedbacksChange?: (feedback: Feedback[]) => void;
 };
 
-export default function CodeView({ repository_url }: CodeViewProps) {
+export default function CodeView({ repository_url, feedbacks, onFeedbacksChange }: CodeViewProps) {
   const repository = useFetchAndUnzip(repository_url);
   const [selectedFile, setSelectedFile] = useState<string | undefined>(
     undefined
@@ -38,11 +42,10 @@ export default function CodeView({ repository_url }: CodeViewProps) {
         <Allotment.Pane>
           {fileContent ? (
             <FileEditor
-              type="programming"
               content={fileContent}
               filePath={selectedFile}
-              feedbacks={undefined}
-              onFeedbacksChange={() => undefined}
+              feedbacks={feedbacks}
+              onFeedbacksChange={onFeedbacksChange}
             />
           ) : (
             <div className="h-full w-full flex items-center justify-center">

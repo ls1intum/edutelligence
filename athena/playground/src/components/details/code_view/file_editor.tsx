@@ -14,7 +14,6 @@ type FileEditorProps = {
   filePath?: string;
   feedbacks?: Feedback[];
   onFeedbacksChange?: (feedback: Feedback[]) => void;
-  createNewFeedback?: (range: IRange) => Feedback;
 };
 
 export default function FileEditor({
@@ -22,7 +21,6 @@ export default function FileEditor({
   filePath,
   feedbacks,
   onFeedbacksChange,
-  createNewFeedback,
 }: FileEditorProps) {
   const editorRef = useRef<editor.IStandaloneCodeEditor>();
   const monaco = useMonaco();

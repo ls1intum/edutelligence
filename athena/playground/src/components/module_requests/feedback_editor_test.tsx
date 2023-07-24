@@ -5,31 +5,39 @@ import { useEffect, useState } from "react";
 
 import ExerciseSelect from "@/components/selectors/exercise_select";
 import SubmissionSelect from "@/components/selectors/submission_select";
-import Disclosure from "@/components/disclosure";
 import ExerciseDetail from "@/components/details/exercise_detail";
 import SubmissionDetail from "@/components/details/submission_detail";
 import { useFeedbacks } from "@/helpers/client/get_data";
 
 import { ModuleRequestProps } from ".";
 import { Feedback } from "@/model/feedback";
+import Disclosure from "../disclosure";
 
 export default function FeedbackEditorTest({
   mode,
   module,
 }: ModuleRequestProps) {
   const [exercise, setExercise] = useState<Exercise | undefined>(undefined);
-  const [submission, setSubmission] = useState<Submission | undefined>(undefined);
+  const [submission, setSubmission] = useState<Submission | undefined>(
+    undefined
+  );
 
-  const { feedbacks: loadedFeedbacks, isLoading: isFeedbackLoading, error: feedbackError } = useFeedbacks(mode, exercise);
+  const {
+    feedbacks: loadedFeedbacks,
+    isLoading: isFeedbackLoading,
+    error: feedbackError,
+  } = useFeedbacks(mode, exercise);
 
-  const [feedbacks, setFeedbacks] = useState<Feedback[] | undefined>(undefined);
+  const [feedbacks, setFeedbacks] = useState<Feedback[]>([]);
 
   useEffect(() => {
-    if (loadedFeedbacks) {
-      setFeedbacks(loadedFeedbacks);
+    if (submission && loadedFeedbacks) {
+      setFeedbacks(
+        loadedFeedbacks.filter((f) => f.submission_id === submission.id)
+      );
     }
-  }, [loadedFeedbacks]);
- 
+  }, [submission, loadedFeedbacks]);
+
   useEffect(() => {
     setSubmission(undefined);
   }, [exercise]);
@@ -58,12 +66,11 @@ export default function FeedbackEditorTest({
           <div className="space-y-1 mt-2">
             <ExerciseDetail exercise={exercise} mode={mode} />
             {submission && (
-              <Disclosure title="Submission">
+              <Disclosure title="Submission Detail">
                 <SubmissionDetail
                   submission={submission}
-                  feedbacks={feedbacks?.filter(
-                    (f) => f.submission_id === submission.id
-                  )}
+                  feedbacks={feedbacks}
+                  onFeedbacksChange={setFeedbacks}
                 />
               </Disclosure>
             )}
