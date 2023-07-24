@@ -5,6 +5,7 @@ import { editor } from "monaco-editor";
 import * as portals from 'react-reverse-portal';
 import { createRoot } from "react-dom/client";
 import InlineFeedback from "./inline_feedback";
+import { twMerge } from "tailwind-merge";
 
 type FileEditorProps = {
   content: string;
@@ -92,10 +93,11 @@ export default function FileEditor({
       decorationsCollection.clear();
     }
     const newDecorationsCollection = editor.createDecorationsCollection(
-      feedbackRanges?.flatMap(range => (
+      feedbackRanges?.flatMap((range, index) => (
         range ? [{
           options: {
-            inlineClassName: "bg-primary-300 rounded-md py-1",
+            inlineClassName: twMerge("rounded-md py-1", 
+              feedbacks![index].credits < 0 ? "bg-red-100 text-red-800" : feedbacks![index].credits > 0 ? "bg-green-100 text-green-800" : "bg-gray-100 text-gray-800"),
           },
           range,
         }] : [])) ?? []
@@ -114,7 +116,7 @@ export default function FileEditor({
     };
   }, []);
 
-  return <div className="h-[50vh] hover:bg-primary-500">
+  return <div className="h-[50vh]">
   <Editor
     options={{
       automaticLayout: true,
@@ -135,7 +137,9 @@ export default function FileEditor({
   {portalNodes && feedbacks && feedbacks.map((feedback, index) => {
     return portalNodes[index] && (
       <portals.InPortal node={portalNodes[index]} key={feedback.id}>
-        <InlineFeedback feedback={feedback} onFeedbackChange={undefined} />
+        <div className="mr-4">
+          <InlineFeedback feedback={feedback} onFeedbackChange={undefined} />
+        </div>
       </portals.InPortal>
     );
   })}
