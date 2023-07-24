@@ -63,7 +63,19 @@ export default function InlineFeedback({
         <div className="w-full">
           <div className="flex items-center space-x-1">
             <span className="font-semibold">
-              {feedback.title ? feedback.title : <i>Missing title</i>}
+              {isEditing ? (
+                <input
+                  className="font-semibold rounded w-full placeholder:italic"
+                  type="text"
+                  value={feedback.title}
+                  placeholder="Feedback title"
+                  onChange={(e) =>
+                    onFeedbackChange({ ...feedback, title: e.target.value })
+                  }
+                />
+              ) : (
+                feedback.title ? feedback.title : <i>Missing title</i>
+              )}
             </span>
             <span className="text-xs text-gray-500 rounded-full px-2 py-0.5 bg-gray-100">
               Suggestion
