@@ -1,22 +1,14 @@
-import type { HealthResponse, ModuleMeta } from "@/model/health_response";
-
-import useSWR from "swr";
-import fetcher from "@/helpers/fetcher";
-import baseUrl from "@/helpers/base_url";
+import type { ModuleMeta } from "@/model/health_response";
+import useHealth from "@/hooks/health";
 
 export default function ModuleSelect({
-  url,
   module,
   onChange,
 }: {
-  url: string;
   module: ModuleMeta | undefined;
   onChange: (module: ModuleMeta) => void;
 }) {
-  const { data, error } = useSWR<HealthResponse>(
-    `${baseUrl}/api/health?url=${encodeURIComponent(url)}`,
-    fetcher
-  );
+  const { data, error } = useHealth();
   if (error) return <div className="text-red-500 text-sm">Failed to load</div>;
   if (!data) return <div className="text-gray-500 text-sm">Loading...</div>;
   return (

@@ -1,6 +1,10 @@
 import "@/styles/globals.css";
 import type { AppProps } from "next/app";
 import Head from "next/head";
+import { QueryClient, QueryClientProvider } from "react-query"
+import { BaseInfoProvider } from "@/hooks/base_info_context";
+
+const queryClient = new QueryClient()
 
 export default function App({ Component, pageProps }: AppProps) {
   return (
@@ -9,7 +13,11 @@ export default function App({ Component, pageProps }: AppProps) {
         <title>Athena Playground</title>
         <link rel="icon" href="/logo.png" sizes="any" />
       </Head>
-      <Component {...pageProps} />
+      <QueryClientProvider client={queryClient}>
+        <BaseInfoProvider>
+          <Component {...pageProps} />
+        </BaseInfoProvider>
+      </QueryClientProvider>
       <footer className="p-4 text-gray-400 border-t border-gray-800 text-xs">
         {
           process.env.NEXT_PUBLIC_ATHENA_IS_DEVELOP === 'true' ? <>

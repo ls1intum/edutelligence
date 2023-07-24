@@ -1,30 +1,20 @@
 import type { Exercise } from "@/model/exercise";
-import type { Mode } from "@/model/mode";
 import type { Feedback } from "@/model/feedback";
+
+import useSubmissions from "@/hooks/playground/submissions";
 
 import Disclosure from "@/components/disclosure";
 import SubmissionDetail from "@/components/details/submission_detail";
 
-import { useSubmissions } from "@/helpers/client/get_data";
-
 type SubmissionListProps = {
   exercise: Exercise;
-  mode: Mode;
   feedbacks?: Feedback[];
 };
 
-export default function SubmissionList({
-  exercise,
-  mode,
-  feedbacks,
-}: SubmissionListProps) {
-  const {
-    submissions,
-    isLoading: isLoadingSubmissions,
-    error: submissionsError,
-  } = useSubmissions(mode, exercise);
+export default function SubmissionList({ exercise, feedbacks }: SubmissionListProps) {
+  const { data, isLoading, error } = useSubmissions(exercise);
 
-  if (submissions) {
+  if (data) {
     let feedbacksBySubmissionId: Record<number, Feedback[]> = {};
     if (feedbacks) {
       feedbacksBySubmissionId = feedbacks.reduce((acc, feedback) => {
@@ -38,12 +28,12 @@ export default function SubmissionList({
 
     return (
       <Disclosure
-        title={`${submissions.length} Submission${
-          submissions.length === 1 ? "" : "s"
+        title={`${data.length} Submission${
+          data.length === 1 ? "" : "s"
         }`}
         className={{ content: "space-y-1" }}
       >
-        {submissions.map((submission) => (
+        {data.map((submission) => (
           <Disclosure title={`Submission ${submission.id}`} key={submission.id}>
             <SubmissionDetail
               key={submission.id}
@@ -54,9 +44,9 @@ export default function SubmissionList({
         ))}
       </Disclosure>
     );
-  } else if (submissionsError) {
+  } else if (error) {
     return <div className="text-gray-500 text-sm">Failed to load submissions</div>;
-  } else if (isLoadingSubmissions) {
+  } else if (isLoading) {
     return <div className="text-gray-500 text-sm">Loading submissions...</div>;
   } else {
     return null;

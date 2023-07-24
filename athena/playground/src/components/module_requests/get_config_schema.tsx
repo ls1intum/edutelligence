@@ -1,60 +1,21 @@
 import type { ModuleMeta } from "@/model/health_response";
-import type { ModuleResponse } from "@/model/module_response";
 
-import { useState } from "react";
-
-import baseUrl from "@/helpers/base_url";
-
+import useConfigSchema from "@/hooks/athena/config_schema";
 import ModuleResponseView from "@/components/module_response_view";
-import { ModuleRequestProps } from ".";
 
-async function getConfig(
-  athenaUrl: string,
-  athenaSecret: string,
-  module: ModuleMeta
-): Promise<ModuleResponse | undefined> {
-  try {
-    const athenaConfigUrl = `${athenaUrl}/modules/${module.type}/${module.name}/config_schema`;
-    const response = await fetch(
-      `${baseUrl}/api/athena_request?${new URLSearchParams({
-        url: athenaConfigUrl,
-      })}`,
-      {
-        method: "GET",
-        headers: {
-          "Content-Type": "application/json",
-          "X-API-Secret": athenaSecret,
-          // No X-Module-Config here
-        },
-      }
-    );
-    if (response.status !== 200) {
-      console.error(response);
-      alert(`Athena responded with status code ${response.status}`);
-      return {
-        module_name: "Unknown",
-        status: response.status,
-        data: await response.text(),
-      };
-    }
-    return await response.json();
-  } catch (e) {
-    console.error(e);
-    alert(
-      "Failed to get config from Athena: Failed to fetch. Is the URL correct?"
-    );
-  }
-}
-
-export default function GetConfigSchema({
-  athenaUrl,
-  athenaSecret,
-  module,
-}: ModuleRequestProps) {
-  const [loading, setLoading] = useState<boolean>(false);
-  const [response, setResponse] = useState<ModuleResponse | undefined>(
-    undefined
-  );
+export default function GetConfigSchema({ module }: { module: ModuleMeta }) {
+  const { data, error, isLoading, refetch, remove } = useConfigSchema({
+    onError: (error) => {
+      console.error(error);
+      alert(`Failed to get config from Athena: ${error.message}. Is the URL correct?`);
+    },
+    onSuccess: () => {
+      alert(`Config schema received successfully!`);
+    },
+    queryKey: ["config_schema", module.name, "module_requests"],
+    retry: false,
+    enabled: false
+  });
 
   return (
     <div className="bg-white rounded-md p-4 mb-8">
@@ -72,18 +33,16 @@ export default function GetConfigSchema({
         signature of all other decorators to provide the configuration to the
         function.
       </p>
-      <ModuleResponseView response={response} />
+      <ModuleResponseView response={data ?? (error?.asModuleResponse ? error.asModuleResponse() : undefined)} />
       <button
-        className="bg-primary-500 text-white rounded-md p-2 mt-4 hover:bg-primary-600"
+        className="bg-primary-500 text-white rounded-md p-2 mt-4 hover:bg-primary-600 disabled:text-gray-500 disabled:bg-gray-200 disabled:cursor-not-allowed"
         onClick={() => {
-          setLoading(true);
-          getConfig(athenaUrl, athenaSecret, module)
-            .then(setResponse)
-            .finally(() => setLoading(false));
+          remove();
+          refetch();
         }}
-        disabled={loading}
+        disabled={isLoading}
       >
-        {loading ? "Loading..." : "Get Config Schema"}
+        {isLoading ? "Loading..." : "Get config schema"}
       </button>
     </div>
   );

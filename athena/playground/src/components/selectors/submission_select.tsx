@@ -1,33 +1,26 @@
-import type { Mode } from "@/model/mode";
 import type { ProgrammingSubmission, Submission, TextSubmission } from "@/model/submission";
+import type { Exercise } from "@/model/exercise";
 
-import useSWR from "swr";
-import fetcher from "@/helpers/fetcher";
-import baseUrl from "@/helpers/base_url";
+import useSubmissions from "@/hooks/playground/submissions";
 
 type SubmissionSelectProps = {
-  mode: Mode;
-  exercise_id?: number;
+  exercise?: Exercise;
   submission?: Submission;
   onChange: (submission: Submission) => void;
   isAllSubmissions?: boolean;
   setIsAllSubmissions?: (isAllSubmissions: boolean) => void;
+  disabled?: boolean;
 };
 
 export default function SubmissionSelect({
-  mode,
-  exercise_id,
+  exercise,
   submission,
   onChange,
   isAllSubmissions,
   setIsAllSubmissions,
+  disabled,
 }: SubmissionSelectProps) {
-  const apiURL = `${baseUrl}/api/mode/${mode}/${
-    exercise_id === undefined
-      ? "submissions"
-      : `exercise/${exercise_id}/submissions`
-  }`;
-  const { data, error, isLoading } = useSWR(apiURL, fetcher);
+  const { data, error, isLoading } = useSubmissions(exercise);
   if (error) return <div className="text-red-500 text-sm">Failed to load</div>;
   if (isLoading) return <div className="text-gray-500 text-sm">Loading...</div>;
 
@@ -37,16 +30,13 @@ export default function SubmissionSelect({
       <select
         className="border border-gray-300 rounded-md p-2"
         value={isAllSubmissions ? "all" : submission?.id || ""}
+        disabled={disabled}
         onChange={(e) => {
           const value = e.target.value;
           if (value === "all") {
             setIsAllSubmissions!(true);
           } else {
-            onChange(
-              data.find(
-                (sub: Submission) => sub.id === parseInt(e.target.value)
-              )
-            );
+            onChange(data!.find((sub: Submission) => sub.id === parseInt(e.target.value))!);
             if (setIsAllSubmissions) setIsAllSubmissions(false);
           }
         }}
@@ -64,7 +54,7 @@ export default function SubmissionSelect({
               ✨ All submissions
             </option>
           )}
-        {data.map((sub: Submission) => {
+        {data?.map((sub: Submission) => {
           const contentPreview =
             (sub as TextSubmission)?.content ||
             (sub as ProgrammingSubmission)?.repository_url ||

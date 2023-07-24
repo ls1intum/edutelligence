@@ -22,9 +22,9 @@ export default function DescriptionField<
   }
   if (typeof description === 'string') {
     return (
-      <p id={id} className='field-description'>
+      <div id={id} className='field-description'>
         <ReactMarkdown>{description}</ReactMarkdown>
-      </p>
+      </div>
     );
   } else {
     return (
