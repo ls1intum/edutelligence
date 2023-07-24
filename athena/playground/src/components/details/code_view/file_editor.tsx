@@ -96,8 +96,7 @@ export default function FileEditor({
       feedbackRanges?.flatMap((range, index) => (
         range ? [{
           options: {
-            inlineClassName: twMerge("rounded-md py-1", 
-              feedbacks![index].credits < 0 ? "bg-red-100 text-red-800" : feedbacks![index].credits > 0 ? "bg-green-100 text-green-800" : "bg-gray-100 text-gray-800"),
+            inlineClassName: `inline-feedback-text ${feedbacks![index].credits < 0 ? "negative" : feedbacks![index].credits > 0 ? "positive" : "neutral"}`,
           },
           range,
         }] : [])) ?? []

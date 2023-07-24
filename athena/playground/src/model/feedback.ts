@@ -80,9 +80,9 @@ export function getFeedbackRange(content: string, feedback: Feedback): IRange | 
     const linesBeforeEnd = content.slice(0, feedback.index_end ?? feedback.index_start).split("\n");
     return {
       startLineNumber: linesBeforeStart.length,
-      startColumn: linesBeforeStart[linesBeforeStart.length - 1].length,
+      startColumn: linesBeforeStart[linesBeforeStart.length - 1].length + 1,
       endLineNumber: linesBeforeEnd.length,
-      endColumn: linesBeforeEnd[linesBeforeEnd.length - 1].length,
+      endColumn: linesBeforeEnd[linesBeforeEnd.length - 1].length + 1 ,
     }
   }
   return undefined;

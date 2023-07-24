@@ -125,3 +125,20 @@ body {
     @apply text-lg font-semibold text-red-700;
   }
 }
+
+@layer components {
+  .monaco-editor .inline-feedback-text {
+    @apply rounded py-0.5;
+  }
+  .monaco-editor .inline-feedback-text.positive {
+    @apply bg-green-200/50 text-green-800 !important;
+  }
+  .monaco-editor .inline-feedback-text.negative {
+    @apply bg-red-200/50 text-red-800 !important;
+  }
+  .monaco-editor .inline-feedback-text.neutral {
+    @apply bg-gray-200/50 text-gray-800 !important;
+  }
+}
+inlineClassName: twMerge("rounded-md py-0.5 bg-opacity-50", 
+              feedbacks![index].credits < 0 ? "bg-red-200 text-red-800" : feedbacks![index].credits > 0 ? "bg-green-200 text-green-800" : "bg-gray-200 text-gray-800"),
