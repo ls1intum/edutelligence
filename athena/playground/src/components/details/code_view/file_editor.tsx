@@ -163,9 +163,7 @@ export default function FileEditor({
       },
       {
         range: new monaco.Range(hoverPosition.lineNumber, hoverPosition.column, hoverPosition.lineNumber, hoverPosition.column),
-        options: {
-          linesDecorationsClassName: 'comment-range-button',
-        },
+        options: { linesDecorationsClassName: 'comment-range-button',},
       }];
       const newAddFeedbackDecorationsCollection = editorRef.current.createDecorationsCollection(decorations);
       setAddFeedbackDecorationsCollection(newAddFeedbackDecorationsCollection);
