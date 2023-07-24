@@ -104,41 +104,42 @@ export default function InlineFeedback({
             )}
           </div>
         </div>
-
-        <div className="flex flex-col space-y-1 w-24">
-          <button
-            className={twMerge(
-              "bg-red-100 text-red-800 rounded px-2 py-0.5 hover:bg-red-200 hover:text-red-900",
-              confirmDelete
-                ? "bg-red-500 text-white hover:bg-red-600 hover:text-white"
-                : ""
-            )}
-            onClick={() => {
-              if (confirmDelete) {
-                onFeedbackChange(undefined);
-              } else {
-                setConfirmDelete(true);
-                setTimeout(() => setConfirmDelete(false), 2000);
-              }
-            }}
-          >
-            {confirmDelete ? "Confirm" : "Delete"}
-          </button>
-          <button
-            className={twMerge(
-              "rounded px-2 py-0.5",
-              isEditing
-                ? "bg-primary-100 text-primary-800 hover:bg-primary-200 hover:text-primary-900"
-                : "bg-yellow-100 text-yellow-800 hover:bg-yellow-200 hover:text-yellow-900"
-            )}
-            onClick={() => {
-              setIsEditing(!isEditing);
-              setConfirmDelete(false);
-            }}
-          >
-            {isEditing ? "Save" : "Edit"}
-          </button>
-        </div>
+        {onFeedbackChange && (
+          <div className="flex flex-col space-y-1 w-24">
+            <button
+              className={twMerge(
+                "bg-red-100 text-red-800 rounded px-2 py-0.5 hover:bg-red-200 hover:text-red-900",
+                confirmDelete
+                  ? "bg-red-500 text-white hover:bg-red-600 hover:text-white"
+                  : ""
+              )}
+              onClick={() => {
+                if (confirmDelete) {
+                  onFeedbackChange(undefined);
+                } else {
+                  setConfirmDelete(true);
+                  setTimeout(() => setConfirmDelete(false), 2000);
+                }
+              }}
+            >
+              {confirmDelete ? "Confirm" : "Delete"}
+            </button>
+            <button
+              className={twMerge(
+                "rounded px-2 py-0.5",
+                isEditing
+                  ? "bg-primary-100 text-primary-800 hover:bg-primary-200 hover:text-primary-900"
+                  : "bg-yellow-100 text-yellow-800 hover:bg-yellow-200 hover:text-yellow-900"
+              )}
+              onClick={() => {
+                setIsEditing(!isEditing);
+                setConfirmDelete(false);
+              }}
+            >
+              {isEditing ? "Save" : "Edit"}
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );
