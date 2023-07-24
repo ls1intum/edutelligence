@@ -38,10 +38,11 @@ export default function CodeView({ repository_url }: CodeViewProps) {
         <Allotment.Pane>
           {fileContent ? (
             <FileEditor
+              type="programming"
               content={fileContent}
               filePath={selectedFile}
               feedbacks={undefined}
-              onFeedbackChange={() => {}}
+              onFeedbacksChange={() => undefined}
             />
           ) : (
             <div className="h-full w-full flex items-center justify-center">

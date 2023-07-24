@@ -1,9 +1,12 @@
-import { Feedback, getFeedbackRange } from "@/model/feedback";
+import type { Feedback, TextFeedback } from "@/model/feedback";
+
 import { useEffect, useId, useMemo, useRef, useState } from "react";
-import { Monaco, Editor, useMonaco } from "@monaco-editor/react";
-import { Position, Selection, editor } from "monaco-editor";
+import { Editor, Monaco, useMonaco } from "@monaco-editor/react";
+import { IRange, Position, Selection, editor } from "monaco-editor";
 import * as portals from "react-reverse-portal";
 import { createRoot } from "react-dom/client";
+
+import { getFeedbackRange } from "@/model/feedback";
 import InlineFeedback from "./inline_feedback";
 
 type FileEditorProps = {
@@ -11,6 +14,7 @@ type FileEditorProps = {
   filePath?: string;
   feedbacks?: Feedback[];
   onFeedbacksChange?: (feedback: Feedback[]) => void;
+  createNewFeedback?: (range: IRange) => Feedback;
 };
 
 export default function FileEditor({
@@ -18,6 +22,7 @@ export default function FileEditor({
   filePath,
   feedbacks,
   onFeedbacksChange,
+  createNewFeedback,
 }: FileEditorProps) {
   const editorRef = useRef<editor.IStandaloneCodeEditor>();
   const monaco = useMonaco();
@@ -39,6 +44,12 @@ export default function FileEditor({
     addFeedbackDecorationsCollection,
     setAddFeedbackDecorationsCollection,
   ] = useState<editor.IEditorDecorationsCollection | undefined>(undefined);
+
+  const isAddFeedbackPressed = useRef(false);
+
+  const addFeedbackPressed = () => {
+    
+  };
 
   useEffect(() => {
     if (monaco) {
@@ -140,14 +151,18 @@ export default function FileEditor({
     });
 
     editor.onMouseDown(function (e) {
-      console.log(e.target);
-      if (e.target.type === monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN) {
-        // const lineNumber = e.target.position?.lineNumber;
-        // if(lineNumber && hoverLineNumber === lineNumber) {
-        //     console.log('Glyph margin clicked at line ' + lineNumber);
-        //     // Add your logic to create a comment here...
-        // }
+      if (e.target.element?.className.includes("comment-range-button")) {
+        isAddFeedbackPressed.current = true;
       }
+    });
+
+    editor.onMouseUp(function (e) {
+      if (e.target.element?.className.includes("comment-range-button")) {
+        if (isAddFeedbackPressed.current) {
+          addFeedbackPressed();
+        }
+      }
+      isAddFeedbackPressed.current = false;
     });
   };
 

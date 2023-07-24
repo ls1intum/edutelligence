@@ -15,7 +15,7 @@ export default function TextSubmissionDetail({
 }: TextSubmissionDetailProps) {
   return (
     <>
-      <FileEditor content={submission.content} feedbacks={feedbacks} onFeedbackChange={() => {}} />
+      <FileEditor content={submission.content} feedbacks={feedbacks} onFeedbacksChange={() => {}} />
       {feedbacks && feedbacks.length > 0 && (
         <div className="space-y-1 mt-2">
           {feedbacks.map((feedback) => (

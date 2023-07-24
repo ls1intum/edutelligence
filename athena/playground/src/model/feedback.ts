@@ -1,7 +1,7 @@
 import type { IRange } from "monaco-editor";
 
 type FeedbackBase = {
-  id: number;
+  id?: number;
   title: string;
   description: string;
   credits: number;
