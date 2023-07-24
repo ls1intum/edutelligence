@@ -6,7 +6,6 @@ body {
   background: black;
 }
 
-
 /* Styling for the rjsf form with className="schema-form" */
 @layer utilities {
   .border-input {
@@ -85,16 +84,16 @@ body {
     @apply font-normal not-italic;
   }
   .schema-form .glyphicon-remove::before {
-    content: 'Remove';
+    content: "Remove";
   }
   .schema-form .glyphicon-arrow-up::before {
-    content: 'Up';
+    content: "Up";
   }
   .schema-form .glyphicon-arrow-down::before {
-    content: 'Down';
+    content: "Down";
   }
   .schema-form .glyphicon-plus::before {
-    content: 'Add';
+    content: "Add";
   }
   /* Buttons (tends to be icon buttons) */
   .schema-form .btn {
@@ -106,7 +105,7 @@ body {
   .schema-form .btn-add {
     @apply border-primary-200;
   }
-  .schema-form button[type='submit'] {
+  .schema-form button[type="submit"] {
     @apply bg-primary-500 text-white hover:bg-primary-600;
   }
   .schema-form .text-danger {
@@ -118,7 +117,7 @@ body {
   .schema-form .field-description {
     @apply prose prose-sm leading-snug max-w-none prose-slate;
   }
-  .schema-form .panel.panel-danger.errors { 
+  .schema-form .panel.panel-danger.errors {
     @apply bg-red-100 border border-red-400 rounded-md shadow-sm px-4 py-2 my-2;
   }
   .schema-form .panel.panel-danger.errors .panel-heading {
@@ -140,5 +139,3 @@ body {
     @apply bg-gray-200/50 text-gray-800 !important;
   }
 }
-inlineClassName: twMerge("rounded-md py-0.5 bg-opacity-50", 
-              feedbacks![index].credits < 0 ? "bg-red-200 text-red-800" : feedbacks![index].credits > 0 ? "bg-green-200 text-green-800" : "bg-gray-200 text-gray-800"),
