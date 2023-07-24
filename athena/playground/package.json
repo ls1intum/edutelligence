@@ -35,6 +35,7 @@
     "react-dom": "18.2.0",
     "react-markdown": "^8.0.7",
     "react-reverse-portal": "^2.1.1",
+    "react-textarea-autosize": "^8.5.2",
     "rehype-raw": "^6.1.1",
     "swr": "^2.1.3",
     "tailwind-merge": "^1.13.2",
