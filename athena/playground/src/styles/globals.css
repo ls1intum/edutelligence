@@ -138,4 +138,21 @@ body {
   .monaco-editor .inline-feedback-text.neutral {
     @apply bg-gray-200/50 text-gray-800 !important;
   }
+
+  .monaco-editor .comment-range-glyph::before {
+    content: "\2b";
+    font-family: FontAwesome 6;
+    border-radius: 3px;
+    width: 18px!important;
+    height: 18px!important;
+    z-index: 10;
+    color: red;
+    background: gray;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    top: 50%;
+    transform: translateY(-50%);
+  }
 }

@@ -26,6 +26,9 @@ export default function FileEditor({
   const portalNodes = useMemo(() => feedbacks?.map(() => portals.createHtmlPortalNode()), [feedbacks]);
   const resizeObservers = useRef<(ResizeObserver | null)[]>([]);
   const [decorationsCollection, setDecorationsCollection] = useState<editor.IEditorDecorationsCollection | undefined>(undefined);
+  const [hoverLineNumber, setHoverLineNumber] = useState<number | undefined>(undefined);
+  const [hoverGlyphDecorationsCollection, setHoverGlyphDecorationsCollection] = useState<editor.IEditorDecorationsCollection | undefined>(undefined);
+
 
   useEffect(() => {
     if (monaco) {
@@ -101,7 +104,52 @@ export default function FileEditor({
         }] : [])) ?? []
     );
     setDecorationsCollection(newDecorationsCollection);
+
+    editor.onMouseMove(function(e) {
+      setHoverLineNumber(e.target.position?.lineNumber);
+    });
+
+    editor.onDidChangeCursorSelection(function(e) {
+      setHoverLineNumber(e.selection.endLineNumber);
+    });
+  
+    editor.onMouseDown(function(e) {
+      console.log(e.target)
+        if (e.target.type === monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN) {
+            const lineNumber = e.target.position?.lineNumber;
+            if(lineNumber && hoverLineNumber === lineNumber) {
+                console.log('Glyph margin clicked at line ' + lineNumber);
+                // Add your logic to create a comment here...
+            }
+        }
+    });
   }
+
+  useEffect(() => {
+    console.log(hoverLineNumber)
+    if (!editorRef.current || !monaco) {
+      return;
+    }
+
+    if (hoverGlyphDecorationsCollection) {
+      hoverGlyphDecorationsCollection.clear();
+    }
+    if (hoverLineNumber === undefined) {
+      setHoverGlyphDecorationsCollection(undefined);
+      return;
+    }
+
+    const newHoverGlyphDecorationsCollection = editorRef.current.createDecorationsCollection([
+      {
+        range: new monaco.Range(hoverLineNumber, 1, hoverLineNumber, 1),
+        options: {
+          isWholeLine: true,
+          linesDecorationsClassName: 'comment-range-glyph',
+        },
+      }
+    ]);
+    setHoverGlyphDecorationsCollection(newHoverGlyphDecorationsCollection);
+  }, [hoverLineNumber]);
 
   // Cleanup on unmount
   useEffect(() => {
@@ -113,6 +161,7 @@ export default function FileEditor({
       resizeObservers.current = [];
     };
   }, []);
+
 
   return <div className="h-[50vh]">
   <Editor
@@ -126,6 +175,8 @@ export default function FileEditor({
         enabled: false,
       },
       readOnly: true,
+      lineDecorationsWidth: 20,
+      folding: false,
     }}
     value={content}
     path={filePath}
