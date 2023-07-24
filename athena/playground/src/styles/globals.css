@@ -138,21 +138,23 @@ body {
   .monaco-editor .inline-feedback-text.neutral {
     @apply bg-gray-200/50 text-gray-800 !important;
   }
-
+  /* Styling the comment range glyph */
+  /* Plus button */
   .monaco-editor .comment-range-glyph::before {
-    content: "\2b";
-    font-family: FontAwesome 6;
-    border-radius: 3px;
-    width: 18px!important;
-    height: 18px!important;
-    z-index: 10;
-    color: red;
-    background: gray;
+    margin-left: 1px;
+    content: "\ea60";
+    font-family: codicon;
+    width: 18px !important;
+    height: 18px !important;
     display: flex;
     align-items: center;
     justify-content: center;
-    position: relative;
-    top: 50%;
-    transform: translateY(-50%);
+    @apply rounded bg-gray-200 text-gray-700 z-10 hover:bg-gray-300 hover:text-gray-800;
+  }
+  /* Line range */
+  .monaco-editor .comment-range {
+    height: 17px !important;
+    transform: translateX(calc(50% - 1px));
+    @apply border-dotted border-l-2 border-gray-300;
   }
 }

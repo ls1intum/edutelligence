@@ -1,7 +1,7 @@
 import { Feedback, getFeedbackRange } from "@/model/feedback";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Monaco, Editor, useMonaco } from "@monaco-editor/react";
-import { editor } from "monaco-editor";
+import { Position, Selection, editor } from "monaco-editor";
 import * as portals from 'react-reverse-portal';
 import { createRoot } from "react-dom/client";
 import InlineFeedback from "./inline_feedback";
@@ -26,9 +26,9 @@ export default function FileEditor({
   const portalNodes = useMemo(() => feedbacks?.map(() => portals.createHtmlPortalNode()), [feedbacks]);
   const resizeObservers = useRef<(ResizeObserver | null)[]>([]);
   const [decorationsCollection, setDecorationsCollection] = useState<editor.IEditorDecorationsCollection | undefined>(undefined);
-  const [hoverLineNumber, setHoverLineNumber] = useState<number | undefined>(undefined);
-  const [hoverGlyphDecorationsCollection, setHoverGlyphDecorationsCollection] = useState<editor.IEditorDecorationsCollection | undefined>(undefined);
-
+  const [hoverPosition, setHoverPosition] = useState<Position | undefined>(undefined);
+  const [selection, setSelection] = useState<Selection | undefined>(undefined);
+  const [addFeedbackDecorationsCollection, setAddFeedbackDecorationsCollection] = useState<editor.IEditorDecorationsCollection | undefined>(undefined);
 
   useEffect(() => {
     if (monaco) {
@@ -106,50 +106,73 @@ export default function FileEditor({
     setDecorationsCollection(newDecorationsCollection);
 
     editor.onMouseMove(function(e) {
-      setHoverLineNumber(e.target.position?.lineNumber);
+      setHoverPosition(e.target.position ?? undefined);
     });
 
     editor.onDidChangeCursorSelection(function(e) {
-      setHoverLineNumber(e.selection.endLineNumber);
+      setSelection(e.selection);
     });
   
     editor.onMouseDown(function(e) {
       console.log(e.target)
         if (e.target.type === monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN) {
-            const lineNumber = e.target.position?.lineNumber;
-            if(lineNumber && hoverLineNumber === lineNumber) {
-                console.log('Glyph margin clicked at line ' + lineNumber);
-                // Add your logic to create a comment here...
-            }
+            // const lineNumber = e.target.position?.lineNumber;
+            // if(lineNumber && hoverLineNumber === lineNumber) {
+            //     console.log('Glyph margin clicked at line ' + lineNumber);
+            //     // Add your logic to create a comment here...
+            // }
         }
     });
   }
 
   useEffect(() => {
-    console.log(hoverLineNumber)
     if (!editorRef.current || !monaco) {
       return;
     }
 
-    if (hoverGlyphDecorationsCollection) {
-      hoverGlyphDecorationsCollection.clear();
+    if (addFeedbackDecorationsCollection) {
+      addFeedbackDecorationsCollection.clear();
     }
-    if (hoverLineNumber === undefined) {
-      setHoverGlyphDecorationsCollection(undefined);
+    if (hoverPosition === undefined && selection === undefined) {
+      setAddFeedbackDecorationsCollection(undefined);
       return;
     }
 
-    const newHoverGlyphDecorationsCollection = editorRef.current.createDecorationsCollection([
-      {
-        range: new monaco.Range(hoverLineNumber, 1, hoverLineNumber, 1),
+    if (selection && !selection.isEmpty()) {
+      const decorations: editor.IModelDeltaDecoration[] = [{
+        range: new monaco.Range(selection.startLineNumber, selection.startColumn, selection.endLineNumber, selection.endColumn),
         options: {
-          isWholeLine: true,
+          linesDecorationsClassName: 'comment-range',
+        },
+      },
+      {
+        range: new monaco.Range(selection.endLineNumber, selection.endColumn, selection.endLineNumber, selection.endColumn),
+        options: {
           linesDecorationsClassName: 'comment-range-glyph',
         },
-      }
-    ]);
-    setHoverGlyphDecorationsCollection(newHoverGlyphDecorationsCollection);
-  }, [hoverLineNumber]);
+      }];
+      const newAddFeedbackDecorationsCollection = editorRef.current.createDecorationsCollection(decorations);
+      setAddFeedbackDecorationsCollection(newAddFeedbackDecorationsCollection);
+    } else if (hoverPosition) {
+      const decorations: editor.IModelDeltaDecoration[] = [{
+        range: new monaco.Range(hoverPosition.lineNumber, 1, hoverPosition.lineNumber, 1),
+        options: {
+          isWholeLine: true,
+          linesDecorationsClassName: 'comment-range',
+        },
+      },
+      {
+        range: new monaco.Range(hoverPosition.lineNumber, hoverPosition.column, hoverPosition.lineNumber, hoverPosition.column),
+        options: {
+          linesDecorationsClassName: 'comment-range-glyph',
+        },
+      }];
+      const newAddFeedbackDecorationsCollection = editorRef.current.createDecorationsCollection(decorations);
+      setAddFeedbackDecorationsCollection(newAddFeedbackDecorationsCollection);
+    } else {
+      setAddFeedbackDecorationsCollection(undefined);
+    }
+  }, [hoverPosition, selection]);
 
   // Cleanup on unmount
   useEffect(() => {
@@ -177,6 +200,7 @@ export default function FileEditor({
       readOnly: true,
       lineDecorationsWidth: 20,
       folding: false,
+      wordWrap: "on"
     }}
     value={content}
     path={filePath}
