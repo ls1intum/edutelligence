@@ -138,9 +138,9 @@ body {
   .monaco-editor .inline-feedback-text.neutral {
     @apply bg-gray-200/50 text-gray-800 !important;
   }
-  /* Styling the comment range glyph */
+  /* Styling the comment range button */
   /* Plus button */
-  .monaco-editor .comment-range-glyph::before {
+  .monaco-editor .comment-range-button::before {
     margin-left: 1px;
     content: "\ea60";
     font-family: codicon;

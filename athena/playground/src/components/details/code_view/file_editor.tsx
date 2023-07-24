@@ -148,7 +148,7 @@ export default function FileEditor({
       {
         range: new monaco.Range(selection.endLineNumber, selection.endColumn, selection.endLineNumber, selection.endColumn),
         options: {
-          linesDecorationsClassName: 'comment-range-glyph',
+          linesDecorationsClassName: 'comment-range-button',
         },
       }];
       const newAddFeedbackDecorationsCollection = editorRef.current.createDecorationsCollection(decorations);
@@ -164,7 +164,7 @@ export default function FileEditor({
       {
         range: new monaco.Range(hoverPosition.lineNumber, hoverPosition.column, hoverPosition.lineNumber, hoverPosition.column),
         options: {
-          linesDecorationsClassName: 'comment-range-glyph',
+          linesDecorationsClassName: 'comment-range-button',
         },
       }];
       const newAddFeedbackDecorationsCollection = editorRef.current.createDecorationsCollection(decorations);
