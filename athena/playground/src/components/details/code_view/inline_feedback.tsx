@@ -69,7 +69,7 @@ export default function InlineFeedback({
                 onFeedbackChange(undefined);
               } else {
                 setConfirmDelete(true);
-                setTimeout(() => setConfirmDelete(false), 3000);
+                setTimeout(() => setConfirmDelete(false), 2000);
               }
             }}
           >
