@@ -5,20 +5,19 @@ import { editor } from "monaco-editor";
 import * as portals from 'react-reverse-portal';
 import { createRoot } from "react-dom/client";
 import InlineFeedback from "./inline_feedback";
-import { twMerge } from "tailwind-merge";
 
 type FileEditorProps = {
   content: string;
   filePath?: string;
   feedbacks?: Feedback[];
-  onFeedbackChange: (feedback: Feedback[]) => void;
+  onFeedbacksChange?: (feedback: Feedback[]) => void;
 };
 
 export default function FileEditor({
   content,
   filePath,
   feedbacks,
-  onFeedbackChange,
+  onFeedbacksChange,
 }: FileEditorProps) {
   const editorRef = useRef<editor.IStandaloneCodeEditor>();
   const monaco = useMonaco();
@@ -137,7 +136,15 @@ export default function FileEditor({
     return portalNodes[index] && (
       <portals.InPortal node={portalNodes[index]} key={feedback.id}>
         <div className="mr-4">
-          <InlineFeedback feedback={feedback} onFeedbackChange={undefined} />
+          <InlineFeedback feedback={feedback} onFeedbackChange={onFeedbacksChange && (
+            newFeedback => {
+              if (newFeedback) {
+                onFeedbacksChange(feedbacks.map(f => f.id === feedback.id ? newFeedback : f));
+              } else {
+                onFeedbacksChange(feedbacks.filter(f => f.id !== feedback.id));
+              }
+            })
+          } />
         </div>
       </portals.InPortal>
     );
