@@ -1,9 +1,9 @@
-import useSWR from "swr";
+import type { Mode } from "@/model/mode";
+import type { Exercise } from "@/model/exercise";
+import type { Submission } from "@/model/submission";
+import type { Feedback } from "@/model/feedback";
 
-import { Mode } from "@/model/mode";
-import { Exercise } from "@/model/exercise";
-import { Submission } from "@/model/submission";
-import Feedback from "@/model/feedback";
+import useSWR from "swr";
 
 import baseUrl from "@/helpers/base_url";
 import fetcher from "@/helpers/fetcher";

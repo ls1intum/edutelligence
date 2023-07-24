@@ -1,8 +1,10 @@
+import type { Feedback } from "@/model/feedback";
+import type { Mode } from "@/model/mode";
+
 import useSWR from "swr";
-import Feedback from "@/model/feedback";
+
 import fetcher from "@/helpers/fetcher";
 import baseUrl from "@/helpers/base_url";
-import { Mode } from "@/model/mode";
 
 type FeedbackSelectProps = {
   mode: Mode;
@@ -72,9 +74,9 @@ export default function FeedbackSelect({
             ✨ All feedback
             </option>
           )}
-        {filteredFeedbacks.map((fb: Feedback) => (
-          <option key={fb.id} value={fb.id}>
-            {fb.id} ({fb.credits} credits) {fb.text || fb.detail_text || "N/A"}
+        {filteredFeedbacks.map((feedback: Feedback) => (
+          <option key={feedback.id} value={feedback.id}>
+            {feedback.id} ({feedback.credits} credits) {feedback.title || feedback.description || "N/A"}
           </option>
         ))}
       </select>

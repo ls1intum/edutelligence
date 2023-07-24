@@ -18,17 +18,24 @@
       "id": 101,
       "repository_url": "{{exerciseDataUrl}}/submissions/101.zip",
       "meta": {},
-
       "feedbacks": [
         {
           "id": 101,
-          "detail_text": "Your program does not print \"Hello World\" to the console.",
+          "title": "File BinarySearch.java at line 20",
+          "description": "Your program does not print \"Hello World\" to the console.",
+          "file_path": "BinarySearch.java",
+          "line_start": 20,
+          "line_end": null,
           "credits": -2.0,
           "meta": {}
         },
         {
           "id": 102,
-          "detail_text": "You're missing a semicolon at the end of the line.",
+          "title": "File BinarySearch.java at line 16",
+          "description": "You're missing a semicolon at the end of the line.",
+          "file_path": "BinarySearch.java",
+          "line_start": 16,
+          "line_end": null,
           "credits": -2.0,
           "meta": {}
         }
@@ -42,7 +49,39 @@
     {
       "id": 103,
       "repository_url": "{{exerciseDataUrl}}/submissions/103.zip",
-      "meta": {}
+      "meta": {},
+      "feedbacks": [
+        {
+          "id": 103,
+          "title": "File src/mttpe1/BubbleSort.java at line 13 to 20",
+          "description": "Well done! You are sorting the array correctly.",
+          "file_path": "src/mttpe1/BubbleSort.java",
+          "line_start": 13,
+          "line_end": 20,
+          "credits": 2.0,
+          "meta": {}
+        },
+        {
+          "id": 104,
+          "title": "File src/mttpe1/BubbleSort.java",
+          "description": "Good job! With BubbleSort overall",
+          "file_path": "src/mttpe1/BubbleSort.java",
+          "line_start": null,
+          "line_end": null,
+          "credits": 1.0,
+          "meta": {}
+        },
+        {
+          "id": 105,
+          "title": "Feedback",
+          "description": "Great submission!",
+          "file_path": null,
+          "line_start": null,
+          "line_end": null,
+          "credits": 3.0,
+          "meta": {}
+        }
+      ]
     }
   ]
 }

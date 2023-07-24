@@ -1,10 +1,7 @@
+import type { Mode } from "@/model/mode";
+import type { ProgrammingSubmission, Submission, TextSubmission } from "@/model/submission";
+
 import useSWR from "swr";
-import {
-  ProgrammingSubmission,
-  Submission,
-  TextSubmission,
-} from "@/model/submission";
-import { Mode } from "@/model/mode";
 import fetcher from "@/helpers/fetcher";
 import baseUrl from "@/helpers/base_url";
 

@@ -1,11 +1,12 @@
+import type { Exercise } from "@/model/exercise";
+import type { Submission } from "@/model/submission";
+import type { Feedback } from "@/model/feedback";
+import type { Mode } from "@/model/mode";
+
 import path from "path";
 import fs from "fs";
 
-import { Exercise } from "@/model/exercise";
-import { Submission } from "@/model/submission";
-import Feedback from "@/model/feedback";
 import baseUrl from "@/helpers/base_url";
-import { Mode } from "@/model/mode";
 
 function replaceJsonPlaceholders(
   mode: Mode,
@@ -140,13 +141,24 @@ function jsonToFeedbacks(json: any): Feedback[] {
         // submission_id is not provided in the json for convenience, so we add it here
         feedback.submission_id = submissionJson.id;
 
-        // replace text and detail_text with undefined if they are not strings (null somehow gets parsed as {})
-        if (typeof feedback.text !== "string") {
-          feedback.text = undefined;
+        // replace title and description with "" if they are not strings (null somehow gets parsed as {})
+        if (typeof feedback.title !== "string") {
+          feedback.title = "";
         }
-        if (typeof feedback.detail_text !== "string") {
-          feedback.detail_text = undefined;
+        if (typeof feedback.description !== "string") {
+          feedback.description = "";
         }
+
+        // replace index_start, index_end, line_start, line_end with undefined if they are not numbers (null somehow gets parsed as {})
+        ["index_start", "index_end", "line_start", "line_end"].forEach(
+          (key) => {
+            // @ts-ignore
+            if (typeof feedback[key] !== "number") {
+              // @ts-ignore
+              feedback[key] = undefined;
+            }
+          }
+        );
 
         return feedback;
       });

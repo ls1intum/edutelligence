@@ -1,4 +1,4 @@
-import { NextApiRequest } from "next/types";
+import type { NextApiRequest } from "next/types";
 
 export default function getOriginFromRequest(req: NextApiRequest): string {
   const host = req.headers.host;

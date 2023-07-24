@@ -26,11 +26,27 @@ def get_stored_feedback_meta(feedback: Feedback) -> Optional[dict]:
         return db.query(db_feedback_cls.meta).filter_by(id=feedback.id).scalar()  # type: ignore
 
 
-def store_feedback(feedback: Feedback):
-    """Stores the given feedback."""
+def store_feedback(feedback: Feedback, is_lms_id=False) -> Feedback:
+    """Stores the given LMS feedback.
+
+    Args:
+        feedback (Feedback): The feedback to store.
+        is_lms_id (bool, optional): Whether the feedback's ID is an LMS ID. Defaults to False.
+    
+    Returns:
+        Feedback: The stored feedback with its internal ID assigned.
+    """
+    db_feedback_cls = feedback.__class__.get_model_class()
     with get_db() as db:
-        db.merge(feedback.to_model())
+        lms_id = None
+        if is_lms_id:
+            lms_id = feedback.id
+            internal_id = db.query(db_feedback_cls.id).filter_by(lms_id=lms_id).scalar()  # type: ignore
+            feedback.id = internal_id
+
+        stored_feedback_model = db.merge(feedback.to_model(lms_id=lms_id))
         db.commit()
+        return stored_feedback_model.to_schema()
 
 
 def get_stored_feedback_suggestions(
@@ -45,12 +61,20 @@ def get_stored_feedback_suggestions(
         return (f.to_schema() for f in query.all())
 
 
-def store_feedback_suggestions(feedbacks: List[Feedback]):
-    """Stores the given feedbacks as a suggestions."""
+def store_feedback_suggestions(feedbacks: List[Feedback]) -> List[Feedback]:
+    """Stores the given feedbacks as a suggestions.
+
+    Returns:
+        List[Feedback]: The stored feedback suggestions with their internal IDs assigned.
+    """
+    stored_feedbacks: List[Feedback] = []
     with get_db() as db:
         for feedback in feedbacks:
-            db.merge(feedback.to_model(is_suggestion=True))
+            stored_feedback_model = db.merge(feedback.to_model(is_suggestion=True))
+            db.flush() # Ensure the ID is generated now
+            stored_feedbacks.append(stored_feedback_model.to_schema())
         db.commit()
+    return stored_feedbacks
 
 
 def store_feedback_suggestion(feedback: Feedback):

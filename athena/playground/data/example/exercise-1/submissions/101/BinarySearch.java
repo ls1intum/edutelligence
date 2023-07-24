@@ -13,7 +13,7 @@ public class BinarySearch implements SearchStrategy {
             if (result == 0)
                 return chapters.get(theMiddle).getPageNumber();
             if (result > 0)
-                small = theMiddle + 1;
+                small = theMiddle + 1
             else
                 large = theMiddle - 1;
         }

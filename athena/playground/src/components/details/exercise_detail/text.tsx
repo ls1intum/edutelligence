@@ -1,4 +1,5 @@
-import { TextExercise } from "@/model/exercise";
+import type { TextExercise } from "@/model/exercise";
+
 import Markdown from "@/components/markdown";
 import Disclosure from "@/components/disclosure";
 

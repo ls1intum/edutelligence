@@ -1,4 +1,4 @@
-import { Mode } from "@/model/mode";
+import type { Mode } from "@/model/mode";
 
 export default function DataSelect({
   mode,
