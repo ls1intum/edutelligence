@@ -71,9 +71,11 @@ export default function InlineFeedback({
                 {feedback.title ? feedback.title : <i>Missing title</i>}
               </span>
             )}
-            <span className="text-xs text-gray-500 rounded-full px-2 py-0.5 bg-gray-100">
-              Suggestion
-            </span>
+            {feedback.is_suggestion && (
+              <span className="text-xs text-fuchsia-500 rounded-full px-2 py-0.5 bg-fuchsia-100">
+                Suggestion
+              </span>
+            )}
           </div>
           <div>
             {isEditing ? (
