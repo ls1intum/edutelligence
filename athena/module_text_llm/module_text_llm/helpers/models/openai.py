@@ -223,9 +223,9 @@ openai_models = {
 available_deployments = _get_available_deployments(openai_models, _model_aliases)
 available_models = _get_available_models(openai_models, available_deployments)
 
+logger.info("Available openai models: %s", ", ".join(available_models.keys()))
 
 OpenAIModel = Enum('OpenAIModel', {name: name for name in available_models})  # type: ignore
-
 
 default_openai_model = OpenAIModel[os.environ.get("LLM_DEFAULT_MODEL", "gpt-3.5-turbo")]
 
@@ -307,6 +307,3 @@ decreasing the model's likelihood to repeat the same line verbatim.
         # Initialize a copy of the model using the config
         model = model.__class__(**kwargs)
         return model
-
-
-logger.info("Available openai models: %s", ", ".join(available_models.keys()))
