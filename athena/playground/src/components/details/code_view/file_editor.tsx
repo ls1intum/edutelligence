@@ -22,21 +22,24 @@ export default function FileEditor({
   feedbacks,
   onFeedbacksChange,
 }: FileEditorProps) {
+  // Only render feedbacks that are relevant to the current file
+  // Unreferenced feedbacks are always shown
+  const feedbacksToRender = feedbacks?.filter((feedback) => {
+    if ("file_path" in feedback) {
+      return feedback.file_path === filePath;
+    } else {
+      return true;
+    }
+  });
+
   const editorRef = useRef<editor.IStandaloneCodeEditor>();
   const monaco = useMonaco();
 
   const id = useId();
-  const portalNodes = useMemo(
-    () => feedbacks?.map(() => portals.createHtmlPortalNode()),
-    [feedbacks]
-  );
+  const portalNodes = useMemo(() => feedbacksToRender?.map(() => portals.createHtmlPortalNode()), [feedbacks]);
   const resizeObservers = useRef<(ResizeObserver | null)[]>([]);
-  const [decorationsCollection, setDecorationsCollection] = useState<
-    editor.IEditorDecorationsCollection | undefined
-  >(undefined);
-  const [hoverPosition, setHoverPosition] = useState<Position | undefined>(
-    undefined
-  );
+  const [decorationsCollection, setDecorationsCollection] = useState<editor.IEditorDecorationsCollection | undefined>(undefined);
+  const [hoverPosition, setHoverPosition] = useState<Position | undefined>(undefined);
   const [selection, setSelection] = useState<Selection | undefined>(undefined);
   const [
     addFeedbackDecorationsCollection,
@@ -46,19 +49,16 @@ export default function FileEditor({
   const isAddFeedbackPressed = useRef(false);
 
   const addFeedbackPressed = () => {
-    
+    console.log("Add feedback");
   };
 
+  // Update the model when the content or filePath changes (for syntax highlighting)
   useEffect(() => {
-    if (monaco) {
-      console.log("here is the monaco instance:", monaco);
-      console.log("Models", monaco.editor.getModels());
-      const path = monaco.Uri.parse(filePath || "");
-      monaco.editor.getModel(path)?.dispose();
-      console.log("Create model");
-      const model = monaco.editor.createModel(content, undefined, path);
-      editorRef.current?.setModel(model);
-    }
+    if (!monaco) return;  
+    const path = monaco.Uri.parse(filePath || "");
+    monaco.editor.getModel(path)?.dispose();
+    const model = monaco.editor.createModel(content, undefined, path);
+    editorRef.current?.setModel(model);
   }, [monaco, filePath, content]);
 
   const handleEditorDidMount = (
@@ -67,12 +67,12 @@ export default function FileEditor({
   ) => {
     editorRef.current = editor;
 
-    const feedbackRanges = feedbacks?.map((feedback) =>
+    const feedbackRanges = feedbacksToRender?.map((feedback) =>
       getFeedbackRange(content, feedback)
     );
 
     let overlayNodes: HTMLDivElement[] = [];
-    feedbacks?.forEach((_, index) => {
+    feedbacksToRender?.forEach((_, index) => {
       const portalNode = portalNodes![index]!;
 
       const overlayNode = document.createElement("div");
@@ -91,7 +91,7 @@ export default function FileEditor({
     });
 
     editor.changeViewZones(function (changeAccessor) {
-      feedbacks?.forEach((_, index) => {
+      feedbacksToRender?.forEach((_, index) => {
         const overlayNode = overlayNodes[index];
         const zoneNode = document.createElement("div");
         zoneNode.id = `feedback-${id}-${index}-zone`;
@@ -125,9 +125,9 @@ export default function FileEditor({
               {
                 options: {
                   inlineClassName: `inline-feedback-text ${
-                    feedbacks![index].credits < 0
+                    feedbacksToRender![index].credits < 0
                       ? "negative"
-                      : feedbacks![index].credits > 0
+                      : feedbacksToRender![index].credits > 0
                       ? "positive"
                       : "neutral"
                   }`,
@@ -270,9 +270,8 @@ export default function FileEditor({
         defaultValue="Please select a file"
         onMount={handleEditorDidMount}
       />
-      {portalNodes &&
-        feedbacks &&
-        feedbacks.map((feedback, index) => {
+      {portalNodes && feedbacks && feedbacksToRender &&
+        feedbacksToRender.map((feedback, index) => {
           return (
             portalNodes[index] && (
               <portals.InPortal node={portalNodes[index]} key={feedback.id}>

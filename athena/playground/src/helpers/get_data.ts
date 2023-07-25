@@ -95,7 +95,41 @@ function addExerciseTypeToSubmissionsAndFeedbacks(json: any): any {
   return json;
 }
 
-
+/**
+ * Removes all null values from the given json.
+ * 
+ * @param json - the json to remove the null values from
+ * @param recursive - whether to remove null values recursively
+ * @returns the json without null values
+ */
+function removeNullValues(json: any, recursive: boolean = true): any {
+  if (Array.isArray(json)) {
+    return json.filter(item => item !== null).map(item => {
+      if (recursive && typeof item === "object" && item !== null) {
+        return removeNullValues(item, recursive);
+      } else {
+        return item;
+      }
+    });
+  } else if (typeof json === 'object' && json !== null) {
+    const result: any = {};
+    for (const key in json) {
+      if (json.hasOwnProperty(key)) {
+        const value = json[key];
+        if (value !== null) {
+          if (recursive && typeof value === "object" && value !== null) {
+            result[key] = removeNullValues(value, recursive);
+          } else {
+            result[key] = value;
+          }
+        }
+      }
+    }
+    return result;
+  } else {
+    return json;
+  }
+}
 
 function getExerciseJSON(
   mode: Mode,
@@ -118,6 +152,9 @@ function getExerciseJSON(
       athenaOrigin
     );
     exerciseJson = addExerciseTypeToSubmissionsAndFeedbacks(exerciseJson);
+    if (exerciseJson.submissions) {
+      exerciseJson.submissions = removeNullValues(exerciseJson.submissions);
+    }
     return exerciseJson;
   }
   throw new Error(`Exercise ${exerciseId} not found`);
