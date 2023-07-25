@@ -31,9 +31,10 @@ export default function CodeView({ repository_url, feedbacks, onFeedbacksChange 
     <div className="h-[40vh]">
       <Allotment vertical={false} defaultSizes={[1, 4]}>
         <Allotment.Pane preferredSize={"20%"}>
-          <div className="h-full overflow-y-auto mr-2">
+          <div className="h-full overflow-y-auto pr-2">
             <FileTree
               tree={repository.tree}
+              feedbacks={feedbacks}
               selectedFile={selectedFile}
               onSelectFile={setSelectedFile}
             />
