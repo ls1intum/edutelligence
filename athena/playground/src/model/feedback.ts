@@ -95,3 +95,14 @@ export function getFeedbackReferenceType(feedback: Feedback): FeedbackReferenceT
   }
   return "unreferenced";
 }
+
+export function getOnFeedbackChange(feedbacks: Feedback[], index: number, onFeedbacksChange: (feedbacks: Feedback[]) => void): (newFeedback: Feedback | undefined) => void {
+  return (newFeedback: Feedback | undefined) => {
+    if (newFeedback === undefined) {
+      feedbacks.splice(index, 1);
+    } else {
+      feedbacks[index] = newFeedback;
+    }
+    onFeedbacksChange(feedbacks);
+  }  
+}
