@@ -4,7 +4,6 @@ import type { Feedback } from "@/model/feedback";
 import { isProgrammingSubmission, isTextSubmission } from "@/model/submission";
 import TextSubmissionDetail from "./text";
 import ProgrammingSubmissionDetail from "./programming";
-import { IRange } from "monaco-editor";
 
 type SubmissionDetailProps = {
   submission: Submission;
