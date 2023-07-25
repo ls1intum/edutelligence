@@ -79,7 +79,7 @@ export function getFeedbackRange(content: string, feedback: Feedback): IRange | 
   return undefined;
 }
 
-type FeedbackReferenceType = "unreferenced" | "unreferenced_file" | "referenced";
+export type FeedbackReferenceType = "unreferenced" | "unreferenced_file" | "referenced";
 
 export function getFeedbackReferenceType(feedback: Feedback): FeedbackReferenceType {
   if (feedback.type === "programming") {

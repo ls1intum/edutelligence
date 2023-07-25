@@ -1,4 +1,4 @@
-import type { Feedback, TextFeedback } from "@/model/feedback";
+import type { Feedback, FeedbackReferenceType } from "@/model/feedback";
 
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Editor, Monaco, useMonaco } from "@monaco-editor/react";
@@ -32,24 +32,29 @@ export default function FileEditor({
     }
   });
 
-  const editorRef = useRef<editor.IStandaloneCodeEditor>();
-  const monaco = useMonaco();
-
   const id = useId();
+  const monaco = useMonaco();
+  const editorRef = useRef<editor.IStandaloneCodeEditor>();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   const portalNodes = useMemo(() => feedbacksToRender?.map(() => portals.createHtmlPortalNode()), [feedbacks]);
   const resizeObservers = useRef<(ResizeObserver | null)[]>([]);
-  const [decorationsCollection, setDecorationsCollection] = useState<editor.IEditorDecorationsCollection | undefined>(undefined);
   const [hoverPosition, setHoverPosition] = useState<Position | undefined>(undefined);
   const [selection, setSelection] = useState<Selection | undefined>(undefined);
+  const [
+    feedbackWidgetDecorationsCollection, 
+    setFeedbackWidgetDecorationsCollection
+  ] = useState<editor.IEditorDecorationsCollection | undefined>(undefined);
   const [
     addFeedbackDecorationsCollection,
     setAddFeedbackDecorationsCollection,
   ] = useState<editor.IEditorDecorationsCollection | undefined>(undefined);
-
+  // useState is not used here because we don't want to re-render when the value changes
   const isAddFeedbackPressed = useRef(false);
 
-  const addFeedbackPressed = () => {
-    console.log("Add feedback");
+  // Called when the user presses the add feedback button
+  const addFeedbackPressed = (referenceType: FeedbackReferenceType) => {
+    console.log("Add feedback", referenceType);
+    // TODO create empty feedback
   };
 
   // Update the model when the content or filePath changes (for syntax highlighting)
@@ -126,8 +131,8 @@ export default function FileEditor({
       });
     });
 
-    if (decorationsCollection) {
-      decorationsCollection.clear();
+    if (feedbackWidgetDecorationsCollection) {
+      feedbackWidgetDecorationsCollection.clear();
     }
     const newDecorationsCollection = editor.createDecorationsCollection(
       feedbackRanges?.flatMap((range, index) =>
@@ -149,7 +154,7 @@ export default function FileEditor({
           : []
       ) ?? []
     );
-    setDecorationsCollection(newDecorationsCollection);
+    setFeedbackWidgetDecorationsCollection(newDecorationsCollection);
 
     editor.onMouseMove(function (e) {
       setHoverPosition(e.target.position ?? undefined);
@@ -168,7 +173,7 @@ export default function FileEditor({
     editor.onMouseUp(function (e) {
       if (e.target.element?.className.includes("comment-range-button")) {
         if (isAddFeedbackPressed.current) {
-          addFeedbackPressed();
+          addFeedbackPressed("referenced");
         }
       }
       isAddFeedbackPressed.current = false;
@@ -259,6 +264,17 @@ export default function FileEditor({
     };
   }, []);
 
+  useEffect(() => {
+    console.log("FileEditor useEffect []")
+    return () => {
+      console.log("FileEditor useEffect [] return")
+    }
+  }, []);
+
+  useEffect(() => {
+    console.log("FileEditor should re-render")
+  }, [feedbacks, content, filePath, monaco, editorRef]);
+
   return (
     <div className="h-[50vh]">
       <Editor
@@ -279,7 +295,19 @@ export default function FileEditor({
         value={content}
         path={filePath}
         defaultValue="Please select a file"
-        onMount={handleEditorDidMount}
+        onMount={(editor, monaco) => {
+          console.log("Editor.onMount");
+          handleEditorDidMount(editor, monaco);
+        }}
+        onChange={(value, ev) => {
+          console.log("Editor.onChange");
+        }}
+        onValidate={(markers) => {
+          console.log("Editor.onValidate");
+        }}
+        beforeMount={(monaco) => {
+          console.log("Editor.beforeMount");
+        }}
       />
       {portalNodes && feedbacks && feedbacksToRender &&
         feedbacksToRender.map((feedback, index) => {
