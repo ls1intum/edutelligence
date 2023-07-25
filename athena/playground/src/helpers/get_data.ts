@@ -82,9 +82,9 @@ function replaceJsonPlaceholders(
 function addExerciseTypeToSubmissionsAndFeedbacks(json: any): any {
   const exerciseType = json.type;
 
-  const submissions = json.submissions.map((submissionJson: any) => {
+  const submissions = json.submissions?.map((submissionJson: any) => {
     submissionJson.type = exerciseType;
-    const feedbacks = submissionJson.feedbacks.map((feedbackJson: any) => {
+    const feedbacks = submissionJson.feedbacks?.map((feedbackJson: any) => {
       feedbackJson.type = exerciseType;
       return feedbackJson;
     });
