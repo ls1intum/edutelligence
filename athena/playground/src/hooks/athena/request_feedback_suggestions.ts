@@ -4,6 +4,7 @@ import type ModuleResponse from "@/model/module_response";
 
 import { UseMutationOptions, useMutation } from "react-query";
 import { AthenaError, useAthenaFetcher } from "@/hooks/athena_fetcher";
+import { Feedback } from "@/model/feedback";
 
 /**
  * Requests feedback suggestions for an exercise and a submission from an Athena module.
@@ -23,7 +24,15 @@ export default function useRequestFeedbackSuggestions(
   const athenaFetcher = useAthenaFetcher();
   return useMutation({
     mutationFn: async ({ exercise, submission }) => {
-      return await athenaFetcher("/feedback_suggestions", { exercise, submission });
+      let response = await athenaFetcher("/feedback_suggestions", { exercise, submission });
+      if (response?.data) {
+        // Add is_suggestion flag to feedbacks
+        response.data.feedbacks = response.data.feedbacks.map((feedback: Feedback) => {
+          feedback.is_suggestion = true;
+          return feedback;
+        });
+      }
+      return response;
     },
     ...options,
   });
