@@ -2,7 +2,7 @@ import type { Feedback, TextFeedback } from "@/model/feedback";
 
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Editor, Monaco, useMonaco } from "@monaco-editor/react";
-import { IRange, Position, Selection, editor } from "monaco-editor";
+import { Position, Selection, editor } from "monaco-editor";
 import * as portals from "react-reverse-portal";
 import { createRoot } from "react-dom/client";
 
