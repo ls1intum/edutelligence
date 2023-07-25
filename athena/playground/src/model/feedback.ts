@@ -33,7 +33,7 @@ export type Feedback = TextFeedback | ProgrammingFeedback;
 export function formatReference(feedback: Feedback): string {
   if (feedback.type === "text") {
     if (feedback.index_start !== undefined && feedback.index_end !== undefined) {
-      return `(${feedback.index_start}-${feedback.index_end})`;
+      return `${feedback.index_start}-${feedback.index_end}`;
     }
   } else if (feedback.type === "programming") {
     if (feedback.file_path !== undefined && feedback.line_start !== undefined) {
@@ -79,18 +79,18 @@ export function getFeedbackRange(content: string, feedback: Feedback): IRange | 
   return undefined;
 }
 
-type FeedbackReferenceType = "unreferenced" | "referenced_file" | "referenced_line";
+type FeedbackReferenceType = "unreferenced" | "unreferenced_file" | "referenced";
 
 export function getFeedbackReferenceType(feedback: Feedback): FeedbackReferenceType {
   if (feedback.type === "programming") {
     if (feedback.file_path !== undefined && feedback.line_start !== undefined) {
-      return "referenced_line";
+      return "referenced";
     } else if (feedback.file_path !== undefined) {
-      return "referenced_file";
+      return "unreferenced_file";
     }
   } else if (feedback.type === "text") {
     if (feedback.index_start !== undefined && feedback.index_end !== undefined) {
-      return "referenced_line";
+      return "referenced";
     }
   }
   return "unreferenced";

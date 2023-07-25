@@ -1,7 +1,10 @@
-import { Feedback, formatReference } from "@/model/feedback";
+import type { Feedback } from "@/model/feedback";
+
 import { useState } from "react";
 import { twMerge } from "tailwind-merge";
 import TextareaAutosize from "react-textarea-autosize";
+
+import { formatReference, getFeedbackReferenceType } from "@/model/feedback";
 
 type InlineFeedbackProps = {
   feedback: Feedback;
@@ -15,10 +18,14 @@ export default function InlineFeedback({
   const [isEditing, setIsEditing] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   
+  const referenceType = getFeedbackReferenceType(feedback);
+
   return (
     <div className="m-2 border border-gray-300 rounded-lg text-sm max-w-3xl">
       <div className="flex items-center justify-start px-4 py-2 border-b border-gray-300 text-xs text-gray-600">
-        Feedback on {formatReference(feedback)}
+        {referenceType === "unreferenced" && "Unreferenced"}
+        {"file_path" in feedback && referenceType === "unreferenced_file" && `References ${feedback.file_path}`}
+        {referenceType === "referenced" && `References ${formatReference(feedback)}`}
       </div>
       <div className="flex justify-start items-start space-x-2 px-4 py-2">
         {isEditing ? (
