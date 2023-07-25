@@ -1,7 +1,9 @@
 import type { IRange } from "monaco-editor";
+import type { ExerciseType } from "./exercise";
 
 type FeedbackBase = {
   id?: number;
+  type: ExerciseType;
   title: string;
   description: string;
   credits: number;
@@ -13,11 +15,13 @@ type FeedbackBase = {
 };
 
 export type TextFeedback = FeedbackBase & {
+  type: "text";
   index_start?: number;
   index_end?: number;
 };
 
 export type ProgrammingFeedback = FeedbackBase & {
+  type: "programming";
   file_path?: string;
   line_start?: number;
   line_end?: number;
@@ -25,26 +29,12 @@ export type ProgrammingFeedback = FeedbackBase & {
 
 export type Feedback = TextFeedback | ProgrammingFeedback;
 
-export function isTextFeedback(feedback: Feedback): feedback is TextFeedback {
-  const textFeedback = feedback as TextFeedback;
-  return textFeedback.index_start !== undefined || textFeedback.index_end !== undefined;
-}
-
-export function isProgrammingFeedback(feedback: Feedback): feedback is ProgrammingFeedback {
-  const programmingFeedback = feedback as ProgrammingFeedback;
-  return (
-    programmingFeedback.file_path !== undefined ||
-    programmingFeedback.line_start !== undefined ||
-    programmingFeedback.line_end !== undefined
-  );
-}
-
 export function formatReference(feedback: Feedback): string {
-  if (isTextFeedback(feedback)) {
+  if (feedback.type === "text") {
     if (feedback.index_start !== undefined && feedback.index_end !== undefined) {
       return `(${feedback.index_start}-${feedback.index_end})`;
     }
-  } else if (isProgrammingFeedback(feedback)) {
+  } else if (feedback.type === "programming") {
     if (feedback.file_path !== undefined && feedback.line_start !== undefined) {
       return `file:${feedback.file_path}_line:${feedback.line_start}${feedback.line_end !== undefined ? "-" + feedback.line_end : ""}`;
     } else if (feedback.file_path !== undefined) {
@@ -62,7 +52,7 @@ export function formatReference(feedback: Feedback): string {
  * @returns the range of the feedback in the given content
  */
 export function getFeedbackRange(content: string, feedback: Feedback): IRange | undefined {
-  if (isProgrammingFeedback(feedback)) {
+  if (feedback.type === "programming") {
     if (feedback.line_start === undefined && feedback.line_end === undefined) {
       return undefined;
     }
@@ -72,7 +62,7 @@ export function getFeedbackRange(content: string, feedback: Feedback): IRange | 
       endLineNumber: (feedback.line_start || feedback.line_end)!,
       endColumn: Infinity,
     }
-  } else if (isTextFeedback(feedback)) {
+  } else if (feedback.type === "text") {
     if (feedback.index_start === undefined && feedback.index_end === undefined) {
       return undefined;
     }
