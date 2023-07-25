@@ -1,18 +1,9 @@
 import type { ProgrammingExercise } from "@/model/exercise";
-import type { Mode } from "@/model/mode";
 
 import Disclosure from "@/components/disclosure";
 import CodeView from "@/components/details/code_view";
 
-type ProgrammingExerciseDetailProps = {
-  exercise: ProgrammingExercise;
-  mode: Mode;
-};
-
-export default function ProgrammingExerciseDetail({
-  exercise,
-  mode,
-}: ProgrammingExerciseDetailProps) {
+export default function ProgrammingExerciseDetail({ exercise }: { exercise: ProgrammingExercise; }) {
   return (
     <>
       <Disclosure title="Template Repository">

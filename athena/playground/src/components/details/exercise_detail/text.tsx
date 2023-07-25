@@ -3,13 +3,7 @@ import type { TextExercise } from "@/model/exercise";
 import Markdown from "@/components/markdown";
 import Disclosure from "@/components/disclosure";
 
-type TextExerciseDetailProps = {
-  exercise: TextExercise;
-};
-
-export default function TextExerciseDetail({
-  exercise,
-}: TextExerciseDetailProps) {
+export default function TextExerciseDetail({ exercise }: { exercise: TextExercise }) {
   return (
     <Disclosure title="Example Solution">
       {exercise.example_solution.length > 0 ? (

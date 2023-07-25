@@ -2,6 +2,7 @@
 	email paul.schwind@tum.de
 }
 {$ATHENA_DOMAIN} {
+	redir / /playground 302
 	reverse_proxy /playground* http://playground:3000
 	reverse_proxy http://assessment_module_manager:5000
 }

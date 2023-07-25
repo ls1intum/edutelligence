@@ -1,10 +1,12 @@
 import type { Exercise } from "@/model/exercise";
-import type { Mode } from "@/model/mode";
+import type ModuleResponse from "@/model/module_response";
 import type { ModuleMeta } from "@/model/health_response";
-import type { Submission } from "@/model/submission";
-import type { ModuleResponse } from "@/model/module_response";
 
 import { useEffect, useState } from "react";
+
+import { useBaseInfo } from "@/hooks/base_info_context";
+import useRequestSubmissionSelection from "@/hooks/athena/request_submission_selection";
+import useSubmissions from "@/hooks/playground/submissions";
 
 import ExerciseSelect from "@/components/selectors/exercise_select";
 import ModuleResponseView from "@/components/module_response_view";
@@ -13,95 +15,23 @@ import Disclosure from "@/components/disclosure";
 import SubmissionDetail from "@/components/details/submission_detail";
 import SubmissionList from "@/components/submission_list";
 
-import baseUrl from "@/helpers/base_url";
-import { useSubmissions } from "@/helpers/client/get_data";
-
-import { ModuleRequestProps } from ".";
-
-async function requestSubmissionSelection(
-  mode: Mode,
-  athenaUrl: string,
-  athenaSecret: string,
-  module: ModuleMeta,
-  moduleConfig: any,
-  exercise: Exercise | undefined
-): Promise<ModuleResponse | undefined> {
-  if (!exercise) {
-    alert("Please select an exercise");
-    return;
-  }
-
-  const submissionsResponse = await fetch(
-    `${baseUrl}/api/mode/${mode}/exercise/${exercise.id}/submissions`
-  );
-  const submissions: Submission[] = await submissionsResponse.json();
-  try {
-    const athenaSubmissionSelectUrl = `${athenaUrl}/modules/${module.type}/${module.name}/select_submission`;
-    const response = await fetch(
-      `${baseUrl}/api/athena_request?${new URLSearchParams({
-        url: athenaSubmissionSelectUrl,
-      })}`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-API-Secret": athenaSecret,
-          ...(moduleConfig && {
-            "X-Module-Config": JSON.stringify(moduleConfig),
-          }),
-        },
-        body: JSON.stringify({
-          exercise,
-          submission_ids: submissions.map((submission) => submission.id),
-        }),
-      }
-    );
-    if (response.status !== 200) {
-      console.error(response);
-      alert(`Athena responded with status code ${response.status}`);
-      return {
-        module_name: "Unknown",
-        status: response.status,
-        data: await response.text(),
-      };
-    }
-    alert("Submission selection requested successfully!");
-    return await response.json();
-  } catch (e) {
-    console.error(e);
-    alert(
-      "Failed to request submission selection from Athena: Failed to fetch. Is the URL correct?"
-    );
-  }
-}
-
-export default function SelectSubmission({
-  mode,
-  athenaUrl,
-  athenaSecret,
-  module,
-  moduleConfig,
-}: ModuleRequestProps) {
+export default function SelectSubmission({ module }: { module: ModuleMeta }) {
+  const { mode } = useBaseInfo();
+  
   const [exercise, setExercise] = useState<Exercise | undefined>(undefined);
-  const [loading, setLoading] = useState<boolean>(false);
-  const [response, setResponse] = useState<ModuleResponse | undefined>(
-    undefined
-  );
-
-  useEffect(() => {
-    // Reset
-    setResponse(undefined);
-  }, [exercise]);
-
-  useEffect(() => {
-    setExercise(undefined);
-  }, [module, mode]);
-
-  const {
-    submissions,
-    isLoading: submissionsLoading,
-    error: submissionsError,
-  } = useSubmissions(mode, exercise);
+  const { data: submissions, isLoading: isLoadingSubmissions } = useSubmissions(exercise);
+  const { data: response, isLoading, error, mutate, reset } = useRequestSubmissionSelection({
+    onError: (error) => {
+      console.error(error);
+      alert(`Failed to request submission selection from Athena: ${error.message}. Is the URL correct?`);
+    },
+    onSuccess: () => {
+      alert("Submission selection requested successfully!");
+    },
+  });
+  
+  useEffect(() => reset(), [exercise, reset]);
+  useEffect(() => setExercise(undefined), [module, mode]);
 
   const responseSubmissionView = (response: ModuleResponse | undefined) => {
     if (!response || response.status !== 200 || typeof response.data !== "number") {
@@ -143,38 +73,43 @@ export default function SelectSubmission({
         </b>
       </p>
       <ExerciseSelect
-        mode={mode}
         exerciseType={module.type}
         exercise={exercise}
         onChange={setExercise}
+        disabled={isLoading}
       />
       {exercise && (
         <div className="space-y-1 mt-2">
-          <ExerciseDetail exercise={exercise} mode={mode} />
-          <SubmissionList exercise={exercise} mode={mode} />
+          <ExerciseDetail exercise={exercise} />
+          <SubmissionList exercise={exercise} />
         </div>
       )}
-      <ModuleResponseView response={response}>
+      <ModuleResponseView response={response ?? (error?.asModuleResponse ? error.asModuleResponse() : undefined)}>
         {responseSubmissionView(response)}
       </ModuleResponseView>
       <button
-        className="bg-primary-500 text-white rounded-md p-2 mt-4 hover:bg-primary-600"
+        className="bg-primary-500 text-white rounded-md p-2 mt-4 hover:bg-primary-600 disabled:text-gray-500 disabled:bg-gray-200 disabled:cursor-not-allowed"
         onClick={() => {
-          setLoading(true);
-          requestSubmissionSelection(
-            mode,
-            athenaUrl,
-            athenaSecret,
-            module,
-            moduleConfig,
-            exercise
-          )
-            .then(setResponse)
-            .finally(() => setLoading(false));
+          if (!exercise) {
+            alert("Please select an exercise");
+            return;
+          }
+          if (!submissions) {
+            alert("Failed to fetch submissions or no submissions found");
+            return;
+          }
+          mutate({
+            exercise,
+            submissions,
+          });
         }}
-        disabled={loading}
+        disabled={!exercise || isLoading || isLoadingSubmissions}
       >
-        {loading ? "Loading..." : "Request Submission Selection"}
+        {exercise
+          ? isLoading || isLoadingSubmissions
+            ? "Loading..."
+            : "Request submission selection"
+          : "Please select an exercise"}
       </button>
     </div>
   );

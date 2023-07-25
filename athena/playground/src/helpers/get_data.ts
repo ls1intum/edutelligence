@@ -57,7 +57,7 @@ function replaceJsonPlaceholders(
         result[key] = value.map((item) =>
           replaceJsonPlaceholders(mode, item, exerciseId, athenaOrigin)
         );
-      } else if (typeof value === "object") {
+      } else if (typeof value === "object" && value !== null) {
         result[key] = replaceJsonPlaceholders(
           mode,
           value,
@@ -140,26 +140,6 @@ function jsonToFeedbacks(json: any): Feedback[] {
         feedback.exercise_id = json.id;
         // submission_id is not provided in the json for convenience, so we add it here
         feedback.submission_id = submissionJson.id;
-
-        // replace title and description with "" if they are not strings (null somehow gets parsed as {})
-        if (typeof feedback.title !== "string") {
-          feedback.title = "";
-        }
-        if (typeof feedback.description !== "string") {
-          feedback.description = "";
-        }
-
-        // replace index_start, index_end, line_start, line_end with undefined if they are not numbers (null somehow gets parsed as {})
-        ["index_start", "index_end", "line_start", "line_end"].forEach(
-          (key) => {
-            // @ts-ignore
-            if (typeof feedback[key] !== "number") {
-              // @ts-ignore
-              feedback[key] = undefined;
-            }
-          }
-        );
-
         return feedback;
       });
       return feedbacks;

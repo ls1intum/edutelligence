@@ -1,9 +1,12 @@
 import type { Submission } from "@/model/submission";
 import type { Exercise } from "@/model/exercise";
+import type ModuleResponse from "@/model/module_response";
 import type { ModuleMeta } from "@/model/health_response";
-import type { ModuleResponse } from "@/model/module_response";
 
 import { useEffect, useState } from "react";
+
+import { useBaseInfo } from "@/hooks/base_info_context";
+import useRequestFeedbackSuggestions from "@/hooks/athena/request_feedback_suggestions";
 
 import ExerciseSelect from "@/components/selectors/exercise_select";
 import SubmissionSelect from "@/components/selectors/submission_select";
@@ -12,88 +15,40 @@ import ExerciseDetail from "@/components/details/exercise_detail";
 import SubmissionDetail from "@/components/details/submission_detail";
 import Disclosure from "@/components/disclosure";
 
-import baseUrl from "@/helpers/base_url";
-
-import { ModuleRequestProps } from ".";
-
-async function requestFeedbackSuggestions(
-  athenaUrl: string,
-  athenaSecret: string,
-  module: ModuleMeta,
-  moduleConfig: any,
-  exercise: Exercise | undefined,
-  submission: Submission | undefined
-): Promise<ModuleResponse | undefined> {
-  if (!exercise) {
-    alert("Please select an exercise");
-    return;
-  }
-  if (!submission) {
-    alert("Please select a submission");
-    return;
-  }
-  try {
-    const athenaFeedbackUrl = `${athenaUrl}/modules/${module.type}/${module.name}/feedback_suggestions`;
-    const response = await fetch(
-      `${baseUrl}/api/athena_request?${new URLSearchParams({
-        url: athenaFeedbackUrl,
-      })}`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-API-Secret": athenaSecret,
-          ...(moduleConfig && {
-            "X-Module-Config": JSON.stringify(moduleConfig),
-          }),
-        },
-        body: JSON.stringify({ exercise, submission }),
-      }
-    );
-    if (response.status !== 200) {
-      console.error(response);
-      alert(`Athena responded with status code ${response.status}`);
-      return {
-        module_name: "Unknown",
-        status: response.status,
-        data: await response.text(),
-      };
-    }
-    alert("Feedback suggestions requested successfully!");
-    return await response.json();
-  } catch (e) {
-    console.error(e);
-    alert(
-      "Failed to request feedback suggestions from Athena: Failed to fetch. Is the URL correct?"
-    );
-  }
-}
-
 export default function RequestFeedbackSuggestions({
-  mode,
-  athenaUrl,
-  athenaSecret,
   module,
-  moduleConfig,
-}: ModuleRequestProps) {
+}: { module: ModuleMeta }) {
+  const { mode } = useBaseInfo();
+
   const [exercise, setExercise] = useState<Exercise | undefined>(undefined);
   const [submission, setSubmission] = useState<Submission | undefined>(
     undefined
   );
-  const [loading, setLoading] = useState<boolean>(false);
-  const [response, setResponse] = useState<ModuleResponse | undefined>(
-    undefined
-  );
 
+  const {
+    data: response,
+    isLoading,
+    error,
+    mutate,
+    reset,
+  } = useRequestFeedbackSuggestions({
+    onError: (error) => {
+      console.error(error);
+      alert(
+        `Failed to request feedback suggestions from Athena: ${error.message}. Is the URL correct?`
+      );
+    },
+    onSuccess: () => {
+      alert(`Feedback suggestions requested successfully!`);
+    },
+  });
+
+  // Handle resets with useEffect to avoid stale state
   useEffect(() => {
-    // Reset
-    setResponse(undefined);
+    reset();
     setSubmission(undefined);
-  }, [exercise]);
-
-  useEffect(() => {
-    setExercise(undefined);
-  }, [module, mode]);
+  }, [exercise, reset]);
+  useEffect(() => setExercise(undefined), [module, mode]);
 
   const responseSubmissionView = (response: ModuleResponse | undefined) => {
     if (!response || response.status !== 200) {
@@ -127,21 +82,21 @@ export default function RequestFeedbackSuggestions({
         request at the function annotated with <code>@feedback_provider</code>.
       </p>
       <ExerciseSelect
-        mode={mode}
         exerciseType={module.type}
         exercise={exercise}
         onChange={setExercise}
+        disabled={isLoading}
       />
       {exercise && (
         <>
           <SubmissionSelect
-            mode={mode}
-            exercise_id={exercise?.id}
+            exercise={exercise}
             submission={submission}
             onChange={setSubmission}
+            disabled={isLoading}
           />
           <div className="space-y-1 mt-2">
-            <ExerciseDetail exercise={exercise} mode={mode} />
+            <ExerciseDetail exercise={exercise} />
             {submission && (
               <Disclosure title="Submission">
                 <SubmissionDetail submission={submission} />
@@ -150,27 +105,34 @@ export default function RequestFeedbackSuggestions({
           </div>
         </>
       )}
-      <ModuleResponseView response={response}>
+      <ModuleResponseView response={response ?? (error?.asModuleResponse ? error.asModuleResponse() : undefined)}>
         {responseSubmissionView(response)}
       </ModuleResponseView>
       <button
-        className="bg-primary-500 text-white rounded-md p-2 mt-4 hover:bg-primary-600"
+        className="bg-primary-500 text-white rounded-md p-2 mt-4 hover:bg-primary-600 disabled:text-gray-500 disabled:bg-gray-200 disabled:cursor-not-allowed"
         onClick={() => {
-          setLoading(true);
-          requestFeedbackSuggestions(
-            athenaUrl,
-            athenaSecret,
-            module,
-            moduleConfig,
+          if (!exercise) {
+            alert("Please select an exercise");
+            return;
+          }
+          if (!submission) {
+            alert("Please select a submission");
+            return;
+          }
+          mutate({
             exercise,
-            submission
-          )
-            .then(setResponse)
-            .finally(() => setLoading(false));
+            submission,
+          });
         }}
-        disabled={loading}
+        disabled={!exercise || !submission || isLoading}
       >
-        {loading ? "Loading..." : "Request Feedback Suggestions"}
+        {exercise && submission
+          ? isLoading
+            ? "Loading..."
+            : "Request feedback suggestions"
+          : exercise
+          ? "Please select a submission"
+          : "Please select an exercise"}
       </button>
     </div>
   );

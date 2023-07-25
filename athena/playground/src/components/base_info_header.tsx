@@ -1,8 +1,5 @@
-import type { Mode } from "@/model/mode";
-import type { ModuleMeta } from "@/model/health_response";
-
-import useSWR from "swr";
-import athenaFetcher from "@/helpers/athena_fetcher";
+import { useBaseInfo, useBaseInfoDispatch } from "@/hooks/base_info_context";
+import useConfigSchema from "@/hooks/athena/config_schema";
 
 import Health from "@/components/health";
 import ModuleSelect from "@/components/selectors/module_select";
@@ -10,35 +7,16 @@ import DataSelect from "@/components/selectors/data_select";
 import ModuleConfig from "@/components/module_config";
 import Disclosure from "@/components/disclosure";
 
-type BaseInfoHeaderProps = {
-  athenaUrl: string;
-  onChangeAthenaUrl: (value: string) => void;
-  athenaSecret: string;
-  onChangeAthenaSecret: (value: string) => void;
-  module: ModuleMeta | undefined;
-  onChangeModule: (value: ModuleMeta) => void;
-  moduleConfig: any;
-  onChangeModuleConfig: (value: any) => void;
-  mode: Mode;
-  onChangeMode: (value: Mode) => void;
-};
-
-export default function BaseInfoHeader({
-  athenaUrl,
-  onChangeAthenaUrl,
-  athenaSecret,
-  onChangeAthenaSecret,
-  module,
-  onChangeModule,
-  moduleConfig,
-  onChangeModuleConfig,
-  mode,
-  onChangeMode,
-}: BaseInfoHeaderProps) {
-  const url = module
-    ? `${athenaUrl}/modules/${module.type}/${module.name}/config_schema`
-    : null;
-  const { data, error, isLoading } = useSWR(url, athenaFetcher(athenaSecret));
+export default function BaseInfoHeader() {
+  const {
+    mode,
+    athenaUrl,
+    athenaSecret,
+    module,
+    moduleConfig,
+  } = useBaseInfo();
+  const dispatch = useBaseInfoDispatch();
+  const { data, error, isLoading } = useConfigSchema();
 
   return (
     <div className="bg-white rounded-md p-4 mb-8">
@@ -47,10 +25,10 @@ export default function BaseInfoHeader({
         <input
           className="border border-gray-300 rounded-md p-2"
           value={athenaUrl}
-          onChange={(e) => onChangeAthenaUrl(e.target.value)}
+          onChange={(e) => dispatch({ type: "SET_ATHENA_URL", payload: e.target.value })}
         />
       </label>
-      <Health url={athenaUrl} />
+      <Health />
       <label className="flex flex-col mt-4">
         <span className="text-lg font-bold">Secret</span>
         <p className="text-gray-500 mb-2">
@@ -61,17 +39,13 @@ export default function BaseInfoHeader({
           className="border border-gray-300 rounded-md p-2"
           value={athenaSecret}
           placeholder="Optional, only required for production setups"
-          onChange={(e) => onChangeAthenaSecret(e.target.value)}
+          onChange={(e) => dispatch({ type: "SET_ATHENA_SECRET", payload: e.target.value })}
         />
       </label>
       <br />
       <ModuleSelect
-        url={athenaUrl}
         module={module}
-        onChange={(value) => {
-          onChangeModule(value);
-          onChangeModuleConfig(undefined);
-        }}
+        onChange={(value) => dispatch({ type: "SET_MODULE", payload: value })}
       />
       {module && (
         <div className="mt-2 space-y-1">
@@ -98,9 +72,9 @@ export default function BaseInfoHeader({
                   checked={moduleConfig !== undefined}
                   onChange={(e) => {
                     if (e.target.checked) {
-                      onChangeModuleConfig({});
+                      dispatch({ type: "SET_MODULE_CONFIG", payload: {}});
                     } else {
-                      onChangeModuleConfig(undefined);
+                      dispatch({ type: "SET_MODULE_CONFIG", payload: undefined});
                     }
                   }}
                 />
@@ -112,10 +86,10 @@ export default function BaseInfoHeader({
                 <Disclosure title="Configuration" openedInitially>
                   <ModuleConfig
                     module={module}
-                    athenaUrl={athenaUrl}
-                    athenaSecret={athenaSecret}
                     moduleConfig={moduleConfig}
-                    onChangeConfig={onChangeModuleConfig}
+                    onChangeConfig={(config) =>
+                      dispatch({ type: "SET_MODULE_CONFIG", payload: config })
+                    }
                   />
                 </Disclosure>
               )}
@@ -124,7 +98,10 @@ export default function BaseInfoHeader({
         </div>
       )}
       <br />
-      <DataSelect mode={mode} onChangeMode={onChangeMode} />
+      <DataSelect 
+        mode={mode} 
+        onChangeMode={(mode) => dispatch({ type: "SET_MODE", payload: mode })} 
+      />
     </div>
   );
 }

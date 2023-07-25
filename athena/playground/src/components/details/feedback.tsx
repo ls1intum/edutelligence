@@ -2,11 +2,7 @@ import type { Feedback } from "@/model/feedback";
 
 import { formatReference } from "@/model/feedback";
 
-type FeedbackDetailProps = {
-  feedback: Feedback;
-};
-
-export default function FeedbackDetail({ feedback }: FeedbackDetailProps) {
+export default function FeedbackDetail({ feedback }: { feedback: Feedback; }) {
   return (
     <div className="p-4 bg-white rounded shadow-sm border border-slate-200">
       <label className="block text-sm font-medium text-slate-500">

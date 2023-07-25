@@ -1,11 +1,14 @@
+import type { ModuleMeta } from "@/model/health_response";
 import type { Submission } from "@/model/submission";
-import type { Mode } from "@/model/mode";
 import type { Exercise } from "@/model/exercise";
 import type { Feedback } from "@/model/feedback";
-import type { ModuleResponse } from "@/model/module_response";
-import type { ModuleMeta } from "@/model/health_response";
 
 import { useEffect, useState } from "react";
+
+import { useBaseInfo } from "@/hooks/base_info_context";
+import { useSendFeedbacks } from "@/hooks/athena/send_feedback";
+import useSubmissions from "@/hooks/playground/submissions";
+import useFeedbacks from "@/hooks/playground/feedbacks";
 
 import ExerciseSelect from "@/components/selectors/exercise_select";
 import SubmissionSelect from "@/components/selectors/submission_select";
@@ -16,180 +19,40 @@ import ExerciseDetail from "@/components/details/exercise_detail";
 import SubmissionDetail from "@/components/details/submission_detail";
 import SubmissionList from "@/components/submission_list";
 
-import baseUrl from "@/helpers/base_url";
-import { useFeedbacks } from "@/helpers/client/get_data";
+export default function SendFeedback({ module }: { module: ModuleMeta }) {
+  const { mode } = useBaseInfo();
 
-import { ModuleRequestProps } from ".";
-
-async function sendFeedback(
-  athenaUrl: string,
-  athenaSecret: string,
-  module: ModuleMeta,
-  moduleConfig: any,
-  exercise?: Exercise,
-  submission?: Submission,
-  feedback?: Feedback,
-  alertAfterSuccess: boolean = true
-): Promise<ModuleResponse | undefined> {
-  if (!exercise) {
-    alert("Please select an exercise");
-    return;
-  }
-  if (!submission) {
-    alert("Please select a submission");
-    return;
-  }
-  if (!feedback) {
-    alert("Please select a feedback");
-    return;
-  }
-  try {
-    const athenaFeedbackUrl = `${athenaUrl}/modules/${module.type}/${module.name}/feedback`;
-    const response = await fetch(
-      `${baseUrl}/api/athena_request?${new URLSearchParams({
-        url: athenaFeedbackUrl,
-      })}`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-API-Secret": athenaSecret,
-          ...(moduleConfig && {
-            "X-Module-Config": JSON.stringify(moduleConfig),
-          }),
-        },
-        body: JSON.stringify({ exercise, submission, feedback }),
-      }
-    );
-    if (response.status !== 200) {
-      console.error(response);
-      alert(`Athena responded with status code ${response.status}`);
-      return {
-        module_name: "Unknown",
-        status: response.status,
-        data: await response.text(),
-      };
-    }
-    if (alertAfterSuccess) {
-      alert("Feedback sent successfully!");
-    }
-    return await response.json();
-  } catch (e) {
-    console.error(e);
-    alert(
-      "Failed to send feedback to Athena: Failed to fetch. Is the URL correct?"
-    );
-  }
-}
-
-async function sendAllExerciseFeedbacks(
-  mode: Mode,
-  athenaUrl: string,
-  athenaSecret: string,
-  module: ModuleMeta,
-  moduleConfig: any,
-  exercise?: Exercise,
-  submission?: Submission
-): Promise<ModuleResponse[] | undefined> {
-  if (!exercise) {
-    alert("Please select an exercise");
-    return;
-  }
-  const submissionResponse = await fetch(
-    `${baseUrl}/api/mode/${mode}/exercise/${exercise.id}/submissions`
-  );
-  if (submissionResponse.status !== 200) {
-    console.error(submissionResponse);
-    alert(`Failed to fetch submissions for exercise ${exercise.id}`);
-    return;
-  }
-  const submissions: Submission[] = await submissionResponse.json();
-  const feedbackResponse = await fetch(
-    `${baseUrl}/api/mode/${mode}/exercise/${exercise.id}/feedbacks`
-  );
-  if (feedbackResponse.status !== 200) {
-    console.error(feedbackResponse);
-    alert(`Failed to fetch feedbacks for exercise ${exercise.id}`);
-    return;
-  }
-  let feedbacks: Feedback[] = await feedbackResponse.json();
-  if (submission) {
-    feedbacks = feedbacks.filter((f) => f.submission_id === submission.id);
-  }
-  if (feedbacks.length === 0) {
-    alert(`No feedbacks found for ${submission ? "submission" : "exercise"}`);
-    return;
-  }
-  const responses: ModuleResponse[] = [];
-  for (const feedback of feedbacks) {
-    const submission = submissions.find((s) => s.id === feedback.submission_id);
-    const response = await sendFeedback(
-      athenaUrl,
-      athenaSecret,
-      module,
-      moduleConfig,
-      exercise,
-      submission!,
-      feedback,
-      false
-    );
-    if (response) {
-      responses.push(response);
-    } else {
-      // something went wrong, abort
-      return;
-    }
-  }
-  alert(`${feedbacks.length} feedbacks sent`);
-  return responses;
-}
-
-export default function SendFeedback({
-  mode,
-  athenaUrl,
-  athenaSecret,
-  module,
-  moduleConfig,
-}: ModuleRequestProps) {
   const [exercise, setExercise] = useState<Exercise | undefined>(undefined);
-
   const [isAllSubmissions, setIsAllSubmissions] = useState<boolean>(true);
-  const [submission, setSubmission] = useState<Submission | undefined>(
-    undefined
-  );
-
+  const [submission, setSubmission] = useState<Submission | undefined>(undefined);
   const [isAllFeedback, setIsAllFeedback] = useState<boolean>(true);
   const [feedback, setFeedback] = useState<Feedback | undefined>(undefined);
 
-  const [loading, setLoading] = useState<boolean>(false);
-  const [responses, setResponses] = useState<ModuleResponse[] | undefined>(
-    undefined
-  );
+  const { data: submissions, isLoading: isLoadingSubmissions, isError: isErrorFeedbacks } = useSubmissions(exercise);
+  const { data: feedbacks, isLoading: isLoadingFeedbacks } = useFeedbacks(exercise);
+  const { data: responses, isLoading, error, mutate, reset } = useSendFeedbacks({
+    onError: (error) => {
+      console.error(error);
+      alert(`Failed to send feedback(s) to Athena: ${error.message}. Is the URL correct?`);
+    },
+    onSuccess: (responses) => {
+      alert(`${responses?.length} feedback(s) sent successfully!`);
+    },
+  });
 
-  const {
-    feedbacks,
-    isLoading: isFeedbackLoading,
-    error: feedbackError,
-  } = useFeedbacks(mode, exercise);
-
+  // Handle resets with useEffect to avoid stale state
   useEffect(() => {
-    // Reset
-    setResponses(undefined);
+    reset();
     setIsAllSubmissions(true);
     setSubmission(undefined);
     setIsAllFeedback(true);
     setFeedback(undefined);
-  }, [exercise]);
-
+  }, [exercise, reset]);
   useEffect(() => {
-    // Reset
     setIsAllFeedback(true);
     setFeedback(undefined);
   }, [submission, isAllSubmissions]);
-
-  useEffect(() => {
-    setExercise(undefined);
-  }, [module, mode]);
+  useEffect(() =>  setExercise(undefined), [module, mode]);
 
   return (
     <div className="bg-white rounded-md p-4 mb-8">
@@ -202,34 +65,34 @@ export default function SendFeedback({
         <code>@feedback_consumer</code>.
       </p>
       <ExerciseSelect
-        mode={mode}
         exerciseType={module.type}
         exercise={exercise}
         onChange={setExercise}
+        disabled={isLoading}
       />
       {exercise && (
         <>
           <SubmissionSelect
-            mode={mode}
-            exercise_id={exercise?.id}
+            exercise={exercise}
             submission={submission}
             onChange={setSubmission}
             isAllSubmissions={isAllSubmissions}
             setIsAllSubmissions={setIsAllSubmissions}
+            disabled={isLoading}
           />
           {!isAllSubmissions && (
             <FeedbackSelect
-              mode={mode}
-              exercise_id={exercise?.id}
-              submission_id={submission?.id}
+              exercise={exercise}
+              submission={submission}
               feedback={feedback}
               onChange={setFeedback}
               isAllFeedback={isAllFeedback}
               setIsAllFeedback={setIsAllFeedback}
+              disabled={isLoading}
             />
           )}
           <div className="space-y-1 mt-2">
-            <ExerciseDetail exercise={exercise} mode={mode} />
+            <ExerciseDetail exercise={exercise} />
             {submission ? (
               <Disclosure title="Submission">
                 <SubmissionDetail
@@ -241,13 +104,13 @@ export default function SendFeedback({
               </Disclosure>
             ) : (
               isAllFeedback && (
-                <SubmissionList exercise={exercise} mode={mode} feedbacks={feedback ? [feedback] : feedbacks} />
+                <SubmissionList exercise={exercise} feedbacks={feedback ? [feedback] : feedbacks} />
               )
             )}
-            {isFeedbackLoading && (
+            {isLoadingFeedbacks && (
               <div className="text-gray-500 text-sm">Loading feedbacks...</div>
             )}
-            {feedbackError && (
+            {isErrorFeedbacks && (
               <div className="text-red-500 text-sm">
                 Failed to load feedbacks
               </div>
@@ -268,53 +131,58 @@ export default function SendFeedback({
           )}
         </>
       )}
-      {responses?.map((response, i) => (
-        <ModuleResponseView key={i} response={response} />
-      ))}
+      {responses?.map((response, i) => (<ModuleResponseView key={i} response={response} />))}
+      {error?.asModuleResponse && (<ModuleResponseView response={error.asModuleResponse()} />)}
       <button
-        className="bg-primary-500 text-white rounded-md p-2 mt-4 hover:bg-primary-600"
+        className="bg-primary-500 text-white rounded-md p-2 mt-4 hover:bg-primary-600 disabled:text-gray-500 disabled:bg-gray-200 disabled:cursor-not-allowed"
         onClick={() => {
-          setLoading(true);
-          if (isAllSubmissions) {
-            sendAllExerciseFeedbacks(
-              mode,
-              athenaUrl,
-              athenaSecret,
-              module,
-              moduleConfig,
-              exercise!
-            )
-              .then(setResponses)
-              .finally(() => setLoading(false));
-          } else if (isAllFeedback) {
-            sendAllExerciseFeedbacks(
-              mode,
-              athenaUrl,
-              athenaSecret,
-              module,
-              moduleConfig,
-              exercise!,
-              submission!
-            )
-              .then(setResponses)
-              .finally(() => setLoading(false));
-          } else {
-            sendFeedback(
-              athenaUrl,
-              athenaSecret,
-              module,
-              moduleConfig,
-              exercise,
-              submission,
-              feedback
-            )
-              .then((resp) => setResponses(resp ? [resp] : undefined))
-              .finally(() => setLoading(false));
+          if (!exercise) {
+            alert("Please select an exercise");
+            return;
           }
+          if (!submissions) {
+            alert("Failed to fetch submissions or no submissions found");
+            return;
+          }
+          if (!feedbacks) {
+            alert("Failed to fetch feedbacks or no feedbacks found");
+            return;
+          }
+
+          let items: { exercise: Exercise; submission: Submission; feedback: Feedback }[] = [];
+          if (!isAllFeedback) {
+            // Sending single feedback for single submission
+            if (submission && feedback) {
+              items = [{ exercise, submission, feedback }];
+            } else {
+              alert("Please select a submission and feedback");
+              return;
+            }
+          } else {
+            // Sending all feedbacks for single submission or all submissions
+            const submissionsToSend = isAllSubmissions ? submissions : [submission!];
+            submissionsToSend.forEach((submission) => {
+              const feedbacksToSend = feedbacks.filter(
+                (f) => f.submission_id === submission.id
+              );
+              feedbacksToSend.forEach((feedback) => {
+                items.push({ exercise, submission, feedback });
+              });
+            });
+          }
+          if (items.length === 0) {
+            alert("No feedback to send");
+            return;
+          }
+          mutate(items);
         }}
-        disabled={loading}
+        disabled={!exercise || isLoading || isLoadingSubmissions || isLoadingFeedbacks}
       >
-        {loading ? "Loading..." : "Send Feedback"}
+        {exercise
+          ? isLoading || isLoadingSubmissions || isLoadingFeedbacks
+            ? "Loading..."
+            : "Send feedback"
+          : "Please select an exercise"}
       </button>
     </div>
   );
