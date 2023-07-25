@@ -36,7 +36,7 @@ export default function FileEditor({
   const monaco = useMonaco();
   const editorRef = useRef<editor.IStandaloneCodeEditor>();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  const portalNodes = useMemo(() => feedbacksToRender?.map(() => portals.createHtmlPortalNode()), [feedbacks]);
+  const portalNodes = useMemo(() => feedbacksToRender?.map(() => portals.createHtmlPortalNode()), [feedbacks, content, filePath]);
   const resizeObservers = useRef<(ResizeObserver | null)[]>([]);
   const [hoverPosition, setHoverPosition] = useState<Position | undefined>(undefined);
   const [selection, setSelection] = useState<Selection | undefined>(undefined);
@@ -57,25 +57,11 @@ export default function FileEditor({
     // TODO create empty feedback
   };
 
-  // Update the model when the content or filePath changes (for syntax highlighting)
-  useEffect(() => {
-    if (!monaco) return;  
-    const path = monaco.Uri.parse(filePath || "");
-    monaco.editor.getModel(path)?.dispose();
-    const model = monaco.editor.createModel(content, undefined, path);
-    editorRef.current?.setModel(model);
-  }, [monaco, filePath, content]);
+  // Setup feedback widgets for each feedback
+  const setupFeedbackWidgets = (editor: editor.IStandaloneCodeEditor) => {
+    const feedbackRanges = feedbacksToRender?.map((feedback) => getFeedbackRange(content, feedback));
 
-  const handleEditorDidMount = (
-    editor: editor.IStandaloneCodeEditor,
-    monaco: Monaco
-  ) => {
-    editorRef.current = editor;
-
-    const feedbackRanges = feedbacksToRender?.map((feedback) =>
-      getFeedbackRange(content, feedback)
-    );
-
+    // Add feedback overlay widgets for each feedback
     let overlayNodes: HTMLDivElement[] = [];
     feedbacksToRender?.forEach((_, index) => {
       const portalNode = portalNodes![index]!;
@@ -95,6 +81,7 @@ export default function FileEditor({
       overlayNodes.push(overlayNode);
     });
 
+    // Add view zones for each feedback to push the content down
     editor.changeViewZones(function (changeAccessor) {
       feedbacksToRender?.forEach((feedback, index) => {
         const overlayNode = overlayNodes[index];
@@ -131,6 +118,7 @@ export default function FileEditor({
       });
     });
 
+    // Add line decorations for each feedback to highlight the text
     if (feedbackWidgetDecorationsCollection) {
       feedbackWidgetDecorationsCollection.clear();
     }
@@ -155,7 +143,11 @@ export default function FileEditor({
       ) ?? []
     );
     setFeedbackWidgetDecorationsCollection(newDecorationsCollection);
+  }
 
+  // Setup listeners for adding feedback
+  // Listening for mouse and selection events for adding feedback
+  const setupAddFeedbackListeners = (editor: editor.IStandaloneCodeEditor) => {
     editor.onMouseMove(function (e) {
       setHoverPosition(e.target.position ?? undefined);
     });
@@ -178,13 +170,10 @@ export default function FileEditor({
       }
       isAddFeedbackPressed.current = false;
     });
-  };
+  }
 
-  useEffect(() => {
-    if (!editorRef.current || !monaco) {
-      return;
-    }
-
+  // Setup decorations for adding feedback (in the gutter)
+  const setupAddFeedbackDecorations = (editor: editor.IStandaloneCodeEditor, monaco: Monaco) => {
     if (addFeedbackDecorationsCollection) {
       addFeedbackDecorationsCollection.clear();
     }
@@ -219,7 +208,7 @@ export default function FileEditor({
         },
       ];
       const newAddFeedbackDecorationsCollection =
-        editorRef.current.createDecorationsCollection(decorations);
+        editor.createDecorationsCollection(decorations);
       setAddFeedbackDecorationsCollection(newAddFeedbackDecorationsCollection);
     } else if (hoverPosition) {
       const decorations: editor.IModelDeltaDecoration[] = [
@@ -246,34 +235,57 @@ export default function FileEditor({
         },
       ];
       const newAddFeedbackDecorationsCollection =
-        editorRef.current.createDecorationsCollection(decorations);
+        editor.createDecorationsCollection(decorations);
       setAddFeedbackDecorationsCollection(newAddFeedbackDecorationsCollection);
     } else {
       setAddFeedbackDecorationsCollection(undefined);
     }
+  }
+
+  const setupEditor = () => {
+    if (!editorRef.current || !monaco) return;
+    setupFeedbackWidgets(editorRef.current);
+    setupAddFeedbackListeners(editorRef.current);
+    setupAddFeedbackDecorations(editorRef.current, monaco);
+  }
+
+
+  // Update the model when the content or filePath changes (for syntax highlighting)
+  useEffect(() => {
+    if (!monaco) return;  
+    const path = monaco.Uri.parse(filePath || "");
+    monaco.editor.getModel(path)?.dispose();
+    const model = monaco.editor.createModel(content, undefined, path);
+    editorRef.current?.setModel(model);
+  }, [monaco, filePath, content]);
+
+  // Setup editor when it is mounted
+  const handleEditorDidMount = (
+    editor: editor.IStandaloneCodeEditor,
+    monaco: Monaco
+  ) => {
+    editorRef.current = editor;
+    setupEditor();
+  };
+
+  // Update add feedback decorations when the hover position or selection changes
+  useEffect(() => {
+    if (!editorRef.current || !monaco) return;
+    setupAddFeedbackDecorations(editorRef.current, monaco);
   }, [hoverPosition, selection]);
 
-  // Cleanup on unmount
+  // Setup editor when something changes
   useEffect(() => {
-    if (editorRef.current && monaco) {
-      handleEditorDidMount(editorRef.current, monaco);
-    }
+    setupEditor();
+  }, [feedbacks, content, filePath, monaco, editorRef]);
+
+  // Cleanup observers on unmount
+  useEffect(() => {
     return () => {
       resizeObservers.current.forEach((observer) => observer?.disconnect());
       resizeObservers.current = [];
     };
   }, []);
-
-  useEffect(() => {
-    console.log("FileEditor useEffect []")
-    return () => {
-      console.log("FileEditor useEffect [] return")
-    }
-  }, []);
-
-  useEffect(() => {
-    console.log("FileEditor should re-render")
-  }, [feedbacks, content, filePath, monaco, editorRef]);
 
   return (
     <div className="h-[50vh]">
