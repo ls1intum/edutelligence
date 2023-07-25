@@ -3,12 +3,13 @@ import type { ExerciseType } from "./exercise";
 
 type FeedbackBase = {
   id?: number;
-  type: ExerciseType;
+  type: ExerciseType; // Playground only
   title: string;
   description: string;
   credits: number;
   exercise_id: number;
   submission_id: number;
+  is_suggestion?: boolean; // Playground only
   meta: {
     [key: string]: any;
   };

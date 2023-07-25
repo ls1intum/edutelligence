@@ -2,7 +2,7 @@ import type { ExerciseType } from "./exercise";
 
 type SubmissionBase = {
     id: number;
-    type: ExerciseType;
+    type: ExerciseType; // Playground only
     exercise_id: number;
     meta: {
         [key: string]: any;

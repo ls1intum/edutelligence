@@ -72,6 +72,31 @@ function replaceJsonPlaceholders(
   return result;
 }
 
+/**
+ * Adds the exercise type to all submissions and feedbacks in the given json.
+ * This is only for the playground, because the exercise type is not provided in the json for convenience.
+ * 
+ * @param json - the json to add the exercise type to
+ * @returns the json with the exercise type added to all submissions and feedbacks
+ */
+function addExerciseTypeToSubmissionsAndFeedbacks(json: any): any {
+  const exerciseType = json.type;
+
+  const submissions = json.submissions.map((submissionJson: any) => {
+    submissionJson.type = exerciseType;
+    const feedbacks = submissionJson.feedbacks.map((feedbackJson: any) => {
+      feedbackJson.type = exerciseType;
+      return feedbackJson;
+    });
+    submissionJson.feedbacks = feedbacks;
+    return submissionJson;
+  });
+  json.submissions = submissions;
+  return json;
+}
+
+
+
 function getExerciseJSON(
   mode: Mode,
   exerciseId: number,
@@ -85,13 +110,15 @@ function getExerciseJSON(
     `exercise-${exerciseId}.json`
   );
   if (fs.existsSync(exercisePath)) {
-    const exerciseJson = JSON.parse(fs.readFileSync(exercisePath, "utf8"));
-    return replaceJsonPlaceholders(
+    let exerciseJson = JSON.parse(fs.readFileSync(exercisePath, "utf8"));
+    exerciseJson = replaceJsonPlaceholders(
       mode,
       exerciseJson,
       exerciseId,
       athenaOrigin
     );
+    exerciseJson = addExerciseTypeToSubmissionsAndFeedbacks(exerciseJson);
+    return exerciseJson;
   }
   throw new Error(`Exercise ${exerciseId} not found`);
 }
