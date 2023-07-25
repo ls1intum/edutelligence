@@ -9,19 +9,12 @@ type InlineFeedbackProps = {
 };
 
 export default function InlineFeedback({
-  feedback: propsFeedback,
-  onFeedbackChange: propsOnFeedbackChange,
+  feedback,
+  onFeedbackChange,
 }: InlineFeedbackProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const [feedback, onFeedbackChange] = useState<Feedback | undefined>(
-    propsFeedback
-  );
-
-  if (!feedback) {
-    return null;
-  }
-
+  
   return (
     <div className="m-2 border border-gray-300 rounded-lg text-sm max-w-3xl">
       <div className="flex items-center justify-start px-4 py-2 border-b border-gray-300 text-xs text-gray-600">
