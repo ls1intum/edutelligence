@@ -1,32 +1,34 @@
-import type { Submission } from "@/model/submission";
+import type { ModuleMeta } from "@/model/health_response";
 import type { Exercise } from "@/model/exercise";
+import type { Submission } from "@/model/submission";
+import type { Feedback } from "@/model/feedback";
 
 import { useEffect, useState } from "react";
 
+import { useBaseInfo } from "@/hooks/base_info_context";
+import useFeedbacks from "@/hooks/playground/feedbacks";
+
+import Disclosure from "@/components/disclosure";
 import ExerciseSelect from "@/components/selectors/exercise_select";
 import SubmissionSelect from "@/components/selectors/submission_select";
 import ExerciseDetail from "@/components/details/exercise_detail";
 import SubmissionDetail from "@/components/details/submission_detail";
-import { useFeedbacks } from "@/helpers/client/get_data";
-
-import { ModuleRequestProps } from ".";
-import { Feedback } from "@/model/feedback";
-import Disclosure from "../disclosure";
 
 export default function FeedbackEditorTest({
-  mode,
   module,
-}: ModuleRequestProps) {
+}: { module: ModuleMeta}) {
+  const { mode } = useBaseInfo();
+
   const [exercise, setExercise] = useState<Exercise | undefined>(undefined);
   const [submission, setSubmission] = useState<Submission | undefined>(
     undefined
   );
 
   const {
-    feedbacks: loadedFeedbacks,
+    data: loadedFeedbacks,
     isLoading: isFeedbackLoading,
     error: feedbackError,
-  } = useFeedbacks(mode, exercise);
+  } = useFeedbacks(exercise);
 
   const [feedbacks, setFeedbacks] = useState<Feedback[]>([]);
 
@@ -50,7 +52,6 @@ export default function FeedbackEditorTest({
     <div className="bg-white rounded-md p-4 mb-8">
       <h3 className="text-2xl font-bold mb-4">Feedback Editor Test</h3>
       <ExerciseSelect
-        mode={mode}
         exerciseType={module.type}
         exercise={exercise}
         onChange={setExercise}
@@ -58,13 +59,12 @@ export default function FeedbackEditorTest({
       {exercise && (
         <>
           <SubmissionSelect
-            mode={mode}
-            exercise_id={exercise?.id}
+            exercise={exercise}
             submission={submission}
             onChange={setSubmission}
           />
           <div className="space-y-1 mt-2">
-            <ExerciseDetail exercise={exercise} mode={mode} />
+            <ExerciseDetail exercise={exercise} />
             {submission && (
               <Disclosure title="Submission Detail">
                 <SubmissionDetail
