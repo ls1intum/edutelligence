@@ -6,7 +6,7 @@ import { IRange, Position, Selection, editor } from "monaco-editor";
 import * as portals from "react-reverse-portal";
 import { createRoot } from "react-dom/client";
 
-import { getFeedbackRange } from "@/model/feedback";
+import { getFeedbackRange, getFeedbackReferenceType } from "@/model/feedback";
 import InlineFeedback from "./inline_feedback";
 
 type FileEditorProps = {
@@ -91,14 +91,25 @@ export default function FileEditor({
     });
 
     editor.changeViewZones(function (changeAccessor) {
-      feedbacksToRender?.forEach((_, index) => {
+      feedbacksToRender?.forEach((feedback, index) => {
         const overlayNode = overlayNodes[index];
         const zoneNode = document.createElement("div");
         zoneNode.id = `feedback-${id}-${index}-zone`;
 
+        const referenceType = getFeedbackReferenceType(feedback);
+        // Unreferenced and unreferenced_file feedbacks are always shown at the top
+        const afterLineNumber = feedbackRanges![index]?.startLineNumber ?? 0;
+        // Order unreferenced feedback before unreferenced_file feedback
+        const afterColumn =
+          referenceType === "unreferenced"
+            ? 0
+            : referenceType === "unreferenced_file"
+            ? 1
+            : feedbackRanges![index]?.startColumn;
+
         const zoneId = changeAccessor.addZone({
-          afterLineNumber: feedbackRanges![index]?.endLineNumber || 0,
-          afterColumn: feedbackRanges![index]?.endColumn,
+          afterLineNumber: afterLineNumber,
+          afterColumn: afterColumn,
           domNode: zoneNode,
           get heightInPx() {
             return overlayNode.offsetHeight;
