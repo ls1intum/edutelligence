@@ -1,8 +1,8 @@
 import type { ProgrammingSubmission } from "@/model/submission";
 import { getOnFeedbackChange, type Feedback, getFeedbackReferenceType } from "@/model/feedback";
 
-import CodeView from "@/components/details/code_view";
-import InlineFeedback from "@/components/details/code_view/inline_feedback";
+import CodeEditor from "@/components/details/editor/code_editor";
+import InlineFeedback from "@/components/details/editor/inline_feedback";
 
 type ProgrammingSubmissionDetailProps = {
   submission: ProgrammingSubmission;
@@ -18,7 +18,7 @@ export default function ProgrammingSubmissionDetail({
   const unreferencedFeedbacks = feedbacks?.filter((feedback) => getFeedbackReferenceType(feedback) === "unreferenced");
   return (
     <>
-      <CodeView
+      <CodeEditor
         repository_url={submission.repository_url}
         feedbacks={feedbacks}
         onFeedbacksChange={onFeedbacksChange}

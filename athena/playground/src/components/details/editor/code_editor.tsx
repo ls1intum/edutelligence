@@ -8,13 +8,13 @@ import { useFetchAndUnzip } from "@/helpers/fetch_and_unzip";
 import FileTree from "./file_tree";
 import FileEditor from "./file_editor";
 
-type CodeViewProps = {
+type CodeEditorProps = {
   repository_url: string;
   feedbacks?: Feedback[];
   onFeedbacksChange?: (feedback: Feedback[]) => void;
 };
 
-export default function CodeView({ repository_url, feedbacks, onFeedbacksChange }: CodeViewProps) {
+export default function CodeEditor({ repository_url, feedbacks, onFeedbacksChange }: CodeEditorProps) {
   const repository = useFetchAndUnzip(repository_url);
   const [selectedFile, setSelectedFile] = useState<string | undefined>(
     undefined
