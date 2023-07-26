@@ -1,10 +1,8 @@
 import type { Feedback, FeedbackReferenceType } from "@/model/feedback";
 
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Editor, Monaco, useMonaco } from "@monaco-editor/react";
 import { Position, Selection, editor } from "monaco-editor";
-import * as portals from "react-reverse-portal";
-import { createRoot } from "react-dom/client";
 
 import {
   getFeedbackRange,
@@ -43,25 +41,12 @@ export default function FileEditor({
     }
   });
 
-  const id = useId();
   const monaco = useMonaco();
   const editorRef = useRef<editor.IStandaloneCodeEditor>();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const feedbackWidgetsPortalNodes = useMemo(
-    () => feedbacksToRender?.map(() => portals.createHtmlPortalNode()),
-    [feedbacks, content, filePath]
-  );
-  const addFileFeedbackPortalNode = useRef(portals.createHtmlPortalNode());
   const feedbackWidgetsResizeObservers = useRef<(ResizeObserver | null)[]>([]);
   const addFileFeedbackResizeObserver = useRef<ResizeObserver | null>(null);
-  const [hoverPosition, setHoverPosition] = useState<Position | undefined>(
-    undefined
-  );
+  const [hoverPosition, setHoverPosition] = useState<Position | undefined>(undefined);
   const [selection, setSelection] = useState<Selection | undefined>(undefined);
-  const [
-    feedbackWidgetDecorationsCollection,
-    setFeedbackWidgetDecorationsCollection,
-  ] = useState<editor.IEditorDecorationsCollection | undefined>(undefined);
   const [
     addFeedbackDecorationsCollection,
     setAddFeedbackDecorationsCollection,
@@ -354,8 +339,7 @@ export default function FileEditor({
               </button>
             </EditorWidget>
           )}
-          {feedbackWidgetsPortalNodes &&
-            feedbacks &&
+          { feedbacks &&
             feedbacksToRender &&
             feedbacksToRender.map((feedback, index) => {
               const model = editorRef.current?.getModel();
