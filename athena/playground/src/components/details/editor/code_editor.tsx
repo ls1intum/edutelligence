@@ -12,9 +12,10 @@ type CodeEditorProps = {
   repository_url: string;
   feedbacks?: Feedback[];
   onFeedbacksChange?: (feedback: Feedback[]) => void;
+  createNewFeedback?: () => Feedback;
 };
 
-export default function CodeEditor({ repository_url, feedbacks, onFeedbacksChange }: CodeEditorProps) {
+export default function CodeEditor({ repository_url, feedbacks, onFeedbacksChange, createNewFeedback }: CodeEditorProps) {
   const repository = useFetchAndUnzip(repository_url);
   const [selectedFile, setSelectedFile] = useState<string | undefined>(
     undefined

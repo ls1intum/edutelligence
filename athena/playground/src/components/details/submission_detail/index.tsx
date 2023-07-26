@@ -15,17 +15,37 @@ export default function SubmissionDetail({
   feedbacks,
   onFeedbacksChange,
 }: SubmissionDetailProps) {
+  const createNewFeedback = () => {
+    const newFeedback: Feedback = {
+      id: undefined,
+      credits: 0,
+      title: "",
+      description: "",
+      type: "text",
+      exercise_id: submission.exercise_id,
+      submission_id: submission.id,
+      meta: {},
+    };
+    return newFeedback;
+  };
+
   if (submission.type === "programming") {
     return (
       <ProgrammingSubmissionDetail
         submission={submission}
         feedbacks={feedbacks}
         onFeedbacksChange={onFeedbacksChange}
+        createNewFeedback={createNewFeedback}
       />
     );
   } else if (submission.type === "text") {
     return (
-      <TextSubmissionDetail submission={submission} feedbacks={feedbacks} onFeedbacksChange={onFeedbacksChange} />
+      <TextSubmissionDetail
+        submission={submission}
+        feedbacks={feedbacks}
+        onFeedbacksChange={onFeedbacksChange}
+        createNewFeedback={createNewFeedback}
+      />
     );
   } else {
     return null;

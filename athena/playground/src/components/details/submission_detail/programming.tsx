@@ -8,12 +8,14 @@ type ProgrammingSubmissionDetailProps = {
   submission: ProgrammingSubmission;
   feedbacks?: Feedback[];
   onFeedbacksChange?: (feedback: Feedback[]) => void;
+  createNewFeedback: () => Feedback;
 };
 
 export default function ProgrammingSubmissionDetail({
   submission,
   feedbacks,
   onFeedbacksChange,
+  createNewFeedback,
 }: ProgrammingSubmissionDetailProps) {
   const unreferencedFeedbacks = feedbacks?.filter((feedback) => getFeedbackReferenceType(feedback) === "unreferenced");
   return (
@@ -22,6 +24,7 @@ export default function ProgrammingSubmissionDetail({
         repository_url={submission.repository_url}
         feedbacks={feedbacks}
         onFeedbacksChange={onFeedbacksChange}
+        createNewFeedback={createNewFeedback}
       />
       {((unreferencedFeedbacks && unreferencedFeedbacks.length > 0) || onFeedbacksChange) && (
         <div className="space-y-2 mt-5">
@@ -40,9 +43,7 @@ export default function ProgrammingSubmissionDetail({
           {onFeedbacksChange && (
             <button
               className="mx-2 my-1 border-2 border-primary-400 border-dashed text-primary-500 hover:text-primary-600 hover:bg-primary-50 hover:border-primary-500 rounded-lg font-medium max-w-3xl w-full py-2"
-              onClick={() => {
-                console.log("TODO: Add feedback");
-              }}
+              onClick={() => onFeedbacksChange([...(feedbacks ?? []), createNewFeedback()])}
             >
               Add feedback
             </button>

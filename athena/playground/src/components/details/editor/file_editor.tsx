@@ -14,6 +14,7 @@ type FileEditorProps = {
   filePath?: string;
   feedbacks?: Feedback[];
   onFeedbacksChange?: (feedback: Feedback[]) => void;
+  createNewFeedback?: () => Feedback;
 };
 
 export default function FileEditor({
@@ -21,6 +22,7 @@ export default function FileEditor({
   filePath,
   feedbacks,
   onFeedbacksChange,
+  createNewFeedback,
 }: FileEditorProps) {
   // Only render feedbacks that are relevant to the current file
   // Unreferenced feedbacks are always shown
@@ -158,7 +160,7 @@ export default function FileEditor({
 
   // Setup add file feedback button
   const setupAddFileFeedbackWidget = (editor: editor.IStandaloneCodeEditor) => {
-    if (!onFeedbacksChange) return;
+    if (!onFeedbacksChange && filePath) return;
 
     // Add file feedback button overlay widget
     const overlayNode = document.createElement("div");
@@ -367,7 +369,7 @@ export default function FileEditor({
         defaultValue="Please select a file"
         onMount={handleEditorDidMount}
       />
-      {onFeedbacksChange && (
+      {onFeedbacksChange && filePath && (
         <portals.InPortal node={addFileFeedbackPortalNode.current}>
           <button
             className="mx-2 my-1 border-2 border-primary-400 border-dashed text-primary-500 hover:text-primary-600 hover:bg-primary-50 hover:border-primary-500 rounded-lg font-medium max-w-3xl w-full py-2"
