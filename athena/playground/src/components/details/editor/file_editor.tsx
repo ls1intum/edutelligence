@@ -40,14 +40,14 @@ export default function FileEditor({
   const monaco = useMonaco();
   const editorRef = useRef<editor.IStandaloneCodeEditor>();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  const portalNodes = useMemo(
+  const feedbackWidgetsPortalNodes = useMemo(
     () => feedbacksToRender?.map(() => portals.createHtmlPortalNode()),
     [feedbacks, content, filePath]
   );
-  const resizeObservers = useRef<(ResizeObserver | null)[]>([]);
-  const [hoverPosition, setHoverPosition] = useState<Position | undefined>(
-    undefined
-  );
+  const addFileFeedbackPortalNode = useRef(portals.createHtmlPortalNode());
+  const feedbackWidgetsResizeObservers = useRef<(ResizeObserver | null)[]>([]);
+  const addFileFeedbackResizeObserver = useRef<ResizeObserver | null>(null);
+  const [hoverPosition, setHoverPosition] = useState<Position | undefined>(undefined);
   const [selection, setSelection] = useState<Selection | undefined>(undefined);
   const [
     feedbackWidgetDecorationsCollection,
@@ -75,7 +75,7 @@ export default function FileEditor({
     // Add feedback overlay widgets for each feedback
     let overlayNodes: HTMLDivElement[] = [];
     feedbacksToRender?.forEach((_, index) => {
-      const portalNode = portalNodes![index]!;
+      const portalNode = feedbackWidgetsPortalNodes![index]!;
 
       const overlayNode = document.createElement("div");
       overlayNode.id = `feedback-${id}-${index}-overlay`;
@@ -125,7 +125,7 @@ export default function FileEditor({
           editor.changeViewZones((accessor) => accessor.layoutZone(zoneId));
         });
         observer.observe(overlayNode);
-        resizeObservers.current.push(observer);
+        feedbackWidgetsResizeObservers.current.push(observer);
       });
     });
 
@@ -154,6 +154,47 @@ export default function FileEditor({
       ) ?? []
     );
     setFeedbackWidgetDecorationsCollection(newDecorationsCollection);
+  };
+
+  // Setup add file feedback button
+  const setupAddFileFeedbackWidget = (editor: editor.IStandaloneCodeEditor) => {
+    if (!onFeedbacksChange) return;
+
+    // Add file feedback button overlay widget
+    const overlayNode = document.createElement("div");
+    overlayNode.id = `feedback-${id}-add-file-feedback-overlay`;
+    overlayNode.style.width = "100%";
+    const root = createRoot(overlayNode);
+    root.render(<portals.OutPortal node={addFileFeedbackPortalNode.current} />);
+
+    var overlayWidget = {
+      getId: () => `feedback-${id}-add-file-feedback-widget`,
+      getDomNode: () => overlayNode,
+      getPosition: () => null,
+    };
+    editor.addOverlayWidget(overlayWidget);
+
+    // Add view zone for the file feedback button to push the content down
+    editor.changeViewZones(function (changeAccessor) {
+      const zoneNode = document.createElement("div");
+      zoneNode.id = `feedback-${id}-add-file-feedback-zone`;
+      const zoneId = changeAccessor.addZone({
+        afterLineNumber: 0,
+        afterColumn: 0,
+        domNode: zoneNode,
+        get heightInPx() {
+          return overlayNode.offsetHeight;
+        },
+        onDomNodeTop: (top) => {
+          overlayNode.style.top = top + "px";
+        },
+      });
+      const observer = new ResizeObserver(() => {
+        editor.changeViewZones((accessor) => accessor.layoutZone(zoneId));
+      });
+      observer.observe(overlayNode);
+      addFileFeedbackResizeObserver.current = observer;
+    });
   };
 
   // Setup listeners for adding feedback
@@ -258,9 +299,11 @@ export default function FileEditor({
 
   const setupEditor = () => {
     if (!editorRef.current || !monaco) return;
-    setupFeedbackWidgets(editorRef.current);
-    setupAddFeedbackListeners(editorRef.current);
-    setupAddFeedbackDecorations(editorRef.current, monaco);
+    const editor = editorRef.current;
+    setupFeedbackWidgets(editor);
+    setupAddFileFeedbackWidget(editor);
+    setupAddFeedbackListeners(editor);
+    setupAddFeedbackDecorations(editor, monaco);
   };
 
   // Update the model when the content or filePath changes (for syntax highlighting)
@@ -295,21 +338,15 @@ export default function FileEditor({
   // Cleanup observers on unmount
   useEffect(() => {
     return () => {
-      resizeObservers.current.forEach((observer) => observer?.disconnect());
-      resizeObservers.current = [];
+      feedbackWidgetsResizeObservers.current.forEach((observer) => observer?.disconnect());
+      feedbackWidgetsResizeObservers.current = [];
+      addFileFeedbackResizeObserver.current?.disconnect();
+      addFileFeedbackResizeObserver.current = null;
     };
   }, []);
 
   return (
     <div className="h-[50vh]">
-      <button
-        className="mx-2 my-1 border-2 border-primary-400 border-dashed text-primary-500 hover:text-primary-600 hover:bg-primary-50 hover:border-primary-500 rounded-lg font-medium max-w-3xl w-full py-2"
-        onClick={() => {
-          console.log("TODO: Add feedback");
-        }}
-      >
-        Add file feedback
-      </button>
       <Editor
         options={{
           automaticLayout: true,
@@ -328,27 +365,30 @@ export default function FileEditor({
         value={content}
         path={filePath}
         defaultValue="Please select a file"
-        onMount={(editor, monaco) => {
-          console.log("Editor.onMount");
-          handleEditorDidMount(editor, monaco);
-        }}
-        onChange={(value, ev) => {
-          console.log("Editor.onChange");
-        }}
-        onValidate={(markers) => {
-          console.log("Editor.onValidate");
-        }}
-        beforeMount={(monaco) => {
-          console.log("Editor.beforeMount");
-        }}
+        onMount={handleEditorDidMount}
       />
-      {portalNodes &&
+      {onFeedbacksChange && (
+        <portals.InPortal node={addFileFeedbackPortalNode.current}>
+          <button
+            className="mx-2 my-1 border-2 border-primary-400 border-dashed text-primary-500 hover:text-primary-600 hover:bg-primary-50 hover:border-primary-500 rounded-lg font-medium max-w-3xl w-full py-2"
+            onClick={() => {
+              addFeedbackPressed("unreferenced_file");
+            }}
+          >
+            Add file feedback
+          </button>
+        </portals.InPortal>
+      )}
+      {feedbackWidgetsPortalNodes &&
         feedbacks &&
         feedbacksToRender &&
         feedbacksToRender.map((feedback, index) => {
           return (
-            portalNodes[index] && (
-              <portals.InPortal node={portalNodes[index]} key={feedback.id}>
+            feedbackWidgetsPortalNodes[index] && (
+              <portals.InPortal
+                node={feedbackWidgetsPortalNodes[index]}
+                key={feedback.id}
+              >
                 <div className="mr-4">
                   <InlineFeedback
                     feedback={feedback}
