@@ -1,6 +1,6 @@
 import type { Feedback } from "@/model/feedback";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { twMerge } from "tailwind-merge";
 import TextareaAutosize from "react-textarea-autosize";
 
