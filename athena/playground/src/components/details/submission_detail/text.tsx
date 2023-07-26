@@ -35,7 +35,7 @@ export default function TextSubmissionDetail({
           ))}
           {onFeedbacksChange && (
             <button
-              className="mx-2 my-1 border-2 border-primary-300 border-dashed text-primary-500 hover:text-primary-600 hover:bg-primary-50 hover:border-primary-400 rounded-lg font-medium max-w-3xl w-full py-2"
+              className="mx-2 my-1 border-2 border-primary-400 border-dashed text-primary-500 hover:text-primary-600 hover:bg-primary-50 hover:border-primary-500 rounded-lg font-medium max-w-3xl w-full py-2"
               onClick={() => {
                 console.log("TODO: Add feedback");
               }}

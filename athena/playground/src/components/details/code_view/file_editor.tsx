@@ -25,6 +25,10 @@ export default function FileEditor({
   // Only render feedbacks that are relevant to the current file
   // Unreferenced feedbacks are always shown
   const feedbacksToRender = feedbacks?.filter((feedback) => {
+    const referenceType = getFeedbackReferenceType(feedback);
+    if (referenceType === "unreferenced") {
+      return false;
+    }
     if ("file_path" in feedback) {
       return feedback.file_path === filePath;
     } else {
@@ -36,13 +40,18 @@ export default function FileEditor({
   const monaco = useMonaco();
   const editorRef = useRef<editor.IStandaloneCodeEditor>();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  const portalNodes = useMemo(() => feedbacksToRender?.map(() => portals.createHtmlPortalNode()), [feedbacks, content, filePath]);
+  const portalNodes = useMemo(
+    () => feedbacksToRender?.map(() => portals.createHtmlPortalNode()),
+    [feedbacks, content, filePath]
+  );
   const resizeObservers = useRef<(ResizeObserver | null)[]>([]);
-  const [hoverPosition, setHoverPosition] = useState<Position | undefined>(undefined);
+  const [hoverPosition, setHoverPosition] = useState<Position | undefined>(
+    undefined
+  );
   const [selection, setSelection] = useState<Selection | undefined>(undefined);
   const [
-    feedbackWidgetDecorationsCollection, 
-    setFeedbackWidgetDecorationsCollection
+    feedbackWidgetDecorationsCollection,
+    setFeedbackWidgetDecorationsCollection,
   ] = useState<editor.IEditorDecorationsCollection | undefined>(undefined);
   const [
     addFeedbackDecorationsCollection,
@@ -59,7 +68,9 @@ export default function FileEditor({
 
   // Setup feedback widgets for each feedback
   const setupFeedbackWidgets = (editor: editor.IStandaloneCodeEditor) => {
-    const feedbackRanges = feedbacksToRender?.map((feedback) => getFeedbackRange(content, feedback));
+    const feedbackRanges = feedbacksToRender?.map((feedback) =>
+      getFeedbackRange(content, feedback)
+    );
 
     // Add feedback overlay widgets for each feedback
     let overlayNodes: HTMLDivElement[] = [];
@@ -143,7 +154,7 @@ export default function FileEditor({
       ) ?? []
     );
     setFeedbackWidgetDecorationsCollection(newDecorationsCollection);
-  }
+  };
 
   // Setup listeners for adding feedback
   // Listening for mouse and selection events for adding feedback
@@ -170,10 +181,13 @@ export default function FileEditor({
       }
       isAddFeedbackPressed.current = false;
     });
-  }
+  };
 
   // Setup decorations for adding feedback (in the gutter)
-  const setupAddFeedbackDecorations = (editor: editor.IStandaloneCodeEditor, monaco: Monaco) => {
+  const setupAddFeedbackDecorations = (
+    editor: editor.IStandaloneCodeEditor,
+    monaco: Monaco
+  ) => {
     if (addFeedbackDecorationsCollection) {
       addFeedbackDecorationsCollection.clear();
     }
@@ -240,19 +254,18 @@ export default function FileEditor({
     } else {
       setAddFeedbackDecorationsCollection(undefined);
     }
-  }
+  };
 
   const setupEditor = () => {
     if (!editorRef.current || !monaco) return;
     setupFeedbackWidgets(editorRef.current);
     setupAddFeedbackListeners(editorRef.current);
     setupAddFeedbackDecorations(editorRef.current, monaco);
-  }
-
+  };
 
   // Update the model when the content or filePath changes (for syntax highlighting)
   useEffect(() => {
-    if (!monaco) return;  
+    if (!monaco) return;
     const path = monaco.Uri.parse(filePath || "");
     monaco.editor.getModel(path)?.dispose();
     const model = monaco.editor.createModel(content, undefined, path);
@@ -289,6 +302,14 @@ export default function FileEditor({
 
   return (
     <div className="h-[50vh]">
+      <button
+        className="mx-2 my-1 border-2 border-primary-400 border-dashed text-primary-500 hover:text-primary-600 hover:bg-primary-50 hover:border-primary-500 rounded-lg font-medium max-w-3xl w-full py-2"
+        onClick={() => {
+          console.log("TODO: Add feedback");
+        }}
+      >
+        Add file feedback
+      </button>
       <Editor
         options={{
           automaticLayout: true,
@@ -321,7 +342,9 @@ export default function FileEditor({
           console.log("Editor.beforeMount");
         }}
       />
-      {portalNodes && feedbacks && feedbacksToRender &&
+      {portalNodes &&
+        feedbacks &&
+        feedbacksToRender &&
         feedbacksToRender.map((feedback, index) => {
           return (
             portalNodes[index] && (
