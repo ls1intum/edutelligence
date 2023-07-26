@@ -64,8 +64,68 @@ export default function FileEditor({
 
   // Called when the user presses the add feedback button
   const addFeedbackPressed = (referenceType: FeedbackReferenceType) => {
-    console.log("Add feedback", referenceType);
-    // TODO create empty feedback
+    const model = editorRef.current?.getModel()
+    if (!createNewFeedback || !onFeedbacksChange || !model) return;
+    let newFeedback = createNewFeedback();
+    if (referenceType === "referenced") {
+      console.log("referenced");
+      if (newFeedback.type === "text") {
+        if (selection && !selection.isEmpty()) {
+          const startIndex = model.getOffsetAt({
+            lineNumber: selection.startLineNumber,
+            column: selection.startColumn,
+          });
+          const endIndex = model.getOffsetAt({
+            lineNumber: selection.endLineNumber,
+            column: selection.endColumn,
+          });
+          newFeedback = {
+            ...newFeedback,
+            index_start: startIndex,
+            index_end: endIndex,
+          };
+        } else if (hoverPosition) {
+          const startIndex = model.getOffsetAt({
+            lineNumber: hoverPosition.lineNumber,
+            column: model.getLineMinColumn(hoverPosition.lineNumber),
+          });
+          const endIndex = model.getOffsetAt({
+            lineNumber: hoverPosition.lineNumber,
+            column: model.getLineMaxColumn(hoverPosition.lineNumber),
+          });
+          newFeedback = {
+            ...newFeedback,
+            index_start: startIndex,
+            index_end: endIndex,
+          };
+        }
+      } else if (newFeedback.type === "programming") {
+        if (selection && !selection.isEmpty()) {
+          newFeedback = {
+            ...newFeedback,
+            file_path: filePath,
+            line_start: selection.startLineNumber,
+            line_end: selection.endLineNumber,
+          };
+        } else if (hoverPosition) {
+          newFeedback = {
+            ...newFeedback,
+            file_path: filePath,
+            line_start: hoverPosition.lineNumber,
+            line_end: hoverPosition.lineNumber,
+          };
+        }
+      }
+    } else if (referenceType === "unreferenced_file") {
+      if (newFeedback.type === "programming") {
+        newFeedback = {
+          ...newFeedback,
+          file_path: filePath,
+        };
+      }
+    }
+    console.log(newFeedback);
+    onFeedbacksChange([...(feedbacks ?? []), newFeedback]);
   };
 
   // Setup feedback widgets for each feedback

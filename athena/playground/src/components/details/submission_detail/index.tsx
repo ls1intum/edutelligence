@@ -21,7 +21,7 @@ export default function SubmissionDetail({
       credits: 0,
       title: "",
       description: "",
-      type: "text",
+      type: submission.type,
       exercise_id: submission.exercise_id,
       submission_id: submission.id,
       meta: {},
