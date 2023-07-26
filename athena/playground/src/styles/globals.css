@@ -130,6 +130,7 @@ body {
     @apply rounded py-0.5;
   }
   .monaco-editor .inline-feedback-text.positive {
+    mix-blend-mode: multiply;
     @apply bg-green-200/50 text-green-800 !important;
   }
   .monaco-editor .inline-feedback-text.negative {

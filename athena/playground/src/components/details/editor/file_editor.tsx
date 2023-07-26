@@ -43,6 +43,7 @@ export default function FileEditor({
 
   const monaco = useMonaco();
   const editorRef = useRef<editor.IStandaloneCodeEditor>();
+  const [height, setHeight] = useState(100);
   const [hoverPosition, setHoverPosition] = useState<Position | undefined>(undefined);
   const [selection, setSelection] = useState<Selection | undefined>(undefined);
   const [
@@ -300,7 +301,6 @@ export default function FileEditor({
     editor: editor.IStandaloneCodeEditor,
     monaco: Monaco
   ) => {
-    console.log("Editor mounted");
     editorRef.current = editor;
     setIsMounted(true);
     setupEditor();
@@ -329,7 +329,7 @@ export default function FileEditor({
   }, [feedbacks, content, filePath, monaco, editorRef]);
 
   return (
-    <div className="h-[50vh]">
+    <>
       <Editor
         options={{
           automaticLayout: true,
@@ -379,7 +379,7 @@ export default function FileEditor({
                 editorRef.current && (
                   <EditorWidget
                     editor={editorRef.current}
-                    key={index}
+                    key={`feedback-${feedback.id}-${index}`}
                     afterLineNumber={range?.endLineNumber ?? 0}
                     afterColumn={range?.endColumn ?? 0}
                     filePath={filePath}
@@ -398,6 +398,6 @@ export default function FileEditor({
             })}
         </>
       )}
-    </div>
+    </>
   );
 }

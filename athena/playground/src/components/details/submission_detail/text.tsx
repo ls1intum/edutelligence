@@ -26,12 +26,14 @@ export default function TextSubmissionDetail({
   );
   return (
     <>
-      <FileEditor
-        content={submission.content}
-        feedbacks={feedbacks}
-        onFeedbacksChange={onFeedbacksChange}
-        createNewFeedback={createNewFeedback}
-      />
+      <div className="h-[50vh] border border-gray-200 rounded-lg overflow-hidden">
+        <FileEditor
+          content={submission.content}
+          feedbacks={feedbacks}
+          onFeedbacksChange={onFeedbacksChange}
+          createNewFeedback={createNewFeedback}
+        />
+      </div>
       {((unreferencedFeedbacks && unreferencedFeedbacks.length > 0) ||
         onFeedbacksChange) && (
         <div className="space-y-2 mt-5">
@@ -52,7 +54,9 @@ export default function TextSubmissionDetail({
           {onFeedbacksChange && (
             <button
               className="mx-2 my-1 border-2 border-primary-400 border-dashed text-primary-500 hover:text-primary-600 hover:bg-primary-50 hover:border-primary-500 rounded-lg font-medium max-w-3xl w-full py-2"
-              onClick={() => onFeedbacksChange([...(feedbacks ?? []), createNewFeedback()])}
+              onClick={() =>
+                onFeedbacksChange([...(feedbacks ?? []), createNewFeedback()])
+              }
             >
               Add feedback
             </button>

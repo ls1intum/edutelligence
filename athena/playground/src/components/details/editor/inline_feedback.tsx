@@ -45,9 +45,9 @@ export default function InlineFeedback({
           <input
             className={twMerge(
               "font-medium rounded pl-2.5 py-0.5 w-16 mt-2 border border-gray-300",
-              feedback.credits < 0
+              !isEditing && feedback.credits < 0 || isEditing && credits < 0
                 ? "bg-red-100 text-red-800"
-                : feedback.credits > 0
+                : !isEditing && feedback.credits > 0 || isEditing && credits > 0
                 ? "bg-green-100 text-green-800"
                 : "bg-gray-100 text-gray-800"
             )}
