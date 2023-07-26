@@ -43,8 +43,6 @@ export default function FileEditor({
 
   const monaco = useMonaco();
   const editorRef = useRef<editor.IStandaloneCodeEditor>();
-  const feedbackWidgetsResizeObservers = useRef<(ResizeObserver | null)[]>([]);
-  const addFileFeedbackResizeObserver = useRef<ResizeObserver | null>(null);
   const [hoverPosition, setHoverPosition] = useState<Position | undefined>(undefined);
   const [selection, setSelection] = useState<Selection | undefined>(undefined);
   const [
@@ -238,8 +236,6 @@ export default function FileEditor({
   const setupEditor = () => {
     if (!editorRef.current || !monaco) return;
     const editor = editorRef.current;
-    // setupFeedbackWidgets(editor);
-    // setupAddFileFeedbackWidget(editor);
     setupAddFeedbackListeners(editor);
     setupAddFeedbackDecorations(editor, monaco);
   };
@@ -251,7 +247,6 @@ export default function FileEditor({
     monaco.editor.getModel(path)?.dispose();
     const model = monaco.editor.createModel(content, undefined, path);
     editorRef.current?.setModel(model);
-    console.log("Model updated");
   }, [monaco, filePath, content]);
 
   // Setup editor when it is mounted
@@ -285,18 +280,6 @@ export default function FileEditor({
       filePath,
     };
   }, [feedbacks, content, filePath, monaco, editorRef]);
-
-  // Cleanup observers on unmount
-  useEffect(() => {
-    return () => {
-      feedbackWidgetsResizeObservers.current.forEach((observer) =>
-        observer?.disconnect()
-      );
-      feedbackWidgetsResizeObservers.current = [];
-      addFileFeedbackResizeObserver.current?.disconnect();
-      addFileFeedbackResizeObserver.current = null;
-    };
-  }, []);
 
   return (
     <div className="h-[50vh]">
