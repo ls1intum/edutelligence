@@ -8,9 +8,10 @@ type EditorWidgetProps = {
   children: React.ReactNode;
   afterLineNumber: number;
   afterColumn?: number;
+  filePath?: string;
 };
 
-export function EditorWidget({ editor, children, afterLineNumber, afterColumn }: EditorWidgetProps) {
+export function EditorWidget({ editor, children, afterLineNumber, afterColumn, filePath }: EditorWidgetProps) {
   const id = useId();
   const portalNode = useMemo(() => createHtmlPortalNode(), []);
   const resizeObserverRef = useRef<ResizeObserver>();
@@ -18,8 +19,6 @@ export function EditorWidget({ editor, children, afterLineNumber, afterColumn }:
   const zoneIdRef = useRef<string>();
   
   const updateWidget = () => {
-    console.log(`Create view zone for ${id}`)
-
     overlayWidgetRef.current && editor.removeOverlayWidget(overlayWidgetRef.current);
     zoneIdRef.current && editor.changeViewZones((accessor) => accessor.removeZone(zoneIdRef.current!));
 
@@ -66,8 +65,9 @@ export function EditorWidget({ editor, children, afterLineNumber, afterColumn }:
   };
  
   useEffect(() => {
-    console.log(`Mount ${id}`)
     updateWidget();
+
+    // Last resort workaround for the widget not being created
     const observer = new MutationObserver((mutationsList, observer) => {
       // If the widget doesn't exist, update it
       if (!document.getElementById(`widget-${id}-zone`)) {
@@ -79,11 +79,10 @@ export function EditorWidget({ editor, children, afterLineNumber, afterColumn }:
     observer.observe(document, { childList: true, subtree: true });
 
     return () => {
-      console.log(`Unmount ${id}`);
       resizeObserverRef.current?.disconnect();
       observer.disconnect();
     };
-  }, []);
+  }, [filePath]);
 
   return (
     <InPortal node={portalNode}>{children}</InPortal>

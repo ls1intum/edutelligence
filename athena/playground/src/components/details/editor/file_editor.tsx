@@ -66,6 +66,7 @@ export default function FileEditor({
     addFeedbackDecorationsCollection,
     setAddFeedbackDecorationsCollection,
   ] = useState<editor.IEditorDecorationsCollection | undefined>(undefined);
+  const [isMounted, setIsMounted] = useState(false);
 
   // Using state for non-react handlers is not working so we use a ref
   // This is a workaround to bridge the gap between react and monaco
@@ -399,6 +400,7 @@ export default function FileEditor({
     monaco.editor.getModel(path)?.dispose();
     const model = monaco.editor.createModel(content, undefined, path);
     editorRef.current?.setModel(model);
+    console.log("Model updated");
   }, [monaco, filePath, content]);
 
   // Setup editor when it is mounted
@@ -408,6 +410,7 @@ export default function FileEditor({
   ) => {
     console.log("Editor mounted");
     editorRef.current = editor;
+    setIsMounted(true);
     setupEditor();
   };
 
@@ -466,13 +469,14 @@ export default function FileEditor({
         defaultValue="Please select a file"
         onMount={handleEditorDidMount}
       />
-      {editorRef.current && (
+      {editorRef.current && isMounted && (
         <>
           {onFeedbacksChange && filePath && (
             <EditorWidget
               editor={editorRef.current}
               afterLineNumber={0}
               afterColumn={1000}
+              filePath={filePath}
             >
               <button
                 className="mx-2 my-1 border-2 border-primary-400 border-dashed text-primary-500 hover:text-primary-600 hover:bg-primary-50 hover:border-primary-500 rounded-lg font-medium max-w-3xl w-full py-2"
@@ -497,7 +501,7 @@ export default function FileEditor({
                     editor={editorRef.current}
                     key={index}
                     afterLineNumber={range?.endLineNumber ?? 0}
-                    afterColumn={range?.endColumn}
+                    afterColumn={range?.endColumn ?? 0}
                     filePath={filePath}
                   >
                     <InlineFeedback
