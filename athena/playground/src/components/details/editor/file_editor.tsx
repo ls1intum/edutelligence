@@ -180,7 +180,7 @@ export default function FileEditor({
       zoneNode.id = `feedback-${id}-add-file-feedback-zone`;
       const zoneId = changeAccessor.addZone({
         afterLineNumber: 0,
-        afterColumn: 0,
+        afterColumn: 1000, // To make sure it is always at the bottom
         domNode: zoneNode,
         get heightInPx() {
           return overlayNode.offsetHeight;
