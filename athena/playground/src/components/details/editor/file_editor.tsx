@@ -6,7 +6,11 @@ import { Position, Selection, editor } from "monaco-editor";
 import * as portals from "react-reverse-portal";
 import { createRoot } from "react-dom/client";
 
-import { getFeedbackRange, getFeedbackReferenceType } from "@/model/feedback";
+import {
+  getFeedbackRange,
+  getFeedbackReferenceType,
+  getOnFeedbackChange,
+} from "@/model/feedback";
 import InlineFeedback from "./inline_feedback";
 
 type FileEditorProps = {
@@ -49,7 +53,9 @@ export default function FileEditor({
   const addFileFeedbackPortalNode = useRef(portals.createHtmlPortalNode());
   const feedbackWidgetsResizeObservers = useRef<(ResizeObserver | null)[]>([]);
   const addFileFeedbackResizeObserver = useRef<ResizeObserver | null>(null);
-  const [hoverPosition, setHoverPosition] = useState<Position | undefined>(undefined);
+  const [hoverPosition, setHoverPosition] = useState<Position | undefined>(
+    undefined
+  );
   const [selection, setSelection] = useState<Selection | undefined>(undefined);
   const [
     feedbackWidgetDecorationsCollection,
@@ -59,16 +65,27 @@ export default function FileEditor({
     addFeedbackDecorationsCollection,
     setAddFeedbackDecorationsCollection,
   ] = useState<editor.IEditorDecorationsCollection | undefined>(undefined);
-  // useState is not used here because we don't want to re-render when the value changes
-  const isAddFeedbackPressed = useRef(false);
+  
+  // Using state for non-react handlers is not working so we use a ref
+  // This is a workaround to bridge the gap between react and monaco
+  const latestAddFeedbackState = useRef({
+    isPressed: false,
+    selection: selection,
+    hoverPosition: hoverPosition,
+    feedbacks: feedbacks,
+    filePath: filePath,
+  });
 
   // Called when the user presses the add feedback button
   const addFeedbackPressed = (referenceType: FeedbackReferenceType) => {
-    const model = editorRef.current?.getModel()
+    const model = editorRef.current?.getModel();
     if (!createNewFeedback || !onFeedbacksChange || !model) return;
+
+    // Get the current state (workaround for non-react handlers)
+    const { selection, hoverPosition, feedbacks, filePath } = latestAddFeedbackState.current;
+
     let newFeedback = createNewFeedback();
     if (referenceType === "referenced") {
-      console.log("referenced");
       if (newFeedback.type === "text") {
         if (selection && !selection.isEmpty()) {
           const startIndex = model.getOffsetAt({
@@ -105,14 +122,13 @@ export default function FileEditor({
             ...newFeedback,
             file_path: filePath,
             line_start: selection.startLineNumber,
-            line_end: selection.endLineNumber,
+            line_end: selection.startLineNumber !== selection.endLineNumber ? selection.endLineNumber : undefined,
           };
         } else if (hoverPosition) {
           newFeedback = {
             ...newFeedback,
             file_path: filePath,
             line_start: hoverPosition.lineNumber,
-            line_end: hoverPosition.lineNumber,
           };
         }
       }
@@ -163,7 +179,7 @@ export default function FileEditor({
 
         const referenceType = getFeedbackReferenceType(feedback);
         // Unreferenced and unreferenced_file feedbacks are always shown at the top
-        const afterLineNumber = feedbackRanges![index]?.startLineNumber ?? 0;
+        const afterLineNumber = feedbackRanges![index]?.endLineNumber ?? 0;
         // Order unreferenced feedback before unreferenced_file feedback
         const afterColumn =
           referenceType === "unreferenced"
@@ -272,17 +288,17 @@ export default function FileEditor({
 
     editor.onMouseDown(function (e) {
       if (e.target.element?.className.includes("comment-range-button")) {
-        isAddFeedbackPressed.current = true;
+        latestAddFeedbackState.current.isPressed = true;
       }
     });
 
     editor.onMouseUp(function (e) {
       if (e.target.element?.className.includes("comment-range-button")) {
-        if (isAddFeedbackPressed.current) {
+        if (latestAddFeedbackState.current.isPressed) {
           addFeedbackPressed("referenced");
         }
       }
-      isAddFeedbackPressed.current = false;
+      latestAddFeedbackState.current.isPressed = false;
     });
   };
 
@@ -390,17 +406,29 @@ export default function FileEditor({
   useEffect(() => {
     if (!editorRef.current || !monaco) return;
     setupAddFeedbackDecorations(editorRef.current, monaco);
+    latestAddFeedbackState.current = {
+      ...latestAddFeedbackState.current,
+      selection,
+      hoverPosition,
+    };
   }, [hoverPosition, selection]);
 
   // Setup editor when something changes
   useEffect(() => {
     setupEditor();
+    latestAddFeedbackState.current = {
+      ...latestAddFeedbackState.current,
+      feedbacks,
+      filePath,
+    };
   }, [feedbacks, content, filePath, monaco, editorRef]);
 
   // Cleanup observers on unmount
   useEffect(() => {
     return () => {
-      feedbackWidgetsResizeObservers.current.forEach((observer) => observer?.disconnect());
+      feedbackWidgetsResizeObservers.current.forEach((observer) =>
+        observer?.disconnect()
+      );
       feedbackWidgetsResizeObservers.current = [];
       addFileFeedbackResizeObserver.current?.disconnect();
       addFileFeedbackResizeObserver.current = null;
@@ -456,19 +484,7 @@ export default function FileEditor({
                     feedback={feedback}
                     onFeedbackChange={
                       onFeedbacksChange &&
-                      ((newFeedback) => {
-                        if (newFeedback) {
-                          onFeedbacksChange(
-                            feedbacks.map((f) =>
-                              f.id === feedback.id ? newFeedback : f
-                            )
-                          );
-                        } else {
-                          onFeedbacksChange(
-                            feedbacks.filter((f) => f.id !== feedback.id)
-                          );
-                        }
-                      })
+                      getOnFeedbackChange(feedbacks, index, onFeedbacksChange)
                     }
                   />
                 </div>

@@ -60,7 +60,7 @@ export function getFeedbackRange(content: string, feedback: Feedback): IRange | 
     return {
       startLineNumber: (feedback.line_start || feedback.line_end)!,
       startColumn: 0,
-      endLineNumber: (feedback.line_start || feedback.line_end)!,
+      endLineNumber: (feedback.line_end || feedback.line_start)!,
       endColumn: Infinity,
     }
   } else if (feedback.type === "text") {
