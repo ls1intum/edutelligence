@@ -10,6 +10,7 @@ type FeedbackBase = {
   exercise_id: number;
   submission_id: number;
   is_suggestion?: boolean; // Playground only
+  is_new?: boolean; // Playground only
   meta: {
     [key: string]: any;
   };
@@ -98,11 +99,12 @@ export function getFeedbackReferenceType(feedback: Feedback): FeedbackReferenceT
 
 export function getOnFeedbackChange(feedbacks: Feedback[], index: number, onFeedbacksChange: (feedbacks: Feedback[]) => void): (newFeedback: Feedback | undefined) => void {
   return (newFeedback: Feedback | undefined) => {
+    let newFeedbacks = [...feedbacks];
     if (newFeedback === undefined) {
-      feedbacks.splice(index, 1);
+      newFeedbacks.splice(index, 1);
     } else {
-      feedbacks[index] = newFeedback;
+      newFeedbacks[index] = newFeedback;
     }
-    onFeedbacksChange(feedbacks);
+    onFeedbacksChange(newFeedbacks);
   }  
 }

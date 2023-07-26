@@ -1,6 +1,6 @@
 import type { Feedback } from "@/model/feedback";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { twMerge } from "tailwind-merge";
 import TextareaAutosize from "react-textarea-autosize";
 
@@ -25,6 +25,12 @@ export default function InlineFeedback({
   const [description, setDescription] = useState(feedback.description);
 
   const referenceType = getFeedbackReferenceType(feedback);
+
+  useEffect(() => {
+    if (feedback.is_new) {
+      setIsEditing(true);
+    }
+  }, [feedback]);
 
   return (
     <div className={twMerge("mx-2 my-1 border border-gray-300 rounded-lg text-sm max-w-3xl", className)}>

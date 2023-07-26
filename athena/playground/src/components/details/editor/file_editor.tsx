@@ -316,6 +316,7 @@ export default function FileEditor({
 
   // Setup editor when something changes
   useEffect(() => {
+    console.log("Something changed");
     setupEditor();
     latestAddFeedbackState.current = {
       ...latestAddFeedbackState.current,

@@ -24,6 +24,7 @@ export default function SubmissionDetail({
       type: submission.type,
       exercise_id: submission.exercise_id,
       submission_id: submission.id,
+      is_new: true,
       meta: {},
     };
     return newFeedback;
