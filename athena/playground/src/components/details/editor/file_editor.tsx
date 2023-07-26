@@ -46,6 +46,10 @@ export default function FileEditor({
   const [hoverPosition, setHoverPosition] = useState<Position | undefined>(undefined);
   const [selection, setSelection] = useState<Selection | undefined>(undefined);
   const [
+    inlineFeedbackHighlightDecorationsCollection,
+    setInlineFeedbackHighlightDecorationsCollection,
+  ] = useState<editor.IEditorDecorationsCollection | undefined>(undefined);
+  const [
     addFeedbackDecorationsCollection,
     setAddFeedbackDecorationsCollection,
   ] = useState<editor.IEditorDecorationsCollection | undefined>(undefined);
@@ -233,11 +237,50 @@ export default function FileEditor({
     }
   };
 
+  // Setup line decorations for inline feedback highlights
+  const setupInlineFeedbackHighlights = (editor: editor.IStandaloneCodeEditor) => {
+    const model = editor.getModel();
+    if (!model) return;
+
+    // Add line decorations for each feedback to highlight the text
+    if (inlineFeedbackHighlightDecorationsCollection) {
+      inlineFeedbackHighlightDecorationsCollection.clear();
+    }
+
+    const feedbackRanges = feedbacksToRender?.map((feedback) => {
+      return getFeedbackRange(model, feedback);
+    });
+
+    const newDecorationsCollection = editor.createDecorationsCollection(
+      feedbackRanges?.flatMap((range, index) =>
+        range
+          ? [
+              {
+                options: {
+                  inlineClassName: `inline-feedback-text ${
+                    feedbacksToRender![index].credits < 0
+                      ? "negative"
+                      : feedbacksToRender![index].credits > 0
+                      ? "positive"
+                      : "neutral"
+                  }`,
+                },
+                range,
+              },
+            ]
+          : []
+      ) ?? []
+    );
+    setInlineFeedbackHighlightDecorationsCollection(newDecorationsCollection);
+  };
+  
+
   const setupEditor = () => {
     if (!editorRef.current || !monaco) return;
     const editor = editorRef.current;
     setupAddFeedbackListeners(editor);
     setupAddFeedbackDecorations(editor, monaco);
+    setupInlineFeedbackHighlights(editor);
   };
 
   // Update the model when the content or filePath changes (for syntax highlighting)

@@ -81,6 +81,8 @@ export function EditorWidget({ editor, children, afterLineNumber, afterColumn, f
     return () => {
       resizeObserverRef.current?.disconnect();
       observer.disconnect();
+      editor.removeOverlayWidget(overlayWidgetRef.current!);
+      editor.changeViewZones((accessor) => accessor.removeZone(zoneIdRef.current!));
     };
   }, [filePath]);
 
