@@ -43,12 +43,20 @@ export default function FileEditor({
 
   const monaco = useMonaco();
   const editorRef = useRef<editor.IStandaloneCodeEditor>();
-  const [height, setHeight] = useState(100);
-  const [hoverPosition, setHoverPosition] = useState<Position | undefined>(undefined);
+  const [hoverPosition, setHoverPosition] = useState<Position | undefined>(
+    undefined
+  );
   const [selection, setSelection] = useState<Selection | undefined>(undefined);
   const [
     inlineFeedbackHighlightDecorationsCollection,
     setInlineFeedbackHighlightDecorationsCollection,
+  ] = useState<editor.IEditorDecorationsCollection | undefined>(undefined);
+  const [hoverFeedback, setHoverFeedback] = useState<Feedback | undefined>(
+    undefined
+  );
+  const [
+    hoverInlineFeedbackHighlightDecorationsCollection,
+    setHoverInlineFeedbackHighlightDecorationsCollection,
   ] = useState<editor.IEditorDecorationsCollection | undefined>(undefined);
   const [
     addFeedbackDecorationsCollection,
@@ -239,7 +247,9 @@ export default function FileEditor({
   };
 
   // Setup line decorations for inline feedback highlights
-  const setupInlineFeedbackHighlights = (editor: editor.IStandaloneCodeEditor) => {
+  const setupInlineFeedbackHighlights = (
+    editor: editor.IStandaloneCodeEditor
+  ) => {
     const model = editor.getModel();
     if (!model) return;
 
@@ -274,7 +284,38 @@ export default function FileEditor({
     );
     setInlineFeedbackHighlightDecorationsCollection(newDecorationsCollection);
   };
-  
+
+  useEffect(() => {
+    const editor = editorRef.current;
+    const model = editor?.getModel();
+    if (!model || !editor) return;
+
+    if (hoverInlineFeedbackHighlightDecorationsCollection) {
+      hoverInlineFeedbackHighlightDecorationsCollection.clear();
+      setHoverInlineFeedbackHighlightDecorationsCollection(undefined);
+    }
+
+    if (!hoverFeedback) return;
+    const range = getFeedbackRange(model, hoverFeedback);
+    if (!range) return;
+    const newDecorationsCollection = editor.createDecorationsCollection([
+      {
+        options: {
+          inlineClassName: `inline-feedback-text ${
+            hoverFeedback.credits < 0
+              ? "highlighted-negative"
+              : hoverFeedback.credits > 0
+              ? "highlighted-positive"
+              : "highlighted-neutral"
+          }`,
+        },
+        range,
+      },
+    ]);
+    setHoverInlineFeedbackHighlightDecorationsCollection(
+      newDecorationsCollection
+    );
+  }, [hoverFeedback]);
 
   const setupEditor = () => {
     if (!editorRef.current || !monaco) return;
@@ -369,7 +410,7 @@ export default function FileEditor({
               </button>
             </EditorWidget>
           )}
-          { feedbacks &&
+          {feedbacks &&
             feedbacksToRender &&
             feedbacksToRender.map((feedback, index) => {
               const model = editorRef.current?.getModel();
@@ -384,14 +425,23 @@ export default function FileEditor({
                     afterColumn={range?.endColumn ?? 0}
                     filePath={filePath}
                   >
-                    <InlineFeedback
-                      feedback={feedback}
-                      onFeedbackChange={
-                        onFeedbacksChange &&
-                        getOnFeedbackChange(feedbacks, index, onFeedbacksChange)
-                      }
-                      className="mr-4"
-                    />
+                    <div
+                      onMouseEnter={() => setHoverFeedback(feedback)}
+                      onMouseLeave={() => setHoverFeedback(undefined)}
+                    >
+                      <InlineFeedback
+                        feedback={feedback}
+                        onFeedbackChange={
+                          onFeedbacksChange &&
+                          getOnFeedbackChange(
+                            feedbacks,
+                            index,
+                            onFeedbacksChange
+                          )
+                        }
+                        className="mr-4"
+                      />
+                    </div>
                   </EditorWidget>
                 )
               );

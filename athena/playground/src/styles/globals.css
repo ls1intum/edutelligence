@@ -127,10 +127,15 @@ body {
 
 @layer components {
   .monaco-editor .inline-feedback-text {
-    @apply rounded py-0.5;
+    @apply py-0.5;
+  }
+  .monaco-editor .inline-feedback-text:first-of-type {
+    @apply rounded-l rounded-tr-none rounded-br-none;
+  }
+  .monaco-editor .inline-feedback-text:last-of-type {
+    @apply rounded-r rounded-tl-none rounded-bl-none;
   }
   .monaco-editor .inline-feedback-text.positive {
-    mix-blend-mode: multiply;
     @apply bg-green-200/50 text-green-800 !important;
   }
   .monaco-editor .inline-feedback-text.negative {
@@ -138,6 +143,15 @@ body {
   }
   .monaco-editor .inline-feedback-text.neutral {
     @apply bg-gray-300/50 text-gray-800 !important;
+  }
+  .monaco-editor .inline-feedback-text.highlighted-positive {
+    @apply bg-green-300/50 text-green-800 !important;
+  }
+  .monaco-editor .inline-feedback-text.highlighted-negative {
+    @apply bg-red-300/50 text-red-800 !important;
+  }
+  .monaco-editor .inline-feedback-text.highlighted-neutral {
+    @apply bg-gray-400/50 text-gray-800 !important;
   }
   /* Styling the comment range button */
   /* Plus button */
