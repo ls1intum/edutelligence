@@ -27,8 +27,9 @@ export default function InlineFeedback({
   const referenceType = getFeedbackReferenceType(feedback);
 
   useEffect(() => {
-    if (feedback.is_new) {
+    if (feedback.is_new && onFeedbackChange) {
       setIsEditing(true);
+      feedback.is_new = false;
     }
   }, [feedback]);
 
