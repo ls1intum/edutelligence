@@ -333,9 +333,6 @@ def config_schema_provider(cls: Type[C]) -> Type[C]:
     if not issubclass(cls, BaseModel):
         raise TypeError("Decorated class must be a subclass of BaseModel")
 
-    if getattr(app.state, "config_schema_defined", False):
-        raise ValueError("@config_schema_provider can only be used once")
-
     # Try to initialize the class without parameters (default values will be used)
     try:
         cls()
@@ -346,5 +343,4 @@ def config_schema_provider(cls: Type[C]) -> Type[C]:
     async def wrapper():
         return cls.schema()
 
-    app.state.config_schema_defined = True
     return cls
