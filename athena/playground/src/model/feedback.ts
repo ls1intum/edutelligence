@@ -61,7 +61,7 @@ export function getFeedbackRange(model: editor.ITextModel, feedback: Feedback): 
       startLineNumber: (feedback.line_start || feedback.line_end)!,
       startColumn: 0,
       endLineNumber: (feedback.line_end || feedback.line_start)!,
-      endColumn: model.getLineMaxColumn((feedback.line_end || feedback.line_start)!),
+      endColumn: Infinity,
     }
   } else if (feedback.type === "text") {
     if (feedback.index_start === undefined && feedback.index_end === undefined) {

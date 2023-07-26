@@ -498,6 +498,7 @@ export default function FileEditor({
                     key={index}
                     afterLineNumber={range?.endLineNumber ?? 0}
                     afterColumn={range?.endColumn}
+                    filePath={filePath}
                   >
                     <InlineFeedback
                       feedback={feedback}

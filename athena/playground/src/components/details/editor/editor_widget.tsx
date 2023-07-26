@@ -19,6 +19,10 @@ export function EditorWidget({ editor, children, afterLineNumber, afterColumn }:
   
   const updateWidget = () => {
     console.log(`Create view zone for ${id}`)
+
+    overlayWidgetRef.current && editor.removeOverlayWidget(overlayWidgetRef.current);
+    zoneIdRef.current && editor.changeViewZones((accessor) => accessor.removeZone(zoneIdRef.current!));
+
     const overlayNode = document.createElement("div");
     overlayNode.id = `widget-${id}-overlay`;
     overlayNode.style.width = "100%";
@@ -64,25 +68,20 @@ export function EditorWidget({ editor, children, afterLineNumber, afterColumn }:
   useEffect(() => {
     console.log(`Mount ${id}`)
     updateWidget();
-    const didChangeModelListener = editor.onDidChangeModelContent(() => {
-      console.log(`Model changed for ${id}`)
-      updateWidget();
+    const observer = new MutationObserver((mutationsList, observer) => {
+      // If the widget doesn't exist, update it
+      if (!document.getElementById(`widget-${id}-zone`)) {
+        updateWidget();
+      }
     });
-    const didResizeListener = editor.onDidContentSizeChange(() => {
-      console.log(`Content size changed for ${id}`)
-      editor.changeViewZones((accessor) => accessor.layoutZone(zoneIdRef.current!));
-    });
+    
+    // Start observing the document with the configured parameters
+    observer.observe(document, { childList: true, subtree: true });
 
     return () => {
       console.log(`Unmount ${id}`);
-      didChangeModelListener.dispose();
       resizeObserverRef.current?.disconnect();
-      editor.changeViewZones((accessor) => {
-        console.log(`Remove view zone for ${id}`)
-        accessor.removeZone(zoneIdRef.current!);
-      }
-      );
-      editor.removeOverlayWidget(overlayWidgetRef.current!);
+      observer.disconnect();
     };
   }, []);
 
