@@ -278,9 +278,12 @@ export default function FileEditor({
   const setupEditor = () => {
     if (!editorRef.current || !monaco) return;
     const editor = editorRef.current;
-    setupAddFeedbackListeners(editor);
-    setupAddFeedbackDecorations(editor, monaco);
     setupInlineFeedbackHighlights(editor);
+
+    if (onFeedbacksChange) {
+      setupAddFeedbackListeners(editor);
+      setupAddFeedbackDecorations(editor, monaco);
+    }
   };
 
   // Update the model when the content or filePath changes (for syntax highlighting)
