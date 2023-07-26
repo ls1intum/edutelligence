@@ -12,6 +12,7 @@ import {
   getOnFeedbackChange,
 } from "@/model/feedback";
 import InlineFeedback from "./inline_feedback";
+import { EditorWidget } from "./editor_widget";
 
 type FileEditorProps = {
   content: string;
@@ -65,7 +66,7 @@ export default function FileEditor({
     addFeedbackDecorationsCollection,
     setAddFeedbackDecorationsCollection,
   ] = useState<editor.IEditorDecorationsCollection | undefined>(undefined);
-  
+
   // Using state for non-react handlers is not working so we use a ref
   // This is a workaround to bridge the gap between react and monaco
   const latestAddFeedbackState = useRef({
@@ -82,7 +83,8 @@ export default function FileEditor({
     if (!createNewFeedback || !onFeedbacksChange || !model) return;
 
     // Get the current state (workaround for non-react handlers)
-    const { selection, hoverPosition, feedbacks, filePath } = latestAddFeedbackState.current;
+    const { selection, hoverPosition, feedbacks, filePath } =
+      latestAddFeedbackState.current;
 
     let newFeedback = createNewFeedback();
     if (referenceType === "referenced") {
@@ -122,7 +124,10 @@ export default function FileEditor({
             ...newFeedback,
             file_path: filePath,
             line_start: selection.startLineNumber,
-            line_end: selection.startLineNumber !== selection.endLineNumber ? selection.endLineNumber : undefined,
+            line_end:
+              selection.startLineNumber !== selection.endLineNumber
+                ? selection.endLineNumber
+                : undefined,
           };
         } else if (hoverPosition) {
           newFeedback = {
@@ -146,8 +151,11 @@ export default function FileEditor({
 
   // Setup feedback widgets for each feedback
   const setupFeedbackWidgets = (editor: editor.IStandaloneCodeEditor) => {
+    const model = editor.getModel();
+    if (!model) return;
+
     const feedbackRanges = feedbacksToRender?.map((feedback) =>
-      getFeedbackRange(content, feedback)
+      getFeedbackRange(model, feedback)
     );
 
     // Add feedback overlay widgets for each feedback
@@ -378,8 +386,8 @@ export default function FileEditor({
   const setupEditor = () => {
     if (!editorRef.current || !monaco) return;
     const editor = editorRef.current;
-    setupFeedbackWidgets(editor);
-    setupAddFileFeedbackWidget(editor);
+    // setupFeedbackWidgets(editor);
+    // setupAddFileFeedbackWidget(editor);
     setupAddFeedbackListeners(editor);
     setupAddFeedbackDecorations(editor, monaco);
   };
@@ -398,6 +406,7 @@ export default function FileEditor({
     editor: editor.IStandaloneCodeEditor,
     monaco: Monaco
   ) => {
+    console.log("Editor mounted");
     editorRef.current = editor;
     setupEditor();
   };
@@ -457,41 +466,53 @@ export default function FileEditor({
         defaultValue="Please select a file"
         onMount={handleEditorDidMount}
       />
-      {onFeedbacksChange && filePath && (
-        <portals.InPortal node={addFileFeedbackPortalNode.current}>
-          <button
-            className="mx-2 my-1 border-2 border-primary-400 border-dashed text-primary-500 hover:text-primary-600 hover:bg-primary-50 hover:border-primary-500 rounded-lg font-medium max-w-3xl w-full py-2"
-            onClick={() => {
-              addFeedbackPressed("unreferenced_file");
-            }}
-          >
-            Add file feedback
-          </button>
-        </portals.InPortal>
-      )}
-      {feedbackWidgetsPortalNodes &&
-        feedbacks &&
-        feedbacksToRender &&
-        feedbacksToRender.map((feedback, index) => {
-          return (
-            feedbackWidgetsPortalNodes[index] && (
-              <portals.InPortal
-                node={feedbackWidgetsPortalNodes[index]}
-                key={feedback.id}
+      {editorRef.current && (
+        <>
+          {onFeedbacksChange && filePath && (
+            <EditorWidget
+              editor={editorRef.current}
+              afterLineNumber={0}
+              afterColumn={1000}
+            >
+              <button
+                className="mx-2 my-1 border-2 border-primary-400 border-dashed text-primary-500 hover:text-primary-600 hover:bg-primary-50 hover:border-primary-500 rounded-lg font-medium max-w-3xl w-full py-2"
+                onClick={() => {
+                  addFeedbackPressed("unreferenced_file");
+                }}
               >
-                <div className="mr-4">
-                  <InlineFeedback
-                    feedback={feedback}
-                    onFeedbackChange={
-                      onFeedbacksChange &&
-                      getOnFeedbackChange(feedbacks, index, onFeedbacksChange)
-                    }
-                  />
-                </div>
-              </portals.InPortal>
-            )
-          );
-        })}
+                Add file feedback
+              </button>
+            </EditorWidget>
+          )}
+          {feedbackWidgetsPortalNodes &&
+            feedbacks &&
+            feedbacksToRender &&
+            feedbacksToRender.map((feedback, index) => {
+              const model = editorRef.current?.getModel();
+              if (!editorRef.current || !model) return null;
+              const range = getFeedbackRange(model, feedback);
+              return (
+                editorRef.current && (
+                  <EditorWidget
+                    editor={editorRef.current}
+                    key={index}
+                    afterLineNumber={range?.endLineNumber ?? 0}
+                    afterColumn={range?.endColumn}
+                  >
+                    <InlineFeedback
+                      feedback={feedback}
+                      onFeedbackChange={
+                        onFeedbacksChange &&
+                        getOnFeedbackChange(feedbacks, index, onFeedbacksChange)
+                      }
+                      className="mr-4"
+                    />
+                  </EditorWidget>
+                )
+              );
+            })}
+        </>
+      )}
     </div>
   );
 }

@@ -9,11 +9,13 @@ import { formatReference, getFeedbackReferenceType } from "@/model/feedback";
 type InlineFeedbackProps = {
   feedback: Feedback;
   onFeedbackChange?: (feedback: Feedback | undefined) => void;
+  className?: string;
 };
 
 export default function InlineFeedback({
   feedback,
   onFeedbackChange,
+  className,
 }: InlineFeedbackProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -25,7 +27,7 @@ export default function InlineFeedback({
   const referenceType = getFeedbackReferenceType(feedback);
 
   return (
-    <div className="mx-2 my-1 border border-gray-300 rounded-lg text-sm max-w-3xl">
+    <div className={twMerge("mx-2 my-1 border border-gray-300 rounded-lg text-sm max-w-3xl", className)}>
       <div className="flex items-center justify-start px-4 py-2 border-b border-gray-300 text-xs text-gray-600">
         {referenceType === "unreferenced" && "Unreferenced"}
         {"file_path" in feedback && referenceType === "unreferenced_file" && `References ${feedback.file_path}`}

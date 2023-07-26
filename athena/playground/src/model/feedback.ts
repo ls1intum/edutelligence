@@ -1,4 +1,4 @@
-import type { IRange } from "monaco-editor";
+import type { IRange, editor } from "monaco-editor";
 import type { ExerciseType } from "./exercise";
 
 type FeedbackBase = {
@@ -48,11 +48,11 @@ export function formatReference(feedback: Feedback): string {
 /**
  * Returns the range of the feedback in the given content (for monaco editor)
  * 
- * @param content - the content of the editor
+ * @param model - the monaco editor model
  * @param feedback - the feedback
  * @returns the range of the feedback in the given content
  */
-export function getFeedbackRange(content: string, feedback: Feedback): IRange | undefined {
+export function getFeedbackRange(model: editor.ITextModel, feedback: Feedback): IRange | undefined {
   if (feedback.type === "programming") {
     if (feedback.line_start === undefined && feedback.line_end === undefined) {
       return undefined;
@@ -61,19 +61,19 @@ export function getFeedbackRange(content: string, feedback: Feedback): IRange | 
       startLineNumber: (feedback.line_start || feedback.line_end)!,
       startColumn: 0,
       endLineNumber: (feedback.line_end || feedback.line_start)!,
-      endColumn: Infinity,
+      endColumn: model.getLineMaxColumn((feedback.line_end || feedback.line_start)!),
     }
   } else if (feedback.type === "text") {
     if (feedback.index_start === undefined && feedback.index_end === undefined) {
       return undefined;
     }
-    const linesBeforeStart = content.slice(0, feedback.index_start ?? feedback.index_end).split("\n");
-    const linesBeforeEnd = content.slice(0, feedback.index_end ?? feedback.index_start).split("\n");
+    const startPosition = model.getPositionAt(feedback.index_start ?? feedback.index_end!);
+    const endPosition = model.getPositionAt(feedback.index_end ?? feedback.index_start!);
     return {
-      startLineNumber: linesBeforeStart.length,
-      startColumn: linesBeforeStart[linesBeforeStart.length - 1].length + 1,
-      endLineNumber: linesBeforeEnd.length,
-      endColumn: linesBeforeEnd[linesBeforeEnd.length - 1].length + 1 ,
+      startLineNumber: startPosition.lineNumber,
+      startColumn: startPosition.column,
+      endLineNumber: endPosition.lineNumber,
+      endColumn: endPosition.column,
     }
   }
   return undefined;
