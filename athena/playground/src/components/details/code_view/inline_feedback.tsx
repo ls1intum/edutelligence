@@ -44,12 +44,9 @@ export default function InlineFeedback({
             )}
             type="number"
             step="0.5"
-            value={feedback.credits}
+            value={credits}
             onChange={(e) => {
-              onFeedbackChange({
-                ...feedback,
-                credits: e.target.value == "" ? 0 : parseFloat(e.target.value),
-              });
+              setCredits(e.target.value == "" ? 0 : parseFloat(e.target.value));
             }}
           />
         ) : (
@@ -71,11 +68,9 @@ export default function InlineFeedback({
             {isEditing && onFeedbackChange ? (
               <input
                 className="font-semibold w-full border border-gray-300 rounded p-1"
-                value={feedback.title}
+                value={title}
                 placeholder="Title..."
-                onChange={(e) =>
-                  onFeedbackChange({ ...feedback, title: e.target.value })
-                }
+                onChange={(e) => setTitle(e.target.value)}
               />
             ) : (
               <span className="font-semibold">
@@ -92,14 +87,9 @@ export default function InlineFeedback({
             {isEditing && onFeedbackChange ? (
               <TextareaAutosize
                 className="w-full border border-gray-300 rounded p-1 mt-1"
-                value={feedback.description}
+                value={description}
                 placeholder="Description..."
-                onChange={(e) =>
-                  onFeedbackChange({
-                    ...feedback,
-                    description: e.target.value,
-                  })
-                }
+                onChange={(e) => setDescription(e.target.value)}
               />
             ) : feedback.description ? (
               <span className="whitespace-pre-wrap">
@@ -138,6 +128,18 @@ export default function InlineFeedback({
                   : "bg-yellow-100 text-yellow-800 hover:bg-yellow-200 hover:text-yellow-900"
               )}
               onClick={() => {
+                if (isEditing) {
+                  onFeedbackChange({
+                    ...feedback,
+                    credits: credits,
+                    title: title,
+                    description: description,
+                  });
+                } else {
+                  setCredits(feedback.credits);
+                  setTitle(feedback.title);
+                  setDescription(feedback.description);
+                }
                 setIsEditing(!isEditing);
                 setConfirmDelete(false);
               }}
