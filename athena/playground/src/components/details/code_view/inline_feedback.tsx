@@ -18,6 +18,10 @@ export default function InlineFeedback({
   const [isEditing, setIsEditing] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   
+  const [credits, setCredits] = useState(feedback.credits);
+  const [title, setTitle] = useState(feedback.title);
+  const [description, setDescription] = useState(feedback.description);
+
   const referenceType = getFeedbackReferenceType(feedback);
 
   return (
@@ -28,7 +32,7 @@ export default function InlineFeedback({
         {referenceType === "referenced" && `References ${formatReference(feedback)}`}
       </div>
       <div className="flex justify-start items-start space-x-2 px-4 py-2">
-        {isEditing ? (
+        {isEditing && onFeedbackChange ? (
           <input
             className={twMerge(
               "font-medium rounded pl-2.5 py-0.5 w-16 mt-2 border border-gray-300",
@@ -64,7 +68,7 @@ export default function InlineFeedback({
         )}
         <div className="w-full">
           <div className="flex items-center justify-between space-x-1">
-            {isEditing ? (
+            {isEditing && onFeedbackChange ? (
               <input
                 className="font-semibold w-full border border-gray-300 rounded p-1"
                 value={feedback.title}
@@ -85,7 +89,7 @@ export default function InlineFeedback({
             )}
           </div>
           <div>
-            {isEditing ? (
+            {isEditing && onFeedbackChange ? (
               <TextareaAutosize
                 className="w-full border border-gray-300 rounded p-1 mt-1"
                 value={feedback.description}
