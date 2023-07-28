@@ -46,7 +46,8 @@ export default function FileEditor({
       return true;
     }
   });
-  const modelPath = (identifier ? `${identifier}/` : "") + (filePath ?? "default");
+  const modelPath =
+    (identifier ? `${identifier}/` : "") + (filePath ?? "default");
 
   const monaco = useMonaco();
   const editorRef = useRef<editor.IStandaloneCodeEditor>();
@@ -55,17 +56,6 @@ export default function FileEditor({
     undefined
   );
   const [selection, setSelection] = useState<Selection | undefined>(undefined);
-  const [
-    inlineFeedbackHighlightDecorationsCollection,
-    setInlineFeedbackHighlightDecorationsCollection,
-  ] = useState<editor.IEditorDecorationsCollection | undefined>(undefined);
-  const [hoverFeedback, setHoverFeedback] = useState<Feedback | undefined>(
-    undefined
-  );
-  const [
-    hoverInlineFeedbackHighlightDecorationsCollection,
-    setHoverInlineFeedbackHighlightDecorationsCollection,
-  ] = useState<editor.IEditorDecorationsCollection | undefined>(undefined);
   const [
     addFeedbackDecorationsCollection,
     setAddFeedbackDecorationsCollection,
@@ -254,81 +244,9 @@ export default function FileEditor({
     }
   };
 
-  // Setup line decorations for inline feedback highlights
-  const setupInlineFeedbackHighlights = (
-    editor: editor.IStandaloneCodeEditor
-  ) => {
-    const model = editor.getModel();
-    if (!model) return;
-
-    // Add line decorations for each feedback to highlight the text
-    if (inlineFeedbackHighlightDecorationsCollection) {
-      inlineFeedbackHighlightDecorationsCollection.clear();
-    }
-
-    const feedbackRanges = feedbacksToRender?.map((feedback) => {
-      return getFeedbackRange(model, feedback);
-    });
-
-    const newDecorationsCollection = editor.createDecorationsCollection(
-      feedbackRanges?.flatMap((range, index) =>
-        range
-          ? [
-              {
-                options: {
-                  inlineClassName: `inline-feedback-text ${
-                    feedbacksToRender![index].credits < 0
-                      ? "negative"
-                      : feedbacksToRender![index].credits > 0
-                      ? "positive"
-                      : "neutral"
-                  }`,
-                },
-                range,
-              },
-            ]
-          : []
-      ) ?? []
-    );
-    setInlineFeedbackHighlightDecorationsCollection(newDecorationsCollection);
-  };
-
-  useEffect(() => {
-    const editor = editorRef.current;
-    const model = editor?.getModel();
-    if (!model || !editor) return;
-
-    if (hoverInlineFeedbackHighlightDecorationsCollection) {
-      hoverInlineFeedbackHighlightDecorationsCollection.clear();
-      setHoverInlineFeedbackHighlightDecorationsCollection(undefined);
-    }
-
-    if (!hoverFeedback) return;
-    const range = getFeedbackRange(model, hoverFeedback);
-    if (!range) return;
-    const newDecorationsCollection = editor.createDecorationsCollection([
-      {
-        options: {
-          inlineClassName: `inline-feedback-text ${
-            hoverFeedback.credits < 0
-              ? "highlighted-negative"
-              : hoverFeedback.credits > 0
-              ? "highlighted-positive"
-              : "highlighted-neutral"
-          }`,
-        },
-        range,
-      },
-    ]);
-    setHoverInlineFeedbackHighlightDecorationsCollection(
-      newDecorationsCollection
-    );
-  }, [hoverFeedback]);
-
   const setupEditor = () => {
     if (!editorRef.current || !monaco) return;
     const editor = editorRef.current;
-    setupInlineFeedbackHighlights(editor);
 
     if (onFeedbacksChange) {
       setupAddFeedbackListeners(editor);
@@ -340,7 +258,11 @@ export default function FileEditor({
   useEffect(() => {
     if (!monaco) return;
     monaco.editor.getModel(monaco.Uri.parse(modelPath))?.dispose();
-    const model = monaco.editor.createModel(content, undefined, monaco.Uri.parse(modelPath));
+    const model = monaco.editor.createModel(
+      content,
+      undefined,
+      monaco.Uri.parse(modelPath)
+    );
     editorRef.current?.setModel(model);
   }, [monaco, identifier, filePath, content]);
 
@@ -443,23 +365,19 @@ export default function FileEditor({
                     afterColumn={range?.endColumn ?? 0}
                     filePath={filePath}
                   >
-                    <div
-                      onMouseEnter={() => setHoverFeedback(feedback)}
-                      onMouseLeave={() => setHoverFeedback(undefined)}
-                    >
-                      <InlineFeedback
-                        feedback={feedback}
-                        onFeedbackChange={
-                          onFeedbacksChange &&
-                          getOnFeedbackChange(
-                            feedback,
-                            feedbacks,
-                            onFeedbacksChange
-                          )
-                        }
-                        className="mr-4"
-                      />
-                    </div>
+                    <InlineFeedback
+                      feedback={feedback}
+                      onFeedbackChange={
+                        onFeedbacksChange &&
+                        getOnFeedbackChange(
+                          feedback,
+                          feedbacks,
+                          onFeedbacksChange
+                        )
+                      }
+                      model={model}
+                      className="mr-4"
+                    />
                   </EditorWidget>
                 )
               );

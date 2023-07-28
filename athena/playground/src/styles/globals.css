@@ -129,12 +129,6 @@ body {
   .monaco-editor .inline-feedback-text {
     @apply py-0.5;
   }
-  .monaco-editor .inline-feedback-text:first-of-type {
-    @apply rounded-l rounded-tr-none rounded-br-none;
-  }
-  .monaco-editor .inline-feedback-text:last-of-type {
-    @apply rounded-r rounded-tl-none rounded-bl-none;
-  }
   .monaco-editor .inline-feedback-text.positive {
     @apply bg-green-200/50 text-green-800 !important;
   }
