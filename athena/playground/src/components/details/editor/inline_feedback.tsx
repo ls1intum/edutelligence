@@ -194,7 +194,7 @@ export default function InlineFeedback({
               </span>
             )}
             {feedback.is_suggestion && (
-              <span className="text-xs text-fuchsia-500 rounded-full px-2 py-0.5 bg-fuchsia-100">
+              <span className="text-xs text-violet-800 rounded-full px-2 py-0.5 bg-violet-100">
                 Suggestion
               </span>
             )}
