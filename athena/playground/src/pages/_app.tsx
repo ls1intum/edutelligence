@@ -1,4 +1,6 @@
 import "@/styles/globals.css";
+import "@/styles/schema_form.css";
+import "@/styles/monaco.css";
 import "allotment/dist/style.css";
 
 import type { AppProps } from "next/app";
