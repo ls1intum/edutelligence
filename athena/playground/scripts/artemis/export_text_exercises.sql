@@ -1,15 +1,14 @@
-DROP VIEW IF EXISTS relevant_text_exercises;
+-- Drop temp_course_exercises if it exists
+DROP TEMPORARY TABLE IF EXISTS temp_course_exercises;
 
-/*
- * All relevant text exercises
- * 
- * Relevant ones are:
- *  - Text exercises
- * 	- Not part of a test course
- *  - Influencing the grade
- *  - OR is an exam exercise of a non-test exam
- */
-CREATE VIEW relevant_text_exercises AS -- Select course exercises
+-- Drop temp_exam_exercises if it exists
+DROP TEMPORARY TABLE IF EXISTS temp_exam_exercises;
+
+-- Drop relevant_text_exercises if it exists
+DROP TEMPORARY TABLE IF EXISTS relevant_text_exercises;
+
+-- Create temporary table for relevant course exercises
+CREATE TEMPORARY TABLE temp_course_exercises AS
 SELECT
   DISTINCT e.id,
   c.id AS course_id,
@@ -17,15 +16,14 @@ SELECT
 FROM
   exercise e
   JOIN course c ON e.course_id = c.id
-  JOIN participation p ON p.exercise_id = e.id
-  JOIN result r ON r.participation_id = p.id
 WHERE
   e.discriminator = 'T'
   AND c.test_course = 0
   AND e.included_in_overall_score <> 'NOT_INCLUDED'
-  AND e.course_id is not NULL
-UNION
--- Select exam exercises
+  AND e.course_id is not NULL;
+
+-- Create temporary table for relevant exam exercises
+CREATE TEMPORARY TABLE temp_exam_exercises AS
 SELECT
   DISTINCT e.id,
   c.id AS course_id,
@@ -45,8 +43,14 @@ WHERE
   AND eg.exam_id = ex.id
   AND e.exercise_group_id = eg.id;
 
-SET
-  SESSION group_concat_max_len = 1000000;
+-- Combine temp tables to form relevant_text_exercises
+CREATE TEMPORARY TABLE relevant_text_exercises AS
+SELECT * FROM temp_course_exercises
+UNION
+SELECT * FROM temp_exam_exercises;
+
+-- Make sure we don't run into the group_concat_max_len limit
+SET SESSION group_concat_max_len = 1000000;
 
 -- Exercise export for playground
 SELECT
@@ -118,7 +122,7 @@ SELECT
     JSON_ARRAYAGG(
       JSON_OBJECT(
         'id',
-        s.id,
+        p.id,
         'content',
         s.`text`,
         'student_id',
@@ -160,13 +164,12 @@ SELECT
               )
             )
           from
-            `result` r
-            join feedback f on f.result_id = r.id
+            feedback f
             left join text_block tb on tb.feedback_id = f.id
             left join grading_instruction gi on f.grading_instruction_id = gi.id
             left join grading_criterion gc on gi.grading_criterion_id  = gc.id
           where
-            r.participation_id = p.id
+            f.result_id = r.id
         )
       )
     )
@@ -175,12 +178,14 @@ from
   relevant_text_exercises te
   join exercise e on te.id = e.id
   join course c on te.course_id = c.id
-  join participation p on p.exercise_id = e.id
-  join submission s on s.participation_id = p.id
+  join participation p on p.exercise_id = te.id
+  join result r on r.participation_id = p.id
+  join submission s on r.submission_id = s.id
 WHERE
   e.id IN :exercise_ids
   and s.`text` is not null
   and s.submitted = 1
+  and r.rated = 1
 GROUP BY
   te.id,
   te.course_id;
