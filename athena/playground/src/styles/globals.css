@@ -175,6 +175,7 @@ body {
   .monaco-editor .inline-feedback-text.highlighted-neutral {
     @apply bg-yellow-300/50 text-yellow-800 !important;
   }
+  
   /* Styling the comment range button */
   /* Plus button */
   .monaco-editor .comment-range-button::before {

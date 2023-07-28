@@ -38,12 +38,13 @@ export default function InlineFeedback({
   const lineDecorations = useRef<string[]>([]);
   const hoverLineDecorations = useRef<string[]>([]);
 
+  const currentCredits = isEditing ? credits : feedback.credits;
+
   useEffect(() => {
     if (!model) return;
     const range = getFeedbackRange(model, feedback);
     if (!range) return;
 
-    const currentCredits = isEditing ? credits : feedback.credits;
     const creditsType =
       currentCredits < 0
         ? "negative"
@@ -122,7 +123,12 @@ export default function InlineFeedback({
   return (
     <div
       className={twMerge(
-        "mx-2 my-1 border border-gray-300 rounded-lg text-sm max-w-3xl",
+        "mx-2 my-1 border border-gray-300 rounded-lg text-sm max-w-3xl hover:outline outline-2 hover:shadow transition-all duration-200",
+        currentCredits < 0
+          ? "outline-red-300/50"
+          : currentCredits > 0
+          ? "outline-green-300/50"
+          : "outline-yellow-300/50",
         className
       )}
       onMouseEnter={() => setIsHovering(true)}
@@ -146,7 +152,7 @@ export default function InlineFeedback({
                 : (!isEditing && feedback.credits > 0) ||
                   (isEditing && credits > 0)
                 ? "bg-green-100 text-green-800"
-                : "bg-gray-100 text-gray-800"
+                : "bg-yellow-100 text-yellow-800"
             )}
             type="number"
             step="0.5"
