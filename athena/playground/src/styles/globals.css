@@ -127,8 +127,10 @@ body {
 
 @layer components {
   .monaco-editor .inline-feedback-text {
-    @apply py-0.5;
+    @apply py-0.5 rounded;
   }
+
+  /* Styling the inline feedback text */
   .monaco-editor .inline-feedback-text.positive {
     @apply bg-green-200/50 text-green-800 !important;
   }
@@ -136,8 +138,34 @@ body {
     @apply bg-red-200/50 text-red-800 !important;
   }
   .monaco-editor .inline-feedback-text.neutral {
-    @apply bg-gray-300/50 text-gray-800 !important;
+    @apply bg-yellow-200/50 text-yellow-800 !important;
   }
+
+  /* Styling combination of two overlapping inline feedback texts */
+  .monaco-editor .inline-feedback-text.positive.negative:not(.highlighted-positive):not(.highlighted-negative):not(.highlighted-neutral) {
+    background-image: linear-gradient(45deg, theme('colors.green.200') 25%, theme('colors.red.200') 25%, theme('colors.red.200') 50%, theme('colors.green.200') 50%, theme('colors.green.200') 75%, theme('colors.red.200') 75%, theme('colors.red.200'));
+    background-size: 8px 8px;
+    background-position: 0 0, 4px 4px;
+  }
+  .monaco-editor .inline-feedback-text.negative.neutral:not(.highlighted-positive):not(.highlighted-negative):not(.highlighted-neutral) {
+    background-image: linear-gradient(45deg, theme('colors.red.200') 25%, theme('colors.yellow.200') 25%, theme('colors.yellow.200') 50%, theme('colors.red.200') 50%, theme('colors.red.200') 75%, theme('colors.yellow.200') 75%, theme('colors.yellow.200'));
+    background-size: 8px 8px;
+    background-position: 0 0, 4px 4px;
+  }
+  .monaco-editor .inline-feedback-text.neutral.positive:not(.highlighted-positive):not(.highlighted-negative):not(.highlighted-neutral) {
+    background-image: linear-gradient(45deg, theme('colors.yellow.200') 25%, theme('colors.green.200') 25%, theme('colors.green.200') 50%, theme('colors.yellow.200') 50%, theme('colors.yellow.200') 75%, theme('colors.green.200') 75%, theme('colors.green.200'));
+    background-size: 8px 8px;
+    background-position: 0 0, 4px 4px;
+  }
+
+  /* Styling combination of three overlapping inline feedback texts */
+  .monaco-editor .inline-feedback-text.positive.negative.neutral:not(.highlighted-positive):not(.highlighted-negative):not(.highlighted-neutral) {
+    background-image: linear-gradient(45deg, theme('colors.green.200') 16.666%, theme('colors.yellow.200') 16.666%, theme('colors.yellow.200') 33.333%, theme('colors.red.200') 33.333%, theme('colors.red.200') 50%,  theme('colors.green.200') 50%, theme('colors.green.200') 66.666%, theme('colors.yellow.200') 66.666%, theme('colors.yellow.200') 83.333%, theme('colors.red.200') 83.333%, theme('colors.red.200'));
+    background-size: 8px 8px;
+    background-position: 0 0, 4px 4px, 4px 4px;
+  }
+
+  /* Styling the highlighted inline feedback text */
   .monaco-editor .inline-feedback-text.highlighted-positive {
     @apply bg-green-300/50 text-green-800 !important;
   }
@@ -145,7 +173,7 @@ body {
     @apply bg-red-300/50 text-red-800 !important;
   }
   .monaco-editor .inline-feedback-text.highlighted-neutral {
-    @apply bg-gray-400/50 text-gray-800 !important;
+    @apply bg-yellow-300/50 text-yellow-800 !important;
   }
   /* Styling the comment range button */
   /* Plus button */
