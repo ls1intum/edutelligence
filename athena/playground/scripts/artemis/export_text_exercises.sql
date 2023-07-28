@@ -133,10 +133,17 @@ SELECT
                 'id',
                 f.id,
                 'description',
-                f.detail_text,
+                CASE 
+                   WHEN f.detail_text <> '' AND gi.feedback <> '' THEN CONCAT(gi.feedback, '\n\n', f.detail_text)
+                   WHEN gi.feedback <> '' THEN gi.feedback
+                   ELSE COALESCE(f.detail_text, '')
+                END,
                 'title',
-                COALESCE(f.text, ''),
-                -- Might remove fallback in the future
+                CASE 
+                  WHEN f.text <> '' AND gc.title <> '' THEN CONCAT(f.text, '\n', gc.title)
+                  WHEN f.text <> '' THEN f.text
+                  ELSE COALESCE(gc.title, '')
+                END,
                 'index_start',
                 tb.start_index,
                 'index_end',
@@ -146,13 +153,18 @@ SELECT
                 'type',
                 f.`type`,
                 'meta',
-                JSON_OBJECT()
+                JSON_OBJECT(
+                  'grading_instruction_id',
+                  f.grading_instruction_id
+                )
               )
             )
           from
             `result` r
             join feedback f on f.result_id = r.id
-            left join text_block tb on f.reference = tb.id
+            left join text_block tb on tb.feedback_id = f.id
+            left join grading_instruction gi on f.grading_instruction_id = gi.id
+            left join grading_criterion gc on gi.grading_criterion_id  = gc.id
           where
             r.participation_id = p.id
         )

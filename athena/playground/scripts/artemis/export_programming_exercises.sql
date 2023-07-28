@@ -140,10 +140,17 @@ SELECT
                 'id',
                 f.id,
                 'description',
-                f.detail_text,
+                CASE 
+                   WHEN f.detail_text <> '' AND gi.feedback <> '' THEN CONCAT(gi.feedback, '\n\n', f.detail_text)
+                   WHEN gi.feedback <> '' THEN gi.feedback
+                   ELSE COALESCE(f.detail_text, '')
+                END,
                 'title',
-                COALESCE(f.text, ''),
-                -- Might remove the f.text fallback in the future
+                CASE 
+                  WHEN f.text <> '' AND gc.title <> '' THEN CONCAT(f.text, '\n', gc.title)
+                  WHEN f.text <> '' THEN f.text
+                  ELSE COALESCE(gc.title, '')
+                END,
                 'file_path',
                 COALESCE(SUBSTRING_INDEX(SUBSTRING_INDEX(f.reference, 'file:', -1), '_line:', 1), NULL),
                 'line_start',
@@ -155,12 +162,17 @@ SELECT
                 'type',
                 f.`type`,
                 'meta',
-                JSON_OBJECT()
+                JSON_OBJECT(
+                  'grading_instruction_id',
+                  f.grading_instruction_id
+                )
               )
             )
           from
             `result` r
             join feedback f on f.result_id = r.id
+            left join grading_instruction gi on f.grading_instruction_id = gi.id
+            left join grading_criterion gc on gi.grading_criterion_id  = gc.id
           where
             r.participation_id = p.id
             and f.`type` <> 3 -- Ignore feedback of type AUTOMATIC (unit tests, SCA, Submission Policy - for now until we have a Athena indicator!)
