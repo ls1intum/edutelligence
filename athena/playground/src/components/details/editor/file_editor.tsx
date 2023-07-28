@@ -17,6 +17,7 @@ type FileEditorProps = {
   identifier?: string;
   filePath?: string;
   noFileFeedback?: boolean;
+  autoHeight?: boolean;
   feedbacks?: Feedback[];
   onFeedbacksChange?: (feedback: Feedback[]) => void;
   createNewFeedback?: () => Feedback;
@@ -27,6 +28,7 @@ export default function FileEditor({
   identifier,
   filePath,
   noFileFeedback = false,
+  autoHeight = false,
   feedbacks,
   onFeedbacksChange,
   createNewFeedback,
@@ -48,6 +50,7 @@ export default function FileEditor({
 
   const monaco = useMonaco();
   const editorRef = useRef<editor.IStandaloneCodeEditor>();
+  const [height, setHeight] = useState<number>(100);
   const [hoverPosition, setHoverPosition] = useState<Position | undefined>(
     undefined
   );
@@ -349,6 +352,13 @@ export default function FileEditor({
     editorRef.current = editor;
     setIsMounted(true);
     setupEditor();
+
+    if (autoHeight) {
+      editor.onDidContentSizeChange(() => {
+        setHeight(Math.min(1000, editor.getContentHeight()));
+        editor.layout();
+      });
+    }
   };
 
   // Update add feedback decorations when the hover position or selection changes
@@ -375,26 +385,30 @@ export default function FileEditor({
 
   return (
     <>
-      <Editor
-        options={{
-          automaticLayout: true,
-          scrollbar: {
-            vertical: "hidden",
-            horizontal: "hidden",
-          },
-          minimap: {
-            enabled: false,
-          },
-          readOnly: true,
-          lineDecorationsWidth: 20,
-          folding: false,
-          wordWrap: "on",
-        }}
-        value={content}
-        path={modelPath}
-        defaultValue="Please select a file"
-        onMount={handleEditorDidMount}
-      />
+      <div style={autoHeight ? { height } : {}} className="h-full">
+        <Editor
+          options={{
+            automaticLayout: true,
+            scrollBeyondLastLine: !autoHeight,
+            scrollbar: {
+              vertical: "hidden",
+              horizontal: "hidden",
+              alwaysConsumeMouseWheel: !autoHeight || height === 1000,
+            },
+            minimap: {
+              enabled: false,
+            },
+            readOnly: true,
+            lineDecorationsWidth: 20,
+            folding: false,
+            wordWrap: "on",
+          }}
+          value={content}
+          path={modelPath}
+          defaultValue="Please select a file"
+          onMount={handleEditorDidMount}
+        />
+      </div>
       {editorRef.current && isMounted && (
         <>
           {onFeedbacksChange && !noFileFeedback && (

@@ -11,11 +11,12 @@ export default function TextExerciseDetail({
   return (
     <Disclosure title="Example Solution" noContentIndent>
       {exercise.example_solution.length > 0 ? (
-        <div className="h-[50vh] border border-gray-200 rounded-lg overflow-hidden">
+        <div className="border border-gray-100 rounded-lg overflow-hidden">
           <FileEditor
             key={`${exercise.id}/solution`}
             identifier={`exercise-${exercise.id}/solution`}
             content={exercise.example_solution}
+            autoHeight
           />
         </div>
       ) : (

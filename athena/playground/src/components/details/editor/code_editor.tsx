@@ -29,7 +29,7 @@ export default function CodeEditor({ repository_url, feedbacks, onFeedbacksChang
   }, [selectedFile, repository]);
 
   return (
-    <div className="h-[50vh] border border-gray-200 rounded-lg overflow-hidden">
+    <div className="h-[50vh] border border-gray-100 rounded-lg overflow-hidden">
       <Allotment vertical={false} defaultSizes={[1, 4]}>
         <Allotment.Pane preferredSize={"20%"}>
           <div className="h-full overflow-y-auto p-2">
