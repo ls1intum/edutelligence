@@ -124,12 +124,15 @@ export default function InlineFeedback({
   return (
     <div
       className={twMerge(
-        "mx-2 my-1 border border-gray-300 rounded-lg text-sm max-w-3xl hover:outline outline-2 hover:shadow transition-all duration-200",
+        "mx-2 my-1 border border-gray-300 rounded-lg text-sm max-w-3xl",
+        ...(referenceType !== "unreferenced" ? [
+        "hover:outline outline-2 hover:shadow transition-all duration-200",
         currentCredits < 0
           ? "outline-red-300/50"
           : currentCredits > 0
           ? "outline-green-300/50"
           : "outline-yellow-300/50",
+        ] : []),
         className
       )}
       onMouseEnter={() => setIsHovering(true)}

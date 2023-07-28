@@ -33,6 +33,9 @@ export default function FileEditor({
   onFeedbacksChange,
   createNewFeedback,
 }: FileEditorProps) {
+  const monaco = useMonaco();
+  const editorRef = useRef<editor.IStandaloneCodeEditor>();
+
   // Only render feedbacks that are relevant to the current file
   // Unreferenced feedbacks are always shown
   const feedbacksToRender = feedbacks?.filter((feedback) => {
@@ -46,20 +49,12 @@ export default function FileEditor({
       return true;
     }
   });
-  const modelPath =
-    (identifier ? `${identifier}/` : "") + (filePath ?? "default");
+  const modelPath = (identifier ? `${identifier}/` : "") + (filePath ?? "default");
 
-  const monaco = useMonaco();
-  const editorRef = useRef<editor.IStandaloneCodeEditor>();
+  // Height used for autoHeight
   const [height, setHeight] = useState<number>(100);
-  const [hoverPosition, setHoverPosition] = useState<Position | undefined>(
-    undefined
-  );
+  const [hoverPosition, setHoverPosition] = useState<Position | undefined>(undefined);
   const [selection, setSelection] = useState<Selection | undefined>(undefined);
-  const [
-    addFeedbackDecorationsCollection,
-    setAddFeedbackDecorationsCollection,
-  ] = useState<editor.IEditorDecorationsCollection | undefined>(undefined);
   const [isMounted, setIsMounted] = useState(false);
 
   // Using state for non-react handlers is not working so we use a ref
@@ -71,6 +66,7 @@ export default function FileEditor({
     feedbacks: feedbacks,
     filePath: filePath,
   });
+  const addFeedbackHoverDecorations = useRef<string[]>([]);
 
   // Called when the user presses the add feedback button
   const addFeedbackPressed = (referenceType: FeedbackReferenceType) => {
@@ -140,13 +136,12 @@ export default function FileEditor({
         };
       }
     }
-    console.log(newFeedback);
     onFeedbacksChange([...(feedbacks ?? []), newFeedback]);
   };
 
   // Setup listeners for adding feedback
   // Listening for mouse and selection events for adding feedback
-  const setupAddFeedbackListeners = (editor: editor.IStandaloneCodeEditor) => {
+  const setupAddFeedbackHoverListeners = (editor: editor.IStandaloneCodeEditor) => {
     editor.onMouseMove(function (e) {
       setHoverPosition(e.target.position ?? undefined);
     });
@@ -171,49 +166,46 @@ export default function FileEditor({
     });
   };
 
-  // Setup decorations for adding feedback (in the gutter)
-  const setupAddFeedbackDecorations = (
+  // Update decorations for adding feedback (in the gutter)
+  const updateAddFeedbackHoverDecorations = (
     editor: editor.IStandaloneCodeEditor,
     monaco: Monaco
   ) => {
-    if (addFeedbackDecorationsCollection) {
-      addFeedbackDecorationsCollection.clear();
-    }
+    const model = editor.getModel();
+    if (!model || model.isDisposed()) return;
+
     if (hoverPosition === undefined && selection === undefined) {
-      setAddFeedbackDecorationsCollection(undefined);
+      model.deltaDecorations(addFeedbackHoverDecorations.current, []);
       return;
     }
 
     if (selection && !selection.isEmpty()) {
-      const decorations: editor.IModelDeltaDecoration[] = [
-        {
-          range: new monaco.Range(
-            selection.startLineNumber,
-            selection.startColumn,
-            selection.endLineNumber,
-            selection.endColumn
-          ),
-          options: {
-            linesDecorationsClassName: "comment-range",
+      addFeedbackHoverDecorations.current = model.deltaDecorations(addFeedbackHoverDecorations.current, [
+          {
+            range: new monaco.Range(
+              selection.startLineNumber,
+              selection.startColumn,
+              selection.endLineNumber,
+              selection.endColumn
+            ),
+            options: {
+              linesDecorationsClassName: "comment-range",
+            },
           },
-        },
-        {
-          range: new monaco.Range(
-            selection.endLineNumber,
-            selection.endColumn,
-            selection.endLineNumber,
-            selection.endColumn
-          ),
-          options: {
-            linesDecorationsClassName: "comment-range-button",
+          {
+            range: new monaco.Range(
+              selection.endLineNumber,
+              selection.endColumn,
+              selection.endLineNumber,
+              selection.endColumn
+            ),
+            options: {
+              linesDecorationsClassName: "comment-range-button",
+            },
           },
-        },
-      ];
-      const newAddFeedbackDecorationsCollection =
-        editor.createDecorationsCollection(decorations);
-      setAddFeedbackDecorationsCollection(newAddFeedbackDecorationsCollection);
+      ]);
     } else if (hoverPosition) {
-      const decorations: editor.IModelDeltaDecoration[] = [
+      addFeedbackHoverDecorations.current = model.deltaDecorations(addFeedbackHoverDecorations.current, [
         {
           range: new monaco.Range(
             hoverPosition.lineNumber,
@@ -235,22 +227,9 @@ export default function FileEditor({
           ),
           options: { linesDecorationsClassName: "comment-range-button" },
         },
-      ];
-      const newAddFeedbackDecorationsCollection =
-        editor.createDecorationsCollection(decorations);
-      setAddFeedbackDecorationsCollection(newAddFeedbackDecorationsCollection);
+      ]);
     } else {
-      setAddFeedbackDecorationsCollection(undefined);
-    }
-  };
-
-  const setupEditor = () => {
-    if (!editorRef.current || !monaco) return;
-    const editor = editorRef.current;
-
-    if (onFeedbacksChange) {
-      setupAddFeedbackListeners(editor);
-      setupAddFeedbackDecorations(editor, monaco);
+      model.deltaDecorations(addFeedbackHoverDecorations.current, []);
     }
   };
 
@@ -273,7 +252,10 @@ export default function FileEditor({
   ) => {
     editorRef.current = editor;
     setIsMounted(true);
-    setupEditor();
+    if (onFeedbacksChange) {
+      setupAddFeedbackHoverListeners(editor);
+      updateAddFeedbackHoverDecorations(editorRef.current, monaco);
+    }
 
     if (autoHeight) {
       editor.onDidContentSizeChange(() => {
@@ -285,8 +267,8 @@ export default function FileEditor({
 
   // Update add feedback decorations when the hover position or selection changes
   useEffect(() => {
-    if (!editorRef.current || !monaco) return;
-    setupAddFeedbackDecorations(editorRef.current, monaco);
+    if (!onFeedbacksChange ||  !editorRef.current || !monaco) return;
+    updateAddFeedbackHoverDecorations(editorRef.current, monaco);
     latestAddFeedbackState.current = {
       ...latestAddFeedbackState.current,
       selection,
@@ -294,10 +276,7 @@ export default function FileEditor({
     };
   }, [hoverPosition, selection]);
 
-  // Setup editor when something changes
   useEffect(() => {
-    console.log("Something changed");
-    setupEditor();
     latestAddFeedbackState.current = {
       ...latestAddFeedbackState.current,
       feedbacks,

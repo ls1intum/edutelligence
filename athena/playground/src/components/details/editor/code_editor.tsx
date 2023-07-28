@@ -15,7 +15,12 @@ type CodeEditorProps = {
   createNewFeedback?: () => Feedback;
 };
 
-export default function CodeEditor({ repository_url, feedbacks, onFeedbacksChange, createNewFeedback }: CodeEditorProps) {
+export default function CodeEditor({
+  repository_url,
+  feedbacks,
+  onFeedbacksChange,
+  createNewFeedback,
+}: CodeEditorProps) {
   const repository = useFetchAndUnzip(repository_url);
   const [selectedFile, setSelectedFile] = useState<string | undefined>(
     undefined
@@ -24,7 +29,11 @@ export default function CodeEditor({ repository_url, feedbacks, onFeedbacksChang
 
   useEffect(() => {
     if (selectedFile && repository) {
-      repository.zip.file(selectedFile)?.async("string").then(setFileContent)
+      repository.zip
+        .file(selectedFile)
+        ?.async("string")
+        .then(setFileContent)
+        .catch(console.error);
     }
   }, [selectedFile, repository]);
 
