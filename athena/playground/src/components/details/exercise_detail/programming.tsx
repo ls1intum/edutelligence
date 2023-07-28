@@ -7,13 +7,13 @@ export default function ProgrammingExerciseDetail({ exercise }: { exercise: Prog
   return (
     <>
       <Disclosure title="Template Repository">
-        <CodeEditor repository_url={exercise.template_repository_url} />
+        <CodeEditor key={`${exercise.id}/template`} repository_url={exercise.template_repository_url} />
       </Disclosure>
       <Disclosure title="Solution Repository">
-        <CodeEditor repository_url={exercise.solution_repository_url} />
+        <CodeEditor key={`${exercise.id}/solution`} repository_url={exercise.solution_repository_url} />
       </Disclosure>
       <Disclosure title="Tests Repository">
-        <CodeEditor repository_url={exercise.tests_repository_url} />
+        <CodeEditor key={`${exercise.id}/tests`} repository_url={exercise.tests_repository_url} />
       </Disclosure>
     </>
   );

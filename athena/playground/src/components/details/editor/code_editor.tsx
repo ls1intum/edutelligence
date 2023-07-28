@@ -23,8 +23,8 @@ export default function CodeEditor({ repository_url, feedbacks, onFeedbacksChang
   const [fileContent, setFileContent] = useState<string | undefined>(undefined);
 
   useEffect(() => {
-    if (selectedFile) {
-      repository.zip.file(selectedFile)?.async("string").then(setFileContent);
+    if (selectedFile && repository) {
+      repository.zip.file(selectedFile)?.async("string").then(setFileContent)
     }
   }, [selectedFile, repository]);
 
@@ -45,7 +45,8 @@ export default function CodeEditor({ repository_url, feedbacks, onFeedbacksChang
           {fileContent ? (
             <FileEditor
               content={fileContent}
-              filePath={`${repository_url}:${selectedFile}`}
+              identifier={repository_url}
+              filePath={selectedFile}
               feedbacks={feedbacks}
               onFeedbacksChange={onFeedbacksChange}
               createNewFeedback={createNewFeedback}

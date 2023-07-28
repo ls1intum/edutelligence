@@ -14,7 +14,8 @@ import { EditorWidget } from "./editor_widget";
 
 type FileEditorProps = {
   content: string;
-  filePath: string;
+  identifier?: string;
+  filePath?: string;
   noFileFeedback?: boolean;
   feedbacks?: Feedback[];
   onFeedbacksChange?: (feedback: Feedback[]) => void;
@@ -23,6 +24,7 @@ type FileEditorProps = {
 
 export default function FileEditor({
   content,
+  identifier,
   filePath,
   noFileFeedback = false,
   feedbacks,
@@ -42,6 +44,7 @@ export default function FileEditor({
       return true;
     }
   });
+  const modelPath = (identifier ? `${identifier}/` : "") + (filePath ?? "default");
 
   const monaco = useMonaco();
   const editorRef = useRef<editor.IStandaloneCodeEditor>();
@@ -333,11 +336,10 @@ export default function FileEditor({
   // Update the model when the content or filePath changes (for syntax highlighting)
   useEffect(() => {
     if (!monaco) return;
-    const path = monaco.Uri.parse(filePath || "");
-    monaco.editor.getModel(path)?.dispose();
-    const model = monaco.editor.createModel(content, undefined, path);
+    monaco.editor.getModel(monaco.Uri.parse(modelPath))?.dispose();
+    const model = monaco.editor.createModel(content, undefined, monaco.Uri.parse(modelPath));
     editorRef.current?.setModel(model);
-  }, [monaco, filePath, content]);
+  }, [monaco, identifier, filePath, content]);
 
   // Setup editor when it is mounted
   const handleEditorDidMount = (
@@ -389,7 +391,7 @@ export default function FileEditor({
           wordWrap: "on",
         }}
         value={content}
-        path={filePath}
+        path={modelPath}
         defaultValue="Please select a file"
         onMount={handleEditorDidMount}
       />

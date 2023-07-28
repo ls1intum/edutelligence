@@ -28,8 +28,9 @@ export default function TextSubmissionDetail({
     <>
       <div className="h-[50vh] border border-gray-200 rounded-lg overflow-hidden">
         <FileEditor
+          key={`submission-${submission.id}`}
+          identifier={`submission-${submission.id}`}
           content={submission.content}
-          filePath={`submission-${submission.id}`}
           noFileFeedback
           feedbacks={feedbacks}
           onFeedbacksChange={onFeedbacksChange}

@@ -21,6 +21,7 @@ export default function ProgrammingSubmissionDetail({
   return (
     <>
       <CodeEditor
+        key={submission.id}
         repository_url={submission.repository_url}
         feedbacks={feedbacks}
         onFeedbacksChange={onFeedbacksChange}
