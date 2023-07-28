@@ -52,7 +52,7 @@ export default function FileEditor({
   const modelPath = (identifier ? `${identifier}/` : "") + (filePath ?? "default");
 
   // Height used for autoHeight
-  const [height, setHeight] = useState<number>(100);
+  const [height, setHeight] = useState<number>(18);
   const [hoverPosition, setHoverPosition] = useState<Position | undefined>(undefined);
   const [selection, setSelection] = useState<Selection | undefined>(undefined);
   const [isMounted, setIsMounted] = useState(false);
@@ -235,7 +235,10 @@ export default function FileEditor({
 
   // Update the model when the content or filePath changes (for syntax highlighting)
   useEffect(() => {
+    console.log("update model");
     if (!monaco) return;
+    console.log("update model 2");
+
     monaco.editor.getModel(monaco.Uri.parse(modelPath))?.dispose();
     const model = monaco.editor.createModel(
       content,
@@ -243,7 +246,7 @@ export default function FileEditor({
       monaco.Uri.parse(modelPath)
     );
     editorRef.current?.setModel(model);
-  }, [monaco, identifier, filePath, content]);
+  }, [filePath]);
 
   // Setup editor when it is mounted
   const handleEditorDidMount = (
@@ -251,6 +254,7 @@ export default function FileEditor({
     monaco: Monaco
   ) => {
     editorRef.current = editor;
+    console.log("editor did mount");
     setIsMounted(true);
     if (onFeedbacksChange) {
       setupAddFeedbackHoverListeners(editor);
