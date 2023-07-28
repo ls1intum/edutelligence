@@ -85,8 +85,9 @@ export default function InlineFeedback({
 
   useEffect(() => {
     return () => {
-      model?.deltaDecorations(lineDecorations.current, []);
-      model?.deltaDecorations(hoverLineDecorations.current, []);
+      if (!model || model.isDisposed()) return;
+      model.deltaDecorations(lineDecorations.current, []);
+      model.deltaDecorations(hoverLineDecorations.current, []);
     };
   }, [model]);
 
