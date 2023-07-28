@@ -1,6 +1,6 @@
 import type { Feedback } from "@/model/feedback";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { twMerge } from "tailwind-merge";
 import TextareaAutosize from "react-textarea-autosize";
 
@@ -34,61 +34,60 @@ export default function InlineFeedback({
   const referenceType = getFeedbackReferenceType(feedback);
 
   // Highlight the feedback range in the editor
-  const [lineDecorations, setLineDecorations] = useState<string[]>([]);
   const [isHovering, setIsHovering] = useState(false);
-  const [hoverLineDecorations, setHoverLineDecorations] = useState<string[]>(
-    []
-  );
+  const lineDecorations = useRef<string[]>([]);
+  const hoverLineDecorations = useRef<string[]>([]);
 
   useEffect(() => {
     if (!model) return;
     const range = getFeedbackRange(model, feedback);
     if (!range) return;
 
-    const newLineDecorations = model.deltaDecorations(lineDecorations, [
+    const currentCredits = isEditing ? credits : feedback.credits;
+    const creditsType =
+      currentCredits < 0
+        ? "negative"
+        : currentCredits > 0
+        ? "positive"
+        : "neutral";
+
+    lineDecorations.current = model.deltaDecorations(lineDecorations.current, [
       {
         options: {
-          inlineClassName: `inline-feedback-text ${
-            feedback.credits < 0
-              ? "negative"
-              : feedback.credits > 0
-              ? "positive"
-              : "neutral"
-          }`,
+          inlineClassName: `inline-feedback-text ${creditsType}`,
         },
         range,
       },
     ]);
-    setLineDecorations(newLineDecorations);
 
-    const newHoverLineDecorations = model.deltaDecorations(
-      hoverLineDecorations,
+    hoverLineDecorations.current = model.deltaDecorations(
+      hoverLineDecorations.current,
       isHovering
         ? [
             {
               options: {
-                inlineClassName: `inline-feedback-text ${
-                  feedback.credits < 0
-                    ? "highlighted-negative"
-                    : feedback.credits > 0
-                    ? "highlighted-positive"
-                    : "highlighted-neutral"
-                }`,
+                inlineClassName: `inline-feedback-text highlighted-${creditsType}`,
               },
               range,
             },
           ]
         : []
     );
-    setHoverLineDecorations(newHoverLineDecorations);
-  }, [feedback, model, isHovering]);
+  }, [feedback, model, credits, isHovering, isEditing]);
 
   useEffect(() => {
     if (feedback.is_new && onFeedbackChange) {
       setIsEditing(true);
       feedback.is_new = false;
     }
-  }, [feedback]);
+  }, [feedback, onFeedbackChange]);
+
+  useEffect(() => {
+    return () => {
+      model?.deltaDecorations(lineDecorations.current, []);
+      model?.deltaDecorations(hoverLineDecorations.current, []);
+    };
+  }, [model]);
 
   const handleDelete = () => {
     if (!onFeedbackChange) return;
