@@ -45,7 +45,7 @@ export default function CodeEditor({ repository_url, feedbacks, onFeedbacksChang
           {fileContent ? (
             <FileEditor
               content={fileContent}
-              filePath={selectedFile}
+              filePath={`${repository_url}:${selectedFile}`}
               feedbacks={feedbacks}
               onFeedbacksChange={onFeedbacksChange}
               createNewFeedback={createNewFeedback}

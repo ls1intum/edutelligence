@@ -8,7 +8,7 @@ export default function TextExerciseDetail({ exercise }: { exercise: TextExercis
     <Disclosure title="Example Solution" noContentIndent>
       {exercise.example_solution.length > 0 ? (
         <div className="h-[50vh] border border-gray-200 rounded-lg overflow-hidden">
-          <FileEditor content={exercise.example_solution}/>
+          <FileEditor content={exercise.example_solution} filePath={`exercise-${exercise.id}/solution`}/>
         </div>
       ) : (
         <span className="text-gray-500">No example solution available</span>

@@ -14,7 +14,8 @@ import { EditorWidget } from "./editor_widget";
 
 type FileEditorProps = {
   content: string;
-  filePath?: string;
+  filePath: string;
+  noFileFeedback?: boolean;
   feedbacks?: Feedback[];
   onFeedbacksChange?: (feedback: Feedback[]) => void;
   createNewFeedback?: () => Feedback;
@@ -23,6 +24,7 @@ type FileEditorProps = {
 export default function FileEditor({
   content,
   filePath,
+  noFileFeedback = false,
   feedbacks,
   onFeedbacksChange,
   createNewFeedback,
@@ -393,7 +395,7 @@ export default function FileEditor({
       />
       {editorRef.current && isMounted && (
         <>
-          {onFeedbacksChange && filePath && (
+          {onFeedbacksChange && !noFileFeedback && (
             <EditorWidget
               editor={editorRef.current}
               afterLineNumber={0}
