@@ -167,13 +167,13 @@ body {
 
   /* Styling the highlighted inline feedback text */
   .monaco-editor .inline-feedback-text.highlighted-positive {
-    @apply bg-green-300/50 text-green-800 !important;
+    @apply bg-green-400/50 text-green-800 !important;
   }
   .monaco-editor .inline-feedback-text.highlighted-negative {
-    @apply bg-red-300/50 text-red-800 !important;
+    @apply bg-red-400/50 text-red-800 !important;
   }
   .monaco-editor .inline-feedback-text.highlighted-neutral {
-    @apply bg-yellow-300/50 text-yellow-800 !important;
+    @apply bg-yellow-400/50 text-yellow-800 !important;
   }
 
   /* Styling the comment range button */
