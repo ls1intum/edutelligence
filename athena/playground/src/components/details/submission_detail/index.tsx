@@ -17,7 +17,7 @@ export default function SubmissionDetail({
 }: SubmissionDetailProps) {
   const createNewFeedback = () => {
     const newFeedback: Feedback = {
-      id: undefined,
+      id: Date.now(), // Good enough for the playground
       credits: 0,
       title: "",
       description: "",

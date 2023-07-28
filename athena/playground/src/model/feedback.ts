@@ -2,7 +2,7 @@ import type { IRange, editor } from "monaco-editor";
 import type { ExerciseType } from "./exercise";
 
 type FeedbackBase = {
-  id?: number;
+  id: number;
   type: ExerciseType; // Playground only
   title: string;
   description: string;
@@ -97,13 +97,13 @@ export function getFeedbackReferenceType(feedback: Feedback): FeedbackReferenceT
   return "unreferenced";
 }
 
-export function getOnFeedbackChange(feedbacks: Feedback[], index: number, onFeedbacksChange: (feedbacks: Feedback[]) => void): (newFeedback: Feedback | undefined) => void {
+export function getOnFeedbackChange(feedback: Feedback, feedbacks: Feedback[], onFeedbacksChange: (feedbacks: Feedback[]) => void): (newFeedback: Feedback | undefined) => void {
   return (newFeedback: Feedback | undefined) => {
     let newFeedbacks = [...feedbacks];
     if (newFeedback === undefined) {
-      newFeedbacks.splice(index, 1);
+      newFeedbacks = newFeedbacks.filter((f) => f.id !== feedback.id);
     } else {
-      newFeedbacks[index] = newFeedback;
+      newFeedbacks = newFeedbacks.map((f) => f.id === feedback.id ? newFeedback : f);
     }
     onFeedbacksChange(newFeedbacks);
   }  

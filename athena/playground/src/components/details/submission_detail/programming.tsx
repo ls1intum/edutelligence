@@ -29,14 +29,14 @@ export default function ProgrammingSubmissionDetail({
       {((unreferencedFeedbacks && unreferencedFeedbacks.length > 0) || onFeedbacksChange) && (
         <div className="space-y-2 mt-5">
           <h3 className="ml-2 text-lg font-medium">Unreferenced Feedback</h3>
-          {feedbacks?.map((feedback, index) => (
+          {feedbacks?.map((feedback) => (
             getFeedbackReferenceType(feedback) === "unreferenced" && (
             <InlineFeedback
               key={feedback.id}
               feedback={feedback}
               onFeedbackChange={
                 onFeedbacksChange &&
-                getOnFeedbackChange(feedbacks, index, onFeedbacksChange)
+                getOnFeedbackChange(feedback, feedbacks, onFeedbacksChange)
               }
             />)
           ))}

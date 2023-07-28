@@ -434,8 +434,8 @@ export default function FileEditor({
                         onFeedbackChange={
                           onFeedbacksChange &&
                           getOnFeedbackChange(
+                            feedback,
                             feedbacks,
-                            index,
                             onFeedbacksChange
                           )
                         }
