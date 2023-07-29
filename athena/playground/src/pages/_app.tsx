@@ -1,6 +1,9 @@
 import "@/styles/globals.css";
 import "@/styles/schema_form.css";
 import "@/styles/monaco.css";
+
+import "@blueprintjs/core/lib/css/blueprint.css";
+import "@blueprintjs/icons/lib/css/blueprint-icons.css";
 import "allotment/dist/style.css";
 
 import type { AppProps } from "next/app";
