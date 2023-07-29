@@ -159,7 +159,11 @@ SELECT
                 'file_path',
                 COALESCE(SUBSTRING_INDEX(SUBSTRING_INDEX(f.reference, 'file:', -1), '_line:', 1), NULL),
                 'line_start',
-                COALESCE(CAST(SUBSTRING_INDEX(SUBSTRING_INDEX(f.reference, '_line:', -1), 'file:', -1) AS UNSIGNED), NULL),
+                IF( -- If line number is not NULL, add 1 to it (because line numbers start at 1 in the IDE)
+                  f.reference IS NOT NULL, 
+                  COALESCE(CAST(SUBSTRING_INDEX(SUBSTRING_INDEX(f.reference, '_line:', -1), 'file:', -1) AS UNSIGNED), NULL) + 1,
+                  NULL
+                ),
                 'line_end',
                 NULL,
                 'credits',
