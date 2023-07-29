@@ -50,14 +50,19 @@ export default function CodeEditor({
         </Allotment.Pane>
         <Allotment.Pane>
           {fileContent ? (
-            <FileEditor
-              content={fileContent}
-              identifier={repository_url}
-              filePath={selectedFile}
-              feedbacks={feedbacks}
-              onFeedbacksChange={onFeedbacksChange}
-              createNewFeedback={createNewFeedback}
-            />
+            <div className="h-full w-full">
+              <div className="text-gray-500 text-sm py-0.5 px-2 bg-gray-50 italic">
+                {selectedFile}
+              </div>
+              <FileEditor
+                content={fileContent}
+                identifier={repository_url}
+                filePath={selectedFile}
+                feedbacks={feedbacks}
+                onFeedbacksChange={onFeedbacksChange}
+                createNewFeedback={createNewFeedback}
+              />
+            </div>
           ) : (
             <div className="h-full w-full flex items-center justify-center">
               <p className="text-gray-500">Select a file to view its content</p>
