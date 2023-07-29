@@ -40,7 +40,6 @@ export function EditorWidget({ editor, children, afterLineNumber, afterColumn, f
     zoneNode.id = `widget-${id}-zone`;
 
     editor.changeViewZones(function (changeAccessor) {
-      console.log(`Change view zone for ${id}`)
       const overlayNode = overlayWidget.getDomNode();
       const zoneId = changeAccessor.addZone({
         afterLineNumber,

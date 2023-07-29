@@ -235,9 +235,7 @@ export default function FileEditor({
 
   // Update the model when the content or filePath changes (for syntax highlighting)
   useEffect(() => {
-    console.log("update model");
     if (!monaco) return;
-    console.log("update model 2");
 
     monaco.editor.getModel(monaco.Uri.parse(modelPath))?.dispose();
     const model = monaco.editor.createModel(
@@ -254,7 +252,6 @@ export default function FileEditor({
     monaco: Monaco
   ) => {
     editorRef.current = editor;
-    console.log("editor did mount");
     setIsMounted(true);
     if (onFeedbacksChange) {
       setupAddFeedbackHoverListeners(editor);

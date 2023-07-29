@@ -101,10 +101,8 @@ export function getOnFeedbackChange(feedback: Feedback, feedbacks: Feedback[], o
   return (newFeedback: Feedback | undefined) => {
     let newFeedbacks = [...feedbacks];
     if (newFeedback === undefined) {
-      console.log("Delete feedback")
       newFeedbacks = newFeedbacks.filter((f) => f.id !== feedback.id);
     } else {
-      console.log("Update feedback")
       newFeedbacks = newFeedbacks.map((f) => f.id === feedback.id ? newFeedback : f);
     }
     onFeedbacksChange(newFeedbacks);

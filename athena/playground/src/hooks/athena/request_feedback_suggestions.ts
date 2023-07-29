@@ -25,7 +25,6 @@ export default function useRequestFeedbackSuggestions(
   return useMutation({
     mutationFn: async ({ exercise, submission }) => {
       let response = await athenaFetcher("/feedback_suggestions", { exercise, submission });
-      console.log(response)
       if (response?.data) {
         // Add is_suggestion flag to feedbacks
         response.data.feedbacks = response.data.map((feedback: Feedback) => {
