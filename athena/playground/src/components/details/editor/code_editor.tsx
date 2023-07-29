@@ -41,14 +41,12 @@ export default function CodeEditor({
     <div className="h-[50vh] border border-gray-100 rounded-lg overflow-hidden">
       <Allotment vertical={false} defaultSizes={[1, 4]}>
         <Allotment.Pane preferredSize={"20%"}>
-          <div className="h-full overflow-y-auto">
-            <FileTree
-              tree={repository.tree}
-              feedbacks={feedbacks}
-              selectedFile={selectedFile}
-              onSelectFile={setSelectedFile}
-            />
-          </div>
+          <FileTree
+            tree={repository.tree}
+            feedbacks={feedbacks}
+            selectedFile={selectedFile}
+            onSelectFile={setSelectedFile}
+          />
         </Allotment.Pane>
         <Allotment.Pane>
           {fileContent ? (
