@@ -315,6 +315,7 @@ export default function FileEditor({
         <>
           {onFeedbacksChange && !noFileFeedback && (
             <EditorWidget
+              key={filePath}
               editor={editorRef.current}
               afterLineNumber={0}
               afterColumn={1000}
