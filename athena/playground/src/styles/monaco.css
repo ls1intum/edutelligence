@@ -40,8 +40,8 @@
   /* Styling combination of three overlapping inline feedback texts */
   .monaco-editor .inline-feedback-text.positive.negative.neutral:not(.highlighted-positive):not(.highlighted-negative):not(.highlighted-neutral) {
     background-image: linear-gradient(45deg, rgb(187 247 208 / 0.5) 16.666%, rgb(254 240 138 / 0.5) 16.666%, rgb(254 240 138 / 0.5) 33.333%, rgb(254 202 202 / 0.5) 33.333%, rgb(254 202 202 / 0.5) 50%,  rgb(187 247 208 / 0.5) 50%, rgb(187 247 208 / 0.5) 66.666%, rgb(254 240 138 / 0.5) 66.666%, rgb(254 240 138 / 0.5) 83.333%, rgb(254 202 202 / 0.5) 83.333%, rgb(254 202 202 / 0.5));
-    background-size: 16px 16px;
-    background-position: 0 0, 8px 8px;
+    background-size: 12px 12px;
+    background-position: 0 0, 6px 6px;
   }
 
   /* Styling the highlighted inline feedback text */
