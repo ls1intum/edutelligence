@@ -11,6 +11,7 @@ import {
   TreeItem,
   TreeItemIndex,
 } from "react-complex-tree";
+import { twMerge } from "tailwind-merge";
 
 type FileTreeProps = {
   tree: FileTree[];
@@ -22,6 +23,7 @@ type FileTreeProps = {
 type ItemData = {
   path: string;
   name: string;
+  isDir: boolean;
   feedbackCount?: number;
 };
 
@@ -39,12 +41,17 @@ export default function FileTree({
       data: {
         path: "/",
         name: "Root Item",
+        isDir: true,
       },
     },
   };
 
-  const addChildren = (item: FileTree) => {
-    if (item.dir) {
+  const addChildren = (item: FileTree): number => {
+    if (item.isDir) {
+      const feedbackCount = item.children.reduce(
+        (acc, file) => acc + (addChildren(file) ?? 0),
+        0
+      );
       items[item.path] = {
         index: item.path,
         isFolder: true,
@@ -52,9 +59,11 @@ export default function FileTree({
         data: {
           path: item.path,
           name: item.dirname,
+          isDir: true,
+          feedbackCount: feedbackCount > 0 ? feedbackCount : undefined,
         },
       };
-      item.children?.forEach(addChildren);
+      return feedbackCount;
     } else {
       const feedbackCount =
         feedbacks?.filter(
@@ -67,9 +76,11 @@ export default function FileTree({
         data: {
           path: item.path,
           name: item.filename,
+          isDir: false,
           feedbackCount: feedbackCount > 0 ? feedbackCount : undefined,
         },
       };
+      return feedbackCount;
     }
   };
   tree.forEach(addChildren);
@@ -112,7 +123,15 @@ export default function FileTree({
           <>
             {bpRenderers.renderItemTitle && bpRenderers.renderItemTitle(props)}
             {props.item.data.feedbackCount && (
-              <span className="ml-1 text-slate-800 rounded bg-slate-200 px-1 py-0.5">
+              <span
+                className={twMerge(
+                  "mx-1 px-1 py-0.5 text-xs",
+                  props.item.data.isDir
+                    ? "rounded-full aspect-auto text-slate-500"
+                    : "rounded text-blue-800 bg-blue-200",
+                  props.context.isSelected && props.item.data.isDir ? "text-white" : ""
+                )}
+              >
                 {props.item.data.feedbackCount}
               </span>
             )}
