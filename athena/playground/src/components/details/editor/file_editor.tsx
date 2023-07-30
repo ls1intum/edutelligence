@@ -319,7 +319,7 @@ export default function FileEditor({
               editor={editorRef.current}
               afterLineNumber={0}
               afterColumn={1000}
-              filePath={filePath}
+              modelPath={modelPath}
             >
               <button
                 className="mx-2 my-1 border-2 border-primary-400 border-dashed text-primary-500 hover:text-primary-600 hover:bg-primary-50 hover:border-primary-500 rounded-lg font-medium max-w-3xl w-full py-2"
@@ -344,7 +344,7 @@ export default function FileEditor({
                     key={`feedback-${feedback.id}-${index}`}
                     afterLineNumber={range?.endLineNumber ?? 0}
                     afterColumn={range?.endColumn ?? 0}
-                    filePath={filePath}
+                    modelPath={modelPath}
                   >
                     <InlineFeedback
                       feedback={feedback}

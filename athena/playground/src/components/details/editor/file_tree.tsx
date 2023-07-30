@@ -1,6 +1,5 @@
 import type { Feedback } from "@/model/feedback";
-
-import { FileTree } from "@/helpers/fetch_and_unzip";
+import type { FileTree } from "@/helpers/fetch_and_unzip";
 
 import { useState } from "react";
 import { FocusStyleManager } from "@blueprintjs/core";
@@ -30,7 +29,6 @@ type ItemData = {
 export default function FileTree({
   tree,
   feedbacks,
-  selectedFile,
   onSelectFile,
 }: FileTreeProps) {
   let items: { [index: string]: TreeItem<ItemData> } = {

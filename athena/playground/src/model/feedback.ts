@@ -82,6 +82,12 @@ export function getFeedbackRange(model: editor.ITextModel, feedback: Feedback): 
 
 export type FeedbackReferenceType = "unreferenced" | "unreferenced_file" | "referenced";
 
+/**
+ * Returns the reference type of the feedback
+ * 
+ * @param feedback - the feedback
+ * @returns the reference type of the feedback
+ */
 export function getFeedbackReferenceType(feedback: Feedback): FeedbackReferenceType {
   if (feedback.type === "programming") {
     if (feedback.file_path !== undefined && feedback.line_start !== undefined) {
@@ -97,6 +103,17 @@ export function getFeedbackReferenceType(feedback: Feedback): FeedbackReferenceT
   return "unreferenced";
 }
 
+/**
+ * Transforms a onFeedbacksChange function to a single onFeedbackChange function for a specific feedback
+ * 
+ * @param feedback - feedback for which the onFeedbackChange function should be created
+ * @param feedbacks - feedbacks array
+ * @param onFeedbacksChange - onFeedbacksChange function that should be transformed
+ * @returns a onFeedbackChange function for the given feedback
+ * @example
+ *   const onFeedbackChange = getOnFeedbackChange(feedback, feedbacks, onFeedbacksChange);
+ *   onFeedbackChange(newFeedback);
+ */
 export function getOnFeedbackChange(feedback: Feedback, feedbacks: Feedback[], onFeedbacksChange: (feedbacks: Feedback[]) => void): (newFeedback: Feedback | undefined) => void {
   return (newFeedback: Feedback | undefined) => {
     let newFeedbacks = [...feedbacks];

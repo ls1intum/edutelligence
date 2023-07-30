@@ -44,7 +44,6 @@ export default function CodeEditor({
           <FileTree
             tree={repository.tree}
             feedbacks={feedbacks}
-            selectedFile={selectedFile}
             onSelectFile={setSelectedFile}
           />
         </Allotment.Pane>

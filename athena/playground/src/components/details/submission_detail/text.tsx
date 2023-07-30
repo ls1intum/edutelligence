@@ -1,12 +1,9 @@
 import type { TextSubmission } from "@/model/submission";
-import {
-  getOnFeedbackChange,
-  type Feedback,
-  getFeedbackReferenceType,
-} from "@/model/feedback";
+import type { Feedback } from "@/model/feedback";
 
 import FileEditor from "@/components/details/editor/file_editor";
 import InlineFeedback from "@/components/details/editor/inline_feedback";
+import { getOnFeedbackChange, getFeedbackReferenceType } from "@/model/feedback";
 
 type TextSubmissionDetailProps = {
   submission: TextSubmission;

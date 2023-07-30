@@ -1,17 +1,23 @@
+import { useEffect, useId, useMemo, useRef } from "react";
+import { createRoot } from "react-dom/client";
 import { editor } from "monaco-editor";
 import { createHtmlPortalNode, InPortal, OutPortal } from "react-reverse-portal";
-import { createRoot } from "react-dom/client";
-import { useEffect, useId, useMemo, useRef, useState } from "react";
 
 type EditorWidgetProps = {
   editor: editor.IStandaloneCodeEditor;
   children: React.ReactNode;
   afterLineNumber: number;
   afterColumn?: number;
-  filePath?: string;
+  modelPath?: string;
 };
 
-export function EditorWidget({ editor, children, afterLineNumber, afterColumn, filePath }: EditorWidgetProps) {
+/**
+ * A editor widget that can be placed inline in the Monaco text editor.
+ * 
+ * We render the widget in a portal so it can be a React component using react state etc.
+ * The out-portal is rendered in the editor as a overlay widget and a view zone makes space for it.
+ */
+export function EditorWidget({ editor, children, afterLineNumber, afterColumn, modelPath }: EditorWidgetProps) {
   const id = useId();
   const portalNode = useMemo(() => createHtmlPortalNode(), []);
   const resizeObserverRef = useRef<ResizeObserver>();
@@ -83,7 +89,7 @@ export function EditorWidget({ editor, children, afterLineNumber, afterColumn, f
       editor.removeOverlayWidget(overlayWidgetRef.current!);
       editor.changeViewZones((accessor) => accessor.removeZone(zoneIdRef.current!));
     };
-  }, [filePath]);
+  }, [modelPath]);
 
   return (
     <InPortal node={portalNode}>{children}</InPortal>

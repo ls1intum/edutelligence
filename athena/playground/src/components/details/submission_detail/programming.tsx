@@ -1,8 +1,9 @@
 import type { ProgrammingSubmission } from "@/model/submission";
-import { getOnFeedbackChange, type Feedback, getFeedbackReferenceType } from "@/model/feedback";
+import type { Feedback } from "@/model/feedback";
 
 import CodeEditor from "@/components/details/editor/code_editor";
 import InlineFeedback from "@/components/details/editor/inline_feedback";
+import { getOnFeedbackChange, getFeedbackReferenceType } from "@/model/feedback";
 
 type ProgrammingSubmissionDetailProps = {
   submission: ProgrammingSubmission;

@@ -1,3 +1,5 @@
+// TODO: REMOVE THIS BEFORE MERGING TO MAIN
+
 import type { ModuleMeta } from "@/model/health_response";
 import type { Exercise } from "@/model/exercise";
 import type { Submission } from "@/model/submission";
