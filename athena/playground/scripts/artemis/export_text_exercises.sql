@@ -179,9 +179,15 @@ SELECT
                   ELSE COALESCE(gc.title, '')
                 END,
                 'index_start',
-                tb.start_index,
+                CASE
+                  WHEN tb.start_index IS NOT NULL AND tb.start_index > 0 THEN tb.start_index - 1
+                  ELSE 0
+                END,
                 'index_end',
-                tb.end_index,
+                CASE
+                  WHEN tb.end_index IS NOT NULL AND tb.end_index > 0 THEN tb.end_index - 1
+                  ELSE 0
+                END,
                 'credits',
                 f.credits,
                 'type',
