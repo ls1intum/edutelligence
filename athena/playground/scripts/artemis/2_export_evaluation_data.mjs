@@ -37,7 +37,7 @@ async function exportExercises(
   sql = sql.replace(":exercise_ids", `(${placeholders})`);
 
   try {
-    console.log(`Exporting ${exerciseType} exercises, this may take a while...`);
+    console.log(`Exporting ${exerciseType} exercises...`);
     const [results] = await connection.query(sql, exerciseIds);
     const [exercises] = results.slice(-1);
     await Promise.all(exercises.map(async ({ exercise_data }) => {
