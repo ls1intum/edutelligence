@@ -1,7 +1,7 @@
 import { useBaseInfo, useBaseInfoDispatch } from "@/hooks/base_info_context";
 
 import Health from "@/components/health";
-import DataSelect from "@/components/selectors/data_select";
+import DataModeSelect from "@/components/selectors/data_mode_select";
 
 export default function BaseInfoHeader() {
   const { dataMode, athenaUrl, athenaSecret } = useBaseInfo();
@@ -32,7 +32,7 @@ export default function BaseInfoHeader() {
         />
       </label>
       <br />
-      <DataSelect 
+      <DataModeSelect 
         dataMode={dataMode} 
         onChangeDataMode={(dataMode) => dispatch({ type: "SET_DATA_MODE", payload: dataMode })} 
       />

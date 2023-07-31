@@ -1,6 +1,6 @@
 import type { DataMode } from "@/model/data_mode";
 
-export default function DataSelect({
+export default function DataModeSelect({
   dataMode,
   onChangeDataMode,
 }: {
