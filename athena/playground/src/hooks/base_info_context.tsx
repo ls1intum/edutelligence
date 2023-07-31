@@ -37,7 +37,7 @@ function createInitialState(): BaseInfo {
 }
 
 const BaseInfoContext = createContext<{
-  state:BaseInfo, 
+  state: BaseInfo, 
   dispatch: React.Dispatch<Action>
 }>({
   state: createInitialState(), 
