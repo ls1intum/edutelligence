@@ -24,28 +24,28 @@ import ModuleLLMConfig from "./module_llm";
 // Use ModuleLLMConfig as example.
 type CustomModuleConfig = "module_text_llm";
 const customModuleConfigComponents: {
-  [key in CustomModuleConfig]: React.FC<ModuleConfigProps>;
+  [key in CustomModuleConfig]: React.FC<ModuleConfigSelectProps>;
 } = {
   module_text_llm: ModuleLLMConfig,
 };
 
 type SetConfig = Dispatch<SetStateAction<any>>;
 
-export type ModuleConfigProps = {
+export type ModuleConfigSelectProps = {
   configOptions?: any;
   moduleConfig: any;
   onChangeConfig: SetConfig;
 };
 
-type ModuleConfigWrapperProps = ModuleConfigProps & {
+type ModuleConfigSelectWrapperProps = ModuleConfigSelectProps & {
   module: ModuleMeta;
 };
 
-export default function ModuleConfigWrapper({
+export default function ModuleConfigSelect({
   module,
   moduleConfig,
   onChangeConfig,
-}: ModuleConfigWrapperProps) {
+}: ModuleConfigSelectWrapperProps) {
   const hasCustomModuleConfigComponent =
     module.name in customModuleConfigComponents;
   const CustomModuleConfigComponent =

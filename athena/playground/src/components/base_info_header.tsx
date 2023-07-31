@@ -4,7 +4,7 @@ import useConfigSchema from "@/hooks/athena/config_schema";
 import Health from "@/components/health";
 import ModuleSelect from "@/components/selectors/module_select";
 import DataSelect from "@/components/selectors/data_select";
-import ModuleConfig from "@/components/module_config";
+import ModuleConfigSelect from "@/components/selectors/module_config_select";
 import Disclosure from "@/components/disclosure";
 
 export default function BaseInfoHeader() {
@@ -84,7 +84,7 @@ export default function BaseInfoHeader() {
               </label>
               {moduleConfig !== undefined && (
                 <Disclosure title="Configuration" openedInitially>
-                  <ModuleConfig
+                  <ModuleConfigSelect
                     module={module}
                     moduleConfig={moduleConfig}
                     onChangeConfig={(config) =>

@@ -3,14 +3,14 @@ import validator from "@rjsf/validator-ajv8";
 
 import Form from "@/components/form";
 import { getUISchema } from "@/components/form/utils";
-import { ModuleConfigProps } from ".";
+import { ModuleConfigSelectProps } from ".";
 import { Monaco } from "@monaco-editor/react";
 
 export default function ModuleLLMConfig({
   moduleConfig,
   configOptions,
   onChangeConfig,
-}: ModuleConfigProps) {
+}: ModuleConfigSelectProps) {
   return (
     <>
       <Form

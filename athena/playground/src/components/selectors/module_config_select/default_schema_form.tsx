@@ -2,13 +2,13 @@ import { getDefaultFormState } from "@rjsf/utils";
 import validator from "@rjsf/validator-ajv8";
 
 import Form from "@/components/form";
-import { ModuleConfigProps } from ".";
+import { ModuleConfigSelectProps } from ".";
 
 export default function DefaultSchemaFormModuleConfig({
   moduleConfig,
   configOptions,
   onChangeConfig,
-}: ModuleConfigProps) {
+}: ModuleConfigSelectProps) {
   return (
     <>
       <Form
