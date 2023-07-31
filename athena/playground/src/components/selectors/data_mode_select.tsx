@@ -19,7 +19,7 @@ export default function DataModeSelect({
           }`}
           onClick={() => onChangeDataMode("example")}
         >
-          Example data
+          Example Data
         </button>
         <button
           className={`p-2 rounded-r-md ${
@@ -29,7 +29,7 @@ export default function DataModeSelect({
           }`}
           onClick={() => onChangeDataMode("evaluation")}
         >
-          Evaluation data
+          Evaluation Data
         </button>
       </div>
       <p className="text-gray-500">
