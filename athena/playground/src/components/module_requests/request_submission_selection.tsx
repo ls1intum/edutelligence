@@ -1,6 +1,5 @@
 import type { Exercise } from "@/model/exercise";
 import type ModuleResponse from "@/model/module_response";
-import type { ModuleMeta } from "@/model/health_response";
 
 import { useEffect, useState } from "react";
 

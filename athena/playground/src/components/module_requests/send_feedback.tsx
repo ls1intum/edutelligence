@@ -1,4 +1,3 @@
-import type { ModuleMeta } from "@/model/health_response";
 import type { Submission } from "@/model/submission";
 import type { Exercise } from "@/model/exercise";
 import type { Feedback } from "@/model/feedback";
