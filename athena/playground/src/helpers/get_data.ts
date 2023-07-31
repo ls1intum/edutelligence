@@ -1,7 +1,7 @@
 import type { Exercise } from "@/model/exercise";
 import type { Submission } from "@/model/submission";
 import type { Feedback } from "@/model/feedback";
-import type { Mode } from "@/model/mode";
+import type { DataMode } from "@/model/data_mode";
 
 import path from "path";
 import fs from "fs";
@@ -9,7 +9,7 @@ import fs from "fs";
 import baseUrl from "@/helpers/base_url";
 
 function replaceJsonPlaceholders(
-  mode: Mode,
+  dataMode: DataMode,
   json: any,
   exerciseId: number,
   athenaOrigin: string
@@ -19,7 +19,7 @@ function replaceJsonPlaceholders(
   // 2. Replace a few placeholders.
   //    Placeholders look like this: `{{placeholder}}`
   const jsonPlaceholders: { [key: string]: string } = {
-    exerciseDataUrl: `${athenaOrigin}${baseUrl}/api/mode/${mode}/exercise/${exerciseId}/data`,
+    exerciseDataUrl: `${athenaOrigin}${baseUrl}/api/data/${dataMode}/exercise/${exerciseId}/data`,
   };
   const result: any = {};
   for (const key in json) {
@@ -55,11 +55,11 @@ function replaceJsonPlaceholders(
         result[key] = value;
       } else if (Array.isArray(value)) {
         result[key] = value.map((item) =>
-          replaceJsonPlaceholders(mode, item, exerciseId, athenaOrigin)
+          replaceJsonPlaceholders(dataMode, item, exerciseId, athenaOrigin)
         );
       } else if (typeof value === "object" && value !== null) {
         result[key] = replaceJsonPlaceholders(
-          mode,
+          dataMode,
           value,
           exerciseId,
           athenaOrigin
@@ -132,21 +132,21 @@ function removeNullValues(json: any, recursive: boolean = true): any {
 }
 
 function getExerciseJSON(
-  mode: Mode,
+  dataMode: DataMode,
   exerciseId: number,
   athenaOrigin: string
 ): any {
-  // find in cwd/data/<mode>/exercise-<exerciseId>.json
+  // find in cwd/data/<dataMode>/exercise-<exerciseId>.json
   const exercisePath = path.join(
     process.cwd(),
     "data",
-    mode,
+    dataMode,
     `exercise-${exerciseId}.json`
   );
   if (fs.existsSync(exercisePath)) {
     let exerciseJson = JSON.parse(fs.readFileSync(exercisePath, "utf8"));
     exerciseJson = replaceJsonPlaceholders(
-      mode,
+      dataMode,
       exerciseJson,
       exerciseId,
       athenaOrigin
@@ -160,9 +160,9 @@ function getExerciseJSON(
   throw new Error(`Exercise ${exerciseId} not found`);
 }
 
-function getAllExerciseJSON(mode: Mode, athenaOrigin: string): any[] {
-  // find in cwd/data/<mode> all exercise-*.json
-  const exercisesDir = path.join(process.cwd(), "data", mode);
+function getAllExerciseJSON(dataMode: DataMode, athenaOrigin: string): any[] {
+  // find in cwd/data/<dataMode> all exercise-*.json
+  const exercisesDir = path.join(process.cwd(), "data", dataMode);
   const exerciseIds = fs
     .readdirSync(exercisesDir)
     .filter(
@@ -172,7 +172,7 @@ function getAllExerciseJSON(mode: Mode, athenaOrigin: string): any[] {
     .map((fileName) => {
       return parseInt(fileName.split(".")[0].split("-")[1]);
     });
-  return exerciseIds.map((id) => getExerciseJSON(mode, id, athenaOrigin));
+  return exerciseIds.map((id) => getExerciseJSON(dataMode, id, athenaOrigin));
 }
 
 function jsonToExercise(json: any): Exercise {
@@ -212,28 +212,28 @@ function jsonToFeedbacks(json: any): Feedback[] {
   });
 }
 
-export function getExercises(mode: Mode, athenaOrigin: string): Exercise[] {
-  return getAllExerciseJSON(mode, athenaOrigin).map(jsonToExercise);
+export function getExercises(dataMode: DataMode, athenaOrigin: string): Exercise[] {
+  return getAllExerciseJSON(dataMode, athenaOrigin).map(jsonToExercise);
 }
 
 export function getSubmissions(
-  mode: Mode,
+  dataMode: DataMode,
   exerciseId: number | undefined,
   athenaOrigin: string
 ): Submission[] {
   if (exerciseId !== undefined) {
-    return jsonToSubmissions(getExerciseJSON(mode, exerciseId, athenaOrigin));
+    return jsonToSubmissions(getExerciseJSON(dataMode, exerciseId, athenaOrigin));
   }
-  return getAllExerciseJSON(mode, athenaOrigin).flatMap(jsonToSubmissions);
+  return getAllExerciseJSON(dataMode, athenaOrigin).flatMap(jsonToSubmissions);
 }
 
 export function getFeedbacks(
-  mode: Mode,
+  dataMode: DataMode,
   exerciseId: number | undefined,
   athenaOrigin: string
 ): Feedback[] {
   if (exerciseId !== undefined) {
-    return jsonToFeedbacks(getExerciseJSON(mode, exerciseId, athenaOrigin));
+    return jsonToFeedbacks(getExerciseJSON(dataMode, exerciseId, athenaOrigin));
   }
-  return getAllExerciseJSON(mode, athenaOrigin).flatMap(jsonToFeedbacks);
+  return getAllExerciseJSON(dataMode, athenaOrigin).flatMap(jsonToFeedbacks);
 }

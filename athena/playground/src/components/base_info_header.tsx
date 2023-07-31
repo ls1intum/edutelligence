@@ -4,7 +4,7 @@ import Health from "@/components/health";
 import DataSelect from "@/components/selectors/data_select";
 
 export default function BaseInfoHeader() {
-  const { mode, athenaUrl, athenaSecret } = useBaseInfo();
+  const { dataMode, athenaUrl, athenaSecret } = useBaseInfo();
   const dispatch = useBaseInfoDispatch();
 
   return (
@@ -33,8 +33,8 @@ export default function BaseInfoHeader() {
       </label>
       <br />
       <DataSelect 
-        mode={mode} 
-        onChangeMode={(mode) => dispatch({ type: "SET_MODE", payload: mode })} 
+        dataMode={dataMode} 
+        onChangeDataMode={(dataMode) => dispatch({ type: "SET_DATA_MODE", payload: dataMode })} 
       />
     </div>
   );

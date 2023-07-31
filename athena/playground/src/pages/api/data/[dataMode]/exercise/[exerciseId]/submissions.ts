@@ -1,13 +1,13 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import type { Submission } from "@/model/submission";
-import type { Mode } from "@/model/mode";
+import type { DataMode } from "@/model/data_mode";
 
 import { getSubmissions } from "@/helpers/get_data";
 import getOriginFromRequest from "@/helpers/origin_from_req";
-import { validateModeMiddleware } from "@/helpers/validate_mode_middleware";
+import { validateDataModeMiddleware } from "@/helpers/validate_data_mode_middleware";
 
 function handler(req: NextApiRequest, res: NextApiResponse<Submission[]>) {
-  const { mode, exerciseId } = req.query as { mode: Mode; exerciseId: string };
+  const { dataMode, exerciseId } = req.query as { dataMode: DataMode; exerciseId: string };
   const parsedExerciseId = exerciseId ? parseInt(exerciseId) : undefined;
   if (parsedExerciseId === undefined) {
     res.status(404).json([]);
@@ -15,7 +15,7 @@ function handler(req: NextApiRequest, res: NextApiResponse<Submission[]>) {
   }
   try {
     const submissions = getSubmissions(
-      mode,
+      dataMode,
       parsedExerciseId,
       getOriginFromRequest(req)
     );
@@ -30,5 +30,5 @@ export default function handlerWithMiddleware(
   req: NextApiRequest,
   res: NextApiResponse
 ) {
-  validateModeMiddleware(req, res, () => handler(req, res));
+  validateDataModeMiddleware(req, res, () => handler(req, res));
 }

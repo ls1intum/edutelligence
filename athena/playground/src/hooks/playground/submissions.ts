@@ -18,15 +18,15 @@ export default function useSubmissions(
   exercise?: Exercise,
   options: Omit<UseQueryOptions<Submission[], Error, Submission[]>, 'queryFn'> = {}
 ) {
-  const { mode } = useBaseInfo();
+  const { dataMode } = useBaseInfo();
 
   return useQuery<Submission[], Error, Submission[], any>({
-    queryKey: ["submissions", mode, exercise?.id],
+    queryKey: ["submissions", dataMode, exercise?.id],
     queryFn: async () => {
       if (exercise === undefined) {
         return undefined;
       }
-      const response = await fetch(`${baseUrl}/api/mode/${mode}/exercise/${exercise.id}/submissions`);
+      const response = await fetch(`${baseUrl}/api/data/${dataMode}/exercise/${exercise.id}/submissions`);
       return await response.json() as Submission[];
     },
     ...options

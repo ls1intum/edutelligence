@@ -15,12 +15,12 @@ import { useBaseInfo } from "@/hooks/base_info_context";
 export default function useExercises(
   options: Omit<UseQueryOptions<Exercise[], Error, Exercise[]>, 'queryFn'> = {}
 ) {
-  const { mode } = useBaseInfo();
+  const { dataMode } = useBaseInfo();
 
   return useQuery({
-    queryKey: ["exercises", mode],
+    queryKey: ["exercises", dataMode],
     queryFn: async () => {
-      const response = await fetch(`${baseUrl}/api/mode/${mode}/exercises`);
+      const response = await fetch(`${baseUrl}/api/data/${dataMode}/exercises`);
       return await response.json() as Exercise[];
     },
     ...options

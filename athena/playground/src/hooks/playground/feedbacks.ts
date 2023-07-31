@@ -21,12 +21,12 @@ export default function useFeedbacks(
   submission?: Submission,
   options: Omit<UseQueryOptions<Feedback[], Error, Feedback[]>, 'queryFn'> = {}
 ) {
-  const { mode } = useBaseInfo();
+  const { dataMode } = useBaseInfo();
 
   return useQuery({
-    queryKey: ["feedbacks", mode, exercise?.id, submission?.id],
+    queryKey: ["feedbacks", dataMode, exercise?.id, submission?.id],
     queryFn: async () => {
-      const url = `${baseUrl}/api/mode/${mode}/${exercise ? `exercise/${exercise.id}/` : ""}feedbacks`;
+      const url = `${baseUrl}/api/data/${dataMode}/${exercise ? `exercise/${exercise.id}/` : ""}feedbacks`;
       const response = await fetch(url);
       const feedbacks = await response.json() as Feedback[];
       if (submission) {

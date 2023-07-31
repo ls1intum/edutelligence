@@ -1,15 +1,15 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import type { Submission } from "@/model/submission";
-import type { Mode } from "@/model/mode";
+import type { DataMode } from "@/model/data_mode";
 
 import { getSubmissions } from "@/helpers/get_data";
 import getOriginFromRequest from "@/helpers/origin_from_req";
-import { validateModeMiddleware } from "@/helpers/validate_mode_middleware";
+import { validateDataModeMiddleware } from "@/helpers/validate_data_mode_middleware";
 
 function handler(req: NextApiRequest, res: NextApiResponse<Submission[]>) {
-  const { mode } = req.query as { mode: Mode };
+  const { dataMode } = req.query as { dataMode: DataMode };
   const submissions = getSubmissions(
-    mode,
+    dataMode,
     undefined,
     getOriginFromRequest(req)
   );
@@ -20,5 +20,5 @@ export default function handlerWithMiddleware(
   req: NextApiRequest,
   res: NextApiResponse
 ) {
-  validateModeMiddleware(req, res, () => handler(req, res));
+  validateDataModeMiddleware(req, res, () => handler(req, res));
 }

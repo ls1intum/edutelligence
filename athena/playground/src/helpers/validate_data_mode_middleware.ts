@@ -2,13 +2,13 @@ import type { NextApiRequest, NextApiResponse } from "next";
 
 const allowedModes = ["example", "evaluation"];
 
-export const validateModeMiddleware = (
+export const validateDataModeMiddleware = (
   req: NextApiRequest,
   res: NextApiResponse,
   next: Function
 ) => {
-  const { mode } = req.query;
-  if (!allowedModes.includes(mode as string)) {
+  const { dataMode } = req.query;
+  if (!allowedModes.includes(dataMode as string)) {
     return res.status(404).end();
   }
   next();

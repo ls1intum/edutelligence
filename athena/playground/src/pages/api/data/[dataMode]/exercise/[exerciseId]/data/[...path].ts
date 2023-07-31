@@ -1,14 +1,14 @@
 import type { NextApiRequest, NextApiResponse } from "next";
-import type { Mode } from "@/model/mode";
+import type { DataMode } from "@/model/data_mode";
 
 import { promises as fs } from "fs";
 import { join } from "path";
 import Archiver from "archiver";
-import { validateModeMiddleware } from "@/helpers/validate_mode_middleware";
+import { validateDataModeMiddleware } from "@/helpers/validate_data_mode_middleware";
 
 const handler = async (req: NextApiRequest, res: NextApiResponse) => {
-  const { mode, exerciseId, path } = req.query as {
-    mode: Mode;
+  const { dataMode, exerciseId, path } = req.query as {
+    dataMode: DataMode;
     exerciseId: string;
     path: string[];
   };
@@ -22,7 +22,7 @@ const handler = async (req: NextApiRequest, res: NextApiResponse) => {
   const folderPath = join(
     process.cwd(),
     "data",
-    mode,
+    dataMode,
     "exercise-" + exerciseId,
     ...path
   );
@@ -52,5 +52,5 @@ export default function handlerWithMiddleware(
   req: NextApiRequest,
   res: NextApiResponse
 ) {
-  validateModeMiddleware(req, res, () => handler(req, res));
+  validateDataModeMiddleware(req, res, () => handler(req, res));
 }

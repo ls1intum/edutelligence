@@ -1,11 +1,11 @@
-import type { Mode } from "@/model/mode";
+import type { DataMode } from "@/model/data_mode";
 
 export default function DataSelect({
-  mode,
-  onChangeMode,
+  dataMode,
+  onChangeDataMode,
 }: {
-  mode: Mode;
-  onChangeMode: (mode: Mode) => void;
+  dataMode: DataMode;
+  onChangeDataMode: (dataMode: DataMode) => void;
 }) {
   return (
     <label className="flex flex-col">
@@ -13,27 +13,27 @@ export default function DataSelect({
       <div className="flex flex-row mb-2">
         <button
           className={`p-2 rounded-l-md ${
-            mode === "example"
+            dataMode === "example"
               ? "bg-primary-500 text-white hover:bg-primary-600"
               : "bg-gray-200 text-gray-500 hover:bg-gray-300"
           }`}
-          onClick={() => onChangeMode("example")}
+          onClick={() => onChangeDataMode("example")}
         >
           Example data
         </button>
         <button
           className={`p-2 rounded-r-md ${
-            mode === "evaluation"
+            dataMode === "evaluation"
               ? "bg-primary-500 text-white hover:bg-primary-600"
               : "bg-gray-200 text-gray-500 hover:bg-gray-300"
           }`}
-          onClick={() => onChangeMode("evaluation")}
+          onClick={() => onChangeDataMode("evaluation")}
         >
           Evaluation data
         </button>
       </div>
       <p className="text-gray-500">
-        Data in <code className="bg-gray-100 p-1 rounded-sm">data/{mode}/</code>{" "}
+        Data in <code className="bg-gray-100 p-1 rounded-sm">data/{dataMode}/</code>{" "}
         directory will be used.
       </p>
     </label>

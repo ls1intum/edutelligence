@@ -17,7 +17,7 @@ import Disclosure from "@/components/disclosure";
 
 export default function RequestFeedbackSuggestions() {
   const { module } = useModule();
-  const { mode } = useBaseInfo();
+  const { dataMode } = useBaseInfo();
 
   const [exercise, setExercise] = useState<Exercise | undefined>(undefined);
   const [submission, setSubmission] = useState<Submission | undefined>(
@@ -47,7 +47,7 @@ export default function RequestFeedbackSuggestions() {
     reset();
     setSubmission(undefined);
   }, [exercise, reset]);
-  useEffect(() => setExercise(undefined), [module, mode]);
+  useEffect(() => setExercise(undefined), [module, dataMode]);
 
   const responseSubmissionView = (response: ModuleResponse | undefined) => {
     if (!response || response.status !== 200) {

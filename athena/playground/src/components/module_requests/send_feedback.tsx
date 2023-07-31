@@ -21,7 +21,7 @@ import SubmissionList from "@/components/submission_list";
 
 export default function SendFeedback() {
   const { module } = useModule();
-  const { mode } = useBaseInfo();
+  const { dataMode } = useBaseInfo();
 
   const [exercise, setExercise] = useState<Exercise | undefined>(undefined);
   const [isAllSubmissions, setIsAllSubmissions] = useState<boolean>(true);
@@ -53,7 +53,7 @@ export default function SendFeedback() {
     setIsAllFeedback(true);
     setFeedback(undefined);
   }, [submission, isAllSubmissions]);
-  useEffect(() =>  setExercise(undefined), [module, mode]);
+  useEffect(() =>  setExercise(undefined), [module, dataMode]);
 
   return (
     <div className="bg-white rounded-md p-4 mb-8">
