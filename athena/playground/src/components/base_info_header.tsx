@@ -2,9 +2,10 @@ import { useBaseInfo, useBaseInfoDispatch } from "@/hooks/base_info_context";
 
 import Health from "@/components/health";
 import DataModeSelect from "@/components/selectors/data_mode_select";
+import ViewModeSelect from "@/components/selectors/view_mode_select";
 
 export default function BaseInfoHeader() {
-  const { dataMode, athenaUrl, athenaSecret } = useBaseInfo();
+  const { dataMode, viewMode, athenaUrl, athenaSecret } = useBaseInfo();
   const dispatch = useBaseInfoDispatch();
 
   return (
@@ -35,6 +36,11 @@ export default function BaseInfoHeader() {
       <DataModeSelect 
         dataMode={dataMode} 
         onChangeDataMode={(dataMode) => dispatch({ type: "SET_DATA_MODE", payload: dataMode })} 
+      />
+      <br />
+      <ViewModeSelect 
+        viewMode={viewMode} 
+        onChangeViewMode={(viewMode) => dispatch({ type: "SET_VIEW_MODE", payload: viewMode })} 
       />
     </div>
   );
