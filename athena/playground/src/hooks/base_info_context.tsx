@@ -1,21 +1,16 @@
 import type { Mode } from '@/model/mode';
-import type { ModuleMeta } from '@/model/health_response';
 
 import { ReactNode, createContext, useContext, useReducer } from 'react';
 
 export type BaseInfo = {
   athenaUrl: string;
   athenaSecret: string;
-  module?: ModuleMeta;
-  moduleConfig: any;
   mode: Mode;
 };
 
 type Action =
   | { type: 'SET_ATHENA_URL'; payload: string }
   | { type: 'SET_ATHENA_SECRET'; payload: string }
-  | { type: 'SET_MODULE'; payload: ModuleMeta }
-  | { type: 'SET_MODULE_CONFIG'; payload: any }
   | { type: 'SET_MODE'; payload: Mode };
 
 function createInitialState(): BaseInfo {
@@ -30,8 +25,6 @@ function createInitialState(): BaseInfo {
   return {
     athenaUrl: defaultUrl,
     athenaSecret: "",
-    module: undefined,
-    moduleConfig: {},
     mode: "example",
   };
 }
@@ -47,13 +40,9 @@ const BaseInfoContext = createContext<{
 function reducer(state: BaseInfo, action: Action): BaseInfo {
   switch (action.type) {
     case "SET_ATHENA_URL":
-      return { ...state, athenaUrl: action.payload, module: undefined, moduleConfig: undefined };
+      return { ...state, athenaUrl: action.payload };
     case "SET_ATHENA_SECRET":
       return { ...state, athenaSecret: action.payload };
-    case "SET_MODULE":
-      return { ...state, module: action.payload, moduleConfig: undefined };
-    case "SET_MODULE_CONFIG":
-      return { ...state, moduleConfig: action.payload };
     case "SET_MODE":
       return { ...state, mode: action.payload };
     default:

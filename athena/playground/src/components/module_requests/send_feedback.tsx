@@ -9,6 +9,7 @@ import { useBaseInfo } from "@/hooks/base_info_context";
 import { useSendFeedbacks } from "@/hooks/athena/send_feedback";
 import useSubmissions from "@/hooks/playground/submissions";
 import useFeedbacks from "@/hooks/playground/feedbacks";
+import { useModule } from "@/hooks/module_context";
 
 import ExerciseSelect from "@/components/selectors/exercise_select";
 import SubmissionSelect from "@/components/selectors/submission_select";
@@ -19,7 +20,8 @@ import ExerciseDetail from "@/components/details/exercise_detail";
 import SubmissionDetail from "@/components/details/submission_detail";
 import SubmissionList from "@/components/submission_list";
 
-export default function SendFeedback({ module }: { module: ModuleMeta }) {
+export default function SendFeedback() {
+  const { module } = useModule();
   const { mode } = useBaseInfo();
 
   const [exercise, setExercise] = useState<Exercise | undefined>(undefined);

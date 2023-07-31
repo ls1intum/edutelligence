@@ -1,9 +1,10 @@
-import type { ModuleMeta } from "@/model/health_response";
-
 import useConfigSchema from "@/hooks/athena/config_schema";
+import { useModule } from "@/hooks/module_context";
+
 import ModuleResponseView from "@/components/module_response_view";
 
-export default function GetConfigSchema({ module }: { module: ModuleMeta }) {
+export default function GetConfigSchema() {
+  const { module } = useModule();
   const { data, error, isLoading, refetch, remove } = useConfigSchema({
     onError: (error) => {
       console.error(error);

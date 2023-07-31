@@ -1,12 +1,12 @@
 import type { Submission } from "@/model/submission";
 import type { Exercise } from "@/model/exercise";
 import type ModuleResponse from "@/model/module_response";
-import type { ModuleMeta } from "@/model/health_response";
 
 import { useEffect, useState } from "react";
 
 import { useBaseInfo } from "@/hooks/base_info_context";
 import useRequestFeedbackSuggestions from "@/hooks/athena/request_feedback_suggestions";
+import { useModule } from "@/hooks/module_context";
 
 import ExerciseSelect from "@/components/selectors/exercise_select";
 import SubmissionSelect from "@/components/selectors/submission_select";
@@ -15,9 +15,8 @@ import ExerciseDetail from "@/components/details/exercise_detail";
 import SubmissionDetail from "@/components/details/submission_detail";
 import Disclosure from "@/components/disclosure";
 
-export default function RequestFeedbackSuggestions({
-  module,
-}: { module: ModuleMeta }) {
+export default function RequestFeedbackSuggestions() {
+  const { module } = useModule();
   const { mode } = useBaseInfo();
 
   const [exercise, setExercise] = useState<Exercise | undefined>(undefined);

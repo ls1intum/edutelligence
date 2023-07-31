@@ -2,6 +2,7 @@ import type ModuleResponse from "@/model/module_response";
 
 import baseUrl from "@/helpers/base_url";
 import { useBaseInfo } from "@/hooks/base_info_context";
+import { useModule } from "@/hooks/module_context";
 
 export class AthenaError extends Error {
   status: number;
@@ -34,14 +35,11 @@ export class AthenaError extends Error {
  * @returns A function that can be used to fetch data from the module or that returns undefined if the module is not set.
  */
 export function useAthenaFetcher() {
-  const { athenaUrl, athenaSecret, module, moduleConfig } = useBaseInfo();  
+  const { module, moduleConfig } = useModule();
+  const { athenaUrl, athenaSecret } = useBaseInfo();  
 
   return (
     async (moduleRoute: string, body?: any) => {
-      if (module === undefined) {
-        return undefined;
-      }
-
       const url = `${athenaUrl}/modules/${module.type}/${module.name}${moduleRoute}`;
       const response = await fetch(
         `${baseUrl}/api/athena_request?${new URLSearchParams({
