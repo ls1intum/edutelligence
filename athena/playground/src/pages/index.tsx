@@ -1,6 +1,6 @@
 import React from "react";
 import BaseInfoHeader from "@/components/base_info_header";
-import ModuleRequests from "@/components/module_requests";
+import ModuleRequests from "@/components/view_mode/module_requests";
 
 export default function Playground() {
   return (
