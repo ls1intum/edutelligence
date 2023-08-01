@@ -3,7 +3,7 @@ import useHealth from "@/hooks/health";
 
 export default function ExerciseTypeSelect({
   exerciseType,
-  onChangeExerciseType: onChangeType,
+  onChangeExerciseType,
 }: {
   exerciseType: string | undefined;
   onChangeExerciseType: (type: string) => void;
@@ -32,7 +32,7 @@ export default function ExerciseTypeSelect({
       <select
         className="border border-gray-300 rounded-md p-2"
         value={exerciseType ?? ""}
-        onChange={(e) => onChangeType(e.target.value)}
+        onChange={(e) => onChangeExerciseType(e.target.value)}
       >
         <option value={""} disabled>
           Select an exercise type
