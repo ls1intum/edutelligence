@@ -17,7 +17,7 @@ export default function SendSubmissions() {
   const { dataMode } = useBaseInfo();
 
   const [exercise, setExercise] = useState<Exercise | undefined>(undefined);
-  const { data: submissions, isLoading: isLoadingSubmissions } = useSubmissions(exercise);
+  const { data: submissions, isLoading: isLoadingSubmissions, error: errorSubmissions } = useSubmissions(exercise);
   const { data: response, isLoading, error, mutate, reset } = useSendSubmissions({
     onError: (error) => {
       console.error(error);
@@ -49,7 +49,9 @@ export default function SendSubmissions() {
       {exercise && (
         <div className="space-y-1 mt-2">
           <ExerciseDetail exercise={exercise} />
-          <SubmissionList exercise={exercise} />
+          {errorSubmissions && <div className="text-gray-500 text-sm">Failed to load submissions</div>}
+          {isLoadingSubmissions && <div className="text-gray-500 text-sm">Loading submissions...</div>}
+          {submissions && <SubmissionList submissions={submissions}/>}
         </div>
       )}
       <ModuleResponseView response={response ?? (error?.asModuleResponse ? error.asModuleResponse() : undefined)} />

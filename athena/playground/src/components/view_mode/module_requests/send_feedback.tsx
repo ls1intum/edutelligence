@@ -29,8 +29,8 @@ export default function SendFeedback() {
   const [isAllFeedback, setIsAllFeedback] = useState<boolean>(true);
   const [feedback, setFeedback] = useState<Feedback | undefined>(undefined);
 
-  const { data: submissions, isLoading: isLoadingSubmissions, isError: isErrorFeedbacks } = useSubmissions(exercise);
-  const { data: feedbacks, isLoading: isLoadingFeedbacks } = useFeedbacks(exercise);
+  const { data: submissions, isLoading: isLoadingSubmissions, error: errorSubmissions } = useSubmissions(exercise);
+  const { data: feedbacks, isLoading: isLoadingFeedbacks, error: errorFeedbacks} = useFeedbacks(exercise);
   const { data: responses, isLoading, error, mutate, reset } = useSendFeedbacks({
     onError: (error) => {
       console.error(error);
@@ -105,13 +105,17 @@ export default function SendFeedback() {
               </Disclosure>
             ) : (
               isAllFeedback && (
-                <SubmissionList exercise={exercise} feedbacks={feedback ? [feedback] : feedbacks} />
+                <>
+                  {errorSubmissions && <div className="text-gray-500 text-sm">Failed to load submissions</div>}
+                  {isLoadingSubmissions && <div className="text-gray-500 text-sm">Loading submissions...</div>}
+                  {submissions && <SubmissionList submissions={submissions} feedbacks={feedback ? [feedback] : feedbacks}/>}
+                </>
               )
             )}
             {isLoadingFeedbacks && (
               <div className="text-gray-500 text-sm">Loading feedbacks...</div>
             )}
-            {isErrorFeedbacks && (
+            {errorFeedbacks && (
               <div className="text-red-500 text-sm">
                 Failed to load feedbacks
               </div>
