@@ -37,10 +37,16 @@ type ExperimentExport = {
 export default function DefineExperiment() {
   const baseInfoDispatch = useBaseInfoDispatch();
   const { dataMode } = useBaseInfo();
-  const [exerciseType, setExerciseType] = useState<string | undefined>(undefined);
+  const [exerciseType, setExerciseType] = useState<string | undefined>(
+    undefined
+  );
   const [exercise, setExercise] = useState<Exercise | undefined>(undefined);
-  const [executionMode, setExecutionMode] = useState<ExecutionMode | undefined>(undefined);
-  const [experimentSubmissions, setExperimentSubmissions] = useState<ExperimentSubmissions | undefined>(undefined);
+  const [executionMode, setExecutionMode] = useState<ExecutionMode | undefined>(
+    undefined
+  );
+  const [experimentSubmissions, setExperimentSubmissions] = useState<
+    ExperimentSubmissions | undefined
+  >(undefined);
   const [isImporting, setIsImporting] = useState<boolean>(false);
 
   useEffect(() => {
@@ -108,8 +114,10 @@ export default function DefineExperiment() {
       !executionMode ||
       !experimentSubmissions
     ) {
+      console.error("Invalid experiment export");
       return;
     }
+    console.log("Importing experiment", experimentExport);
 
     baseInfoDispatch({ type: "SET_DATA_MODE", payload: dataMode });
     setExerciseType(exerciseType);
@@ -124,8 +132,8 @@ export default function DefineExperiment() {
             experimentSubmissions.trainingSubmissionIds?.includes(s.id)
           )
         : undefined;
-      const testSubmissions = submissions.filter(
-        (s) => experimentSubmissions.testSubmissionIds?.includes(s.id)
+      const testSubmissions = submissions.filter((s) =>
+        experimentSubmissions.testSubmissionIds?.includes(s.id)
       );
       setExperimentSubmissions({
         trainingSubmissions,
@@ -138,9 +146,46 @@ export default function DefineExperiment() {
 
   return (
     <div className="bg-white rounded-md p-4 mb-8 space-y-2">
-      <h3 className="text-2xl font-bold">Define Experiment</h3>
+      <div className="flex flex-row justify-between items-center">
+        <h3 className="text-2xl font-bold">Define Experiment</h3>
+        <div className="flex flex-row gap-2">
+          {experiment && (
+            <a
+              className="text-primary-500 hover:underline"
+              href={`data:text/json;charset=utf-8,${encodeURIComponent(
+                JSON.stringify(getExperimentExport(experiment), null, 2)
+              )}`}
+              download={"experiment.json"}
+            >
+              Export
+            </a>
+          )}
+          <label className="text-primary-500 hover:underline">
+            Import
+            <input
+              className="hidden"
+              type="file"
+              onChange={(e) => {
+                if (e.target.files && e.target.files.length > 0) {
+                  setIsImporting(true);
+                  const file = e.target.files[0];
+                  const reader = new FileReader();
+                  reader.onload = (e) => {
+                    if (e.target && typeof e.target.result === "string") {
+                      importExperiment(e.target.result).finally(() => {
+                        setIsImporting(false);
+                      });
+                    }
+                  };
+                  reader.readAsText(file);
+                }
+              }}
+            />
+          </label>
+        </div>
+      </div>
       {isImporting ? (
-        <p className="text-text-500">Importing experiment...</p>
+        <p className="text-gray-500">Importing experiment...</p>
       ) : (
         <>
           <ExperimentExecutionModeSelect
@@ -166,41 +211,6 @@ export default function DefineExperiment() {
             experimentSubmissions={experimentSubmissions}
             onChangeExperimentSubmissions={setExperimentSubmissions}
           />
-          <div className="flex flex-row gap-2">
-            {experiment && (
-              <a
-                className="text-primary-500"
-                href={`data:text/json;charset=utf-8,${encodeURIComponent(
-                  JSON.stringify(getExperimentExport(experiment), null, 2)
-                )}`}
-                download={"experiment.json"}
-              >
-                Export
-              </a>
-            )}
-            <label className="text-primary-500">
-              Import
-              <input
-                className="hidden"
-                type="file"
-                onChange={(e) => {
-                  if (e.target.files && e.target.files.length > 0) {
-                    setIsImporting(true);
-                    const file = e.target.files[0];
-                    const reader = new FileReader();
-                    reader.onload = (e) => {
-                      if (e.target && typeof e.target.result === "string") {
-                        importExperiment(e.target.result).finally(() => {
-                          setIsImporting(false);
-                        });
-                      }
-                    };
-                    reader.readAsText(file);
-                  }
-                }}
-              />
-            </label>
-          </div>
         </>
       )}
     </div>
