@@ -25,10 +25,10 @@ export default function EvaluationMode() {
         </h3>
         <ExerciseTypeSelect exerciseType={exerciseType} onChangeExerciseType={setExerciseType} />
         {exerciseType && (
-          <ExerciseSelect exercise={exercise} exerciseType={exerciseType} onChange={setExercise} />
-        )}
-        {exercise && (
-          <ExerciseDetail exercise={exercise} />
+          <>
+            <ExerciseSelect exercise={exercise} exerciseType={exerciseType} onChange={setExercise} />
+            {exercise && <ExerciseDetail exercise={exercise} />}
+          </>
         )}
         <p>Select mode</p>
         <p>Select Submissions to use</p>
