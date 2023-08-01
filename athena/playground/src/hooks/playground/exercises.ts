@@ -1,8 +1,15 @@
 import type { Exercise } from "@/model/exercise";
+import type { DataMode } from "@/model/data_mode";
 
 import { UseQueryOptions, useQuery } from "react-query";
 import baseUrl from "@/helpers/base_url";
 import { useBaseInfo } from "@/hooks/base_info_context";
+
+export function fetchExercises(dataMode: DataMode) {
+  return fetch(`${baseUrl}/api/data/${dataMode}/exercises`).then(
+    (res) => res.json() as Promise<Exercise[]>
+  );
+}
 
 /**
  * Fetches the exercises of the playground.
@@ -20,8 +27,7 @@ export default function useExercises(
   return useQuery({
     queryKey: ["exercises", dataMode],
     queryFn: async () => {
-      const response = await fetch(`${baseUrl}/api/data/${dataMode}/exercises`);
-      return await response.json() as Exercise[];
+      return await fetchExercises(dataMode);
     },
     ...options
   });
