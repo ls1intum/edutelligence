@@ -24,13 +24,17 @@ export default function SubmissionList({
     }, {} as Record<number, Feedback[]>);
   }
 
+  if (submissions.length === 0) {
+    return <div className="text-gray-500 text-sm">No submissions</div>;
+  }
+
   return (
     <Disclosure
       title={`${submissions.length} Submission${submissions.length === 1 ? "" : "s"}`}
       className={{ content: "space-y-1" }}
     >
       {submissions.map((submission) => (
-        <Disclosure title={`Submission ${submission.id}`} key={submission.id}>
+        <Disclosure title={`Submission ${submission.id}`} key={submission.id} noContentIndent>
           <SubmissionDetail
             key={submission.id}
             submission={submission}
