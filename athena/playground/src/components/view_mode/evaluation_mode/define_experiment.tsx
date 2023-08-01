@@ -1,10 +1,13 @@
 import type { Exercise } from "@/model/exercise";
+import type { DataMode } from "@/model/data_mode";
 import type { ExecutionMode } from "@/components/selectors/experiment_execution_mode_select";
 import type { ExperimentSubmissions } from "@/components/selectors/experiment_submissions_select";
 
 import { useEffect, useState } from "react";
 
-import { useBaseInfo } from "@/hooks/base_info_context";
+import { useBaseInfo, useBaseInfoDispatch } from "@/hooks/base_info_context";
+import { fetchExercises } from "@/hooks/playground/exercises";
+import { fetchSubmissions } from "@/hooks/playground/submissions";
 
 import ExerciseTypeSelect from "@/components/selectors/exercise_type_select";
 import ExerciseSelect from "@/components/selectors/exercise_select";
@@ -13,7 +16,7 @@ import ExperimentExecutionModeSelect from "@/components/selectors/experiment_exe
 import ExperimentSubmissionsSelect from "@/components/selectors/experiment_submissions_select";
 
 type Experiment = {
-  dataMode: string;
+  dataMode: DataMode;
   exerciseType: string;
   exercise: Exercise;
   executionMode: ExecutionMode;
@@ -21,7 +24,7 @@ type Experiment = {
 };
 
 type ExperimentExport = {
-  dataMode: string;
+  dataMode: DataMode;
   exerciseType: string;
   exerciseId: number;
   executionMode: ExecutionMode;
@@ -32,17 +35,13 @@ type ExperimentExport = {
 };
 
 export default function DefineExperiment() {
+  const baseInfoDispatch = useBaseInfoDispatch();
   const { dataMode } = useBaseInfo();
-  const [exerciseType, setExerciseType] = useState<string | undefined>(
-    undefined
-  );
+  const [exerciseType, setExerciseType] = useState<string | undefined>(undefined);
   const [exercise, setExercise] = useState<Exercise | undefined>(undefined);
-  const [executionMode, setExecutionMode] = useState<ExecutionMode | undefined>(
-    undefined
-  );
-  const [experimentSubmissions, setExperimentSubmissions] = useState<
-    ExperimentSubmissions | undefined
-  >(undefined);
+  const [executionMode, setExecutionMode] = useState<ExecutionMode | undefined>(undefined);
+  const [experimentSubmissions, setExperimentSubmissions] = useState<ExperimentSubmissions | undefined>(undefined);
+  const [isImporting, setIsImporting] = useState<boolean>(false);
 
   useEffect(() => {
     setExerciseType(undefined);
@@ -93,42 +92,116 @@ export default function DefineExperiment() {
     };
   };
 
+  const importExperiment = async (fileContent: string) => {
+    const experimentExport = JSON.parse(fileContent) as ExperimentExport;
+    const {
+      dataMode,
+      exerciseType,
+      exerciseId,
+      executionMode,
+      experimentSubmissions,
+    } = experimentExport;
+    if (
+      !dataMode ||
+      !exerciseType ||
+      !exerciseId ||
+      !executionMode ||
+      !experimentSubmissions
+    ) {
+      return;
+    }
+
+    baseInfoDispatch({ type: "SET_DATA_MODE", payload: dataMode });
+    setExerciseType(exerciseType);
+    setExecutionMode(executionMode);
+    const exercises = await fetchExercises(dataMode);
+    const exercise = exercises?.find((e) => e.id === exerciseId);
+    setExercise(exercise);
+    if (exercise) {
+      const submissions = await fetchSubmissions(exercise, dataMode);
+      const trainingSubmissions = experimentSubmissions.trainingSubmissionIds
+        ? submissions.filter((s) =>
+            experimentSubmissions.trainingSubmissionIds?.includes(s.id)
+          )
+        : undefined;
+      const testSubmissions = submissions.filter(
+        (s) => experimentSubmissions.testSubmissionIds?.includes(s.id)
+      );
+      setExperimentSubmissions({
+        trainingSubmissions,
+        testSubmissions,
+      });
+    } else {
+      setExperimentSubmissions(undefined);
+    }
+  };
+
   return (
     <div className="bg-white rounded-md p-4 mb-8 space-y-2">
       <h3 className="text-2xl font-bold">Define Experiment</h3>
-      <ExperimentExecutionModeSelect
-        executionMode={executionMode}
-        onChangeExecutionMode={setExecutionMode}
-      />
-      <ExerciseTypeSelect
-        exerciseType={exerciseType}
-        onChangeExerciseType={setExerciseType}
-      />
-      {exerciseType && (
+      {isImporting ? (
+        <p className="text-text-500">Importing experiment...</p>
+      ) : (
         <>
-          <ExerciseSelect
-            exercise={exercise}
-            exerciseType={exerciseType}
-            onChange={setExercise}
+          <ExperimentExecutionModeSelect
+            executionMode={executionMode}
+            onChangeExecutionMode={setExecutionMode}
           />
-          {exercise && <ExerciseDetail exercise={exercise} />}
+          <ExerciseTypeSelect
+            exerciseType={exerciseType}
+            onChangeExerciseType={setExerciseType}
+          />
+          {exerciseType && (
+            <>
+              <ExerciseSelect
+                exercise={exercise}
+                exerciseType={exerciseType}
+                onChange={setExercise}
+              />
+              {exercise && <ExerciseDetail exercise={exercise} />}
+            </>
+          )}
+          <ExperimentSubmissionsSelect
+            exercise={exercise}
+            experimentSubmissions={experimentSubmissions}
+            onChangeExperimentSubmissions={setExperimentSubmissions}
+          />
+          <div className="flex flex-row gap-2">
+            {experiment && (
+              <a
+                className="text-primary-500"
+                href={`data:text/json;charset=utf-8,${encodeURIComponent(
+                  JSON.stringify(getExperimentExport(experiment), null, 2)
+                )}`}
+                download={"experiment.json"}
+              >
+                Export
+              </a>
+            )}
+            <label className="text-primary-500">
+              Import
+              <input
+                className="hidden"
+                type="file"
+                onChange={(e) => {
+                  if (e.target.files && e.target.files.length > 0) {
+                    setIsImporting(true);
+                    const file = e.target.files[0];
+                    const reader = new FileReader();
+                    reader.onload = (e) => {
+                      if (e.target && typeof e.target.result === "string") {
+                        importExperiment(e.target.result).finally(() => {
+                          setIsImporting(false);
+                        });
+                      }
+                    };
+                    reader.readAsText(file);
+                  }
+                }}
+              />
+            </label>
+          </div>
         </>
-      )}
-      <ExperimentSubmissionsSelect
-        exercise={exercise}
-        experimentSubmissions={experimentSubmissions}
-        onChangeExperimentSubmissions={setExperimentSubmissions}
-      />
-      {experiment && (
-        <a
-          className="text-primary-500"
-          href={`data:text/json;charset=utf-8,${encodeURIComponent(
-            JSON.stringify(getExperimentExport(experiment), null, 2)
-          )}`}
-          download={"experiment.json"}
-        >
-          Export
-        </a>
       )}
     </div>
   );
