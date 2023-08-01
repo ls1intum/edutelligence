@@ -7,8 +7,8 @@ import useSubmissions from "@/hooks/playground/submissions";
 import SubmissionList from "@/components/submission_list";
 
 export type ExperimentSubmissions = {
-  training: Submission[] | undefined;
-  test: Submission[];
+  trainingSubmissions: Submission[] | undefined;
+  testSubmissions: Submission[];
 };
 
 type ExperimentSubmissionsSelectProps = {
@@ -26,21 +26,18 @@ export default function ExperimentSubmissionsSelect({
 }: ExperimentSubmissionsSelectProps) {
   const { data, error, isLoading } = useSubmissions(exercise);
 
-  const [moveSubmissionsNumber, setMoveSubmissionsNumber] = useState<
-    number | undefined
-  >(undefined);
+  const [moveSubmissionsNumber, setMoveSubmissionsNumber] = useState<number>(10);
   const [moveToTest, setMoveToTest] = useState<boolean>(true);
-  const [moveRandom, setMoveRandom] = useState<boolean>(false);
 
   if (!exercise) return null;
   if (error) return <div className="text-red-500 text-sm">Failed to load</div>;
   if (isLoading) return <div className="text-gray-500 text-sm">Loading...</div>;
 
   const isSubmissionUsed = (submission: Submission) =>
-    experimentSubmissions?.training?.some(
+    experimentSubmissions?.trainingSubmissions?.some(
       (usedSubmission) => usedSubmission.id === submission.id
     ) ||
-    experimentSubmissions?.test?.some(
+    experimentSubmissions?.testSubmissions?.some(
       (usedSubmission) => usedSubmission.id === submission.id
     );
 
@@ -50,17 +47,17 @@ export default function ExperimentSubmissionsSelect({
       <label className="flex items-center cursor-pointer">
         <input
           type="checkbox"
-          checked={experimentSubmissions?.training !== undefined}
+          checked={experimentSubmissions?.trainingSubmissions !== undefined}
           onChange={(e) => {
             if (e.target.checked) {
               onChangeExperimentSubmissions({
-                training: [],
-                test: experimentSubmissions?.test ?? [],
+                trainingSubmissions: [],
+                testSubmissions: experimentSubmissions?.testSubmissions ?? [],
               });
             } else {
               onChangeExperimentSubmissions({
-                training: undefined,
-                test: experimentSubmissions?.test ?? [],
+                trainingSubmissions: undefined,
+                testSubmissions: experimentSubmissions?.testSubmissions ?? [],
               });
             }
           }}
@@ -79,12 +76,12 @@ export default function ExperimentSubmissionsSelect({
               step="0.5"
               value={moveSubmissionsNumber}
               onChange={(e) =>
-                setMoveSubmissionsNumber(parseInt(e.target.value))
+                setMoveSubmissionsNumber(e.target.value ? parseInt(e.target.value) : 0)
               }
             />
             <div className="ml-2 text-gray-700 font-normal">Submissions</div>
           </label>
-          {experimentSubmissions?.training !== undefined && (
+          {experimentSubmissions?.trainingSubmissions !== undefined && (
             <label className="flex items-center cursor-pointer">
               <input
                 type="checkbox"
@@ -103,21 +100,26 @@ export default function ExperimentSubmissionsSelect({
               ?.filter((submission) => !isSubmissionUsed(submission))
               ?.slice(0, moveSubmissionsNumber);
             if (submissionsToMove === undefined) return;
-            if (experimentSubmissions?.training === undefined || moveToTest) {
+            if (
+              experimentSubmissions?.trainingSubmissions === undefined ||
+              moveToTest
+            ) {
               onChangeExperimentSubmissions({
-                training: experimentSubmissions?.training,
-                test: [
-                  ...(experimentSubmissions?.test ?? []),
+                trainingSubmissions: experimentSubmissions?.trainingSubmissions,
+                testSubmissions: [
+                  ...(experimentSubmissions?.testSubmissions ?? []),
                   ...submissionsToMove,
                 ],
               });
-            } else if (experimentSubmissions?.training !== undefined) {
+            } else if (
+              experimentSubmissions?.trainingSubmissions !== undefined
+            ) {
               onChangeExperimentSubmissions({
-                training: [
-                  ...experimentSubmissions.training,
+                trainingSubmissions: [
+                  ...experimentSubmissions.trainingSubmissions,
                   ...submissionsToMove,
                 ],
-                test: experimentSubmissions?.test,
+                testSubmissions: experimentSubmissions?.testSubmissions,
               });
             }
           }}
@@ -131,23 +133,29 @@ export default function ExperimentSubmissionsSelect({
             if (moveSubmissionsNumber === undefined) return;
             const submissionsToMove = data
               ?.filter((submission) => !isSubmissionUsed(submission))
-              ?.sort(() => Math.random() - 0.5).slice(0, moveSubmissionsNumber);
+              ?.sort(() => Math.random() - 0.5)
+              .slice(0, moveSubmissionsNumber);
             if (submissionsToMove === undefined) return;
-            if (experimentSubmissions?.training === undefined || moveToTest) {
+            if (
+              experimentSubmissions?.trainingSubmissions === undefined ||
+              moveToTest
+            ) {
               onChangeExperimentSubmissions({
-                training: experimentSubmissions?.training,
-                test: [
-                  ...(experimentSubmissions?.test ?? []),
+                trainingSubmissions: experimentSubmissions?.trainingSubmissions,
+                testSubmissions: [
+                  ...(experimentSubmissions?.testSubmissions ?? []),
                   ...submissionsToMove,
                 ],
               });
-            } else if (experimentSubmissions?.training !== undefined) {
+            } else if (
+              experimentSubmissions?.trainingSubmissions !== undefined
+            ) {
               onChangeExperimentSubmissions({
-                training: [
-                  ...experimentSubmissions.training,
+                trainingSubmissions: [
+                  ...experimentSubmissions.trainingSubmissions,
                   ...submissionsToMove,
                 ],
-                test: experimentSubmissions?.test,
+                testSubmissions: experimentSubmissions?.testSubmissions,
               });
             }
           }}
@@ -159,9 +167,11 @@ export default function ExperimentSubmissionsSelect({
           className="mt-2 text-sm text-red-500 hover:text-red-700 underline"
           onClick={() =>
             onChangeExperimentSubmissions({
-              training:
-                experimentSubmissions?.training !== undefined ? [] : undefined,
-              test: [],
+              trainingSubmissions:
+                experimentSubmissions?.trainingSubmissions !== undefined
+                  ? []
+                  : undefined,
+              testSubmissions: [],
             })
           }
         >
@@ -180,13 +190,13 @@ export default function ExperimentSubmissionsSelect({
             }
           />
         </div>
-        {experimentSubmissions?.training !== undefined && (
+        {experimentSubmissions?.trainingSubmissions !== undefined && (
           <div className="flex-1 my-2 p-1">
             <div className="text-base font-medium border-b border-gray-300 mb-2">
               Training
             </div>
             <SubmissionList
-              submissions={experimentSubmissions?.training ?? []}
+              submissions={experimentSubmissions?.trainingSubmissions ?? []}
             />
           </div>
         )}
@@ -194,7 +204,9 @@ export default function ExperimentSubmissionsSelect({
           <div className="text-base font-medium border-b border-gray-300 mb-2">
             Test
           </div>
-          <SubmissionList submissions={experimentSubmissions?.test ?? []} />
+          <SubmissionList
+            submissions={experimentSubmissions?.testSubmissions ?? []}
+          />
         </div>
       </div>
     </div>
