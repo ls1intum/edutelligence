@@ -30,8 +30,15 @@ export default function EvaluationMode() {
             {exercise && <ExerciseDetail exercise={exercise} />}
           </>
         )}
+        {/* 
+        Note to self: 
+        1. First implement the incremental learning mode + comparison 
+        2. Then implement the batch mode (+ comparison)
+        3. Train/test split mode (send all feedback for train at first, then test with the incremental learning mode / batch mode)
+        */}
         <p>Select mode</p>
         <p>Select Submissions to use</p>
+        <p>Submissions list (specific to mode)</p>
         <p>Import / Export</p>
       </div>
     </>
