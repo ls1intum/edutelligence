@@ -72,13 +72,13 @@ function ModuleConfig({
   );
 }
 
-export default function ModuleSelectAndConfig({ children }: { children: ReactNode }) {
+export default function ModuleSelectAndConfig({ children, className }: { children: ReactNode; className?: string }) {
   const [module, setModule] = useState<ModuleMeta | undefined>(undefined);
   const [moduleConfig, setModuleConfig] = useState<any>(undefined);
 
   return (
     <>
-      <div className="bg-white rounded-md p-4 mb-8">
+      <div className={className}>
         <ModuleSelect module={module} onChange={setModule} />
         {module && (
           <ModuleProvider module={module} moduleConfig={moduleConfig}>

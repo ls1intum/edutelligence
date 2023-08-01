@@ -15,7 +15,7 @@ import ExerciseDetail from "@/components/details/exercise_detail";
 import ExperimentExecutionModeSelect from "@/components/selectors/experiment_execution_mode_select";
 import ExperimentSubmissionsSelect from "@/components/selectors/experiment_submissions_select";
 
-type Experiment = {
+export type Experiment = {
   dataMode: DataMode;
   exerciseType: string;
   exercise: Exercise;
@@ -34,7 +34,12 @@ type ExperimentExport = {
   };
 };
 
-export default function DefineExperiment() {
+type DefineExperimentProps = {
+  experiment: Experiment | undefined;
+  onChangeExperiment: (experiment: Experiment) => void;
+};
+
+export default function DefineExperiment({ experiment, onChangeExperiment }: DefineExperimentProps) {
   const baseInfoDispatch = useBaseInfoDispatch();
   const { dataMode } = useBaseInfo();
   const [exerciseType, setExerciseType] = useState<string | undefined>(
@@ -79,7 +84,7 @@ export default function DefineExperiment() {
     };
   };
 
-  const experiment = getExperiment();
+  const definedExperiment = getExperiment();
 
   const getExperimentExport = (experiment: Experiment): ExperimentExport => {
     return {
@@ -149,11 +154,11 @@ export default function DefineExperiment() {
       <div className="flex flex-row justify-between items-center">
         <h3 className="text-2xl font-bold">Define Experiment</h3>
         <div className="flex flex-row gap-2">
-          {experiment && (
+          {definedExperiment && (
             <a
               className="text-primary-500 hover:underline"
               href={`data:text/json;charset=utf-8,${encodeURIComponent(
-                JSON.stringify(getExperimentExport(experiment), null, 2)
+                JSON.stringify(getExperimentExport(definedExperiment), null, 2)
               )}`}
               download={"experiment.json"}
             >
@@ -213,6 +218,19 @@ export default function DefineExperiment() {
           />
         </>
       )}
+      <div>
+        <button
+          className="bg-primary-500 text-white rounded-md p-2 mt-2 hover:bg-primary-600 disabled:text-gray-500 disabled:bg-gray-200 disabled:cursor-not-allowed"
+          disabled={!definedExperiment}
+          onClick={() => {
+            if (definedExperiment) {
+              onChangeExperiment(definedExperiment);
+            } 
+          }}
+        >
+          Conduct Experiment
+        </button>
+      </div>
     </div>
   );
 }

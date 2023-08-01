@@ -9,7 +9,7 @@ export default function ModuleRequests() {
   return (
     <>
       <h2 className="text-4xl font-bold text-white mb-4">Module Requests</h2>
-      <ModuleSelectAndConfig>
+      <ModuleSelectAndConfig className="bg-white rounded-md p-4 mb-8">
         <GetConfigSchema />
         <SendSubmissions />
         <SelectSubmission />
