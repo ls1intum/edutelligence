@@ -4,7 +4,7 @@ import type { Exercise } from "@/model/exercise";
 import { useState } from "react";
 
 import useSubmissions from "@/hooks/playground/submissions";
-import SubmissionList from "../submission_list";
+import SubmissionList from "@/components/submission_list";
 
 export type ExperimentSubmissions = {
   training: Submission[] | undefined;
@@ -152,7 +152,7 @@ export default function ExperimentSubmissionsSelect({
             }
           }}
         >
-          Move random {moveSubmissionsNumber} submissions
+          Take random {moveSubmissionsNumber} submissions
         </button>
 
         <button
