@@ -28,9 +28,13 @@ export default function ExperimentSubmissionsSelect({
   if (error) return <div className="text-red-500 text-sm">Failed to load</div>;
   if (isLoading) return <div className="text-gray-500 text-sm">Loading...</div>;
 
-  const isSubmissionUsed = (submission: Submission) => 
-    experimentSubmissions?.training?.some((usedSubmission) => usedSubmission.id === submission.id) ||
-    experimentSubmissions?.test?.some((usedSubmission) => usedSubmission.id === submission.id);
+  const isSubmissionUsed = (submission: Submission) =>
+    experimentSubmissions?.training?.some(
+      (usedSubmission) => usedSubmission.id === submission.id
+    ) ||
+    experimentSubmissions?.test?.some(
+      (usedSubmission) => usedSubmission.id === submission.id
+    );
 
   return (
     <div className="flex flex-col">
@@ -62,14 +66,22 @@ export default function ExperimentSubmissionsSelect({
           <div className="text-base font-medium border-b border-gray-300 mb-2">
             Unused
           </div>
-          <SubmissionList submissions={data?.filter((submission) => !isSubmissionUsed(submission)) ?? []} />
+          <SubmissionList
+            submissions={
+              data?.filter((submission) => !isSubmissionUsed(submission)) ?? []
+            }
+          />
         </div>
-        <div className="flex-1 my-2 p-1">
-          <div className="text-base font-medium border-b border-gray-300 mb-2">
-            Training
+        {experimentSubmissions?.training !== undefined && (
+          <div className="flex-1 my-2 p-1">
+            <div className="text-base font-medium border-b border-gray-300 mb-2">
+              Training
+            </div>
+            <SubmissionList
+              submissions={experimentSubmissions?.training ?? []}
+            />
           </div>
-          <SubmissionList submissions={experimentSubmissions?.training ?? []} />
-        </div>
+        )}
         <div className="flex-1 my-2 p-1">
           <div className="text-base font-medium border-b border-gray-300 mb-2">
             Test
