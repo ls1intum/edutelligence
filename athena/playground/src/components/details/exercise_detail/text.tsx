@@ -5,11 +5,13 @@ import FileEditor from "@/components/details/editor/file_editor";
 
 export default function TextExerciseDetail({
   exercise,
+  openedInitially,
 }: {
   exercise: TextExercise;
+  openedInitially?: boolean;
 }) {
   return (
-    <Disclosure title="Example Solution" noContentIndent>
+    <Disclosure title="Example Solution" noContentIndent openedInitially={openedInitially}>
       {exercise.example_solution.length > 0 ? (
         <div className="border border-gray-100 rounded-lg overflow-hidden">
           <FileEditor

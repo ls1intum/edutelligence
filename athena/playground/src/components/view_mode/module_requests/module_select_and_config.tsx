@@ -72,14 +72,20 @@ function ModuleConfig({
   );
 }
 
-export default function ModuleSelectAndConfig({ children, className }: { children: ReactNode; className?: string }) {
+type ModuleSelectAndConfigProps = {
+  exerciseType?: string;
+  children: ReactNode;
+  className?: string;
+};
+
+export default function ModuleSelectAndConfig({ exerciseType, children, className }: ModuleSelectAndConfigProps) {
   const [module, setModule] = useState<ModuleMeta | undefined>(undefined);
   const [moduleConfig, setModuleConfig] = useState<any>(undefined);
 
   return (
     <>
       <div className={className}>
-        <ModuleSelect module={module} onChange={setModule} />
+        <ModuleSelect exerciseType={exerciseType} module={module} onChange={setModule} />
         {module && (
           <ModuleProvider module={module} moduleConfig={moduleConfig}>
             <ModuleConfig

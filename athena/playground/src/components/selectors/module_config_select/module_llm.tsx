@@ -7,6 +7,7 @@ import { ModuleConfigSelectProps } from ".";
 import { Monaco } from "@monaco-editor/react";
 
 export default function ModuleLLMConfig({
+  disabled,
   moduleConfig,
   configOptions,
   onChangeConfig,
@@ -14,6 +15,7 @@ export default function ModuleLLMConfig({
   return (
     <>
       <Form
+        disabled={disabled}
         schema={configOptions}
         validator={validator}
         onChange={(props) => {

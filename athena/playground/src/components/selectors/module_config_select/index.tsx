@@ -32,6 +32,7 @@ const customModuleConfigComponents: {
 type SetConfig = Dispatch<SetStateAction<any>>;
 
 export type ModuleConfigSelectProps = {
+  disabled?: boolean;
   configOptions?: any;
   moduleConfig: any;
   onChangeConfig: SetConfig;
@@ -42,6 +43,7 @@ type ModuleConfigSelectWrapperProps = ModuleConfigSelectProps & {
 };
 
 export default function ModuleConfigSelect({
+  disabled,
   module,
   moduleConfig,
   onChangeConfig,
@@ -83,12 +85,14 @@ export default function ModuleConfigSelect({
       {data &&
         (hasCustomModuleConfigComponent ? (
           <CustomModuleConfigComponent
+            disabled={disabled}
             configOptions={data.data}
             moduleConfig={moduleConfig}
             onChangeConfig={onChangeConfig}
           />
         ) : (
           <DefaultSchemaFormModuleConfig
+            disabled={disabled}
             configOptions={data.data}
             moduleConfig={moduleConfig}
             onChangeConfig={onChangeConfig}

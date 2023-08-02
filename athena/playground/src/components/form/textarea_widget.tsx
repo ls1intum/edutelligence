@@ -4,7 +4,7 @@ import { WidgetProps } from "@rjsf/utils";
 import { Editor, Monaco } from "@monaco-editor/react";
 import { editor } from "monaco-editor";
 
-const TextAreaWidget = ({ id, value, onChange, options }: WidgetProps) => {
+const TextAreaWidget = ({ id, value, onChange, options, disabled }: WidgetProps) => {
   const [height, setHeight] = useState(100);
   const lineNumbers: editor.LineNumbersType = options.showLineNumbers ? "on" : "off";
   const customizeMonaco = options.customizeMonaco as ((monaco: Monaco) => void) | undefined;
@@ -28,6 +28,7 @@ const TextAreaWidget = ({ id, value, onChange, options }: WidgetProps) => {
       <div style={{ height }}>
         <Editor
           options={{
+            readOnly: disabled,
             lineNumbers: lineNumbers,
             lineDecorationsWidth: 0,
             scrollBeyondLastLine: false,
