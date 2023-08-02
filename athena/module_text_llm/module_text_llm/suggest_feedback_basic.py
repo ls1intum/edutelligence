@@ -48,8 +48,8 @@ async def suggest_feedback_basic(exercise: Exercise, submission: Submission, con
             continue
 
         try:
-            credits = float(row["credits"])
-        except ValueError:
+            feedback_credits = float(row["credits"])
+        except (ValueError, TypeError):
             logger.warning("Could not parse credits from row %s", row)
             continue
 
@@ -63,7 +63,7 @@ async def suggest_feedback_basic(exercise: Exercise, submission: Submission, con
             description=row["text"],
             index_start=index_start,
             index_end=index_end,
-            credits=credits,
+            credits=feedback_credits,
             meta={}
         ))
 
