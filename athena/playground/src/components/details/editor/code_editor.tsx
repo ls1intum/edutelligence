@@ -23,28 +23,43 @@ export default function CodeEditor({
   onFeedbacksChange,
   createNewFeedback,
 }: CodeEditorProps) {
-  const repository = useFetchAndUnzip(repository_url);
+  const {
+    isError,
+    zip: repositoryZip,
+    tree,
+  } = useFetchAndUnzip(repository_url);
   const [selectedFile, setSelectedFile] = useState<string | undefined>(
     undefined
   );
   const [fileContent, setFileContent] = useState<string | undefined>(undefined);
 
   useEffect(() => {
-    if (selectedFile && repository) {
-      repository.zip
+    if (selectedFile && repositoryZip) {
+      repositoryZip
         .file(selectedFile)
         ?.async("string")
         .then(setFileContent)
         .catch(console.error);
     }
-  }, [selectedFile, repository]);
+  }, [selectedFile, repositoryZip]);
+
+  if (isError) {
+    return (
+      <div className="text-red-500 text-sm">
+        Failed to load repository, did you link the downloaded repositories?
+        <div className="text-gray-500">
+          <code>npm run export:artemis:4-link-programming-repositories</code>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="h-[50vh] border border-gray-100 rounded-lg overflow-hidden">
       <Allotment vertical={false} defaultSizes={[1, 4]}>
         <Allotment.Pane preferredSize={"20%"}>
           <FileTree
-            tree={repository.tree}
+            tree={tree}
             feedbacks={feedbacks}
             onSelectFile={setSelectedFile}
           />
@@ -57,7 +72,11 @@ export default function CodeEditor({
               </div>
               <FileEditor
                 content={fileContent}
-                identifier={identifier ? `${identifier}-${repository_url}` : repository_url}
+                identifier={
+                  identifier
+                    ? `${identifier}-${repository_url}`
+                    : repository_url
+                }
                 filePath={selectedFile}
                 feedbacks={feedbacks}
                 onFeedbacksChange={onFeedbacksChange}
