@@ -6,6 +6,7 @@ import ExerciseDetail from "@/components/details/exercise_detail";
 import ModuleSelectAndConfig from "../module_requests/module_select_and_config";
 import { Experiment } from "./define_experiment";
 import RunModuleExperiment from "./run_module_experiment";
+import ExperimentSubmissions from "./experiment_submissions";
 
 export default function ConductExperiment({
   experiment,
@@ -84,6 +85,11 @@ export default function ConductExperiment({
                 hideDisclosure
                 openedInitially
               />
+            </div>
+          </div>
+          <div className="flex flex-col shrink-0 snap-start overflow-y-auto">
+            <div className="shrink-0 w-[calc(50vw-2rem)] pr-2">
+              <ExperimentSubmissions experiment={experiment}/>
             </div>
           </div>
 
