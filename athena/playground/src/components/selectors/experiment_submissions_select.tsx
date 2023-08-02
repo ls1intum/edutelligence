@@ -4,6 +4,7 @@ import type { Exercise } from "@/model/exercise";
 import { useState } from "react";
 
 import useSubmissions from "@/hooks/playground/submissions";
+import useFeedbacks from "@/hooks/playground/feedbacks";
 import SubmissionList from "@/components/submission_list";
 
 export type ExperimentSubmissions = {
@@ -27,6 +28,7 @@ export default function ExperimentSubmissionsSelect({
   onChangeExperimentSubmissions,
 }: ExperimentSubmissionsSelectProps) {
   const { data, error, isLoading } = useSubmissions(exercise);
+  const { data: feedbacks } = useFeedbacks(exercise);
 
   const [moveSubmissionsNumber, setMoveSubmissionsNumber] =
     useState<number>(10);
@@ -201,6 +203,7 @@ export default function ExperimentSubmissionsSelect({
             submissions={
               data?.filter((submission) => !isSubmissionUsed(submission)) ?? []
             }
+            feedbacks={feedbacks}
           />
         </div>
         {experimentSubmissions?.trainingSubmissions !== undefined && (
@@ -210,6 +213,7 @@ export default function ExperimentSubmissionsSelect({
             </div>
             <SubmissionList
               submissions={experimentSubmissions?.trainingSubmissions ?? []}
+              feedbacks={feedbacks}
             />
           </div>
         )}
@@ -219,6 +223,7 @@ export default function ExperimentSubmissionsSelect({
           </div>
           <SubmissionList
             submissions={experimentSubmissions?.testSubmissions ?? []}
+            feedbacks={feedbacks}
           />
         </div>
       </div>

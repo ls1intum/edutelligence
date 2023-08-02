@@ -15,6 +15,7 @@ import ExerciseDetail from "@/components/details/exercise_detail";
 import ExperimentExecutionModeSelect from "@/components/selectors/experiment_execution_mode_select";
 import ExperimentSubmissionsSelect from "@/components/selectors/experiment_submissions_select";
 import { twMerge } from "tailwind-merge";
+import useFeedbacks from "@/hooks/playground/feedbacks";
 
 export type Experiment = {
   dataMode: DataMode;
@@ -46,16 +47,10 @@ export default function DefineExperiment({
 }: DefineExperimentProps) {
   const baseInfoDispatch = useBaseInfoDispatch();
   const { dataMode } = useBaseInfo();
-  const [exerciseType, setExerciseType] = useState<string | undefined>(
-    undefined
-  );
+  const [exerciseType, setExerciseType] = useState<string | undefined>(undefined);
   const [exercise, setExercise] = useState<Exercise | undefined>(undefined);
-  const [executionMode, setExecutionMode] = useState<ExecutionMode | undefined>(
-    undefined
-  );
-  const [experimentSubmissions, setExperimentSubmissions] = useState<
-    ExperimentSubmissions | undefined
-  >(undefined);
+  const [executionMode, setExecutionMode] = useState<ExecutionMode | undefined>(undefined);
+  const [experimentSubmissions, setExperimentSubmissions] = useState<ExperimentSubmissions | undefined>(undefined);
   const [isImporting, setIsImporting] = useState<boolean>(false);
 
   useEffect(() => {
