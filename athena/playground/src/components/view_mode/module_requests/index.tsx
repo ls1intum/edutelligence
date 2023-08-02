@@ -19,6 +19,7 @@ export default function ModuleRequests() {
       <div className="bg-white rounded-md p-4 mb-8">
         <ModuleAndConfigSelect
           showOverrideCheckbox
+          collapsibleConfig
           moduleAndConfig={moduleAndConfig}
           onChangeModuleAndConfig={setModuleAndConfig}
         />

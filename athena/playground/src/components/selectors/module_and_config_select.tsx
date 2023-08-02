@@ -12,6 +12,7 @@ type ModuleConfigProps = {
   moduleConfig: any;
   onChangeConfig: (newConfig: any) => void;
   showOverrideCheckbox?: boolean;
+  collapsibleConfig?: boolean;
 };
 
 function ModuleConfig({
@@ -19,6 +20,7 @@ function ModuleConfig({
   moduleConfig,
   onChangeConfig,
   showOverrideCheckbox,
+  collapsibleConfig,
 }: ModuleConfigProps) {
   const { data, error, isLoading } = useConfigSchema();
 
@@ -61,15 +63,22 @@ function ModuleConfig({
               </label>
             </>
           )}
-          {(moduleConfig !== undefined || !showOverrideCheckbox) && (
-            <Disclosure title="Configuration" openedInitially>
+          {(moduleConfig !== undefined || !showOverrideCheckbox) &&
+            (collapsibleConfig ? (
+              <Disclosure title="Configuration" openedInitially>
+                <ModuleConfigSelect
+                  module={module}
+                  moduleConfig={moduleConfig}
+                  onChangeConfig={onChangeConfig}
+                />
+              </Disclosure>
+            ) : (
               <ModuleConfigSelect
                 module={module}
                 moduleConfig={moduleConfig}
                 onChangeConfig={onChangeConfig}
               />
-            </Disclosure>
-          )}
+            ))}
         </>
       )}
     </div>
@@ -84,6 +93,7 @@ type ModuleAndConfig = {
 type ModuleAndConfigSelectProps = {
   exerciseType?: string;
   showOverrideCheckbox?: boolean;
+  collapsibleConfig?: boolean;
   moduleAndConfig: ModuleAndConfig | undefined;
   onChangeModuleAndConfig: (newModuleAndConfig: ModuleAndConfig) => void;
 };
@@ -91,6 +101,7 @@ type ModuleAndConfigSelectProps = {
 export default function ModuleAndConfigSelect({
   exerciseType,
   showOverrideCheckbox,
+  collapsibleConfig,
   moduleAndConfig,
   onChangeModuleAndConfig,
 }: ModuleAndConfigSelectProps) {
@@ -113,6 +124,7 @@ export default function ModuleAndConfigSelect({
         >
           <ModuleConfig
             showOverrideCheckbox={showOverrideCheckbox}
+            collapsibleConfig={collapsibleConfig}
             module={moduleAndConfig.module}
             moduleConfig={moduleAndConfig.moduleConfig}
             onChangeConfig={(newConfig) => {
