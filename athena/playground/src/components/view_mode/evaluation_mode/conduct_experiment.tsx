@@ -1,14 +1,18 @@
+import { useEffect, useState } from "react";
+
 import ExerciseDetail from "@/components/details/exercise_detail";
 import ModuleSelectAndConfig from "../module_requests/module_select_and_config";
 import { Experiment } from "./define_experiment";
 import RunModuleExperiment from "./run_module_experiment";
-import { useEffect, useRef } from "react";
 
 export default function ConductExperiment({
   experiment,
 }: {
   experiment: Experiment;
 }) {
+  const [numberOfModuleExperiments, setNumberOfModuleExperiments] =
+    useState<number>(1);
+
   useEffect(() => {
     const handleBeforeunload = (e) => {
       e.preventDefault();
@@ -24,7 +28,33 @@ export default function ConductExperiment({
 
   return (
     <div className="bg-white rounded-md p-4 mb-8 space-y-2">
-      <h3 className="text-2xl font-bold">Conduct Experiment</h3>
+      <div className="flex flex-row justify-between items-center">
+        <h3 className="text-2xl font-bold">Conduct Experiment</h3>
+        <div className="flex flex-row gap-1 items-center">
+          <span className="text-gray-500 text-sm">
+            {numberOfModuleExperiments} Module Experiment{numberOfModuleExperiments > 1 ? "s" : ""}
+          </span>
+          <button
+            className="bg-primary-500 text-white rounded-md p-2 hover:bg-primary-600 disabled:text-gray-500 disabled:bg-gray-200 disabled:cursor-not-allowed"
+            onClick={() => {
+              if (numberOfModuleExperiments <= 1) {
+                return;
+              }
+              setNumberOfModuleExperiments(numberOfModuleExperiments - 1);
+            }}
+          >
+            -
+          </button>
+          <button
+            className="bg-primary-500 text-white rounded-md p-2 hover:bg-primary-600 disabled:text-gray-500 disabled:bg-gray-200 disabled:cursor-not-allowed"
+            onClick={() => {
+              setNumberOfModuleExperiments(numberOfModuleExperiments + 1);
+            }}
+          >
+            +
+          </button>
+        </div>
+      </div>
       <div
         className="w-full flex gap-6 snap-x snap-mandatory overflow-x-auto max-h-[calc(100vh-6rem)]"
         key={experiment.exercise.id}
@@ -39,13 +69,18 @@ export default function ConductExperiment({
           </div>
         </div>
 
-        <div className="flex flex-col shrink-0 snap-center overflow-y-auto">
-          <div className="shrink-0 w-[50vw] mx-2">
-            <ModuleSelectAndConfig exerciseType={experiment.exercise.type}>
-              <RunModuleExperiment experiment={experiment} />
-            </ModuleSelectAndConfig>
+        {Array.from({ length: numberOfModuleExperiments }).map((_, index) => (
+          <div
+            key={index}
+            className="flex flex-col shrink-0 snap-center overflow-y-auto"
+          >
+            <div className="shrink-0 w-[50vw] mx-2">
+              <ModuleSelectAndConfig exerciseType={experiment.exercise.type}>
+                <RunModuleExperiment experiment={experiment} />
+              </ModuleSelectAndConfig>
+            </div>
           </div>
-        </div>
+        ))}
       </div>
     </div>
   );

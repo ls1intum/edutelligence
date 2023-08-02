@@ -43,7 +43,6 @@ export default function RunModuleExperiment({
 
   return (
     <div className="bg-white rounded-md p-4 mb-8 space-y-4">
-      <h3 className="text-2xl font-bold">Interactive Experiment</h3>
       <div className="flex flex-row space-x-2">
         <button
           className="bg-primary-500 text-white rounded-md p-2 hover:bg-primary-600 disabled:text-gray-500 disabled:bg-gray-200 disabled:cursor-not-allowed"
