@@ -9,6 +9,7 @@ import FileTree from "./file_tree";
 import FileEditor from "./file_editor";
 
 type CodeEditorProps = {
+  identifier?: string;
   repository_url: string;
   feedbacks?: Feedback[];
   onFeedbacksChange?: (feedback: Feedback[]) => void;
@@ -16,6 +17,7 @@ type CodeEditorProps = {
 };
 
 export default function CodeEditor({
+  identifier,
   repository_url,
   feedbacks,
   onFeedbacksChange,
@@ -55,7 +57,7 @@ export default function CodeEditor({
               </div>
               <FileEditor
                 content={fileContent}
-                identifier={repository_url}
+                identifier={identifier ? `${identifier}-${repository_url}` : repository_url}
                 filePath={selectedFile}
                 feedbacks={feedbacks}
                 onFeedbacksChange={onFeedbacksChange}

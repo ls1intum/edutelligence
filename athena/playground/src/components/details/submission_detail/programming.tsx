@@ -6,6 +6,7 @@ import InlineFeedback from "@/components/details/editor/inline_feedback";
 import { getOnFeedbackChange, getFeedbackReferenceType } from "@/model/feedback";
 
 type ProgrammingSubmissionDetailProps = {
+  identifier?: string;
   submission: ProgrammingSubmission;
   feedbacks?: Feedback[];
   onFeedbacksChange?: (feedback: Feedback[]) => void;
@@ -13,6 +14,7 @@ type ProgrammingSubmissionDetailProps = {
 };
 
 export default function ProgrammingSubmissionDetail({
+  identifier,
   submission,
   feedbacks,
   onFeedbacksChange,
@@ -22,7 +24,8 @@ export default function ProgrammingSubmissionDetail({
   return (
     <>
       <CodeEditor
-        key={submission.id}
+        key={identifier ? `${identifier}-${submission.id}` : submission.id}
+        identifier={identifier}
         repository_url={submission.repository_url}
         feedbacks={feedbacks}
         onFeedbacksChange={onFeedbacksChange}

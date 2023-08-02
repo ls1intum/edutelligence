@@ -6,6 +6,7 @@ import InlineFeedback from "@/components/details/editor/inline_feedback";
 import { getOnFeedbackChange, getFeedbackReferenceType } from "@/model/feedback";
 
 type TextSubmissionDetailProps = {
+  identifier?: string;
   submission: TextSubmission;
   feedbacks?: Feedback[];
   onFeedbacksChange?: (feedback: Feedback[]) => void;
@@ -13,6 +14,7 @@ type TextSubmissionDetailProps = {
 };
 
 export default function TextSubmissionDetail({
+  identifier,
   submission,
   feedbacks,
   onFeedbacksChange,
@@ -25,8 +27,8 @@ export default function TextSubmissionDetail({
     <>
       <div className="border border-gray-100 rounded-lg overflow-hidden">
         <FileEditor
-          key={`submission-${submission.id}`}
-          identifier={`submission-${submission.id}`}
+          key={identifier ? `${identifier}-${submission.id}` : submission.id}
+          identifier={identifier ? `${identifier}-${submission.id}` : `${submission.id}`}
           content={submission.content}
           autoHeight
           noFileFeedback

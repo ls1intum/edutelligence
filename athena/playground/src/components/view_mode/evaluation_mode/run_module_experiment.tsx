@@ -2,7 +2,7 @@ import type { Feedback } from "@/model/feedback";
 import type { Submission } from "@/model/submission";
 import type { Experiment } from "./define_experiment";
 
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { Allotment } from "allotment";
 
 import { useBaseInfo } from "@/hooks/base_info_context";
@@ -18,6 +18,9 @@ export default function RunModuleExperiment({
 }: {
   experiment: Experiment;
 }) {
+  const id = useId();
+  const [currentIndex, setCurrentSubmissionIndex] = useState(-1);
+  
   const { mutate: sendSubmissions, isLoading: isLoadingSendSubmissions } =
     useSendSubmissions();
   const { mutate: selectSubmission, isLoading: isLoadingSubmissionSelection } =
@@ -29,8 +32,7 @@ export default function RunModuleExperiment({
   const [submissionsAndFeedbacks, setSubmissionsAndFeedbacks] = useState<
     { submission: Submission; feedbacks: Feedback[] }[]
   >([]);
-  const [currentIndex, setCurrentSubmissionIndex] = useState(-1);
-
+  
   useEffect(() => {
     sendSubmissions({
       exercise: experiment.exercise,
@@ -132,6 +134,7 @@ export default function RunModuleExperiment({
       </div>
         {submissionsAndFeedbacks[currentIndex]?.submission ? (
           <SubmissionDetail
+            identifier={id}
             submission={submissionsAndFeedbacks[currentIndex]?.submission}
             feedbacks={submissionsAndFeedbacks[currentIndex]?.feedbacks}
           />
