@@ -4,6 +4,7 @@ import type { ExecutionMode } from "@/components/selectors/experiment_execution_
 import type { ExperimentSubmissions } from "@/components/selectors/experiment_submissions_select";
 
 import { useEffect, useState } from "react";
+import { twMerge } from "tailwind-merge";
 
 import { useBaseInfo, useBaseInfoDispatch } from "@/hooks/base_info_context";
 import { fetchExercises } from "@/hooks/playground/exercises";
@@ -14,8 +15,6 @@ import ExerciseSelect from "@/components/selectors/exercise_select";
 import ExerciseDetail from "@/components/details/exercise_detail";
 import ExperimentExecutionModeSelect from "@/components/selectors/experiment_execution_mode_select";
 import ExperimentSubmissionsSelect from "@/components/selectors/experiment_submissions_select";
-import { twMerge } from "tailwind-merge";
-import useFeedbacks from "@/hooks/playground/feedbacks";
 
 export type Experiment = {
   dataMode: DataMode;

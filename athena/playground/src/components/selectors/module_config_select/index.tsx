@@ -60,7 +60,7 @@ export default function ModuleConfigSelect({
     if (data) {
       const defaultFormData = getDefaultFormState(validator, data, {}, data);
       if (
-        Object.keys(moduleConfig).length === 0 &&
+        Object.keys(moduleConfig ?? {}).length === 0 &&
         Object.keys(defaultFormData).length !== 0
       ) {
         onChangeConfig(defaultFormData);
