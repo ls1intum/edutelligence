@@ -16,7 +16,7 @@ export default function ExperimentExecutionModeSelect({
       <span className="text-lg font-bold">Execution Mode</span>
       <select
         disabled={disabled}
-        className="border border-gray-300 rounded-md p-2"
+        className="border border-gray-300 rounded-md p-2 disabled:opacity-50"
         value={executionMode ?? ""}
         onChange={(e) =>
           onChangeExperimentMode(e.target.value as ExecutionMode)

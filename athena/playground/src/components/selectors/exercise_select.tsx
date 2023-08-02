@@ -21,7 +21,7 @@ export default function ExerciseSelect({
     <label className="flex flex-col">
       <span className="text-lg font-bold">Exercise</span>
       <select
-        className="border border-gray-300 rounded-md p-2"
+        className="border border-gray-300 rounded-md p-2 disabled:opacity-50"
         value={exercise?.id ?? ""}
         disabled={disabled}
         onChange={(e) => onChange(data!.find((ex: Exercise) => ex.id === parseInt(e.target.value))!)}

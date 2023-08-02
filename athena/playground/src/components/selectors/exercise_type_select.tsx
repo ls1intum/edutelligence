@@ -39,7 +39,7 @@ export default function ExerciseTypeSelect({
       <span className="text-lg font-bold">Exercise Type</span>
       <select
         disabled={disabled}
-        className="border border-gray-300 rounded-md p-2"
+        className="border border-gray-300 rounded-md p-2 disabled:opacity-50"
         value={exerciseType ?? ""}
         onChange={(e) => onChangeExerciseType(e.target.value)}
       >
