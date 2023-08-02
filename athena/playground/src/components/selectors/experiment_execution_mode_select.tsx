@@ -1,16 +1,21 @@
 export type ExecutionMode = "incremental" | "batch";
 
+type ExperimentExecutionModeSelectProps = {
+  disabled?: boolean;
+  executionMode?: ExecutionMode;
+  onChangeExecutionMode: (executionMode: ExecutionMode) => void;
+};
+
 export default function ExperimentExecutionModeSelect({
+  disabled,
   executionMode,
   onChangeExecutionMode: onChangeExperimentMode,
-}: {
-  executionMode: ExecutionMode | undefined;
-  onChangeExecutionMode: (executionMode: ExecutionMode) => void;
-}) {
+}: ExperimentExecutionModeSelectProps) {
   return (
     <label className="flex flex-col">
       <span className="text-lg font-bold">Execution Mode</span>
       <select
+        disabled={disabled}
         className="border border-gray-300 rounded-md p-2"
         value={executionMode ?? ""}
         onChange={(e) =>
@@ -25,6 +30,6 @@ export default function ExperimentExecutionModeSelect({
         </option>
         <option value={"batch"}>Batch mode (all submissions at once)</option>
       </select>
-  </label>
+    </label>
   );
 }

@@ -5,6 +5,7 @@ import Form from "@/components/form";
 import { ModuleConfigSelectProps } from ".";
 
 export default function DefaultSchemaFormModuleConfig({
+  disabled,
   moduleConfig,
   configOptions,
   onChangeConfig,
@@ -12,6 +13,7 @@ export default function DefaultSchemaFormModuleConfig({
   return (
     <>
       <Form
+        disabled={disabled}
         schema={configOptions}
         validator={validator}
         onChange={(props) => {

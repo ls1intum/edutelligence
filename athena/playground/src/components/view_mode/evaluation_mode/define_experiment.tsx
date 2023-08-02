@@ -14,6 +14,7 @@ import ExerciseSelect from "@/components/selectors/exercise_select";
 import ExerciseDetail from "@/components/details/exercise_detail";
 import ExperimentExecutionModeSelect from "@/components/selectors/experiment_execution_mode_select";
 import ExperimentSubmissionsSelect from "@/components/selectors/experiment_submissions_select";
+import { twMerge } from "tailwind-merge";
 
 export type Experiment = {
   dataMode: DataMode;
@@ -36,10 +37,13 @@ type ExperimentExport = {
 
 type DefineExperimentProps = {
   experiment: Experiment | undefined;
-  onChangeExperiment: (experiment: Experiment) => void;
+  onChangeExperiment: (experiment: Experiment | undefined) => void;
 };
 
-export default function DefineExperiment({ experiment, onChangeExperiment }: DefineExperimentProps) {
+export default function DefineExperiment({
+  experiment,
+  onChangeExperiment,
+}: DefineExperimentProps) {
   const baseInfoDispatch = useBaseInfoDispatch();
   const { dataMode } = useBaseInfo();
   const [exerciseType, setExerciseType] = useState<string | undefined>(
@@ -153,10 +157,10 @@ export default function DefineExperiment({ experiment, onChangeExperiment }: Def
     <div className="bg-white rounded-md p-4 mb-8 space-y-2">
       <div className="flex flex-row justify-between items-center">
         <h3 className="text-2xl font-bold">Define Experiment</h3>
-        <div className="flex flex-row gap-2">
+        <div className="flex flex-row">
           {definedExperiment && (
             <a
-              className="text-primary-500 hover:underline"
+              className="rounded-md p-2 mt-2 text-primary-500 hover:text-primary-600 hover:bg-gray-100 hover:no-underline"
               href={`data:text/json;charset=utf-8,${encodeURIComponent(
                 JSON.stringify(getExperimentExport(definedExperiment), null, 2)
               )}`}
@@ -165,9 +169,17 @@ export default function DefineExperiment({ experiment, onChangeExperiment }: Def
               Export
             </a>
           )}
-          <label className="text-primary-500 hover:underline">
+          <label
+            className={twMerge(
+              "rounded-md p-2 mt-2",
+              isImporting || experiment !== undefined
+                ? "text-gray-500 cursor-not-allowed"
+                : "text-primary-500 hover:text-primary-600 hover:bg-gray-100"
+            )}
+          >
             Import
             <input
+              disabled={isImporting || experiment !== undefined}
               className="hidden"
               type="file"
               onChange={(e) => {
@@ -194,16 +206,19 @@ export default function DefineExperiment({ experiment, onChangeExperiment }: Def
       ) : (
         <>
           <ExperimentExecutionModeSelect
+            disabled={experiment !== undefined}
             executionMode={executionMode}
             onChangeExecutionMode={setExecutionMode}
           />
           <ExerciseTypeSelect
+            disabled={experiment !== undefined}
             exerciseType={exerciseType}
             onChangeExerciseType={setExerciseType}
           />
           {exerciseType && (
             <>
               <ExerciseSelect
+                disabled={experiment !== undefined}
                 exercise={exercise}
                 exerciseType={exerciseType}
                 onChange={setExercise}
@@ -212,24 +227,37 @@ export default function DefineExperiment({ experiment, onChangeExperiment }: Def
             </>
           )}
           <ExperimentSubmissionsSelect
+            disabled={experiment !== undefined}
             exercise={exercise}
             experimentSubmissions={experimentSubmissions}
             onChangeExperimentSubmissions={setExperimentSubmissions}
           />
         </>
       )}
-      <div>
+      <div className="flex flex-row gap-2">
         <button
           className="bg-primary-500 text-white rounded-md p-2 mt-2 hover:bg-primary-600 disabled:text-gray-500 disabled:bg-gray-200 disabled:cursor-not-allowed"
-          disabled={!definedExperiment}
+          disabled={!definedExperiment || experiment !== undefined}
           onClick={() => {
             if (definedExperiment) {
               onChangeExperiment(definedExperiment);
-            } 
+            }
           }}
         >
-          Conduct Experiment
+          {experiment ? "Experiment Started" : "Start Experiment"}
         </button>
+        {experiment && (
+          <button
+            className="bg-red-500 text-white rounded-md p-2 mt-2 hover:bg-red-600"
+            onClick={() => {
+              if (definedExperiment && confirm("Cancel experiment?")) {
+                onChangeExperiment(undefined);
+              }
+            }}
+          >
+            Cancel Experiment
+          </button>
+        )}
       </div>
     </div>
   );

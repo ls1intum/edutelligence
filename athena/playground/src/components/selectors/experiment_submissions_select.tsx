@@ -12,6 +12,7 @@ export type ExperimentSubmissions = {
 };
 
 type ExperimentSubmissionsSelectProps = {
+  disabled?: boolean;
   exercise?: Exercise;
   experimentSubmissions?: ExperimentSubmissions;
   onChangeExperimentSubmissions: (
@@ -20,6 +21,7 @@ type ExperimentSubmissionsSelectProps = {
 };
 
 export default function ExperimentSubmissionsSelect({
+  disabled,
   exercise,
   experimentSubmissions,
   onChangeExperimentSubmissions,
@@ -46,6 +48,7 @@ export default function ExperimentSubmissionsSelect({
       <span className="text-lg font-bold">Submissions</span>
       <label className="flex items-center cursor-pointer">
         <input
+          disabled={disabled}
           type="checkbox"
           checked={experimentSubmissions?.trainingSubmissions !== undefined}
           onChange={(e) => {
@@ -71,6 +74,7 @@ export default function ExperimentSubmissionsSelect({
         <div className="flex gap-3">
           <label className="flex items-center cursor-pointer">
             <input
+              disabled={disabled}
               className="ml-2 w-16 border border-gray-100 rounded-md p-1"
               type="number"
               step="0.5"
@@ -84,6 +88,7 @@ export default function ExperimentSubmissionsSelect({
           {experimentSubmissions?.trainingSubmissions !== undefined && (
             <label className="flex items-center cursor-pointer">
               <input
+                disabled={disabled}
                 type="checkbox"
                 checked={moveToTest}
                 onChange={(e) => setMoveToTest(e.target.checked)}
@@ -93,6 +98,7 @@ export default function ExperimentSubmissionsSelect({
           )}
         </div>
         <button
+          disabled={disabled}
           className="mt-2 text-sm text-primary-500 hover:text-primary-700 underline"
           onClick={() => {
             if (moveSubmissionsNumber === undefined) return;
@@ -128,6 +134,7 @@ export default function ExperimentSubmissionsSelect({
         </button>
 
         <button
+          disabled={disabled}
           className="mt-2 text-sm text-primary-500 hover:text-primary-700 underline"
           onClick={() => {
             if (moveSubmissionsNumber === undefined) return;
@@ -164,6 +171,7 @@ export default function ExperimentSubmissionsSelect({
         </button>
 
         <button
+          disabled={disabled}
           className="mt-2 text-sm text-red-500 hover:text-red-700 underline"
           onClick={() =>
             onChangeExperimentSubmissions({
