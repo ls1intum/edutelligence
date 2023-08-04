@@ -106,7 +106,7 @@ export default function ModuleAndConfigSelect({
   onChangeModuleAndConfig,
 }: ModuleAndConfigSelectProps) {
   return (
-    <div>
+    <>
       <ModuleSelect
         exerciseType={exerciseType}
         module={moduleAndConfig?.module}
@@ -136,6 +136,6 @@ export default function ModuleAndConfigSelect({
           />
         </ModuleProvider>
       )}
-    </div>
+    </>
   );
 }

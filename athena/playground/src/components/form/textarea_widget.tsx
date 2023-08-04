@@ -33,6 +33,7 @@ const TextAreaWidget = ({ id, value, onChange, options, disabled }: WidgetProps)
             lineDecorationsWidth: 0,
             scrollBeyondLastLine: false,
             automaticLayout: true,
+            wordWrap: "on",
             scrollbar: {
               vertical: "hidden",
               horizontal: "hidden",
