@@ -106,13 +106,19 @@ export default function ConfigureModules({
                       No module selected
                     </span>
                   )}
-                  {moduleConfigurations.filter(
+                  {moduleConfiguration.name ? (
+                    moduleConfigurations.filter(
                     (currentModuleConfiguration) =>
                       currentModuleConfiguration.name ===
                       moduleConfiguration.name
                   ).length > 1 && (
                     <span className="rounded-full bg-yellow-500 text-white px-2 py-0.5 text-xs">
                       Duplicate module name
+                    </span>
+                  )
+                  ) : (
+                    <span className="rounded-full bg-yellow-500 text-white px-2 py-0.5 text-xs">
+                      No name
                     </span>
                   )}
                 </div>
