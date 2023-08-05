@@ -238,7 +238,7 @@ export default function DefineExperiment({
             }
           }}
         >
-          {experiment ? "Experiment Started" : "Start Experiment"}
+          {experiment ? "Experiment Defined" : "Define Experiment"}
         </button>
         {experiment && (
           <button

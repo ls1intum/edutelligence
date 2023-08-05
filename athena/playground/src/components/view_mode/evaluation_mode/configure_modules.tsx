@@ -106,6 +106,15 @@ export default function ConfigureModules({
                       No module selected
                     </span>
                   )}
+                  {moduleConfigurations.filter(
+                    (currentModuleConfiguration) =>
+                      currentModuleConfiguration.name ===
+                      moduleConfiguration.name
+                  ).length > 1 && (
+                    <span className="rounded-full bg-yellow-500 text-white px-2 py-0.5 text-xs">
+                      Duplicate module name
+                    </span>
+                  )}
                 </div>
                 <div className="flex gap-2 mb-2">
                   <input
@@ -133,10 +142,20 @@ export default function ConfigureModules({
                   />
                   <button
                     onClick={() => {
+                      let newName =  `${moduleConfiguration.name} (copy)`;
+                      let num = 1;
+                      while (moduleConfigurations.filter(
+                        (currentModuleConfiguration) =>
+                          currentModuleConfiguration.name ===
+                          newName
+                      ).length > 0) {
+                        newName = `${moduleConfiguration.name} (copy ${num})`;
+                      }
+
                       const newModuleConfiguration = {
                         ...moduleConfiguration,
                         id: uuidv4(),
-                        name: `${moduleConfiguration.name} (copy)`,
+                        name: newName,
                       };
                       // insert after current index
                       const newModuleConfigurations = [
@@ -174,26 +193,27 @@ export default function ConfigureModules({
                 </div>
               </div>
               <div className="px-2">
-              <ModuleAndConfigSelect
-                exerciseType={experiment.exerciseType}
-                moduleAndConfig={moduleConfiguration.moduleAndConfig}
-                onChangeModuleAndConfig={(newModuleAndConfig) => {
-                  const newModuleConfigurations = moduleConfigurations?.map(
-                    (currentModuleConfiguration) => {
-                      if (
-                        currentModuleConfiguration.id === moduleConfiguration.id
-                      ) {
-                        return {
-                          ...currentModuleConfiguration,
-                          moduleAndConfig: newModuleAndConfig,
-                        };
+                <ModuleAndConfigSelect
+                  exerciseType={experiment.exerciseType}
+                  moduleAndConfig={moduleConfiguration.moduleAndConfig}
+                  onChangeModuleAndConfig={(newModuleAndConfig) => {
+                    const newModuleConfigurations = moduleConfigurations?.map(
+                      (currentModuleConfiguration) => {
+                        if (
+                          currentModuleConfiguration.id ===
+                          moduleConfiguration.id
+                        ) {
+                          return {
+                            ...currentModuleConfiguration,
+                            moduleAndConfig: newModuleAndConfig,
+                          };
+                        }
+                        return currentModuleConfiguration;
                       }
-                      return currentModuleConfiguration;
-                    }
-                  );
-                  setModuleConfigurations(newModuleConfigurations);
-                }}
-              />
+                    );
+                    setModuleConfigurations(newModuleConfigurations);
+                  }}
+                />
               </div>
             </div>
           </div>
