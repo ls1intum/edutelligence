@@ -1,4 +1,4 @@
-# Athena: A system to support (semi-)automated assessment of exercises
+# Athena: A system to support (semi-)automated assessment of exercises 
 
 ---
 > **Note**
