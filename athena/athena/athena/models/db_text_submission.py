@@ -7,7 +7,8 @@ from .db_submission import DBSubmission
 
 class DBTextSubmission(DBSubmission, Base):
     __tablename__ = "text_submissions"
-    content: str = Column(String, nullable=False)  # type: ignore
+    text: str = Column(String, nullable=False)  # type: ignore
+    language: str = Column(String, nullable=True)  # type: ignore
 
     exercise_id = Column(Integer, ForeignKey("text_exercises.id", ondelete="CASCADE"), index=True)
 

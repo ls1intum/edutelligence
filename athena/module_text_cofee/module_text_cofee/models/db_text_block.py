@@ -4,6 +4,7 @@ from sqlalchemy.orm import relationship
 
 from athena.database import Base
 from athena.text import Feedback
+from athena.logger import logger
 
 
 class DBTextBlock(Base):
@@ -13,6 +14,7 @@ class DBTextBlock(Base):
     text = Column(String)  # type: ignore
     index_start = Column(Integer)  # type: ignore
     index_end = Column(Integer)  # type: ignore
+    position_in_cluster = Column(Integer)  # type: ignore
 
     # foreign keys
     submission_id = Column(Integer, ForeignKey("text_submissions.id"))  # FK to athena-native table
@@ -35,7 +37,7 @@ class DBTextBlock(Base):
         """
         if feedback.index_start is None or feedback.index_end is None:
             return False
-        return self.index_start <= feedback.index_start and feedback.index_end <= self.index_end
+        return self.index_start <= feedback.index_start and feedback.index_end <= self.index_end  # type: ignore
 
     def feedback_is_linked_to_block(self, feedback: Feedback) -> bool:
         """The info whether the feedback is linked to the block is stored in the metadata of the feedback."""
@@ -55,6 +57,10 @@ class DBTextBlock(Base):
         """
         distance_matrix = self.cluster.distance_matrix
         block_index = self.cluster.blocks.index(self)
+        if len(distance_matrix) <= block_index:
+            logger.warning("Block %s is not in the distance matrix of cluster %s", self.id, self.cluster.id)
+            logger.debug("Distance matrix: %s", distance_matrix)
+            return 999 # Something went wrong, this block is not in the distance matrix
         distance_matrix_row = distance_matrix[block_index]
         # subtract 1 because the statement also included the distance to itself, but it shouldn't be included
         return sum(1 - distance for distance in distance_matrix_row) - 1

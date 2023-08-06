@@ -15,7 +15,7 @@ export default function TextSubmissionDetail({
 }: TextSubmissionDetailProps) {
   return (
     <>
-      <Markdown content={submission.content} enablePlainTextSwitcher />
+      <Markdown content={submission.text} enablePlainTextSwitcher />
       {feedbacks && feedbacks.length > 0 && (
         <div className="space-y-1 mt-2">
           {feedbacks.map((feedback) => (

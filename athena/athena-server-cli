@@ -47,6 +47,9 @@ curl -sSL -o athena-docker.sh https://raw.githubusercontent.com/ls1intum/Athena/
 chmod +x athena-docker.sh
 echo "Executing docker management script"
 ./athena-docker.sh start $3 $4 $hostname
+echo "Deployment finished."
+echo "Cleaning up..."
+./athena-docker.sh cleanup # remove old images
 COMMAND
 }
 

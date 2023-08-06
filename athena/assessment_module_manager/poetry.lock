@@ -35,7 +35,7 @@ fastapi = "^0.96.0"
 gitpython = "^3.1.31"
 httpx = "^0.24.1"
 sqlalchemy = {version = "^2.0.15", extras = ["mypy"]}
-uvicorn = "^0.22.0"
+uvicorn = "^0.23.0"
 
 [package.source]
 type = "directory"
@@ -530,13 +530,13 @@ files = [
 
 [[package]]
 name = "uvicorn"
-version = "0.22.0"
+version = "0.23.0"
 description = "The lightning-fast ASGI server."
 optional = false
-python-versions = ">=3.7"
+python-versions = ">=3.8"
 files = [
-    {file = "uvicorn-0.22.0-py3-none-any.whl", hash = "sha256:e9434d3bbf05f310e762147f769c9f21235ee118ba2d2bf1155a7196448bd996"},
-    {file = "uvicorn-0.22.0.tar.gz", hash = "sha256:79277ae03db57ce7d9aa0567830bbb51d7a612f54d6e1e3e92da3ef24c2c8ed8"},
+    {file = "uvicorn-0.23.0-py3-none-any.whl", hash = "sha256:479599b2c0bb1b9b394c6d43901a1eb0c1ec72c7d237b5bafea23c5b2d4cdf10"},
+    {file = "uvicorn-0.23.0.tar.gz", hash = "sha256:d38ab90c0e2c6fe3a054cddeb962cfd5d0e0e6608eaaff4a01d5c36a67f3168c"},
 ]
 
 [package.dependencies]
@@ -549,4 +549,4 @@ standard = ["colorama (>=0.4)", "httptools (>=0.5.0)", "python-dotenv (>=0.13)",
 [metadata]
 lock-version = "2.0"
 python-versions = "^3.10"
-content-hash = "d9342caf222bb221b65b6559cae22da8c638e8026e8107b0a1655e1f085c32cd"
+content-hash = "a4e7f50ede65b9bbd205f56da933be8139af56101e0a9f2cd31e084777e54aa6"

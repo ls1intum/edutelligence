@@ -16,7 +16,7 @@ from .prompts.generate_file_grading_instructions import system_template as syste
 from .prompts.generate_file_problem_statements import system_template as system_template_problem_statements, human_template as human_template_problem_statements
 
 def generate_file_grading_instructions(exercise: Exercise):
-    grading_instructions = exercise.grading_instructions
+    grading_instructions = exercise.grading_instructions or ""
 
     solution_repo = exercise.get_solution_repository()
     template_repo = exercise.get_template_repository()

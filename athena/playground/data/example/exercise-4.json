@@ -12,117 +12,117 @@
   "submissions": [
     {
       "id": 401,
-      "content": "MVC test",
+      "text": "MVC test",
       "meta": {}
     },
     {
       "id": 402,
-      "content": "Bridge Pattern\nState Pattern\nComposite Pattern",
+      "text": "Bridge Pattern\nState Pattern\nComposite Pattern",
       "meta": {}
     },
     {
       "id": 403,
-      "content": "Bridge pattern, Strategy pattern, Singleton pattern",
+      "text": "Bridge pattern, Strategy pattern, Singleton pattern",
       "meta": {}
     },
     {
       "id": 404,
-      "content": "Builder\nPrototype\nScheduler",
+      "text": "Builder\nPrototype\nScheduler",
       "meta": {}
     },
     {
       "id": 405,
-      "content": "singleton pattern\nbuilder pattern\nobserver pattern\ncontainer pattern\n\n-----------\n\ncreational patterns\nstructural patterns\nbehavioral patterns",
+      "text": "singleton pattern\nbuilder pattern\nobserver pattern\ncontainer pattern\n\n-----------\n\ncreational patterns\nstructural patterns\nbehavioral patterns",
       "meta": {}
     },
     {
       "id": 406,
-      "content": "Visitor\nFactory\nInterpreter",
+      "text": "Visitor\nFactory\nInterpreter",
       "meta": {}
     },
     {
       "id": 407,
-      "content": "Creational pattern\nStructural pattern\nBehavioral pattern",
+      "text": "Creational pattern\nStructural pattern\nBehavioral pattern",
       "meta": {}
     },
     {
       "id": 408,
-      "content": "visitor pattern\ninterceptor pattern\ninterpreter pattern",
+      "text": "visitor pattern\ninterceptor pattern\ninterpreter pattern",
       "meta": {}
     },
     {
       "id": 409,
-      "content": "The three major categories are: structural, behavioral and creational patterns.",
+      "text": "The three major categories are: structural, behavioral and creational patterns.",
       "meta": {}
     },
     {
       "id": 410,
-      "content": "kjhkjhkjhkjhiuhbhhkhuhuh",
+      "text": "kjhkjhkjhkjhiuhbhhkhuhuh",
       "meta": {}
     },
     {
       "id": 411,
-      "content": "observer pattern, visitor pattern, interpreter pattern",
+      "text": "observer pattern, visitor pattern, interpreter pattern",
       "meta": {}
     },
     {
       "id": 412,
-      "content": "Behavioral, creational and structural.",
+      "text": "Behavioral, creational and structural.",
       "meta": {}
     },
     {
       "id": 413,
-      "content": "- Visitor pattern\n- Composite Pattern\n- Model View Controller (Presentator)",
+      "text": "- Visitor pattern\n- Composite Pattern\n- Model View Controller (Presentator)",
       "meta": {}
     },
     {
       "id": 414,
-      "content": "strategy, command, composite",
+      "text": "strategy, command, composite",
       "meta": {}
     },
     {
       "id": 415,
-      "content": "- Visitor pattern\n- Singleton pattern\n- Decorator pattern",
+      "text": "- Visitor pattern\n- Singleton pattern\n- Decorator pattern",
       "meta": {}
     },
     {
       "id": 416,
-      "content": "Observer Pattern\nFacade Pattern\nDecorator Pattern",
+      "text": "Observer Pattern\nFacade Pattern\nDecorator Pattern",
       "meta": {}
     },
     {
       "id": 417,
-      "content": "Observer Pattern\nAbstract Factory Pattern\nAdapter Pattern",
+      "text": "Observer Pattern\nAbstract Factory Pattern\nAdapter Pattern",
       "meta": {}
     },
     {
       "id": 418,
-      "content": "Singleton\nObserver\nFactory",
+      "text": "Singleton\nObserver\nFactory",
       "meta": {}
     },
     {
       "id": 419,
-      "content": "Kompositum-Pattern\nMVC-Pattern(Model-View-Controller)\nObserver-Pattern\n",
+      "text": "Kompositum-Pattern\nMVC-Pattern(Model-View-Controller)\nObserver-Pattern\n",
       "meta": {}
     },
     {
       "id": 420,
-      "content": "Proxy Pattern, Bridge Pattern, Observer Pattern",
+      "text": "Proxy Pattern, Bridge Pattern, Observer Pattern",
       "meta": {}
     },
     {
       "id": 1085082,
-      "content": "Visitor Pattern, Decorator Pattern, Dependency Injection",
+      "text": "Visitor Pattern, Decorator Pattern, Dependency Injection",
       "meta": {}
     },
     {
       "id": 1085103,
-      "content": "- Creational patterns\n- Structural patterns\n- Behavioral patterns",
+      "text": "- Creational patterns\n- Structural patterns\n- Behavioral patterns",
       "meta": {}
     },
     {
       "id": 1085105,
-      "content": "MVC, Blackboard, Bridge",
+      "text": "MVC, Blackboard, Bridge",
       "meta": {}
     }
   ]

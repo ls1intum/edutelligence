@@ -29,26 +29,27 @@ def select_submission(exercise: Exercise, submissions: List[Submission]) -> Subm
 
 
 @feedback_consumer
-def process_incoming_feedback(exercise: Exercise, submission: Submission, feedback: Feedback):
-    logger.info("process_feedback: Received feedback for submission %d of exercise %d", submission.id, exercise.id)
-    logger.info("process_feedback: Feedback: %s", feedback)
+def process_incoming_feedback(exercise: Exercise, submission: Submission, feedbacks: List[Feedback]):
+    logger.info("process_feedback: Received feedbacks for submission %d of exercise %d", submission.id, exercise.id)
+    logger.info("process_feedback: Feedbacks: %s", feedbacks)
 
-    if feedback.file_path is None or feedback.line_start is None:
-        logger.debug("Cannot process without knowledge about method.")
-        return
+    for feedback in feedbacks:
+        if feedback.file_path is None or feedback.line_start is None:
+            logger.debug("Feedback #%d: Cannot process without knowledge about method.", feedback.id)
+            continue
 
-    # find method that the feedback is on
-    code = submission.get_code(feedback.file_path)
-    methods = extract_methods(code)
-    feedback_method = None
-    for m in methods:
-        # method has to contain all feedback lines
-        if m.line_start <= feedback.line_start and m.line_end >= feedback.line_end:
-            feedback_method = m
-            break
+        # find method that the feedback is on
+        code = submission.get_code(feedback.file_path)
+        methods = extract_methods(code)
+        feedback_method = None
+        for m in methods:
+            # method has to contain all feedback lines
+            if m.line_start <= feedback.line_start and m.line_end >= feedback.line_end:
+                feedback_method = m
+                break
 
-    feedback.meta["method_name"] = feedback_method.name if feedback_method else None
-    store_feedback(feedback)
+        feedback.meta["method_name"] = feedback_method.name if feedback_method else None
+        store_feedback(feedback)
 
 
 @feedback_provider

@@ -12,6 +12,7 @@ python = "^3.10"
 prospector = "^1.10.2"
 assessment_module_manager = {path = "./assessment_module_manager", develop = true}
 athena = {path = "./athena", develop = true}
+log_viewer = {path = "./log_viewer", develop = true}
 module_example = {path = "./module_example", develop = true}
 module_programming_llm = {path = "./module_programming_llm", develop = true}
 module_text_llm = {path = "./module_text_llm", develop = true}

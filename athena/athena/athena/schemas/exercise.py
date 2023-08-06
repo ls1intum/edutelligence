@@ -1,4 +1,5 @@
 from abc import ABC
+from typing import Optional
 
 from pydantic import Field
 
@@ -18,12 +19,12 @@ class Exercise(Schema, ABC):
     bonus_points: float = Field(0.0, ge=0,
                                 description="The number of bonus points that can be achieved.",
                                 example=0.0)
-    grading_instructions: str = Field("", description="Markdown text that describes how the exercise is graded.",
+    grading_instructions: Optional[str] = Field(None, description="Markdown text that describes how the exercise is graded.",
                                       example="Give 1 point for each correct answer.")
     problem_statement: str = Field("", description="Markdown text that describes the problem statement.",
                                    example="Write a program that prints 'Hello World!'")
 
-    meta: dict = Field(example={"internal_id": "5"})
+    meta: dict = Field({}, example={"internal_id": "5"})
 
     class Config:
         orm_mode = True

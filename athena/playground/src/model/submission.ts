@@ -7,7 +7,7 @@ type SubmissionBase = {
 };
 
 export type TextSubmission = SubmissionBase & {
-  content: string;
+  text: string;
 };
 
 export type ProgrammingSubmission = SubmissionBase & {
@@ -21,5 +21,5 @@ export function isProgrammingSubmission(submission: Submission): submission is P
 }
 
 export function isTextSubmission(submission: Submission): submission is TextSubmission {
-  return (submission as TextSubmission).content !== undefined;
+  return (submission as TextSubmission).text !== undefined;
 }
