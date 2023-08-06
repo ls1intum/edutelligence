@@ -6,18 +6,32 @@ import { useEffect, useRef, useState } from "react";
 
 import ModuleAndConfigSelect from "@/components/selectors/module_and_config_select";
 
+export type ModuleConfiguration = {
+  id: string;
+  name: string;
+  moduleAndConfig: { module: ModuleMeta; moduleConfig: any };
+};
+
+type ConfigureModulesProps = {
+  experiment: Experiment;
+  moduleConfigurations: ModuleConfiguration[] | undefined;
+  onChangeModuleConfigurations: (
+    moduleConfigurations: ModuleConfiguration[] | undefined
+  ) => void;
+};
+
 export default function ConfigureModules({
   experiment,
-}: {
-  experiment: Experiment;
-}) {
-  const [moduleConfigurations, setModuleConfigurations] = useState<
+  moduleConfigurations,
+  onChangeModuleConfigurations,
+}: ConfigureModulesProps) {
+  const [moduleConfigurationsState, setModuleConfigurationsState] = useState<
     {
       id: string;
       name: string;
       moduleAndConfig: { module: ModuleMeta; moduleConfig: any } | undefined;
     }[]
-  >([]);
+  >(moduleConfigurations ?? []);
 
   const [disablePrev, setDisablePrev] = useState(true);
   const [disableNext, setDisableNext] = useState(false);
@@ -50,7 +64,7 @@ export default function ConfigureModules({
 
   useEffect(() => {
     checkScroll();
-  }, [moduleConfigurations]);
+  }, [moduleConfigurationsState]);
 
   useEffect(() => {
     if (!scrollRef.current) return;
@@ -59,10 +73,37 @@ export default function ConfigureModules({
     return () => scroll.removeEventListener("scroll", checkScroll);
   }, [scrollRef]);
 
+  const configurationsStatus = moduleConfigurationsState.map(
+    (moduleConfiguration) => {
+      const isModuleEmpty = moduleConfiguration.moduleAndConfig === undefined;
+      const isDuplicateName =
+        moduleConfigurationsState.filter(
+          (currentModuleConfiguration) =>
+            currentModuleConfiguration.name === moduleConfiguration.name
+        ).length > 1;
+      const isNameEmpty = moduleConfiguration.name === "";
+      return {
+        id: moduleConfiguration.id,
+        isValid: !isModuleEmpty && !isDuplicateName && !isNameEmpty,
+        isModuleEmpty,
+        isDuplicateName,
+        isNameEmpty,
+      };
+    }
+  );
+
   return (
     <div className="bg-white rounded-md p-4 mb-8 space-y-2">
       <div className="flex flex-row justify-between items-center">
+        <div className="flex flex-row items-center gap-2">
         <h3 className="text-2xl font-bold">Configure Modules</h3>
+        {configurationsStatus.some((status) => !status.isValid) && (
+          <span className="rounded-full bg-red-500 text-white px-2 py-0.5 text-xs">
+            {configurationsStatus.filter((status) => !status.isValid).length}{" "}
+            invalid
+          </span>
+        )}
+        </div>
         {/* Export */}
         {/* Import */}
         <div className="flex flex-row gap-2">
@@ -83,10 +124,10 @@ export default function ConfigureModules({
         </div>
       </div>
       <div
-        className="w-full flex gap-4 snap-x snap-mandatory overflow-x-auto max-h-[calc(100vh-6rem)] mb-1 pb-4"
+        className="w-full flex gap-4 snap-x snap-mandatory overflow-x-auto max-h-[calc(100vh-10rem)] mb-1 pb-4"
         ref={scrollRef}
       >
-        {moduleConfigurations?.map((moduleConfiguration, index) => (
+        {moduleConfigurationsState?.map((moduleConfiguration, index) => (
           <div
             key={moduleConfiguration.id}
             className="flex flex-col shrink-0 snap-start overflow-y-auto z-20"
@@ -97,39 +138,127 @@ export default function ConfigureModules({
                   <h4 className="text-lg font-bold">
                     Configuration {index + 1}
                   </h4>
-                  {moduleConfiguration.moduleAndConfig?.module.name ? (
-                    <span className="rounded-full bg-green-500 text-white px-2 py-0.5 text-xs">
-                      {moduleConfiguration.moduleAndConfig.module.name}
-                    </span>
-                  ) : (
-                    <span className="rounded-full bg-red-500 text-white px-2 py-0.5 text-xs">
-                      No module selected
-                    </span>
-                  )}
-                  {moduleConfiguration.name ? (
-                    moduleConfigurations.filter(
-                    (currentModuleConfiguration) =>
-                      currentModuleConfiguration.name ===
-                      moduleConfiguration.name
-                  ).length > 1 && (
-                    <span className="rounded-full bg-yellow-500 text-white px-2 py-0.5 text-xs">
-                      Duplicate module name
-                    </span>
-                  )
-                  ) : (
-                    <span className="rounded-full bg-yellow-500 text-white px-2 py-0.5 text-xs">
-                      No name
-                    </span>
-                  )}
+                  <div className="flex gap-1">
+                    {configurationsStatus[index].isValid ? (
+                      <span className="rounded-full bg-green-500 text-white px-2 py-0.5 text-xs">
+                        Valid
+                      </span>
+                    ) : (
+                      <span className="rounded-full bg-red-500 text-white px-2 py-0.5 text-xs">
+                        Invalid
+                      </span>
+                    )}
+                    {configurationsStatus[index].isModuleEmpty && (
+                      <span className="rounded-full bg-red-500 text-white px-2 py-0.5 text-xs">
+                        No module selected
+                      </span>
+                    )}
+                    {configurationsStatus[index].isNameEmpty ? (
+                      <span className="rounded-full bg-red-500 text-white px-2 py-0.5 text-xs">
+                        No name
+                      </span>
+                    ) : (
+                      configurationsStatus[index].isDuplicateName && (
+                        <span className="rounded-full bg-red-500 text-white px-2 py-0.5 text-xs">
+                          Duplicate module name
+                        </span>
+                      )
+                    )}
+                  </div>
                 </div>
                 <div className="flex gap-2 mb-2">
                   <input
                     type="text"
+                    disabled={moduleConfigurations !== undefined}
                     placeholder="Configuration name"
-                    className="w-full rounded-md p-2 border border-gray-300"
+                    className="w-full rounded-md p-2 border border-gray-300 disabled:bg-gray-100 disabled:cursor-not-allowed"
                     value={moduleConfiguration.name}
                     onChange={(e) => {
-                      const newModuleConfigurations = moduleConfigurations?.map(
+                      const newModuleConfigurations =
+                        moduleConfigurationsState?.map(
+                          (currentModuleConfiguration) => {
+                            if (
+                              currentModuleConfiguration.id ===
+                              moduleConfiguration.id
+                            ) {
+                              return {
+                                ...currentModuleConfiguration,
+                                name: e.target.value,
+                              };
+                            }
+                            return currentModuleConfiguration;
+                          }
+                        );
+                      setModuleConfigurationsState(newModuleConfigurations);
+                    }}
+                  />
+                  {moduleConfigurations === undefined && (
+                    <>
+                      <button
+                        onClick={() => {
+                          let newName = `${moduleConfiguration.name} (copy)`;
+                          let num = 1;
+                          while (
+                            moduleConfigurationsState.filter(
+                              (currentModuleConfiguration) =>
+                                currentModuleConfiguration.name === newName
+                            ).length > 0
+                          ) {
+                            newName = `${moduleConfiguration.name} (copy ${num})`;
+                          }
+
+                          const newModuleConfiguration = {
+                            ...moduleConfiguration,
+                            id: uuidv4(),
+                            name: newName,
+                          };
+                          // insert after current index
+                          const newModuleConfigurations = [
+                            ...moduleConfigurationsState.slice(0, index + 1),
+                            newModuleConfiguration,
+                            ...moduleConfigurationsState.slice(index + 1),
+                          ];
+                          setModuleConfigurationsState(newModuleConfigurations);
+                          slide("next");
+                        }}
+                        className="bg-primary-500 text-white rounded-md p-2 hover:bg-primary-600"
+                      >
+                        Duplicate
+                      </button>
+                      <button
+                        onClick={() => {
+                          if (confirm("Are you sure you want to delete?")) {
+                            const newModuleConfigurations =
+                              moduleConfigurationsState?.filter(
+                                (currentModuleConfiguration) => {
+                                  return (
+                                    currentModuleConfiguration.id !==
+                                    moduleConfiguration.id
+                                  );
+                                }
+                              );
+                            setModuleConfigurationsState(
+                              newModuleConfigurations
+                            );
+                            slide("prev");
+                          }
+                        }}
+                        className="bg-red-500 text-white rounded-md p-2 hover:bg-red-600"
+                      >
+                        Delete
+                      </button>
+                    </>
+                  )}
+                </div>
+              </div>
+              <div className="px-2">
+                <ModuleAndConfigSelect
+                  disabled={moduleConfigurations !== undefined}
+                  exerciseType={experiment.exerciseType}
+                  moduleAndConfig={moduleConfiguration.moduleAndConfig}
+                  onChangeModuleAndConfig={(newModuleAndConfig) => {
+                    const newModuleConfigurations =
+                      moduleConfigurationsState?.map(
                         (currentModuleConfiguration) => {
                           if (
                             currentModuleConfiguration.id ===
@@ -137,87 +266,13 @@ export default function ConfigureModules({
                           ) {
                             return {
                               ...currentModuleConfiguration,
-                              name: e.target.value,
+                              moduleAndConfig: newModuleAndConfig,
                             };
                           }
                           return currentModuleConfiguration;
                         }
                       );
-                      setModuleConfigurations(newModuleConfigurations);
-                    }}
-                  />
-                  <button
-                    onClick={() => {
-                      let newName =  `${moduleConfiguration.name} (copy)`;
-                      let num = 1;
-                      while (moduleConfigurations.filter(
-                        (currentModuleConfiguration) =>
-                          currentModuleConfiguration.name ===
-                          newName
-                      ).length > 0) {
-                        newName = `${moduleConfiguration.name} (copy ${num})`;
-                      }
-
-                      const newModuleConfiguration = {
-                        ...moduleConfiguration,
-                        id: uuidv4(),
-                        name: newName,
-                      };
-                      // insert after current index
-                      const newModuleConfigurations = [
-                        ...moduleConfigurations.slice(0, index + 1),
-                        newModuleConfiguration,
-                        ...moduleConfigurations.slice(index + 1),
-                      ];
-                      setModuleConfigurations(newModuleConfigurations);
-                      slide("next");
-                    }}
-                    className="bg-primary-500 text-white rounded-md p-2 hover:bg-primary-600"
-                  >
-                    Duplicate
-                  </button>
-                  <button
-                    onClick={() => {
-                      if (confirm("Are you sure you want to delete?")) {
-                        const newModuleConfigurations =
-                          moduleConfigurations?.filter(
-                            (currentModuleConfiguration) => {
-                              return (
-                                currentModuleConfiguration.id !==
-                                moduleConfiguration.id
-                              );
-                            }
-                          );
-                        setModuleConfigurations(newModuleConfigurations);
-                        slide("prev");
-                      }
-                    }}
-                    className="bg-red-500 text-white rounded-md p-2 hover:bg-red-600"
-                  >
-                    Delete
-                  </button>
-                </div>
-              </div>
-              <div className="px-2">
-                <ModuleAndConfigSelect
-                  exerciseType={experiment.exerciseType}
-                  moduleAndConfig={moduleConfiguration.moduleAndConfig}
-                  onChangeModuleAndConfig={(newModuleAndConfig) => {
-                    const newModuleConfigurations = moduleConfigurations?.map(
-                      (currentModuleConfiguration) => {
-                        if (
-                          currentModuleConfiguration.id ===
-                          moduleConfiguration.id
-                        ) {
-                          return {
-                            ...currentModuleConfiguration,
-                            moduleAndConfig: newModuleAndConfig,
-                          };
-                        }
-                        return currentModuleConfiguration;
-                      }
-                    );
-                    setModuleConfigurations(newModuleConfigurations);
+                    setModuleConfigurationsState(newModuleConfigurations);
                   }}
                 />
               </div>
@@ -229,14 +284,14 @@ export default function ConfigureModules({
             <button
               onClick={() => {
                 const newModuleConfigurations = [
-                  ...moduleConfigurations,
+                  ...moduleConfigurationsState,
                   {
                     id: uuidv4(),
                     name: "",
                     moduleAndConfig: undefined,
                   },
                 ];
-                setModuleConfigurations(newModuleConfigurations);
+                setModuleConfigurationsState(newModuleConfigurations);
               }}
               className="h-32 w-full p-2 border-2 border-primary-400 border-dashed text-primary-500 hover:text-primary-600 hover:bg-primary-50 hover:border-primary-500 rounded-lg font-medium"
             >
@@ -244,6 +299,45 @@ export default function ConfigureModules({
             </button>
           </div>
         </div>
+      </div>
+      <div className="flex flex-row gap-2">
+        <button
+          className="bg-primary-500 text-white rounded-md p-2 mt-2 hover:bg-primary-600 disabled:text-gray-500 disabled:bg-gray-200 disabled:cursor-not-allowed"
+          disabled={
+            moduleConfigurations !== undefined ||
+            moduleConfigurationsState.length === 0 ||
+            configurationsStatus.some(
+              (configurationStatus) => !configurationStatus.isValid
+            )
+          }
+          onClick={() => {
+            if (
+              configurationsStatus.every(
+                (configurationStatus) => configurationStatus.isValid
+              )
+            ) {
+              onChangeModuleConfigurations(
+                moduleConfigurationsState as ModuleConfiguration[]
+              );
+            }
+          }}
+        >
+          {(moduleConfigurations?.length ?? 0) > 0
+            ? "Module Configurations Defined"
+            : "Define Module Configurations"}
+        </button>
+        {moduleConfigurations && (
+          <button
+            className="bg-red-500 text-white rounded-md p-2 mt-2 hover:bg-red-600"
+            onClick={() => {
+              if (moduleConfigurations && confirm("Cancel experiment?")) {
+                onChangeModuleConfigurations(undefined);
+              }
+            }}
+          >
+            Cancel
+          </button>
+        )}
       </div>
     </div>
   );

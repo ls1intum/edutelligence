@@ -244,12 +244,12 @@ export default function DefineExperiment({
           <button
             className="bg-red-500 text-white rounded-md p-2 mt-2 hover:bg-red-600"
             onClick={() => {
-              if (definedExperiment && confirm("Cancel experiment?")) {
+              if (experiment && confirm("Cancel experiment?")) {
                 onChangeExperiment(undefined);
               }
             }}
           >
-            Cancel Experiment
+            Cancel
           </button>
         )}
       </div>

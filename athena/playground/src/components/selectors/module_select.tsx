@@ -2,12 +2,14 @@ import type { ModuleMeta } from "@/model/health_response";
 import useHealth from "@/hooks/health";
 
 type ModuleSelectProps = {
+  disabled?: boolean;
   exerciseType?: string;
   module: ModuleMeta | undefined;
   onChange: (module: ModuleMeta) => void;
 }
 
 export default function ModuleSelect({
+  disabled,
   exerciseType,
   module,
   onChange,
@@ -19,7 +21,8 @@ export default function ModuleSelect({
     <label className="flex flex-col">
       <span className="text-lg font-bold">Module</span>
       <select
-        className="border border-gray-300 rounded-md p-2"
+        disabled={disabled}
+        className="border border-gray-300 rounded-md p-2 disabled:opacity-50"
         value={module?.name ?? ""}
         onChange={(e) => onChange(data.modules[e.target.value])}
       >

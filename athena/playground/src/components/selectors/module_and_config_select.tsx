@@ -8,6 +8,7 @@ import ModuleSelect from "@/components/selectors/module_select";
 import ModuleConfigSelect from "@/components/selectors/module_config_select";
 
 type ModuleConfigProps = {
+  disabled?: boolean;
   module: ModuleMeta;
   moduleConfig: any;
   onChangeConfig: (newConfig: any) => void;
@@ -16,6 +17,7 @@ type ModuleConfigProps = {
 };
 
 function ModuleConfig({
+  disabled,
   module,
   moduleConfig,
   onChangeConfig,
@@ -67,6 +69,7 @@ function ModuleConfig({
             (collapsibleConfig ? (
               <Disclosure title="Configuration" openedInitially>
                 <ModuleConfigSelect
+                  disabled={disabled}
                   module={module}
                   moduleConfig={moduleConfig}
                   onChangeConfig={onChangeConfig}
@@ -74,6 +77,7 @@ function ModuleConfig({
               </Disclosure>
             ) : (
               <ModuleConfigSelect
+                disabled={disabled}
                 module={module}
                 moduleConfig={moduleConfig}
                 onChangeConfig={onChangeConfig}
@@ -91,6 +95,7 @@ type ModuleAndConfig = {
 };
 
 type ModuleAndConfigSelectProps = {
+  disabled?: boolean;
   exerciseType?: string;
   showOverrideCheckbox?: boolean;
   collapsibleConfig?: boolean;
@@ -99,6 +104,7 @@ type ModuleAndConfigSelectProps = {
 };
 
 export default function ModuleAndConfigSelect({
+  disabled,
   exerciseType,
   showOverrideCheckbox,
   collapsibleConfig,
@@ -108,6 +114,7 @@ export default function ModuleAndConfigSelect({
   return (
     <>
       <ModuleSelect
+        disabled={disabled}
         exerciseType={exerciseType}
         module={moduleAndConfig?.module}
         onChange={(newModule) => {
@@ -123,6 +130,7 @@ export default function ModuleAndConfigSelect({
           moduleConfig={moduleAndConfig.moduleConfig}
         >
           <ModuleConfig
+            disabled={disabled}
             showOverrideCheckbox={showOverrideCheckbox}
             collapsibleConfig={collapsibleConfig}
             module={moduleAndConfig.module}
