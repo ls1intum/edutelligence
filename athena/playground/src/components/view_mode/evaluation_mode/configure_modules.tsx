@@ -5,6 +5,7 @@ import { v4 as uuidv4 } from "uuid";
 import { useEffect, useRef, useState } from "react";
 
 import ModuleAndConfigSelect from "@/components/selectors/module_and_config_select";
+import { twMerge } from "tailwind-merge";
 
 export type ModuleConfiguration = {
   id: string;
@@ -92,21 +93,92 @@ export default function ConfigureModules({
     }
   );
 
+  const handleExport = () => {
+    moduleConfigurationsState.forEach((config, index) => {
+      setTimeout(() => {
+        const blob = new Blob([JSON.stringify(config, null, 2)], {
+          type: "text/json",
+        });
+        const url = window.URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        let name = config.name.toLowerCase().replace(/\s+/g, "_");
+        name = name.replace(/[\\/:"*?<>|]+/g, "").replace(/_+/g, "_");
+        link.download = `module_config_${name}.json`;
+        link.click();
+        window.URL.revokeObjectURL(url);
+      }, index * 1000);
+    });
+  };
+
   return (
     <div className="bg-white rounded-md p-4 mb-8 space-y-2">
       <div className="flex flex-row justify-between items-center">
         <div className="flex flex-row items-center gap-2">
-        <h3 className="text-2xl font-bold">Configure Modules</h3>
-        {configurationsStatus.some((status) => !status.isValid) && (
-          <span className="rounded-full bg-red-500 text-white px-2 py-0.5 text-xs">
-            {configurationsStatus.filter((status) => !status.isValid).length}{" "}
-            invalid
-          </span>
-        )}
+          <h3 className="text-2xl font-bold">Configure Modules</h3>
+          {configurationsStatus.some((status) => !status.isValid) && (
+            <span className="rounded-full bg-red-500 text-white px-2 py-0.5 text-xs">
+              {configurationsStatus.filter((status) => !status.isValid).length}{" "}
+              invalid
+            </span>
+          )}
         </div>
-        {/* Export */}
-        {/* Import */}
         <div className="flex flex-row gap-2">
+          {configurationsStatus.every((status) => status.isValid) &&
+            configurationsStatus.length > 0 && (
+              <button
+                className="rounded-md p-2 text-primary-500 hover:text-primary-600 hover:bg-gray-100 hover:no-underline"
+                onClick={handleExport}
+              >
+                Export
+              </button>
+            )}
+          <label
+            className={twMerge(
+              "rounded-md p-2",
+              moduleConfigurations !== undefined
+                ? "text-gray-500 cursor-not-allowed"
+                : "text-primary-500 hover:text-primary-600 hover:bg-gray-100"
+            )}
+          >
+            Import
+            <input
+              multiple
+              disabled={moduleConfigurations !== undefined}
+              className="hidden"
+              type="file"
+              onChange={(e) => {
+                if (!e.target.files) return;
+
+                Array.from(e.target.files).forEach((file) => {
+                  const reader = new FileReader();
+                  reader.onload = (e) => {
+                    if (e.target && typeof e.target.result === "string") {
+                      const moduleConfiguration = JSON.parse(
+                        e.target.result
+                      ) as ModuleConfiguration;
+                      const existingConfiguration =
+                        moduleConfigurationsState.find(
+                          (config) => config.id === moduleConfiguration.id
+                        );
+                      if (!existingConfiguration) {
+                        setModuleConfigurationsState((prevState) => [
+                          ...prevState,
+                          moduleConfiguration,
+                        ]);
+                        alert(`Imported ${moduleConfiguration.name}`);
+                      } else {
+                        alert(
+                          `Module configuration with id: ${existingConfiguration.id} and name: ${existingConfiguration.name} already exists`
+                        );
+                      }
+                    }
+                  };
+                  reader.readAsText(file);
+                });
+              }}
+            />
+          </label>
           <button
             onClick={() => slide("prev")}
             disabled={disablePrev}
@@ -279,30 +351,37 @@ export default function ConfigureModules({
             </div>
           </div>
         ))}
-        <div className="flex flex-col shrink-0 snap-start">
-          <div className="shrink-0 w-[calc(50vw-8rem)] px-2">
-            <button
-              onClick={() => {
-                const newModuleConfigurations = [
-                  ...moduleConfigurationsState,
-                  {
-                    id: uuidv4(),
-                    name: "",
-                    moduleAndConfig: undefined,
-                  },
-                ];
-                setModuleConfigurationsState(newModuleConfigurations);
-              }}
-              className="h-32 w-full p-2 border-2 border-primary-400 border-dashed text-primary-500 hover:text-primary-600 hover:bg-primary-50 hover:border-primary-500 rounded-lg font-medium"
-            >
-              Add configuration
-            </button>
+        {moduleConfigurations === undefined && (
+          <div className="flex flex-col shrink-0 snap-start">
+            <div className="shrink-0 w-[calc(50vw-8rem)] px-2">
+              <button
+                onClick={() => {
+                  const newModuleConfigurations = [
+                    ...moduleConfigurationsState,
+                    {
+                      id: uuidv4(),
+                      name: "",
+                      moduleAndConfig: undefined,
+                    },
+                  ];
+                  setModuleConfigurationsState(newModuleConfigurations);
+                }}
+                className="h-32 w-full p-2 border-2 border-primary-400 border-dashed text-primary-500 hover:text-primary-600 hover:bg-primary-50 hover:border-primary-500 rounded-lg font-medium"
+              >
+                Add configuration
+              </button>
+            </div>
           </div>
-        </div>
+        )}
       </div>
       <div className="flex flex-row gap-2">
         <button
-          className="bg-primary-500 text-white rounded-md p-2 mt-2 hover:bg-primary-600 disabled:text-gray-500 disabled:bg-gray-200 disabled:cursor-not-allowed"
+          className={twMerge(
+            "bg-primary-500 text-white rounded-md p-2 mt-2 hover:bg-primary-600 disabled:cursor-not-allowed",
+            (moduleConfigurations?.length ?? 0) > 0
+              ? "disabled:bg-green-100 disabled:text-green-600"
+              : "disabled:text-gray-500 disabled:bg-gray-200"
+          )}
           disabled={
             moduleConfigurations !== undefined ||
             moduleConfigurationsState.length === 0 ||
@@ -323,8 +402,8 @@ export default function ConfigureModules({
           }}
         >
           {(moduleConfigurations?.length ?? 0) > 0
-            ? "Module Configurations Defined"
-            : "Define Module Configurations"}
+            ? "Configurations Defined"
+            : "Define Configurations"}
         </button>
         {moduleConfigurations && (
           <button

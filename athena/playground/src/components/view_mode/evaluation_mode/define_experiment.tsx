@@ -46,10 +46,16 @@ export default function DefineExperiment({
 }: DefineExperimentProps) {
   const baseInfoDispatch = useBaseInfoDispatch();
   const { dataMode } = useBaseInfo();
-  const [exerciseType, setExerciseType] = useState<string | undefined>(undefined);
+  const [exerciseType, setExerciseType] = useState<string | undefined>(
+    undefined
+  );
   const [exercise, setExercise] = useState<Exercise | undefined>(undefined);
-  const [executionMode, setExecutionMode] = useState<ExecutionMode | undefined>(undefined);
-  const [experimentSubmissions, setExperimentSubmissions] = useState<ExperimentSubmissions | undefined>(undefined);
+  const [executionMode, setExecutionMode] = useState<ExecutionMode | undefined>(
+    undefined
+  );
+  const [experimentSubmissions, setExperimentSubmissions] = useState<
+    ExperimentSubmissions | undefined
+  >(undefined);
   const [isImporting, setIsImporting] = useState<boolean>(false);
 
   useEffect(() => {
@@ -154,7 +160,7 @@ export default function DefineExperiment({
         <div className="flex flex-row">
           {definedExperiment && (
             <a
-              className="rounded-md p-2 mt-2 text-primary-500 hover:text-primary-600 hover:bg-gray-100 hover:no-underline"
+              className="rounded-md p-2 text-primary-500 hover:text-primary-600 hover:bg-gray-100 hover:no-underline"
               href={`data:text/json;charset=utf-8,${encodeURIComponent(
                 JSON.stringify(getExperimentExport(definedExperiment), null, 2)
               )}`}
@@ -165,7 +171,7 @@ export default function DefineExperiment({
           )}
           <label
             className={twMerge(
-              "rounded-md p-2 mt-2",
+              "rounded-md p-2",
               isImporting || experiment !== undefined
                 ? "text-gray-500 cursor-not-allowed"
                 : "text-primary-500 hover:text-primary-600 hover:bg-gray-100"
@@ -230,7 +236,12 @@ export default function DefineExperiment({
       )}
       <div className="flex flex-row gap-2">
         <button
-          className="bg-primary-500 text-white rounded-md p-2 mt-2 hover:bg-primary-600 disabled:text-gray-500 disabled:bg-gray-200 disabled:cursor-not-allowed"
+          className={twMerge(
+            "bg-primary-500 text-white rounded-md p-2 mt-2 hover:bg-primary-600 disabled:text-gray-500 disabled:bg-gray-200 disabled:cursor-not-allowed",
+            experiment
+              ? "disabled:bg-green-100 disabled:text-green-600"
+              : "disabled:text-gray-500 disabled:bg-gray-200"
+          )}
           disabled={!definedExperiment || experiment !== undefined}
           onClick={() => {
             if (definedExperiment) {

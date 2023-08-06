@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { FullScreen, useFullScreenHandle } from "react-full-screen";
 
 import ExerciseDetail from "@/components/details/exercise_detail";
-import ModuleSelectAndConfig from "../module_requests/module_select_and_config";
+import ModuleSelectAndConfig from "@/components/selectors/module_and_config_select";
 import { Experiment } from "./define_experiment";
 import RunModuleExperiment from "./run_module_experiment";
 import ExperimentSubmissions from "./experiment_submissions";
@@ -99,7 +99,7 @@ export default function ConductExperiment({
               className="flex flex-col shrink-0 snap-start overflow-y-auto"
             >
               <div className="shrink-0 w-[calc(50vw-2rem)] px-2">
-                <ModuleSelectAndConfig exerciseType={experiment.exercise.type}>
+                <ModuleSelectAndConfig exerciseType={experiment.exercise.type} disabled>
                   <RunModuleExperiment experiment={experiment} />
                 </ModuleSelectAndConfig>
               </div>
