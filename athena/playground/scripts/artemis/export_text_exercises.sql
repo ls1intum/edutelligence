@@ -1,15 +1,12 @@
-DROP VIEW IF EXISTS relevant_text_exercises;
+-- Drop temporary tables if they exist
+DROP TEMPORARY TABLE IF EXISTS temp_course_exercises;
+DROP TEMPORARY TABLE IF EXISTS temp_exam_exercises;
+DROP TEMPORARY TABLE IF EXISTS relevant_text_exercises;
+DROP TEMPORARY TABLE IF EXISTS latest_rated_text_results;
+DROP TEMPORARY TABLE IF EXISTS latest_rated_text_submissions;
 
-/*
- * All relevant text exercises
- * 
- * Relevant ones are:
- *  - Text exercises
- * 	- Not part of a test course
- *  - Influencing the grade
- *  - OR is an exam exercise of a non-test exam
- */
-CREATE VIEW relevant_text_exercises AS -- Select course exercises
+-- Create temporary table for relevant course exercises
+CREATE TEMPORARY TABLE temp_course_exercises AS
 SELECT
   DISTINCT e.id,
   c.id AS course_id,
@@ -17,15 +14,15 @@ SELECT
 FROM
   exercise e
   JOIN course c ON e.course_id = c.id
-  JOIN participation p ON p.exercise_id = e.id
-  JOIN result r ON r.participation_id = p.id
 WHERE
   e.discriminator = 'T'
   AND c.test_course = 0
+  and c.id <> 39 -- tutorial course
   AND e.included_in_overall_score <> 'NOT_INCLUDED'
-  AND e.course_id is not NULL
-UNION
--- Select exam exercises
+  AND e.course_id is not NULL;
+
+-- Create temporary table for relevant exam exercises
+CREATE TEMPORARY TABLE temp_exam_exercises AS
 SELECT
   DISTINCT e.id,
   c.id AS course_id,
@@ -38,6 +35,7 @@ FROM
 WHERE
   e.discriminator = 'T'
   AND c.test_course = 0
+  and c.id <> 39 -- tutorial course
   AND e.included_in_overall_score <> 'NOT_INCLUDED'
   AND e.course_id is NULL
   AND ex.course_id = c.id
@@ -45,8 +43,47 @@ WHERE
   AND eg.exam_id = ex.id
   AND e.exercise_group_id = eg.id;
 
-SET
-  SESSION group_concat_max_len = 1000000;
+-- Combine temp tables to form relevant_text_exercises
+CREATE TEMPORARY TABLE relevant_text_exercises AS
+SELECT * FROM temp_course_exercises
+UNION
+SELECT * FROM temp_exam_exercises;
+
+-- Create temporary table for latest rated text results
+CREATE TEMPORARY TABLE latest_rated_text_results as
+select r.* 
+from result r
+join (
+	select 
+		r1.participation_id,
+		r1.submission_id,
+		MAX(r1.completion_date) as latest_completion_date
+	from relevant_text_exercises te
+	join participation p on p.exercise_id = te.id 
+	join result r1 on r1.participation_id = p.id
+	join submission s on r1.submission_id = s.id
+	where r1.rated = 1 and s.submitted = 1 and s.`text` IS NOT NULL AND TRIM(s.`text`) <> ''
+	group by r1.participation_id, r1.submission_id
+) r1 on r1.participation_id = r.participation_id and r1.submission_id = r.submission_id and r1.latest_completion_date = r.completion_date;
+
+-- Create temporary table for latest rated text submissions
+CREATE TEMPORARY TABLE latest_rated_text_submissions as
+select s.*
+from submission s 
+join (
+	select 
+	    s1.participation_id,
+	    MAX(s1.submission_date) as latest_submission
+	from relevant_text_exercises te
+	join participation p on p.exercise_id = te.id  
+	join latest_rated_text_results r on r.participation_id = p.id
+	join submission s1 on r.submission_id = s1.id 
+	where s1.submitted = 1 and r.rated = 1 and s1.`text` IS NOT NULL AND TRIM(s1.`text`) <> ''
+	group by s1.participation_id
+) s1 on s1.participation_id = s.participation_id and s1.latest_submission = s.submission_date;
+
+-- Make sure we don't run into the group_concat_max_len limit
+SET SESSION group_concat_max_len = 1000000;
 
 -- Exercise export for playground
 SELECT
@@ -118,8 +155,8 @@ SELECT
     JSON_ARRAYAGG(
       JSON_OBJECT(
         'id',
-        s.id,
-        'content',
+        p.id,
+        'text',
         s.`text`,
         'student_id',
         p.student_id,
@@ -133,14 +170,29 @@ SELECT
                 'id',
                 f.id,
                 'description',
-                f.detail_text,
+                CASE 
+                   WHEN f.detail_text <> '' AND gi.feedback <> '' THEN CONCAT(gi.feedback, '\n\n', f.detail_text)
+                   WHEN gi.feedback <> '' THEN gi.feedback
+                   ELSE COALESCE(f.detail_text, '')
+                END,
                 'title',
-                COALESCE(f.text, ''),
-                -- Might remove fallback in the future
+                CASE 
+                  WHEN f.text <> '' AND gc.title <> '' THEN CONCAT(f.text, '\n', gc.title)
+                  WHEN f.text <> '' THEN f.text
+                  ELSE COALESCE(gc.title, '')
+                END,
                 'index_start',
-                tb.start_index,
+                CASE
+                  WHEN tb.start_index IS NOT NULL AND tb.start_index > 0 THEN tb.start_index - 1
+                  ELSE 0
+                END,
                 'index_end',
-                tb.end_index,
+                CASE
+                  WHEN tb.end_index IS NOT NULL AND tb.end_index > 0 THEN tb.end_index - 1
+                  ELSE 0
+                END,
+                'grading_instruction_id',
+                f.grading_instruction_id,
                 'credits',
                 f.credits,
                 'type',
@@ -150,11 +202,12 @@ SELECT
               )
             )
           from
-            `result` r
-            join feedback f on f.result_id = r.id
-            left join text_block tb on f.reference = tb.id
+            feedback f
+            left join text_block tb on tb.feedback_id = f.id
+            left join grading_instruction gi on f.grading_instruction_id = gi.id
+            left join grading_criterion gc on gi.grading_criterion_id  = gc.id
           where
-            r.participation_id = p.id
+            f.result_id = r.id
         )
       )
     )
@@ -163,12 +216,12 @@ from
   relevant_text_exercises te
   join exercise e on te.id = e.id
   join course c on te.course_id = c.id
-  join participation p on p.exercise_id = e.id
-  join submission s on s.participation_id = p.id
+  join participation p on p.exercise_id = te.id
+  join latest_rated_text_submissions s on s.participation_id = p.id
+  join latest_rated_text_results r on r.submission_id = s.id
 WHERE
   e.id IN :exercise_ids
   and s.`text` is not null
-  and s.submitted = 1
 GROUP BY
   te.id,
   te.course_id;

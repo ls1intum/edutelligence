@@ -1,33 +1,67 @@
 {
-  "iPraktikum On-Site Intro Course": {
-    "course_id": 208,
-    "semester": "WS22/23",
+  "Einführung in die Rechnerarchitektur (WS20/21)": {
+    "semester": "WS20/21",
+    "course_id": 86,
+    "exercises": [
+      { "id": 2111, "title": "H02 - Festkommarechnung", "is_exam_exercise": 0 },
+      {
+        "id": 2610,
+        "title": "P01 - Raycasting mit Festkommazahlen",
+        "is_exam_exercise": 0
+      },
+      { "id": 3187, "title": "P02 - Taschenrechner", "is_exam_exercise": 0 },
+      { "id": 2104, "title": "H03 - Grafikspeicher", "is_exam_exercise": 0 },
+      { "id": 3781, "title": "Ampelsteuerung", "is_exam_exercise": 1 },
+      { "id": 3782, "title": "ASM Backpack", "is_exam_exercise": 1 }
+    ]
+  },
+  "Functional Programming and Verification (WS20/21)": {
+    "semester": "SS21",
+    "course_id": 87,
+    "exercises": [
+      { "id": 3693, "title": "Shapes", "is_exam_exercise": 1 },
+      { "id": 3942, "title": "Expressions", "is_exam_exercise": 1 }
+    ]
+  },
+  "Erstklausur zur Einführung in die Informatik 1 WS20/21": {
+    "semester": "WS20/21",
+    "course_id": 104,
     "exercises": [
       {
-        "id": 7883,
-        "title": "Homework - Swift 2 - Travel Agency"
+        "id": 3184,
+        "title": "Objektorientierung mit Verkehrsmitteln",
+        "is_exam_exercise": 1
       },
       {
-        "id": 8056,
-        "title": "Homework - App 2 - BirthdayTracker"
-      },
-      {
-        "id": 7923,
-        "title": "Homework - App 3 - TODOList"
-      },
-      {
-        "id": 7874,
-        "title": "Homework - Swift 1 - Course and Developer"
-      },
-      { "id": 8058, "title": "Homework - App 1 - CVApp" },
-      {
-        "id": 7814,
-        "title": "Homework - Swift 3 - User Manager"
-      },
-      {
-        "id": 7907,
-        "title": "Homework - Swift 4 - ReminderServer"
+        "id": 3185,
+        "title": "Objektorientierung mit Transportmitteln",
+        "is_exam_exercise": 1
       }
+    ]
+  },
+  "Nachklausur zum Praktikum: Grundlagen der Programmierung WS20/21": {
+    "semester": "WS20/21",
+    "course_id": 125,
+    "exercises": [
+      { "id": 3914, "title": "Konsumierende Eisbaeren", "is_exam_exercise": 1 },
+      { "id": 3908, "title": "Aktor-Threads", "is_exam_exercise": 1 },
+      { "id": 3913, "title": "Shoppende Pinguine", "is_exam_exercise": 1 }
+    ]
+  },
+  "Security Engineering (IN2178) SS21": {
+    "semester": "SS21",
+    "course_id": 130,
+    "exercises": [
+      { "id": 4864, "title": "Free Shipment", "is_exam_exercise": 1 },
+      { "id": 4896, "title": "Free Delivery", "is_exam_exercise": 1 }
+    ]
+  },
+  "Exam: Functional Programming and Verification (IN0003) WS 21/22": {
+    "semester": "WS21/22",
+    "course_id": 167,
+    "exercises": [
+      { "id": 6433, "title": "Interpreters", "is_exam_exercise": 1 },
+      { "id": 6344, "title": "Textline Editor", "is_exam_exercise": 1 }
     ]
   }
 }
