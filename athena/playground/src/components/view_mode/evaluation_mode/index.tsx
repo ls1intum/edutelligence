@@ -29,7 +29,6 @@ export default function EvaluationMode() {
             moduleConfigurations={moduleConfigurations}
             onChangeModuleConfigurations={setModuleConfigurations}
           />
-          )
           {moduleConfigurations && (
             <ConductExperiment
               experiment={experiment}

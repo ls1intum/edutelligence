@@ -33,8 +33,7 @@ export default function ConductExperiment({
   const handle = useFullScreenHandle();
 
   return (
-    <FullScreen handle={handle}>
-      <div className="bg-white rounded-md p-4 space-y-2">
+    <FullScreen handle={handle} className="bg-white rounded-md p-4 mb-8 space-y-2 h-[calc(100vh-4rem)]">
         <div className="flex flex-row justify-between items-center">
           <h3 className="text-2xl font-bold">Conduct Experiment</h3>
           <button
@@ -87,7 +86,6 @@ export default function ConductExperiment({
             </div>
           ))}
         </div>
-      </div>
     </FullScreen>
   );
 }
