@@ -61,10 +61,15 @@ export default function ConductExperiment({
         key={experiment.exercise.id}
       >
         <div className="flex flex-col shrink-0 snap-start overflow-y-auto z-20">
-          <div className="sticky top-0 bg-white border-b border-gray-300 z-10 px-2">
-            <h4 className="text-lg font-bold">Exercise Details</h4>
-          </div>
-          <div className="shrink-0 w-[calc(50vw-2rem)] pr-2">
+          <div
+            className={twMerge(
+              "shrink-0 pr-2",
+              handle.active ? "w-[calc(50vw-1.5rem)]" : "w-[calc(50vw-7.5rem)]"
+            )}
+          >
+            <div className="sticky top-0 bg-white border-b border-gray-300 z-10 px-2">
+              <h4 className="text-lg font-bold">Exercise Details</h4>
+            </div>
             <ExerciseDetail
               exercise={experiment.exercise}
               hideDisclosure
@@ -73,17 +78,41 @@ export default function ConductExperiment({
           </div>
         </div>
         <div className="flex flex-col shrink-0 snap-start overflow-y-auto">
-          <div className="shrink-0 w-[calc(50vw-2rem)] pr-2">
+          <div
+            className={twMerge(
+              "shrink-0 pr-2",
+              handle.active ? "w-[calc(50vw-1.5rem)]" : "w-[calc(50vw-7.5rem)]"
+            )}
+          >
+            <div className="sticky top-0 bg-white border-b border-gray-300 z-10 px-2">
+              <h4 className="text-lg font-bold">Tutor Feedback</h4>
+            </div>
             <ExperimentSubmissions experiment={experiment} />
           </div>
         </div>
-
         {moduleConfigurations.map((moduleConfiguration) => (
           <div
             key={moduleConfiguration.id}
             className="flex flex-col shrink-0 snap-start overflow-y-auto"
           >
-            <div className="shrink-0 w-[calc(50vw-2rem)] px-2">
+            <div
+              className={twMerge(
+                "shrink-0 pr-2",
+                handle.active ? "w-[calc(50vw-1.5rem)]" : "w-[calc(50vw-7.5rem)]"
+              )}
+            >
+              <div className="sticky top-0 bg-white border-b border-gray-300 z-10 px-2">
+                <div className="flex items-center gap-2">
+                  <h4 className="text-lg font-bold">
+                    {moduleConfiguration.name}
+                  </h4>
+                  <div className="flex flex-wrap gap-1">
+                    <span className="rounded-full bg-indigo-500 text-white px-2 py-0.5 text-xs">
+                      Module
+                    </span>
+                  </div>
+                </div>
+              </div>
               <ModuleProvider
                 module={moduleConfiguration.moduleAndConfig.module}
                 moduleConfig={moduleConfiguration.moduleAndConfig.moduleConfig}

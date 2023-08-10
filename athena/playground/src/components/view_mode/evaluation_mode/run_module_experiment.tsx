@@ -50,12 +50,6 @@ export default function RunModuleExperiment({
 
   return (
     <div className="bg-white rounded-md p-4 mb-8 space-y-4">
-      <div className="sticky top-0 bg-white border-b border-gray-300 z-10 px-2">
-        <div className="flex items-center gap-2">
-          <h4 className="text-lg font-bold">{moduleConfiguration.name}</h4>
-        </div>
-      </div>
-
       <div className="flex flex-row space-x-2 items-center">
         <button
           className="bg-primary-500 text-white rounded-md p-2 hover:bg-primary-600 disabled:text-gray-500 disabled:bg-gray-200 disabled:cursor-not-allowed"
