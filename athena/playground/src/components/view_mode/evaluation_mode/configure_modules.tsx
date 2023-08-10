@@ -50,7 +50,7 @@ export default function ConfigureModules({
 
   const slide = (direction: "prev" | "next") => {
     if (!scrollRef.current) return;
-    const moveAmount = scrollRef.current.clientWidth * 0.5;
+    const moveAmount = scrollRef.current.clientWidth * 0.4;
     const slider = scrollRef.current;
 
     if (
@@ -208,9 +208,14 @@ export default function ConfigureModules({
               <div className="sticky top-0 bg-white border-b border-gray-300 z-10 px-2">
                 <div className="flex items-center gap-2">
                   <h4 className="text-lg font-bold">
-                    Configuration {index + 1}
+                    Configuration&nbsp;{index + 1}
                   </h4>
-                  <div className="flex gap-1">
+                  <div className="flex flex-wrap gap-1">
+                    {index === 0 && (
+                      <span className="rounded-full bg-indigo-500 text-white px-2 py-0.5 text-xs">
+                        Submission Selector (First)
+                      </span>
+                    )}
                     {configurationsStatus[index].isValid ? (
                       <span className="rounded-full bg-green-500 text-white px-2 py-0.5 text-xs">
                         Valid
@@ -236,6 +241,40 @@ export default function ConfigureModules({
                         </span>
                       )
                     )}
+                  </div>
+                  <div className="flex flex-1 justify-end gap-1 mb-1 self-start">
+                    <button
+                      disabled={index === 0}
+                      className="w-8 h-8 rounded-md p-2 bg-gray-100 hover:bg-gray-200 font-bold text-gray-500 hover:text-gray-600 text-base leading-none disabled:text-gray-300 disabled:bg-gray-50 disabled:cursor-not-allowed"
+                      onClick={() => {
+                        setModuleConfigurationsState((prevState) => {
+                          const newState = [...prevState];
+                          const temp = newState[index - 1];
+                          newState[index - 1] = newState[index];
+                          newState[index] = temp;
+                          return newState;
+                        })
+                        slide("prev");
+                      }}
+                    >
+                      ←
+                    </button>
+                    <button
+                      disabled={index === moduleConfigurationsState.length - 1}
+                      className="w-8 h-8 rounded-md p-2 bg-gray-100 hover:bg-gray-200 font-bold text-gray-500 hover:text-gray-600 text-base leading-none disabled:text-gray-300 disabled:bg-gray-50 disabled:cursor-not-allowed"
+                      onClick={() => {
+                        setModuleConfigurationsState((prevState) => {
+                          const newState = [...prevState];
+                          const temp = newState[index + 1];
+                          newState[index + 1] = newState[index];
+                          newState[index] = temp;
+                          return newState;
+                        })
+                        slide("next");
+                      }}
+                    >
+                      →
+                    </button>
                   </div>
                 </div>
                 <div className="flex gap-2 mb-2">
@@ -352,8 +391,8 @@ export default function ConfigureModules({
           </div>
         ))}
         {moduleConfigurations === undefined && (
-          <div className="flex flex-col shrink-0 snap-start">
-            <div className="shrink-0 w-[calc(50vw-8rem)] px-2">
+          <div className="flex flex-col shrink-0 snap-start px-2">
+            <div className="shrink-0 w-[calc(50vw-8rem)]">
               <button
                 onClick={() => {
                   const newModuleConfigurations = [
