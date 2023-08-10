@@ -119,7 +119,7 @@ export default function ConfigureModules({
           {configurationsStatus.some((status) => !status.isValid) && (
             <span className="rounded-full bg-red-500 text-white px-2 py-0.5 text-xs">
               {configurationsStatus.filter((status) => !status.isValid).length}{" "}
-              invalid
+              Invalid
             </span>
           )}
         </div>

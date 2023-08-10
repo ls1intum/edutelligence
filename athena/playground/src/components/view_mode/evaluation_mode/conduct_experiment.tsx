@@ -9,6 +9,7 @@ import ExperimentSubmissions from "./experiment_submissions";
 import type { ModuleConfiguration } from "./configure_modules";
 import { ModuleProvider } from "@/hooks/module_context";
 import { twMerge } from "tailwind-merge";
+import useHealth from "@/hooks/health";
 
 type ConductExperimentProps = {
   experiment: Experiment;
@@ -29,6 +30,8 @@ export default function ConductExperiment({
       window.removeEventListener("beforeunload", handleBeforeunload);
     };
   }, []);
+
+  const { data: health } = useHealth();
 
   const handle = useFullScreenHandle();
 
@@ -161,9 +164,22 @@ export default function ConductExperiment({
                     {moduleConfiguration.name}
                   </h4>
                   <div className="flex flex-wrap gap-1">
-                    <span className="rounded-full bg-indigo-500 text-white px-2 py-0.5 text-xs">
-                      Module
-                    </span>
+                    {moduleConfigurations[0].id === moduleConfiguration.id && (
+                      <span className="rounded-full bg-indigo-500 text-white px-2 py-0.5 text-xs">
+                        Submission Selector
+                      </span>
+                    )}
+                    {health?.modules[
+                      moduleConfiguration.moduleAndConfig.module.name
+                    ] ? (
+                      <span className="rounded-full bg-green-500 text-white px-2 py-0.5 text-xs">
+                        Healthy
+                      </span>
+                    ) : (
+                      <span className="rounded-full bg-red-500 text-white px-2 py-0.5 text-xs">
+                        Unhealthy
+                      </span>
+                    )}
                   </div>
                 </div>
               </div>
