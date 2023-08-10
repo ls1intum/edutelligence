@@ -43,7 +43,7 @@ export default function RunModuleExperiment({
       exercise: experiment.exercise,
       submissions: [
         ...(experiment.experimentSubmissions.trainingSubmissions ?? []),
-        ...experiment.experimentSubmissions.testSubmissions,
+        ...experiment.experimentSubmissions.evaluationSubmissions,
       ],
     });
   }, []);
@@ -77,10 +77,10 @@ export default function RunModuleExperiment({
                 return;
               } else if (
                 submissionsAndFeedbacks.length <
-                experiment.experimentSubmissions.testSubmissions.length
+                experiment.experimentSubmissions.evaluationSubmissions.length
               ) {
                 const submissionsToSelectFrom =
-                  experiment.experimentSubmissions.testSubmissions.filter(
+                  experiment.experimentSubmissions.evaluationSubmissions.filter(
                     (submission) => {
                       return !submissionsAndFeedbacks.some(
                         (submissionAndFeedback) => {
@@ -144,7 +144,7 @@ export default function RunModuleExperiment({
           </span>
           <span className="text-gray-500">
             Progress: ({currentIndex + 1} /{" "}
-            {experiment.experimentSubmissions.testSubmissions.length})
+            {experiment.experimentSubmissions.evaluationSubmissions.length})
           </span>
         </div>
       </div>

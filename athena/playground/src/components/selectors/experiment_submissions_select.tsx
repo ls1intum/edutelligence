@@ -6,10 +6,11 @@ import { useState } from "react";
 import useSubmissions from "@/hooks/playground/submissions";
 import useFeedbacks from "@/hooks/playground/feedbacks";
 import SubmissionList from "@/components/submission_list";
+import { twMerge } from "tailwind-merge";
 
 export type ExperimentSubmissions = {
   trainingSubmissions: Submission[] | undefined;
-  testSubmissions: Submission[];
+  evaluationSubmissions: Submission[];
 };
 
 type ExperimentSubmissionsSelectProps = {
@@ -30,9 +31,11 @@ export default function ExperimentSubmissionsSelect({
   const { data, error, isLoading } = useSubmissions(exercise);
   const { data: feedbacks } = useFeedbacks(exercise);
 
+  const [sumbissionsSelectType, setSumbissionsSelectType] = useState<
+    "random" | "next"
+  >("random");
   const [moveSubmissionsNumber, setMoveSubmissionsNumber] =
     useState<number>(10);
-  const [moveToTest, setMoveToTest] = useState<boolean>(true);
 
   if (!exercise) return null;
   if (error) return <div className="text-red-500 text-sm">Failed to load</div>;
@@ -42,69 +45,102 @@ export default function ExperimentSubmissionsSelect({
     experimentSubmissions?.trainingSubmissions?.some(
       (usedSubmission) => usedSubmission.id === submission.id
     ) ||
-    experimentSubmissions?.testSubmissions?.some(
+    experimentSubmissions?.evaluationSubmissions?.some(
       (usedSubmission) => usedSubmission.id === submission.id
     );
 
-  const moveNext = () => {
-    if (moveSubmissionsNumber === undefined) return;
-    const submissionsToMove = data
-      ?.filter((submission) => !isSubmissionUsed(submission))
-      ?.slice(0, moveSubmissionsNumber);
-    if (submissionsToMove === undefined) return;
-    if (
-      experimentSubmissions?.trainingSubmissions === undefined ||
-      moveToTest
-    ) {
-      onChangeExperimentSubmissions({
-        trainingSubmissions: experimentSubmissions?.trainingSubmissions,
-        testSubmissions: [
-          ...(experimentSubmissions?.testSubmissions ?? []),
-          ...submissionsToMove,
-        ],
-      });
-    } else if (experimentSubmissions?.trainingSubmissions !== undefined) {
-      onChangeExperimentSubmissions({
-        trainingSubmissions: [
-          ...experimentSubmissions.trainingSubmissions,
-          ...submissionsToMove,
-        ],
-        testSubmissions: experimentSubmissions?.testSubmissions,
-      });
-    }
-  };
-
-  const takeRandom = () => {
-    if (moveSubmissionsNumber === undefined) return;
-    const submissionsToMove = data
-      ?.filter((submission) => !isSubmissionUsed(submission))
-      ?.sort(() => Math.random() - 0.5)
-      .slice(0, moveSubmissionsNumber);
-    if (submissionsToMove === undefined) return;
-    if (
-      experimentSubmissions?.trainingSubmissions === undefined ||
-      moveToTest
-    ) {
-      onChangeExperimentSubmissions({
-        trainingSubmissions: experimentSubmissions?.trainingSubmissions,
-        testSubmissions: [
-          ...(experimentSubmissions?.testSubmissions ?? []),
-          ...submissionsToMove,
-        ],
-      });
-    } else if (experimentSubmissions?.trainingSubmissions !== undefined) {
-      onChangeExperimentSubmissions({
-        trainingSubmissions: [
-          ...experimentSubmissions.trainingSubmissions,
-          ...submissionsToMove,
-        ],
-        testSubmissions: experimentSubmissions?.testSubmissions,
-      });
-    }
-  };
-
   const excludedSubmissions =
     data?.filter((submission) => !isSubmissionUsed(submission)) ?? [];
+
+  const takeSubmissions = (submissions: Submission[]) => {
+    if (sumbissionsSelectType === "random") {
+      return [...submissions]
+        .sort(() => 0.5 - Math.random())
+        .slice(0, moveSubmissionsNumber);
+    } else {
+      return [...submissions].slice(0, moveSubmissionsNumber);
+    }
+  };
+
+  const moveSubmissions = (
+    from: "training" | "evaluation" | "excluded",
+    to: "training" | "evaluation" | "excluded"
+  ) => {
+    if (from === to || moveSubmissionsNumber <= 0) return;
+
+    if (from === "excluded") {
+      const moveSubmissions = takeSubmissions(excludedSubmissions);
+      if (to === "training") {
+        onChangeExperimentSubmissions({
+          evaluationSubmissions:
+            experimentSubmissions?.evaluationSubmissions ?? [],
+          trainingSubmissions: [
+            ...(experimentSubmissions?.trainingSubmissions ?? []),
+            ...moveSubmissions,
+          ],
+        });
+      } else if (to === "evaluation") {
+        onChangeExperimentSubmissions({
+          trainingSubmissions: experimentSubmissions?.trainingSubmissions,
+          evaluationSubmissions: [
+            ...(experimentSubmissions?.evaluationSubmissions ?? []),
+            ...moveSubmissions,
+          ],
+        });
+      }
+    } else if (
+      from === "training" &&
+      experimentSubmissions?.trainingSubmissions
+    ) {
+      const moveSubmissions = takeSubmissions(
+        experimentSubmissions.trainingSubmissions
+      );
+      const trainingSubmissions =
+        experimentSubmissions.trainingSubmissions.filter(
+          (submission) => !moveSubmissions.some((s) => s.id === submission.id)
+        );
+      if (to === "excluded") {
+        onChangeExperimentSubmissions({
+          evaluationSubmissions:
+            experimentSubmissions?.evaluationSubmissions ?? [],
+          trainingSubmissions,
+        });
+      } else if (to === "evaluation") {
+        onChangeExperimentSubmissions({
+          trainingSubmissions,
+          evaluationSubmissions: [
+            ...(experimentSubmissions?.evaluationSubmissions ?? []),
+            ...moveSubmissions,
+          ],
+        });
+      }
+    } else if (
+      from === "evaluation" &&
+      experimentSubmissions?.evaluationSubmissions
+    ) {
+      const moveSubmissions = takeSubmissions(
+        experimentSubmissions.evaluationSubmissions
+      );
+      const evaluationSubmissions =
+        experimentSubmissions.evaluationSubmissions.filter(
+          (submission) => !moveSubmissions.some((s) => s.id === submission.id)
+        );
+      if (to === "excluded") {
+        onChangeExperimentSubmissions({
+          trainingSubmissions: experimentSubmissions?.trainingSubmissions,
+          evaluationSubmissions,
+        });
+      } else if (to === "training") {
+        onChangeExperimentSubmissions({
+          trainingSubmissions: [
+            ...(experimentSubmissions?.trainingSubmissions ?? []),
+            ...moveSubmissions,
+          ],
+          evaluationSubmissions,
+        });
+      }
+    }
+  };
 
   return (
     <div className="flex flex-col">
@@ -120,14 +156,14 @@ export default function ExperimentSubmissionsSelect({
                 if (e.target.checked) {
                   onChangeExperimentSubmissions({
                     trainingSubmissions: [],
-                    testSubmissions:
-                      experimentSubmissions?.testSubmissions ?? [],
+                    evaluationSubmissions:
+                      experimentSubmissions?.evaluationSubmissions ?? [],
                   });
                 } else {
                   onChangeExperimentSubmissions({
                     trainingSubmissions: undefined,
-                    testSubmissions:
-                      experimentSubmissions?.testSubmissions ?? [],
+                    evaluationSubmissions:
+                      experimentSubmissions?.evaluationSubmissions ?? [],
                   });
                 }
               }}
@@ -141,25 +177,25 @@ export default function ExperimentSubmissionsSelect({
               Move
               <div className="flex flex-col items-start ml-2">
                 <div className="flex items-center">
-                  <input
-                    id="default-radio-1"
-                    type="radio"
-                    value=""
-                    name="default-radio"
-                  />
-                  <label htmlFor="default-radio-1" className="ml-2">
+                  <label>
+                    <input
+                      type="radio"
+                      value=""
+                      className="mr-2"
+                      checked={sumbissionsSelectType === "random"}
+                      onChange={() => setSumbissionsSelectType("random")}
+                    />
                     random
                   </label>
                 </div>
                 <div className="flex items-center">
-                  <input
-                    checked
-                    id="default-radio-2"
-                    type="radio"
-                    value=""
-                    name="default-radio"
-                  />
-                  <label htmlFor="default-radio-2" className="ml-2">
+                  <label>
+                    <input
+                      type="radio"
+                      className="mr-2"
+                      checked={sumbissionsSelectType === "next"}
+                      onChange={() => setSumbissionsSelectType("next")}
+                    />
                     next
                   </label>
                 </div>
@@ -190,20 +226,54 @@ export default function ExperimentSubmissionsSelect({
           </div>
           {!disabled && (
             <div className="border-b border-gray-200 pb-1 justify-between flex items-center">
-              <div className="flex flex-col">
-                <button className="rounded-md p-2 text-primary-500 hover:text-primary-600 hover:bg-primary-100">
-                  {moveSubmissionsNumber} Training →
+              {experimentSubmissions?.trainingSubmissions !== undefined && (
+                <div className="flex flex-col">
+                  <button
+                    className="rounded-md p-2 text-primary-500 hover:text-primary-600 hover:bg-primary-100"
+                    onClick={() => moveSubmissions("training", "excluded")}
+                  >
+                    {Math.min(
+                      moveSubmissionsNumber,
+                      experimentSubmissions?.trainingSubmissions?.length ?? 0
+                    )}{" "}
+                    Training →
+                  </button>
+                  <button
+                    className="rounded-md p-2 text-red-500 hover:text-red-600 hover:bg-red-100"
+                    onClick={() => moveSubmissions("excluded", "training")}
+                  >
+                    {Math.min(
+                      moveSubmissionsNumber,
+                      excludedSubmissions.length
+                    )}{" "}
+                    Training ←
+                  </button>
+                </div>
+              )}
+              <div
+                className={twMerge(
+                  "flex",
+                  experimentSubmissions?.trainingSubmissions !== undefined
+                    ? "flex-col"
+                    : "flex-row"
+                )}
+              >
+                <button
+                  className="rounded-md p-2 text-primary-500 hover:text-primary-600 hover:bg-primary-100"
+                  onClick={() => moveSubmissions("evaluation", "excluded")}
+                >
+                  {Math.min(
+                    moveSubmissionsNumber,
+                    experimentSubmissions?.evaluationSubmissions?.length ?? 0
+                  )}{" "}
+                  Evaluation →
                 </button>
-                <button className="rounded-md p-2 text-red-500 hover:text-red-600 hover:bg-red-100">
-                  {moveSubmissionsNumber} Training ←
-                </button>
-              </div>
-              <div className="flex flex-col">
-                <button className="rounded-md p-2 text-primary-500 hover:text-primary-600 hover:bg-primary-100">
-                  {moveSubmissionsNumber} Evaluation →
-                </button>
-                <button className="rounded-md p-2 text-red-500 hover:text-red-600 hover:bg-red-100">
-                  {moveSubmissionsNumber} Evaluation ←
+                <button
+                  className="rounded-md p-2 text-red-500 hover:text-red-600 hover:bg-red-100"
+                  onClick={() => moveSubmissions("excluded", "evaluation")}
+                >
+                  {Math.min(moveSubmissionsNumber, excludedSubmissions.length)}{" "}
+                  Evaluation ←
                 </button>
               </div>
             </div>
@@ -225,19 +295,47 @@ export default function ExperimentSubmissionsSelect({
             {!disabled && (
               <div className="border-b border-gray-200 pb-1 justify-between flex items-center">
                 <div className="flex flex-col">
-                  <button className="rounded-md p-2 text-primary-500 hover:text-primary-600 hover:bg-primary-100">
-                    {moveSubmissionsNumber} Excluded →
+                  <button
+                    className="rounded-md p-2 text-primary-500 hover:text-primary-600 hover:bg-primary-100"
+                    onClick={() => moveSubmissions("excluded", "training")}
+                  >
+                    {Math.min(
+                      moveSubmissionsNumber,
+                      excludedSubmissions.length
+                    )}{" "}
+                    Excluded →
                   </button>
-                  <button className="rounded-md p-2 text-red-500 hover:text-red-600 hover:bg-red-100">
-                    {moveSubmissionsNumber} Excluded ←
+                  <button
+                    className="rounded-md p-2 text-red-500 hover:text-red-600 hover:bg-red-100"
+                    onClick={() => moveSubmissions("training", "excluded")}
+                  >
+                    {Math.min(
+                      moveSubmissionsNumber,
+                      experimentSubmissions?.trainingSubmissions.length ?? 0
+                    )}{" "}
+                    Excluded ←
                   </button>
                 </div>
                 <div className="flex flex-col">
-                  <button className="rounded-md p-2 text-primary-500 hover:text-primary-600 hover:bg-primary-100">
-                    {moveSubmissionsNumber} Evaluation →
+                  <button
+                    className="rounded-md p-2 text-primary-500 hover:text-primary-600 hover:bg-primary-100"
+                    onClick={() => moveSubmissions("evaluation", "training")}
+                  >
+                    {Math.min(
+                      moveSubmissionsNumber,
+                      experimentSubmissions?.evaluationSubmissions.length ?? 0
+                    )}{" "}
+                    Evaluation →
                   </button>
-                  <button className="rounded-md p-2 text-red-500 hover:text-red-600 hover:bg-red-100">
-                    {moveSubmissionsNumber} Evaluation ←
+                  <button
+                    className="rounded-md p-2 text-red-500 hover:text-red-600 hover:bg-red-100"
+                    onClick={() => moveSubmissions("training", "evaluation")}
+                  >
+                    {Math.min(
+                      moveSubmissionsNumber,
+                      experimentSubmissions?.trainingSubmissions.length ?? 0
+                    )}{" "}
+                    Evaluation ←
                   </button>
                 </div>
               </div>
@@ -253,34 +351,69 @@ export default function ExperimentSubmissionsSelect({
         )}
         <div className="flex-1 p-1 space-y-1">
           <div className="text-base font-medium border-b border-gray-300 mb-2">
-            Evaluation ({experimentSubmissions?.testSubmissions.length ?? 0}{" "}
+            Evaluation (
+            {experimentSubmissions?.evaluationSubmissions.length ?? 0}{" "}
             Submissions)
           </div>
           {!disabled && (
             <div className="border-b border-gray-200 pb-1 justify-between flex items-center">
-              <div className="flex flex-col">
-                <button className="rounded-md p-2 text-primary-500 hover:text-primary-600 hover:bg-primary-100">
-                  {moveSubmissionsNumber} Excluded →
+              <div
+                className={twMerge(
+                  "flex",
+                  experimentSubmissions?.trainingSubmissions !== undefined
+                    ? "flex-col"
+                    : "flex-row"
+                )}
+              >
+                <button
+                  className="rounded-md p-2 text-primary-500 hover:text-primary-600 hover:bg-primary-100"
+                  onClick={() => moveSubmissions("excluded", "evaluation")}
+                >
+                  {Math.min(moveSubmissionsNumber, excludedSubmissions.length)}{" "}
+                  Excluded →
                 </button>
-                <button className="rounded-md p-2 text-red-500 hover:text-red-600 hover:bg-red-100">
-                  {moveSubmissionsNumber} Excluded ←
+                <button
+                  className="rounded-md p-2 text-red-500 hover:text-red-600 hover:bg-red-100"
+                  onClick={() => moveSubmissions("evaluation", "excluded")}
+                >
+                  {Math.min(
+                    moveSubmissionsNumber,
+                    experimentSubmissions?.evaluationSubmissions.length ?? 0
+                  )}{" "}
+                  Excluded ←
                 </button>
               </div>
-              <div className="flex flex-col">
-                <button className="rounded-md p-2 text-primary-500 hover:text-primary-600 hover:bg-primary-100">
-                  {moveSubmissionsNumber} Training →
-                </button>
-                <button className="rounded-md p-2 text-red-500 hover:text-red-600 hover:bg-red-100">
-                  {moveSubmissionsNumber} Training ←
-                </button>
-              </div>
+              {experimentSubmissions?.trainingSubmissions !== undefined && (
+                <div className="flex flex-col">
+                  <button
+                    className="rounded-md p-2 text-primary-500 hover:text-primary-600 hover:bg-primary-100"
+                    onClick={() => moveSubmissions("training", "evaluation")}
+                  >
+                    {Math.min(
+                      moveSubmissionsNumber,
+                      experimentSubmissions?.trainingSubmissions.length ?? 0
+                    )}{" "}
+                    Training →
+                  </button>
+                  <button
+                    className="rounded-md p-2 text-red-500 hover:text-red-600 hover:bg-red-100"
+                    onClick={() => moveSubmissions("evaluation", "training")}
+                  >
+                    {Math.min(
+                      moveSubmissionsNumber,
+                      experimentSubmissions?.evaluationSubmissions.length ?? 0
+                    )}{" "}
+                    Training ←
+                  </button>
+                </div>
+              )}
             </div>
           )}
           <p className="text-sm text-gray-500 mb-2">
             Run the experiment on the evaluation submissions.
           </p>
           <SubmissionList
-            submissions={experimentSubmissions?.testSubmissions ?? []}
+            submissions={experimentSubmissions?.evaluationSubmissions ?? []}
             feedbacks={feedbacks}
           />
         </div>

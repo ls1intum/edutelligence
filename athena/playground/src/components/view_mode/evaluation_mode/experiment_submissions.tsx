@@ -13,7 +13,7 @@ export default function ExperimentSubmissions({
   const [currentIndex, setCurrentSubmissionIndex] = useState(-1);
   const currentSubmission =
     currentIndex >= 0
-      ? experiment.experimentSubmissions.testSubmissions[currentIndex]
+      ? experiment.experimentSubmissions.evaluationSubmissions[currentIndex]
       : undefined;
   const { data: feedbacks } = useFeedbacks(
     experiment.exercise,
@@ -39,7 +39,7 @@ export default function ExperimentSubmissions({
           onClick={() => {
             if (
               currentIndex >=
-              experiment.experimentSubmissions.testSubmissions.length - 1
+              experiment.experimentSubmissions.evaluationSubmissions.length - 1
             )
               return;
             setCurrentSubmissionIndex(currentIndex + 1);
@@ -55,7 +55,7 @@ export default function ExperimentSubmissions({
           </span>
           <span className="text-gray-500">
             Progress: ({currentIndex + 1} /{" "}
-            {experiment.experimentSubmissions.testSubmissions.length})
+            {experiment.experimentSubmissions.evaluationSubmissions.length})
           </span>
         </div>
       </div>

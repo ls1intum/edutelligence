@@ -75,7 +75,7 @@ export default function DefineExperiment({
       !exercise ||
       !executionMode ||
       !experimentSubmissions ||
-      !experimentSubmissions.testSubmissions
+      !experimentSubmissions.evaluationSubmissions
     ) {
       return undefined;
     }
@@ -100,7 +100,7 @@ export default function DefineExperiment({
         trainingSubmissionIds:
           experiment.experimentSubmissions.trainingSubmissions &&
           experiment.experimentSubmissions.trainingSubmissions.map((s) => s.id),
-        testSubmissionIds: experiment.experimentSubmissions.testSubmissions.map(
+        testSubmissionIds: experiment.experimentSubmissions.evaluationSubmissions.map(
           (s) => s.id
         ),
       },
@@ -146,7 +146,7 @@ export default function DefineExperiment({
       );
       setExperimentSubmissions({
         trainingSubmissions,
-        testSubmissions,
+        evaluationSubmissions: testSubmissions,
       });
     } else {
       setExperimentSubmissions(undefined);
