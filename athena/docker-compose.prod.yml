@@ -48,3 +48,18 @@ services:
     env_file:
       - ${ATHENA_ENV_DIR:-./env_example}/module_programming_themisml.env
     image: ls1tum/athena_module_programming_themisml:${ATHENA_TAG:-develop}
+
+  postgres:
+    hostname: postgres
+    image: postgres:15
+    env_file:
+      - ${ATHENA_ENV_DIR:-./env_example}/postgres.env
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres-init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "5432:5432"
+
+
+volumes:
+  postgres_data:

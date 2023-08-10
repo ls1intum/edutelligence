@@ -23,9 +23,9 @@ export default function CommonExerciseDetail({ exercise }: { exercise: Exercise;
 
       {/* Grading Instructions */}
       <Disclosure title="Grading Instructions">
-        {exercise.grading_instructions?.length > 0 ? (
+        {exercise.grading_instructions ? (
           <Markdown
-            content={exercise.grading_instructions}
+            content={exercise.grading_instructions || ""}
             enablePlainTextSwitcher
           />
         ) : (

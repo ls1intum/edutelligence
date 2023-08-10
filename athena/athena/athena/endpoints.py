@@ -10,6 +10,7 @@ from athena.metadata import with_meta
 from athena.module_config import get_dynamic_module_config_factory
 from athena.logger import logger
 from athena.schemas import Exercise, Submission, Feedback
+from athena.schemas.schema import to_camel
 from athena.storage import get_stored_submission_meta, get_stored_exercise_meta, get_stored_feedback_meta, \
     store_exercise, store_feedback, store_feedback_suggestions, store_submissions, get_stored_submissions
 
@@ -23,7 +24,7 @@ C = TypeVar("C", bound=BaseModel)
 
 module_responses = {
     403: {
-        "description": "API secret is invalid - set the environment variable SECRET and the X-API-Secret header "
+        "description": "API secret is invalid - set the environment variable SECRET and the Authorization header "
                        "to the same value",
     }
 }
@@ -87,9 +88,13 @@ def submissions_consumer(func: Union[
                     submission_meta = get_stored_submission_meta(stored_submission) or {}
                     submission_meta.update(stored_submission.meta)
                     submissions_dict[stored_submission.id].meta = submission_meta
-        submissions = list(submissions_dict.values())
+
+        kwargs = {}
+        if "module_config" in inspect.signature(func).parameters:
+            kwargs["module_config"] = module_config
 
         store_exercise(exercise)
+        submissions = list(submissions_dict.values())
         store_submissions(submissions)
 
         kwargs = {}
@@ -144,17 +149,29 @@ def submission_selector(func: Union[
     submission_type = inspect.signature(func).parameters["submissions"].annotation.__args__[0]
     module_config_type = inspect.signature(func).parameters["module_config"].annotation if "module_config" in inspect.signature(func).parameters else None
 
+    # own request model to allow for `submissionIds` instead of `submission_ids` (camelCase vs snake_case)
+    class SubmissionSelectorRequest(BaseModel):
+        exercise: exercise_type
+        submission_ids: List[int]
+        module_config: module_config_type = Depends(get_dynamic_module_config_factory(module_config_type))
+    
+        class Config:
+            # Allow camelCase field names in the API (converted to snake_case)
+            alias_generator = to_camel
+            allow_population_by_field_name = True
+
     @app.post("/select_submission", responses=module_responses)
     @authenticated
     @with_meta
-    async def wrapper(
-            exercise: exercise_type,
-            submission_ids: List[int],
-            module_config: module_config_type = Depends(get_dynamic_module_config_factory(module_config_type))):
+    async def wrapper(request: SubmissionSelectorRequest):
         # The wrapper handles only transmitting submission IDs for efficiency, but the actual selection logic
         # only works with the full submission objects.
+        exercise = request.exercise
+        submission_ids = request.submission_ids
+        module_config = request.module_config
 
         exercise.meta.update(get_stored_exercise_meta(exercise) or {})
+        store_exercise(exercise)
 
         # Get the full submission objects
         submissions = list(get_stored_submissions(submission_type, exercise.id, submission_ids))
@@ -183,10 +200,10 @@ def submission_selector(func: Union[
 
 
 def feedback_consumer(func: Union[
-    Callable[[E, S, F], None],
-    Callable[[E, S, F], Coroutine[Any, Any, None]],
-    Callable[[E, S, F, C], None],
-    Callable[[E, S, F, C], Coroutine[Any, Any, None]]
+    Callable[[E, S, List[F]], None],
+    Callable[[E, S, List[F]], Coroutine[Any, Any, None]],
+    Callable[[E, S, List[F], C], None],
+    Callable[[E, S, List[F], C], Coroutine[Any, Any, None]]
 ]):
     """
     Receive feedback from the Assessment Module Manager.
@@ -199,43 +216,45 @@ def feedback_consumer(func: Union[
 
         Without using module config (both synchronous and asynchronous forms):
         >>> @feedback_consumer
-        ... def sync_process_feedback(exercise: Exercise, submission: Submission, feedback: Feedback):
+        ... def sync_process_feedback(exercise: Exercise, submission: Submission, feedbacks: List[Feedback]):
         ...     # process feedback here
 
         >>> @feedback_consumer
-        ... async def async_process_feedback(exercise: Exercise, submission: Submission, feedback: Feedback):
+        ... async def async_process_feedback(exercise: Exercise, submission: Submission, feedbacks: List[Feedback]):
         ...     # process feedback here
 
         With using module config (both synchronous and asynchronous forms):
         >>> @feedback_consumer
-        ... def sync_process_feedback_with_config(exercise: Exercise, submission: Submission, feedback: Feedback, module_config: Optional[dict]):
+        ... def sync_process_feedback_with_config(exercise: Exercise, submission: Submission, feedbacks: List[Feedback], module_config: Optional[dict]):
         ...     # process feedback here using module_config
 
         >>> @feedback_consumer
-        ... async def async_process_feedback_with_config(exercise: Exercise, submission: Submission, feedback: Feedback, module_config: Optional[dict]):
+        ... async def async_process_feedback_with_config(exercise: Exercise, submission: Submission, feedbacks: List[Feedback], module_config: Optional[dict]):
         ...     # process feedback here using module_config
     """
     exercise_type = inspect.signature(func).parameters["exercise"].annotation
     submission_type = inspect.signature(func).parameters["submission"].annotation
-    feedback_type = inspect.signature(func).parameters["feedback"].annotation
+    feedback_type = inspect.signature(func).parameters["feedbacks"].annotation.__args__[0]
     module_config_type = inspect.signature(func).parameters["module_config"].annotation if "module_config" in inspect.signature(func).parameters else None
 
-    @app.post("/feedback", responses=module_responses)
+    @app.post("/feedbacks", responses=module_responses)
     @authenticated
     @with_meta
     async def wrapper(
             exercise: exercise_type,
             submission: submission_type,
-            feedback: feedback_type,
+            feedbacks: List[feedback_type],
             module_config: module_config_type = Depends(get_dynamic_module_config_factory(module_config_type))):
 
         # Retrieve existing metadata for the exercise, submission and feedback
         exercise.meta.update(get_stored_exercise_meta(exercise) or {})
+        store_exercise(exercise)
         submission.meta.update(get_stored_submission_meta(submission) or {})
-        feedback.meta.update(get_stored_feedback_meta(feedback) or {})
-
-        # Change the ID of the LMS to an internal ID
-        feedback = store_feedback(feedback, is_lms_id=True)
+        store_submissions([submission])
+        for feedback in feedbacks:
+            feedback.meta.update(get_stored_feedback_meta(feedback) or {})
+            # Change the ID of the LMS to an internal ID
+            feedback.id = store_feedback(feedback, is_lms_id=True).id
 
         kwargs = {}
         if "module_config" in inspect.signature(func).parameters:
@@ -243,9 +262,9 @@ def feedback_consumer(func: Union[
 
         # Call the actual consumer
         if inspect.iscoroutinefunction(func):
-            await func(exercise, submission, feedback, **kwargs)
+            await func(exercise, submission, feedbacks, **kwargs)
         else:
-            func(exercise, submission, feedback, **kwargs)
+            func(exercise, submission, feedbacks, **kwargs)
 
         return None
     return wrapper

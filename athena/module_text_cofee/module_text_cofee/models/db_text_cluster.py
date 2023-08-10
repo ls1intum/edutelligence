@@ -5,6 +5,7 @@ from sqlalchemy import Column, Integer, LargeBinary, ForeignKey, Boolean
 from sqlalchemy.orm import relationship
 
 from athena.database import Base
+from athena.logger import logger
 
 
 class DBTextCluster(Base):
@@ -16,7 +17,7 @@ class DBTextCluster(Base):
     disabled: bool = Column(Boolean, default=False)  # type: ignore
 
     # Define the relationship to DBTextBlock
-    blocks = relationship("DBTextBlock", back_populates="cluster")
+    blocks = relationship("DBTextBlock", back_populates="cluster", order_by="DBTextBlock.position_in_cluster")  # type: ignore
 
     # Define the relationship to DBTextExercise
     exercise_id = Column(Integer, ForeignKey('text_exercises.id'))
@@ -40,6 +41,12 @@ class DBTextCluster(Base):
         block2_index = self.blocks.index(block2)
         if block2_index == -1:
             raise ValueError(f"Block {block2} is not in this cluster")
+        if len(self.distance_matrix) <= block1_index:
+            logger.warning("Block %s is not in the distance matrix of cluster %s", block1.id, self.id)
+            return 999  # prevent the server from crashing and instead just ignore this distance
+        if len(self.distance_matrix[block1_index]) <= block2_index:
+            logger.warning("Block %s is not in the distance matrix of cluster %s", block2.id, self.id)
+            return 999  # prevent the server from crashing and instead just ignore this distance
         return self.distance_matrix[block1_index][block2_index]
 
     def get_number_of_ungraded_blocks(self, ungraded_submission_ids: List[int]) -> int:

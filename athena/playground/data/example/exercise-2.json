@@ -12,7 +12,7 @@
   "submissions": [
     {
       "id": 201,
-      "content": "Maximilian",
+      "text": "Maximilian",
       "meta": {},
       "feedbacks": [
         {
@@ -28,52 +28,52 @@
     },
     {
       "id": 202,
-      "content": "Paul",
+      "text": "Paul",
       "meta": {}
     },
     {
       "id": 203,
-      "content": "Felix",
+      "text": "Felix",
       "meta": {}
     },
     {
       "id": 204,
-      "content": "Liam",
+      "text": "Liam",
       "meta": {}
     },
     {
       "id": 205,
-      "content": "Olivia",
+      "text": "Olivia",
       "meta": {}
     },
     {
       "id": 206,
-      "content": "Sophia",
+      "text": "Sophia",
       "meta": {}
     },
     {
       "id": 207,
-      "content": "Mason",
+      "text": "Mason",
       "meta": {}
     },
     {
       "id": 208,
-      "content": "Isabella",
+      "text": "Isabella",
       "meta": {}
     },
     {
       "id": 209,
-      "content": "Lucas",
+      "text": "Lucas",
       "meta": {}
     },
     {
       "id": 210,
-      "content": "Ava",
+      "text": "Ava",
       "meta": {}
     },
     {
       "id": 211,
-      "content": "Ethan",
+      "text": "Ethan",
       "meta": {}
     }
   ]

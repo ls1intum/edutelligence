@@ -25,7 +25,7 @@ async def suggest_feedback_basic(exercise: Exercise, submission: Submission, con
         "grading_instructions": exercise.grading_instructions,
         "problem_statement": exercise.problem_statement,
         # TODO: "example_solution": exercise.example_solution, MISSING
-        "submission": add_sentence_numbers(submission.content)
+        "submission": add_sentence_numbers(submission.text)
     }
 
     system_message_prompt = SystemMessagePromptTemplate.from_template(config.prompt.system_message)
@@ -53,7 +53,7 @@ async def suggest_feedback_basic(exercise: Exercise, submission: Submission, con
             logger.warning("Could not parse credits from row %s", row)
             continue
 
-        index_start, index_end = parse_line_number_reference_as_span(row["reference"], submission.content)
+        index_start, index_end = parse_line_number_reference_as_span(row["reference"], submission.text)
         
         feedbacks.append(Feedback(
             id=None,

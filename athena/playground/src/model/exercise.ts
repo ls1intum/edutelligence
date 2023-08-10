@@ -7,7 +7,7 @@ type ExerciseBase = {
   type: ExerciseType;
   max_points: number;
   bonus_points: number;
-  grading_instructions: string;
+  grading_instructions?: string;
   problem_statement: string;
   meta: {
     [key: string]: any;

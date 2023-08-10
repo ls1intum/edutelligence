@@ -41,11 +41,12 @@ def send_submissions(exercise: Exercise, submissions: List[Submission]):
         f"{get_cofee_url()}/submit",
         json={
             # TODO: maybe make this more flexible?
+            # "callbackUrl": f"http://host.docker.internal:5004/cofee_callback/{exercise.id}", # for local debugging
             "callbackUrl": f"{module_url}/cofee_callback/{exercise.id}",
             "submissions": [
                 {
                     "id": submission.id,
-                    "text": submission.content,
+                    "text": submission.text,
                 }
                 for submission in submissions
             ],

@@ -23,7 +23,7 @@ const athenaFetcher =
         method: "GET",
         headers: {
           "Content-Type": "application/json",
-          "X-API-Secret": athenaSecret,
+          "Authorization": athenaSecret,
           ...(moduleConfig && {
             "X-Module-Config": JSON.stringify(moduleConfig),
           }),

@@ -8,3 +8,12 @@ services:
   playground:
     hostname: playground
     image: ls1tum/athena_playground:${ATHENA_TAG:-develop}
+
+  log_viewer:
+    hostname: log_viewer
+    image: ls1tum/athena_log_viewer:${ATHENA_TAG:-develop}
+    env_file:
+      - ${ATHENA_ENV_DIR:-./env_example}/log_viewer.env
+    volumes:
+      # allow log viewer to access docker logs
+      - /var/run/docker.sock:/var/run/docker.sock

@@ -33,6 +33,9 @@ services:
     restart: unless-stopped
     expose:
        - 8000
+    # for local debugging:
+    #ports:
+    #  - 80:8000
     env_file:
       - ${ATHENA_ENV_DIR:-./env_example}/cofee.env
     working_dir: /usr/src/app
@@ -105,3 +108,4 @@ services:
     volumes:
       - ./module_text_cofee/init-mongo.js:/docker-entrypoint-initdb.d/init-mongo.js:ro
       - ./data/cofee_db:/data/db
+    command: --quiet > /dev/null

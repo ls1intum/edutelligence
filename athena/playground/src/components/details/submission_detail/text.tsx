@@ -27,7 +27,7 @@ export default function TextSubmissionDetail({
         <FileEditor
           key={`submission-${submission.id}`}
           identifier={`submission-${submission.id}`}
-          content={submission.content}
+          content={submission.text}
           autoHeight
           noFileFeedback
           feedbacks={feedbacks}
