@@ -35,6 +35,10 @@ export default function ConductExperiment({
 
   const handle = useFullScreenHandle();
 
+  const [moduleRenderOrder, setModuleRenderOrder] = useState<number[]>(
+    moduleConfigurations.map((_, index) => index)
+  );
+
   const [disablePrev, setDisablePrev] = useState(true);
   const [disableNext, setDisableNext] = useState(false);
 
@@ -145,56 +149,95 @@ export default function ConductExperiment({
             <ExperimentSubmissions experiment={experiment} />
           </div>
         </div>
-        {moduleConfigurations.map((moduleConfiguration) => (
-          <div
-            key={moduleConfiguration.id}
-            className="flex flex-col shrink-0 snap-start overflow-y-auto"
-          >
+        {moduleRenderOrder
+          .map((index) => moduleConfigurations[index])
+          .map((moduleConfiguration, index) => (
             <div
-              className={twMerge(
-                "shrink-0 pr-2",
-                handle.active
-                  ? "w-[calc(50vw-1.5rem)]"
-                  : "w-[calc(50vw-7.5rem)]"
-              )}
+              key={moduleConfiguration.id}
+              className="flex flex-col shrink-0 snap-start overflow-y-auto"
             >
-              <div className="sticky top-0 bg-white border-b border-gray-300 z-10 px-2">
-                <div className="flex items-center gap-2">
-                  <h4 className="text-lg font-bold">
-                    {moduleConfiguration.name}
-                  </h4>
-                  <div className="flex flex-wrap gap-1">
-                    {moduleConfigurations[0].id === moduleConfiguration.id && (
-                      <span className="rounded-full bg-indigo-500 text-white px-2 py-0.5 text-xs">
-                        Submission Selector
-                      </span>
-                    )}
-                    {health?.modules[
-                      moduleConfiguration.moduleAndConfig.module.name
-                    ] ? (
-                      <span className="rounded-full bg-green-500 text-white px-2 py-0.5 text-xs">
-                        Healthy
-                      </span>
-                    ) : (
-                      <span className="rounded-full bg-red-500 text-white px-2 py-0.5 text-xs">
-                        Unhealthy
-                      </span>
-                    )}
+              <div
+                className={twMerge(
+                  "shrink-0 pr-2",
+                  handle.active
+                    ? "w-[calc(50vw-1.5rem)]"
+                    : "w-[calc(50vw-7.5rem)]"
+                )}
+              >
+                <div className="sticky top-0 bg-white border-b border-gray-300 z-10 px-2">
+                  <div className="flex items-center gap-2">
+                    <h4 className="text-lg font-bold">
+                      {moduleConfiguration.name}
+                    </h4>
+                    <div className="flex flex-wrap gap-1">
+                      {moduleConfigurations[0].id ===
+                        moduleConfiguration.id && (
+                        <span className="rounded-full bg-indigo-500 text-white px-2 py-0.5 text-xs">
+                          Submission Selector
+                        </span>
+                      )}
+                      {health?.modules[
+                        moduleConfiguration.moduleAndConfig.module.name
+                      ] ? (
+                        <span className="rounded-full bg-green-500 text-white px-2 py-0.5 text-xs">
+                          Healthy
+                        </span>
+                      ) : (
+                        <span className="rounded-full bg-red-500 text-white px-2 py-0.5 text-xs">
+                          Unhealthy
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex flex-1 justify-end gap-1 mb-1 self-start">
+                      <button
+                        disabled={index === 0}
+                        className="w-8 h-8 rounded-md p-2 bg-gray-100 hover:bg-gray-200 font-bold text-gray-500 hover:text-gray-600 text-base leading-none disabled:text-gray-300 disabled:bg-gray-50 disabled:cursor-not-allowed"
+                        onClick={() => {
+                          setModuleRenderOrder((prevOrder) => {
+                            const newOrder = [...prevOrder];
+                            const temp = newOrder[index - 1];
+                            newOrder[index - 1] = newOrder[index];
+                            newOrder[index] = temp;
+                            return newOrder;
+                          });
+                          slide("prev");
+                        }}
+                      >
+                        ←
+                      </button>
+                      <button
+                        disabled={index === moduleRenderOrder.length - 1}
+                        className="w-8 h-8 rounded-md p-2 bg-gray-100 hover:bg-gray-200 font-bold text-gray-500 hover:text-gray-600 text-base leading-none disabled:text-gray-300 disabled:bg-gray-50 disabled:cursor-not-allowed"
+                        onClick={() => {
+                          setModuleRenderOrder((prevOrder) => {
+                            const newOrder = [...prevOrder];
+                            const temp = newOrder[index + 1];
+                            newOrder[index + 1] = newOrder[index];
+                            newOrder[index] = temp;
+                            return newOrder;
+                          });
+                          slide("next");
+                        }}
+                      >
+                        →
+                      </button>
+                    </div>
                   </div>
                 </div>
+                <ModuleProvider
+                  module={moduleConfiguration.moduleAndConfig.module}
+                  moduleConfig={
+                    moduleConfiguration.moduleAndConfig.moduleConfig
+                  }
+                >
+                  <RunModuleExperiment
+                    experiment={experiment}
+                    moduleConfiguration={moduleConfiguration}
+                  />
+                </ModuleProvider>
               </div>
-              <ModuleProvider
-                module={moduleConfiguration.moduleAndConfig.module}
-                moduleConfig={moduleConfiguration.moduleAndConfig.moduleConfig}
-              >
-                <RunModuleExperiment
-                  experiment={experiment}
-                  moduleConfiguration={moduleConfiguration}
-                />
-              </ModuleProvider>
             </div>
-          </div>
-        ))}
+          ))}
       </div>
     </FullScreen>
   );
