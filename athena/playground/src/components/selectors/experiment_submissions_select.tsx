@@ -227,55 +227,39 @@ export default function ExperimentSubmissionsSelect({
           {!disabled && (
             <div className="border-b border-gray-200 pb-1 justify-between flex items-center">
               {experimentSubmissions?.trainingSubmissions !== undefined && (
-                <div className="flex flex-col">
-                  <button
-                    className="rounded-md p-2 text-primary-500 hover:text-primary-600 hover:bg-primary-100"
-                    onClick={() => moveSubmissions("training", "excluded")}
-                  >
-                    {Math.min(
-                      moveSubmissionsNumber,
-                      experimentSubmissions?.trainingSubmissions?.length ?? 0
-                    )}{" "}
-                    Training →
-                  </button>
-                  <button
-                    className="rounded-md p-2 text-red-500 hover:text-red-600 hover:bg-red-100"
-                    onClick={() => moveSubmissions("excluded", "training")}
-                  >
-                    {Math.min(
-                      moveSubmissionsNumber,
-                      excludedSubmissions.length
-                    )}{" "}
-                    Training ←
-                  </button>
-                </div>
-              )}
-              <div
-                className={twMerge(
-                  "flex",
-                  experimentSubmissions?.trainingSubmissions !== undefined
-                    ? "flex-col"
-                    : "flex-row"
-                )}
-              >
                 <button
-                  className="rounded-md p-2 text-primary-500 hover:text-primary-600 hover:bg-primary-100"
-                  onClick={() => moveSubmissions("evaluation", "excluded")}
+                  disabled={
+                    Math.min(
+                      moveSubmissionsNumber,
+                      excludedSubmissions.length ?? 0
+                    ) === 0
+                  }
+                  className="rounded-md p-2 text-primary-500 hover:text-primary-600 hover:bg-primary-100 disabled:text-gray-500 disabled:cursor-not-allowed disabled:hover:bg-gray-100"
+                  onClick={() => moveSubmissions("excluded", "training")}
                 >
                   {Math.min(
                     moveSubmissionsNumber,
-                    experimentSubmissions?.evaluationSubmissions?.length ?? 0
+                    excludedSubmissions.length ?? 0
                   )}{" "}
-                  Evaluation →
+                  Training →
                 </button>
-                <button
-                  className="rounded-md p-2 text-red-500 hover:text-red-600 hover:bg-red-100"
-                  onClick={() => moveSubmissions("excluded", "evaluation")}
-                >
-                  {Math.min(moveSubmissionsNumber, excludedSubmissions.length)}{" "}
-                  Evaluation ←
-                </button>
-              </div>
+              )}
+              <button
+                disabled={
+                  Math.min(
+                    moveSubmissionsNumber,
+                    excludedSubmissions.length ?? 0
+                  ) === 0
+                }
+                className="rounded-md p-2 text-primary-500 hover:text-primary-600 hover:bg-primary-100 disabled:text-gray-500 disabled:cursor-not-allowed disabled:hover:bg-gray-100"
+                onClick={() => moveSubmissions("excluded", "evaluation")}
+              >
+                {Math.min(
+                  moveSubmissionsNumber,
+                  excludedSubmissions.length ?? 0
+                )}{" "}
+                Evaluation →
+              </button>
             </div>
           )}
           <p className="text-sm text-gray-500 mb-2">
@@ -294,50 +278,38 @@ export default function ExperimentSubmissionsSelect({
             </div>
             {!disabled && (
               <div className="border-b border-gray-200 pb-1 justify-between flex items-center">
-                <div className="flex flex-col">
-                  <button
-                    className="rounded-md p-2 text-primary-500 hover:text-primary-600 hover:bg-primary-100"
-                    onClick={() => moveSubmissions("excluded", "training")}
-                  >
-                    {Math.min(
-                      moveSubmissionsNumber,
-                      excludedSubmissions.length
-                    )}{" "}
-                    Excluded →
-                  </button>
-                  <button
-                    className="rounded-md p-2 text-red-500 hover:text-red-600 hover:bg-red-100"
-                    onClick={() => moveSubmissions("training", "excluded")}
-                  >
-                    {Math.min(
+                <button
+                  disabled={
+                    Math.min(
                       moveSubmissionsNumber,
                       experimentSubmissions?.trainingSubmissions.length ?? 0
-                    )}{" "}
-                    Excluded ←
-                  </button>
-                </div>
-                <div className="flex flex-col">
-                  <button
-                    className="rounded-md p-2 text-primary-500 hover:text-primary-600 hover:bg-primary-100"
-                    onClick={() => moveSubmissions("evaluation", "training")}
-                  >
-                    {Math.min(
-                      moveSubmissionsNumber,
-                      experimentSubmissions?.evaluationSubmissions.length ?? 0
-                    )}{" "}
-                    Evaluation →
-                  </button>
-                  <button
-                    className="rounded-md p-2 text-red-500 hover:text-red-600 hover:bg-red-100"
-                    onClick={() => moveSubmissions("training", "evaluation")}
-                  >
-                    {Math.min(
+                    ) === 0
+                  }
+                  className="rounded-md p-2 text-red-500 hover:text-red-600 hover:bg-red-100 disabled:text-gray-500 disabled:cursor-not-allowed disabled:hover:bg-gray-100"
+                  onClick={() => moveSubmissions("training", "excluded")}
+                >
+                  {Math.min(
+                    moveSubmissionsNumber,
+                    experimentSubmissions?.trainingSubmissions.length ?? 0
+                  )}{" "}
+                  Excluded →
+                </button>
+                <button
+                  disabled={
+                    Math.min(
                       moveSubmissionsNumber,
                       experimentSubmissions?.trainingSubmissions.length ?? 0
-                    )}{" "}
-                    Evaluation ←
-                  </button>
-                </div>
+                    ) === 0
+                  }
+                  className="rounded-md p-2 text-red-500 hover:text-red-600 hover:bg-red-100 disabled:text-gray-500 disabled:cursor-not-allowed disabled:hover:bg-gray-100"
+                  onClick={() => moveSubmissions("training", "evaluation")}
+                >
+                  {Math.min(
+                    moveSubmissionsNumber,
+                    experimentSubmissions?.trainingSubmissions.length ?? 0
+                  )}{" "}
+                  Evaluation →
+                </button>
               </div>
             )}
             <p className="text-sm text-gray-500 mb-2">
@@ -357,55 +329,39 @@ export default function ExperimentSubmissionsSelect({
           </div>
           {!disabled && (
             <div className="border-b border-gray-200 pb-1 justify-between flex items-center">
-              <div
-                className={twMerge(
-                  "flex",
-                  experimentSubmissions?.trainingSubmissions !== undefined
-                    ? "flex-col"
-                    : "flex-row"
-                )}
+              <button
+                disabled={
+                  Math.min(
+                    moveSubmissionsNumber,
+                    experimentSubmissions?.evaluationSubmissions.length ?? 0
+                  ) === 0
+                }
+                className="rounded-md p-2 text-red-500 hover:text-red-600 hover:bg-red-100 disabled:text-gray-500 disabled:cursor-not-allowed disabled:hover:bg-gray-100"
+                onClick={() => moveSubmissions("evaluation", "excluded")}
               >
+                {Math.min(
+                  moveSubmissionsNumber,
+                  experimentSubmissions?.evaluationSubmissions.length ?? 0
+                )}{" "}
+                Excluded →
+              </button>
+              {experimentSubmissions?.trainingSubmissions !== undefined && (
                 <button
-                  className="rounded-md p-2 text-primary-500 hover:text-primary-600 hover:bg-primary-100"
-                  onClick={() => moveSubmissions("excluded", "evaluation")}
-                >
-                  {Math.min(moveSubmissionsNumber, excludedSubmissions.length)}{" "}
-                  Excluded →
-                </button>
-                <button
-                  className="rounded-md p-2 text-red-500 hover:text-red-600 hover:bg-red-100"
-                  onClick={() => moveSubmissions("evaluation", "excluded")}
+                  disabled={
+                    Math.min(
+                      moveSubmissionsNumber,
+                      experimentSubmissions?.evaluationSubmissions.length ?? 0
+                    ) === 0
+                  }
+                  className="rounded-md p-2 text-red-500 hover:text-red-600 hover:bg-red-100 disabled:text-gray-500 disabled:cursor-not-allowed disabled:hover:bg-gray-100"
+                  onClick={() => moveSubmissions("evaluation", "training")}
                 >
                   {Math.min(
                     moveSubmissionsNumber,
                     experimentSubmissions?.evaluationSubmissions.length ?? 0
                   )}{" "}
-                  Excluded ←
+                  Training →
                 </button>
-              </div>
-              {experimentSubmissions?.trainingSubmissions !== undefined && (
-                <div className="flex flex-col">
-                  <button
-                    className="rounded-md p-2 text-primary-500 hover:text-primary-600 hover:bg-primary-100"
-                    onClick={() => moveSubmissions("training", "evaluation")}
-                  >
-                    {Math.min(
-                      moveSubmissionsNumber,
-                      experimentSubmissions?.trainingSubmissions.length ?? 0
-                    )}{" "}
-                    Training →
-                  </button>
-                  <button
-                    className="rounded-md p-2 text-red-500 hover:text-red-600 hover:bg-red-100"
-                    onClick={() => moveSubmissions("evaluation", "training")}
-                  >
-                    {Math.min(
-                      moveSubmissionsNumber,
-                      experimentSubmissions?.evaluationSubmissions.length ?? 0
-                    )}{" "}
-                    Training ←
-                  </button>
-                </div>
               )}
             </div>
           )}
