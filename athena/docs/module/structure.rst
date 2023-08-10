@@ -64,7 +64,7 @@ Example:
 
 Consume Feedback
 ~~~~~~~~~~~~~~~~
-Get a single given feedback. This usually happens when someone gives feedback on the submission in the LMS. The module will receive the feedback at the function annotated with ``@feedback_consumer``.
+Get a list of given feedback. This usually happens when someone gives feedback on the submission in the LMS. The module will receive the feedback at the function annotated with ``@feedback_consumer``.
 
 Example:
     .. code-block:: python
@@ -72,7 +72,7 @@ Example:
         from athena import *
 
         @feedback_consumer
-        def process_incoming_feedback(exercise: Exercise, submission: Submission, feedback: Feedback):
+        def process_incoming_feedback(exercise: Exercise, submission: Submission, feedbacks: List[Feedback]):
             ...
 
 Provide Feedback Suggestions

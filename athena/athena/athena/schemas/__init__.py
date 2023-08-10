@@ -6,7 +6,7 @@ from .feedback import Feedback
 from .submission import Submission
 from .text_feedback import TextFeedback
 from .text_exercise import TextExercise
-from .text_submission import TextSubmission
+from .text_submission import TextSubmission, TextLanguageEnum
 from .programming_feedback import ProgrammingFeedback
 from .programming_exercise import ProgrammingExercise
 from .programming_submission import ProgrammingSubmission

@@ -19,6 +19,8 @@ def calculate_information_gain(submission: TextSubmission, ungraded_submission_i
         # (2) "cluster percentage" = number indicating percentage of clusters with less text blocks on ungraded submissions
         all_clusters = db.query(DBTextBlock).filter(DBTextBlock.submission_id == submission.id).all()
         for block in all_clusters:
+            if not block.cluster:
+                continue
             # (1) added distance / cluster size for each block
             information_gain += block.calculate_added_distance() / len(block.cluster.blocks)
             # (2) "cluster percentage" = number indicating percentage of clusters with less text blocks on ungraded submissions

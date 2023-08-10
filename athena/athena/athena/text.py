@@ -3,7 +3,7 @@ import functools
 
 import athena.storage
 from .module_config import get_module_config
-from .schemas import TextExercise, TextFeedback, TextSubmission
+from .schemas import TextExercise, TextFeedback, TextSubmission, TextLanguageEnum
 
 module_type = get_module_config().type
 if module_type.name != "text":
@@ -22,6 +22,6 @@ get_stored_feedback = functools.partial(athena.storage.get_stored_feedback, Feed
 get_stored_feedback_suggestions = functools.partial(athena.storage.get_stored_feedback_suggestions, Feedback)
 
 __all__ = [
-    "Exercise", "Submission", "Feedback",
+    "Exercise", "Submission", "Feedback", "TextLanguageEnum",
     "get_stored_exercises", "get_stored_submissions", "get_stored_feedback", "get_stored_feedback_suggestions",
 ]

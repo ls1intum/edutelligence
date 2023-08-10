@@ -11,7 +11,7 @@ from athena.logger import logger
 
 SECRET = os.getenv("SECRET")
 
-api_key_header = APIKeyHeader(name='X-API-Secret', auto_error=False)
+api_key_header = APIKeyHeader(name='Authorization', auto_error=False)
 
 
 def verify_secret(secret: str):

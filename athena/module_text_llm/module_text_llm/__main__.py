@@ -22,8 +22,8 @@ def select_submission(exercise: Exercise, submissions: List[Submission]) -> Subm
 
 
 @feedback_consumer
-def process_incoming_feedback(exercise: Exercise, submission: Submission, feedback: Feedback):
-    logger.info("process_feedback: Received feedback for submission %d of exercise %d.", submission.id, exercise.id)
+def process_incoming_feedback(exercise: Exercise, submission: Submission, feedbacks: List[Feedback]):
+    logger.info("process_feedback: Received feedbacks for submission %d of exercise %d.", submission.id, exercise.id)
 
 
 @feedback_provider

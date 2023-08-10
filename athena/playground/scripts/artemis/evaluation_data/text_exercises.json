@@ -1,130 +1,448 @@
 {
-  "Introduction to Software Engineering (Summer 2019)": {
-    "course_id": 29,
-    "semester": "SS19",
-    "exercises": [
-      { "id": 500, "title": "H04E01 Coupling and Cohesion" },
-      {
-        "id": 503,
-        "title": "H04E02 Analysis Models & System Design"
-      },
-      { "id": 505, "title": "H04E03 Design Goal Trade-offs" },
-      {
-        "id": 519,
-        "title": "H05E02 Centralized vs Decentralized Designs"
-      },
-      {
-        "id": 536,
-        "title": "H06E04 Inheritance vs. Delegation"
-      },
-      {
-        "id": 538,
-        "title": "H06E03 Specification & Implementation Inheritance"
-      },
-      { "id": 544, "title": "H07E03 MVC & Observer Pattern" },
-      {
-        "id": 598,
-        "title": "H09E01 Advantages and Disadvantages of Scrum"
-      },
-      {
-        "id": 599,
-        "title": "H09E02 Unified Process and Scrum"
-      },
-      { "id": 612, "title": "H10E01 Problems using Git" },
-      {
-        "id": 613,
-        "title": "H10E02 Merge Conflicts & Best Practices"
-      }
-    ]
-  },
-  "Introduction to Software Engineering (Summer 2020)": {
-    "course_id": 48,
-    "semester": "SS20",
-    "exercises": [
-      {
-        "id": 1215,
-        "name": "H04E01 Coupling and Cohesion"
-      },
-      {
-        "id": 1216,
-        "name": "H04E02 Analysis Models & System Design"
-      },
-      {
-        "id": 1217,
-        "name": "H04E03 Design Goal Trade-offs"
-      },
-      {
-        "id": 1274,
-        "name": "H05E02 Centralized vs Decentralized Designs"
-      },
-      {
-        "id": 1309,
-        "name": "H06E03 Specification & Implementation Inheritance"
-      },
-      {
-        "id": 1310,
-        "name": "H06E04 Inheritance vs. Delegation"
-      },
-      {
-        "id": 1324,
-        "name": "H07E03 MVC & Observer Pattern"
-      },
-      {
-        "id": 1458,
-        "name": "H09E01 Advantages and Disadvantages of Scrum"
-      },
-      {
-        "id": 1471,
-        "name": "H09E02 Unified Process and Scrum"
-      },
-      {
-        "id": 1594,
-        "name": "H10E01 Problems using Git"
-      },
-      {
-        "id": 1596,
-        "name": "H10E02 Merge Conflicts & Best Practices"
-      }
-    ]
-  },
   "Introduction to Software Engineering (IN0006) SS21": {
-    "course_id": 121,
     "semester": "SS21",
+    "course_id": 121,
     "exercises": [
-      { "id": 4160, "title": "H04E01 Coupling and Cohesion" },
+      { "id": 4066, "title": "L01E02 Group vs. Team", "is_exam_exercise": 0 },
+      {
+        "id": 4082,
+        "title": "H01E02 Change in Software Development",
+        "is_exam_exercise": 0
+      },
+      {
+        "id": 4099,
+        "title": "H03E01 Bumpers Nonfunctional Requirements",
+        "is_exam_exercise": 0
+      },
+      {
+        "id": 4100,
+        "title": "H03E02 As-Is Scenario for Bumpers",
+        "is_exam_exercise": 0
+      },
+      {
+        "id": 4101,
+        "title": "H03E03 Bumpers Visionary Scenario",
+        "is_exam_exercise": 0
+      },
+      {
+        "id": 4102,
+        "title": "H03E05 Difference Aggregation & Composition",
+        "is_exam_exercise": 0
+      },
+      {
+        "id": 4114,
+        "title": "H01E01 System, Model and View",
+        "is_exam_exercise": 0
+      },
+      {
+        "id": 4160,
+        "title": "H04E01 Coupling and Cohesion",
+        "is_exam_exercise": 0
+      },
       {
         "id": 4161,
-        "title": "H04E02 Analysis Model & System Design"
+        "title": "H04E02 Analysis Model & System Design",
+        "is_exam_exercise": 0
       },
       {
         "id": 4162,
-        "title": "H04E03 Design Goal Trade-offs"
+        "title": "H04E03 Design Goal Trade-offs",
+        "is_exam_exercise": 0
+      },
+      {
+        "id": 4174,
+        "title": "L03E02 Create a formalized Scenario",
+        "is_exam_exercise": 0
       },
       {
         "id": 4228,
-        "title": "H05E02 Centralized vs. Decentralized Designs"
+        "title": "H05E02 Centralized vs. Decentralized Designs",
+        "is_exam_exercise": 0
       },
       {
         "id": 4237,
-        "title": "H06E03 Specification & Implementation Inheritance"
+        "title": "H06E03 Specification & Implementation Inheritance",
+        "is_exam_exercise": 0
       },
       {
         "id": 4238,
-        "title": "H06E04 Inheritance vs. Delegation"
+        "title": "H06E04 Inheritance vs. Delegation",
+        "is_exam_exercise": 0
+      },
+      { "id": 4271, "title": "T01E04 Use Cases", "is_exam_exercise": 0 },
+      {
+        "id": 4279,
+        "title": "T01E01 Functional and Nonfunctional Requirements",
+        "is_exam_exercise": 0
+      },
+      {
+        "id": 4280,
+        "title": "T01E02 Visionary Scenarios",
+        "is_exam_exercise": 0
       },
       {
         "id": 4289,
-        "title": "H07E03 MVC & Observer Pattern"
+        "title": "H07E03 MVC & Observer Pattern",
+        "is_exam_exercise": 0
+      },
+      {
+        "id": 4321,
+        "title": "T02E01 Design Goals and Design Goal Trade-offs",
+        "is_exam_exercise": 0
       },
       {
         "id": 4341,
-        "title": "H09E01 Advantages and Disadvantages of Scrum"
+        "title": "H09E01 Advantages and Disadvantages of Scrum",
+        "is_exam_exercise": 0
       },
-      { "id": 4398, "title": "H10E01 Problems using Git" },
+      {
+        "id": 4342,
+        "title": "H09E02 Spiral model and Scrum",
+        "is_exam_exercise": 0
+      },
+      {
+        "id": 4398,
+        "title": "H10E01 Problems using Git",
+        "is_exam_exercise": 0
+      },
       {
         "id": 4399,
-        "title": "H10E02 Merge Conflicts & Best Practices"
-      }
+        "title": "H10E02 Merge Conflicts & Best Practices",
+        "is_exam_exercise": 0
+      },
+      {
+        "id": 4558,
+        "title": "H11E02 Model Refactoring",
+        "is_exam_exercise": 0
+      },
+      { "id": 4641, "title": "Requirements", "is_exam_exercise": 1 },
+      { "id": 4643, "title": "Design Goal Trade-offs", "is_exam_exercise": 1 },
+      { "id": 4674, "title": "Requirements", "is_exam_exercise": 1 },
+      { "id": 4675, "title": "Design Goal Trade-offs", "is_exam_exercise": 1 },
+      {
+        "id": 4809,
+        "title": "System Design Model Review 1",
+        "is_exam_exercise": 1
+      },
+      {
+        "id": 4810,
+        "title": "System Design Model Review 2",
+        "is_exam_exercise": 1
+      },
+      {
+        "id": 4811,
+        "title": "System Design Model Review 3",
+        "is_exam_exercise": 1
+      },
+      {
+        "id": 4812,
+        "title": "System Design Model Review 4",
+        "is_exam_exercise": 1
+      },
+      { "id": 4813, "title": "Use Cases 1", "is_exam_exercise": 1 },
+      { "id": 4814, "title": "Use Cases 2", "is_exam_exercise": 1 },
+      { "id": 4815, "title": "Use Cases 3", "is_exam_exercise": 1 },
+      { "id": 4816, "title": "Use Cases 4", "is_exam_exercise": 1 },
+      { "id": 4817, "title": "Use Cases 5", "is_exam_exercise": 1 },
+      { "id": 4818, "title": "Use Cases 6", "is_exam_exercise": 1 },
+      { "id": 5052, "title": "Requirements", "is_exam_exercise": 1 },
+      { "id": 5053, "title": "Design Goal Trade-offs", "is_exam_exercise": 1 },
+      { "id": 5148, "title": "Requirements", "is_exam_exercise": 1 },
+      { "id": 5149, "title": "Requirements", "is_exam_exercise": 1 },
+      { "id": 5150, "title": "System Design Review", "is_exam_exercise": 1 },
+      { "id": 5151, "title": "System Design Review", "is_exam_exercise": 1 }
+    ]
+  },
+  "Fortgeschrittene Themen des Softwaretests SS2021 (IN2084)": {
+    "semester": "SS21",
+    "course_id": 139,
+    "exercises": [
+      {
+        "id": 4462,
+        "title": "Regression Test Optimization",
+        "is_exam_exercise": 1
+      },
+      {
+        "id": 4463,
+        "title": "Regression Test Optimization",
+        "is_exam_exercise": 1
+      },
+      {
+        "id": 4464,
+        "title": "Regression Test Optimization",
+        "is_exam_exercise": 1
+      },
+      {
+        "id": 4499,
+        "title": "Modified Condition/Decision Coverage (MC/DC)",
+        "is_exam_exercise": 1
+      },
+      {
+        "id": 4500,
+        "title": "Modified Condition/Decision Coverage (MC/DC)",
+        "is_exam_exercise": 1
+      },
+      {
+        "id": 4502,
+        "title": "Modified Condition/Decision Coverage (MC/DC)",
+        "is_exam_exercise": 1
+      },
+      { "id": 4503, "title": "Fuzzer Development", "is_exam_exercise": 1 },
+      {
+        "id": 4507,
+        "title": "Random Testing vs. Partition-Based Testing: Partitioning",
+        "is_exam_exercise": 1
+      },
+      {
+        "id": 4510,
+        "title": "Random Testing vs. Partition-Based Testing: Partitioning",
+        "is_exam_exercise": 1
+      },
+      {
+        "id": 4511,
+        "title": "Random Testing vs. Partition-Based Testing: Partitioning",
+        "is_exam_exercise": 1
+      },
+      {
+        "id": 4550,
+        "title": "Testing Artificial Intelligence",
+        "is_exam_exercise": 1
+      },
+      { "id": 4551, "title": "Fuzzer Development", "is_exam_exercise": 1 },
+      { "id": 4552, "title": "Fuzzer Development", "is_exam_exercise": 1 },
+      { "id": 4554, "title": "Fuzzing Theory", "is_exam_exercise": 1 },
+      { "id": 4555, "title": "Fuzzing Theory", "is_exam_exercise": 1 },
+      { "id": 4556, "title": "Fuzzing Theory", "is_exam_exercise": 1 },
+      {
+        "id": 4561,
+        "title": "Basics of Software Testing",
+        "is_exam_exercise": 1
+      },
+      {
+        "id": 4562,
+        "title": "Testing with Mealy Machines",
+        "is_exam_exercise": 1
+      },
+      {
+        "id": 4563,
+        "title": "Testing Artificial Intelligence",
+        "is_exam_exercise": 1
+      },
+      {
+        "id": 4564,
+        "title": "Basics of Software Testing",
+        "is_exam_exercise": 1
+      },
+      {
+        "id": 4565,
+        "title": "Testing with Mealy Machines",
+        "is_exam_exercise": 1
+      },
+      {
+        "id": 4566,
+        "title": "Testing with Mealy Machines",
+        "is_exam_exercise": 1
+      },
+      {
+        "id": 4567,
+        "title": "Testing with Mealy Machines",
+        "is_exam_exercise": 1
+      },
+      {
+        "id": 4568,
+        "title": "Testing with Mealy Machines",
+        "is_exam_exercise": 1
+      },
+      {
+        "id": 4569,
+        "title": "Testing with Mealy Machines",
+        "is_exam_exercise": 1
+      },
+      { "id": 4572, "title": "OOS Test Selection", "is_exam_exercise": 1 },
+      { "id": 4573, "title": "OOS Test Selection", "is_exam_exercise": 1 },
+      { "id": 4574, "title": "OOS Test Selection", "is_exam_exercise": 1 },
+      {
+        "id": 4624,
+        "title": "Partition-based Testing - Weyuker&Jeng",
+        "is_exam_exercise": 1
+      },
+      {
+        "id": 4625,
+        "title": "Partition-based Testing - Weyuker&Jeng",
+        "is_exam_exercise": 1
+      },
+      { "id": 4631, "title": "Good test cases", "is_exam_exercise": 1 },
+      { "id": 4681, "title": "Software Defects", "is_exam_exercise": 1 },
+      { "id": 4683, "title": "Software Defects", "is_exam_exercise": 1 },
+      { "id": 4685, "title": "Software Defects", "is_exam_exercise": 1 },
+      {
+        "id": 4698,
+        "title": "Random Testing vs. Partition-Based Testing: Partitioning",
+        "is_exam_exercise": 1
+      },
+      {
+        "id": 4699,
+        "title": "Fault Localization with Hit Spectra",
+        "is_exam_exercise": 1
+      },
+      {
+        "id": 4700,
+        "title": "Fault Localization with Hit Spectra",
+        "is_exam_exercise": 1
+      },
+      {
+        "id": 4701,
+        "title": "Fault Localization with Hit Spectra",
+        "is_exam_exercise": 1
+      },
+      {
+        "id": 4702,
+        "title": "Fault Localization with Hit Spectra",
+        "is_exam_exercise": 1
+      },
+      { "id": 4705, "title": "Good test cases", "is_exam_exercise": 1 },
+      { "id": 4866, "title": "Text Test", "is_exam_exercise": 1 },
+      {
+        "id": 4889,
+        "title": "Testing autonomous Systems",
+        "is_exam_exercise": 1
+      },
+      {
+        "id": 4890,
+        "title": "Testing autonomous Systems",
+        "is_exam_exercise": 1
+      },
+      {
+        "id": 4891,
+        "title": "Testing autonomous Systems",
+        "is_exam_exercise": 1
+      },
+      { "id": 4897, "title": "CPS", "is_exam_exercise": 1 },
+      { "id": 4898, "title": "Delta Debugging", "is_exam_exercise": 1 },
+      { "id": 4899, "title": "Delta Debugging", "is_exam_exercise": 1 },
+      { "id": 4900, "title": "Delta Debugging", "is_exam_exercise": 1 },
+      { "id": 4901, "title": "Wejucker&Jeng Model", "is_exam_exercise": 1 },
+      { "id": 4902, "title": "FL", "is_exam_exercise": 1 },
+      { "id": 4903, "title": "Flo", "is_exam_exercise": 1 },
+      { "id": 4904, "title": "FLO", "is_exam_exercise": 1 },
+      { "id": 4905, "title": "vlo", "is_exam_exercise": 1 },
+      { "id": 4906, "title": "xxd", "is_exam_exercise": 1 },
+      { "id": 4907, "title": "Unit-Testing", "is_exam_exercise": 1 },
+      { "id": 4908, "title": "Unit Testing", "is_exam_exercise": 1 },
+      {
+        "id": 4909,
+        "title": "Testing autonomous Systems",
+        "is_exam_exercise": 1
+      },
+      {
+        "id": 4910,
+        "title": "Testing autonomous Systems",
+        "is_exam_exercise": 1
+      },
+      {
+        "id": 4911,
+        "title": "Testing autonomous Systems",
+        "is_exam_exercise": 1
+      },
+      {
+        "id": 4912,
+        "title": "Testing autonomous Systems",
+        "is_exam_exercise": 1
+      },
+      {
+        "id": 4913,
+        "title": "Metrics for Fault Localization",
+        "is_exam_exercise": 1
+      },
+      { "id": 4914, "title": "OO Defects", "is_exam_exercise": 1 },
+      {
+        "id": 4915,
+        "title": "Requirements-based Testing",
+        "is_exam_exercise": 1
+      },
+      { "id": 4916, "title": "OOS Testing Theory", "is_exam_exercise": 1 },
+      { "id": 4917, "title": "OOS Testing Theory", "is_exam_exercise": 1 },
+      { "id": 4918, "title": "OOS Testing Theory", "is_exam_exercise": 1 },
+      { "id": 4919, "title": "OOS Testing Theory", "is_exam_exercise": 1 },
+      { "id": 4920, "title": "OO Defects", "is_exam_exercise": 1 }
+    ]
+  },
+  "Exam: Functional Programming and Verification (IN0003) WS 21/22": {
+    "semester": "WS21/22",
+    "course_id": 167,
+    "exercises": [
+      {
+        "id": 6347,
+        "title": "Verification of Mini-OCaml",
+        "is_exam_exercise": 1
+      },
+      {
+        "id": 6348,
+        "title": "Verification of Mini-OCaml",
+        "is_exam_exercise": 1
+      },
+      { "id": 6375, "title": "Weakest Precondition", "is_exam_exercise": 1 },
+      { "id": 6376, "title": "Weakest Precondition", "is_exam_exercise": 1 },
+      { "id": 6377, "title": "MiniJava 3.0", "is_exam_exercise": 1 },
+      { "id": 6378, "title": "MiniJava 3.0", "is_exam_exercise": 1 }
+    ]
+  },
+  "Introduction to Software Engineering (IN0006) - Garching SS22": {
+    "semester": "SS22",
+    "course_id": 169,
+    "exercises": [
+      {
+        "id": 6715,
+        "title": "H01E01 Change in Software Development",
+        "is_exam_exercise": 0
+      },
+      { "id": 6716, "title": "L01E03 Group vs. Team", "is_exam_exercise": 0 },
+      {
+        "id": 6770,
+        "title": "H03E02 Bumpers Visionary Scenario",
+        "is_exam_exercise": 0
+      },
+      {
+        "id": 6787,
+        "title": "H03E01 Bumpers Nonfunctional Requirements",
+        "is_exam_exercise": 0
+      },
+      {
+        "id": 6790,
+        "title": "L03E02 Create a formalized Scenario",
+        "is_exam_exercise": 0
+      },
+      {
+        "id": 6794,
+        "title": "H04E02 Design Goal Trade-offs",
+        "is_exam_exercise": 0
+      },
+      {
+        "id": 6814,
+        "title": "H04E01 Analysis Model & System Design",
+        "is_exam_exercise": 0
+      },
+      {
+        "id": 6904,
+        "title": "H05E02 Centralized vs Decentralized Designs",
+        "is_exam_exercise": 0
+      },
+      {
+        "id": 6911,
+        "title": "H06E03 Inheritance vs. Delegation",
+        "is_exam_exercise": 0
+      },
+      {
+        "id": 7012,
+        "title": "H07E03 MVC & Observer Pattern",
+        "is_exam_exercise": 0
+      },
+      {
+        "id": 7195,
+        "title": "H09E01 Advantages and Disadvantages of Scrum",
+        "is_exam_exercise": 0
+      },
+      { "id": 7340, "title": "H11E02 Model Refactoring", "is_exam_exercise": 0 }
     ]
   }
 }

@@ -11,7 +11,7 @@ type SubmissionBase = {
 
 export type TextSubmission = SubmissionBase & {
   type: "text";
-  content: string;
+  text: string;
 };
 
 export type ProgrammingSubmission = SubmissionBase & {
