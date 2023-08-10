@@ -75,7 +75,8 @@ export default function DefineExperiment({
       !exercise ||
       !executionMode ||
       !experimentSubmissions ||
-      !experimentSubmissions.evaluationSubmissions
+      !experimentSubmissions.evaluationSubmissions ||
+      experimentSubmissions.evaluationSubmissions.length === 0
     ) {
       return undefined;
     }

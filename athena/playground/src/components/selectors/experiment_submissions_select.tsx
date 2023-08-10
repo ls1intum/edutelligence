@@ -221,11 +221,8 @@ export default function ExperimentSubmissionsSelect({
       )}
       <div className="flex gap-2">
         <div className="flex-1 p-1 space-y-1">
-          <div className="text-base font-medium border-b border-gray-300 mb-2">
-            Excluded ({excludedSubmissions.length} Submissions)
-          </div>
-          {!disabled && (
-            <div className="border-b border-gray-200 pb-1 justify-between flex items-center">
+        {!disabled && (
+            <div className="justify-between flex items-center">
               {experimentSubmissions?.trainingSubmissions !== undefined && (
                 <button
                   disabled={
@@ -237,11 +234,12 @@ export default function ExperimentSubmissionsSelect({
                   className="rounded-md p-2 text-primary-500 hover:text-primary-600 hover:bg-primary-100 disabled:text-gray-500 disabled:cursor-not-allowed disabled:hover:bg-gray-100"
                   onClick={() => moveSubmissions("excluded", "training")}
                 >
+                  Move{" "}
                   {Math.min(
                     moveSubmissionsNumber,
                     excludedSubmissions.length ?? 0
                   )}{" "}
-                  Training →
+                  to Training →
                 </button>
               )}
               <button
@@ -254,14 +252,18 @@ export default function ExperimentSubmissionsSelect({
                 className="rounded-md p-2 text-primary-500 hover:text-primary-600 hover:bg-primary-100 disabled:text-gray-500 disabled:cursor-not-allowed disabled:hover:bg-gray-100"
                 onClick={() => moveSubmissions("excluded", "evaluation")}
               >
+                Move{" "}
                 {Math.min(
                   moveSubmissionsNumber,
                   excludedSubmissions.length ?? 0
                 )}{" "}
-                Evaluation →
+                to Evaluation →
               </button>
             </div>
           )}
+          <div className="text-base font-medium border-b border-gray-300 mb-2">
+            Excluded ({excludedSubmissions.length} Submissions)
+          </div>
           <p className="text-sm text-gray-500 mb-2">
             Submissions that are not used in the experiment.
           </p>
@@ -272,12 +274,8 @@ export default function ExperimentSubmissionsSelect({
         </div>
         {experimentSubmissions?.trainingSubmissions !== undefined && (
           <div className="flex-1 p-1 space-y-1">
-            <div className="text-base font-medium border-b border-gray-300 mb-2">
-              Training ({experimentSubmissions?.trainingSubmissions.length ?? 0}{" "}
-              Submissions)
-            </div>
             {!disabled && (
-              <div className="border-b border-gray-200 pb-1 justify-between flex items-center">
+              <div className="justify-between flex items-center">
                 <button
                   disabled={
                     Math.min(
@@ -288,11 +286,12 @@ export default function ExperimentSubmissionsSelect({
                   className="rounded-md p-2 text-red-500 hover:text-red-600 hover:bg-red-100 disabled:text-gray-500 disabled:cursor-not-allowed disabled:hover:bg-gray-100"
                   onClick={() => moveSubmissions("training", "excluded")}
                 >
+                  Move{" "}
                   {Math.min(
                     moveSubmissionsNumber,
                     experimentSubmissions?.trainingSubmissions.length ?? 0
                   )}{" "}
-                  Excluded →
+                  to Excluded →
                 </button>
                 <button
                   disabled={
@@ -304,14 +303,19 @@ export default function ExperimentSubmissionsSelect({
                   className="rounded-md p-2 text-red-500 hover:text-red-600 hover:bg-red-100 disabled:text-gray-500 disabled:cursor-not-allowed disabled:hover:bg-gray-100"
                   onClick={() => moveSubmissions("training", "evaluation")}
                 >
+                  Move{" "}
                   {Math.min(
                     moveSubmissionsNumber,
                     experimentSubmissions?.trainingSubmissions.length ?? 0
                   )}{" "}
-                  Evaluation →
+                  to Evaluation →
                 </button>
               </div>
             )}
+            <div className="text-base font-medium border-b border-gray-300 mb-2">
+              Training ({experimentSubmissions?.trainingSubmissions.length ?? 0}{" "}
+              Submissions)
+            </div>
             <p className="text-sm text-gray-500 mb-2">
               Sent for training before running evaluation.
             </p>
@@ -322,13 +326,8 @@ export default function ExperimentSubmissionsSelect({
           </div>
         )}
         <div className="flex-1 p-1 space-y-1">
-          <div className="text-base font-medium border-b border-gray-300 mb-2">
-            Evaluation (
-            {experimentSubmissions?.evaluationSubmissions.length ?? 0}{" "}
-            Submissions)
-          </div>
-          {!disabled && (
-            <div className="border-b border-gray-200 pb-1 justify-between flex items-center">
+        {!disabled && (
+            <div className="justify-between flex items-center">
               <button
                 disabled={
                   Math.min(
@@ -339,11 +338,12 @@ export default function ExperimentSubmissionsSelect({
                 className="rounded-md p-2 text-red-500 hover:text-red-600 hover:bg-red-100 disabled:text-gray-500 disabled:cursor-not-allowed disabled:hover:bg-gray-100"
                 onClick={() => moveSubmissions("evaluation", "excluded")}
               >
+                Move{" "}
                 {Math.min(
                   moveSubmissionsNumber,
                   experimentSubmissions?.evaluationSubmissions.length ?? 0
                 )}{" "}
-                Excluded →
+                to Excluded →
               </button>
               {experimentSubmissions?.trainingSubmissions !== undefined && (
                 <button
@@ -356,15 +356,21 @@ export default function ExperimentSubmissionsSelect({
                   className="rounded-md p-2 text-red-500 hover:text-red-600 hover:bg-red-100 disabled:text-gray-500 disabled:cursor-not-allowed disabled:hover:bg-gray-100"
                   onClick={() => moveSubmissions("evaluation", "training")}
                 >
+                  Move{" "}
                   {Math.min(
                     moveSubmissionsNumber,
                     experimentSubmissions?.evaluationSubmissions.length ?? 0
                   )}{" "}
-                  Training →
+                  to Training →
                 </button>
               )}
             </div>
           )}
+          <div className="text-base font-medium border-b border-gray-300 mb-2">
+            Evaluation (
+            {experimentSubmissions?.evaluationSubmissions.length ?? 0}{" "}
+            Submissions)
+          </div>
           <p className="text-sm text-gray-500 mb-2">
             Run the experiment on the evaluation submissions.
           </p>
