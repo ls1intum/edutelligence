@@ -12,15 +12,20 @@ import useRequestFeedbackSuggestions from "@/hooks/athena/request_feedback_sugge
 import SubmissionDetail from "@/components/details/submission_detail";
 import ExerciseDetail from "@/components/details/exercise_detail";
 import useSendSubmissions from "@/hooks/athena/send_submissions";
+import { ModuleConfiguration } from "./configure_modules";
+
+type RunModuleExperimentProps = {
+  experiment: Experiment;
+  moduleConfiguration: ModuleConfiguration;
+};
 
 export default function RunModuleExperiment({
   experiment,
-}: {
-  experiment: Experiment;
-}) {
+  moduleConfiguration,
+}: RunModuleExperimentProps) {
   const id = useId();
   const [currentIndex, setCurrentSubmissionIndex] = useState(-1);
-  
+
   const { mutate: sendSubmissions, isLoading: isLoadingSendSubmissions } =
     useSendSubmissions();
   const { mutate: selectSubmission, isLoading: isLoadingSubmissionSelection } =
@@ -32,7 +37,7 @@ export default function RunModuleExperiment({
   const [submissionsAndFeedbacks, setSubmissionsAndFeedbacks] = useState<
     { submission: Submission; feedbacks: Feedback[] }[]
   >([]);
-  
+
   useEffect(() => {
     sendSubmissions({
       exercise: experiment.exercise,
@@ -45,6 +50,12 @@ export default function RunModuleExperiment({
 
   return (
     <div className="bg-white rounded-md p-4 mb-8 space-y-4">
+      <div className="sticky top-0 bg-white border-b border-gray-300 z-10 px-2">
+        <div className="flex items-center gap-2">
+          <h4 className="text-lg font-bold">{moduleConfiguration.name}</h4>
+        </div>
+      </div>
+
       <div className="flex flex-row space-x-2 items-center">
         <button
           className="bg-primary-500 text-white rounded-md p-2 hover:bg-primary-600 disabled:text-gray-500 disabled:bg-gray-200 disabled:cursor-not-allowed"
@@ -124,25 +135,30 @@ export default function RunModuleExperiment({
           Next
         </button>
         <div className="flex flex-col">
-        <span className="text-gray-500">
-          {currentIndex < 0 ? "No submission selected" : `Selected: Submission ${currentIndex + 1} (id: ${submissionsAndFeedbacks[currentIndex]?.submission?.id})`}
-        </span>
-        <span className="text-gray-500">
-          Progress: ({currentIndex + 1} / {experiment.experimentSubmissions.testSubmissions.length})
-        </span>
+          <span className="text-gray-500">
+            {currentIndex < 0
+              ? "No submission selected"
+              : `Selected: Submission ${currentIndex + 1} (id: ${
+                  submissionsAndFeedbacks[currentIndex]?.submission?.id
+                })`}
+          </span>
+          <span className="text-gray-500">
+            Progress: ({currentIndex + 1} /{" "}
+            {experiment.experimentSubmissions.testSubmissions.length})
+          </span>
         </div>
       </div>
-        {submissionsAndFeedbacks[currentIndex]?.submission ? (
-          <SubmissionDetail
-            identifier={id}
-            submission={submissionsAndFeedbacks[currentIndex]?.submission}
-            feedbacks={submissionsAndFeedbacks[currentIndex]?.feedbacks}
-          />
-        ) : (
-          <p className="text-gray-500">
-            No submission selected. Please click next to select a submission.
-          </p>
-        )}
+      {submissionsAndFeedbacks[currentIndex]?.submission ? (
+        <SubmissionDetail
+          identifier={id}
+          submission={submissionsAndFeedbacks[currentIndex]?.submission}
+          feedbacks={submissionsAndFeedbacks[currentIndex]?.feedbacks}
+        />
+      ) : (
+        <p className="text-gray-500">
+          No submission selected. Please click next to select a submission.
+        </p>
+      )}
       {/* 4. Assessment */}
       {/* 5. Send feedback */}
       {/* Go to 2. */}

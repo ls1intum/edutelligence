@@ -7,23 +7,24 @@ import ModuleSelectAndConfig from "@/components/selectors/module_and_config_sele
 import { Experiment } from "./define_experiment";
 import RunModuleExperiment from "./run_module_experiment";
 import ExperimentSubmissions from "./experiment_submissions";
+import type { ModuleConfiguration } from "./configure_modules";
+import { ModuleProvider } from "@/hooks/module_context";
+
+type ConductExperimentProps = {
+  experiment: Experiment;
+  moduleConfigurations: ModuleConfiguration[];
+};
 
 export default function ConductExperiment({
   experiment,
-}: {
-  experiment: Experiment;
-}) {
-  const [numberOfModuleExperiments, setNumberOfModuleExperiments] =
-    useState<number>(1);
-
+  moduleConfigurations,
+}: ConductExperimentProps) {
   useEffect(() => {
     const handleBeforeunload = (e) => {
       e.preventDefault();
       e.returnValue = "";
     };
-
     window.addEventListener("beforeunload", handleBeforeunload);
-
     return () => {
       window.removeEventListener("beforeunload", handleBeforeunload);
     };
@@ -48,31 +49,6 @@ export default function ConductExperiment({
           >
             {handle.active ? "Exit Fullscreen" : "Enter Fullscreen"}
           </button>
-          <div className="flex flex-row gap-1 items-center">
-            <span className="text-gray-500 text-sm">
-              {numberOfModuleExperiments} Module Experiment
-              {numberOfModuleExperiments > 1 ? "s" : ""}
-            </span>
-            <button
-              className="bg-primary-500 text-white rounded-md p-2 hover:bg-primary-600 disabled:text-gray-500 disabled:bg-gray-200 disabled:cursor-not-allowed"
-              onClick={() => {
-                if (numberOfModuleExperiments <= 1) {
-                  return;
-                }
-                setNumberOfModuleExperiments(numberOfModuleExperiments - 1);
-              }}
-            >
-              -
-            </button>
-            <button
-              className="bg-primary-500 text-white rounded-md p-2 hover:bg-primary-600 disabled:text-gray-500 disabled:bg-gray-200 disabled:cursor-not-allowed"
-              onClick={() => {
-                setNumberOfModuleExperiments(numberOfModuleExperiments + 1);
-              }}
-            >
-              +
-            </button>
-          </div>
         </div>
         <div
           className="w-full flex gap-4 snap-x snap-mandatory overflow-x-auto max-h-[calc(100vh-6rem)]"
@@ -89,19 +65,24 @@ export default function ConductExperiment({
           </div>
           <div className="flex flex-col shrink-0 snap-start overflow-y-auto">
             <div className="shrink-0 w-[calc(50vw-2rem)] pr-2">
-              <ExperimentSubmissions experiment={experiment}/>
+              <ExperimentSubmissions experiment={experiment} />
             </div>
           </div>
 
-          {Array.from({ length: numberOfModuleExperiments }).map((_, index) => (
+          {moduleConfigurations.map((moduleConfiguration) => (
             <div
-              key={index}
+              key={moduleConfiguration.id}
               className="flex flex-col shrink-0 snap-start overflow-y-auto"
             >
               <div className="shrink-0 w-[calc(50vw-2rem)] px-2">
-                <ModuleSelectAndConfig exerciseType={experiment.exercise.type} disabled>
-                  <RunModuleExperiment experiment={experiment} />
-                </ModuleSelectAndConfig>
+                <ModuleProvider
+                  module={moduleConfiguration.moduleAndConfig.module}
+                  moduleConfig={
+                    moduleConfiguration.moduleAndConfig.moduleConfig
+                  }
+                >
+                  <RunModuleExperiment experiment={experiment} moduleConfiguration={moduleConfiguration}/>
+                </ModuleProvider>
               </div>
             </div>
           ))}
