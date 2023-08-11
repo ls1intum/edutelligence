@@ -78,7 +78,10 @@ async function setupAuthenticatedClient() {
     console.log("Authenticated successfully");
     artemisInstance = axiosInstance;
   } catch (error) {
-    console.error("An error occurred during authentication:", JSON.stringify(error));
+    console.error(
+      "An error occurred during authentication:",
+      JSON.stringify(error)
+    );
     process.exit(1);
   }
 }
@@ -98,17 +101,20 @@ async function fetchArrayBufferWithRetry(
   url,
   body,
   retries = fetchRetries,
-  delay = fetchRetryDelay,
+  delay = fetchRetryDelay
 ) {
   let lastError;
 
   for (let i = 0; i <= retries; i++) {
     try {
-      const response = body === undefined ? await artemisInstance.get(url, {
-        responseType: "arraybuffer",
-      }) : await artemisInstance.post(url, body, {
-        responseType: "arraybuffer",
-      });
+      const response =
+        body === undefined
+          ? await artemisInstance.get(url, {
+              responseType: "arraybuffer",
+            })
+          : await artemisInstance.post(url, body, {
+              responseType: "arraybuffer",
+            });
 
       return response.data;
     } catch (error) {
@@ -234,7 +240,10 @@ async function downloadSubmissions(exerciseId, participationIds) {
   const participationIdGroups = [];
   for (let i = 0; i < participationIds.length; i += batchSize) {
     participationIdGroups.push(
-      participationIds.slice(i, Math.min(i + batchSize, participationIds.length))
+      participationIds.slice(
+        i,
+        Math.min(i + batchSize, participationIds.length)
+      )
     );
   }
 
@@ -242,10 +251,7 @@ async function downloadSubmissions(exerciseId, participationIds) {
     evaluationOutputDirPath,
     `exercise-${exerciseId}`
   );
-  const submissionsPath = path.join(
-    exercisePath,
-    "submissions"
-  );
+  const submissionsPath = path.join(exercisePath, "submissions");
 
   // Keep track of index and progress
   let groupIndex = 0;
@@ -254,10 +260,14 @@ async function downloadSubmissions(exerciseId, participationIds) {
   let failed = [];
   const total = participationIdGroups.length;
   for (const participationIdGroup of participationIdGroups) {
-    const identifier = `exercise ${exerciseId}, submission ${offset + 1} to ${offset + participationIdGroup.length} batch (${groupIndex + 1}/${total})`
+    const identifier = `exercise ${exerciseId}, submission ${offset + 1} to ${
+      offset + participationIdGroup.length
+    } batch (${groupIndex + 1}/${total})`;
     try {
       console.log(`SUBMISSIONS - Start downloading ${identifier}`);
-      const url = `/programming-exercises/${exerciseId}/export-repos-by-participation-ids/${participationIdGroup.join(",")}`;
+      const url = `/programming-exercises/${exerciseId}/export-repos-by-participation-ids/${participationIdGroup.join(
+        ","
+      )}`;
       const data = await fetchArrayBufferWithRetry(url, {
         anonymizeRepository: true,
       });
@@ -308,10 +318,14 @@ async function downloadSubmissions(exerciseId, participationIds) {
       offset += participationIdGroup.length;
     }
   }
-  console.log(`SUBMISSIONS - Downloaded exercises ${exerciseId}: ${downloaded.length}, (${failed.length} failed)`);
+  console.log(
+    `SUBMISSIONS - Downloaded exercises ${exerciseId}: ${downloaded.length}, (${failed.length} failed)`
+  );
   await fs.promises.writeFile(
     path.join(exercisePath, `submissions-${Date.now()}.txt`),
-    `${downloaded.length} downloaded:\n${downloaded.join(", ")}\n\n${failed.length} failed:\n${failed.join(", ")}`
+    `${downloaded.length} downloaded:\n${downloaded.join(", ")}\n\n${
+      failed.length
+    } failed:\n${failed.join(", ")}`
   );
   return failed.length === 0;
 }
@@ -326,7 +340,9 @@ async function download(exercise) {
   let success = true;
   console.log(`Downloading exercise ${exercise.id}...`);
   success = success && (await downloadMaterial(exercise.id));
-  success = success && (await downloadSubmissions(exercise.id, exercise.participations));
+  success =
+    success &&
+    (await downloadSubmissions(exercise.id, exercise.participations));
   console.log(`Finished downloading exercise ${exercise.id}`);
   return success;
 }
@@ -387,15 +403,15 @@ async function main() {
     }
   }
   console.log(
-    `Fully downloaded ${downloaded.length} exercises, ${
-      failed.length
-    } failed/incomplete`
+    `Fully downloaded ${downloaded.length} exercises, ${failed.length} failed/incomplete`
   );
   console.log("Done!");
-  
+
   await fs.promises.writeFile(
     path.join(evaluationOutputDirPath, `download-${Date.now()}.txt`),
-    `${downloaded.length} exercises downloaded:\n${downloaded.join(", ")}\n\n${failed.length} exercises failed:\n${failed.join(", ")}`
+    `${downloaded.length} exercises downloaded:\n${downloaded.join(", ")}\n\n${
+      failed.length
+    } exercises failed:\n${failed.join(", ")}`
   );
 }
 
