@@ -1,4 +1,5 @@
 import inquirer from "inquirer";
+import axios from "axios";
 import JSZip from "jszip";
 import fs from "fs";
 import path from "path";
@@ -16,7 +17,7 @@ const fetchRetryCount = 3;
 // Delay between fetch retries in milliseconds
 const fetchRetryDelay = 1000;
 const exponentialBackoffFactor = 5; // 1, 5, 25 (seconds)
-const concurrentDownloads = 5;
+const timeout = 3600000; // 1 hour
 
 /**
  * Fetch a URL, retrying the fetch a specified number of times if it fails.
@@ -36,7 +37,13 @@ async function fetchWithRetry(
 ) {
   for (let i = 0; i <= retryCount; i++) {
     try {
-      const response = await fetch(url, options);
+      const response = await axios({
+        timeout,
+        url,
+        method: options.method,
+        headers: options.headers,
+        data: options.body,
+      });
       if (response.ok) {
         return response;
       }
@@ -53,6 +60,7 @@ async function fetchWithRetry(
             i + 1
           }/${retryCount + 1})`
         );
+        console.error(` > ${error.message}`);
         await new Promise((resolve) => setTimeout(resolve, delay));
       } else {
         throw error;
@@ -286,23 +294,6 @@ async function download(exerciseId) {
 }
 
 /**
- * Helper function to create a promise that resolves after a task is done.
- */
-const taskPromise = (idx, task = null) =>
-  new Promise((resolve) => {
-    if (!task) {
-      resolve(idx);
-    }
-    task
-      .then(() => {
-        resolve(idx);
-      })
-      .catch(() => {
-        resolve(idx);
-      });
-  });
-
-/**
  * Main entry point.
  */
 async function main() {
@@ -352,21 +343,11 @@ async function main() {
   }
 
   const exerciseIds = exercises.map((exercise) => exercise.id);
-
-  // Only download limited exercises at a time
-  const downloadPromises = Array.from({ length: concurrentDownloads }, () =>
-    Promise.resolve()
-  );
-  const resultPromises = [];
-
+  const results = [];
   for (const exerciseId of exerciseIds) {
-    const idx = await Promise.race(downloadPromises);
-    const downloadPromise = download(exerciseId);
-    resultPromises.push(downloadPromise);
-    downloadPromises[idx] = taskPromise(idx, downloadPromise);
+    const result = await download(exerciseId);
+    results.push(result);
   }
-
-  const results = await Promise.all(resultPromises);
   const failed = results.filter((result) => !result);
   console.log(
     `Downloaded ${exerciseIds.length - failed.length} exercises, ${
