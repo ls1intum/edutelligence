@@ -43,14 +43,15 @@ async function fetchWithRetry(
         method: options.method,
         headers: options.headers,
         data: options.body,
+        responseType: "arraybuffer",
       });
-      if (response.ok) {
+      if (response.status >= 200 && response.status < 300) {
         return response;
       }
       throw new Error(
         `HTTP ${response.status} for ${url}: ${
           response.statusText
-        }\n${await response.text()}`
+        }\n${response.data}`
       );
     } catch (error) {
       if (i < retryCount) {
@@ -94,7 +95,7 @@ async function auth() {
     body: JSON.stringify({ username, password }),
   });
 
-  if (!response.ok) {
+  if (!(response.status >= 200 && response.status < 300)) {
     const error = await response.json();
     console.error(`Failed to authenticate: ${error.title}`);
     process.exit(1);
@@ -139,7 +140,7 @@ async function downloadMaterial(exerciseId) {
     }
   );
 
-  if (!response.ok) {
+  if (!(response.status >= 200 && response.status < 300)) {
     console.error(`Error downloading exercise ${exerciseId}'s material`);
     process.exit(1);
   }
@@ -149,7 +150,7 @@ async function downloadMaterial(exerciseId) {
     evaluationOutputDirPath,
     `exercise-${exerciseId}`
   );
-  const data = await response.arrayBuffer();
+  const data = response.data;
   const materialData = await JSZip.loadAsync(data);
 
   // There is only one zip file in the material zip, which contains the exercise, solution and tests zips
@@ -225,7 +226,7 @@ async function downloadSubmissions(exerciseId) {
     }
   );
 
-  if (!response.ok) {
+  if (!(response.status >= 200 && response.status < 300)) {
     console.error(`Error downloading exercise ${exerciseId}'s submissions`);
     process.exit(1);
   }
@@ -238,7 +239,7 @@ async function downloadSubmissions(exerciseId) {
   );
 
   // The response is a zip file containing a zip file for each submission
-  const data = await response.arrayBuffer();
+  const data = response.data;
   const submissionsData = await JSZip.loadAsync(data);
 
   await Promise.all(
