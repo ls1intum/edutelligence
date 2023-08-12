@@ -4,4 +4,5 @@ type ModuleResponse = {
   data: any;
   meta?: any;
 };
+
 export default ModuleResponse;

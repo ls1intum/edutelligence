@@ -5,11 +5,11 @@ export type FileTree = {
   path: string;
 } & (
   | {
-      dir: false;
+      isDir: false;
       filename: string;
     }
   | {
-      dir: true;
+      isDir: true;
       dirname: string;
       children: FileTree[];
     }
@@ -36,14 +36,14 @@ function buildFileTree(paths: string[], path: string = ""): FileTree[] {
     // If there is no / in remainingPath, then it is a file
     if (remainingPath.indexOf("/") === -1) {
       tree.push({
-        dir: false,
+        isDir: false,
         filename: remainingPath,
         path: path + remainingPath,
       });
     } else {
       // Else, it is a directory
       tree.push({
-        dir: true,
+        isDir: true,
         dirname: remainingPath.replace("/", ""),
         path: path + remainingPath,
         children: buildFileTree(paths, path + remainingPath),

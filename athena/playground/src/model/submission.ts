@@ -1,5 +1,8 @@
+import type { ExerciseType } from "./exercise";
+
 type SubmissionBase = {
     id: number;
+    type: ExerciseType; // Playground only
     exercise_id: number;
     meta: {
         [key: string]: any;
@@ -7,19 +10,13 @@ type SubmissionBase = {
 };
 
 export type TextSubmission = SubmissionBase & {
+  type: "text";
   text: string;
 };
 
 export type ProgrammingSubmission = SubmissionBase & {
+  type: "programming";
   repository_url: string;
 };
 
 export type Submission = ProgrammingSubmission | TextSubmission;
-
-export function isProgrammingSubmission(submission: Submission): submission is ProgrammingSubmission {
-  return (submission as ProgrammingSubmission).repository_url !== undefined;
-}
-
-export function isTextSubmission(submission: Submission): submission is TextSubmission {
-  return (submission as TextSubmission).text !== undefined;
-}

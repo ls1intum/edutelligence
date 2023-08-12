@@ -72,6 +72,63 @@ function replaceJsonPlaceholders(
   return result;
 }
 
+/**
+ * Adds the exercise type to all submissions and feedbacks in the given json.
+ * This is only for the playground, because the exercise type is not provided in the json for convenience.
+ * 
+ * @param json - the json to add the exercise type to
+ * @returns the json with the exercise type added to all submissions and feedbacks
+ */
+function addExerciseTypeToSubmissionsAndFeedbacks(json: any): any {
+  const exerciseType = json.type;
+
+  json.submissions = json.submissions?.map((submissionJson: any) => {
+    submissionJson.type = exerciseType;
+    submissionJson.feedbacks = submissionJson.feedbacks?.map((feedbackJson: any) => {
+      feedbackJson.type = exerciseType;
+      return feedbackJson;
+    });
+    return submissionJson;
+  });
+  return json;
+}
+
+/**
+ * Removes all null values from the given json.
+ * 
+ * @param json - the json to remove the null values from
+ * @param recursive - whether to remove null values recursively
+ * @returns the json without null values
+ */
+function removeNullValues(json: any, recursive: boolean = true): any {
+  if (Array.isArray(json)) {
+    return json.filter(item => item !== null).map(item => {
+      if (recursive && typeof item === "object" && item !== null) {
+        return removeNullValues(item, recursive);
+      } else {
+        return item;
+      }
+    });
+  } else if (typeof json === 'object' && json !== null) {
+    const result: any = {};
+    for (const key in json) {
+      if (json.hasOwnProperty(key)) {
+        const value = json[key];
+        if (value !== null) {
+          if (recursive && typeof value === "object" && value !== null) {
+            result[key] = removeNullValues(value, recursive);
+          } else {
+            result[key] = value;
+          }
+        }
+      }
+    }
+    return result;
+  } else {
+    return json;
+  }
+}
+
 function getExerciseJSON(
   mode: Mode,
   exerciseId: number,
@@ -85,13 +142,18 @@ function getExerciseJSON(
     `exercise-${exerciseId}.json`
   );
   if (fs.existsSync(exercisePath)) {
-    const exerciseJson = JSON.parse(fs.readFileSync(exercisePath, "utf8"));
-    return replaceJsonPlaceholders(
+    let exerciseJson = JSON.parse(fs.readFileSync(exercisePath, "utf8"));
+    exerciseJson = replaceJsonPlaceholders(
       mode,
       exerciseJson,
       exerciseId,
       athenaOrigin
     );
+    exerciseJson = addExerciseTypeToSubmissionsAndFeedbacks(exerciseJson);
+    if (exerciseJson.submissions) {
+      exerciseJson.submissions = removeNullValues(exerciseJson.submissions);
+    }
+    return exerciseJson;
   }
   throw new Error(`Exercise ${exerciseId} not found`);
 }
