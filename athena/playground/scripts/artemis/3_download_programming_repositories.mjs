@@ -405,7 +405,7 @@ async function main() {
   console.log(
     `Fully downloaded ${downloaded.length} exercises, ${failed.length} failed/incomplete`
   );
-  console.log("Done!");
+  console.log(`Failed exercises: ${failed.join(", ")}`);
 
   await fs.promises.writeFile(
     path.join(evaluationOutputDirPath, `download-${Date.now()}.txt`),
@@ -413,6 +413,8 @@ async function main() {
       failed.length
     } exercises failed:\n${failed.join(", ")}`
   );
+
+  console.log("Done!");
 }
 
 main();
