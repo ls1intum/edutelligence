@@ -90,7 +90,7 @@ async def suggest_feedback(exercise: Exercise, submission: Submission) -> List[F
 
             for feedback in feedbacks:
                 line = feedback.get("line", None)
-                description = feedback.get("text", "")
+                description = feedback.get("text", None)
                 credits = feedback.get("credits", 0.0)
                 feedback_proposals.append(
                     Feedback(

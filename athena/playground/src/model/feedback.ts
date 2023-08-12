@@ -1,7 +1,7 @@
 type FeedbackBase = {
   id: number;
-  title: string;
-  description: string;
+  title?: string;
+  description?: string;
   credits: number;
   exercise_id: number;
   submission_id: number;
