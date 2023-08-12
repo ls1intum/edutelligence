@@ -13,7 +13,6 @@ import useFeedbacks from "@/hooks/playground/feedbacks";
 
 import ExerciseSelect from "@/components/selectors/exercise_select";
 import SubmissionSelect from "@/components/selectors/submission_select";
-import FeedbackSelect from "@/components/selectors/feedback_select";
 import ModuleResponseView from "@/components/module_response_view";
 import Disclosure from "@/components/disclosure";
 import ExerciseDetail from "@/components/details/exercise_detail";
@@ -26,21 +25,29 @@ export default function SendFeedbacks({ module }: { module: ModuleMeta }) {
 
   const [exercise, setExercise] = useState<Exercise | undefined>(undefined);
   const [isAllSubmissions, setIsAllSubmissions] = useState<boolean>(true);
-  const [selectedSubmission, setSelectedSubmission] = useState<Submission | undefined>(undefined);
-  const [isAllFeedback, setIsAllFeedback] = useState<boolean>(true);
-  const [selectedFeedback, setSelectedFeedback] = useState<Feedback | undefined>(undefined);
+  const [selectedSubmission, setSelectedSubmission] = useState<
+    Submission | undefined
+  >(undefined);
 
   const [feedbacks, setFeedbacks] = useState<Feedback[]>([]);
   const [removedFeedbackIds, setRemovedFeedbackIds] = useState<number[]>([]);
-  const [responses, setResponses] = useState<(ModuleResponse | undefined)[]>([]);
+  const [responses, setResponses] = useState<(ModuleResponse | undefined)[]>(
+    []
+  );
 
   const setFeedbacksAndTrackChanges = (newFeedbacks: Feedback[]) => {
+    const storedFeedbackIds = new Set<number>(
+      storedFeedbacks?.map((f) => f.id) ?? []
+    );
+
     setFeedbacks(newFeedbacks);
-    const removedIds = new Set<number>(feedbacks.map((f) => f.id));
+    const removedIds = new Set<number>(
+      feedbacks.map((f) => f.id).filter((id) => storedFeedbackIds.has(id))
+    );
     newFeedbacks.forEach((f) => removedIds.delete(f.id));
     removedFeedbackIds.forEach((id) => removedIds.add(id));
     setRemovedFeedbackIds(Array.from(removedIds));
-  }
+  };
 
   const {
     data: submissions,
@@ -54,43 +61,46 @@ export default function SendFeedbacks({ module }: { module: ModuleMeta }) {
       onSuccess: (fetchFeedbacks) => {
         const ignoreIds = new Set<number>(removedFeedbackIds);
         feedbacks.forEach((f) => ignoreIds.add(f.id));
-        setFeedbacks([...fetchFeedbacks.filter((f) => !ignoreIds.has(f.id)), ...feedbacks]);
+        setFeedbacks([
+          ...fetchFeedbacks.filter((f) => !ignoreIds.has(f.id)),
+          ...feedbacks,
+        ]);
       },
     }
   );
 
-  const feedbacksAreChanged = removedFeedbackIds.length > 0 || feedbacks.some((f) => f.isChanged);
-
   const { isLoading, error, mutateAsync, reset } = useSendFeedbacks();
 
+  const feedbacksAreChanged =
+    removedFeedbackIds.length > 0 || feedbacks.some((f) => f.isChanged);
+  const resetFeedbacks = () => {
+    setFeedbacks(storedFeedbacks ?? []);
+    setRemovedFeedbackIds([]);
+  };
+
   // Handle resets with useEffect to avoid stale state
-  useEffect(() => {
-    reset();
-    setResponses([]);
-    setIsAllSubmissions(true);
-    setSelectedSubmission(undefined);
-    setIsAllFeedback(true);
-    setSelectedFeedback(undefined);
-  }, [exercise, reset]);
-  useEffect(() => {
-    setIsAllFeedback(true);
-    setSelectedFeedback(undefined);
-  }, [selectedSubmission, isAllSubmissions]);
   useEffect(() => setExercise(undefined), [module, mode]);
 
   return (
     <div className="bg-white rounded-md p-4 mb-8">
       <h3 className="text-2xl font-bold mb-4">Send Feedbacks to Athena</h3>
       <p className="text-gray-500 mb-4">
-        Send given feedback to Athena, or all feedbacks for the whole exercise.
-        This usually happens when someone gives feedback on the submission in
+        Send given feedbacks to Athena, or all feedbacks for the whole exercise.
+        This usually happens when someone gives feedbacks on the submission in
         the LMS. The matching module for the exercise will receive the feedbacks
         at the function annotated with <code>@feedback_consumer</code>.
       </p>
       <ExerciseSelect
         exerciseType={module.type}
         exercise={exercise}
-        onChange={setExercise}
+        onChange={(exercise) => {
+          setExercise(exercise);
+          reset();
+          setResponses([]);
+          setIsAllSubmissions(true);
+          setSelectedSubmission(undefined);
+          resetFeedbacks();
+        }}
         disabled={isLoading}
       />
       {exercise && (
@@ -98,40 +108,40 @@ export default function SendFeedbacks({ module }: { module: ModuleMeta }) {
           <SubmissionSelect
             exercise={exercise}
             submission={selectedSubmission}
-            onChange={setSelectedSubmission}
+            onChange={(submission) => {
+              setSelectedSubmission(submission);
+              resetFeedbacks();
+            }}
             isAllSubmissions={isAllSubmissions}
             setIsAllSubmissions={setIsAllSubmissions}
             disabled={isLoading}
           />
-          {!isAllSubmissions && (
-            <FeedbackSelect
-              exercise={exercise}
-              submission={selectedSubmission}
-              feedback={selectedFeedback}
-              onChange={setSelectedFeedback}
-              isAllFeedback={isAllFeedback}
-              setIsAllFeedback={setIsAllFeedback}
-              disabled={isLoading}
-            />
-          )}
           <div className="space-y-1 mt-2">
+            {feedbacksAreChanged && (
+              <button
+                className="bg-red-100 text-red-800 rounded-md p-2 hover:bg-red-200 hover:text-red-900"
+                onClick={() => resetFeedbacks()}
+              >
+                Reset Changed Feedbacks
+              </button>
+            )}
             <ExerciseDetail exercise={exercise} />
-            {selectedSubmission ? (
+            {selectedSubmission && !isAllSubmissions ? (
               <Disclosure title="Submission">
                 <SubmissionDetail
                   submission={selectedSubmission}
-                  feedbacks={feedbacks}
+                  feedbacks={feedbacks.filter(
+                    (f) => f.submission_id === selectedSubmission.id
+                  )}
                   onFeedbacksChange={setFeedbacksAndTrackChanges}
                 />
               </Disclosure>
             ) : (
-              isAllFeedback && (
-                <SubmissionList
-                  exercise={exercise}
-                  feedbacks={feedbacks}
-                  onFeedbacksChange={setFeedbacksAndTrackChanges}
-                />
-              )
+              <SubmissionList
+                exercise={exercise}
+                feedbacks={feedbacks}
+                onFeedbacksChange={setFeedbacksAndTrackChanges}
+              />
             )}
             {isLoadingFeedbacks && (
               <div className="text-gray-500 text-sm">Loading feedbacks...</div>
@@ -145,14 +155,7 @@ export default function SendFeedbacks({ module }: { module: ModuleMeta }) {
           {isAllSubmissions && (
             <div className="bg-yellow-50 border-l-4 border-yellow-400 p-4 text-sm text-yellow-700 mt-2">
               You are about to send feedback for all submissions of this
-              exercise. This will send a request for each feedback of each
-              submission.
-            </div>
-          )}
-          {!isAllSubmissions && isAllFeedback && (
-            <div className="bg-yellow-50 border-l-4 border-yellow-400 p-4 text-sm text-yellow-700 mt-2">
-              You are about to send all feedback for the selected submission.
-              This will send a request for each feedback of the submission.
+              exercise. This will send a request for each submission.
             </div>
           )}
         </>
@@ -223,7 +226,7 @@ export default function SendFeedbacks({ module }: { module: ModuleMeta }) {
                 },
                 onSettled: (response) => {
                   responses.push(response);
-                }
+                },
               }
             );
           }
@@ -234,7 +237,9 @@ export default function SendFeedbacks({ module }: { module: ModuleMeta }) {
                 .join(", ")}. Is the URL correct?`
             );
           } else {
-            alert(`${sentFeedbacksCount} feedback(s) in ${items.length} submission(s) sent sucessfully!`);
+            alert(
+              `${sentFeedbacksCount} feedback(s) in ${items.length} submission(s) sent sucessfully!`
+            );
           }
           setResponses(responses);
         }}
