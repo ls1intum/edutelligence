@@ -340,10 +340,11 @@ async function downloadSubmissions(exerciseId, participationIds) {
 async function download(exercise) {
   let success = true;
   console.log(`Downloading exercise ${exercise.id}...`);
-  success = success && (await downloadMaterial(exercise.id));
-  success =
-    success &&
-    (await downloadSubmissions(exercise.id, exercise.participations));
+  success = await downloadMaterial(exercise.id);
+  if (success) {
+      // both downloads have to be successful
+      success = await downloadSubmissions(exercise.id, exercise.participations);
+  }
   console.log(`Finished downloading exercise ${exercise.id}`);
   return success;
 }
