@@ -6,11 +6,12 @@ import path from "path";
 
 import { programming, evaluationOutputDirPath } from "./utils.mjs";
 
+// Download timeout
+const timeoutMilliseconds = 10 * 60 * 1000; // 10 minutes
 // Number of times to retry a fetch if it fails
 const fetchRetries = 4;
 // Delay between fetch retries in milliseconds
 const fetchRetryDelay = 1000;
-const timeout = 60 * 1000 * 10; // 10 minutes
 // Number of repositories to download in parallel
 const batchSize = 25;
 
@@ -50,7 +51,7 @@ async function setupAuthenticatedClient() {
 
   const axiosInstance = axios.create({
     baseURL,
-    timeout,
+    timeout: timeoutMilliseconds,
   });
 
   try {
