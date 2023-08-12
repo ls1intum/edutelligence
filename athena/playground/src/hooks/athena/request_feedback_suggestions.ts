@@ -27,6 +27,7 @@ export default function useRequestFeedbackSuggestions(
       let response = await athenaFetcher("/feedback_suggestions", { exercise, submission });
       if (response?.data) {
         response.data.feedbacks = response.data.map((feedback: Feedback) => {
+          feedback.id = Date.now(); // Good enough for the playground
           feedback.type = exercise.type;
           feedback.isSuggestion = true;
           return feedback;
