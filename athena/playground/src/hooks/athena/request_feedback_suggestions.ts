@@ -28,7 +28,7 @@ export default function useRequestFeedbackSuggestions(
       if (response?.data) {
         response.data.feedbacks = response.data.map((feedback: Feedback) => {
           feedback.type = exercise.type;
-          feedback.is_suggestion = true;
+          feedback.isSuggestion = true;
           return feedback;
         });
       }

@@ -77,9 +77,9 @@ export default function InlineFeedback({
   }, [feedback, model, credits, isHovering, isEditing]);
 
   useEffect(() => {
-    if (feedback.is_new && onFeedbackChange) {
+    if (feedback.isNew && onFeedbackChange) {
       setIsEditing(true);
-      feedback.is_new = false;
+      feedback.isNew = false;
     }
   }, [feedback, onFeedbackChange]);
 
@@ -193,7 +193,7 @@ export default function InlineFeedback({
                 {feedback.title ? feedback.title : <i>Missing title</i>}
               </span>
             )}
-            {feedback.is_suggestion && (
+            {feedback.isSuggestion && (
               <span className="text-xs text-violet-800 rounded-full px-2 py-0.5 bg-violet-100">
                 Suggestion
               </span>

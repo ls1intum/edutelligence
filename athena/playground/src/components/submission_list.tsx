@@ -9,9 +9,10 @@ import SubmissionDetail from "@/components/details/submission_detail";
 type SubmissionListProps = {
   exercise: Exercise;
   feedbacks?: Feedback[];
+  onFeedbacksChange?: (feedback: Feedback[]) => void;
 };
 
-export default function SubmissionList({ exercise, feedbacks }: SubmissionListProps) {
+export default function SubmissionList({ exercise, feedbacks, onFeedbacksChange }: SubmissionListProps) {
   const { data, isLoading, error } = useSubmissions(exercise);
 
   if (data) {
@@ -39,6 +40,7 @@ export default function SubmissionList({ exercise, feedbacks }: SubmissionListPr
               key={submission.id}
               submission={submission}
               feedbacks={feedbacksBySubmissionId[submission.id]}
+              onFeedbacksChange={onFeedbacksChange}
             />
           </Disclosure>
         ))}
