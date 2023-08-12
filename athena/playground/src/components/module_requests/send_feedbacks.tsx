@@ -25,15 +25,11 @@ export default function SendFeedbacks({ module }: { module: ModuleMeta }) {
 
   const [exercise, setExercise] = useState<Exercise | undefined>(undefined);
   const [isAllSubmissions, setIsAllSubmissions] = useState<boolean>(true);
-  const [selectedSubmission, setSelectedSubmission] = useState<
-    Submission | undefined
-  >(undefined);
+  const [selectedSubmission, setSelectedSubmission] = useState<Submission | undefined>(undefined);
 
   const [feedbacks, setFeedbacks] = useState<Feedback[]>([]);
   const [removedFeedbackIds, setRemovedFeedbackIds] = useState<number[]>([]);
-  const [responses, setResponses] = useState<(ModuleResponse | undefined)[]>(
-    []
-  );
+  const [responses, setResponses] = useState<(ModuleResponse | undefined)[]>([]);
 
   const setFeedbacksAndTrackChanges = (newFeedbacks: Feedback[]) => {
     const storedFeedbackIds = new Set<number>(
