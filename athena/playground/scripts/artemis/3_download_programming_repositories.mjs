@@ -79,11 +79,8 @@ async function setupAuthenticatedClient() {
     console.log("Authenticated successfully");
     artemisInstance = axiosInstance;
   } catch (error) {
-    console.error(
-      "An error occurred during authentication:",
-      JSON.stringify(error)
-    );
-    process.exit(1);
+    console.error("An error occurred during authentication:");
+    throw error;
   }
 }
 
