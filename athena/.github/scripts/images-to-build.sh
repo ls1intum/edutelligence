@@ -57,20 +57,24 @@ for DIR in */; do
         fi
 
         # Construct Docker image name and tag
-        IMAGE_NAME="athena%2F$DIR"
+        IMAGE_NAME="athena/$DIR"
         IMAGE_TAG="pr-$PR_NUMBER"
 
         # Check if any file has changed in that directory since the pull request was created
         IS_CHANGED=$(echo "$CHANGED_FILES" | grep -q "^$DIR" && echo "true" || echo "false")
         # Check if Docker image exists on GitHub Packages
-        URL="https://api.github.com/orgs/$ORGANIZATION_NAME/packages/container/$IMAGE_NAME"
         RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" -L \
         -H "Accept: application/vnd.github+json" \
-        -H "Authorization: Bearer $GITHUB_TOKEN" \
-        https://api.github.com/orgs/$ORGANIZATION_NAME/packages/container/$IMAGE_NAME)
+        -H "Authorization: Bearer $(echo $GITHUB_TOKEN | base64)" \
+        https://ghcr.io/v2/$ORGANIZATION_NAME/$IMAGE_NAME/tags/list)
         # Check if the image exists
         if [ $RESPONSE -eq 200 ]; then
-            IMAGE_EXISTS=true
+            # find the string "pr-<n>" in the response (with quotes)
+            if [[ $RESPONSE == *"\"$IMAGE_TAG\""* ]]; then
+                IMAGE_EXISTS=true
+            else
+                IMAGE_EXISTS=false
+            fi
         else
             IMAGE_EXISTS=false
         fi
