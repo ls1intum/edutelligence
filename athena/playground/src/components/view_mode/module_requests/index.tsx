@@ -4,7 +4,7 @@ import { useState } from "react";
 
 import GetConfigSchema from "@/components/view_mode/module_requests/get_config_schema";
 import SendSubmissions from "@/components/view_mode/module_requests/send_submissions";
-import SendFeedback from "@/components/view_mode/module_requests/send_feedback";
+import SendFeedbacks from "@/components/view_mode/module_requests/send_feedbacks";
 import RequestFeedbackSuggestions from "@/components/view_mode/module_requests/request_feedback_suggestions";
 import SelectSubmission from "@/components/view_mode/module_requests/request_submission_selection";
 import ModuleAndConfigSelect from "@/components/selectors/module_and_config_select";
@@ -32,7 +32,7 @@ export default function ModuleRequests() {
           <GetConfigSchema />
           <SendSubmissions />
           <SelectSubmission />
-          <SendFeedback />
+          <SendFeedbacks />
           <RequestFeedbackSuggestions />
         </ModuleProvider>
       )}
