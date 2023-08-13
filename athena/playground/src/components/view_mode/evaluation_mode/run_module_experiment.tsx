@@ -3,25 +3,21 @@ import type { Submission } from "@/model/submission";
 import type { Experiment } from "./define_experiment";
 
 import { useEffect, useId, useState } from "react";
-import { Allotment } from "allotment";
 
-import { useBaseInfo } from "@/hooks/base_info_context";
 import useRequestSubmissionSelection from "@/hooks/athena/request_submission_selection";
 import useRequestFeedbackSuggestions from "@/hooks/athena/request_feedback_suggestions";
 
 import SubmissionDetail from "@/components/details/submission_detail";
-import ExerciseDetail from "@/components/details/exercise_detail";
 import useSendSubmissions from "@/hooks/athena/send_submissions";
-import { ModuleConfiguration } from "./configure_modules";
 
 type RunModuleExperimentProps = {
   experiment: Experiment;
-  moduleConfiguration: ModuleConfiguration;
+  currentSubmissionIndex: number;
 };
 
 export default function RunModuleExperiment({
   experiment,
-  moduleConfiguration,
+  currentSubmissionIndex,
 }: RunModuleExperimentProps) {
   const id = useId();
   const [currentIndex, setCurrentSubmissionIndex] = useState(-1);

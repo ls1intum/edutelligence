@@ -10,6 +10,7 @@ import type { ModuleConfiguration } from "./configure_modules";
 import { ModuleProvider } from "@/hooks/module_context";
 import { twMerge } from "tailwind-merge";
 import useHealth from "@/hooks/health";
+import useRequestSubmissionSelection from "@/hooks/athena/request_submission_selection";
 
 type ConductExperimentProps = {
   experiment: Experiment;
@@ -32,12 +33,22 @@ export default function ConductExperiment({
   }, []);
 
   const { data: health } = useHealth();
-
   const handle = useFullScreenHandle();
+
+  // Submission selector module (index 0) selects the submission
+  // from `experiment.experimentSubmissions.evaluationSubmissions`
+  const [submissionOrderIndicies, setSubmissionOrderIndicies] = useState<
+    number[]
+  >([]);
+  const [currentSubmissionOrderIndex, setCurrentSubmissionOrderIndex] =
+    useState<number>(-1);
 
   const [moduleRenderOrder, setModuleRenderOrder] = useState<number[]>(
     moduleConfigurations.map((_, index) => index)
   );
+
+  // Uses the submission selector module which is provided in the context
+  const { mutate: requestSubmissionSelection } = useRequestSubmissionSelection();
 
   const [disablePrev, setDisablePrev] = useState(true);
   const [disableNext, setDisableNext] = useState(false);
@@ -80,8 +91,75 @@ export default function ConductExperiment({
       handle={handle}
       className="bg-white rounded-md p-4 mb-8 space-y-2"
     >
-      <div className="flex flex-row justify-between items-center">
+      <div className="flex flex-row justify-between items-center gap-4">
         <h3 className="text-2xl font-bold">Conduct Experiment</h3>
+        <div className="flex gap-2 flex-1">
+          <button
+            disabled={currentSubmissionOrderIndex <= 0}
+            className="w-8 h-8 rounded-md p-2 bg-gray-100 hover:bg-gray-200 font-bold text-gray-500 hover:text-gray-600 text-base leading-none disabled:text-gray-300 disabled:bg-gray-50 disabled:cursor-not-allowed"
+            onClick={() =>
+              setCurrentSubmissionOrderIndex(currentSubmissionOrderIndex - 1)
+            }
+          >
+            ←
+          </button>
+          <button
+            disabled={
+              currentSubmissionOrderIndex ===
+              experiment.experimentSubmissions.evaluationSubmissions.length - 1 ||
+              currentSubmissionOrderIndex === submissionOrderIndicies.length
+            }
+            className="w-8 h-8 rounded-md p-2 bg-gray-100 hover:bg-gray-200 font-bold text-gray-500 hover:text-gray-600 text-base leading-none disabled:text-gray-300 disabled:bg-gray-50 disabled:cursor-not-allowed"
+            onClick={() => {
+              if (currentSubmissionOrderIndex === submissionOrderIndicies.length - 1) {
+                const submissions = experiment.experimentSubmissions.evaluationSubmissions;
+                const allIndices = Array.from({ length: submissions.length }, (_, index) => index);
+                const remainingIndicies = allIndices.filter(index => !submissionOrderIndicies.includes(index));
+
+                const submissionsToSelectFrom = remainingIndicies.map(index => submissions[index]);
+                requestSubmissionSelection({
+                  exercise: experiment.exercise,
+                  submissions: submissionsToSelectFrom
+                },
+                {
+                  onSuccess: (response) => {
+                    const submissionId = response.data as number;
+                    let submissionIndex = submissions.findIndex(submission => submission.id === submissionId);
+                    // Pick random submission
+                    if (submissionIndex === -1) {
+                      const randomIndex = Math.floor(Math.random() * remainingIndicies.length);
+                      submissionIndex = remainingIndicies[randomIndex];
+                    }
+                    setSubmissionOrderIndicies([...submissionOrderIndicies, submissionIndex]);
+                    setCurrentSubmissionOrderIndex(currentSubmissionOrderIndex + 1);
+                  }
+                }
+                );
+              } else {
+                setCurrentSubmissionOrderIndex(currentSubmissionOrderIndex + 1);
+              }
+            }}
+          >
+            →
+          </button>
+          <div className="flex flex-col">
+            <span className="text-gray-500">
+              {currentSubmissionOrderIndex < 0
+                ? "No submission selected"
+                : `Selected: Submission ${
+                    currentSubmissionOrderIndex + 1
+                  } (id: ${
+                    experiment.experimentSubmissions.evaluationSubmissions[
+                      submissionOrderIndicies[currentSubmissionOrderIndex]
+                    ]?.id
+                  })`}
+            </span>
+            <span className="text-gray-500">
+              Progress: ({currentSubmissionOrderIndex + 1} /{" "}
+              {experiment.experimentSubmissions.evaluationSubmissions.length})
+            </span>
+          </div>
+        </div>
         <div className="flex flex-row gap-2 justify-start">
           <button
             className="rounded-md p-2 text-primary-500 hover:text-primary-600 hover:bg-gray-100"
@@ -232,7 +310,7 @@ export default function ConductExperiment({
                 >
                   <RunModuleExperiment
                     experiment={experiment}
-                    moduleConfiguration={moduleConfiguration}
+                    currentSubmissionIndex={currentSubmissionOrderIndex < 0 ? -1 : submissionOrderIndicies[currentSubmissionOrderIndex]}
                   />
                 </ModuleProvider>
               </div>
