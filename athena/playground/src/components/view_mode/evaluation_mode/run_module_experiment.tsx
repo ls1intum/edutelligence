@@ -4,11 +4,13 @@ import type { Experiment } from "./define_experiment";
 
 import { useEffect, useId, useState } from "react";
 
-import useRequestSubmissionSelection from "@/hooks/athena/request_submission_selection";
 import useRequestFeedbackSuggestions from "@/hooks/athena/request_feedback_suggestions";
 
 import SubmissionDetail from "@/components/details/submission_detail";
 import useSendSubmissions from "@/hooks/athena/send_submissions";
+import { useSendFeedbacks } from "@/hooks/athena/send_feedbacks";
+import useFeedbacks from "@/hooks/playground/feedbacks";
+import { AthenaError } from "@/hooks/athena_fetcher";
 
 type RunModuleExperimentProps = {
   experiment: Experiment;
@@ -20,129 +22,123 @@ export default function RunModuleExperiment({
   currentSubmissionIndex,
 }: RunModuleExperimentProps) {
   const id = useId();
-  const [currentIndex, setCurrentSubmissionIndex] = useState(-1);
 
-  const { mutate: sendSubmissions, isLoading: isLoadingSendSubmissions } =
-    useSendSubmissions();
-  const { mutate: selectSubmission, isLoading: isLoadingSubmissionSelection } =
-    useRequestSubmissionSelection();
-  const {
-    mutate: requestFeedbackSuggestions,
-    isLoading: isLoadingFeedbackSuggestions,
-  } = useRequestFeedbackSuggestions();
-  const [submissionsAndFeedbacks, setSubmissionsAndFeedbacks] = useState<
-    { submission: Submission; feedbacks: Feedback[] }[]
-  >([]);
+  const { data: feedbacks, isLoading: isLoadingFeedbacks } = useFeedbacks();
+  const { data: sendSubmissionsData, mutate: sendSubmissions, isLoading: isLoadingSendSubmissions } = useSendSubmissions();
+  const { mutate: sendFeedbacks, isLoading: isLoadingSendFeedbacks } = useSendFeedbacks();
+  const { mutate: requestFeedbackSuggestions, isLoading: isLoadingFeedbackSuggestions } = useRequestFeedbackSuggestions();
+  const [suggestedFeedbacks, setSuggestedFeedbacks] = useState<{ [submissionId: string]: Feedback[] }>({});
 
+  const [areSubmissionsSent, setAreSubmissionsSent] = useState<boolean>(false);
+  const [areFeedbacksSent, setAreFeedbacksSent] = useState<boolean>(false);
+  const [sendFeedbackItems, setSendFeedbacksItems] = useState<{ submission: Submission; feedbacks: Feedback[] }[] | undefined>(undefined);
+
+  // Send all submissions on mount
   useEffect(() => {
+    console.log("useEffect: send submissions")
+    if (sendSubmissionsData !== undefined || isLoadingSendSubmissions) {
+      return;
+    }
     sendSubmissions({
       exercise: experiment.exercise,
       submissions: [
         ...(experiment.experimentSubmissions.trainingSubmissions ?? []),
         ...experiment.experimentSubmissions.evaluationSubmissions,
       ],
+    }, {
+      onError: (error: AthenaError) => {
+        console.error(error);
+      },
+      onSuccess: () => {
+        setAreSubmissionsSent(true);
+      },
     });
   }, []);
 
+  // Send feedbacks if submissions are sent and they are loaded
+  useEffect(() => {
+    console.log("useEffect: send feedbacks")
+    const trainingSubmissions = experiment.experimentSubmissions.trainingSubmissions;
+    if (trainingSubmissions === undefined) {
+      setAreFeedbacksSent(true);
+      return;
+    }
+
+    if (!areSubmissionsSent || isLoadingFeedbacks || feedbacks === undefined) {
+      return
+    }
+
+    let items: { submission: Submission; feedbacks: Feedback[] }[] = [];
+    trainingSubmissions.forEach((submission) => {
+      const submissionFeedbacks = feedbacks.filter((f) => f.submission_id === submission.id);
+      if (submissionFeedbacks.length > 0) {
+        items.push({ submission, feedbacks: submissionFeedbacks });
+      }
+    });
+    setSendFeedbacksItems(items);
+  }, [areSubmissionsSent, isLoadingFeedbacks]);
+
+  // Send feedbacks sequentially
+  useEffect(() => {
+    console.log("useEffect: send feedbacks items")
+    if (sendFeedbackItems === undefined) {
+      return;
+    }
+
+    if (sendFeedbackItems.length === 0) {
+      setAreFeedbacksSent(true);
+      return;
+    }
+
+    const { submission, feedbacks } = sendFeedbackItems[0];
+    sendFeedbacks({
+      exercise: experiment.exercise,
+      submission,
+      feedbacks,
+    }, {
+      onError: (error: AthenaError) => {
+        console.error(error);
+      },
+      onSuccess: () => {
+        setSendFeedbacksItems([...sendFeedbackItems].slice(1));
+      }
+    });
+  }, [sendFeedbackItems]);
+
+  useEffect(() => {
+    console.log("useEffect: send feedback suggestions")
+    if (!areSubmissionsSent || !areFeedbacksSent || isLoadingFeedbackSuggestions || currentSubmissionIndex < 0) {
+      console.log("Not sending feedback suggestions");
+      return;
+    }
+
+    const submission = experiment.experimentSubmissions.evaluationSubmissions[currentSubmissionIndex];
+    if (suggestedFeedbacks[submission.id] === undefined) {
+      requestFeedbackSuggestions({
+        exercise: experiment.exercise,
+        submission,
+      }, {
+        onSuccess: (response) => {
+          setSuggestedFeedbacks((prev) => ({
+            ...prev,
+            [submission.id]: response.data,
+          }));
+          console.log("feedback suggestions", response.data);
+        },
+        onError: (error: AthenaError) => {
+          console.error(error);
+        },
+      });
+    }
+  }, [areSubmissionsSent, areFeedbacksSent, isLoadingFeedbackSuggestions, currentSubmissionIndex]);
+
   return (
     <div className="bg-white rounded-md p-4 mb-8 space-y-4">
-      <div className="flex flex-row space-x-2 items-center">
-        <button
-          className="bg-primary-500 text-white rounded-md p-2 hover:bg-primary-600 disabled:text-gray-500 disabled:bg-gray-200 disabled:cursor-not-allowed"
-          onClick={() => {
-            if (currentIndex <= 0) {
-              return;
-            }
-            setCurrentSubmissionIndex(currentIndex - 1);
-          }}
-        >
-          Previous
-        </button>
-        <button
-          className="bg-primary-500 text-white rounded-md p-2 hover:bg-primary-600 disabled:text-gray-500 disabled:bg-gray-200 disabled:cursor-not-allowed"
-          onClick={() => {
-            const nextIndex = currentIndex + 1;
-            if (currentIndex >= submissionsAndFeedbacks.length - 1) {
-              if (isLoadingSubmissionSelection) {
-                return;
-              } else if (
-                submissionsAndFeedbacks.length <
-                experiment.experimentSubmissions.evaluationSubmissions.length
-              ) {
-                const submissionsToSelectFrom =
-                  experiment.experimentSubmissions.evaluationSubmissions.filter(
-                    (submission) => {
-                      return !submissionsAndFeedbacks.some(
-                        (submissionAndFeedback) => {
-                          return (
-                            submissionAndFeedback.submission.id ===
-                            submission.id
-                          );
-                        }
-                      );
-                    }
-                  );
-                selectSubmission(
-                  {
-                    exercise: experiment.exercise,
-                    submissions: submissionsToSelectFrom,
-                  },
-                  {
-                    onSuccess: (reponse) => {
-                      const { data: submissionId } = reponse as {
-                        data: number;
-                      };
-                      const submission = submissionsToSelectFrom.find(
-                        (submission) => submission.id === submissionId
-                      );
-                      if (!submission) {
-                        throw new Error("Failed to find submission");
-                      }
-                      requestFeedbackSuggestions(
-                        { exercise: experiment.exercise, submission },
-                        {
-                          onSuccess: (response) => {
-                            const { data: feedbacks } = response as {
-                              data: Feedback[];
-                            };
-                            setSubmissionsAndFeedbacks([
-                              ...submissionsAndFeedbacks,
-                              { submission, feedbacks },
-                            ]);
-                            setCurrentSubmissionIndex(nextIndex);
-                          },
-                        }
-                      );
-                    },
-                  }
-                );
-              }
-            } else {
-              setCurrentSubmissionIndex(nextIndex);
-            }
-          }}
-        >
-          Next
-        </button>
-        <div className="flex flex-col">
-          <span className="text-gray-500">
-            {currentIndex < 0
-              ? "No submission selected"
-              : `Selected: Submission ${currentIndex + 1} (id: ${
-                  submissionsAndFeedbacks[currentIndex]?.submission?.id
-                })`}
-          </span>
-          <span className="text-gray-500">
-            Progress: ({currentIndex + 1} /{" "}
-            {experiment.experimentSubmissions.evaluationSubmissions.length})
-          </span>
-        </div>
-      </div>
-      {submissionsAndFeedbacks[currentIndex]?.submission ? (
+      {currentSubmissionIndex >= 0 && experiment.experimentSubmissions.evaluationSubmissions[currentSubmissionIndex] ? (
         <SubmissionDetail
           identifier={id}
-          submission={submissionsAndFeedbacks[currentIndex]?.submission}
-          feedbacks={submissionsAndFeedbacks[currentIndex]?.feedbacks}
+          submission={experiment.experimentSubmissions.evaluationSubmissions[currentSubmissionIndex]}
+          feedbacks={suggestedFeedbacks[experiment.experimentSubmissions.evaluationSubmissions[currentSubmissionIndex].id] ?? []}
         />
       ) : (
         <p className="text-gray-500">

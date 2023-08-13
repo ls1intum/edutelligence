@@ -11,6 +11,8 @@ import { ModuleProvider } from "@/hooks/module_context";
 import { twMerge } from "tailwind-merge";
 import useHealth from "@/hooks/health";
 import useRequestSubmissionSelection from "@/hooks/athena/request_submission_selection";
+import SubmissionDetail from "@/components/details/submission_detail";
+import useFeedbacks from "@/hooks/playground/feedbacks";
 
 type ConductExperimentProps = {
   experiment: Experiment;
@@ -48,7 +50,10 @@ export default function ConductExperiment({
   );
 
   // Uses the submission selector module which is provided in the context
-  const { mutate: requestSubmissionSelection } = useRequestSubmissionSelection();
+  const { mutate: requestSubmissionSelection } =
+    useRequestSubmissionSelection();
+
+  const { data: feedbacks, isLoading: isLoadingFeedbacks } = useFeedbacks();
 
   const [disablePrev, setDisablePrev] = useState(true);
   const [disableNext, setDisableNext] = useState(false);
@@ -106,34 +111,56 @@ export default function ConductExperiment({
           <button
             disabled={
               currentSubmissionOrderIndex ===
-              experiment.experimentSubmissions.evaluationSubmissions.length - 1 ||
+                experiment.experimentSubmissions.evaluationSubmissions.length -
+                  1 ||
               currentSubmissionOrderIndex === submissionOrderIndicies.length
             }
             className="w-8 h-8 rounded-md p-2 bg-gray-100 hover:bg-gray-200 font-bold text-gray-500 hover:text-gray-600 text-base leading-none disabled:text-gray-300 disabled:bg-gray-50 disabled:cursor-not-allowed"
             onClick={() => {
-              if (currentSubmissionOrderIndex === submissionOrderIndicies.length - 1) {
-                const submissions = experiment.experimentSubmissions.evaluationSubmissions;
-                const allIndices = Array.from({ length: submissions.length }, (_, index) => index);
-                const remainingIndicies = allIndices.filter(index => !submissionOrderIndicies.includes(index));
+              if (
+                currentSubmissionOrderIndex ===
+                submissionOrderIndicies.length - 1
+              ) {
+                const submissions =
+                  experiment.experimentSubmissions.evaluationSubmissions;
+                const allIndices = Array.from(
+                  { length: submissions.length },
+                  (_, index) => index
+                );
+                const remainingIndicies = allIndices.filter(
+                  (index) => !submissionOrderIndicies.includes(index)
+                );
 
-                const submissionsToSelectFrom = remainingIndicies.map(index => submissions[index]);
-                requestSubmissionSelection({
-                  exercise: experiment.exercise,
-                  submissions: submissionsToSelectFrom
-                },
-                {
-                  onSuccess: (response) => {
-                    const submissionId = response.data as number;
-                    let submissionIndex = submissions.findIndex(submission => submission.id === submissionId);
-                    // Pick random submission
-                    if (submissionIndex === -1) {
-                      const randomIndex = Math.floor(Math.random() * remainingIndicies.length);
-                      submissionIndex = remainingIndicies[randomIndex];
-                    }
-                    setSubmissionOrderIndicies([...submissionOrderIndicies, submissionIndex]);
-                    setCurrentSubmissionOrderIndex(currentSubmissionOrderIndex + 1);
+                const submissionsToSelectFrom = remainingIndicies.map(
+                  (index) => submissions[index]
+                );
+                requestSubmissionSelection(
+                  {
+                    exercise: experiment.exercise,
+                    submissions: submissionsToSelectFrom,
+                  },
+                  {
+                    onSuccess: (response) => {
+                      const submissionId = response.data as number;
+                      let submissionIndex = submissions.findIndex(
+                        (submission) => submission.id === submissionId
+                      );
+                      // Pick random submission
+                      if (submissionIndex === -1) {
+                        const randomIndex = Math.floor(
+                          Math.random() * remainingIndicies.length
+                        );
+                        submissionIndex = remainingIndicies[randomIndex];
+                      }
+                      setSubmissionOrderIndicies([
+                        ...submissionOrderIndicies,
+                        submissionIndex,
+                      ]);
+                      setCurrentSubmissionOrderIndex(
+                        currentSubmissionOrderIndex + 1
+                      );
+                    },
                   }
-                }
                 );
               } else {
                 setCurrentSubmissionOrderIndex(currentSubmissionOrderIndex + 1);
@@ -224,7 +251,28 @@ export default function ConductExperiment({
             <div className="sticky top-0 bg-white border-b border-gray-300 z-10 px-2">
               <h4 className="text-lg font-bold">Tutor Feedback</h4>
             </div>
-            <ExperimentSubmissions experiment={experiment} />
+            <div className="p-4">
+            {currentSubmissionOrderIndex >= 0 ? (
+              <SubmissionDetail
+                identifier={"tutor"}
+                submission={experiment.experimentSubmissions.evaluationSubmissions[
+                  submissionOrderIndicies[currentSubmissionOrderIndex]
+                ]}
+                feedbacks={feedbacks?.filter(
+                  (feedback) =>
+                    feedback.submission_id ===
+                    experiment.experimentSubmissions.evaluationSubmissions[
+                      submissionOrderIndicies[currentSubmissionOrderIndex]
+                    ]?.id
+                )}
+              />
+            ) : (
+              <p className="text-gray-500">
+                No submission selected. Please click next to select a
+                submission.
+              </p>
+            )}
+            </div>
           </div>
         </div>
         {moduleRenderOrder
@@ -310,7 +358,11 @@ export default function ConductExperiment({
                 >
                   <RunModuleExperiment
                     experiment={experiment}
-                    currentSubmissionIndex={currentSubmissionOrderIndex < 0 ? -1 : submissionOrderIndicies[currentSubmissionOrderIndex]}
+                    currentSubmissionIndex={
+                      currentSubmissionOrderIndex < 0
+                        ? -1
+                        : submissionOrderIndicies[currentSubmissionOrderIndex]
+                    }
                   />
                 </ModuleProvider>
               </div>
