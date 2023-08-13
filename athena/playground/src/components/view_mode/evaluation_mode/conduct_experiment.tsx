@@ -136,7 +136,7 @@ export default function ConductExperiment({
             />
           </div>
         </div>
-        <div className="flex flex-col shrink-0 snap-start overflow-y-auto">
+        <div className="flex flex-col shrink-0 snap-start overflow-y-auto z-20">
           <div
             className={twMerge(
               "shrink-0 pr-2",
@@ -154,7 +154,7 @@ export default function ConductExperiment({
           .map((moduleConfiguration, index) => (
             <div
               key={moduleConfiguration.id}
-              className="flex flex-col shrink-0 snap-start overflow-y-auto"
+              className="flex flex-col shrink-0 snap-start overflow-y-auto z-20"
             >
               <div
                 className={twMerge(
