@@ -65,7 +65,7 @@ for DIR in */; do
         # Check if Docker image exists on GitHub Packages
         RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" -L \
         -H "Accept: application/vnd.github+json" \
-        -H "Authorization: Bearer $GITHUB_TOKEN" \
+        -H "Authorization: Bearer $(echo $GITHUB_TOKEN | base64)" \
         https://ghcr.io/v2/$ORGANIZATION_NAME/$IMAGE_NAME/tags/list)
         # Check if the image exists
         if [ $RESPONSE -eq 200 ]; then
