@@ -23,6 +23,7 @@
     "allotment": "^1.19.2",
     "archiver": "^5.3.1",
     "autoprefixer": "10.4.14",
+    "axios": "^1.4.0",
     "fs": "^0.0.1-security",
     "jszip": "^3.10.1",
     "monaco-editor": "^0.40.0",

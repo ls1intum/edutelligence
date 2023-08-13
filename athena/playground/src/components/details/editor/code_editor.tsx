@@ -10,7 +10,7 @@ import FileEditor from "./file_editor";
 
 type CodeEditorProps = {
   identifier?: string;
-  repository_url: string;
+  repositoryUrl: string;
   feedbacks?: Feedback[];
   onFeedbacksChange?: (feedback: Feedback[]) => void;
   createNewFeedback?: () => Feedback;
@@ -18,7 +18,7 @@ type CodeEditorProps = {
 
 export default function CodeEditor({
   identifier,
-  repository_url,
+  repositoryUrl,
   feedbacks,
   onFeedbacksChange,
   createNewFeedback,
@@ -27,7 +27,7 @@ export default function CodeEditor({
     isError,
     zip: repositoryZip,
     tree,
-  } = useFetchAndUnzip(repository_url);
+  } = useFetchAndUnzip(repositoryUrl);
   const [selectedFile, setSelectedFile] = useState<string | undefined>(
     undefined
   );
@@ -74,8 +74,8 @@ export default function CodeEditor({
                 content={fileContent}
                 identifier={
                   identifier
-                    ? `${identifier}-${repository_url}`
-                    : repository_url
+                    ? `${identifier}-${repositoryUrl}`
+                    : repositoryUrl
                 }
                 filePath={selectedFile}
                 feedbacks={feedbacks}

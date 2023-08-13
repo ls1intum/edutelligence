@@ -7,11 +7,13 @@ import SubmissionDetail from "@/components/details/submission_detail";
 type SubmissionListProps = {
   submissions: Submission[];
   feedbacks?: Feedback[];
+  onFeedbacksChange?: (feedback: Feedback[]) => void;
 };
 
 export default function SubmissionList({
   submissions,
   feedbacks,
+  onFeedbacksChange,
 }: SubmissionListProps) {
   let feedbacksBySubmissionId: Record<number, Feedback[]> = {};
   if (feedbacks) {
@@ -23,7 +25,7 @@ export default function SubmissionList({
       return acc;
     }, {} as Record<number, Feedback[]>);
   }
-
+  
   if (submissions.length === 0) {
     return <div className="text-gray-500 text-sm">No submissions</div>;
   }
@@ -39,6 +41,7 @@ export default function SubmissionList({
             key={submission.id}
             submission={submission}
             feedbacks={feedbacksBySubmissionId[submission.id]}
+            onFeedbacksChange={onFeedbacksChange}
           />
         </Disclosure>
       ))}

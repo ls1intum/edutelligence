@@ -9,7 +9,7 @@ class DBFeedback(Model):
     id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     lms_id = Column(Integer)
     title = Column(String)
-    description = Column(String, nullable=False)
+    description = Column(String)
     credits = Column(Float, nullable=False)
     grading_instruction_id = Column(Integer)
     meta = Column(JSON, nullable=False)

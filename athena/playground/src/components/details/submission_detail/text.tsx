@@ -3,14 +3,13 @@ import type { Feedback } from "@/model/feedback";
 
 import FileEditor from "@/components/details/editor/file_editor";
 import InlineFeedback from "@/components/details/editor/inline_feedback";
-import { getOnFeedbackChange, getFeedbackReferenceType } from "@/model/feedback";
+import { getOnFeedbackChange, getFeedbackReferenceType, createNewFeedback } from "@/model/feedback";
 
 type TextSubmissionDetailProps = {
   identifier?: string;
   submission: TextSubmission;
   feedbacks?: Feedback[];
   onFeedbacksChange?: (feedback: Feedback[]) => void;
-  createNewFeedback: () => Feedback;
 };
 
 export default function TextSubmissionDetail({
@@ -18,7 +17,6 @@ export default function TextSubmissionDetail({
   submission,
   feedbacks,
   onFeedbacksChange,
-  createNewFeedback,
 }: TextSubmissionDetailProps) {
   const unreferencedFeedbacks = feedbacks?.filter(
     (feedback) => getFeedbackReferenceType(feedback) === "unreferenced"
@@ -34,7 +32,7 @@ export default function TextSubmissionDetail({
           noFileFeedback
           feedbacks={feedbacks}
           onFeedbacksChange={onFeedbacksChange}
-          createNewFeedback={createNewFeedback}
+          createNewFeedback={() => createNewFeedback(submission)}
         />
       </div>
       {((unreferencedFeedbacks && unreferencedFeedbacks.length > 0) ||
@@ -58,7 +56,7 @@ export default function TextSubmissionDetail({
             <button
               className="mx-2 my-1 border-2 border-primary-400 border-dashed text-primary-500 hover:text-primary-600 hover:bg-primary-50 hover:border-primary-500 rounded-lg font-medium max-w-3xl w-full py-2"
               onClick={() =>
-                onFeedbacksChange([...(feedbacks ?? []), createNewFeedback()])
+                onFeedbacksChange([...(feedbacks ?? []), createNewFeedback(submission)])
               }
             >
               Add feedback

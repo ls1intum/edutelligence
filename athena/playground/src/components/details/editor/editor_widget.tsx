@@ -25,8 +25,12 @@ export function EditorWidget({ editor, children, afterLineNumber, afterColumn, m
   const zoneIdRef = useRef<string>();
   
   const updateWidget = () => {
-    overlayWidgetRef.current && editor.removeOverlayWidget(overlayWidgetRef.current);
-    zoneIdRef.current && editor.changeViewZones((accessor) => accessor.removeZone(zoneIdRef.current!));
+    if (overlayWidgetRef.current) {
+        editor.removeOverlayWidget(overlayWidgetRef.current);
+    }
+    if (zoneIdRef.current) {
+        editor.changeViewZones((accessor) => accessor.removeZone(zoneIdRef.current!));
+    }
 
     const overlayNode = document.createElement("div");
     overlayNode.id = `widget-${id}-overlay`;
@@ -72,9 +76,9 @@ export function EditorWidget({ editor, children, afterLineNumber, afterColumn, m
   useEffect(() => {
     updateWidget();
 
-    // Last resort workaround for the widget not being created
+    // Last resort workaround for the view zone not being created
     const observer = new MutationObserver((mutationsList, observer) => {
-      // If the widget doesn't exist, update it
+      // If the widget exists but the view zone doesn't, update everything
       if (!document.getElementById(`widget-${id}-zone`)) {
         updateWidget();
       }

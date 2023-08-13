@@ -3,14 +3,13 @@ import type { Feedback } from "@/model/feedback";
 
 import CodeEditor from "@/components/details/editor/code_editor";
 import InlineFeedback from "@/components/details/editor/inline_feedback";
-import { getOnFeedbackChange, getFeedbackReferenceType } from "@/model/feedback";
+import { getOnFeedbackChange, getFeedbackReferenceType, createNewFeedback } from "@/model/feedback";
 
 type ProgrammingSubmissionDetailProps = {
   identifier?: string;
   submission: ProgrammingSubmission;
   feedbacks?: Feedback[];
   onFeedbacksChange?: (feedback: Feedback[]) => void;
-  createNewFeedback: () => Feedback;
 };
 
 export default function ProgrammingSubmissionDetail({
@@ -18,7 +17,6 @@ export default function ProgrammingSubmissionDetail({
   submission,
   feedbacks,
   onFeedbacksChange,
-  createNewFeedback,
 }: ProgrammingSubmissionDetailProps) {
   const unreferencedFeedbacks = feedbacks?.filter((feedback) => getFeedbackReferenceType(feedback) === "unreferenced");
   return (
@@ -26,10 +24,10 @@ export default function ProgrammingSubmissionDetail({
       <CodeEditor
         key={identifier ? `${identifier}-${submission.id}` : submission.id}
         identifier={identifier}
-        repository_url={submission.repository_url}
+        repositoryUrl={submission.repository_url}
         feedbacks={feedbacks}
         onFeedbacksChange={onFeedbacksChange}
-        createNewFeedback={createNewFeedback}
+        createNewFeedback={() => createNewFeedback(submission)}
       />
       {((unreferencedFeedbacks && unreferencedFeedbacks.length > 0) || onFeedbacksChange) && (
         <div className="space-y-2 mt-5">
@@ -48,7 +46,7 @@ export default function ProgrammingSubmissionDetail({
           {onFeedbacksChange && (
             <button
               className="mx-2 my-1 border-2 border-primary-400 border-dashed text-primary-500 hover:text-primary-600 hover:bg-primary-50 hover:border-primary-500 rounded-lg font-medium max-w-3xl w-full py-2"
-              onClick={() => onFeedbacksChange([...(feedbacks ?? []), createNewFeedback()])}
+              onClick={() => onFeedbacksChange([...(feedbacks ?? []), createNewFeedback(submission)])}
             >
               Add feedback
             </button>
