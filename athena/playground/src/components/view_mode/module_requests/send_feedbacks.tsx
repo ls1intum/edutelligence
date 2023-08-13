@@ -6,6 +6,7 @@ import type { Feedback } from "@/model/feedback";
 
 import { useEffect, useState } from "react";
 
+import { useModule } from "@/hooks/module_context";
 import { useBaseInfo } from "@/hooks/base_info_context";
 import { useSendFeedbacks } from "@/hooks/athena/send_feedbacks";
 import useSubmissions from "@/hooks/playground/submissions";
@@ -20,7 +21,8 @@ import SubmissionDetail from "@/components/details/submission_detail";
 import SubmissionList from "@/components/submission_list";
 import { AthenaError } from "@/hooks/athena_fetcher";
 
-export default function SendFeedbacks({ module }: { module: ModuleMeta }) {
+export default function SendFeedbacks() {
+  const { module } = useModule();
   const { dataMode } = useBaseInfo();
 
   const [exercise, setExercise] = useState<Exercise | undefined>(undefined);
