@@ -174,7 +174,7 @@ export default function ExperimentSubmissionsSelect({
           </label>
           <div className="flex flex-col items-start space-y-1 mt-2">
             <div className="flex items-center cursor-pointer text-gray-700 font-normal">
-              Move
+              Select
               <div className="flex flex-col items-start ml-2">
                 <div className="flex items-center">
                   <label>
