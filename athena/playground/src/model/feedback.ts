@@ -10,8 +10,9 @@ type FeedbackBase = {
   credits: number;
   exercise_id: number;
   submission_id: number;
-  is_suggestion?: boolean; // Playground only
-  is_new?: boolean; // Playground only
+  isSuggestion?: boolean; // Playground only
+  isNew?: boolean; // Playground only
+  isChanged?: boolean; // Playground only
   meta: {
     [key: string]: any;
   };
@@ -148,6 +149,7 @@ export function getOnFeedbackChange(
     if (newFeedback === undefined) {
       newFeedbacks = newFeedbacks.filter((f) => f.id !== feedback.id);
     } else {
+      newFeedback.isChanged = true;
       newFeedbacks = newFeedbacks.map((f) =>
         f.id === feedback.id ? newFeedback : f
       );
@@ -171,7 +173,7 @@ export const createNewFeedback = (submission: Submission): Feedback => {
     type: submission.type,
     exercise_id: submission.exercise_id,
     submission_id: submission.id,
-    is_new: true,
+    isNew: true,
     meta: {},
   };
 };
