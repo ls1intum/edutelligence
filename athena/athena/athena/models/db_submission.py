@@ -1,7 +1,7 @@
-from sqlalchemy import Column, Integer, JSON
+from sqlalchemy import Column, BigInteger, JSON
 from .model import Model
 
 
 class DBSubmission(Model):
-    id = Column(Integer, primary_key=True, index=True, nullable=False)
+    id = Column(BigInteger, primary_key=True, index=True, nullable=False)
     meta = Column(JSON, nullable=False)
