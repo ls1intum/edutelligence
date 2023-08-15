@@ -85,6 +85,7 @@ def suggest_feedback_for_submission(submission: Submission) -> List[Feedback]:
     with get_db() as db:
         # get blocks of submission
         blocks = db.query(DBTextBlock).filter_by(submission_id=submission.id).all()
+        logger.info("Found blocks for submission %s: %s", submission.id, blocks)
         # merge suggestions for all blocks
         return [
             suggestion
