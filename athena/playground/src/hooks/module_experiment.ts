@@ -545,9 +545,55 @@ export default function useModuleExperiment(
       return;
     }
 
+    interactiveSendPendingFeedbacks().then(() => {
+      const submission = experiment.evaluationSubmissions.find(
+        (submission) => submission.id === interactiveSelectedSubmissionId
+      );
+      if (!submission) {
+        console.error(
+          `Could not find submission ${interactiveSelectedSubmissionId} in evaluation submissions.`
+        );
+        return;
+      }
 
-
-    // First send all feedback
+      setInfo(
+        `Generating feedback suggestions... (${
+          state.feedbackSuggestions.size + 1
+        }/${
+          experiment.evaluationSubmissions.length
+        }) - Requesting feedback suggestions for submission ${submission.id}...`
+      );
+      requestFeedbackSuggestions.mutate(
+        {
+          exercise: experiment.exercise,
+          submission,
+        },
+        {
+          onSuccess: (response) => {
+            console.log("Received feedback suggestions:", response.data);
+            setState({
+              ...state,
+              feedbackSuggestions: new Map(
+                state.feedbackSuggestions.set(submission.id, {
+                  suggestions: response.data,
+                  meta: response.meta,
+                })
+              ),
+            });
+            interactiveSelectNextSubmission();
+          },
+          onError: (error) => {
+            console.error(
+              `Error while generating feedback suggestions for submission ${submission.id}:`,
+              error
+            );
+            setInfo(
+              `Error while generating feedback suggestions for submission ${submission.id}.`
+            );
+          }
+        }
+      );
+    });
   };
 
   // TODO: Interactive send feedback!!!
