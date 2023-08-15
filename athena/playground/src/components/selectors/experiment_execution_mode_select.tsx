@@ -1,4 +1,4 @@
-export type ExecutionMode = "incremental" | "batch";
+export type ExecutionMode = "interactive" | "batch";
 
 type ExperimentExecutionModeSelectProps = {
   disabled?: boolean;
@@ -25,7 +25,7 @@ export default function ExperimentExecutionModeSelect({
         <option value={""} disabled>
           Select an execution mode
         </option>
-        <option value={"incremental"}>
+        <option value={"interactive"}>
           Incremental learning mode (one submission at a time)
         </option>
         <option value={"batch"}>Batch mode (all submissions at once)</option>

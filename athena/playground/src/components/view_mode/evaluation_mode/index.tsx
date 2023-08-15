@@ -6,7 +6,6 @@ import { useState } from "react";
 import DefineExperiment from "./define_experiment";
 import ConfigureModules from "./configure_modules";
 import ConductExperiment from "./conduct_experiment";
-import { ModuleProvider } from "@/hooks/module_context";
 
 export default function EvaluationMode() {
   const [experiment, setExperiment] = useState<Experiment | undefined>(
@@ -31,16 +30,10 @@ export default function EvaluationMode() {
             onChangeModuleConfigurations={setModuleConfigurations}
           />
           {moduleConfigurations && (
-            // Put the submission selector module in the context
-            <ModuleProvider
-              module={moduleConfigurations[0].moduleAndConfig.module}
-              moduleConfig={moduleConfigurations[0].moduleAndConfig.moduleConfig}
-            >
-              <ConductExperiment
-                experiment={experiment}
-                moduleConfigurations={moduleConfigurations}
-              />
-            </ModuleProvider>
+            <ConductExperiment
+              experiment={experiment}
+              moduleConfigurations={moduleConfigurations}
+            />
           )}
         </>
       )}

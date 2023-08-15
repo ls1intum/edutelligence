@@ -1,7 +1,8 @@
 import type { Exercise } from "@/model/exercise";
+import type { Submission } from "@/model/submission";
 import type { DataMode } from "@/model/data_mode";
+import type { Feedback } from "@/model/feedback";
 import type { ExecutionMode } from "@/components/selectors/experiment_execution_mode_select";
-import type { ExperimentSubmissions } from "@/components/selectors/experiment_submissions_select";
 
 import { useEffect, useState } from "react";
 import { twMerge } from "tailwind-merge";
@@ -15,13 +16,17 @@ import ExerciseSelect from "@/components/selectors/exercise_select";
 import ExerciseDetail from "@/components/details/exercise_detail";
 import ExperimentExecutionModeSelect from "@/components/selectors/experiment_execution_mode_select";
 import ExperimentSubmissionsSelect from "@/components/selectors/experiment_submissions_select";
+import useFeedbacks from "@/hooks/playground/feedbacks";
+
 
 export type Experiment = {
   dataMode: DataMode;
   exerciseType: string;
   exercise: Exercise;
   executionMode: ExecutionMode;
-  experimentSubmissions: ExperimentSubmissions;
+  trainingSubmissions?: Submission[];
+  evaluationSubmissions: Submission[];
+  tutorFeedbacks: Feedback[];
 };
 
 type ExperimentExport = {
@@ -29,10 +34,8 @@ type ExperimentExport = {
   exerciseType: string;
   exerciseId: number;
   executionMode: ExecutionMode;
-  experimentSubmissions: {
-    trainingSubmissionIds: number[] | undefined;
-    testSubmissionIds: number[];
-  };
+  trainingSubmissionIds: number[] | undefined;
+  evaluationSubmissionIds: number[];
 };
 
 type DefineExperimentProps = {
@@ -46,17 +49,13 @@ export default function DefineExperiment({
 }: DefineExperimentProps) {
   const baseInfoDispatch = useBaseInfoDispatch();
   const { dataMode } = useBaseInfo();
-  const [exerciseType, setExerciseType] = useState<string | undefined>(
-    undefined
-  );
+  const [exerciseType, setExerciseType] = useState<string | undefined>(undefined);
   const [exercise, setExercise] = useState<Exercise | undefined>(undefined);
-  const [executionMode, setExecutionMode] = useState<ExecutionMode | undefined>(
-    undefined
-  );
-  const [experimentSubmissions, setExperimentSubmissions] = useState<
-    ExperimentSubmissions | undefined
-  >(undefined);
+  const [executionMode, setExecutionMode] = useState<ExecutionMode | undefined>(undefined);
+  const [trainingSubmissions, setTrainingSubmissions] = useState<Submission[] | undefined>(undefined);
+  const [evaluationSubmissions, setEvaluationSubmissions] = useState<Submission[] | undefined>(undefined);
   const [isImporting, setIsImporting] = useState<boolean>(false);
+  const { data: feedbacks, isLoading: isLoadingFeedbacks, isError: isErrorFeedbacks } = useFeedbacks(exercise);
 
   useEffect(() => {
     setExerciseType(undefined);
@@ -65,7 +64,8 @@ export default function DefineExperiment({
     setExercise(undefined);
   }, [exerciseType]);
   useEffect(() => {
-    setExperimentSubmissions(undefined);
+    setTrainingSubmissions(undefined);
+    setEvaluationSubmissions(undefined);
   }, [exercise]);
 
   const getExperiment = (): Experiment | undefined => {
@@ -74,9 +74,11 @@ export default function DefineExperiment({
       !exerciseType ||
       !exercise ||
       !executionMode ||
-      !experimentSubmissions ||
-      !experimentSubmissions.evaluationSubmissions ||
-      experimentSubmissions.evaluationSubmissions.length === 0
+      !evaluationSubmissions ||
+      !evaluationSubmissions ||
+      evaluationSubmissions.length === 0 ||
+      isLoadingFeedbacks ||
+      isErrorFeedbacks
     ) {
       return undefined;
     }
@@ -85,7 +87,9 @@ export default function DefineExperiment({
       exerciseType,
       exercise,
       executionMode,
-      experimentSubmissions,
+      trainingSubmissions,
+      evaluationSubmissions,
+      tutorFeedbacks: feedbacks || [],
     };
   };
 
@@ -97,14 +101,13 @@ export default function DefineExperiment({
       exerciseType: experiment.exerciseType,
       exerciseId: experiment.exercise.id,
       executionMode: experiment.executionMode,
-      experimentSubmissions: {
-        trainingSubmissionIds:
-          experiment.experimentSubmissions.trainingSubmissions &&
-          experiment.experimentSubmissions.trainingSubmissions.map((s) => s.id),
-        testSubmissionIds: experiment.experimentSubmissions.evaluationSubmissions.map(
-          (s) => s.id
-        ),
-      },
+      trainingSubmissionIds:
+        experiment.trainingSubmissions &&
+        experiment.trainingSubmissions.map((s) => s.id),
+      evaluationSubmissionIds: experiment.evaluationSubmissions.map(
+        (s) => s.id
+      ),
+      // tutor feedback ids are not important for the export
     };
   };
 
@@ -115,14 +118,15 @@ export default function DefineExperiment({
       exerciseType,
       exerciseId,
       executionMode,
-      experimentSubmissions,
+      trainingSubmissionIds,
+      evaluationSubmissionIds,
     } = experimentExport;
     if (
       !dataMode ||
       !exerciseType ||
       !exerciseId ||
       !executionMode ||
-      !experimentSubmissions
+      !evaluationSubmissionIds
     ) {
       console.error("Invalid experiment export");
       return;
@@ -137,20 +141,19 @@ export default function DefineExperiment({
     setExercise(exercise);
     if (exercise) {
       const submissions = await fetchSubmissions(exercise, dataMode);
-      const trainingSubmissions = experimentSubmissions.trainingSubmissionIds
+      const trainingSubmissions = trainingSubmissionIds
         ? submissions.filter((s) =>
-            experimentSubmissions.trainingSubmissionIds?.includes(s.id)
+            trainingSubmissionIds?.includes(s.id)
           )
         : undefined;
-      const testSubmissions = submissions.filter((s) =>
-        experimentSubmissions.testSubmissionIds?.includes(s.id)
+      const evaluationSubmissions = submissions.filter((s) =>
+        evaluationSubmissionIds?.includes(s.id)
       );
-      setExperimentSubmissions({
-        trainingSubmissions,
-        evaluationSubmissions: testSubmissions,
-      });
+      setTrainingSubmissions(trainingSubmissions);
+      setEvaluationSubmissions(evaluationSubmissions);
     } else {
-      setExperimentSubmissions(undefined);
+      setTrainingSubmissions(undefined);
+      setEvaluationSubmissions(undefined);
     }
   };
 
@@ -230,8 +233,10 @@ export default function DefineExperiment({
           <ExperimentSubmissionsSelect
             disabled={experiment !== undefined}
             exercise={exercise}
-            experimentSubmissions={experimentSubmissions}
-            onChangeExperimentSubmissions={setExperimentSubmissions}
+            trainingSubmissions={trainingSubmissions}
+            evaluationSubmissions={evaluationSubmissions}
+            onChangeTrainingSubmissions={setTrainingSubmissions}
+            onChangeEvaluationSubmissions={setEvaluationSubmissions}
           />
         </>
       )}

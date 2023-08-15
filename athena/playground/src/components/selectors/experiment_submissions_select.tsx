@@ -6,27 +6,23 @@ import { useState } from "react";
 import useSubmissions from "@/hooks/playground/submissions";
 import useFeedbacks from "@/hooks/playground/feedbacks";
 import SubmissionList from "@/components/submission_list";
-import { twMerge } from "tailwind-merge";
-
-export type ExperimentSubmissions = {
-  trainingSubmissions: Submission[] | undefined;
-  evaluationSubmissions: Submission[];
-};
 
 type ExperimentSubmissionsSelectProps = {
   disabled?: boolean;
   exercise?: Exercise;
-  experimentSubmissions?: ExperimentSubmissions;
-  onChangeExperimentSubmissions: (
-    experimentSubmissions: ExperimentSubmissions
-  ) => void;
+  trainingSubmissions?: Submission[];
+  evaluationSubmissions?: Submission[];
+  onChangeTrainingSubmissions: (submissions: Submission[] | undefined) => void;
+  onChangeEvaluationSubmissions: (submissions: Submission[]) => void;
 };
 
 export default function ExperimentSubmissionsSelect({
   disabled,
   exercise,
-  experimentSubmissions,
-  onChangeExperimentSubmissions,
+  trainingSubmissions,
+  evaluationSubmissions,
+  onChangeTrainingSubmissions,
+  onChangeEvaluationSubmissions,
 }: ExperimentSubmissionsSelectProps) {
   const { data, error, isLoading } = useSubmissions(exercise);
   const { data: feedbacks } = useFeedbacks(exercise);
@@ -42,10 +38,10 @@ export default function ExperimentSubmissionsSelect({
   if (isLoading) return <div className="text-gray-500 text-sm">Loading...</div>;
 
   const isSubmissionUsed = (submission: Submission) =>
-    experimentSubmissions?.trainingSubmissions?.some(
+    trainingSubmissions?.some(
       (usedSubmission) => usedSubmission.id === submission.id
     ) ||
-    experimentSubmissions?.evaluationSubmissions?.some(
+    evaluationSubmissions?.some(
       (usedSubmission) => usedSubmission.id === submission.id
     );
 
@@ -71,73 +67,51 @@ export default function ExperimentSubmissionsSelect({
     if (from === "excluded") {
       const moveSubmissions = takeSubmissions(excludedSubmissions);
       if (to === "training") {
-        onChangeExperimentSubmissions({
-          evaluationSubmissions:
-            experimentSubmissions?.evaluationSubmissions ?? [],
-          trainingSubmissions: [
-            ...(experimentSubmissions?.trainingSubmissions ?? []),
-            ...moveSubmissions,
-          ],
-        });
+        onChangeTrainingSubmissions([
+          ...(trainingSubmissions ?? []),
+          ...moveSubmissions,
+        ]);
       } else if (to === "evaluation") {
-        onChangeExperimentSubmissions({
-          trainingSubmissions: experimentSubmissions?.trainingSubmissions,
-          evaluationSubmissions: [
-            ...(experimentSubmissions?.evaluationSubmissions ?? []),
-            ...moveSubmissions,
-          ],
-        });
+        onChangeEvaluationSubmissions([
+          ...(evaluationSubmissions ?? []),
+          ...moveSubmissions,
+        ]);
       }
     } else if (
       from === "training" &&
-      experimentSubmissions?.trainingSubmissions
+      trainingSubmissions
     ) {
-      const moveSubmissions = takeSubmissions(
-        experimentSubmissions.trainingSubmissions
-      );
-      const trainingSubmissions =
-        experimentSubmissions.trainingSubmissions.filter(
+      const moveSubmissions = takeSubmissions(trainingSubmissions);
+      const newTrainingSubmissions =
+        trainingSubmissions.filter(
           (submission) => !moveSubmissions.some((s) => s.id === submission.id)
         );
       if (to === "excluded") {
-        onChangeExperimentSubmissions({
-          evaluationSubmissions:
-            experimentSubmissions?.evaluationSubmissions ?? [],
-          trainingSubmissions,
-        });
+        onChangeTrainingSubmissions(newTrainingSubmissions);
       } else if (to === "evaluation") {
-        onChangeExperimentSubmissions({
-          trainingSubmissions,
-          evaluationSubmissions: [
-            ...(experimentSubmissions?.evaluationSubmissions ?? []),
-            ...moveSubmissions,
-          ],
-        });
+        onChangeTrainingSubmissions(newTrainingSubmissions);
+        onChangeEvaluationSubmissions([
+          ...(evaluationSubmissions ?? []),
+          ...moveSubmissions,
+        ]);
       }
     } else if (
       from === "evaluation" &&
-      experimentSubmissions?.evaluationSubmissions
+      evaluationSubmissions
     ) {
-      const moveSubmissions = takeSubmissions(
-        experimentSubmissions.evaluationSubmissions
-      );
-      const evaluationSubmissions =
-        experimentSubmissions.evaluationSubmissions.filter(
+      const moveSubmissions = takeSubmissions(evaluationSubmissions);
+      const newEvaluationSubmissions =
+        evaluationSubmissions.filter(
           (submission) => !moveSubmissions.some((s) => s.id === submission.id)
         );
       if (to === "excluded") {
-        onChangeExperimentSubmissions({
-          trainingSubmissions: experimentSubmissions?.trainingSubmissions,
-          evaluationSubmissions,
-        });
+        onChangeEvaluationSubmissions(newEvaluationSubmissions);
       } else if (to === "training") {
-        onChangeExperimentSubmissions({
-          trainingSubmissions: [
-            ...(experimentSubmissions?.trainingSubmissions ?? []),
-            ...moveSubmissions,
-          ],
-          evaluationSubmissions,
-        });
+        onChangeEvaluationSubmissions(newEvaluationSubmissions);
+        onChangeTrainingSubmissions([
+          ...(trainingSubmissions ?? []),
+          ...moveSubmissions,
+        ]);
       }
     }
   };
@@ -151,20 +125,12 @@ export default function ExperimentSubmissionsSelect({
             <input
               disabled={disabled}
               type="checkbox"
-              checked={experimentSubmissions?.trainingSubmissions !== undefined}
+              checked={trainingSubmissions !== undefined}
               onChange={(e) => {
                 if (e.target.checked) {
-                  onChangeExperimentSubmissions({
-                    trainingSubmissions: [],
-                    evaluationSubmissions:
-                      experimentSubmissions?.evaluationSubmissions ?? [],
-                  });
+                  onChangeTrainingSubmissions([]);
                 } else {
-                  onChangeExperimentSubmissions({
-                    trainingSubmissions: undefined,
-                    evaluationSubmissions:
-                      experimentSubmissions?.evaluationSubmissions ?? [],
-                  });
+                  onChangeTrainingSubmissions(undefined);
                 }
               }}
             />
@@ -223,7 +189,7 @@ export default function ExperimentSubmissionsSelect({
         <div className="flex-1 p-1 space-y-1">
         {!disabled && (
             <div className="justify-between flex items-center">
-              {experimentSubmissions?.trainingSubmissions !== undefined && (
+              {trainingSubmissions !== undefined && (
                 <button
                   disabled={
                     Math.min(
@@ -272,7 +238,7 @@ export default function ExperimentSubmissionsSelect({
             feedbacks={feedbacks}
           />
         </div>
-        {experimentSubmissions?.trainingSubmissions !== undefined && (
+        {trainingSubmissions !== undefined && (
           <div className="flex-1 p-1 space-y-1">
             {!disabled && (
               <div className="justify-between flex items-center">
@@ -280,7 +246,7 @@ export default function ExperimentSubmissionsSelect({
                   disabled={
                     Math.min(
                       moveSubmissionsNumber,
-                      experimentSubmissions?.trainingSubmissions.length ?? 0
+                      trainingSubmissions.length ?? 0
                     ) === 0
                   }
                   className="rounded-md p-2 text-red-500 hover:text-red-600 hover:bg-red-100 disabled:text-gray-500 disabled:cursor-not-allowed disabled:hover:bg-gray-100"
@@ -289,7 +255,7 @@ export default function ExperimentSubmissionsSelect({
                   Move{" "}
                   {Math.min(
                     moveSubmissionsNumber,
-                    experimentSubmissions?.trainingSubmissions.length ?? 0
+                    trainingSubmissions.length ?? 0
                   )}{" "}
                   to Excluded →
                 </button>
@@ -297,7 +263,7 @@ export default function ExperimentSubmissionsSelect({
                   disabled={
                     Math.min(
                       moveSubmissionsNumber,
-                      experimentSubmissions?.trainingSubmissions.length ?? 0
+                      trainingSubmissions.length ?? 0
                     ) === 0
                   }
                   className="rounded-md p-2 text-red-500 hover:text-red-600 hover:bg-red-100 disabled:text-gray-500 disabled:cursor-not-allowed disabled:hover:bg-gray-100"
@@ -306,21 +272,21 @@ export default function ExperimentSubmissionsSelect({
                   Move{" "}
                   {Math.min(
                     moveSubmissionsNumber,
-                    experimentSubmissions?.trainingSubmissions.length ?? 0
+                    trainingSubmissions.length ?? 0
                   )}{" "}
                   to Evaluation →
                 </button>
               </div>
             )}
             <div className="text-base font-medium border-b border-gray-300 mb-2">
-              Training ({experimentSubmissions?.trainingSubmissions.length ?? 0}{" "}
+              Training ({trainingSubmissions.length ?? 0}{" "}
               Submissions)
             </div>
             <p className="text-sm text-gray-500 mb-2">
               Sent for training before running evaluation.
             </p>
             <SubmissionList
-              submissions={experimentSubmissions?.trainingSubmissions ?? []}
+              submissions={trainingSubmissions ?? []}
               feedbacks={feedbacks}
             />
           </div>
@@ -332,7 +298,7 @@ export default function ExperimentSubmissionsSelect({
                 disabled={
                   Math.min(
                     moveSubmissionsNumber,
-                    experimentSubmissions?.evaluationSubmissions.length ?? 0
+                    evaluationSubmissions?.length ?? 0
                   ) === 0
                 }
                 className="rounded-md p-2 text-red-500 hover:text-red-600 hover:bg-red-100 disabled:text-gray-500 disabled:cursor-not-allowed disabled:hover:bg-gray-100"
@@ -341,16 +307,16 @@ export default function ExperimentSubmissionsSelect({
                 Move{" "}
                 {Math.min(
                   moveSubmissionsNumber,
-                  experimentSubmissions?.evaluationSubmissions.length ?? 0
+                  evaluationSubmissions?.length ?? 0
                 )}{" "}
                 to Excluded →
               </button>
-              {experimentSubmissions?.trainingSubmissions !== undefined && (
+              {trainingSubmissions !== undefined && (
                 <button
                   disabled={
                     Math.min(
                       moveSubmissionsNumber,
-                      experimentSubmissions?.evaluationSubmissions.length ?? 0
+                      evaluationSubmissions?.length ?? 0
                     ) === 0
                   }
                   className="rounded-md p-2 text-red-500 hover:text-red-600 hover:bg-red-100 disabled:text-gray-500 disabled:cursor-not-allowed disabled:hover:bg-gray-100"
@@ -359,7 +325,7 @@ export default function ExperimentSubmissionsSelect({
                   Move{" "}
                   {Math.min(
                     moveSubmissionsNumber,
-                    experimentSubmissions?.evaluationSubmissions.length ?? 0
+                    evaluationSubmissions?.length ?? 0
                   )}{" "}
                   to Training →
                 </button>
@@ -368,14 +334,14 @@ export default function ExperimentSubmissionsSelect({
           )}
           <div className="text-base font-medium border-b border-gray-300 mb-2">
             Evaluation (
-            {experimentSubmissions?.evaluationSubmissions.length ?? 0}{" "}
+            {evaluationSubmissions?.length ?? 0}{" "}
             Submissions)
           </div>
           <p className="text-sm text-gray-500 mb-2">
             Run the experiment on the evaluation submissions.
           </p>
           <SubmissionList
-            submissions={experimentSubmissions?.evaluationSubmissions ?? []}
+            submissions={evaluationSubmissions ?? []}
             feedbacks={feedbacks}
           />
         </div>

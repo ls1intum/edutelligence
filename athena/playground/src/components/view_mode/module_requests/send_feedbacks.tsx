@@ -220,24 +220,23 @@ export default function SendFeedbacks() {
           let responses: (ModuleResponse | undefined)[] = [];
           let sentFeedbacksCount = 0;
           for (const { submission, feedbacks } of items) {
-            await mutateAsync(
-              {
-                exercise,
-                submission,
-                feedbacks,
-              },
-              {
-                onError: (error) => {
-                  errors.push(error);
+            try {
+              await mutateAsync(
+                {
+                  exercise,
+                  submission,
+                  feedbacks,
                 },
-                onSuccess: () => {
-                  sentFeedbacksCount += feedbacks.length;
-                },
-                onSettled: (response) => {
-                  responses.push(response);
-                },
-              }
-            );
+                {
+                  onSettled: (response) => {
+                    responses.push(response);
+                  },
+                }
+              );
+              sentFeedbacksCount += feedbacks.length;
+            } catch (error) {
+              errors.push(error as AthenaError);
+            }
           }
           if (errors.length > 0) {
             alert(
