@@ -25,13 +25,15 @@ def suggest_feedback_for_block(submission: Submission, block: DBTextBlock) -> Li
     """
     Suggest feedback for a text block (part of submission) based on existing feedback & processed clusters.
     """
+    logger.info("Suggesting feedback for block #%s", block.id)
     # Find the cluster that this block belongs to
     cluster = block.cluster
     if not cluster:
-        logger.warning("Block %s has no cluster", block.id)
+        logger.warning("-> Block %s has no cluster", block.id)
         return []
     # If the cluster is disabled, there should be no suggestions
     if cluster.disabled:
+        logger.info("-> Block disabled")
         return []
     # Get all blocks of that cluster
     blocks = cluster.blocks
@@ -45,13 +47,16 @@ def suggest_feedback_for_block(submission: Submission, block: DBTextBlock) -> Li
     if not blocks_with_feedback:
         logger.info("No feedback available for cluster %d", cluster.id)
         return []
+    logger.info("Blocks with feedback: %s", blocks_with_feedback)
     # Find the closest block to this block
     closest_block = min(
         blocks_with_feedback,
         key=lambda other_block: block.distance_to(other_block),
     )
+    logger.info("Closest block: %s", closest_block)
     # If the distance is too large, there should be no suggestions
     if block.distance_to(closest_block) >= DISTANCE_THRESHOLD:
+        logger.info("-> Distance too large! %s", block.distance_to(closest_block))
         return []
     # Get all feedbacks on the closest block
     closest_block_feedback = filter_feedbacks_by_block(exercise_feedbacks, closest_block)
