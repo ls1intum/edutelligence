@@ -61,11 +61,11 @@ export default function useBatchModuleExperiment(experiment: Experiment) {
       {
         onSuccess: () => {
           console.log("Sending submissions done!");
-          setState({
-            ...state,
+          setState((prevState) => ({
+            ...prevState,
             step: "sendingTrainingFeedbacks", // next step
             didSendSubmissions: true,
-          });
+          }));
         },
         onError: (error) => {
           console.error("Error while sending submissions to Athena:", error);
@@ -77,203 +77,154 @@ export default function useBatchModuleExperiment(experiment: Experiment) {
   };
 
   // 2. Send tutor feedbacks for training submissions to Athena
-  const stepSendTrainingFeedbacks = () => {
+  const stepSendTrainingFeedbacks = async () => {
     setProcessingStep("sendingTrainingFeedbacks");
     // Skip if there are no training submissions
     if (!experiment.trainingSubmissions) {
       console.log("No training submissions, skipping");
-      setState({
-        ...state,
+      setState((prevState) => ({
+        ...prevState,
         step: "generatingFeedbackSuggestions",
-      });
+      }));
       return;
     }
 
     console.log("Sending training feedbacks to Athena...");
     setInfo("Sending training feedbacks to Athena...");
 
-    // Recursive function to send all training submissions
-    const sendNextSubmission = () => {
-      const submission = experiment.trainingSubmissions?.find(
-        (submission) => !state.sentTrainingSubmissions.includes(submission.id)
-      );
-
-      // No more submissions to send -> Go to evaluation
-      if (!submission) {
-        console.log("Sending training feedbacks done!");
-        setState({
-          ...state,
-          step: "generatingFeedbackSuggestions", // next step
-        });
-        return;
-      }
-
+    const submissionsToSend = experiment.trainingSubmissions.filter(
+      (submission) => !state.sentTrainingSubmissions.includes(submission.id)
+    );
+      
+    let num = 0;
+    for (const submission of  submissionsToSend) {
+      num += 1;
       const submissionFeedbacks = experiment.tutorFeedbacks.filter(
         (feedback) => feedback.submission_id === submission?.id
       );
-
-      // Skip submission if there are no feedbacks
       if (submissionFeedbacks.length === 0) {
-        setState({
-          ...state,
-          sentTrainingSubmissions: [
-            ...state.sentTrainingSubmissions,
-            submission.id,
-          ],
-        });
-        sendNextSubmission();
-        return;
+        continue;
       }
 
       setInfo(
-        `Sending training feedbacks to Athena... (${
-          state.sentTrainingSubmissions.length + 1
-        }/${experiment.trainingSubmissions?.length ?? 0})`
+        `Sending training feedbacks to Athena... (${num}/${submissionsToSend.length})`
       );
 
-      sendFeedbacks.mutate(
-        {
-          exercise: experiment.exercise,
-          submission,
-          feedbacks: submissionFeedbacks,
-        },
-        {
-          onSuccess: () => {
-            console.log(
-              `Sending training feedbacks for submission ${submission.id} success`
-            );
-            setState({
-              ...state,
-              sentTrainingSubmissions: [
-                ...state.sentTrainingSubmissions,
-                submission.id,
-              ],
-            });
-            sendNextSubmission();
+      try {
+        await sendFeedbacks.mutateAsync(
+          {
+            exercise: experiment.exercise,
+            submission,
+            feedbacks: submissionFeedbacks,
           },
-          onError: (error) => {
-            console.error(
-              `Sending training feedbacks for submission ${submission.id} failed with error:`,
-              error
-            );
-            setInfo(
-              `Error while sending training feedbacks to Athena for submission ${submission.id}.`
-            );
-          },
-        }
-      );
-    };
+        );
+        setState((prevState) => ({
+          ...prevState,
+          sentTrainingSubmissions: [
+            ...prevState.sentTrainingSubmissions,
+            submission.id,
+          ],
+        }));
+      } catch (error) {
+        console.error(
+          `Sending training feedbacks for submission ${submission.id} failed with error:`,
+          error
+        );
+        setInfo(
+          `Error while sending training feedbacks for submission ${submission.id}.`
+        );
+      }
+    }
 
-    // Start sending submissions
-    sendNextSubmission();
+    setState((prevState) => ({
+      ...prevState,
+      step: "generatingFeedbackSuggestions",
+    }));
   };
 
   // 3. Generate feedback suggestions
-  const stepGenerateFeedbackSuggestions = () => {
+  const stepGenerateFeedbackSuggestions = async () => {
     setProcessingStep("generatingFeedbackSuggestions");
     console.log("Generating feedback suggestions...");
 
-    const generateFeedbackSuggestions = (submission: Submission) => {
+    let remainingSubmissions = experiment.evaluationSubmissions.filter(
+      (submission) => !state.submissionsWithFeedbackSuggestions.has(submission.id)
+    );
+
+    while (remainingSubmissions.length > 0) {
+      const infoPrefix = `Generating feedback suggestions... (${
+        experiment.evaluationSubmissions.length - remainingSubmissions.length + 1
+      }/${experiment.evaluationSubmissions.length})`;
+
+      console.log(`${infoPrefix} - Requesting feedback suggestions...`);
       setInfo(
-        `Generating feedback suggestions... (${
-          state.submissionsWithFeedbackSuggestions.size + 1
-        }/${
-          experiment.evaluationSubmissions.length
-        }) - Requesting feedback suggestions for submission ${submission.id}...`
-      );
-      requestFeedbackSuggestions.mutate(
-        {
-          exercise: experiment.exercise,
-          submission,
-        },
-        {
-          onSuccess: (response) => {
-            console.log("Received feedback suggestions:", response.data);
-            setState({
-              ...state,
-              submissionsWithFeedbackSuggestions: new Map(
-                state.submissionsWithFeedbackSuggestions.set(submission.id, {
-                  suggestions: response.data,
-                  meta: response.meta,
-                })
-              ),
-            });
-            selectNextSubmissionAndGenerate();
-          },
-          onError: (error) => {
-            console.error(
-              `Error while generating feedback suggestions for submission ${submission.id}:`,
-              error
-            );
-            setInfo(
-              `Error while generating feedback suggestions for submission ${submission.id}.`
-            );
-            // TODO: Recover?
-          },
-        }
-      );
-    };
-
-    const selectNextSubmissionAndGenerate = () => {
-      const remainingSubmissions = experiment.evaluationSubmissions.filter(
-        (submission) => !state.submissionsWithFeedbackSuggestions.has(submission.id)
+        `${infoPrefix} - Requesting submission selection...`
       );
 
-      // No more submissions to evaluate -> Go to finished
-      if (remainingSubmissions.length === 0) {
-        console.log("Generating feedback suggestions done!");
-        setState({
-          ...state,
-          step: "finished",
-        });
-        return;
-      }
-      setInfo(
-        `Generating feedback suggestions... (${
-          state.submissionsWithFeedbackSuggestions.size + 1
-        }/${
-          experiment.evaluationSubmissions.length
-        }) - Requesting submission selection...`
-      );
-
-      requestSubmissionSelection.mutate(
-        {
+      let submissionIndex = -1;
+      try {
+        const response = await requestSubmissionSelection.mutateAsync({
           exercise: experiment.exercise,
           submissions: remainingSubmissions,
-        },
-        {
-          onSuccess: (response) => {
-            console.log("Received submission selection:", response.data);
-            let submissionIndex = -1;
-            if (response.data !== -1) {
-              submissionIndex = remainingSubmissions.findIndex(
-                (submission) => submission.id === response.data
-              );
-            }
-            if (submissionIndex === -1) {
-              // Pick random submission from remaining submissions
-              submissionIndex = Math.floor(
-                Math.random() * remainingSubmissions.length
-              );
-            }
-
-            const submission = remainingSubmissions[submissionIndex];
-            generateFeedbackSuggestions(submission);
-          },
-          onError: (error) => {
-            console.error(
-              "Error while requesting submission selection:",
-              error
-            );
-            setInfo("Error while requesting submission selection.");
-            // TODO: Recover?
-          },
+        });
+        console.log("Received submission selection:", response.data);
+        
+        if (response.data !== -1) {
+          submissionIndex = remainingSubmissions.findIndex(
+            (submission) => submission.id === response.data
+          );
         }
-      );
-    };
+      } catch (error) {
+        console.error("Error while requesting submission selection:", error);
+        setInfo("Error while requesting submission selection.");
+      }
 
-    // Start generating feedback suggestions for all evaluation submissions
-    selectNextSubmissionAndGenerate();
+      if (submissionIndex === -1) {
+        // Select random submission
+        submissionIndex = Math.floor(Math.random() * remainingSubmissions.length);
+      }
+
+      const submission = remainingSubmissions[submissionIndex];
+      remainingSubmissions = [
+        ...remainingSubmissions.slice(0, submissionIndex),
+        ...remainingSubmissions.slice(submissionIndex + 1),
+      ];
+
+      console.log(`${infoPrefix} - Requesting feedback suggestions for submission ${submission.id}...`);
+      setInfo(
+        `${infoPrefix} - Requesting feedback suggestions for submission ${submission.id}...`
+      );
+
+      try {
+        const response = await requestFeedbackSuggestions.mutateAsync({
+          exercise: experiment.exercise,
+          submission,
+        });
+        console.log("Received feedback suggestions:", response.data);
+        setState((prevState) => ({
+          ...prevState,
+          submissionsWithFeedbackSuggestions: new Map(
+            prevState.submissionsWithFeedbackSuggestions.set(submission.id, {
+              suggestions: response.data,
+              meta: response.meta,
+            })
+          ),
+        }));
+      } catch (error) {
+        console.error(
+          `Error while generating feedback suggestions for submission ${submission.id}:`,
+          error
+        );
+        setInfo(
+          `Error while generating feedback suggestions for submission ${submission.id}.`
+        );
+      }
+    }
+
+    setState((prevState) => ({
+      ...prevState,
+      step: "finished",
+    }));
   };
 
   useEffect(() => {
