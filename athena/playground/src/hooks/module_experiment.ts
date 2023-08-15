@@ -72,12 +72,17 @@ export default function useModuleExperiment(
   const requestSubmissionSelection = useRequestSubmissionSelection();
   const requestFeedbackSuggestions = useRequestFeedbackSuggestions();
 
-  // Interactive mode: set the selected submission id 
-  const interactiveSetSelectedSubmissionId = (submissionId: number | undefined) => {
+  // Interactive mode: add the selected submission id 
+  const interactiveAddSelectedSubmissionId = (submissionId: number) => {
     if (experiment.executionMode !== "incremental") {
       return;
     }
-
+    if (interactiveSelectedSubmissionId === undefined && interactiveSelectedSubmissionId !== submissionId) {
+      setInteractiveSelectedSubmissionId(submissionId);
+    } else if (!interactiveSubmissionQueue.includes(submissionId) && !interactiveCatchUpWithSubmissions.includes(submissionId)) {
+      setInteractiveSubmissionQueue([...interactiveSubmissionQueue, submissionId]);
+    }
+    // Otherwise the submission is already in the queue
   };
 
   // Interactive mode: request submission selection from the submission selector module
@@ -368,5 +373,5 @@ export default function useModuleExperiment(
 
 
   // Callback function for requesting submission selection
-  return { state, info };
+  return { state, info, interactiveAddSelectedSubmissionId, interactiveRequestSubmissionSelection };
 }
