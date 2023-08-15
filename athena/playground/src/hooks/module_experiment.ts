@@ -67,6 +67,11 @@ export default function useModuleExperiment(
     setInteractiveCatchUpWithSubmissions,
   ] = useState<number[]>([]);
 
+  // Interactive mode: Feedbacks that need to be sent to Athena
+  const [interactivePendingFeedbacks, setInteractivePendingFeedbacks] = useState<
+    Map<number, Feedback[]>
+  >(new Map());
+
   // Module requests
   const sendSubmissions = useSendSubmissions();
   const sendFeedbacks = useSendFeedbacks();
@@ -231,6 +236,27 @@ export default function useModuleExperiment(
     // Waiting for interactiveAddSelectedSubmissionId
   };
 
+  // Interactive mode: set feedbacks for submissions
+  const interactiveSetSubmissionsWithFeedbacks = (submissionsWithFeedbacks: {
+    [submissionId: number]: Feedback[];
+  }) => {
+    if (experiment.executionMode !== "incremental") {
+      return;
+    }
+
+    const sentFeedbackIds = new Set(state.sentFeedbacks.keys());
+    const pendingSubmissionsWithFeedbacks = new Map(
+      Object.entries(submissionsWithFeedbacks)
+        .filter(([submissionId]) => !sentFeedbackIds.has(Number(submissionId)))
+        .map(([submissionId, feedbacks]) => [
+          Number(submissionId),
+          feedbacks,
+        ])
+    );
+    
+    setInteractivePendingFeedbacks(pendingSubmissionsWithFeedbacks);
+  };
+
   // 1. Send submissions to Athena
   const stepSendSubmissions = () => {
     console.log("Sending submissions to Athena...");
@@ -353,10 +379,13 @@ export default function useModuleExperiment(
   };
 
   // 3. Generate feedback suggestions
-  const stepGenerateFeedbackSuggestions = () => {
-    console.log("Generating feedback suggestions...");
-    setInfo("Generating feedback suggestions...");
+  const stepGenerateFeedbackSuggestionsBatch = () => {
+    if (experiment.executionMode !== "batch") {
+      return;
+    }
 
+    console.log("Generating batch feedback suggestions...");
+ 
     const generateFeedbackSuggestions = (submission: Submission) => {
       setInfo(
         `Generating feedback suggestions... (${
@@ -456,13 +485,33 @@ export default function useModuleExperiment(
       );
     };
 
-    // Let's do just the batch mode for now
-    // TODO: Interactive mode
+    // Start generating feedback suggestions for all evaluation submissions
     selectNextSubmissionAndGenerate();
   };
+
+  const stepGenerateFeedbackSuggestionsInteractive = () => {
+    if (experiment.executionMode !== "incremental") {
+      return;
+    }
+    
+    if (interactiveSelectedSubmissionId === undefined) {
+      return;
+    }
+
+    // First send all feedback
+
+  }
+
+  // TODO: Interactive send feedback!!!
   // I need to handle requestSubmissionSelection(remainingSubmissions) -> selection
   // If there are selections that are remaining what are not in remaining submissions I need
   // to do them with the own module submission selector
+
+  useEffect(() => {
+    if (state.step === "generatingFeedbackSuggestions") {
+      stepGenerateFeedbackSuggestionsInteractive();
+    }
+  }, [state.step, interactiveSelectedSubmissionId]);
 
   useEffect(() => {
     console.log("Step changed");
@@ -471,7 +520,12 @@ export default function useModuleExperiment(
     } else if (state.step === "sendingTrainingFeedbacks") {
       stepSendTrainingFeedbacks();
     } else if (state.step === "generatingFeedbackSuggestions") {
-      stepGenerateFeedbackSuggestions();
+      if (experiment.executionMode === "incremental") {
+        stepGenerateFeedbackSuggestionsInteractive();
+      } else {
+        // Batch mode
+        stepGenerateFeedbackSuggestionsBatch();
+      }
     }
     // TODO: Add automatic evaluation step here
     // Note: Evaluate tutor feedback more globally to not do it multiple times
@@ -484,5 +538,6 @@ export default function useModuleExperiment(
     info,
     interactiveAddSelectedSubmissionId,
     interactiveRequestSubmissionSelection,
+    interactiveSetSubmissionsWithFeedbacks,
   };
 }
