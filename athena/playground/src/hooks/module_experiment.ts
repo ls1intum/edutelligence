@@ -68,9 +68,8 @@ export default function useModuleExperiment(
   ] = useState<number[]>([]);
 
   // Interactive mode: Feedbacks that need to be sent to Athena
-  const [interactivePendingFeedbacks, setInteractivePendingFeedbacks] = useState<
-    Map<number, Feedback[]>
-  >(new Map());
+  const [interactivePendingFeedbacks, setInteractivePendingFeedbacks] =
+    useState<Map<number, Feedback[]>>(new Map());
 
   // Module requests
   const sendSubmissions = useSendSubmissions();
@@ -83,7 +82,7 @@ export default function useModuleExperiment(
     submissionId: number,
     remainingSubmissionIds: number[]
   ) => {
-    if (experiment.executionMode !== "incremental") {
+    if (experiment.executionMode !== "interactive") {
       return;
     }
 
@@ -134,7 +133,7 @@ export default function useModuleExperiment(
   // Interactive mode: request submission selection from the submission selector module
   // This does not set the selected submission id
   const interactiveRequestSubmissionSelection = async () => {
-    if (experiment.executionMode !== "incremental") {
+    if (experiment.executionMode !== "interactive") {
       return undefined;
     }
 
@@ -181,7 +180,7 @@ export default function useModuleExperiment(
 
   // Interactive mode: select the next submission from the enqueued submissions
   const interactiveSelectNextSubmission = async () => {
-    if (experiment.executionMode !== "incremental") {
+    if (experiment.executionMode !== "interactive") {
       return;
     }
 
@@ -226,9 +225,7 @@ export default function useModuleExperiment(
     if (interactiveSubmissionQueue.length > 0) {
       const submissionId = interactiveSubmissionQueue[0];
       setInteractiveSelectedSubmissionId(submissionId);
-      setInteractiveSubmissionQueue([
-        ...interactiveSubmissionQueue.slice(1),
-      ]);
+      setInteractiveSubmissionQueue([...interactiveSubmissionQueue.slice(1)]);
       return;
     }
 
@@ -237,24 +234,71 @@ export default function useModuleExperiment(
   };
 
   // Interactive mode: set feedbacks for submissions
-  const interactiveSetSubmissionsWithFeedbacks = (submissionsWithFeedbacks: {
-    [submissionId: number]: Feedback[];
-  }) => {
-    if (experiment.executionMode !== "incremental") {
+  const interactiveSetSubmissionsWithFeedbacksSoFar =
+    (submissionsWithFeedbacks: { [submissionId: number]: Feedback[] }) => {
+      if (experiment.executionMode !== "interactive") {
+        return;
+      }
+
+      const sentFeedbackIds = new Set(state.sentFeedbacks.keys());
+      const pendingSubmissionsWithFeedbacks = new Map(
+        Object.entries(submissionsWithFeedbacks)
+          .filter(
+            ([submissionId]) => !sentFeedbackIds.has(Number(submissionId))
+          )
+          .map(([submissionId, feedbacks]) => [Number(submissionId), feedbacks])
+      );
+
+      setInteractivePendingFeedbacks(pendingSubmissionsWithFeedbacks);
+    };
+
+  // Interactive mode: send pending feedbacks to Athena
+  const interactiveSendPendingFeedbacks = async () => {
+    if (experiment.executionMode !== "interactive") {
       return;
     }
 
-    const sentFeedbackIds = new Set(state.sentFeedbacks.keys());
-    const pendingSubmissionsWithFeedbacks = new Map(
-      Object.entries(submissionsWithFeedbacks)
-        .filter(([submissionId]) => !sentFeedbackIds.has(Number(submissionId)))
-        .map(([submissionId, feedbacks]) => [
-          Number(submissionId),
+    const pendingFeedbacks = Array.from(interactivePendingFeedbacks.entries())
+      .filter(([submissionId]) => !state.sentFeedbacks.has(submissionId))
+      .flatMap(([submissionId, feedbacks]) => {
+        const submission = experiment.evaluationSubmissions.find(
+          (submission) => submission.id === submissionId
+        );
+        if (submission === undefined) {
+          return [];
+        } else {
+          return [{ submission, feedbacks }];
+        }
+      });
+
+    if (pendingFeedbacks.length === 0) {
+      return;
+    }
+
+    for (const { submission, feedbacks } of pendingFeedbacks) {
+      try {
+        await sendFeedbacks.mutateAsync({
+          exercise: experiment.exercise,
+          submission,
           feedbacks,
-        ])
-    );
-    
-    setInteractivePendingFeedbacks(pendingSubmissionsWithFeedbacks);
+        });
+
+        setState({
+          ...state,
+          sentFeedbacks: new Map(state.sentFeedbacks.set(submission.id, feedbacks)),
+        });
+        setInteractivePendingFeedbacks(
+          new Map(
+            Array.from(interactivePendingFeedbacks.entries()).filter(
+              ([submissionId]) => submissionId !== submission.id
+            )
+          )
+        );
+      } catch (error) {
+        console.error("Error while sending feedbacks:", error);
+        setInfo("Error while sending feedbacks.");
+      }
+    }
   };
 
   // 1. Send submissions to Athena
@@ -385,7 +429,7 @@ export default function useModuleExperiment(
     }
 
     console.log("Generating batch feedback suggestions...");
- 
+
     const generateFeedbackSuggestions = (submission: Submission) => {
       setInfo(
         `Generating feedback suggestions... (${
@@ -490,17 +534,16 @@ export default function useModuleExperiment(
   };
 
   const stepGenerateFeedbackSuggestionsInteractive = () => {
-    if (experiment.executionMode !== "incremental") {
+    if (experiment.executionMode !== "interactive") {
       return;
     }
-    
+
     if (interactiveSelectedSubmissionId === undefined) {
       return;
     }
 
     // First send all feedback
-
-  }
+  };
 
   // TODO: Interactive send feedback!!!
   // I need to handle requestSubmissionSelection(remainingSubmissions) -> selection
@@ -520,7 +563,7 @@ export default function useModuleExperiment(
     } else if (state.step === "sendingTrainingFeedbacks") {
       stepSendTrainingFeedbacks();
     } else if (state.step === "generatingFeedbackSuggestions") {
-      if (experiment.executionMode === "incremental") {
+      if (experiment.executionMode === "interactive") {
         stepGenerateFeedbackSuggestionsInteractive();
       } else {
         // Batch mode
@@ -538,6 +581,8 @@ export default function useModuleExperiment(
     info,
     interactiveAddSelectedSubmissionId,
     interactiveRequestSubmissionSelection,
-    interactiveSetSubmissionsWithFeedbacks,
+    interactiveSetSubmissionsWithFeedbacks:
+    interactiveSetSubmissionsWithFeedbacksSoFar,
+    interactiveSendPendingFeedbacks,
   };
 }
