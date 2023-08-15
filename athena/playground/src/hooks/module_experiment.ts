@@ -276,6 +276,9 @@ export default function useModuleExperiment(
     }
 
     for (const { submission, feedbacks } of pendingFeedbacks) {
+      setInfo(
+        `Sending feedbacks for submission ${submission.id} to Athena...`
+      );
       try {
         await sendFeedbacks.mutateAsync({
           exercise: experiment.exercise,
@@ -541,6 +544,8 @@ export default function useModuleExperiment(
     if (interactiveSelectedSubmissionId === undefined) {
       return;
     }
+
+
 
     // First send all feedback
   };
