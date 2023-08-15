@@ -49,8 +49,9 @@ export default function useModuleExperiment(
   const [info, setInfo] = useState<string>("");
 
   // Interactive mode: Selected submission id
-  // Current submission that is being 
-  const [interactiveSelectedSubmissionId, setInteractiveSelectedSubmissionId] = useState<number | undefined>(undefined);
+  // Current submission that is being
+  const [interactiveSelectedSubmissionId, setInteractiveSelectedSubmissionId] =
+    useState<number | undefined>(undefined);
 
   // Interactive mode: Queue of submissions that are waiting for feedback suggestions
   // In interactive mode, the module might lag behind the module that selects submissions
@@ -73,34 +74,56 @@ export default function useModuleExperiment(
   const requestFeedbackSuggestions = useRequestFeedbackSuggestions();
 
   // Interactive mode: add the selected submission id
-  const interactiveAddSelectedSubmissionId = (submissionId: number, remainingSubmissionIds: number[]) => {
+  const interactiveAddSelectedSubmissionId = (
+    submissionId: number,
+    remainingSubmissionIds: number[]
+  ) => {
     if (experiment.executionMode !== "incremental") {
       return;
     }
 
     // Handle submissionId
-    if (interactiveSelectedSubmissionId === undefined && interactiveSelectedSubmissionId !== submissionId) {
+    if (
+      interactiveSelectedSubmissionId === undefined &&
+      interactiveSelectedSubmissionId !== submissionId
+    ) {
       setInteractiveSelectedSubmissionId(submissionId);
-    } else if (!interactiveSubmissionQueue.includes(submissionId) && !interactiveCatchUpWithSubmissions.includes(submissionId)) {
-      setInteractiveSubmissionQueue([...interactiveSubmissionQueue, submissionId]);
+    } else if (
+      !interactiveSubmissionQueue.includes(submissionId) &&
+      !interactiveCatchUpWithSubmissions.includes(submissionId)
+    ) {
+      setInteractiveSubmissionQueue([
+        ...interactiveSubmissionQueue,
+        submissionId,
+      ]);
     }
     // Otherwise the selected submission is already in the queue
 
     // Handle remainingSubmissionIds
     // We have to catch up with submissions that are not in the remaining submissions of the submission selector module
-    const submissionIdsToIgnore = new Set([...interactiveSubmissionQueue, ...interactiveCatchUpWithSubmissions]);
+    const submissionIdsToIgnore = new Set([
+      ...interactiveSubmissionQueue,
+      ...interactiveCatchUpWithSubmissions,
+    ]);
     if (interactiveSelectedSubmissionId !== undefined) {
       submissionIdsToIgnore.add(interactiveSelectedSubmissionId);
     }
-    remainingSubmissionIds.forEach(submissionId => submissionIdsToIgnore.add(submissionId));
-    state.feedbackSuggestions.forEach((_, submissionId) => submissionIdsToIgnore.add(submissionId));
+    remainingSubmissionIds.forEach((submissionId) =>
+      submissionIdsToIgnore.add(submissionId)
+    );
+    state.feedbackSuggestions.forEach((_, submissionId) =>
+      submissionIdsToIgnore.add(submissionId)
+    );
 
     // Submissions that are skipped in the evaliation submissions
     const newCatchUpWithSubmissionIds = experiment.evaluationSubmissions
-      .filter(submission => !submissionIdsToIgnore.has(submission.id))
-      .map(submission => submission.id);
+      .filter((submission) => !submissionIdsToIgnore.has(submission.id))
+      .map((submission) => submission.id);
 
-    setInteractiveCatchUpWithSubmissions([...interactiveCatchUpWithSubmissions, ...newCatchUpWithSubmissionIds]);
+    setInteractiveCatchUpWithSubmissions([
+      ...interactiveCatchUpWithSubmissions,
+      ...newCatchUpWithSubmissionIds,
+    ]);
   };
 
   // Interactive mode: request submission selection from the submission selector module
@@ -111,8 +134,7 @@ export default function useModuleExperiment(
     }
 
     const remainingSubmissions = state.experiment.evaluationSubmissions.filter(
-      (submission) =>
-        !state.feedbackSuggestions.has(submission.id)
+      (submission) => !state.feedbackSuggestions.has(submission.id)
     );
 
     if (remainingSubmissions.length === 0) {
@@ -120,12 +142,10 @@ export default function useModuleExperiment(
     }
 
     try {
-      const response = await requestSubmissionSelection.mutateAsync(
-        {
-          exercise: experiment.exercise,
-          submissions: remainingSubmissions,
-        }
-      );
+      const response = await requestSubmissionSelection.mutateAsync({
+        exercise: experiment.exercise,
+        submissions: remainingSubmissions,
+      });
       console.log("Received submission selection:", response.data);
 
       const remainingSubmissionIds = remainingSubmissions.map(
@@ -148,13 +168,67 @@ export default function useModuleExperiment(
         ),
       };
     } catch (error) {
-      console.error(
-        "Error while requesting submission selection:",
-        error
-      );
+      console.error("Error while requesting submission selection:", error);
       setInfo("Error while requesting submission selection.");
       return undefined;
     }
+  };
+
+  // Interactive mode: select the next submission from the enqueued submissions
+  const interactiveSelectNextSubmission = async () => {
+    if (experiment.executionMode !== "incremental") {
+      return;
+    }
+
+    // If there is a selected submission, we do not need to select a new one
+    if (interactiveSelectedSubmissionId !== undefined) {
+      return;
+    }
+
+    // First, try to pick from interactiveCatchUpWithSubmissions if there are any
+    if (interactiveCatchUpWithSubmissions.length > 0) {
+      try {
+        const response = await requestSubmissionSelection.mutateAsync({
+          exercise: experiment.exercise,
+          submissions: experiment.evaluationSubmissions.filter((submission) =>
+            interactiveCatchUpWithSubmissions.includes(submission.id)
+          ),
+        });
+
+        let submissionId = response.data as number;
+        if (submissionId === -1) {
+          // Pick random submission from interactiveCatchUpWithSubmissions
+          const randomIndex = Math.floor(
+            Math.random() * interactiveCatchUpWithSubmissions.length
+          );
+          submissionId = interactiveCatchUpWithSubmissions[randomIndex];
+        }
+
+        setInteractiveSelectedSubmissionId(submissionId);
+        setInteractiveCatchUpWithSubmissions([
+          ...interactiveCatchUpWithSubmissions.filter(
+            (id) => id !== submissionId
+          ),
+        ]);
+        return;
+      } catch (error) {
+        console.error("Error while requesting submission selection:", error);
+        setInfo("Error while requesting submission selection.");
+      }
+    }
+
+    // Second, pick the first submission from the interactiveSubmissionQueue
+    if (interactiveSubmissionQueue.length > 0) {
+      const submissionId = interactiveSubmissionQueue[0];
+      setInteractiveSelectedSubmissionId(submissionId);
+      setInteractiveSubmissionQueue([
+        ...interactiveSubmissionQueue.slice(1),
+      ]);
+      return;
+    }
+
+    // Third, there is no submission to select
+    // Waiting for interactiveAddSelectedSubmissionId
   };
 
   // 1. Send submissions to Athena
@@ -285,7 +359,9 @@ export default function useModuleExperiment(
 
     const generateFeedbackSuggestions = (submission: Submission) => {
       setInfo(
-        `Generating feedback suggestions... (${state.feedbackSuggestions.size + 1}/${
+        `Generating feedback suggestions... (${
+          state.feedbackSuggestions.size + 1
+        }/${
           experiment.evaluationSubmissions.length
         }) - Requesting feedback suggestions for submission ${submission.id}...`
       );
@@ -337,7 +413,9 @@ export default function useModuleExperiment(
         return;
       }
       setInfo(
-        `Generating feedback suggestions... (${state.feedbackSuggestions.size + 1}/${
+        `Generating feedback suggestions... (${
+          state.feedbackSuggestions.size + 1
+        }/${
           experiment.evaluationSubmissions.length
         }) - Requesting submission selection...`
       );
@@ -400,7 +478,11 @@ export default function useModuleExperiment(
     // Note 2: Actually, I probably want to have it in parallel with the feedback suggestions for the interactive mode!
   }, [state.step]);
 
-
   // Callback function for requesting submission selection
-  return { state, info, interactiveAddSelectedSubmissionId, interactiveRequestSubmissionSelection };
+  return {
+    state,
+    info,
+    interactiveAddSelectedSubmissionId,
+    interactiveRequestSubmissionSelection,
+  };
 }
