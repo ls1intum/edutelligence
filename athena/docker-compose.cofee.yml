@@ -74,6 +74,7 @@ services:
        - 8000
     env_file:
       - ${ATHENA_ENV_DIR:-./env_example}/cofee.env
+    tty: true
     working_dir: /usr/src/app
     labels:
       - traefik.enable=true

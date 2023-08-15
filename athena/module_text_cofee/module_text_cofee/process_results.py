@@ -16,6 +16,7 @@ from module_text_cofee.models.db_text_block import DBTextBlock
 
 def store_text_blocks(segments: List[cofee_pb2.Segment], clusters: List[cofee_pb2.Cluster]):  # type: ignore
     """Convert segments to text blocks and store them in the DB."""
+    logger.info("Storing %d text blocks in the DB", len(segments))
     for segment in segments:
         # store text block in DB
         with get_db() as db:
@@ -31,8 +32,9 @@ def store_text_blocks(segments: List[cofee_pb2.Segment], clusters: List[cofee_pb
             db.commit()
 
 
-def store_text_clusters(exercise_id: int, clusters: Iterable[cofee_pb2.Cluster]) -> List[int]:  # type: ignore
+def store_text_clusters(exercise_id: int, clusters: List[cofee_pb2.Cluster]) -> List[int]:  # type: ignore
     """Store text clusters in the DB. Returns the cluster IDs."""
+    logger.info("Storing %d text clusters in the DB", len(clusters))
     cluster_ids = []
     for cluster in clusters:
         distance_matrix: List[List[float]] = [[0.0 for _ in range(len(cluster.segments))] for _ in range(len(cluster.segments))]
@@ -63,7 +65,7 @@ def connect_text_blocks_to_clusters(clusters: List[cofee_pb2.Cluster], cluster_i
         with get_db() as db:
             for i, segment in enumerate(cluster.segments):
                 model = db.query(DBTextBlock).filter(DBTextBlock.id == segment.id).one()
-                model.position_in_cluster = i
+                model.position_in_cluster = i  # type: ignore
                 model.cluster_id = cluster_id  # cannot use cluster.id because cluster is an object from Athena and we need the DB ID
                 db.merge(model)
             db.commit()
