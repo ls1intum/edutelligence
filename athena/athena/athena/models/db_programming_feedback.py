@@ -1,6 +1,6 @@
 from typing import cast, Optional
 from athena.schemas.programming_submission import ProgrammingSubmission
-from sqlalchemy import Column, Integer, String, ForeignKey
+from sqlalchemy import Column, Integer, BigInteger, String, ForeignKey
 from sqlalchemy.orm import relationship
 
 from athena.database import Base, get_db
@@ -15,8 +15,8 @@ class DBProgrammingFeedback(DBFeedback, Base):
     line_start: Optional[int] = Column(Integer)  # type: ignore
     line_end: Optional[int] = Column(Integer)  # type: ignore
 
-    exercise_id = Column(Integer, ForeignKey("programming_exercises.id", ondelete="CASCADE"), index=True)
-    submission_id = Column(Integer, ForeignKey("programming_submissions.id", ondelete="CASCADE"), index=True)
+    exercise_id = Column(BigInteger, ForeignKey("programming_exercises.id", ondelete="CASCADE"), index=True)
+    submission_id = Column(BigInteger, ForeignKey("programming_submissions.id", ondelete="CASCADE"), index=True)
 
     exercise = relationship("DBProgrammingExercise", back_populates="feedbacks")
     submission = relationship("DBProgrammingSubmission", back_populates="feedbacks")

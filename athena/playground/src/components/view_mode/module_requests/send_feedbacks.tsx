@@ -32,6 +32,22 @@ export default function SendFeedbacks() {
   const [removedFeedbackIds, setRemovedFeedbackIds] = useState<number[]>([]);
   const [responses, setResponses] = useState<(ModuleResponse | undefined)[]>([]);
 
+  // Fetched "storedFeedbacks" from the server can be customized in feedbacks
+  const { data: storedFeedbacks, isLoading: isLoadingFeedbacks, error: errorFeedbacks } = useFeedbacks(
+    exercise,
+    selectedSubmission,
+    {
+      onSuccess: (fetchFeedbacks) => {
+        const ignoreIds = new Set<number>(removedFeedbackIds);
+        feedbacks.forEach((f) => ignoreIds.add(f.id));
+        setFeedbacks([
+          ...fetchFeedbacks.filter((f) => !ignoreIds.has(f.id)),
+          ...feedbacks,
+        ]);
+      },
+    }
+  );
+
   const setFeedbacksAndTrackChanges = (newFeedbacks: Feedback[]) => {
     const storedFeedbackIds = new Set<number>(
       storedFeedbacks?.map((f) => f.id) ?? []
@@ -51,20 +67,6 @@ export default function SendFeedbacks() {
     isLoading: isLoadingSubmissions,
     error: errorSubmissions,
   } = useSubmissions(exercise);
-  const {
-    data: storedFeedbacks,
-    isLoading: isLoadingFeedbacks,
-    error: errorFeedbacks,
-  } = useFeedbacks(exercise, selectedSubmission, {
-    onSuccess: (fetchFeedbacks) => {
-      const ignoreIds = new Set<number>(removedFeedbackIds);
-      feedbacks.forEach((f) => ignoreIds.add(f.id));
-      setFeedbacks([
-        ...fetchFeedbacks.filter((f) => !ignoreIds.has(f.id)),
-        ...feedbacks,
-      ]);
-    },
-  });
 
   const { isLoading, error, mutateAsync, reset } = useSendFeedbacks();
 
