@@ -48,13 +48,17 @@ export default function useModuleExperiment(
   // Info message to display the progress to the user
   const [info, setInfo] = useState<string>("");
 
-  // Queue of submissions that are waiting for feedback suggestions
+  // Interactive mode: Selected submission id
+  // Current submission that is being 
+  const [interactiveSelectedSubmissionId, setInteractiveSelectedSubmissionId] = useState<number | undefined>(undefined);
+
+  // Interactive mode: Queue of submissions that are waiting for feedback suggestions
   // In interactive mode, the module might lag behind the module that selects submissions
   const [interactiveSubmissionQueue, setInteractiveSubmissionQueue] = useState<
     number[]
   >([]);
 
-  // Submissions that are not in the interactiveSubmissionQueue nor in the remaining submissions
+  // Interactive mode: Submissions that are not in the interactiveSubmissionQueue nor in the remaining submissions
   // of the module that selects submissions
   // This might happen if the progress got imported from a previous session
   const [
@@ -67,6 +71,57 @@ export default function useModuleExperiment(
   const sendFeedbacks = useSendFeedbacks();
   const requestSubmissionSelection = useRequestSubmissionSelection();
   const requestFeedbackSuggestions = useRequestFeedbackSuggestions();
+
+  // Interactive mode: set the selected submission id 
+  const interactiveSetSelectedSubmissionId = (submissionId: number | undefined) => {
+    if (experiment.executionMode !== "incremental") {
+      return;
+    }
+
+  };
+
+  // Interactive mode: request submission selection from the submission selector module
+  // This does not set the selected submission id
+  const interactiveRequestSubmissionSelection = async () => {
+    if (experiment.executionMode !== "incremental") {
+      return undefined;
+    }
+
+    const remainingSubmissions = state.experiment.evaliationSubmissions.filter(
+      (submission) =>
+        !state.feedbackSuggestions.has(submission.id)
+    );
+
+    if (remainingSubmissions.length === 0) {
+      return undefined;
+    }
+
+    try {
+      const response = await requestSubmissionSelection.mutateAsync(
+        {
+          exercise: experiment.exercise,
+          submissions: remainingSubmissions,
+        }
+      );
+      console.log("Received submission selection:", response.data);
+      if (response.data !== -1) {
+        return response.data as number;
+      } else {
+        // Pick random submission from remaining submissions
+        const randomIndex = Math.floor(
+          Math.random() * remainingSubmissions.length
+        );
+        return remainingSubmissions[randomIndex].id;
+      }
+    } catch (error) {
+      console.error(
+        "Error while requesting submission selection:",
+        error
+      );
+      setInfo("Error while requesting submission selection.");
+      return undefined;
+    }
+  };
 
   // 1. Send submissions to Athena
   const stepSendSubmissions = () => {
@@ -196,7 +251,7 @@ export default function useModuleExperiment(
 
     const generateFeedbackSuggestions = (submission: Submission) => {
       setInfo(
-        `Generating feedback suggestions... (${state.sentFeedbacks.size + 1}/${
+        `Generating feedback suggestions... (${state.feedbackSuggestions.size + 1}/${
           experiment.evaliationSubmissions.length
         }) - Requesting feedback suggestions for submission ${submission.id}...`
       );
@@ -235,7 +290,7 @@ export default function useModuleExperiment(
 
     const selectNextSubmissionAndGenerate = () => {
       const remainingSubmissions = experiment.evaliationSubmissions.filter(
-        (submission) => !state.sentFeedbacks.has(submission.id)
+        (submission) => !state.feedbackSuggestions.has(submission.id)
       );
 
       // No more submissions to evaluate -> Go to finished
@@ -248,7 +303,7 @@ export default function useModuleExperiment(
         return;
       }
       setInfo(
-        `Generating feedback suggestions... (${state.sentFeedbacks.size + 1}/${
+        `Generating feedback suggestions... (${state.feedbackSuggestions.size + 1}/${
           experiment.evaliationSubmissions.length
         }) - Requesting submission selection...`
       );
@@ -307,7 +362,11 @@ export default function useModuleExperiment(
       stepGenerateFeedbackSuggestions();
     }
     // TODO: Add automatic evaluation step here
+    // Note: Evaluate tutor feedback more globally to not do it multiple times
+    // Note 2: Actually, I probably want to have it in parallel with the feedback suggestions for the interactive mode!
   }, [state.step]);
 
+
+  // Callback function for requesting submission selection
   return { state, info };
 }
