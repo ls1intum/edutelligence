@@ -8,13 +8,15 @@ import useRequestSubmissionSelection from "./athena/request_submission_selection
 import useRequestFeedbackSuggestions from "./athena/request_feedback_suggestions";
 import useSendSubmissions from "./athena/send_submissions";
 
+type ExperimentStep =
+  | "sendingSubmissions"
+  | "sendingTrainingFeedbacks"
+  | "generatingFeedbackSuggestions"
+  | "finished";
+
 type BatchModuleExperimentState = {
   // The current step of the experiment
-  step:
-    | "sendingSubmissions"
-    | "sendingTrainingFeedbacks"
-    | "generatingFeedbackSuggestions"
-    | "finished";
+  step: ExperimentStep;
   // Submissions that have been sent to Athena
   didSendSubmissions: boolean;
   // Tutor feedbacks for training submissions that have been sent to Athena
@@ -35,6 +37,7 @@ export default function useBatchModuleExperiment(experiment: Experiment) {
 
   // Info message to display the progress to the user
   const [info, setInfo] = useState<string>("");
+  const [processingStep, setProcessingStep] = useState<ExperimentStep | undefined>(undefined);
 
   // Module requests
   const sendSubmissions = useSendSubmissions();
@@ -44,6 +47,7 @@ export default function useBatchModuleExperiment(experiment: Experiment) {
 
   // 1. Send submissions to Athena
   const stepSendSubmissions = () => {
+    setProcessingStep("sendingSubmissions");
     console.log("Sending submissions to Athena...");
     setInfo("Sending submissions to Athena...");
     sendSubmissions.mutate(
@@ -74,6 +78,7 @@ export default function useBatchModuleExperiment(experiment: Experiment) {
 
   // 2. Send tutor feedbacks for training submissions to Athena
   const stepSendTrainingFeedbacks = () => {
+    setProcessingStep("sendingTrainingFeedbacks");
     // Skip if there are no training submissions
     if (!experiment.trainingSubmissions) {
       console.log("No training submissions, skipping");
@@ -165,6 +170,7 @@ export default function useBatchModuleExperiment(experiment: Experiment) {
 
   // 3. Generate feedback suggestions
   const stepGenerateFeedbackSuggestions = () => {
+    setProcessingStep("generatingFeedbackSuggestions");
     console.log("Generating feedback suggestions...");
 
     const generateFeedbackSuggestions = (submission: Submission) => {
@@ -270,7 +276,6 @@ export default function useBatchModuleExperiment(experiment: Experiment) {
     selectNextSubmissionAndGenerate();
   };
 
-
   useEffect(() => {
     if (experiment.executionMode !== "batch") {
       console.error(
@@ -280,11 +285,11 @@ export default function useBatchModuleExperiment(experiment: Experiment) {
     }
 
     console.log("Step changed");
-    if (state.step === "sendingSubmissions") {
+    if (state.step === "sendingSubmissions" && processingStep !== "sendingSubmissions") {
       stepSendSubmissions();
-    } else if (state.step === "sendingTrainingFeedbacks") {
+    } else if (state.step === "sendingTrainingFeedbacks" && processingStep !== "sendingTrainingFeedbacks") {
       stepSendTrainingFeedbacks();
-    } else if (state.step === "generatingFeedbackSuggestions") {
+    } else if (state.step === "generatingFeedbackSuggestions" && processingStep !== "generatingFeedbackSuggestions") {
       stepGenerateFeedbackSuggestions();
     }
     // TODO: Add automatic evaluation step here
