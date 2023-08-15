@@ -1,4 +1,5 @@
 import type { Feedback } from "@/model/feedback";
+import type { Submission } from "@/model/submission";
 import type { Experiment } from "@/components/view_mode/evaluation_mode/define_experiment";
 import type { ModuleConfiguration } from "@/components/view_mode/evaluation_mode/configure_modules";
 
@@ -7,7 +8,6 @@ import { useSendFeedbacks } from "./athena/send_feedbacks";
 import useRequestSubmissionSelection from "./athena/request_submission_selection";
 import useRequestFeedbackSuggestions from "./athena/request_feedback_suggestions";
 import useSendSubmissions from "./athena/send_submissions";
-import { Submission } from "@/model/submission";
 
 type ModuleExperimentState = {
   experiment: Experiment;
@@ -84,17 +84,22 @@ export default function useModuleExperiment(
     } else if (!interactiveSubmissionQueue.includes(submissionId) && !interactiveCatchUpWithSubmissions.includes(submissionId)) {
       setInteractiveSubmissionQueue([...interactiveSubmissionQueue, submissionId]);
     }
-    // Otherwise the submission is already in the queue
+    // Otherwise the selected submission is already in the queue
 
     // Handle remainingSubmissionIds
-    const submissionIdsInQueue = new Set(interactiveSubmissionQueue);
-    interactiveCatchUpWithSubmissions.forEach(submissionId => submissionIdsInQueue.add(submissionId));
+    // We have to catch up with submissions that are not in the remaining submissions of the submission selector module
+    const submissionIdsToIgnore = new Set([...interactiveSubmissionQueue, ...interactiveCatchUpWithSubmissions]);
     if (interactiveSelectedSubmissionId !== undefined) {
-      submissionIdsInQueue.add(interactiveSelectedSubmissionId);
+      submissionIdsToIgnore.add(interactiveSelectedSubmissionId);
     }
+    remainingSubmissionIds.forEach(submissionId => submissionIdsToIgnore.add(submissionId));
+    state.feedbackSuggestions.forEach((_, submissionId) => submissionIdsToIgnore.add(submissionId));
 
-    // Submissions to catch up with
-    const newCatchUpWithSubmissionIds = remainingSubmissionIds.filter(submissionId => !submissionIdsInQueue.has(submissionId));
+    // Submissions that are skipped in the evaliation submissions
+    const newCatchUpWithSubmissionIds = experiment.evaluationSubmissions
+      .filter(submission => !submissionIdsToIgnore.has(submission.id))
+      .map(submission => submission.id);
+
     setInteractiveCatchUpWithSubmissions([...interactiveCatchUpWithSubmissions, ...newCatchUpWithSubmissionIds]);
   };
 
@@ -105,7 +110,7 @@ export default function useModuleExperiment(
       return undefined;
     }
 
-    const remainingSubmissions = state.experiment.evaliationSubmissions.filter(
+    const remainingSubmissions = state.experiment.evaluationSubmissions.filter(
       (submission) =>
         !state.feedbackSuggestions.has(submission.id)
     );
@@ -161,7 +166,7 @@ export default function useModuleExperiment(
         exercise: experiment.exercise,
         submissions: [
           ...(experiment.trainingSubmissions ?? []),
-          ...experiment.evaliationSubmissions,
+          ...experiment.evaluationSubmissions,
         ],
       },
       {
@@ -281,7 +286,7 @@ export default function useModuleExperiment(
     const generateFeedbackSuggestions = (submission: Submission) => {
       setInfo(
         `Generating feedback suggestions... (${state.feedbackSuggestions.size + 1}/${
-          experiment.evaliationSubmissions.length
+          experiment.evaluationSubmissions.length
         }) - Requesting feedback suggestions for submission ${submission.id}...`
       );
       requestFeedbackSuggestions.mutate(
@@ -318,7 +323,7 @@ export default function useModuleExperiment(
     };
 
     const selectNextSubmissionAndGenerate = () => {
-      const remainingSubmissions = experiment.evaliationSubmissions.filter(
+      const remainingSubmissions = experiment.evaluationSubmissions.filter(
         (submission) => !state.feedbackSuggestions.has(submission.id)
       );
 
@@ -333,7 +338,7 @@ export default function useModuleExperiment(
       }
       setInfo(
         `Generating feedback suggestions... (${state.feedbackSuggestions.size + 1}/${
-          experiment.evaliationSubmissions.length
+          experiment.evaluationSubmissions.length
         }) - Requesting submission selection...`
       );
 
