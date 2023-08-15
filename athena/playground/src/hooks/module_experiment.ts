@@ -72,17 +72,30 @@ export default function useModuleExperiment(
   const requestSubmissionSelection = useRequestSubmissionSelection();
   const requestFeedbackSuggestions = useRequestFeedbackSuggestions();
 
-  // Interactive mode: add the selected submission id 
-  const interactiveAddSelectedSubmissionId = (submissionId: number) => {
+  // Interactive mode: add the selected submission id
+  const interactiveAddSelectedSubmissionId = (submissionId: number, remainingSubmissionIds: number[]) => {
     if (experiment.executionMode !== "incremental") {
       return;
     }
+
+    // Handle submissionId
     if (interactiveSelectedSubmissionId === undefined && interactiveSelectedSubmissionId !== submissionId) {
       setInteractiveSelectedSubmissionId(submissionId);
     } else if (!interactiveSubmissionQueue.includes(submissionId) && !interactiveCatchUpWithSubmissions.includes(submissionId)) {
       setInteractiveSubmissionQueue([...interactiveSubmissionQueue, submissionId]);
     }
     // Otherwise the submission is already in the queue
+
+    // Handle remainingSubmissionIds
+    const submissionIdsInQueue = new Set(interactiveSubmissionQueue);
+    interactiveCatchUpWithSubmissions.forEach(submissionId => submissionIdsInQueue.add(submissionId));
+    if (interactiveSelectedSubmissionId !== undefined) {
+      submissionIdsInQueue.add(interactiveSelectedSubmissionId);
+    }
+
+    // Submissions to catch up with
+    const newCatchUpWithSubmissionIds = remainingSubmissionIds.filter(submissionId => !submissionIdsInQueue.has(submissionId));
+    setInteractiveCatchUpWithSubmissions([...interactiveCatchUpWithSubmissions, ...newCatchUpWithSubmissionIds]);
   };
 
   // Interactive mode: request submission selection from the submission selector module
@@ -109,15 +122,26 @@ export default function useModuleExperiment(
         }
       );
       console.log("Received submission selection:", response.data);
-      if (response.data !== -1) {
-        return response.data as number;
-      } else {
+
+      const remainingSubmissionIds = remainingSubmissions.map(
+        (submission) => submission.id
+      );
+
+      let submissionId = response.data as number;
+      if (submissionId === -1) {
         // Pick random submission from remaining submissions
         const randomIndex = Math.floor(
           Math.random() * remainingSubmissions.length
         );
-        return remainingSubmissions[randomIndex].id;
+        submissionId = remainingSubmissions[randomIndex].id;
       }
+
+      return {
+        submissionId,
+        remainingSubmissionIds: remainingSubmissionIds.filter(
+          (id) => id !== submissionId
+        ),
+      };
     } catch (error) {
       console.error(
         "Error while requesting submission selection:",
