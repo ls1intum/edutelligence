@@ -179,7 +179,7 @@ export default function ConductExperiment({
             )}
           >
             <div className="sticky top-0 bg-white border-b border-gray-300 z-10 px-2">
-              <h4 className="text-lg font-bold">Submission</h4>
+              <h4 className="text-lg font-bold">Tutor Feedback</h4>
             </div>
             <div className="my-2">
               <SubmissionDetail
