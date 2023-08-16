@@ -77,6 +77,7 @@ export default function ConductExperiment({
       {/* Header */}
       <div className="flex flex-row justify-between items-center gap-4">
         <h3 className="text-2xl font-bold">Conduct Experiment</h3>
+        {/* Submission switcher */}
         <div className="flex gap-2 flex-1 items-center">
           <button
             disabled={viewSubmissionIndex <= 0}
@@ -106,6 +107,35 @@ export default function ConductExperiment({
               (id: {experiment.evaluationSubmissions[viewSubmissionIndex]?.id})
             </span>
           </div>
+        </div>
+        {/* View controls */}
+        <div className="flex flex-row gap-2 justify-start">
+          <button
+            className="rounded-md p-2 text-primary-500 hover:text-primary-600 hover:bg-gray-100"
+            onClick={() => {
+              if (fullscreenHandle.active) {
+                fullscreenHandle.exit();
+              } else {
+                fullscreenHandle.enter();
+              }
+            }}
+          >
+            {fullscreenHandle.active ? "Exit Fullscreen" : "Enter Fullscreen"}
+          </button>
+          <button
+            onClick={() => slide("prev")}
+            disabled={disableSliderBtnPrev}
+            className="bg-primary-500 text-white rounded-md p-2 hover:bg-primary-600 disabled:text-gray-500 disabled:bg-gray-200 disabled:cursor-not-allowed"
+          >
+            Prev
+          </button>
+          <button
+            onClick={() => slide("next")}
+            disabled={disableSliderBtnNext}
+            className="bg-primary-500 text-white rounded-md p-2 hover:bg-primary-600 disabled:text-gray-500 disabled:bg-gray-200 disabled:cursor-not-allowed"
+          >
+            Next
+          </button>
         </div>
       </div>
       {/* Scrollable Slider */}
