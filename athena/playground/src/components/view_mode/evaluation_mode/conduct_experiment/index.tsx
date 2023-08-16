@@ -224,42 +224,30 @@ export default function ConductExperiment({
                   viewSubmission={
                     experiment.evaluationSubmissions[viewSubmissionIndex]
                   }
-                  controlView={
-                    <div className="flex flex-1 justify-end gap-1 mb-1 self-start">
-                      <button
-                        disabled={index === 0}
-                        className="w-8 h-8 rounded-md p-2 bg-gray-100 hover:bg-gray-200 font-bold text-gray-500 hover:text-gray-600 text-base leading-none disabled:text-gray-300 disabled:bg-gray-50 disabled:cursor-not-allowed"
-                        onClick={() => {
-                          setModuleRenderOrder((prevOrder) => {
-                            const newOrder = [...prevOrder];
-                            const temp = newOrder[index - 1];
-                            newOrder[index - 1] = newOrder[index];
-                            newOrder[index] = temp;
-                            return newOrder;
-                          });
-                          slide("prev");
-                        }}
-                      >
-                        ←
-                      </button>
-                      <button
-                        disabled={index === moduleRenderOrder.length - 1}
-                        className="w-8 h-8 rounded-md p-2 bg-gray-100 hover:bg-gray-200 font-bold text-gray-500 hover:text-gray-600 text-base leading-none disabled:text-gray-300 disabled:bg-gray-50 disabled:cursor-not-allowed"
-                        onClick={() => {
-                          setModuleRenderOrder((prevOrder) => {
-                            const newOrder = [...prevOrder];
-                            const temp = newOrder[index + 1];
-                            newOrder[index + 1] = newOrder[index];
-                            newOrder[index] = temp;
-                            return newOrder;
-                          });
-                          slide("next");
-                        }}
-                      >
-                        →
-                      </button>
-                    </div>
-                  }
+                  moduleOrderControl={{
+                    isFirstModule: index === 0,
+                    isLastModule: index === moduleRenderOrder.length - 1,
+                    onClickPrev: () => {
+                      setModuleRenderOrder((prevOrder) => {
+                        const newOrder = [...prevOrder];
+                        const temp = newOrder[index - 1];
+                        newOrder[index - 1] = newOrder[index];
+                        newOrder[index] = temp;
+                        return newOrder;
+                      });
+                      slide("prev");
+                    },
+                    onClickNext: () => {
+                      setModuleRenderOrder((prevOrder) => {
+                        const newOrder = [...prevOrder];
+                        const temp = newOrder[index + 1];
+                        newOrder[index + 1] = newOrder[index];
+                        newOrder[index] = temp;
+                        return newOrder;
+                      });
+                      slide("next");
+                    },
+                  }}
                 />
               </div>
             </div>

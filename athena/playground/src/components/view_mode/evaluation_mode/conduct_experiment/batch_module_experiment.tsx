@@ -14,14 +14,19 @@ type ConductBatchModuleExperimentProps = {
   experiment: Experiment;
   moduleConfiguration: ModuleConfiguration;
   viewSubmission: Submission;
-  controlView?: React.ReactNode;
+  moduleOrderControl: {
+    isFirstModule: boolean;
+    isLastModule: boolean;
+    onClickPrev: () => void;
+    onClickNext: () => void;
+  };
 };
 
 function ConductBatchModuleExperiment({
   experiment,
   moduleConfiguration,
   viewSubmission,
-  controlView,
+  moduleOrderControl,
 }: ConductBatchModuleExperimentProps) {
   const { data: health } = useHealth();
   const moduleExperiment = useBatchModuleExperiment(experiment);
@@ -46,7 +51,22 @@ function ConductBatchModuleExperiment({
         <div className="flex flex-col mb-2">
           <div className="flex items-center justify-between gap-2">
             <h4 className="text-lg font-bold">{moduleConfiguration.name}</h4>
-            {controlView}
+            <div className="flex flex-1 justify-end gap-1 mb-1 self-start">
+              <button
+                disabled={moduleOrderControl.isFirstModule}
+                className="w-8 h-8 rounded-md p-2 bg-gray-100 hover:bg-gray-200 font-bold text-gray-500 hover:text-gray-600 text-base leading-none disabled:text-gray-300 disabled:bg-gray-50 disabled:cursor-not-allowed"
+                onClick={moduleOrderControl.onClickPrev}
+              >
+                ←
+              </button>
+              <button
+                disabled={moduleOrderControl.isLastModule}
+                className="w-8 h-8 rounded-md p-2 bg-gray-100 hover:bg-gray-200 font-bold text-gray-500 hover:text-gray-600 text-base leading-none disabled:text-gray-300 disabled:bg-gray-50 disabled:cursor-not-allowed"
+                onClick={moduleOrderControl.onClickNext}
+              >
+                →
+              </button>
+            </div>
           </div>
           <div className="flex items-center justify-between gap-2">
             <div className="flex flex-wrap gap-1">
@@ -173,7 +193,7 @@ export default function ConductBatchModuleExperimentWrapped({
   experiment,
   moduleConfiguration,
   viewSubmission,
-  controlView,
+  moduleOrderControl,
 }: ConductBatchModuleExperimentProps) {
   return (
     <ModuleProvider
@@ -184,7 +204,7 @@ export default function ConductBatchModuleExperimentWrapped({
         experiment={experiment}
         moduleConfiguration={moduleConfiguration}
         viewSubmission={viewSubmission}
-        controlView={controlView}
+        moduleOrderControl={moduleOrderControl}
       />
     </ModuleProvider>
   );
