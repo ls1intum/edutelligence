@@ -209,9 +209,6 @@ export default function ConductExperiment({
                   : "w-[calc(50vw-7.5rem)]"
               )}
             >
-              <div className="sticky top-0 bg-white border-b border-gray-300 z-10 px-2">
-                <h4 className="text-lg font-bold">Exercise Details</h4>
-              </div>
               <ConductBatchModuleExperiment
                 experiment={experiment}
                 moduleConfiguration={moduleConfiguration}
