@@ -26,7 +26,7 @@ export default function TextSubmissionDetail({
       <div className="border border-gray-100 rounded-lg overflow-hidden">
         <FileEditor
           key={`submission-${submission.id}`}
-          identifier={`submission-${submission.id}`}
+          identifier={identifier}
           content={submission.text}
           autoHeight
           noFileFeedback

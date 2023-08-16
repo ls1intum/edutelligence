@@ -26,8 +26,13 @@ export default function useRequestFeedbackSuggestions(
     mutationFn: async ({ exercise, submission }) => {
       let response = await athenaFetcher("/feedback_suggestions", { exercise, submission });
       if (response?.data) {
-        response.data.feedbacks = response.data.map((feedback: Feedback) => {
-          feedback.id = Date.now(); // Good enough for the playground
+        response.data = response.data.map((feedback: Feedback, index: number) => {
+          // Change variable names from camel case to snake case (change this in the future)
+          feedback = Object.fromEntries(
+            Object.entries(feedback).map(([key, value]) => [key.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`), value])
+          ) as Feedback;
+
+          feedback.id = Number(`${Date.now()}${String(index).padStart(3, "0")}`); // Good enough for the playground
           feedback.type = exercise.type;
           feedback.isSuggestion = true;
           return feedback;

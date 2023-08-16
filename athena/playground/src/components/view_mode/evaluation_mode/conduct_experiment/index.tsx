@@ -215,6 +215,7 @@ export default function ConductExperiment({
               <ConductBatchModuleExperiment
                 experiment={experiment}
                 moduleConfiguration={moduleConfiguration}
+                viewSubmission={experiment.evaluationSubmissions[viewSubmissionIndex]}
               />
             </div>
           </div>

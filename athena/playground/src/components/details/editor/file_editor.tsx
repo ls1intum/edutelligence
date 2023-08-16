@@ -328,7 +328,7 @@ export default function FileEditor({
                 editorRef.current && (
                   <EditorWidget
                     editor={editorRef.current}
-                    key={`feedback-${feedback.id}-${index}`}
+                    key={`${filePath}-feedback-${feedback.id}-${index}`}
                     afterLineNumber={range?.endLineNumber ?? 0}
                     afterColumn={range?.endColumn ?? 0}
                     modelPath={modelPath}

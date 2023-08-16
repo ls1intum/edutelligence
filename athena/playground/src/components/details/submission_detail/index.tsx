@@ -29,6 +29,7 @@ export default function SubmissionDetail({
   } else if (submission.type === "text") {
     return (
       <TextSubmissionDetail
+        identifier={identifier}
         submission={submission}
         feedbacks={feedbacks}
         onFeedbacksChange={onFeedbacksChange}
