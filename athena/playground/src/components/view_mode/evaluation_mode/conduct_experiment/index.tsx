@@ -32,6 +32,9 @@ export default function ConductExperiment({
   }, []);
 
   const [viewSubmissionIndex, setViewSubmissionIndex] = useState(0);
+  const [moduleRenderOrder, setModuleRenderOrder] = useState<number[]>(
+    moduleConfigurations.map((_, index) => index)
+  );
 
   // Slider stuff
   const scrollSliderRef = useRef<HTMLDivElement>(null);
@@ -175,7 +178,9 @@ export default function ConductExperiment({
           <div
             className={twMerge(
               "shrink-0 pr-2",
-              fullscreenHandle.active ? "w-[calc(50vw-1.5rem)]" : "w-[calc(50vw-7.5rem)]"
+              fullscreenHandle.active
+                ? "w-[calc(50vw-1.5rem)]"
+                : "w-[calc(50vw-7.5rem)]"
             )}
           >
             <div className="sticky top-0 bg-white border-b border-gray-300 z-10 px-2">
@@ -184,7 +189,9 @@ export default function ConductExperiment({
             <div className="my-2">
               <SubmissionDetail
                 identifier={"tutor"}
-                submission={experiment.evaluationSubmissions[viewSubmissionIndex]}
+                submission={
+                  experiment.evaluationSubmissions[viewSubmissionIndex]
+                }
                 feedbacks={experiment.tutorFeedbacks.filter(
                   (feedback) =>
                     feedback.submission_id ===
@@ -196,27 +203,67 @@ export default function ConductExperiment({
         </div>
 
         {/* Module Pages */}
-        {moduleConfigurations.map((moduleConfiguration, index) => (
-          <div
-            key={moduleConfiguration.id}
-            className="flex flex-col shrink-0 snap-start overflow-y-auto z-20"
-          >
+        {moduleRenderOrder
+          .map((index) => moduleConfigurations[index])
+          .map((moduleConfiguration, index) => (
             <div
-              className={twMerge(
-                "shrink-0 pr-2",
-                fullscreenHandle.active
-                  ? "w-[calc(50vw-1.5rem)]"
-                  : "w-[calc(50vw-7.5rem)]"
-              )}
+              key={moduleConfiguration.id}
+              className="flex flex-col shrink-0 snap-start overflow-y-auto z-20"
             >
-              <ConductBatchModuleExperiment
-                experiment={experiment}
-                moduleConfiguration={moduleConfiguration}
-                viewSubmission={experiment.evaluationSubmissions[viewSubmissionIndex]}
-              />
+              <div
+                className={twMerge(
+                  "shrink-0 pr-2",
+                  fullscreenHandle.active
+                    ? "w-[calc(50vw-1.5rem)]"
+                    : "w-[calc(50vw-7.5rem)]"
+                )}
+              >
+                <ConductBatchModuleExperiment
+                  experiment={experiment}
+                  moduleConfiguration={moduleConfiguration}
+                  viewSubmission={
+                    experiment.evaluationSubmissions[viewSubmissionIndex]
+                  }
+                  controlView={
+                    <div className="flex flex-1 justify-end gap-1 mb-1 self-start">
+                      <button
+                        disabled={index === 0}
+                        className="w-8 h-8 rounded-md p-2 bg-gray-100 hover:bg-gray-200 font-bold text-gray-500 hover:text-gray-600 text-base leading-none disabled:text-gray-300 disabled:bg-gray-50 disabled:cursor-not-allowed"
+                        onClick={() => {
+                          setModuleRenderOrder((prevOrder) => {
+                            const newOrder = [...prevOrder];
+                            const temp = newOrder[index - 1];
+                            newOrder[index - 1] = newOrder[index];
+                            newOrder[index] = temp;
+                            return newOrder;
+                          });
+                          slide("prev");
+                        }}
+                      >
+                        ←
+                      </button>
+                      <button
+                        disabled={index === moduleRenderOrder.length - 1}
+                        className="w-8 h-8 rounded-md p-2 bg-gray-100 hover:bg-gray-200 font-bold text-gray-500 hover:text-gray-600 text-base leading-none disabled:text-gray-300 disabled:bg-gray-50 disabled:cursor-not-allowed"
+                        onClick={() => {
+                          setModuleRenderOrder((prevOrder) => {
+                            const newOrder = [...prevOrder];
+                            const temp = newOrder[index + 1];
+                            newOrder[index + 1] = newOrder[index];
+                            newOrder[index] = temp;
+                            return newOrder;
+                          });
+                          slide("next");
+                        }}
+                      >
+                        →
+                      </button>
+                    </div>
+                  }
+                />
+              </div>
             </div>
-          </div>
-        ))}
+          ))}
       </div>
     </FullScreen>
   );

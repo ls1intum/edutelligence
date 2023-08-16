@@ -5,23 +5,23 @@ import useBatchModuleExperiment from "@/hooks/batch_module_experiment";
 import ModuleExperimentProgress from "./module_experiment_progress";
 import type { Submission } from "@/model/submission";
 import SubmissionDetail from "@/components/details/submission_detail";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import useHealth from "@/hooks/health";
-import { twMerge } from "tailwind-merge";
 import ModuleConfigSelect from "@/components/selectors/module_config_select";
-import Disclosure from "@/components/disclosure";
 import Modal from "react-modal";
 
 type ConductBatchModuleExperimentProps = {
   experiment: Experiment;
   moduleConfiguration: ModuleConfiguration;
   viewSubmission: Submission;
+  controlView?: React.ReactNode;
 };
 
 function ConductBatchModuleExperiment({
   experiment,
   moduleConfiguration,
   viewSubmission,
+  controlView,
 }: ConductBatchModuleExperimentProps) {
   const { data: health } = useHealth();
   const moduleExperiment = useBatchModuleExperiment(experiment);
@@ -43,50 +43,59 @@ function ConductBatchModuleExperiment({
   return (
     <div>
       <div className="sticky top-0 bg-white border-b border-gray-300 z-10 px-2">
-        <div className="flex items-center gap-2">
-          <h4 className="text-lg font-bold">{moduleConfiguration.name}</h4>
-          <div className="flex flex-wrap gap-1">
-            {health?.modules[
-              moduleConfiguration.moduleAndConfig.module.name
-            ] ? (
-              <span className="rounded-full bg-green-500 text-white px-2 py-0.5 text-xs">
-                Healthy
-              </span>
-            ) : (
-              <span className="rounded-full bg-red-500 text-white px-2 py-0.5 text-xs">
-                Unhealthy
-              </span>
-            )}
+        <div className="flex flex-col mb-2">
+          <div className="flex items-center justify-between gap-2">
+            <h4 className="text-lg font-bold">{moduleConfiguration.name}</h4>
+            {controlView}
           </div>
-          <div className="flex flex-1 justify-end gap-3 mb-1 items-center text-sm">
-            <button className="text-gray-500 hover:text-gray-700"
-            onClick={() => setConfigModalOpen(true)}>Show Config</button>
-            <button
-              className="text-gray-500 hover:text-gray-700"
-              onClick={() => {
-                setShowProgress((prev) => !prev);
-              }}
-            >
-              {showProgress ? "Hide" : "Show"} Progress
-              <span
-                className="inline-block transform transition-transform duration-200 ml-1"
-                style={{
-                  transform: showProgress ? "rotate(90deg)" : "rotate(0deg)",
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex flex-wrap gap-1">
+              {health?.modules[
+                moduleConfiguration.moduleAndConfig.module.name
+              ] ? (
+                <span className="rounded-full bg-green-500 text-white px-2 py-0.5 text-xs">
+                  Healthy
+                </span>
+              ) : (
+                <span className="rounded-full bg-red-500 text-white px-2 py-0.5 text-xs">
+                  Unhealthy
+                </span>
+              )}
+              {moduleExperiment.data.step === "finished" && (
+                <span className="rounded-full bg-green-500 text-white px-2 py-0.5 text-xs">
+                  Finished
+                </span>
+              )}
+              {moduleExperiment.data.step !== "finished" && (
+                <span className="rounded-full bg-yellow-500 text-white px-2 py-0.5 text-xs">
+                  In Progress
+                </span>
+              )}
+            </div>
+            <div className="flex gap-3 items-center text-sm whitespace-nowrap">
+              <button
+                className="text-gray-500 hover:text-gray-700"
+                onClick={() => setConfigModalOpen(true)}
+              >
+                Show&nbsp;Config
+              </button>
+              <button
+                className="text-gray-500 hover:text-gray-700"
+                onClick={() => {
+                  setShowProgress((prev) => !prev);
                 }}
               >
-                ▶
-              </span>
-            </button>
-            {moduleExperiment.data.step === "finished" && (
-              <span className="rounded-full bg-green-500 text-white px-2 py-0.5 text-xs">
-                Finished
-              </span>
-            )}
-            {moduleExperiment.data.step !== "finished" && (
-              <span className="rounded-full bg-yellow-500 text-white px-2 py-0.5 text-xs">
-                In Progress
-              </span>
-            )}
+                {showProgress ? "Hide" : "Show"}&nbsp;Progress
+                <span
+                  className="inline-block transform transition-transform duration-200 ml-1"
+                  style={{
+                    transform: showProgress ? "rotate(90deg)" : "rotate(0deg)",
+                  }}
+                >
+                  ▶
+                </span>
+              </button>
+            </div>
           </div>
         </div>
         {showProgress && (
@@ -164,6 +173,7 @@ export default function ConductBatchModuleExperimentWrapped({
   experiment,
   moduleConfiguration,
   viewSubmission,
+  controlView,
 }: ConductBatchModuleExperimentProps) {
   return (
     <ModuleProvider
@@ -174,6 +184,7 @@ export default function ConductBatchModuleExperimentWrapped({
         experiment={experiment}
         moduleConfiguration={moduleConfiguration}
         viewSubmission={viewSubmission}
+        controlView={controlView}
       />
     </ModuleProvider>
   );
