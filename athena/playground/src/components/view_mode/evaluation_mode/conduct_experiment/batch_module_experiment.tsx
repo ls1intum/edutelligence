@@ -8,6 +8,9 @@ import SubmissionDetail from "@/components/details/submission_detail";
 import { useEffect, useState } from "react";
 import useHealth from "@/hooks/health";
 import { twMerge } from "tailwind-merge";
+import ModuleConfigSelect from "@/components/selectors/module_config_select";
+import Disclosure from "@/components/disclosure";
+import Modal from "react-modal";
 
 type ConductBatchModuleExperimentProps = {
   experiment: Experiment;
@@ -25,19 +28,17 @@ function ConductBatchModuleExperiment({
 
   const [showProgress, setShowProgress] = useState(true);
 
-  useEffect(() => {
-    console.log(
-      `Feedbacks: ${
-        moduleExperiment.data.submissionsWithFeedbackSuggestions.get(
-          viewSubmission.id
-        )?.suggestions.length
-      }`,
-      moduleExperiment.data.submissionsWithFeedbackSuggestions.get(
-        viewSubmission.id
-      )?.suggestions
-    );
-    console.log(moduleExperiment.data.submissionsWithFeedbackSuggestions);
-  }, [moduleExperiment.data.submissionsWithFeedbackSuggestions]);
+  const [isConfigModalOpen, setConfigModalOpen] = useState(false);
+
+  function handleOpenModal() {
+    document.body.style.overflow = "hidden"; // Prevent scrolling
+    setConfigModalOpen(true);
+  }
+
+  function handleCloseModal() {
+    document.body.style.overflow = "unset"; // Restore scrolling
+    setConfigModalOpen(false);
+  }
 
   return (
     <div>
@@ -57,9 +58,11 @@ function ConductBatchModuleExperiment({
               </span>
             )}
           </div>
-          <div className="flex flex-1 justify-end gap-2 mb-1 items-center">
+          <div className="flex flex-1 justify-end gap-3 mb-1 items-center text-sm">
+            <button className="text-gray-500 hover:text-gray-700"
+            onClick={() => setConfigModalOpen(true)}>Show Config</button>
             <button
-              className={twMerge("text-gray-500")}
+              className="text-gray-500 hover:text-gray-700"
               onClick={() => {
                 setShowProgress((prev) => !prev);
               }}
@@ -116,6 +119,43 @@ function ConductBatchModuleExperiment({
           }
         />
       </div>
+      <Modal
+        style={{
+          overlay: {
+            backgroundColor: "rgba(0, 0, 0, 0.8)",
+            zIndex: 1000,
+          },
+        }}
+        className="max-w-4xl max-h-[90vh] overflow-y-auto bg-white rounded-lg mx-auto my-12"
+        isOpen={isConfigModalOpen}
+        onAfterOpen={handleOpenModal}
+        onRequestClose={handleCloseModal}
+      >
+        <div className="p-4">
+          <div className="sticky top-0 bg-white border-b border-gray-300 z-10 px-2">
+            <div className="flex items-center gap-2">
+              <h2 className="text-2xl font-bold py-2">
+                {moduleConfiguration.name}
+              </h2>
+              <div className="flex flex-wrap gap-1">
+                <span className="rounded-full bg-blue-500 text-white px-2 py-0.5 text-xs">
+                  {moduleConfiguration.moduleAndConfig.module.name}
+                </span>
+              </div>
+              <div className="flex flex-1 justify-end gap-2 mb-1 items-start overscroll-contain">
+                <button className="text-primary-500" onClick={handleCloseModal}>
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+          <ModuleConfigSelect
+            module={moduleConfiguration.moduleAndConfig.module}
+            moduleConfig={moduleConfiguration.moduleAndConfig.moduleConfig}
+            disabled
+          />
+        </div>
+      </Modal>
     </div>
   );
 }

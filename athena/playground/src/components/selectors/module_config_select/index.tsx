@@ -35,7 +35,7 @@ export type ModuleConfigSelectProps = {
   disabled?: boolean;
   configOptions?: any;
   moduleConfig: any;
-  onChangeConfig: SetConfig;
+  onChangeConfig?: SetConfig;
 };
 
 type ModuleConfigSelectWrapperProps = ModuleConfigSelectProps & {
@@ -63,7 +63,9 @@ export default function ModuleConfigSelect({
         Object.keys(moduleConfig ?? {}).length === 0 &&
         Object.keys(defaultFormData).length !== 0
       ) {
-        onChangeConfig(defaultFormData);
+        if (onChangeConfig) {
+          onChangeConfig(defaultFormData);
+        }
         setFormKey(formKey + 1);
       }
     }
