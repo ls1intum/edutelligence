@@ -80,77 +80,83 @@ export default function ConductExperiment({
       className="bg-white rounded-md p-4 mb-8 space-y-2"
     >
       {/* Header */}
-      <div className="flex flex-row items-center gap-4">
-        <h3 className="text-2xl font-bold">Conduct Experiment</h3>
-        <div className="flex flex-1">
-        <button 
-          disabled={didStartExperiment}
-          className="bg-primary-500 text-white rounded-md p-2 hover:bg-primary-600 disabled:text-gray-500 disabled:bg-gray-200 disabled:cursor-not-allowed"
-          onClick={() => 
-            setDidStartExperiment(true)
-          }>
-          {didStartExperiment ? "Experiment Started" : "Start Experiment"}
-        </button>
-        </div>
-        {/* Submission switcher */}
-        <div className="flex gap-2 items-center">
+      <div className="flex justify-between items-center gap-4">
+        <div className="flex flex-col gap-2 xl:flex-row xl:items-center xl:gap-4">
+          <h3 className="text-2xl font-bold">Conduct Experiment</h3>
           <button
-            disabled={viewSubmissionIndex <= 0}
-            className="w-8 h-8 rounded-md p-2 bg-gray-100 hover:bg-gray-200 font-bold text-gray-500 hover:text-gray-600 text-base leading-none disabled:text-gray-300 disabled:bg-gray-50 disabled:cursor-not-allowed"
-            onClick={() => setViewSubmissionIndex(viewSubmissionIndex - 1)}
+            disabled={didStartExperiment}
+            className="self-start bg-primary-500 text-white rounded-md p-2 hover:bg-primary-600 disabled:text-gray-500 disabled:bg-gray-200 disabled:cursor-not-allowed"
+            onClick={() => setDidStartExperiment(true)}
           >
-            ←
+            {didStartExperiment ? (
+              <>Experiment&nbsp;Started</>
+            ) : (
+              <>Start&nbsp;Experiment</>
+            )}
           </button>
-          <button
-            disabled={
-              !(
-                viewSubmissionIndex + 1 <
-                experiment.evaluationSubmissions.length
-              )
-            }
-            className="w-8 h-8 rounded-md p-2 bg-gray-100 hover:bg-gray-200 font-bold text-gray-500 hover:text-gray-600 text-base leading-none disabled:text-gray-300 disabled:bg-gray-50 disabled:cursor-not-allowed"
-            onClick={() => {
-              setViewSubmissionIndex(viewSubmissionIndex + 1);
-            }}
-          >
-            →
-          </button>
-          <div className="text-gray-500">
-            Submission {viewSubmissionIndex + 1} of{" "}
-            {experiment.evaluationSubmissions.length}{" "}
-            <span className="text-gray-400 text-sm">
-              (id: {experiment.evaluationSubmissions[viewSubmissionIndex]?.id})
-            </span>
-          </div>
         </div>
-        {/* View controls */}
-        <div className="flex flex-row gap-2 justify-start">
-          <button
-            className="rounded-md p-2 text-primary-500 hover:text-primary-600 hover:bg-gray-100"
-            onClick={() => {
-              if (fullscreenHandle.active) {
-                fullscreenHandle.exit();
-              } else {
-                fullscreenHandle.enter();
+        <div className="flex flex-col gap-1 xl:flex-row xl:items-center xl:gap-4">
+          {/* Submission switcher */}
+          <div className="flex gap-2 items-center">
+            <button
+              disabled={viewSubmissionIndex <= 0}
+              className="w-8 h-8 rounded-md p-2 bg-gray-100 hover:bg-gray-200 font-bold text-gray-500 hover:text-gray-600 text-base leading-none disabled:text-gray-300 disabled:bg-gray-50 disabled:cursor-not-allowed"
+              onClick={() => setViewSubmissionIndex(viewSubmissionIndex - 1)}
+            >
+              ←
+            </button>
+            <button
+              disabled={
+                !(
+                  viewSubmissionIndex + 1 <
+                  experiment.evaluationSubmissions.length
+                )
               }
-            }}
-          >
-            {fullscreenHandle.active ? "Exit Fullscreen" : "Enter Fullscreen"}
-          </button>
-          <button
-            onClick={() => slide("prev")}
-            disabled={disableSliderBtnPrev}
-            className="bg-primary-500 text-white rounded-md p-2 hover:bg-primary-600 disabled:text-gray-500 disabled:bg-gray-200 disabled:cursor-not-allowed"
-          >
-            Prev
-          </button>
-          <button
-            onClick={() => slide("next")}
-            disabled={disableSliderBtnNext}
-            className="bg-primary-500 text-white rounded-md p-2 hover:bg-primary-600 disabled:text-gray-500 disabled:bg-gray-200 disabled:cursor-not-allowed"
-          >
-            Next
-          </button>
+              className="w-8 h-8 rounded-md p-2 bg-gray-100 hover:bg-gray-200 font-bold text-gray-500 hover:text-gray-600 text-base leading-none disabled:text-gray-300 disabled:bg-gray-50 disabled:cursor-not-allowed"
+              onClick={() => {
+                setViewSubmissionIndex(viewSubmissionIndex + 1);
+              }}
+            >
+              →
+            </button>
+            <div className="text-gray-500">
+              Submission {viewSubmissionIndex + 1} of{" "}
+              {experiment.evaluationSubmissions.length}{" "}
+              <span className="text-gray-400 text-sm">
+                (id: {experiment.evaluationSubmissions[viewSubmissionIndex]?.id}
+                )
+              </span>
+            </div>
+          </div>
+          {/* View controls */}
+          <div className="flex flex-row gap-1 justify-end order-first xl:order-last">
+            <button
+              className="rounded-md p-2 text-primary-500 hover:text-primary-600 hover:bg-gray-100"
+              onClick={() => {
+                if (fullscreenHandle.active) {
+                  fullscreenHandle.exit();
+                } else {
+                  fullscreenHandle.enter();
+                }
+              }}
+            >
+              {fullscreenHandle.active ? "Exit Fullscreen" : "Enter Fullscreen"}
+            </button>
+            <button
+              onClick={() => slide("prev")}
+              disabled={disableSliderBtnPrev}
+              className="bg-primary-500 text-white rounded-md p-2 hover:bg-primary-600 disabled:text-gray-500 disabled:bg-gray-200 disabled:cursor-not-allowed"
+            >
+              Prev
+            </button>
+            <button
+              onClick={() => slide("next")}
+              disabled={disableSliderBtnNext}
+              className="bg-primary-500 text-white rounded-md p-2 hover:bg-primary-600 disabled:text-gray-500 disabled:bg-gray-200 disabled:cursor-not-allowed"
+            >
+              Next
+            </button>
+          </div>
         </div>
       </div>
       {/* Scrollable Slider */}
