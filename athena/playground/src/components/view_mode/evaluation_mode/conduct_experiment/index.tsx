@@ -38,6 +38,12 @@ export default function ConductExperiment({
     moduleConfigurations.map((_, index) => index)
   );
 
+  const handleExport = () => {
+  };
+
+  const handleImport = (data: any) => {
+  };
+
   // Slider stuff
   const scrollSliderRef = useRef<HTMLDivElement>(null);
   const [disableSliderBtnPrev, setDisableSliderBtnPrev] = useState(true);
@@ -83,6 +89,7 @@ export default function ConductExperiment({
       <div className="flex justify-between items-center gap-4">
         <div className="flex flex-col gap-2 xl:flex-row xl:items-center xl:gap-4">
           <h3 className="text-2xl font-bold">Conduct Experiment</h3>
+          <div className="flex flex-row gap-2">
           <button
             disabled={didStartExperiment}
             className="self-start bg-primary-500 text-white rounded-md p-2 hover:bg-primary-600 disabled:text-gray-500 disabled:bg-gray-200 disabled:cursor-not-allowed"
@@ -94,6 +101,44 @@ export default function ConductExperiment({
               <>Start&nbsp;Experiment</>
             )}
           </button>
+              <button
+                className="rounded-md p-2 text-primary-500 hover:text-primary-600 hover:bg-gray-100 hover:no-underline"
+                onClick={handleExport}
+              >
+                Export
+              </button>
+          <label
+            className={twMerge(
+              "rounded-md p-2",
+              didStartExperiment
+                ? "text-gray-500 cursor-not-allowed"
+                : "text-primary-500 hover:text-primary-600 hover:bg-gray-100"
+            )}
+          >
+            Import
+            <input
+              multiple
+              disabled={didStartExperiment}
+              className="hidden"
+              type="file"
+              onChange={(e) => {
+                if (!e.target.files) return;
+
+                Array.from(e.target.files).forEach((file) => {
+                  const reader = new FileReader();
+                  reader.onload = (e) => {
+                    if (e.target && typeof e.target.result === "string") {
+                      handleImport(JSON.parse(
+                        e.target.result
+                      ));
+                    }
+                  };
+                  reader.readAsText(file);
+                });
+              }}
+            />
+          </label>
+          </div>
         </div>
         <div className="flex flex-col gap-1 xl:flex-row xl:items-center xl:gap-4">
           {/* Submission switcher */}

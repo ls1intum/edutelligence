@@ -1,7 +1,7 @@
 import type { Feedback } from "@/model/feedback";
 import type { Experiment } from "@/components/view_mode/evaluation_mode/define_experiment";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useSendFeedbacks } from "./athena/send_feedbacks";
 import useRequestSubmissionSelection from "./athena/request_submission_selection";
 import useRequestFeedbackSuggestions from "./athena/request_feedback_suggestions";
@@ -40,6 +40,7 @@ export default function useBatchModuleExperiment(experiment: Experiment) {
   const [processingStep, setProcessingStep] = useState<
     ExperimentStep | undefined
   >(undefined);
+  const isMounted = useRef(true);
 
   const startExperiment = () => {
     // Skip if the experiment has already started
@@ -73,6 +74,10 @@ export default function useBatchModuleExperiment(experiment: Experiment) {
       },
       {
         onSuccess: () => {
+          if (!isMounted.current) {
+            return;
+          }
+
           console.log("Sending submissions done!");
           setData((prevState) => ({
             ...prevState,
@@ -127,6 +132,10 @@ export default function useBatchModuleExperiment(experiment: Experiment) {
           submission,
           feedbacks: submissionFeedbacks,
         });
+        if (!isMounted.current) {
+          return;
+        }
+
         setData((prevState) => ({
           ...prevState,
           sentTrainingSubmissions: [
@@ -173,6 +182,10 @@ export default function useBatchModuleExperiment(experiment: Experiment) {
           exercise: experiment.exercise,
           submissions: remainingSubmissions,
         });
+        if (!isMounted.current) {
+          return;
+        }
+
         console.log("Received submission selection:", response.data);
 
         if (response.data !== -1) {
@@ -206,6 +219,10 @@ export default function useBatchModuleExperiment(experiment: Experiment) {
           exercise: experiment.exercise,
           submission,
         });
+        if (!isMounted.current) {
+          return;
+        }
+
         console.log("Received feedback suggestions:", response.data);
         setData((prevState) => ({
           ...prevState,
@@ -257,6 +274,13 @@ export default function useBatchModuleExperiment(experiment: Experiment) {
     // Note: Evaluate tutor feedback more globally to not do it multiple times
     // Note 2: Actually, I probably want to have it in parallel with the feedback suggestions for the interactive mode!
   }, [data.step]);
+
+  useEffect(() => {
+    isMounted.current = true;
+    return () => {
+      isMounted.current = false;
+    };
+  }, []);
 
   return {
     data,
