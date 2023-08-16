@@ -183,12 +183,12 @@ SELECT
                 END,
                 'index_start',
                 CASE
-                  WHEN tb.start_index IS NOT NULL AND tb.start_index > 0 THEN tb.start_index - 1
+                  WHEN tb.start_index IS NOT NULL AND tb.start_index > 0 THEN tb.start_index
                   ELSE 0
                 END,
                 'index_end',
                 CASE
-                  WHEN tb.end_index IS NOT NULL AND tb.end_index > 0 THEN tb.end_index - 1
+                  WHEN tb.end_index IS NOT NULL AND tb.end_index > 0 THEN tb.end_index
                   ELSE 0
                 END,
                 'grading_instruction_id',
