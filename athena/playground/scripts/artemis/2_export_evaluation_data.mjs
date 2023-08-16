@@ -1,3 +1,4 @@
+import inquirer from "inquirer";
 import mysql from "mysql2/promise";
 import fs from "fs";
 import path from "path";
@@ -70,24 +71,46 @@ async function exportAllExercises(config) {
   });
   console.log("Connected to the database!");
 
+  const { exerciseTypes } = await inquirer.prompt({
+    type: "checkbox",
+    name: "exerciseTypes",
+    message: `Which exercise types do you want to export?`,
+    choices: [{
+      name: "Text exercises",
+      value: "text",
+    },
+    {
+      name: "Programming exercises",
+      value: "programming",
+    }],
+  });
+
+  if (!exerciseTypes.length) {
+    console.warn("No exercise types selected, aborting!");
+    return;
+  }
+
   try {
-    // Export text exercises
-    await exportExercises(
-      connection,
-      text.queryPath,
-      text.inputDataPath,
-      text.exerciseType
-    );
+    if (exerciseTypes.includes("text")) {
+      // Export text exercises
+      await exportExercises(
+        connection,
+        text.queryPath,
+        text.inputDataPath,
+        text.exerciseType
+      );
+    }
 
-    // Export programming exercises
-    await exportExercises(
-      connection,
-      programming.queryPath,
-      programming.inputDataPath,
-      programming.exerciseType
-    );
-    console.log("\nNote: Repositories for programming exercises are not exported, you have to use the corresponding script to download them, and then use the linking script to link them to the exercises.");
-
+    if (exerciseTypes.includes("programming")) {
+      // Export programming exercises
+      await exportExercises(
+        connection,
+        programming.queryPath,
+        programming.inputDataPath,
+        programming.exerciseType
+      );
+      console.log("\nNote: Repositories for programming exercises are not exported, you have to use the corresponding script to download them, and then use the linking script to link them to the exercises.");
+    }
     console.log("Done!");
   } catch (err) {
     throw err;

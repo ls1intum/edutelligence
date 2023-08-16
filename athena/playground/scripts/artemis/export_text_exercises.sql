@@ -182,12 +182,14 @@ SELECT
                   ELSE COALESCE(gc.title, '')
                 END,
                 'index_start',
-                CASE
+                CASE 
+                  WHEN f.`type` = 1 THEN NULL -- info: currently AUTOMATIC and AUTOMATIC_ADAPTED are also only referenced feedback
                   WHEN tb.start_index IS NOT NULL AND tb.start_index > 0 THEN tb.start_index
                   ELSE 0
                 END,
                 'index_end',
                 CASE
+                  WHEN f.`type` = 1 THEN NULL -- info: currently AUTOMATIC and AUTOMATIC_ADAPTED are also only referenced feedback
                   WHEN tb.end_index IS NOT NULL AND tb.end_index > 0 THEN tb.end_index
                   ELSE 0
                 END,
