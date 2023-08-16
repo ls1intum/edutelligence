@@ -211,11 +211,6 @@ export default function ConfigureModules({
                     Configuration&nbsp;{index + 1}
                   </h4>
                   <div className="flex flex-wrap gap-1">
-                    {index === 0 && (
-                      <span className="rounded-full bg-indigo-500 text-white px-2 py-0.5 text-xs">
-                        Submission Selector (First)
-                      </span>
-                    )}
                     {configurationsStatus[index].isValid ? (
                       <span className="rounded-full bg-green-500 text-white px-2 py-0.5 text-xs">
                         Valid
