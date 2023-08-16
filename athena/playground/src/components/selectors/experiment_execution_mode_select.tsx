@@ -25,9 +25,10 @@ export default function ExperimentExecutionModeSelect({
         <option value={""} disabled>
           Select an execution mode
         </option>
+        {/* TODO: Add back in incremental learning mode
         <option value={"interactive"}>
           Incremental learning mode (one submission at a time)
-        </option>
+        </option> */}
         <option value={"batch"}>Batch mode (all submissions at once)</option>
       </select>
     </label>

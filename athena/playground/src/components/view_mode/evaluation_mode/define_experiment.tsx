@@ -51,7 +51,7 @@ export default function DefineExperiment({
   const { dataMode } = useBaseInfo();
   const [exerciseType, setExerciseType] = useState<string | undefined>(undefined);
   const [exercise, setExercise] = useState<Exercise | undefined>(undefined);
-  const [executionMode, setExecutionMode] = useState<ExecutionMode | undefined>(undefined);
+  const [executionMode, setExecutionMode] = useState<ExecutionMode | undefined>("batch");
   const [trainingSubmissions, setTrainingSubmissions] = useState<Submission[] | undefined>(undefined);
   const [evaluationSubmissions, setEvaluationSubmissions] = useState<Submission[] | undefined>(undefined);
   const [isImporting, setIsImporting] = useState<boolean>(false);
