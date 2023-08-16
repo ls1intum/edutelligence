@@ -8,7 +8,7 @@ import useRequestSubmissionSelection from "./athena/request_submission_selection
 import useRequestFeedbackSuggestions from "./athena/request_feedback_suggestions";
 import useSendSubmissions from "./athena/send_submissions";
 
-type ExperimentStep =
+export type ExperimentStep =
   | "sendingSubmissions"
   | "sendingTrainingFeedbacks"
   | "generatingFeedbackSuggestions"
@@ -28,15 +28,13 @@ type BatchModuleExperimentState = {
 
 export default function useBatchModuleExperiment(experiment: Experiment) {
   // State of the module experiment
-  const [state, setState] = useState<BatchModuleExperimentState>({
+  const [data, setData] = useState<BatchModuleExperimentState>({
     step: "sendingSubmissions",
     didSendSubmissions: false,
     sentTrainingSubmissions: [],
     submissionsWithFeedbackSuggestions: new Map(),
   });
 
-  // Info message to display the progress to the user
-  const [info, setInfo] = useState<string>("");
   const [processingStep, setProcessingStep] = useState<ExperimentStep | undefined>(undefined);
 
   // Module requests
@@ -49,7 +47,6 @@ export default function useBatchModuleExperiment(experiment: Experiment) {
   const stepSendSubmissions = () => {
     setProcessingStep("sendingSubmissions");
     console.log("Sending submissions to Athena...");
-    setInfo("Sending submissions to Athena...");
     sendSubmissions.mutate(
       {
         exercise: experiment.exercise,
@@ -61,7 +58,7 @@ export default function useBatchModuleExperiment(experiment: Experiment) {
       {
         onSuccess: () => {
           console.log("Sending submissions done!");
-          setState((prevState) => ({
+          setData((prevState) => ({
             ...prevState,
             step: "sendingTrainingFeedbacks", // next step
             didSendSubmissions: true,
@@ -69,7 +66,6 @@ export default function useBatchModuleExperiment(experiment: Experiment) {
         },
         onError: (error) => {
           console.error("Error while sending submissions to Athena:", error);
-          setInfo("Error while sending submissions to Athena.");
           // TODO: Recover?
         },
       }
@@ -82,7 +78,7 @@ export default function useBatchModuleExperiment(experiment: Experiment) {
     // Skip if there are no training submissions
     if (!experiment.trainingSubmissions) {
       console.log("No training submissions, skipping");
-      setState((prevState) => ({
+      setData((prevState) => ({
         ...prevState,
         step: "generatingFeedbackSuggestions",
       }));
@@ -90,10 +86,9 @@ export default function useBatchModuleExperiment(experiment: Experiment) {
     }
 
     console.log("Sending training feedbacks to Athena...");
-    setInfo("Sending training feedbacks to Athena...");
 
     const submissionsToSend = experiment.trainingSubmissions.filter(
-      (submission) => !state.sentTrainingSubmissions.includes(submission.id)
+      (submission) => !data.sentTrainingSubmissions.includes(submission.id)
     );
       
     let num = 0;
@@ -106,9 +101,7 @@ export default function useBatchModuleExperiment(experiment: Experiment) {
         continue;
       }
 
-      setInfo(
-        `Sending training feedbacks to Athena... (${num}/${submissionsToSend.length})`
-      );
+      console.log(`Sending training feedbacks to Athena... (${num}/${submissionsToSend.length})`);
 
       try {
         await sendFeedbacks.mutateAsync(
@@ -118,7 +111,7 @@ export default function useBatchModuleExperiment(experiment: Experiment) {
             feedbacks: submissionFeedbacks,
           },
         );
-        setState((prevState) => ({
+        setData((prevState) => ({
           ...prevState,
           sentTrainingSubmissions: [
             ...prevState.sentTrainingSubmissions,
@@ -130,13 +123,10 @@ export default function useBatchModuleExperiment(experiment: Experiment) {
           `Sending training feedbacks for submission ${submission.id} failed with error:`,
           error
         );
-        setInfo(
-          `Error while sending training feedbacks for submission ${submission.id}.`
-        );
       }
     }
 
-    setState((prevState) => ({
+    setData((prevState) => ({
       ...prevState,
       step: "generatingFeedbackSuggestions",
     }));
@@ -148,7 +138,7 @@ export default function useBatchModuleExperiment(experiment: Experiment) {
     console.log("Generating feedback suggestions...");
 
     let remainingSubmissions = experiment.evaluationSubmissions.filter(
-      (submission) => !state.submissionsWithFeedbackSuggestions.has(submission.id)
+      (submission) => !data.submissionsWithFeedbackSuggestions.has(submission.id)
     );
 
     while (remainingSubmissions.length > 0) {
@@ -157,9 +147,6 @@ export default function useBatchModuleExperiment(experiment: Experiment) {
       }/${experiment.evaluationSubmissions.length})`;
 
       console.log(`${infoPrefix} - Requesting feedback suggestions...`);
-      setInfo(
-        `${infoPrefix} - Requesting submission selection...`
-      );
 
       let submissionIndex = -1;
       try {
@@ -176,7 +163,6 @@ export default function useBatchModuleExperiment(experiment: Experiment) {
         }
       } catch (error) {
         console.error("Error while requesting submission selection:", error);
-        setInfo("Error while requesting submission selection.");
       }
 
       if (submissionIndex === -1) {
@@ -191,9 +177,6 @@ export default function useBatchModuleExperiment(experiment: Experiment) {
       ];
 
       console.log(`${infoPrefix} - Requesting feedback suggestions for submission ${submission.id}...`);
-      setInfo(
-        `${infoPrefix} - Requesting feedback suggestions for submission ${submission.id}...`
-      );
 
       try {
         const response = await requestFeedbackSuggestions.mutateAsync({
@@ -201,7 +184,7 @@ export default function useBatchModuleExperiment(experiment: Experiment) {
           submission,
         });
         console.log("Received feedback suggestions:", response.data);
-        setState((prevState) => ({
+        setData((prevState) => ({
           ...prevState,
           submissionsWithFeedbackSuggestions: new Map(
             prevState.submissionsWithFeedbackSuggestions.set(submission.id, {
@@ -215,13 +198,10 @@ export default function useBatchModuleExperiment(experiment: Experiment) {
           `Error while generating feedback suggestions for submission ${submission.id}:`,
           error
         );
-        setInfo(
-          `Error while generating feedback suggestions for submission ${submission.id}.`
-        );
       }
     }
 
-    setState((prevState) => ({
+    setData((prevState) => ({
       ...prevState,
       step: "finished",
     }));
@@ -236,17 +216,17 @@ export default function useBatchModuleExperiment(experiment: Experiment) {
     }
 
     console.log("Step changed");
-    if (state.step === "sendingSubmissions" && processingStep !== "sendingSubmissions") {
+    if (data.step === "sendingSubmissions" && processingStep !== "sendingSubmissions") {
       stepSendSubmissions();
-    } else if (state.step === "sendingTrainingFeedbacks" && processingStep !== "sendingTrainingFeedbacks") {
+    } else if (data.step === "sendingTrainingFeedbacks" && processingStep !== "sendingTrainingFeedbacks") {
       stepSendTrainingFeedbacks();
-    } else if (state.step === "generatingFeedbackSuggestions" && processingStep !== "generatingFeedbackSuggestions") {
+    } else if (data.step === "generatingFeedbackSuggestions" && processingStep !== "generatingFeedbackSuggestions") {
       stepGenerateFeedbackSuggestions();
     }
     // TODO: Add automatic evaluation step here
     // Note: Evaluate tutor feedback more globally to not do it multiple times
     // Note 2: Actually, I probably want to have it in parallel with the feedback suggestions for the interactive mode!
-  }, [state.step]);
+  }, [data.step]);
 
-  return { state, info };
+  return { data, moduleRequests: { sendSubmissions, sendFeedbacks, requestSubmissionSelection, requestFeedbackSuggestions } };
 }

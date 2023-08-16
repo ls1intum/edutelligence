@@ -2,6 +2,7 @@ import { ModuleProvider } from "@/hooks/module_context";
 import { ModuleConfiguration } from "../configure_modules";
 import { Experiment } from "../define_experiment";
 import useBatchModuleExperiment from "@/hooks/batch_module_experiment";
+import ModuleExperimentProgress from "./module_experiment_progress";
 
 type ConductBatchModuleExperimentProps = {
   experiment: Experiment;
@@ -9,12 +10,11 @@ type ConductBatchModuleExperimentProps = {
 };
 
 function ConductBatchModuleExperiment({ experiment }: ConductBatchModuleExperimentProps) {
-  const { state, info } = useBatchModuleExperiment(experiment);
+  const moduleExperiment = useBatchModuleExperiment(experiment);
 
   return (
-    <div>
-      {info}
-      {JSON.stringify(state)}
+    <div className="my-2">
+      <ModuleExperimentProgress experiment={experiment} moduleExperiment={moduleExperiment} />
     </div>
   );
 }
