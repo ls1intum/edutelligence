@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from "react";
 import { FullScreen, useFullScreenHandle } from "react-full-screen";
 import ExerciseDetail from "@/components/details/exercise_detail";
 import ConductBatchModuleExperiment from "./batch_module_experiment";
+import SubmissionDetail from "@/components/details/submission_detail";
 
 type ConductExperimentProps = {
   experiment: Experiment;
@@ -29,6 +30,8 @@ export default function ConductExperiment({
       window.removeEventListener("beforeunload", handleBeforeunload);
     };
   }, []);
+
+  const [viewSubmissionIndex, setViewSubmissionIndex] = useState(0);
 
   // Slider stuff
   const scrollSliderRef = useRef<HTMLDivElement>(null);
@@ -74,12 +77,44 @@ export default function ConductExperiment({
       {/* Header */}
       <div className="flex flex-row justify-between items-center gap-4">
         <h3 className="text-2xl font-bold">Conduct Experiment</h3>
+        <div className="flex gap-2 flex-1 items-center">
+          <button
+            disabled={viewSubmissionIndex <= 0}
+            className="w-8 h-8 rounded-md p-2 bg-gray-100 hover:bg-gray-200 font-bold text-gray-500 hover:text-gray-600 text-base leading-none disabled:text-gray-300 disabled:bg-gray-50 disabled:cursor-not-allowed"
+            onClick={() => setViewSubmissionIndex(viewSubmissionIndex - 1)}
+          >
+            ←
+          </button>
+          <button
+            disabled={
+              !(
+                viewSubmissionIndex + 1 <
+                experiment.evaluationSubmissions.length
+              )
+            }
+            className="w-8 h-8 rounded-md p-2 bg-gray-100 hover:bg-gray-200 font-bold text-gray-500 hover:text-gray-600 text-base leading-none disabled:text-gray-300 disabled:bg-gray-50 disabled:cursor-not-allowed"
+            onClick={() => {
+              setViewSubmissionIndex(viewSubmissionIndex + 1);
+            }}
+          >
+            →
+          </button>
+          <div className="text-gray-500">
+            Submission {viewSubmissionIndex + 1} of{" "}
+            {experiment.evaluationSubmissions.length}{" "}
+            <span className="text-gray-400 text-sm">
+              (id: {experiment.evaluationSubmissions[viewSubmissionIndex]?.id})
+            </span>
+          </div>
+        </div>
       </div>
       {/* Scrollable Slider */}
       <div
         className={twMerge(
           "w-full flex gap-4 snap-x snap-mandatory overflow-x-auto",
-          fullscreenHandle.active ? "h-[calc(100vh-4.5rem)]" : "h-[calc(100vh-8rem)]"
+          fullscreenHandle.active
+            ? "h-[calc(100vh-4.5rem)]"
+            : "h-[calc(100vh-8rem)]"
         )}
         key={experiment.exercise.id}
         ref={scrollSliderRef}
@@ -89,7 +124,9 @@ export default function ConductExperiment({
           <div
             className={twMerge(
               "shrink-0 pr-2",
-              fullscreenHandle.active ? "w-[calc(50vw-1.5rem)]" : "w-[calc(50vw-7.5rem)]"
+              fullscreenHandle.active
+                ? "w-[calc(50vw-1.5rem)]"
+                : "w-[calc(50vw-7.5rem)]"
             )}
           >
             <div className="sticky top-0 bg-white border-b border-gray-300 z-10 px-2">
@@ -104,7 +141,7 @@ export default function ConductExperiment({
         </div>
 
         {/* Tutor Feedback Page */}
-        {/* <div className="flex flex-col shrink-0 snap-start overflow-y-auto z-20">
+        <div className="flex flex-col shrink-0 snap-start overflow-y-auto z-20">
           <div
             className={twMerge(
               "shrink-0 pr-2",
@@ -112,48 +149,45 @@ export default function ConductExperiment({
             )}
           >
             <div className="sticky top-0 bg-white border-b border-gray-300 z-10 px-2">
-              <h4 className="text-lg font-bold">Tutor Feedback</h4>
+              <h4 className="text-lg font-bold">Submission</h4>
             </div>
-            <div className="p-4">
-            {currentSubmissionOrderIndex >= 0 ? (
+            <div className="my-2">
               <SubmissionDetail
                 identifier={"tutor"}
-                submission={experiment.submissions.evaluationSubmissions[
-                  submissionOrderIndicies[currentSubmissionOrderIndex]
-                ]}
-                feedbacks={feedbacks?.filter(
+                submission={experiment.evaluationSubmissions[viewSubmissionIndex]}
+                feedbacks={experiment.tutorFeedbacks.filter(
                   (feedback) =>
                     feedback.submission_id ===
-                    experiment.submissions.evaluationSubmissions[
-                      submissionOrderIndicies[currentSubmissionOrderIndex]
-                    ]?.id
+                    experiment.evaluationSubmissions[viewSubmissionIndex]?.id
                 )}
               />
-            ) : (
-              <p className="text-gray-500">
-                No submission selected. Please click next to select a
-                submission.
-              </p>
-            )}
             </div>
           </div>
-        </div> */}
+        </div>
 
         {/* Module Pages */}
         {moduleConfigurations.map((moduleConfiguration, index) => (
-          <div key={moduleConfiguration.id} className="flex flex-col shrink-0 snap-start overflow-y-auto z-20">
           <div
-            className={twMerge(
-              "shrink-0 pr-2",
-              fullscreenHandle.active ? "w-[calc(50vw-1.5rem)]" : "w-[calc(50vw-7.5rem)]"
-            )}
+            key={moduleConfiguration.id}
+            className="flex flex-col shrink-0 snap-start overflow-y-auto z-20"
           >
-            <div className="sticky top-0 bg-white border-b border-gray-300 z-10 px-2">
-              <h4 className="text-lg font-bold">Exercise Details</h4>
+            <div
+              className={twMerge(
+                "shrink-0 pr-2",
+                fullscreenHandle.active
+                  ? "w-[calc(50vw-1.5rem)]"
+                  : "w-[calc(50vw-7.5rem)]"
+              )}
+            >
+              <div className="sticky top-0 bg-white border-b border-gray-300 z-10 px-2">
+                <h4 className="text-lg font-bold">Exercise Details</h4>
+              </div>
+              <ConductBatchModuleExperiment
+                experiment={experiment}
+                moduleConfiguration={moduleConfiguration}
+              />
             </div>
-            <ConductBatchModuleExperiment experiment={experiment} moduleConfiguration={moduleConfiguration} />
           </div>
-        </div>
         ))}
       </div>
     </FullScreen>
