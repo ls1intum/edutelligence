@@ -140,6 +140,8 @@ SELECT
     NULL,
     'tests_repository_url',
     NULL,
+    'programming_language',
+    e.programming_language,
     'max_points',
     e.max_points,
     'bonus_points',
