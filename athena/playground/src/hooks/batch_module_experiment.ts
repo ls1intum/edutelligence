@@ -8,6 +8,7 @@ import useRequestFeedbackSuggestions from "./athena/request_feedback_suggestions
 import useSendSubmissions from "./athena/send_submissions";
 
 export type ExperimentStep =
+  | "notStarted"
   | "sendingSubmissions"
   | "sendingTrainingFeedbacks"
   | "generatingFeedbackSuggestions"
@@ -15,7 +16,7 @@ export type ExperimentStep =
 
 type BatchModuleExperimentState = {
   // The current step of the experiment
-  step: ExperimentStep | undefined;
+  step: ExperimentStep;
   // Submissions that have been sent to Athena
   didSendSubmissions: boolean;
   // Tutor feedbacks for training submissions that have been sent to Athena
@@ -31,7 +32,7 @@ type BatchModuleExperimentState = {
 export default function useBatchModuleExperiment(experiment: Experiment) {
   // State of the module experiment
   const [data, setData] = useState<BatchModuleExperimentState>({
-    step: undefined, // Not started
+    step: "notStarted", // Not started
     didSendSubmissions: false,
     sentTrainingSubmissions: [],
     submissionsWithFeedbackSuggestions: new Map(),
@@ -44,7 +45,7 @@ export default function useBatchModuleExperiment(experiment: Experiment) {
 
   const startExperiment = () => {
     // Skip if the experiment has already started
-    if (data.step !== undefined) {
+    if (data.step !== "notStarted") {
       return;
     }
 
@@ -52,6 +53,23 @@ export default function useBatchModuleExperiment(experiment: Experiment) {
       ...prevState,
       step: "sendingSubmissions",
     }));
+  };
+
+  const importData = (data: BatchModuleExperimentState) => {
+    if (data.step === undefined
+      || data.didSendSubmissions === undefined
+      || data.sentTrainingSubmissions === undefined
+      || data.submissionsWithFeedbackSuggestions === undefined) {
+      return false;
+    }
+
+    setData(() => ({
+      step: data.step,
+      didSendSubmissions: data.didSendSubmissions,
+      sentTrainingSubmissions: data.sentTrainingSubmissions,
+      submissionsWithFeedbackSuggestions: data.submissionsWithFeedbackSuggestions,
+    }));
+    return true;
   };
 
   // Module requests
@@ -285,6 +303,7 @@ export default function useBatchModuleExperiment(experiment: Experiment) {
   return {
     data,
     startExperiment,
+    importData,
     moduleRequests: {
       sendSubmissions,
       sendFeedbacks,

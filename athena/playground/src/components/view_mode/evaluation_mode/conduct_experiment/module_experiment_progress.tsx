@@ -16,12 +16,9 @@ export default function ModuleExperimentProgress({
   const data = moduleExperiment.data;
   const moduleRequests = moduleExperiment.moduleRequests;
 
-  const stepToIndex = (step: ExperimentStep | undefined) => {
-    if (step === undefined) {
-      return -1;
-    }
-
+  const stepToIndex = (step: ExperimentStep) => {
     const steps: ExperimentStep[] = [
+      "notStarted",
       "sendingSubmissions",
       "sendingTrainingFeedbacks",
       "generatingFeedbackSuggestions",
@@ -37,8 +34,8 @@ export default function ModuleExperimentProgress({
         <span
           className={twMerge(
             "flex items-center justify-center w-6 h-6 border rounded-full shrink-0",
-            stepToIndex(data.step) >= 0
-              ? stepToIndex(data.step) > 0
+            stepToIndex(data.step) >= 1
+              ? stepToIndex(data.step) > 1
                 ? "text-green-500 border-green-500"
                 : "text-yellow-500 border-yellow-500"
               : "text-gray-500 border-gray-500"
@@ -49,8 +46,8 @@ export default function ModuleExperimentProgress({
         <div
           className={twMerge(
             "flex flex-col",
-            stepToIndex(data.step) >= 0
-              ? stepToIndex(data.step) > 0
+            stepToIndex(data.step) >= 1
+              ? stepToIndex(data.step) > 1
                 ? "text-green-500"
                 : "text-yellow-500"
               : "text-gray-500"
@@ -87,8 +84,8 @@ export default function ModuleExperimentProgress({
           <span
             className={twMerge(
               "flex items-center justify-center w-6 h-6 border rounded-full shrink-0",
-              stepToIndex(data.step) >= 1
-              ? stepToIndex(data.step) > 1
+              stepToIndex(data.step) >= 2
+              ? stepToIndex(data.step) > 2
                 ? "text-green-500 border-green-500"
                 : "text-yellow-500 border-yellow-500"
               : "text-gray-500 border-gray-500"
@@ -99,8 +96,8 @@ export default function ModuleExperimentProgress({
           <div
             className={twMerge(
               "flex flex-col",
-              stepToIndex(data.step) >= 1
-              ? stepToIndex(data.step) > 1
+              stepToIndex(data.step) >= 2
+              ? stepToIndex(data.step) > 2
                 ? "text-green-500"
                 : "text-yellow-500"
               : "text-gray-500"
@@ -135,9 +132,9 @@ export default function ModuleExperimentProgress({
         <span
           className={twMerge(
             "flex items-center justify-center w-6 h-6 border rounded-full shrink-0",
-            stepToIndex(data.step) > 2
+            stepToIndex(data.step) > 3
               ? "text-green-500 border-green-500"
-              : stepToIndex(data.step) === 2
+              : stepToIndex(data.step) === 3
               ? "text-yellow-500 border-yellow-500"
               : "text-gray-500 border-gray-500"
           )}
@@ -147,9 +144,9 @@ export default function ModuleExperimentProgress({
         <div
           className={twMerge(
             "flex flex-col",
-            stepToIndex(data.step) > 2
+            stepToIndex(data.step) > 3
               ? "text-green-500"
-              : stepToIndex(data.step) === 2
+              : stepToIndex(data.step) === 3
               ? "text-yellow-500"
               : "text-gray-500"
           )}
@@ -180,7 +177,7 @@ export default function ModuleExperimentProgress({
         <span
           className={twMerge(
             "flex items-center justify-center w-6 h-6 border rounded-full shrink-0",
-            stepToIndex(data.step) === 3
+            stepToIndex(data.step) === 4
               ? "text-green-500 border-green-500"
               : "text-gray-500 border-gray-500"
           )}
@@ -190,7 +187,7 @@ export default function ModuleExperimentProgress({
         <div
           className={twMerge(
             "flex flex-col",
-            stepToIndex(data.step) === 3 ? "text-green-500" : "text-gray-500"
+            stepToIndex(data.step) === 4 ? "text-green-500" : "text-gray-500"
           )}
         >
           <span className="font-medium">Finished</span>
