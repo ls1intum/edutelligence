@@ -147,6 +147,7 @@ export default function ConfigureModules({
               disabled={moduleConfigurations !== undefined}
               className="hidden"
               type="file"
+              accept=".json"
               onChange={(e) => {
                 if (!e.target.files) return;
 

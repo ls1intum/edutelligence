@@ -186,6 +186,7 @@ export default function DefineExperiment({
               disabled={isImporting || experiment !== undefined}
               className="hidden"
               type="file"
+              accept=".json"
               onChange={(e) => {
                 if (e.target.files && e.target.files.length > 0) {
                   setIsImporting(true);

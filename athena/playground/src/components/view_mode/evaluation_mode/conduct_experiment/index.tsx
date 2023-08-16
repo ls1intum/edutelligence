@@ -5,7 +5,7 @@ import type { Experiment } from "../define_experiment";
 import { useEffect, useRef, useState } from "react";
 import { FullScreen, useFullScreenHandle } from "react-full-screen";
 import ExerciseDetail from "@/components/details/exercise_detail";
-import ConductBatchModuleExperiment from "./batch_module_experiment";
+import ConductBatchModuleExperiment, { ConductBatchModuleExperimentHandles } from "./batch_module_experiment";
 import SubmissionDetail from "@/components/details/submission_detail";
 
 type ConductExperimentProps = {
@@ -38,10 +38,17 @@ export default function ConductExperiment({
     moduleConfigurations.map((_, index) => index)
   );
 
+  const moduleViewRefs = useRef<(ConductBatchModuleExperimentHandles | null)[]>([]);
+
   const handleExport = () => {
   };
 
   const handleImport = (data: any) => {
+    // if (data.experiment)
+    // TODO check for experiment
+    // TODO check for configuration
+    // Add experiment id
+    console.log(moduleViewRefs);
   };
 
   // Slider stuff
@@ -121,6 +128,7 @@ export default function ConductExperiment({
               disabled={didStartExperiment}
               className="hidden"
               type="file"
+              accept=".json"
               onChange={(e) => {
                 if (!e.target.files) return;
 
@@ -282,6 +290,7 @@ export default function ConductExperiment({
                 )}
               >
                 <ConductBatchModuleExperiment
+                  ref={el => moduleViewRefs.current[index] = el} 
                   experiment={experiment}
                   moduleConfiguration={moduleConfiguration}
                   viewSubmission={
