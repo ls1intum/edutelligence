@@ -34,7 +34,7 @@ export default function ExerciseSelect({
           .map((ex: Exercise) => {
             return ex.type === exerciseType ? (
               <option key={ex.id} value={ex.id}>
-                {ex.id} {ex.type}: {ex.title}
+                {ex.id} {ex.type}{ex.type === "programming" ? ` (${ex.programming_language})` : ""}: {ex.title}
               </option>
             ) : null;
           })}
