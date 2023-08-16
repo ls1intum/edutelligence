@@ -1,5 +1,4 @@
 import type { Feedback } from "@/model/feedback";
-import type { Submission } from "@/model/submission";
 import type { Experiment } from "@/components/view_mode/evaluation_mode/define_experiment";
 
 import { useEffect, useState } from "react";

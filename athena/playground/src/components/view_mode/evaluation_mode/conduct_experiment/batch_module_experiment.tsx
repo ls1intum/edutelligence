@@ -14,6 +14,7 @@ type ConductBatchModuleExperimentProps = {
   experiment: Experiment;
   moduleConfiguration: ModuleConfiguration;
   viewSubmission: Submission;
+  didStartExperiment: boolean;
   moduleOrderControl: {
     isFirstModule: boolean;
     isLastModule: boolean;
@@ -27,6 +28,7 @@ function ConductBatchModuleExperiment({
   moduleConfiguration,
   viewSubmission,
   moduleOrderControl,
+  didStartExperiment,
 }: ConductBatchModuleExperimentProps) {
   const { data: health } = useHealth();
   const moduleExperiment = useBatchModuleExperiment(experiment);
@@ -43,6 +45,10 @@ function ConductBatchModuleExperiment({
   function handleCloseModal() {
     document.body.style.overflow = "unset"; // Restore scrolling
     setConfigModalOpen(false);
+  }
+
+  if (didStartExperiment) {
+    moduleExperiment.startExperiment();
   }
 
   return (
@@ -81,14 +87,17 @@ function ConductBatchModuleExperiment({
                   Unhealthy
                 </span>
               )}
-              {moduleExperiment.data.step === "finished" && (
+              {moduleExperiment.data.step === "finished" ? (
                 <span className="rounded-full bg-green-500 text-white px-2 py-0.5 text-xs">
                   Finished
                 </span>
-              )}
-              {moduleExperiment.data.step !== "finished" && (
+              ) : moduleExperiment.data.step !== undefined ? (
                 <span className="rounded-full bg-yellow-500 text-white px-2 py-0.5 text-xs">
-                  In Progress
+                  In&nbsp;Progress
+                </span>
+              ) : (
+                <span className="rounded-full bg-gray-500 text-white px-2 py-0.5 text-xs">
+                  Not&nbsp;Started
                 </span>
               )}
             </div>
@@ -189,23 +198,15 @@ function ConductBatchModuleExperiment({
   );
 }
 
-export default function ConductBatchModuleExperimentWrapped({
-  experiment,
-  moduleConfiguration,
-  viewSubmission,
-  moduleOrderControl,
-}: ConductBatchModuleExperimentProps) {
+export default function ConductBatchModuleExperimentWrapped(
+  props: ConductBatchModuleExperimentProps
+) {
   return (
     <ModuleProvider
-      module={moduleConfiguration.moduleAndConfig.module}
-      moduleConfig={moduleConfiguration.moduleAndConfig.moduleConfig}
+      module={props.moduleConfiguration.moduleAndConfig.module}
+      moduleConfig={props.moduleConfiguration.moduleAndConfig.moduleConfig}
     >
-      <ConductBatchModuleExperiment
-        experiment={experiment}
-        moduleConfiguration={moduleConfiguration}
-        viewSubmission={viewSubmission}
-        moduleOrderControl={moduleOrderControl}
-      />
+      <ConductBatchModuleExperiment {...props} />
     </ModuleProvider>
   );
 }

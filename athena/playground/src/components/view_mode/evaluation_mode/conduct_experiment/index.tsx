@@ -31,6 +31,8 @@ export default function ConductExperiment({
     };
   }, []);
 
+  const [didStartExperiment, setDidStartExperiment] = useState(false);
+
   const [viewSubmissionIndex, setViewSubmissionIndex] = useState(0);
   const [moduleRenderOrder, setModuleRenderOrder] = useState<number[]>(
     moduleConfigurations.map((_, index) => index)
@@ -78,10 +80,20 @@ export default function ConductExperiment({
       className="bg-white rounded-md p-4 mb-8 space-y-2"
     >
       {/* Header */}
-      <div className="flex flex-row justify-between items-center gap-4">
+      <div className="flex flex-row items-center gap-4">
         <h3 className="text-2xl font-bold">Conduct Experiment</h3>
+        <div className="flex flex-1">
+        <button 
+          disabled={didStartExperiment}
+          className="bg-primary-500 text-white rounded-md p-2 hover:bg-primary-600 disabled:text-gray-500 disabled:bg-gray-200 disabled:cursor-not-allowed"
+          onClick={() => 
+            setDidStartExperiment(true)
+          }>
+          {didStartExperiment ? "Experiment Started" : "Start Experiment"}
+        </button>
+        </div>
         {/* Submission switcher */}
-        <div className="flex gap-2 flex-1 items-center">
+        <div className="flex gap-2 items-center">
           <button
             disabled={viewSubmissionIndex <= 0}
             className="w-8 h-8 rounded-md p-2 bg-gray-100 hover:bg-gray-200 font-bold text-gray-500 hover:text-gray-600 text-base leading-none disabled:text-gray-300 disabled:bg-gray-50 disabled:cursor-not-allowed"
@@ -224,6 +236,7 @@ export default function ConductExperiment({
                   viewSubmission={
                     experiment.evaluationSubmissions[viewSubmissionIndex]
                   }
+                  didStartExperiment={didStartExperiment}
                   moduleOrderControl={{
                     isFirstModule: index === 0,
                     isLastModule: index === moduleRenderOrder.length - 1,
