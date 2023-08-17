@@ -1,15 +1,15 @@
-import { twMerge } from "tailwind-merge";
 import type { ModuleConfiguration } from "../configure_modules";
 import type { Experiment } from "../define_experiment";
+import type { ExperimentStep } from "@/hooks/batch_module_experiment";
+import type { ConductBatchModuleExperimentHandles } from "./batch_module_experiment";
 
 import { useEffect, useRef, useState } from "react";
+import { twMerge } from "tailwind-merge";
 import { FullScreen, useFullScreenHandle } from "react-full-screen";
+
 import ExerciseDetail from "@/components/details/exercise_detail";
-import ConductBatchModuleExperiment, {
-  ConductBatchModuleExperimentHandles,
-} from "./batch_module_experiment";
 import SubmissionDetail from "@/components/details/submission_detail";
-import { ExperimentStep } from "@/hooks/batch_module_experiment";
+import ConductBatchModuleExperiment from "./batch_module_experiment";
 
 type ConductExperimentProps = {
   experiment: Experiment;

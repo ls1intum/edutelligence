@@ -1,14 +1,17 @@
+import type { Submission } from "@/model/submission";
+import type { Experiment } from "../define_experiment";
+import type { ExperimentStep } from "@/hooks/batch_module_experiment";
+
+import React, { useImperativeHandle, useState, ForwardedRef, useEffect } from "react";
+import Modal from "react-modal";
+
+import useHealth from "@/hooks/health";
+import useBatchModuleExperiment from "@/hooks/batch_module_experiment";
 import { ModuleProvider } from "@/hooks/module_context";
 import { ModuleConfiguration } from "../configure_modules";
-import { Experiment } from "../define_experiment";
-import useBatchModuleExperiment, { BatchModuleExperimentState, ExperimentStep } from "@/hooks/batch_module_experiment";
 import ModuleExperimentProgress from "./module_experiment_progress";
-import type { Submission } from "@/model/submission";
 import SubmissionDetail from "@/components/details/submission_detail";
-import React, { useImperativeHandle, useState, ForwardedRef, useEffect } from "react";
-import useHealth from "@/hooks/health";
 import ModuleConfigSelect from "@/components/selectors/module_config_select";
-import Modal from "react-modal";
 
 type ConductBatchModuleExperimentProps = {
   experiment: Experiment;

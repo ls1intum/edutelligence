@@ -3,9 +3,9 @@ import type { Experiment } from "./define_experiment";
 
 import { v4 as uuidv4 } from "uuid";
 import { useEffect, useRef, useState } from "react";
+import { twMerge } from "tailwind-merge";
 
 import ModuleAndConfigSelect from "@/components/selectors/module_and_config_select";
-import { twMerge } from "tailwind-merge";
 
 export type ModuleConfiguration = {
   id: string;

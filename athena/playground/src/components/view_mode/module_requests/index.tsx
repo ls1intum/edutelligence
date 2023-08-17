@@ -2,13 +2,13 @@ import type { ModuleMeta } from "@/model/health_response";
 
 import { useState } from "react";
 
+import { ModuleProvider } from "@/hooks/module_context";
 import GetConfigSchema from "@/components/view_mode/module_requests/get_config_schema";
 import SendSubmissions from "@/components/view_mode/module_requests/send_submissions";
 import SendFeedbacks from "@/components/view_mode/module_requests/send_feedbacks";
 import RequestFeedbackSuggestions from "@/components/view_mode/module_requests/request_feedback_suggestions";
 import SelectSubmission from "@/components/view_mode/module_requests/request_submission_selection";
 import ModuleAndConfigSelect from "@/components/selectors/module_and_config_select";
-import { ModuleProvider } from "@/hooks/module_context";
 
 export default function ModuleRequests() {
   const [moduleAndConfig, setModuleAndConfig] = useState<{ module: ModuleMeta; moduleConfig: any } | undefined>(undefined);

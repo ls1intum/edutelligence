@@ -1,8 +1,9 @@
+import type { Experiment } from "../define_experiment";
+import type { ExperimentStep } from "@/hooks/batch_module_experiment";
+
 import { twMerge } from "tailwind-merge";
-import { Experiment } from "../define_experiment";
-import useBatchModuleExperiment, {
-  ExperimentStep,
-} from "@/hooks/batch_module_experiment";
+
+import useBatchModuleExperiment from "@/hooks/batch_module_experiment";
 
 type ModuleExperimentProgressProps = {
   experiment: Experiment;
