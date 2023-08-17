@@ -5,8 +5,11 @@ import type { Experiment } from "../define_experiment";
 import { useEffect, useRef, useState } from "react";
 import { FullScreen, useFullScreenHandle } from "react-full-screen";
 import ExerciseDetail from "@/components/details/exercise_detail";
-import ConductBatchModuleExperiment, { ConductBatchModuleExperimentHandles } from "./batch_module_experiment";
+import ConductBatchModuleExperiment, {
+  ConductBatchModuleExperimentHandles,
+} from "./batch_module_experiment";
 import SubmissionDetail from "@/components/details/submission_detail";
+import { ExperimentStep } from "@/hooks/batch_module_experiment";
 
 type ConductExperimentProps = {
   experiment: Experiment;
@@ -32,15 +35,41 @@ export default function ConductExperiment({
   }, []);
 
   const [didStartExperiment, setDidStartExperiment] = useState(false);
+  const [modulesStep, setModulesStep] = useState<ExperimentStep[]>([]);
 
   const [viewSubmissionIndex, setViewSubmissionIndex] = useState(0);
   const [moduleRenderOrder, setModuleRenderOrder] = useState<number[]>(
     moduleConfigurations.map((_, index) => index)
   );
 
-  const moduleViewRefs = useRef<(ConductBatchModuleExperimentHandles | null)[]>([]);
+  const moduleViewRefs = useRef<(ConductBatchModuleExperimentHandles | null)[]>(
+    []
+  );
 
   const handleExport = () => {
+    moduleViewRefs.current
+      .flatMap((moduleViewRef) => {
+        if (!moduleViewRef) return [];
+        const data = moduleViewRef.exportData();
+        return data.step !== "notStarted" ? [data] : [];
+      })
+      .forEach((data, index) => {
+        setTimeout(() => {
+          const blob = new Blob([JSON.stringify(data, null, 2)], {
+            type: "text/json",
+          });
+          const url = window.URL.createObjectURL(blob);
+          const link = document.createElement("a");
+          link.href = url;
+          let name = moduleConfigurations[index].name
+            .toLowerCase()
+            .replace(/\s+/g, "_");
+          name = name.replace(/[\\/:"*?<>|]+/g, "").replace(/_+/g, "_");
+          link.download = `${experiment.exerciseType}_results_${name}_${experiment.id}.json`;
+          link.click();
+          window.URL.revokeObjectURL(url);
+        }, index * 1000);
+      });
   };
 
   const handleImport = (data: any) => {
@@ -97,55 +126,54 @@ export default function ConductExperiment({
         <div className="flex flex-col gap-2 xl:flex-row xl:items-center xl:gap-4">
           <h3 className="text-2xl font-bold">Conduct Experiment</h3>
           <div className="flex flex-row gap-2">
-          <button
-            disabled={didStartExperiment}
-            className="self-start bg-primary-500 text-white rounded-md p-2 hover:bg-primary-600 disabled:text-gray-500 disabled:bg-gray-200 disabled:cursor-not-allowed"
-            onClick={() => setDidStartExperiment(true)}
-          >
-            {didStartExperiment ? (
-              <>Experiment&nbsp;Started</>
-            ) : (
-              <>Start&nbsp;Experiment</>
-            )}
-          </button>
-              <button
-                className="rounded-md p-2 text-primary-500 hover:text-primary-600 hover:bg-gray-100 hover:no-underline disabled:text-gray-500 disabled:cursor-not-allowed disabled:hover:bg-transparent"
-                onClick={handleExport}
-              >
-                Export
-              </button>
-          <label
-            className={twMerge(
-              "rounded-md p-2",
-              didStartExperiment
-                ? "text-gray-500 cursor-not-allowed"
-                : "text-primary-500 hover:text-primary-600 hover:bg-gray-100 cursor-pointer"
-            )}
-          >
-            Import
-            <input
-              multiple
+            <button
               disabled={didStartExperiment}
-              className="hidden"
-              type="file"
-              accept=".json"
-              onChange={(e) => {
-                if (!e.target.files) return;
+              className="self-start bg-primary-500 text-white rounded-md p-2 hover:bg-primary-600 disabled:text-gray-500 disabled:bg-gray-200 disabled:cursor-not-allowed"
+              onClick={() => setDidStartExperiment(true)}
+            >
+              {didStartExperiment ? (
+                <>Experiment&nbsp;Started</>
+              ) : (
+                <>Start&nbsp;Experiment</>
+              )}
+            </button>
+            <button
+              disabled={modulesStep.every((step) => step === "notStarted")}
+              className="rounded-md p-2 text-primary-500 hover:text-primary-600 hover:bg-gray-100 hover:no-underline disabled:text-gray-500 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+              onClick={handleExport}
+            >
+              Export
+            </button>
+            <label
+              className={twMerge(
+                "rounded-md p-2",
+                didStartExperiment
+                  ? "text-gray-500 cursor-not-allowed"
+                  : "text-primary-500 hover:text-primary-600 hover:bg-gray-100 cursor-pointer"
+              )}
+            >
+              Import
+              <input
+                multiple
+                disabled={didStartExperiment}
+                className="hidden"
+                type="file"
+                accept=".json"
+                onChange={(e) => {
+                  if (!e.target.files) return;
 
-                Array.from(e.target.files).forEach((file) => {
-                  const reader = new FileReader();
-                  reader.onload = (e) => {
-                    if (e.target && typeof e.target.result === "string") {
-                      handleImport(JSON.parse(
-                        e.target.result
-                      ));
-                    }
-                  };
-                  reader.readAsText(file);
-                });
-              }}
-            />
-          </label>
+                  Array.from(e.target.files).forEach((file) => {
+                    const reader = new FileReader();
+                    reader.onload = (e) => {
+                      if (e.target && typeof e.target.result === "string") {
+                        handleImport(JSON.parse(e.target.result));
+                      }
+                    };
+                    reader.readAsText(file);
+                  });
+                }}
+              />
+            </label>
           </div>
         </div>
         <div className="flex flex-col gap-1 xl:flex-row xl:items-center xl:gap-4">
@@ -290,13 +318,20 @@ export default function ConductExperiment({
                 )}
               >
                 <ConductBatchModuleExperiment
-                  ref={el => moduleViewRefs.current[index] = el} 
+                  ref={(el) => (moduleViewRefs.current[index] = el)}
                   experiment={experiment}
                   moduleConfiguration={moduleConfiguration}
                   viewSubmission={
                     experiment.evaluationSubmissions[viewSubmissionIndex]
                   }
                   didStartExperiment={didStartExperiment}
+                  onChangeStep={(step) =>
+                    setModulesStep((prevStep) => {
+                      const newStep = [...prevStep];
+                      newStep[index] = step;
+                      return newStep;
+                    })
+                  }
                   moduleOrderControl={{
                     isFirstModule: index === 0,
                     isLastModule: index === moduleRenderOrder.length - 1,

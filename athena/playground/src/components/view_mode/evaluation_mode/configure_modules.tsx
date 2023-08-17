@@ -96,8 +96,6 @@ export default function ConfigureModules({
   const handleExport = () => {
     moduleConfigurationsState.forEach((config, index) => {
       setTimeout(() => {
-        if (!config.moduleAndConfig) return;
-
         const blob = new Blob([JSON.stringify(config, null, 2)], {
           type: "text/json",
         });
@@ -106,7 +104,7 @@ export default function ConfigureModules({
         link.href = url;
         let name = config.name.toLowerCase().replace(/\s+/g, "_");
         name = name.replace(/[\\/:"*?<>|]+/g, "").replace(/_+/g, "_");
-        link.download = `${config.moduleAndConfig.module.type}_module_config_${name}.json`;
+        link.download = `${experiment.exerciseType}_module_config_${name}.json`;
         link.click();
         window.URL.revokeObjectURL(url);
       }, index * 1000);

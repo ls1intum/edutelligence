@@ -1,11 +1,11 @@
 import { ModuleProvider } from "@/hooks/module_context";
 import { ModuleConfiguration } from "../configure_modules";
 import { Experiment } from "../define_experiment";
-import useBatchModuleExperiment from "@/hooks/batch_module_experiment";
+import useBatchModuleExperiment, { BatchModuleExperimentState, ExperimentStep } from "@/hooks/batch_module_experiment";
 import ModuleExperimentProgress from "./module_experiment_progress";
 import type { Submission } from "@/model/submission";
 import SubmissionDetail from "@/components/details/submission_detail";
-import React, { useImperativeHandle, useState, ForwardedRef } from "react";
+import React, { useImperativeHandle, useState, ForwardedRef, useEffect } from "react";
 import useHealth from "@/hooks/health";
 import ModuleConfigSelect from "@/components/selectors/module_config_select";
 import Modal from "react-modal";
@@ -21,10 +21,12 @@ type ConductBatchModuleExperimentProps = {
     onClickPrev: () => void;
     onClickNext: () => void;
   };
+  onChangeStep: (step: ExperimentStep) => void;
 };
 
 export type ConductBatchModuleExperimentHandles = {
   importData: (data: any) => boolean;
+  exportData: () => any;
 };
 
 const ConductBatchModuleExperiment = React.forwardRef<
@@ -38,6 +40,7 @@ const ConductBatchModuleExperiment = React.forwardRef<
       viewSubmission,
       moduleOrderControl,
       didStartExperiment,
+      onChangeStep,
     }: ConductBatchModuleExperimentProps,
     ref: ForwardedRef<ConductBatchModuleExperimentHandles>
   ) => {
@@ -64,7 +67,12 @@ const ConductBatchModuleExperiment = React.forwardRef<
 
     useImperativeHandle(ref, () => ({
       importData: moduleExperiment.importData,
+      exportData: moduleExperiment.exportData,
     }));
+
+    useEffect(() => {
+      onChangeStep(moduleExperiment.data.step);
+    }, [moduleExperiment.data.step]);
 
     return (
       <div>

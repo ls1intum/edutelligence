@@ -14,7 +14,7 @@ export type ExperimentStep =
   | "generatingFeedbackSuggestions"
   | "finished";
 
-type BatchModuleExperimentState = {
+export type BatchModuleExperimentState = {
   // The current step of the experiment
   step: ExperimentStep;
   // Submissions that have been sent to Athena
@@ -55,11 +55,24 @@ export default function useBatchModuleExperiment(experiment: Experiment) {
     }));
   };
 
-  const importData = (data: BatchModuleExperimentState) => {
-    if (data.step === undefined
-      || data.didSendSubmissions === undefined
-      || data.sentTrainingSubmissions === undefined
-      || data.submissionsWithFeedbackSuggestions === undefined) {
+  const exportData = () => {
+    return {
+      step: data.step,
+      didSendSubmissions: data.didSendSubmissions,
+      sentTrainingSubmissions: data.sentTrainingSubmissions,
+      submissionsWithFeedbackSuggestions: Object.fromEntries(
+        data.submissionsWithFeedbackSuggestions
+      ),
+    };
+  };
+
+  const importData = (data: any) => {
+    if (
+      data.step === undefined ||
+      data.didSendSubmissions === undefined ||
+      data.sentTrainingSubmissions === undefined ||
+      data.submissionsWithFeedbackSuggestions === undefined
+    ) {
       return false;
     }
 
@@ -67,7 +80,11 @@ export default function useBatchModuleExperiment(experiment: Experiment) {
       step: data.step,
       didSendSubmissions: data.didSendSubmissions,
       sentTrainingSubmissions: data.sentTrainingSubmissions,
-      submissionsWithFeedbackSuggestions: data.submissionsWithFeedbackSuggestions,
+      submissionsWithFeedbackSuggestions: new Map(
+        Object.entries(data.submissionsWithFeedbackSuggestions).map(
+          ([key, value]) => [Number(key), value as any]
+        )
+      ),
     }));
     return true;
   };
@@ -303,6 +320,7 @@ export default function useBatchModuleExperiment(experiment: Experiment) {
   return {
     data,
     startExperiment,
+    exportData,
     importData,
     moduleRequests: {
       sendSubmissions,
