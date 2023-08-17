@@ -124,21 +124,22 @@ export default function ConfigureModules({
           )}
         </div>
         <div className="flex flex-row gap-2">
-          {configurationsStatus.every((status) => status.isValid) &&
-            configurationsStatus.length > 0 && (
-              <button
-                className="rounded-md p-2 text-primary-500 hover:text-primary-600 hover:bg-gray-100 hover:no-underline"
-                onClick={handleExport}
-              >
-                Export
-              </button>
-            )}
+          <button
+            disabled={
+              configurationsStatus.some((status) => !status.isValid) ||
+              configurationsStatus.length == 0
+            }
+            className="rounded-md p-2 text-primary-500 hover:text-primary-600 hover:bg-gray-100 hover:no-underline disabled:text-gray-500 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+            onClick={handleExport}
+          >
+            Export
+          </button>
           <label
             className={twMerge(
               "rounded-md p-2",
               moduleConfigurations !== undefined
                 ? "text-gray-500 cursor-not-allowed"
-                : "text-primary-500 hover:text-primary-600 hover:bg-gray-100"
+                : "text-primary-500 hover:text-primary-600 hover:bg-gray-100 cursor-pointer"
             )}
           >
             Import
@@ -158,6 +159,16 @@ export default function ConfigureModules({
                       const moduleConfiguration = JSON.parse(
                         e.target.result
                       ) as ModuleConfiguration;
+                      if (
+                        experiment.exerciseType !==
+                        moduleConfiguration.moduleAndConfig.module.type
+                      ) {
+                        alert(
+                          `Module configuration with id: ${moduleConfiguration.id} and name: ${moduleConfiguration.name} are not of type ${experiment.exerciseType}`
+                        );
+                        return;
+                      }
+
                       const existingConfiguration =
                         moduleConfigurationsState.find(
                           (config) => config.id === moduleConfiguration.id
@@ -249,7 +260,7 @@ export default function ConfigureModules({
                           newState[index - 1] = newState[index];
                           newState[index] = temp;
                           return newState;
-                        })
+                        });
                         slide("prev");
                       }}
                     >
@@ -265,7 +276,7 @@ export default function ConfigureModules({
                           newState[index + 1] = newState[index];
                           newState[index] = temp;
                           return newState;
-                        })
+                        });
                         slide("next");
                       }}
                     >

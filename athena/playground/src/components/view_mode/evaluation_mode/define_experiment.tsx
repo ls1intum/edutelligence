@@ -6,6 +6,7 @@ import type { ExecutionMode } from "@/components/selectors/experiment_execution_
 
 import { useEffect, useState } from "react";
 import { twMerge } from "tailwind-merge";
+import { v4 as uuidv4 } from "uuid";
 
 import { useBaseInfo, useBaseInfoDispatch } from "@/hooks/base_info_context";
 import { fetchExercises } from "@/hooks/playground/exercises";
@@ -18,8 +19,8 @@ import ExperimentExecutionModeSelect from "@/components/selectors/experiment_exe
 import ExperimentSubmissionsSelect from "@/components/selectors/experiment_submissions_select";
 import useFeedbacks from "@/hooks/playground/feedbacks";
 
-
 export type Experiment = {
+  id: string;
   dataMode: DataMode;
   exerciseType: string;
   exercise: Exercise;
@@ -30,6 +31,7 @@ export type Experiment = {
 };
 
 type ExperimentExport = {
+  id: string;
   dataMode: DataMode;
   exerciseType: string;
   exerciseId: number;
@@ -48,14 +50,30 @@ export default function DefineExperiment({
   onChangeExperiment,
 }: DefineExperimentProps) {
   const baseInfoDispatch = useBaseInfoDispatch();
+
+  const [experimentId, setExperimentId] = useState<string>(
+    uuidv4()
+  );
   const { dataMode } = useBaseInfo();
-  const [exerciseType, setExerciseType] = useState<string | undefined>(undefined);
+  const [exerciseType, setExerciseType] = useState<string | undefined>(
+    undefined
+  );
   const [exercise, setExercise] = useState<Exercise | undefined>(undefined);
-  const [executionMode, setExecutionMode] = useState<ExecutionMode | undefined>("batch");
-  const [trainingSubmissions, setTrainingSubmissions] = useState<Submission[] | undefined>(undefined);
-  const [evaluationSubmissions, setEvaluationSubmissions] = useState<Submission[] | undefined>(undefined);
+  const [executionMode, setExecutionMode] = useState<ExecutionMode | undefined>(
+    "batch"
+  );
+  const [trainingSubmissions, setTrainingSubmissions] = useState<
+    Submission[] | undefined
+  >(undefined);
+  const [evaluationSubmissions, setEvaluationSubmissions] = useState<
+    Submission[] | undefined
+  >(undefined);
   const [isImporting, setIsImporting] = useState<boolean>(false);
-  const { data: feedbacks, isLoading: isLoadingFeedbacks, isError: isErrorFeedbacks } = useFeedbacks(exercise);
+  const {
+    data: feedbacks,
+    isLoading: isLoadingFeedbacks,
+    isError: isErrorFeedbacks,
+  } = useFeedbacks(exercise);
 
   useEffect(() => {
     setExerciseType(undefined);
@@ -83,6 +101,7 @@ export default function DefineExperiment({
       return undefined;
     }
     return {
+      id: experimentId,
       dataMode,
       exerciseType,
       exercise,
@@ -97,6 +116,7 @@ export default function DefineExperiment({
 
   const getExperimentExport = (experiment: Experiment): ExperimentExport => {
     return {
+      id: experiment.id,
       dataMode: experiment.dataMode,
       exerciseType: experiment.exerciseType,
       exerciseId: experiment.exercise.id,
@@ -111,9 +131,28 @@ export default function DefineExperiment({
     };
   };
 
+  const handleExport = () => {
+    const experimentToExport = definedExperiment ?? experiment
+    if (!experimentToExport) return;
+
+    const blob = new Blob(
+      [JSON.stringify(getExperimentExport(experimentToExport), null, 2)],
+      {
+        type: "text/json",
+      }
+    );
+    const url = window.URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `experiment.json`;
+    link.click();
+    window.URL.revokeObjectURL(url);
+  };
+
   const importExperiment = async (fileContent: string) => {
     const experimentExport = JSON.parse(fileContent) as ExperimentExport;
     const {
+      id,
       dataMode,
       exerciseType,
       exerciseId,
@@ -122,6 +161,7 @@ export default function DefineExperiment({
       evaluationSubmissionIds,
     } = experimentExport;
     if (
+      !id ||
       !dataMode ||
       !exerciseType ||
       !exerciseId ||
@@ -142,9 +182,7 @@ export default function DefineExperiment({
     if (exercise) {
       const submissions = await fetchSubmissions(exercise, dataMode);
       const trainingSubmissions = trainingSubmissionIds
-        ? submissions.filter((s) =>
-            trainingSubmissionIds?.includes(s.id)
-          )
+        ? submissions.filter((s) => trainingSubmissionIds?.includes(s.id))
         : undefined;
       const evaluationSubmissions = submissions.filter((s) =>
         evaluationSubmissionIds?.includes(s.id)
@@ -162,23 +200,19 @@ export default function DefineExperiment({
       <div className="flex flex-row justify-between items-center">
         <h3 className="text-2xl font-bold">Define Experiment</h3>
         <div className="flex flex-row">
-          {definedExperiment && (
-            <a
-              className="rounded-md p-2 text-primary-500 hover:text-primary-600 hover:bg-gray-100 hover:no-underline"
-              href={`data:text/json;charset=utf-8,${encodeURIComponent(
-                JSON.stringify(getExperimentExport(definedExperiment), null, 2)
-              )}`}
-              download={"experiment.json"}
-            >
-              Export
-            </a>
-          )}
+          <button
+            disabled={!(definedExperiment !== undefined || experiment !== undefined)}
+            className="rounded-md p-2 text-primary-500 hover:text-primary-600 hover:bg-gray-100 hover:no-underline disabled:text-gray-500 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+            onClick={handleExport}
+          >
+            Export
+          </button>
           <label
             className={twMerge(
               "rounded-md p-2",
               isImporting || experiment !== undefined
                 ? "text-gray-500 cursor-not-allowed"
-                : "text-primary-500 hover:text-primary-600 hover:bg-gray-100"
+                : "text-primary-500 hover:text-primary-600 hover:bg-gray-100 cursor-pointer"
             )}
           >
             Import

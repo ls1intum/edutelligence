@@ -109,7 +109,7 @@ export default function ConductExperiment({
             )}
           </button>
               <button
-                className="rounded-md p-2 text-primary-500 hover:text-primary-600 hover:bg-gray-100 hover:no-underline"
+                className="rounded-md p-2 text-primary-500 hover:text-primary-600 hover:bg-gray-100 hover:no-underline disabled:text-gray-500 disabled:cursor-not-allowed disabled:hover:bg-transparent"
                 onClick={handleExport}
               >
                 Export
@@ -119,7 +119,7 @@ export default function ConductExperiment({
               "rounded-md p-2",
               didStartExperiment
                 ? "text-gray-500 cursor-not-allowed"
-                : "text-primary-500 hover:text-primary-600 hover:bg-gray-100"
+                : "text-primary-500 hover:text-primary-600 hover:bg-gray-100 cursor-pointer"
             )}
           >
             Import
