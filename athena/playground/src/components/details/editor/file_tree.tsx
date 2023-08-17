@@ -46,16 +46,8 @@ export default function FileTree({
     },
   };
 
-  let visitedPaths = new Set<string>();
-
   const addChildren = (item: FileTree): number => {
-    if (visitedPaths.has(item.path)) {
-      console.log("Cycle detected", item.path);
-      return 0;
-    }
-    visitedPaths.add(item.path);
-
-    if (item.isDir) {
+        if (item.isDir) {
       const feedbackCount = item.children.reduce(
         (acc, file) => acc + (addChildren(file) ?? 0),
         0
