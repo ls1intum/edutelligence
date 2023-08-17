@@ -55,6 +55,10 @@ export default function ConductExperiment({
       })
       .forEach((data, index) => {
         setTimeout(() => {
+          // Add experiment id and module configuration id
+          data.experimentId = experiment.id;
+          data.moduleConfigurationId = moduleConfigurations[index].id;
+
           const blob = new Blob([JSON.stringify(data, null, 2)], {
             type: "text/json",
           });
@@ -73,11 +77,41 @@ export default function ConductExperiment({
   };
 
   const handleImport = (data: any) => {
-    // if (data.experiment)
-    // TODO check for experiment
-    // TODO check for configuration
-    // Add experiment id
-    console.log(moduleViewRefs);
+    if (!data.experimentId) {
+      alert("No experiment id found in the data.");
+      return;
+    }
+    if (data.experimentId !== experiment.id) {
+      alert("This data is not for this experiment.");
+      return;
+    }
+    if (!data.moduleConfigurationId) {
+      alert("No module configuration id found in the data.");
+      return;
+    }
+
+    const index = moduleConfigurations.findIndex(
+      (moduleConfiguration) =>
+        moduleConfiguration.id === data.moduleConfigurationId
+    );
+    if (index === -1) {
+      alert(
+        `No module configuration found for id: ${data.moduleConfigurationId}`
+      );
+      return;
+    }
+
+    const moduleViewRef = moduleViewRefs.current[index];
+    if (!moduleViewRef) {
+      alert("Module view not found.");
+      return;
+    }
+
+    if (moduleViewRef.importData(data)) {
+      alert(`Successfully imported data for ${moduleConfigurations[index].name}`);
+    } else {
+      alert(`Failed to import data for ${data.moduleConfigurationId}.`);
+    }
   };
 
   // Slider stuff
@@ -144,18 +178,10 @@ export default function ConductExperiment({
             >
               Export
             </button>
-            <label
-              className={twMerge(
-                "rounded-md p-2",
-                didStartExperiment
-                  ? "text-gray-500 cursor-not-allowed"
-                  : "text-primary-500 hover:text-primary-600 hover:bg-gray-100 cursor-pointer"
-              )}
-            >
+            <label className="rounded-md p-2 text-primary-500 hover:text-primary-600 hover:bg-gray-100 cursor-pointer">
               Import
               <input
                 multiple
-                disabled={didStartExperiment}
                 className="hidden"
                 type="file"
                 accept=".json"
