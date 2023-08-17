@@ -64,6 +64,8 @@ export default function ModuleLLMConfig({
         <button
           className="text-white bg-gray-500 hover:bg-gray-700 rounded-md p-2 border mt-2"
           onClick={() => {
+            if (!onChangeConfig) return;
+
             const defaultFormData = getDefaultFormState(
               validator,
               configOptions,
