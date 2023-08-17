@@ -48,7 +48,7 @@ export default function ExperimentSubmissionsSelect({
   const excludedSubmissions =
     data?.filter((submission) => !isSubmissionUsed(submission)) ?? [];
 
-  const takeSubmissions = (submissions: Submission[]) => {
+  const takeFromSubmissions = (submissions: Submission[]) => {
     if (sumbissionsSelectType === "random") {
       return [...submissions]
         .sort(() => 0.5 - Math.random())
@@ -65,7 +65,7 @@ export default function ExperimentSubmissionsSelect({
     if (from === to || moveSubmissionsNumber <= 0) return;
 
     if (from === "excluded") {
-      const moveSubmissions = takeSubmissions(excludedSubmissions);
+      const moveSubmissions = takeFromSubmissions(excludedSubmissions);
       if (to === "training") {
         onChangeTrainingSubmissions([
           ...(trainingSubmissions ?? []),
@@ -81,7 +81,7 @@ export default function ExperimentSubmissionsSelect({
       from === "training" &&
       trainingSubmissions
     ) {
-      const moveSubmissions = takeSubmissions(trainingSubmissions);
+      const moveSubmissions = takeFromSubmissions(trainingSubmissions);
       const newTrainingSubmissions =
         trainingSubmissions.filter(
           (submission) => !moveSubmissions.some((s) => s.id === submission.id)
@@ -99,7 +99,7 @@ export default function ExperimentSubmissionsSelect({
       from === "evaluation" &&
       evaluationSubmissions
     ) {
-      const moveSubmissions = takeSubmissions(evaluationSubmissions);
+      const moveSubmissions = takeFromSubmissions(evaluationSubmissions);
       const newEvaluationSubmissions =
         evaluationSubmissions.filter(
           (submission) => !moveSubmissions.some((s) => s.id === submission.id)
