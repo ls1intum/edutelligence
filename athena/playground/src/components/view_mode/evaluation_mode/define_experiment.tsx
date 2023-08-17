@@ -144,7 +144,7 @@ export default function DefineExperiment({
     const url = window.URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = `experiment.json`;
+    link.download = `${experimentToExport.exerciseType}_experiment.json`;
     link.click();
     window.URL.revokeObjectURL(url);
   };
