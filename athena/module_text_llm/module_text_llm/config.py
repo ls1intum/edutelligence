@@ -1,8 +1,41 @@
+import os
 from pydantic import BaseModel, Field
+from typing import Union
 
 from athena import config_schema_provider
-from module_text_llm.helpers.models.openai import OpenAIModelConfig
 from .prompts.suggest_feedback_basic import system_template, human_template
+
+
+DefaultModelConfig = None
+default_model_name = os.environ.get("LLM_DEFAULT_MODEL")
+
+types = []
+try:
+    import module_text_llm.helpers.models.openai as openai_config
+    types.append(openai_config.OpenAIModelConfig) # type: ignore
+    if default_model_name in openai_config.available_models:
+        DefaultModelConfig = openai_config.OpenAIModelConfig
+except AttributeError:
+    pass
+
+try:
+    import module_text_llm.helpers.models.replicate as replicate_config
+    types.append(replicate_config.ReplicateModelConfig) # type: ignore
+    if default_model_name in replicate_config.available_models:
+        DefaultModelConfig = replicate_config.ReplicateModelConfig # type: ignore
+except AttributeError:
+    pass
+
+if not types:
+    raise EnvironmentError("No model configurations available, please set up at least one provider in the environment variables.")
+
+if DefaultModelConfig is None:
+    DefaultModelConfig = types[0]
+
+if len(types) == 1:
+    ModelConfig = types[0]
+else:
+    ModelConfig = Union[tuple(types)]  # type: ignore
 
 
 class BasicPrompt(BaseModel):
@@ -15,7 +48,7 @@ class BasicPrompt(BaseModel):
 
 class BasicApproachConfig(BaseModel):
     """This approach uses a LLM with a single prompt to generate feedback in a single step."""
-    model: OpenAIModelConfig = Field(default=OpenAIModelConfig()) # type: ignore
+    model: ModelConfig = Field(default=DefaultModelConfig()) # type: ignore
     prompt: BasicPrompt = Field(default=BasicPrompt())
 
 

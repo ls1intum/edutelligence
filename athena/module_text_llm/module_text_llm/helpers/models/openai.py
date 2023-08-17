@@ -90,8 +90,8 @@ def _use_openai_credentials():
     openai.api_version = None
 
 
-openai_available = os.environ.get("LLM_OPENAI_API_KEY") is not None
-azure_openai_available = os.environ.get("LLM_AZURE_OPENAI_API_KEY") is not None
+openai_available = len(os.environ.get("LLM_OPENAI_API_KEY") or "") > 0
+azure_openai_available = len(os.environ.get("LLM_AZURE_OPENAI_API_KEY") or "") > 0
 
 
 # This is a hack to make sure that the openai api is set correctly
@@ -203,7 +203,7 @@ _model_aliases = {
 openai_models = {
     "chat_completion": [
         "gpt-4",
-        "gpt-4-32k",
+        # "gpt-4-32k", # Not publicly available
         "gpt-3.5-turbo",
         "gpt-3.5-turbo-16k"
     ],
@@ -223,87 +223,99 @@ openai_models = {
 available_deployments = _get_available_deployments(openai_models, _model_aliases)
 available_models = _get_available_models(openai_models, available_deployments)
 
-logger.info("Available openai models: %s", ", ".join(available_models.keys()))
+if available_models:
+    logger.info("Available openai models: %s", ", ".join(available_models.keys()))
 
-OpenAIModel = Enum('OpenAIModel', {name: name for name in available_models})  # type: ignore
-
-default_openai_model = OpenAIModel[os.environ.get("LLM_DEFAULT_MODEL", "gpt-3.5-turbo")]
+    OpenAIModel = Enum('OpenAIModel', {name: name for name in available_models})  # type: ignore
 
 
-# Long descriptions will be displayed in the playground UI and are copied from the OpenAI docs
-class OpenAIModelConfig(ModelConfig):
-    """OpenAI LLM configuration."""
+    default_model_name = "gpt-3.5-turbo"
+    if "LLM_DEFAULT_MODEL" in os.environ and os.environ["LLM_DEFAULT_MODEL"] in available_models:
+        default_model_name = os.environ["LLM_DEFAULT_MODEL"]
+    if default_model_name not in available_models:
+        default_model_name = list(available_models.keys())[0]
 
-    model_name: OpenAIModel = Field(default=default_openai_model,  # type: ignore
-                                    description="The name of the model to use.")
-    max_tokens: PositiveInt = Field(1024, description="""\
+    default_openai_model = OpenAIModel[default_model_name]
+
+
+    # Long descriptions will be displayed in the playground UI and are copied from the OpenAI docs
+    class OpenAIModelConfig(ModelConfig):
+        """OpenAI LLM configuration."""
+
+        model_name: OpenAIModel = Field(default=default_openai_model,  # type: ignore
+                                        description="The name of the model to use.")
+        max_tokens: PositiveInt = Field(1024, description="""\
 The maximum number of [tokens](https://platform.openai.com/tokenizer) to generate in the chat completion.
 
 The total length of input tokens and generated tokens is limited by the model's context length. \
 [Example Python code](https://github.com/openai/openai-cookbook/blob/main/examples/How_to_count_tokens_with_tiktoken.ipynb) for counting tokens.\
 """)
 
-    temperature: float = Field(default=0.0, ge=0, le=2, description="""\
+        temperature: float = Field(default=0.0, ge=0, le=2, description="""\
 What sampling temperature to use, between 0 and 2. Higher values like 0.8 will make the output more random, \
 while lower values like 0.2 will make it more focused and deterministic.
 
 We generally recommend altering this or `top_p` but not both.\
 """)
 
-    top_p: float = Field(default=1, ge=0, le=1, description="""\
+        top_p: float = Field(default=1, ge=0, le=1, description="""\
 An alternative to sampling with temperature, called nucleus sampling, where the model considers the results of the tokens with top_p probability mass. \
 So 0.1 means only the tokens comprising the top 10% probability mass are considered.
 
 We generally recommend altering this or `temperature` but not both.\
 """)
 
-    presence_penalty: float = Field(default=0, ge=-2, le=2, description="""\
+        presence_penalty: float = Field(default=0, ge=-2, le=2, description="""\
 Number between -2.0 and 2.0. Positive values penalize new tokens based on whether they appear in the text so far, \
 increasing the model's likelihood to talk about new topics.
 
 [See more information about frequency and presence penalties.](https://platform.openai.com/docs/api-reference/parameter-details)\
 """)
 
-    frequency_penalty: float = Field(default=0, ge=-2, le=2, description="""\
+        frequency_penalty: float = Field(default=0, ge=-2, le=2, description="""\
 Number between -2.0 and 2.0. Positive values penalize new tokens based on their existing frequency in the text so far, \
 decreasing the model's likelihood to repeat the same line verbatim.
 
 [See more information about frequency and presence penalties.](https://platform.openai.com/docs/api-reference/parameter-details)\
 """)
 
-    @validator('max_tokens')
-    def max_tokens_must_be_positive(cls, v):
-        """
-        Validate that max_tokens is a positive integer.
-        """
-        if v <= 0:
-            raise ValueError('max_tokens must be a positive integer')
-        return v
+        @validator('max_tokens')
+        def max_tokens_must_be_positive(cls, v):
+            """
+            Validate that max_tokens is a positive integer.
+            """
+            if v <= 0:
+                raise ValueError('max_tokens must be a positive integer')
+            return v
 
-    def get_model(self) -> BaseLanguageModel:
-        """Get the model from the configuration.
+        def get_model(self) -> BaseLanguageModel:
+            """Get the model from the configuration.
 
-        Returns:
-            BaseLanguageModel: The model.
-        """
-        model = available_models[self.model_name.value]
-        kwargs = model._lc_kwargs
-        secrets = {secret: getattr(model, secret) for secret in model.lc_secrets.keys()}
-        kwargs.update(secrets)
+            Returns:
+                BaseLanguageModel: The model.
+            """
+            model = available_models[self.model_name.value]
+            kwargs = model._lc_kwargs
+            secrets = {secret: getattr(model, secret) for secret in model.lc_secrets.keys()}
+            kwargs.update(secrets)
 
-        model_kwargs = kwargs.get("model_kwargs", {})
-        for attr, value in self.dict().items():
-            if attr == "model_name":
-                # Skip model_name
-                continue
-            if hasattr(model, attr):
-                # If the model has the attribute, add it to kwargs
-                kwargs[attr] = value
-            else:
-                # Otherwise, add it to model_kwargs (necessary for chat models)
-                model_kwargs[attr] = value
-        kwargs["model_kwargs"] = model_kwargs
+            model_kwargs = kwargs.get("model_kwargs", {})
+            for attr, value in self.dict().items():
+                if attr == "model_name":
+                    # Skip model_name
+                    continue
+                if hasattr(model, attr):
+                    # If the model has the attribute, add it to kwargs
+                    kwargs[attr] = value
+                else:
+                    # Otherwise, add it to model_kwargs (necessary for chat models)
+                    model_kwargs[attr] = value
+            kwargs["model_kwargs"] = model_kwargs
 
-        # Initialize a copy of the model using the config
-        model = model.__class__(**kwargs)
-        return model
+            # Initialize a copy of the model using the config
+            model = model.__class__(**kwargs)
+            return model
+
+
+        class Config:
+            title = 'OpenAI'
