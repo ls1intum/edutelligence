@@ -19,7 +19,9 @@ export default function ModuleLLMConfig({
         schema={configOptions}
         validator={validator}
         onChange={(props) => {
-          onChangeConfig(props.formData);
+          if (onChangeConfig) {
+            onChangeConfig(props.formData);
+          }
         }}
         formData={moduleConfig}
         liveValidate

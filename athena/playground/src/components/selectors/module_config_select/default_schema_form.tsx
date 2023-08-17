@@ -17,7 +17,9 @@ export default function DefaultSchemaFormModuleConfig({
         schema={configOptions}
         validator={validator}
         onChange={(props) => {
-          onChangeConfig(props.formData);
+          if (onChangeConfig) {
+            onChangeConfig(props.formData);
+          }
         }}
         formData={moduleConfig}
         liveValidate
