@@ -315,6 +315,9 @@ export default function ConfigureModules({
                     <>
                       <button
                         onClick={() => {
+                          // Avoids duplicate names
+                          // Every configuration should have a unique name to avoid confusion
+                          // when exporting/importing or comparing configurations
                           let newName = `${moduleConfiguration.name} (copy)`;
                           let num = 1;
                           while (
