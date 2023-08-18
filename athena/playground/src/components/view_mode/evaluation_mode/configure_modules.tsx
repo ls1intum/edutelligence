@@ -65,15 +65,15 @@ export default function ConfigureModules({
   };
 
   useEffect(() => {
-    checkScroll();
-  }, [moduleConfigurationsState]);
-
-  useEffect(() => {
     if (!scrollRef.current) return;
     const scroll = scrollRef.current;
     scroll.addEventListener("scroll", checkScroll);
     return () => scroll.removeEventListener("scroll", checkScroll);
   }, [scrollRef]);
+
+  useEffect(() => {
+    checkScroll();
+  }, [moduleConfigurationsState]);
 
   const configurationsStatus = moduleConfigurationsState.map(
     (moduleConfiguration) => {
