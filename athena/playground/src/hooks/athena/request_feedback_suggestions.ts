@@ -27,7 +27,7 @@ export default function useRequestFeedbackSuggestions(
       let response = await athenaFetcher("/feedback_suggestions", { exercise, submission });
       if (response?.data) {
         response.data = response.data.map((feedback: Feedback, index: number) => {
-          // Change variable names from camel case to snake case (change this in the future)
+          // Change variable names from camel case to snake case (change this in the future, index_start -> indexStart, index_end -> indexEnd)
           feedback = Object.fromEntries(
             Object.entries(feedback).map(([key, value]) => [key.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`), value])
           ) as Feedback;
