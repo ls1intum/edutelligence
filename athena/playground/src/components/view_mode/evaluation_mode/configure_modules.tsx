@@ -117,7 +117,7 @@ export default function ConfigureModules({
           <button
             disabled={
               configurationsStatus.some((status) => !status.isValid) ||
-              configurationsStatus.length == 0
+              configurationsStatus.length === 0
             }
             className="rounded-md p-2 text-primary-500 hover:text-primary-600 hover:bg-gray-100 hover:no-underline disabled:text-gray-500 disabled:cursor-not-allowed disabled:hover:bg-transparent"
             onClick={handleExport}
@@ -127,7 +127,7 @@ export default function ConfigureModules({
           <label
             className={twMerge(
               "rounded-md p-2",
-              moduleConfigurations !== undefined
+              moduleConfigurations != undefined
                 ? "text-gray-500 cursor-not-allowed"
                 : "text-primary-500 hover:text-primary-600 hover:bg-gray-100 cursor-pointer"
             )}
@@ -135,7 +135,7 @@ export default function ConfigureModules({
             Import
             <input
               multiple
-              disabled={moduleConfigurations !== undefined}
+              disabled={moduleConfigurations != undefined}
               className="hidden"
               type="file"
               accept=".json"
@@ -277,7 +277,7 @@ export default function ConfigureModules({
                 <div className="flex gap-2 mb-2">
                   <input
                     type="text"
-                    disabled={moduleConfigurations !== undefined}
+                    disabled={moduleConfigurations != undefined}
                     placeholder="Configuration name"
                     className="w-full rounded-md p-2 border border-gray-300 disabled:bg-gray-100 disabled:cursor-not-allowed"
                     value={moduleConfiguration.name}
@@ -361,7 +361,7 @@ export default function ConfigureModules({
               </div>
               <div className="px-2">
                 <ModuleAndConfigSelect
-                  disabled={moduleConfigurations !== undefined}
+                  disabled={moduleConfigurations != undefined}
                   exerciseType={experiment.exerciseType}
                   moduleAndConfig={moduleConfiguration.moduleAndConfig}
                   onChangeModuleAndConfig={(newModuleAndConfig) => {
@@ -419,7 +419,7 @@ export default function ConfigureModules({
               : "disabled:text-gray-500 disabled:bg-gray-200"
           )}
           disabled={
-            moduleConfigurations !== undefined ||
+            moduleConfigurations != undefined ||
             moduleConfigurationsState.length === 0 ||
             configurationsStatus.some(
               (configurationStatus) => !configurationStatus.isValid
