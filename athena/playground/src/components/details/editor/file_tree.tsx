@@ -47,7 +47,7 @@ export default function FileTree({
   };
 
   const addChildren = (item: FileTree): number => {
-        if (item.isDir) {
+    if (item.isDir) {
       const feedbackCount = item.children.reduce(
         (acc, file) => acc + (addChildren(file) ?? 0),
         0
@@ -129,7 +129,9 @@ export default function FileTree({
                   props.item.data.isDir
                     ? "rounded-full aspect-auto text-slate-500"
                     : "rounded text-blue-800 bg-blue-200",
-                  props.context.isSelected && props.item.data.isDir ? "text-white" : ""
+                  props.context.isSelected && props.item.data.isDir
+                    ? "text-white"
+                    : ""
                 )}
               >
                 {props.item.data.feedbackCount}
