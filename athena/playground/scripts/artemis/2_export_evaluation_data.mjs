@@ -74,7 +74,7 @@ async function exportAllExercises(config) {
   const { exerciseTypes } = await inquirer.prompt({
     type: "checkbox",
     name: "exerciseTypes",
-    message: `Which exercise types do you want to export?`,
+    message: "Which exercise types do you want to export?",
     choices: [{
       name: "Text exercises",
       value: "text",
