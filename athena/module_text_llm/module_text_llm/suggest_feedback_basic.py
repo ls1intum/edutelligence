@@ -1,4 +1,5 @@
 import csv
+import traceback
 from typing import List
 
 from langchain.chains import LLMChain
