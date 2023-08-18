@@ -68,7 +68,7 @@ function BaseInfoProvider({ children }: { children: ReactNode }) {
 
 function useBaseInfo(): BaseInfo {
   const context = useContext(BaseInfoContext);
-  if (context === undefined) {
+  if (context == undefined) {
     throw new Error('useBaseInfoState must be used within a BaseInfoProvider');
   }
   return context.state;
@@ -76,7 +76,7 @@ function useBaseInfo(): BaseInfo {
 
 function useBaseInfoDispatch(): React.Dispatch<Action> {
   const context = useContext(BaseInfoContext);
-  if (context === undefined) {
+  if (context == undefined) {
     throw new Error('useBaseInfoDispatch must be used within a BaseInfoProvider');
   }
   return context.dispatch;

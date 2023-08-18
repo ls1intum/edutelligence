@@ -25,7 +25,7 @@ function ModuleProvider({ module, moduleConfig, children }: ModuleProviderProps)
 
 function useModule(): Module {
   const context = useContext(ModuleContext);
-  if (context === undefined) {
+  if (context == undefined) {
     throw new Error('useModule must be used within a ModuleProvider');
   }
   return context;
