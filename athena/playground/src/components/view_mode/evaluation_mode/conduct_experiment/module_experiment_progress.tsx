@@ -86,7 +86,7 @@ export default function ModuleExperimentProgress({
             className={twMerge(
               "flex items-center justify-center w-6 h-6 border rounded-full shrink-0",
               stepToIndex(data.step) >= 2
-              ? stepToIndex(data.step) > 2
+              ? stepToIndex(data.step) > 2 || moduleExperiment.continueAfterTraining
                 ? "text-green-500 border-green-500"
                 : "text-yellow-500 border-yellow-500"
               : "text-gray-500 border-gray-500"
@@ -98,7 +98,7 @@ export default function ModuleExperimentProgress({
             className={twMerge(
               "flex flex-col",
               stepToIndex(data.step) >= 2
-              ? stepToIndex(data.step) > 2
+              ? stepToIndex(data.step) > 2 || moduleExperiment.continueAfterTraining
                 ? "text-green-500"
                 : "text-yellow-500"
               : "text-gray-500"

@@ -86,6 +86,14 @@ const ConductBatchModuleExperiment = React.forwardRef<
             <div className="flex items-center justify-between gap-2">
               <h4 className="text-lg font-bold">{moduleConfiguration.name}</h4>
               <div className="flex flex-1 justify-end gap-1 mb-1 self-start">
+                {moduleExperiment.continueAfterTraining && (
+                <button 
+                  className="rounded-md p-2 bg-primary-500 hover:bg-primary-600 text-white text-base leading-none"
+                  onClick={moduleExperiment.continueAfterTraining}
+                  >
+                  Start Generating
+                </button>
+                )}
                 <button
                   disabled={moduleOrderControl.isFirstModule}
                   className="w-8 h-8 rounded-md p-2 bg-gray-100 hover:bg-gray-200 font-bold text-gray-500 hover:text-gray-600 text-base leading-none disabled:text-gray-300 disabled:bg-gray-50 disabled:cursor-not-allowed"

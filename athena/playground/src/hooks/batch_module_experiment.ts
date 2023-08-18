@@ -89,6 +89,13 @@ export default function useBatchModuleExperiment(experiment: Experiment) {
     return true;
   };
 
+  const continueAfterTraining = (data.step === "sendingTrainingFeedbacks" && data.sentTrainingSubmissions.length === experiment.trainingSubmissions?.length) ? (() => {
+    setData((prevState) => ({
+      ...prevState,
+      step: "generatingFeedbackSuggestions",
+    }));
+  }) : undefined;
+
   // Module requests
   const sendSubmissions = useSendSubmissions();
   const sendFeedbacks = useSendFeedbacks();
@@ -186,10 +193,7 @@ export default function useBatchModuleExperiment(experiment: Experiment) {
       }
     }
 
-    setData((prevState) => ({
-      ...prevState,
-      step: "generatingFeedbackSuggestions",
-    }));
+    console.log("Sending training feedbacks done waiting to continue...");
   };
 
   // 3. Generate feedback suggestions
@@ -320,6 +324,7 @@ export default function useBatchModuleExperiment(experiment: Experiment) {
   return {
     data,
     startExperiment,
+    continueAfterTraining,
     exportData,
     importData,
     moduleRequests: {
