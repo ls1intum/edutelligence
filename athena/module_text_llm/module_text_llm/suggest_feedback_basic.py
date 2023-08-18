@@ -43,6 +43,35 @@ class AssessmentModel(BaseModel):
         title = "Assessment"
 
 
+def check_token_length_and_omit_from_input_if_necessary(prompt: ChatPromptTemplate, prompt_input, max_input_tokens: int, debug: bool):
+    if num_tokens_from_string(prompt.format(**prompt_input)) <= max_input_tokens:
+        return prompt_input, True
+
+    omitted_features = []        
+
+    # Input is too long -> Try to omit example_solution
+    if "example_solution" in prompt_input:
+        prompt_input["example_solution"] = "omitted"
+        omitted_features.append("example_solution")
+        if num_tokens_from_string(prompt.format(**prompt_input)) <= max_input_tokens:
+            if debug:
+                emit_meta("omitted_features", omitted_features)
+            return prompt_input, True
+        
+    # Input is still too long -> Try to omit problem_statement
+    if "problem_statement" in prompt_input:
+        prompt_input["problem_statement"] = "omitted"
+        omitted_features.append("problem_statement")
+        if num_tokens_from_string(prompt.format(**prompt_input)) <= max_input_tokens:
+            if debug:
+                emit_meta("omitted_features", omitted_features)
+            return prompt_input, True
+
+    # Input is still too long -> Model should not run 
+    return prompt_input, False
+
+
+# pylint: disable-msg=too-many-locals
 async def suggest_feedback_basic(exercise: Exercise, submission: Submission, config: BasicApproachConfig, debug: bool) -> List[Feedback]:
     model = config.model.get_model()
 
@@ -55,38 +84,10 @@ async def suggest_feedback_basic(exercise: Exercise, submission: Submission, con
         "submission": add_sentence_numbers(submission.text)
     }
 
-    def check_token_length_and_omit_from_input_if_necessary(prompt: ChatPromptTemplate, prompt_input):
-        if num_tokens_from_string(prompt.format(**prompt_input)) <= config.max_input_tokens:
-            return prompt_input, True
-
-        omitted_features = []        
-
-        # Input is too long -> Try to omit example_solution
-        if "example_solution" in prompt_input:
-            prompt_input["example_solution"] = "omitted"
-            omitted_features.append("example_solution")
-            if num_tokens_from_string(prompt.format(**prompt_input)) <= config.max_input_tokens:
-                if debug:
-                    emit_meta("omitted_features", omitted_features)
-                return prompt_input, True
-            
-        # Input is still too long -> Try to omit problem_statement
-        if "problem_statement" in prompt_input:
-            prompt_input["problem_statement"] = "omitted"
-            omitted_features.append("problem_statement")
-            if num_tokens_from_string(prompt.format(**prompt_input)) <= config.max_input_tokens:
-                if debug:
-                    emit_meta("omitted_features", omitted_features)
-                return prompt_input, True
-
-        # Input is still too long -> Model should not run 
-        return prompt_input, False
-
     supports_function_calling = isinstance(model, ChatOpenAI)
 
     # Output parser for non-function-calling models
-    pydantic_parser = PydanticOutputParser(pydantic_object=AssessmentModel)
-    output_parser = OutputFixingParser.from_llm(parser=pydantic_parser, llm=model)
+    output_parser = OutputFixingParser.from_llm(parser=PydanticOutputParser(pydantic_object=AssessmentModel), llm=model)
     
     # Prepare prompt
     if supports_function_calling:
@@ -99,7 +100,7 @@ async def suggest_feedback_basic(exercise: Exercise, submission: Submission, con
         human_message_prompt = HumanMessagePromptTemplate.from_template(config.prompt.human_message + "\nJSON Response:")
     chat_prompt = ChatPromptTemplate.from_messages([system_message_prompt, human_message_prompt])
 
-    prompt_input, should_run = check_token_length_and_omit_from_input_if_necessary(chat_prompt, prompt_input)
+    prompt_input, should_run = check_token_length_and_omit_from_input_if_necessary(chat_prompt, prompt_input, config.max_input_tokens, debug)
     if not should_run:
         logger.warning("Input too long. Skipping.")
         if debug:

@@ -5,10 +5,10 @@ from nltk.tokenize import sent_tokenize
 
 # This is correct for gpt-4 and chat gpt3.5 but might be different for other models
 def num_tokens_from_string(string: str) -> int:
-        """Returns the number of tokens in a text string."""
-        encoding = tiktoken.get_encoding("cl100k_base")
-        num_tokens = len(encoding.encode(string))
-        return num_tokens
+    """Returns the number of tokens in a text string."""
+    encoding = tiktoken.get_encoding("cl100k_base")
+    num_tokens = len(encoding.encode(string))
+    return num_tokens
 
 
 def add_sentence_numbers(content: str) -> str:
