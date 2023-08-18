@@ -145,7 +145,6 @@ const ConductBatchModuleExperiment = React.forwardRef<
                 <button
                   className="text-gray-500 hover:text-gray-700"
                   onClick={() => {
-                    console.log(fullScreenHandle);
                     if (fullScreenHandle.active) {
                       fullScreenHandle.exit();
                     }

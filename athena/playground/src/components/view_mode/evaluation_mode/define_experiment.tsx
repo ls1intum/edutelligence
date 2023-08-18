@@ -63,9 +63,7 @@ export default function DefineExperiment({
   const [executionMode, setExecutionMode] = useState<ExecutionMode | undefined>(
     "batch"
   );
-  const [trainingSubmissions, setTrainingSubmissions] = useState<
-    Submission[] | undefined
-  >(undefined);
+  const [trainingSubmissions, setTrainingSubmissions] = useState<Submission[] | undefined>(undefined);
   const [evaluationSubmissions, setEvaluationSubmissions] = useState<
     Submission[] | undefined
   >(undefined);
