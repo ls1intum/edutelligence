@@ -112,15 +112,15 @@ export function getFeedbackReferenceType(
   feedback: Feedback
 ): FeedbackReferenceType {
   if (feedback.type === "programming") {
-    if (feedback.file_path !== undefined && feedback.line_start !== undefined) {
+    if (feedback.file_path != undefined && feedback.line_start != undefined) {
       return "referenced";
-    } else if (feedback.file_path !== undefined) {
+    } else if (feedback.file_path != undefined) {
       return "unreferenced_file";
     }
   } else if (feedback.type === "text") {
     if (
-      feedback.index_start !== undefined &&
-      feedback.index_end !== undefined
+      feedback.index_start != undefined &&
+      feedback.index_end != undefined
     ) {
       return "referenced";
     }
