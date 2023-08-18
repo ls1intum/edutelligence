@@ -105,6 +105,19 @@ def suggest_feedback(exercise: Exercise, submission: Submission, module_config: 
             line_end=18,
             grading_instruction_id=None,
             meta={}
+        ),
+        Feedback(
+            id=None,
+            exercise_id=exercise.id,
+            submission_id=submission.id,
+            title="This is an unreferenced suggestion.",
+            description="General feedback without any reference to the submission.",
+            credits=0.0,
+            file_path=None,
+            line_start=None,
+            line_end=None,
+            grading_instruction_id=None,
+            meta={}
         )
     ]
 
