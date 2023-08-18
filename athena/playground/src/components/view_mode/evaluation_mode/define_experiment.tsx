@@ -8,6 +8,7 @@ import { v4 as uuidv4 } from "uuid";
 import { useEffect, useState } from "react";
 import { twMerge } from "tailwind-merge";
 
+import { downloadJSONFile } from "@/helpers/download";
 import useFeedbacks from "@/hooks/playground/feedbacks";
 import { useBaseInfo, useBaseInfoDispatch } from "@/hooks/base_info_context";
 import { fetchExercises } from "@/hooks/playground/exercises";
@@ -134,19 +135,7 @@ export default function DefineExperiment({
   const handleExport = () => {
     const experimentToExport = definedExperiment ?? experiment
     if (!experimentToExport) return;
-
-    const blob = new Blob(
-      [JSON.stringify(getExperimentExport(experimentToExport), null, 2)],
-      {
-        type: "text/json",
-      }
-    );
-    const url = window.URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `${experimentToExport.exerciseType}_experiment_${experimentToExport.id}.json`;
-    link.click();
-    window.URL.revokeObjectURL(url);
+    downloadJSONFile(`${experimentToExport.exerciseType}_experiment_${experimentToExport.id}`, getExperimentExport(experimentToExport));
   };
 
   const importExperiment = async (fileContent: string) => {
@@ -174,6 +163,7 @@ export default function DefineExperiment({
     console.log("Importing experiment", experimentExport);
 
     baseInfoDispatch({ type: "SET_DATA_MODE", payload: dataMode });
+    setExperimentId(id);
     setExerciseType(exerciseType);
     setExecutionMode(executionMode);
     const exercises = await fetchExercises(dataMode);

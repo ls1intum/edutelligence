@@ -7,6 +7,7 @@ import { useEffect, useRef, useState } from "react";
 import { twMerge } from "tailwind-merge";
 import { FullScreen, useFullScreenHandle } from "react-full-screen";
 
+import { downloadJSONFiles } from "@/helpers/download";
 import ExerciseDetail from "@/components/details/exercise_detail";
 import SubmissionDetail from "@/components/details/submission_detail";
 import ConductBatchModuleExperiment from "./batch_module_experiment";
@@ -47,33 +48,20 @@ export default function ConductExperiment({
   );
 
   const handleExport = () => {
-    moduleViewRefs.current
-      .flatMap((moduleViewRef) => {
+    downloadJSONFiles(
+      moduleViewRefs.current.flatMap((moduleViewRef, index) => {
         if (!moduleViewRef) return [];
         const data = moduleViewRef.exportData();
-        return data.step !== "notStarted" ? [data] : [];
+        return data.step !== "notStarted"
+          ? [
+              {
+                name: `${experiment.exerciseType}_results_${moduleConfigurations[index].name}_${experiment.id}`,
+                data: data,
+              },
+            ]
+          : [];
       })
-      .forEach((data, index) => {
-        setTimeout(() => {
-          // Add experiment id and module configuration id
-          data.experimentId = experiment.id;
-          data.moduleConfigurationId = moduleConfigurations[index].id;
-
-          const blob = new Blob([JSON.stringify(data, null, 2)], {
-            type: "text/json",
-          });
-          const url = window.URL.createObjectURL(blob);
-          const link = document.createElement("a");
-          link.href = url;
-          let name = moduleConfigurations[index].name
-            .toLowerCase()
-            .replace(/\s+/g, "_");
-          name = name.replace(/[\\/:"*?<>|]+/g, "").replace(/_+/g, "_");
-          link.download = `${experiment.exerciseType}_results_${name}_${experiment.id}.json`;
-          link.click();
-          window.URL.revokeObjectURL(url);
-        }, index * 1000);
-      });
+    );
   };
 
   const handleImport = (data: any) => {
@@ -108,7 +96,9 @@ export default function ConductExperiment({
     }
 
     if (moduleViewRef.importData(data)) {
-      alert(`Successfully imported data for ${moduleConfigurations[index].name}`);
+      alert(
+        `Successfully imported data for ${moduleConfigurations[index].name}`
+      );
     } else {
       alert(`Failed to import data for ${data.moduleConfigurationId}.`);
     }

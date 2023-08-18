@@ -5,6 +5,7 @@ import { v4 as uuidv4 } from "uuid";
 import { useEffect, useRef, useState } from "react";
 import { twMerge } from "tailwind-merge";
 
+import { downloadJSONFiles } from "@/helpers/download";
 import ModuleAndConfigSelect from "@/components/selectors/module_and_config_select";
 
 export type ModuleConfiguration = {
@@ -94,21 +95,10 @@ export default function ConfigureModules({
   );
 
   const handleExport = () => {
-    moduleConfigurationsState.forEach((config, index) => {
-      setTimeout(() => {
-        const blob = new Blob([JSON.stringify(config, null, 2)], {
-          type: "text/json",
-        });
-        const url = window.URL.createObjectURL(blob);
-        const link = document.createElement("a");
-        link.href = url;
-        let name = config.name.toLowerCase().replace(/\s+/g, "_");
-        name = name.replace(/[\\/:"*?<>|]+/g, "").replace(/_+/g, "_");
-        link.download = `${experiment.exerciseType}_module_config_${name}.json`;
-        link.click();
-        window.URL.revokeObjectURL(url);
-      }, index * 1000);
-    });
+    downloadJSONFiles(moduleConfigurationsState.map((config) => ({
+      name: `${experiment.exerciseType}_module_config_${config.name}`,
+      data: config,
+    })));
   };
 
   return (
