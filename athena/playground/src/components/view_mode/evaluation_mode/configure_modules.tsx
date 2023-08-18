@@ -94,6 +94,14 @@ export default function ConfigureModules({
     }
   );
 
+  const swapModuleConfigurations = (index1: number, index2: number) => {
+    setModuleConfigurationsState((prevState) => {
+      const newState = [...prevState];
+      [newState[index1], newState[index2]] = [newState[index2], newState[index1]];
+      return newState;
+    });
+  }
+
   const handleExport = () => {
     downloadJSONFiles(moduleConfigurationsState.map((config) => ({
       name: `${experiment.exerciseType}_module_config_${config.name}`,
@@ -259,12 +267,7 @@ export default function ConfigureModules({
                       disabled={index === 0}
                       className="w-8 h-8 rounded-md p-2 bg-gray-100 hover:bg-gray-200 font-bold text-gray-500 hover:text-gray-600 text-base leading-none disabled:text-gray-300 disabled:bg-gray-50 disabled:cursor-not-allowed"
                       onClick={() => {
-                        setModuleConfigurationsState((prevState) => {
-                          const newState = [...prevState];
-                          // swap places
-                          [newState[index - 1], newState[index]] = [newState[index], newState[index - 1]];
-                          return newState;
-                        });
+                        swapModuleConfigurations(index, index - 1);
                         slide("prev");
                       }}
                     >
@@ -274,13 +277,7 @@ export default function ConfigureModules({
                       disabled={index === moduleConfigurationsState.length - 1}
                       className="w-8 h-8 rounded-md p-2 bg-gray-100 hover:bg-gray-200 font-bold text-gray-500 hover:text-gray-600 text-base leading-none disabled:text-gray-300 disabled:bg-gray-50 disabled:cursor-not-allowed"
                       onClick={() => {
-                        setModuleConfigurationsState((prevState) => {
-                          const newState = [...prevState];
-                          const temp = newState[index + 1];
-                          newState[index + 1] = newState[index];
-                          newState[index] = temp;
-                          return newState;
-                        });
+                        swapModuleConfigurations(index, index + 1);
                         slide("next");
                       }}
                     >
