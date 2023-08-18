@@ -101,6 +101,60 @@ export default function ConfigureModules({
     })));
   };
 
+  const handleImport = (files: FileList | null) => {
+    if (!files) return;
+    Array.from(files).forEach((file) => {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        if (!(e.target && typeof e.target.result === "string")) return;
+
+        // Load json file
+        const moduleConfiguration = JSON.parse(e.target.result) as ModuleConfiguration;
+
+        // 1. Check if module configuration is of the correct type
+        if (experiment.exerciseType !== moduleConfiguration.moduleAndConfig.module.type) {
+          alert(
+            `Module configuration with id: ${moduleConfiguration.id} and name: ${moduleConfiguration.name} are not of type ${experiment.exerciseType}`
+          );
+          return;
+        }
+
+        // 2. Check if module configuration is already imported (might lead to unexpected behaviour)
+        const existingConfiguration = moduleConfigurationsState.find(
+          (config) => config.id === moduleConfiguration.id
+        );
+        if (existingConfiguration) {
+          alert(
+            `Module configuration with id: ${existingConfiguration.id} and name: ${existingConfiguration.name} already exists, delete it first before importing`
+          );
+          return;
+        }
+
+        // 3. Check if module configuration is valid
+        const isModuleEmpty = moduleConfiguration.moduleAndConfig === undefined;
+        const isDuplicateName =
+          moduleConfigurationsState.filter(
+            (currentModuleConfiguration) => currentModuleConfiguration.name === moduleConfiguration.name
+          ).length > 1;
+        const isNameEmpty = moduleConfiguration.name === "";
+        if (isModuleEmpty || isDuplicateName || isNameEmpty) {
+          alert(
+            `Module configuration with id: ${moduleConfiguration.id} and name: ${moduleConfiguration.name} is invalid`
+          );
+          return;
+        }
+
+        // 4. Add module configuration to state
+        setModuleConfigurationsState((prevState) => [
+          ...prevState,
+          moduleConfiguration,
+        ]);
+        alert(`Imported ${moduleConfiguration.name}`);
+      };
+      reader.readAsText(file);
+    });
+  };
+
   return (
     <div className="bg-white rounded-md p-4 mb-8 space-y-2">
       <div className="flex flex-row justify-between items-center">
@@ -139,46 +193,7 @@ export default function ConfigureModules({
               className="hidden"
               type="file"
               accept=".json"
-              onChange={(e) => {
-                if (!e.target.files) return;
-
-                Array.from(e.target.files).forEach((file) => {
-                  const reader = new FileReader();
-                  reader.onload = (e) => {
-                    if (e.target && typeof e.target.result === "string") {
-                      const moduleConfiguration = JSON.parse(
-                        e.target.result
-                      ) as ModuleConfiguration;
-                      if (
-                        experiment.exerciseType !==
-                        moduleConfiguration.moduleAndConfig.module.type
-                      ) {
-                        alert(
-                          `Module configuration with id: ${moduleConfiguration.id} and name: ${moduleConfiguration.name} are not of type ${experiment.exerciseType}`
-                        );
-                        return;
-                      }
-
-                      const existingConfiguration =
-                        moduleConfigurationsState.find(
-                          (config) => config.id === moduleConfiguration.id
-                        );
-                      if (!existingConfiguration) {
-                        setModuleConfigurationsState((prevState) => [
-                          ...prevState,
-                          moduleConfiguration,
-                        ]);
-                        alert(`Imported ${moduleConfiguration.name}`);
-                      } else {
-                        alert(
-                          `Module configuration with id: ${existingConfiguration.id} and name: ${existingConfiguration.name} already exists`
-                        );
-                      }
-                    }
-                  };
-                  reader.readAsText(file);
-                });
-              }}
+              onChange={(e) => handleImport(e.target.files)}
             />
           </label>
           <button
