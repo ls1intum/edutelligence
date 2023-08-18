@@ -1,6 +1,7 @@
 from typing import List
 
 import nltk
+import tiktoken
 
 from athena import app, submission_selector, submissions_consumer, feedback_consumer, feedback_provider
 from athena.text import Exercise, Submission, Feedback
@@ -34,4 +35,5 @@ async def suggest_feedback(exercise: Exercise, submission: Submission, module_co
 
 if __name__ == "__main__":
     nltk.download("punkt")
+    tiktoken.get_encoding("cl100k_base")
     app.start()
