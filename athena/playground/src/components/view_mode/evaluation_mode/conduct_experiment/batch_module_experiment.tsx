@@ -34,6 +34,7 @@ export type ConductBatchModuleExperimentHandles = {
   exportData: () => any;
 };
 
+// ForwardRef is needed to expose the ref to the parent component
 const ConductBatchModuleExperiment = React.forwardRef<
   ConductBatchModuleExperimentHandles,
   ConductBatchModuleExperimentProps
