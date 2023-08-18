@@ -55,7 +55,7 @@ export default function CodeEditor({
   }
 
   return (
-    <div className="h-[50vh] border border-gray-100 rounded-lg overflow-hidden">
+    <div className="h-[60vh] border border-gray-100 rounded-lg overflow-hidden">
       <Allotment vertical={false} defaultSizes={[1, 4]}>
         <Allotment.Pane preferredSize={"20%"}>
           <FileTree
