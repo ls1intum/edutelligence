@@ -4,6 +4,7 @@ import type { ExperimentStep } from "@/hooks/batch_module_experiment";
 
 import React, { useImperativeHandle, useState, ForwardedRef, useEffect } from "react";
 import Modal from "react-modal";
+import { FullScreenHandle } from "react-full-screen";
 
 import useHealth from "@/hooks/health";
 import useBatchModuleExperiment from "@/hooks/batch_module_experiment";
@@ -25,6 +26,7 @@ type ConductBatchModuleExperimentProps = {
     onClickNext: () => void;
   };
   onChangeStep: (step: ExperimentStep) => void;
+  fullScreenHandle: FullScreenHandle;
 };
 
 export type ConductBatchModuleExperimentHandles = {
@@ -44,6 +46,7 @@ const ConductBatchModuleExperiment = React.forwardRef<
       moduleOrderControl,
       didStartExperiment,
       onChangeStep,
+      fullScreenHandle,
     }: ConductBatchModuleExperimentProps,
     ref: ForwardedRef<ConductBatchModuleExperimentHandles>
   ) => {
@@ -51,7 +54,6 @@ const ConductBatchModuleExperiment = React.forwardRef<
     const moduleExperiment = useBatchModuleExperiment(experiment);
 
     const [showProgress, setShowProgress] = useState(true);
-
     const [isConfigModalOpen, setConfigModalOpen] = useState(false);
 
     function handleOpenModal() {
@@ -130,7 +132,13 @@ const ConductBatchModuleExperiment = React.forwardRef<
               <div className="flex gap-3 items-center text-sm whitespace-nowrap">
                 <button
                   className="text-gray-500 hover:text-gray-700"
-                  onClick={() => setConfigModalOpen(true)}
+                  onClick={() => {
+                    console.log(fullScreenHandle);
+                    if (fullScreenHandle.active) {
+                      fullScreenHandle.exit();
+                    }
+                    setConfigModalOpen(true);
+                  }}
                 >
                   Show&nbsp;Config
                 </button>

@@ -20,7 +20,7 @@ export default function ConductExperiment({
   experiment,
   moduleConfigurations,
 }: ConductExperimentProps) {
-  const fullscreenHandle = useFullScreenHandle();
+  const fullScreenHandle = useFullScreenHandle();
 
   // Prevent user from leaving the page accidentally
   useEffect(() => {
@@ -152,7 +152,7 @@ export default function ConductExperiment({
 
   return (
     <FullScreen
-      handle={fullscreenHandle}
+      handle={fullScreenHandle}
       className="bg-white rounded-md p-4 mb-8 space-y-2"
     >
       {/* Header */}
@@ -240,14 +240,14 @@ export default function ConductExperiment({
             <button
               className="rounded-md p-2 text-primary-500 hover:text-primary-600 hover:bg-gray-100"
               onClick={() => {
-                if (fullscreenHandle.active) {
-                  fullscreenHandle.exit();
+                if (fullScreenHandle.active) {
+                  fullScreenHandle.exit();
                 } else {
-                  fullscreenHandle.enter();
+                  fullScreenHandle.enter();
                 }
               }}
             >
-              {fullscreenHandle.active ? "Exit Fullscreen" : "Enter Fullscreen"}
+              {fullScreenHandle.active ? "Exit Fullscreen" : "Enter Fullscreen"}
             </button>
             <button
               onClick={() => slide("prev")}
@@ -270,7 +270,7 @@ export default function ConductExperiment({
       <div
         className={twMerge(
           "w-full flex gap-4 snap-x snap-mandatory overflow-x-auto",
-          fullscreenHandle.active
+          fullScreenHandle.active
             ? "h-[calc(100vh-4.5rem)]"
             : "h-[calc(100vh-8rem)]"
         )}
@@ -282,7 +282,7 @@ export default function ConductExperiment({
           <div
             className={twMerge(
               "shrink-0 pr-2",
-              fullscreenHandle.active
+              fullScreenHandle.active
                 ? "w-[calc(50vw-1.5rem)]"
                 : "w-[calc(50vw-7.5rem)]"
             )}
@@ -303,7 +303,7 @@ export default function ConductExperiment({
           <div
             className={twMerge(
               "shrink-0 pr-2",
-              fullscreenHandle.active
+              fullScreenHandle.active
                 ? "w-[calc(50vw-1.5rem)]"
                 : "w-[calc(50vw-7.5rem)]"
             )}
@@ -338,13 +338,14 @@ export default function ConductExperiment({
               <div
                 className={twMerge(
                   "shrink-0 pr-2",
-                  fullscreenHandle.active
+                  fullScreenHandle.active
                     ? "w-[calc(50vw-1.5rem)]"
                     : "w-[calc(50vw-7.5rem)]"
                 )}
               >
                 <ConductBatchModuleExperiment
                   ref={(el) => (moduleViewRefs.current[index] = el)}
+                  fullScreenHandle={fullScreenHandle}
                   experiment={experiment}
                   moduleConfiguration={moduleConfiguration}
                   viewSubmission={
