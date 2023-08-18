@@ -455,7 +455,7 @@ export default function ConfigureModules({
             ? "Configurations Defined"
             : "Define Configurations"}
         </button>
-        {moduleConfigurations && (
+        {(moduleConfigurations?.length ?? 0) > 0 && (
           <button
             className="bg-red-500 text-white rounded-md p-2 mt-2 hover:bg-red-600"
             onClick={() => {
