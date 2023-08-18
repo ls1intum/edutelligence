@@ -50,7 +50,7 @@ function ModuleConfig({
               <label className="flex items-center cursor-pointer">
                 <input
                   type="checkbox"
-                  checked={moduleConfig !== undefined}
+                  checked={moduleConfig != undefined}
                   onChange={(e) => {
                     if (e.target.checked) {
                       onChangeConfig({});
@@ -65,7 +65,7 @@ function ModuleConfig({
               </label>
             </>
           )}
-          {(moduleConfig !== undefined || !showOverrideCheckbox) &&
+          {(moduleConfig != undefined || !showOverrideCheckbox) &&
             (collapsibleConfig ? (
               <Disclosure title="Configuration" openedInitially>
                 <ModuleConfigSelect
