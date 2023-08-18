@@ -257,7 +257,7 @@ export default function ExperimentSubmissionsSelect({
                     moveSubmissionsNumber,
                     trainingSubmissions.length ?? 0
                   )}{" "}
-                  to Excluded →
+                  to Excluded ←
                 </button>
                 <button
                   disabled={
@@ -309,7 +309,7 @@ export default function ExperimentSubmissionsSelect({
                   moveSubmissionsNumber,
                   evaluationSubmissions?.length ?? 0
                 )}{" "}
-                to Excluded →
+                to Excluded ←
               </button>
               {trainingSubmissions !== undefined && (
                 <button
@@ -327,7 +327,7 @@ export default function ExperimentSubmissionsSelect({
                     moveSubmissionsNumber,
                     evaluationSubmissions?.length ?? 0
                   )}{" "}
-                  to Training →
+                  to Training ←
                 </button>
               )}
             </div>
