@@ -261,9 +261,8 @@ export default function ConfigureModules({
                       onClick={() => {
                         setModuleConfigurationsState((prevState) => {
                           const newState = [...prevState];
-                          const temp = newState[index - 1];
-                          newState[index - 1] = newState[index];
-                          newState[index] = temp;
+                          // swap places
+                          [newState[index - 1], newState[index]] = [newState[index], newState[index - 1]];
                           return newState;
                         });
                         slide("prev");
