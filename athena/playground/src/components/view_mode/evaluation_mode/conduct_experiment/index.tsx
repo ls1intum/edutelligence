@@ -118,6 +118,13 @@ export default function ConductExperiment({
     );
   };
 
+  useEffect(() => {
+    if (!scrollSliderRef.current) return;
+    const scroll = scrollSliderRef.current;
+    scroll.addEventListener("scroll", checkScroll);
+    return () => scroll.removeEventListener("scroll", checkScroll);
+  }, [scrollSliderRef]);
+
   const slide = (direction: "prev" | "next") => {
     if (!scrollSliderRef.current) return;
     const moveAmount = scrollSliderRef.current.clientWidth * 0.4;
@@ -132,13 +139,6 @@ export default function ConductExperiment({
       slider.scrollBy({ left: -moveAmount, behavior: "smooth" });
     }
   };
-
-  useEffect(() => {
-    if (!scrollSliderRef.current) return;
-    const scroll = scrollSliderRef.current;
-    scroll.addEventListener("scroll", checkScroll);
-    return () => scroll.removeEventListener("scroll", checkScroll);
-  }, [scrollSliderRef]);
 
   return (
     <FullScreen
