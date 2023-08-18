@@ -51,6 +51,7 @@ async def suggest_feedback_basic(exercise: Exercise, submission: Submission, con
             feedback_credits = float(row["credits"])
         except (ValueError, TypeError):
             logger.warning("Could not parse credits from row %s", row)
+            traceback.print_exc()
             continue
 
         index_start, index_end = parse_line_number_reference_as_span(row["reference"], submission.text)
