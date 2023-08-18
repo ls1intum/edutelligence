@@ -130,7 +130,7 @@ const ConductBatchModuleExperiment = React.forwardRef<
                 ) : moduleExperiment.data.step !== undefined ? (
                   <span className="rounded-full bg-yellow-500 text-white px-2 py-0.5 text-xs">
                     {moduleExperiment.continueAfterTraining ?
-                      <>Waiting&nbsp;for&nbsp;Continue</>
+                      <>Waiting&nbsp;to&nbsp;Continue</>
                     : <>In&nbsp;Progress</>
                     }
                   </span>
