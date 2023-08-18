@@ -37,7 +37,7 @@ type ExperimentExport = {
   exerciseType: string;
   exerciseId: number;
   executionMode: ExecutionMode;
-  trainingSubmissionIds: number[] | undefined;
+  trainingSubmissionIds?: number[];
   evaluationSubmissionIds: number[];
 };
 
