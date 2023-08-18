@@ -6,10 +6,9 @@ import { UseQueryOptions, useQuery } from "react-query";
 import baseUrl from "@/helpers/base_url";
 import { useBaseInfo } from "@/hooks/base_info_context";
 
-export function fetchSubmissions(exercise: Exercise, dataMode: DataMode) {
-  return fetch(`${baseUrl}/api/data/${dataMode}/exercise/${exercise.id}/submissions`).then(
-    (res) => res.json() as Promise<Submission[]>
-  );
+export async function fetchSubmissions(exercise: Exercise, dataMode: DataMode) {
+  const response = await fetch(`${baseUrl}/api/data/${dataMode}/exercise/${exercise.id}/submissions`);
+  return await response.json() as Promise<Submission[]>;
 }
 
 /**

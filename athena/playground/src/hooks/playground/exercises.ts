@@ -5,10 +5,9 @@ import { UseQueryOptions, useQuery } from "react-query";
 import baseUrl from "@/helpers/base_url";
 import { useBaseInfo } from "@/hooks/base_info_context";
 
-export function fetchExercises(dataMode: DataMode) {
-  return fetch(`${baseUrl}/api/data/${dataMode}/exercises`).then(
-    (res) => res.json() as Promise<Exercise[]>
-  );
+export async function fetchExercises(dataMode: DataMode) {
+  const response = await fetch(`${baseUrl}/api/data/${dataMode}/exercises`);
+  return await response.json() as Promise<Exercise[]>;
 }
 
 /**

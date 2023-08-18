@@ -7,15 +7,19 @@ import { UseQueryOptions, useQuery } from "react-query";
 import baseUrl from "@/helpers/base_url";
 import { useBaseInfo } from "@/hooks/base_info_context";
 
-export function fetchFeedbacks(exercise: Exercise | undefined, submission: Submission | undefined, dataMode: DataMode) {
-  return fetch(`${baseUrl}/api/data/${dataMode}/${exercise ? `exercise/${exercise.id}/` : ""}feedbacks`).then(
-    (res) => res.json() as Promise<Feedback[]>
-  ).then((feedbacks) => {
-    if (submission) {
-      return feedbacks.filter((feedback) => feedback.submission_id === submission.id);
-    }
-    return feedbacks;
-  });
+export async function fetchFeedbacks(
+  exercise: Exercise | undefined,
+  submission: Submission | undefined,
+  dataMode: DataMode
+) {
+  const response = await fetch(
+    `${baseUrl}/api/data/${dataMode}/${exercise ? `exercise/${exercise.id}/` : ""}feedbacks`
+  );
+  const feedbacks = await response.json() as Feedback[];
+  if (submission) {
+    return feedbacks.filter((feedback) => feedback.submission_id === submission.id);
+  }
+  return feedbacks;
 }
 
 /**
