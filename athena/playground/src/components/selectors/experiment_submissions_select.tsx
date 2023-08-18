@@ -27,7 +27,7 @@ export default function ExperimentSubmissionsSelect({
   const { data, error, isLoading } = useSubmissions(exercise);
   const { data: feedbacks } = useFeedbacks(exercise);
 
-  const [sumbissionsSelectType, setSumbissionsSelectType] = useState<
+  const [submissionsSelectType, setSubmissionsSelectType] = useState<
     "random" | "next"
   >("random");
   const [moveSubmissionsNumber, setMoveSubmissionsNumber] =
@@ -49,13 +49,17 @@ export default function ExperimentSubmissionsSelect({
     data?.filter((submission) => !isSubmissionUsed(submission)) ?? [];
 
   const takeFromSubmissions = (submissions: Submission[]) => {
-    if (sumbissionsSelectType === "random") {
+    if (submissionsSelectType === "random") {
       return [...submissions]
         .sort(() => 0.5 - Math.random())
         .slice(0, moveSubmissionsNumber);
     } else {
       return [...submissions].slice(0, moveSubmissionsNumber);
     }
+  };
+
+  const movableSubmissionsFrom = (submissions: Submission[] | undefined) => {
+    return Math.min(moveSubmissionsNumber, submissions?.length ?? 0);
   };
 
   const moveSubmissions = (
@@ -77,15 +81,11 @@ export default function ExperimentSubmissionsSelect({
           ...moveSubmissions,
         ]);
       }
-    } else if (
-      from === "training" &&
-      trainingSubmissions
-    ) {
+    } else if (from === "training" && trainingSubmissions) {
       const moveSubmissions = takeFromSubmissions(trainingSubmissions);
-      const newTrainingSubmissions =
-        trainingSubmissions.filter(
-          (submission) => !moveSubmissions.some((s) => s.id === submission.id)
-        );
+      const newTrainingSubmissions = trainingSubmissions.filter(
+        (submission) => !moveSubmissions.some((s) => s.id === submission.id)
+      );
       if (to === "excluded") {
         onChangeTrainingSubmissions(newTrainingSubmissions);
       } else if (to === "evaluation") {
@@ -95,15 +95,11 @@ export default function ExperimentSubmissionsSelect({
           ...moveSubmissions,
         ]);
       }
-    } else if (
-      from === "evaluation" &&
-      evaluationSubmissions
-    ) {
+    } else if (from === "evaluation" && evaluationSubmissions) {
       const moveSubmissions = takeFromSubmissions(evaluationSubmissions);
-      const newEvaluationSubmissions =
-        evaluationSubmissions.filter(
-          (submission) => !moveSubmissions.some((s) => s.id === submission.id)
-        );
+      const newEvaluationSubmissions = evaluationSubmissions.filter(
+        (submission) => !moveSubmissions.some((s) => s.id === submission.id)
+      );
       if (to === "excluded") {
         onChangeEvaluationSubmissions(newEvaluationSubmissions);
       } else if (to === "training") {
@@ -125,7 +121,7 @@ export default function ExperimentSubmissionsSelect({
             <input
               disabled={disabled}
               type="checkbox"
-              checked={trainingSubmissions !== undefined}
+              checked={trainingSubmissions != undefined}
               onChange={(e) => {
                 if (e.target.checked) {
                   onChangeTrainingSubmissions([]);
@@ -148,8 +144,8 @@ export default function ExperimentSubmissionsSelect({
                       type="radio"
                       value=""
                       className="mr-2"
-                      checked={sumbissionsSelectType === "random"}
-                      onChange={() => setSumbissionsSelectType("random")}
+                      checked={submissionsSelectType === "random"}
+                      onChange={() => setSubmissionsSelectType("random")}
                     />
                     random
                   </label>
@@ -159,8 +155,8 @@ export default function ExperimentSubmissionsSelect({
                     <input
                       type="radio"
                       className="mr-2"
-                      checked={sumbissionsSelectType === "next"}
-                      onChange={() => setSumbissionsSelectType("next")}
+                      checked={submissionsSelectType === "next"}
+                      onChange={() => setSubmissionsSelectType("next")}
                     />
                     next
                   </label>
@@ -187,43 +183,23 @@ export default function ExperimentSubmissionsSelect({
       )}
       <div className="flex gap-2">
         <div className="flex-1 p-1 space-y-1">
-        {!disabled && (
+          {!disabled && (
             <div className="justify-between flex items-center">
-              {trainingSubmissions !== undefined && (
+              {trainingSubmissions != undefined && (
                 <button
-                  disabled={
-                    Math.min(
-                      moveSubmissionsNumber,
-                      excludedSubmissions.length ?? 0
-                    ) === 0
-                  }
+                  disabled={movableSubmissionsFrom(excludedSubmissions) === 0}
                   className="rounded-md p-2 text-primary-500 hover:text-primary-600 hover:bg-primary-100 disabled:text-gray-500 disabled:cursor-not-allowed disabled:hover:bg-gray-100"
                   onClick={() => moveSubmissions("excluded", "training")}
                 >
-                  Move{" "}
-                  {Math.min(
-                    moveSubmissionsNumber,
-                    excludedSubmissions.length ?? 0
-                  )}{" "}
-                  to Training →
+                  Move {movableSubmissionsFrom(excludedSubmissions)} to Training →
                 </button>
               )}
               <button
-                disabled={
-                  Math.min(
-                    moveSubmissionsNumber,
-                    excludedSubmissions.length ?? 0
-                  ) === 0
-                }
+                disabled={movableSubmissionsFrom(excludedSubmissions) === 0}
                 className="rounded-md p-2 text-primary-500 hover:text-primary-600 hover:bg-primary-100 disabled:text-gray-500 disabled:cursor-not-allowed disabled:hover:bg-gray-100"
                 onClick={() => moveSubmissions("excluded", "evaluation")}
               >
-                Move{" "}
-                {Math.min(
-                  moveSubmissionsNumber,
-                  excludedSubmissions.length ?? 0
-                )}{" "}
-                to Evaluation →
+                Move {movableSubmissionsFrom(excludedSubmissions)} to Evaluation →
               </button>
             </div>
           )}
@@ -238,49 +214,29 @@ export default function ExperimentSubmissionsSelect({
             feedbacks={feedbacks}
           />
         </div>
-        {trainingSubmissions !== undefined && (
+        {trainingSubmissions != undefined && (
           <div className="flex-1 p-1 space-y-1">
             {!disabled && (
               <div className="justify-between flex items-center">
                 <button
-                  disabled={
-                    Math.min(
-                      moveSubmissionsNumber,
-                      trainingSubmissions.length ?? 0
-                    ) === 0
-                  }
+                  disabled={movableSubmissionsFrom(trainingSubmissions) === 0}
                   className="rounded-md p-2 text-red-500 hover:text-red-600 hover:bg-red-100 disabled:text-gray-500 disabled:cursor-not-allowed disabled:hover:bg-gray-100"
                   onClick={() => moveSubmissions("training", "excluded")}
                 >
-                  Move{" "}
-                  {Math.min(
-                    moveSubmissionsNumber,
-                    trainingSubmissions.length ?? 0
-                  )}{" "}
-                  to Excluded ←
+                  ← Move {movableSubmissionsFrom(trainingSubmissions)} to Excluded
                 </button>
                 <button
-                  disabled={
-                    Math.min(
-                      moveSubmissionsNumber,
-                      trainingSubmissions.length ?? 0
-                    ) === 0
+                  disabled={movableSubmissionsFrom(trainingSubmissions) === 0
                   }
                   className="rounded-md p-2 text-red-500 hover:text-red-600 hover:bg-red-100 disabled:text-gray-500 disabled:cursor-not-allowed disabled:hover:bg-gray-100"
                   onClick={() => moveSubmissions("training", "evaluation")}
                 >
-                  Move{" "}
-                  {Math.min(
-                    moveSubmissionsNumber,
-                    trainingSubmissions.length ?? 0
-                  )}{" "}
-                  to Evaluation →
+                  Move {movableSubmissionsFrom(trainingSubmissions)} to Evaluation →
                 </button>
               </div>
             )}
             <div className="text-base font-medium border-b border-gray-300 mb-2">
-              Training ({trainingSubmissions.length ?? 0}{" "}
-              Submissions)
+              Training ({trainingSubmissions.length ?? 0} Submissions)
             </div>
             <p className="text-sm text-gray-500 mb-2">
               Sent for training before running evaluation.
@@ -292,50 +248,28 @@ export default function ExperimentSubmissionsSelect({
           </div>
         )}
         <div className="flex-1 p-1 space-y-1">
-        {!disabled && (
+          {!disabled && (
             <div className="justify-between flex items-center">
               <button
-                disabled={
-                  Math.min(
-                    moveSubmissionsNumber,
-                    evaluationSubmissions?.length ?? 0
-                  ) === 0
-                }
+                disabled={movableSubmissionsFrom(evaluationSubmissions) === 0}
                 className="rounded-md p-2 text-red-500 hover:text-red-600 hover:bg-red-100 disabled:text-gray-500 disabled:cursor-not-allowed disabled:hover:bg-gray-100"
                 onClick={() => moveSubmissions("evaluation", "excluded")}
               >
-                Move{" "}
-                {Math.min(
-                  moveSubmissionsNumber,
-                  evaluationSubmissions?.length ?? 0
-                )}{" "}
-                to Excluded ←
+                ← Move {movableSubmissionsFrom(evaluationSubmissions)} to Excluded
               </button>
-              {trainingSubmissions !== undefined && (
+              {trainingSubmissions != undefined && (
                 <button
-                  disabled={
-                    Math.min(
-                      moveSubmissionsNumber,
-                      evaluationSubmissions?.length ?? 0
-                    ) === 0
-                  }
+                  disabled={movableSubmissionsFrom(evaluationSubmissions) === 0}
                   className="rounded-md p-2 text-red-500 hover:text-red-600 hover:bg-red-100 disabled:text-gray-500 disabled:cursor-not-allowed disabled:hover:bg-gray-100"
                   onClick={() => moveSubmissions("evaluation", "training")}
                 >
-                  Move{" "}
-                  {Math.min(
-                    moveSubmissionsNumber,
-                    evaluationSubmissions?.length ?? 0
-                  )}{" "}
-                  to Training ←
+                  ← Move {movableSubmissionsFrom(evaluationSubmissions)} to Training
                 </button>
               )}
             </div>
           )}
           <div className="text-base font-medium border-b border-gray-300 mb-2">
-            Evaluation (
-            {evaluationSubmissions?.length ?? 0}{" "}
-            Submissions)
+            Evaluation ({evaluationSubmissions?.length ?? 0} Submissions)
           </div>
           <p className="text-sm text-gray-500 mb-2">
             Run the experiment on the evaluation submissions.
