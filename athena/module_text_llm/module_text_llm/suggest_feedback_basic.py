@@ -1,4 +1,5 @@
 from typing import List, Optional, Sequence
+from pydantic import BaseModel, Field
 
 from langchain.chat_models import ChatOpenAI
 from langchain.chains import LLMChain
@@ -9,19 +10,14 @@ from langchain.prompts import (
 )
 from langchain.output_parsers import PydanticOutputParser, OutputFixingParser
 from langchain.schema.output_parser import OutputParserException
+from langchain.chains.openai_functions import create_structured_output_chain
 
 from athena import emit_meta
 from athena.text import Exercise, Submission, Feedback
 from athena.logger import logger
-from pydantic import BaseModel, Field
+
 from module_text_llm.config import BasicApproachConfig
-
 from module_text_llm.helpers.utils import add_sentence_numbers, get_index_range_from_line_range, num_tokens_from_string
-
-
-from langchain.chains.openai_functions import (
-    create_structured_output_chain,
-)
 
 class FeedbackModel(BaseModel):
     title: str = Field(..., description="Very short title, i.e. feedback category", example="Logic Error")
