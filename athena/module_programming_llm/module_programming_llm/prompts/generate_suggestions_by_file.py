@@ -9,9 +9,6 @@ human_template = """\
 Problem statement:
 {problem_statement}
 
-Example solution:
-{example_solution}
-
 Grading instructions:
 {grading_instructions}
 Max points: {max_points}, bonus points: {bonus_points}

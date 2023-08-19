@@ -1,4 +1,5 @@
 from typing import List, Optional, Sequence
+import os
 import asyncio
 from pydantic import BaseModel, Field
 
@@ -80,11 +81,15 @@ async def generate_suggestions_by_file(exercise: Exercise, submission: Submissio
         file_path=None, 
         name_only=True
     ).split("\n")
+    changed_files_from_template_to_submission = [
+        os.path.join(str(submission_repo.working_tree_dir or ""), file_path)
+        for file_path in changed_files_from_template_to_submission
+    ]
 
     # Changed text files
     changed_files = load_files_from_repo(
         submission_repo, 
-        file_filter=lambda x: x in changed_files_from_template_to_submission
+        file_filter=lambda file_path: file_path in changed_files_from_template_to_submission
     )
 
     for file_path, file_content in changed_files.items():
