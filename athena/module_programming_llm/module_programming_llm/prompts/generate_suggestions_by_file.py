@@ -16,8 +16,8 @@ Grading instructions:
 {grading_instructions}
 Max points: {max_points}, bonus points: {bonus_points}
 
-Student\'s submission to grade (with line numbers <number>: <line>):
-{submission}
+Student\'s submission file to grade (with line numbers <number>: <line>):
+{submission_file}
 
 Diff between solution (deletions) and student\'s submission (additions):
 {solution_to_submission_diff}

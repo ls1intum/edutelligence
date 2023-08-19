@@ -114,30 +114,11 @@ def get_chat_prompt_with_formatting_instructions(
     return ChatPromptTemplate.from_messages([system_message_prompt, human_message_prompt])
 
 
-def predict_and_parse(model: BaseLanguageModel, chat_prompt: ChatPromptTemplate, prompt_input: dict, pydantic_object: Type[T]):
+async def predict_and_parse(model: BaseLanguageModel, chat_prompt: ChatPromptTemplate, prompt_input: dict, pydantic_object: Type[T]):
     """Predicts and parses the output of the model
 
     Args:
         model (BaseLanguageModel): The model to predict with
-        chat_prompt (ChatPromptTemplate): Prompt to use
-        prompt_input (dict): Input parameters to use for the prompt
-        pydantic_object (Type[T]): Pydantic model to parse the output
-    """
-    if supports_function_calling(model):
-        chain = create_structured_output_chain(pydantic_object, llm=model, prompt=chat_prompt)
-        return chain.run(**prompt_input)
-    
-    output_parser = OutputFixingParser.from_llm(parser=PydanticOutputParser(pydantic_object=pydantic_object), llm=model)
-    chain = LLMChain(llm=model, prompt=chat_prompt)
-    output = chain.run(**prompt_input)
-    return output_parser.parse(output)
-
-
-async def agenerate_and_parse(model: BaseLanguageModel, chat_prompt: ChatPromptTemplate, prompt_input: dict, pydantic_object: Type[T]):
-    """Generates and parses the output of the model
-
-    Args:
-        model (BaseLanguageModel): The model to generate with
         chat_prompt (ChatPromptTemplate): Prompt to use
         prompt_input (dict): Input parameters to use for the prompt
         pydantic_object (Type[T]): Pydantic model to parse the output
