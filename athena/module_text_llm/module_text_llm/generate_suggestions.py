@@ -1,22 +1,17 @@
 from typing import List, Optional, Sequence
 from pydantic import BaseModel, Field
 
-from langchain.chat_models import ChatOpenAI
-from langchain.chains import LLMChain
-from langchain.prompts import (
-    ChatPromptTemplate,
-    SystemMessagePromptTemplate,
-    HumanMessagePromptTemplate,
-)
-from langchain.output_parsers import PydanticOutputParser, OutputFixingParser
-from langchain.schema.output_parser import OutputParserException
-from langchain.chains.openai_functions import create_structured_output_chain
-
 from athena import emit_meta
 from athena.text import Exercise, Submission, Feedback
 from athena.logger import logger
 
 from module_text_llm.config import BasicApproachConfig
+from module_text_llm.helpers.llm_utils import (
+    get_chat_prompt_with_formatting_instructions, 
+    check_prompt_length_and_omit_features_if_necessary, 
+    num_tokens_from_prompt,
+    predict_and_parse
+)
 from module_text_llm.helpers.utils import add_sentence_numbers, get_index_range_from_line_range, num_tokens_from_string
 
 class FeedbackModel(BaseModel):
@@ -39,35 +34,6 @@ class AssessmentModel(BaseModel):
         title = "Assessment"
 
 
-def check_token_length_and_omit_from_input_if_necessary(prompt: ChatPromptTemplate, prompt_input, max_input_tokens: int, debug: bool):
-    if num_tokens_from_string(prompt.format(**prompt_input)) <= max_input_tokens:
-        return prompt_input, True
-
-    omitted_features = []        
-
-    # Input is too long -> Try to omit example_solution
-    if "example_solution" in prompt_input:
-        prompt_input["example_solution"] = "omitted"
-        omitted_features.append("example_solution")
-        if num_tokens_from_string(prompt.format(**prompt_input)) <= max_input_tokens:
-            if debug:
-                emit_meta("omitted_features", omitted_features)
-            return prompt_input, True
-        
-    # Input is still too long -> Try to omit problem_statement
-    if "problem_statement" in prompt_input:
-        prompt_input["problem_statement"] = "omitted"
-        omitted_features.append("problem_statement")
-        if num_tokens_from_string(prompt.format(**prompt_input)) <= max_input_tokens:
-            if debug:
-                emit_meta("omitted_features", omitted_features)
-            return prompt_input, True
-
-    # Input is still too long -> Model should not run 
-    return prompt_input, False
-
-
-# pylint: disable-msg=too-many-locals
 async def generate_suggestions(exercise: Exercise, submission: Submission, config: BasicApproachConfig, debug: bool) -> List[Feedback]:
     model = config.model.get_model()
 
@@ -80,46 +46,37 @@ async def generate_suggestions(exercise: Exercise, submission: Submission, confi
         "submission": add_sentence_numbers(submission.text)
     }
 
-    supports_function_calling = isinstance(model, ChatOpenAI)
+    chat_prompt = get_chat_prompt_with_formatting_instructions(
+        model=model, 
+        system_message=config.generate_suggestions_prompt.system_message, 
+        human_message=config.generate_suggestions_prompt.human_message, 
+        pydantic_object=AssessmentModel
+    )
 
-    # Output parser for non-function-calling models
-    output_parser = OutputFixingParser.from_llm(parser=PydanticOutputParser(pydantic_object=AssessmentModel), llm=model)
-    
-    # Prepare prompt
-    if supports_function_calling:
-        system_message_prompt = SystemMessagePromptTemplate.from_template(config.generate_suggestions_prompt.system_message)
-        human_message_prompt = HumanMessagePromptTemplate.from_template(config.generate_suggestions_prompt.human_message)
-    else:
-        system_message_prompt = SystemMessagePromptTemplate.from_template(config.generate_suggestions_prompt.system_message + "\n{format_instructions}")
-        system_message_prompt.prompt.partial_variables = {"format_instructions": output_parser.get_format_instructions()}
-        system_message_prompt.prompt.input_variables.remove("format_instructions")
-        human_message_prompt = HumanMessagePromptTemplate.from_template(config.generate_suggestions_prompt.human_message + "\nJSON Response:")
-    chat_prompt = ChatPromptTemplate.from_messages([system_message_prompt, human_message_prompt])
+    # Check if the prompt is too long and omit features if necessary (in order of importance)
+    omittable_features = ["example_solution", "problem_statement", "grading_instructions"]
+    prompt_input, should_run = check_prompt_length_and_omit_features_if_necessary(
+        prompt=chat_prompt,
+        prompt_input= prompt_input,
+        max_input_tokens=config.max_input_tokens,
+        omittable_features=omittable_features,
+        debug=debug
+    )
 
-    prompt_input, should_run = check_token_length_and_omit_from_input_if_necessary(chat_prompt, prompt_input, config.max_input_tokens, debug)
+    # Skip if the prompt is too long
     if not should_run:
         logger.warning("Input too long. Skipping.")
         if debug:
             emit_meta("prompt", chat_prompt.format(**prompt_input))
-            emit_meta("error", "Input too long. Skipping.")
-        
-        # Return early since we cannot run the model
+            emit_meta("error", f"Input too long {num_tokens_from_prompt(chat_prompt, prompt_input)} > {config.max_input_tokens}")
         return []
 
-    if supports_function_calling:        
-        chain = create_structured_output_chain(AssessmentModel, llm=model, prompt=chat_prompt)
-        result = chain.run(**prompt_input)
-    else:
-        chain = LLMChain(llm=model, prompt=chat_prompt)
-        output = chain.run(**prompt_input)
-
-        try:
-            result = output_parser.parse(output)
-        except OutputParserException as e:
-            logger.warning("Could not parse and fix output: %s", e)
-            result = AssessmentModel(feedbacks=[])
-            if debug:
-                emit_meta("parsing_error", output)
+    result = predict_and_parse(
+        model=model, 
+        chat_prompt=chat_prompt, 
+        prompt_input=prompt_input, 
+        pydantic_object=AssessmentModel
+    )
 
     if debug:
         emit_meta("prompt", chat_prompt.format(**prompt_input))
@@ -128,8 +85,6 @@ async def generate_suggestions(exercise: Exercise, submission: Submission, confi
     for feedback in result.feedbacks:
         index_start, index_end = get_index_range_from_line_range(feedback.line_start, feedback.line_end, submission.text)
         feedbacks.append(Feedback(
-            id=None,
-            grading_instruction_id=None,
             exercise_id=exercise.id,
             submission_id=submission.id,
             title=feedback.title,
