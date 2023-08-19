@@ -14,7 +14,7 @@ from module_programming_llm.helpers.llm_utils import (
     num_tokens_from_string,
     predict_and_parse,
 )
-from module_programming_llm.helpers.utils import(
+from module_programming_llm.helpers.utils import (
     get_diff,
     load_files_from_repo, 
     add_line_numbers, 
