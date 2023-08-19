@@ -34,7 +34,7 @@ def add_line_numbers(content: str) -> str:
     )
 
 
-def get_file_extension(programming_language: str) -> str | None:
+def get_programming_language_file_extension(programming_language: str) -> str | None:
     # JAVA, C, OCAML, HASKELL, PYTHON, SWIFT, VHDL, ASSEMBLER, EMPTY, KOTLIN
     file_extensions = {
         "JAVA": ".java",
