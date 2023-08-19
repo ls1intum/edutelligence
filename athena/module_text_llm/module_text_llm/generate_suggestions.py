@@ -87,13 +87,13 @@ async def generate_suggestions(exercise: Exercise, submission: Submission, confi
     
     # Prepare prompt
     if supports_function_calling:
-        system_message_prompt = SystemMessagePromptTemplate.from_template(config.prompt.system_message)
-        human_message_prompt = HumanMessagePromptTemplate.from_template(config.prompt.human_message)
+        system_message_prompt = SystemMessagePromptTemplate.from_template(config.generate_suggestions_prompt.system_message)
+        human_message_prompt = HumanMessagePromptTemplate.from_template(config.generate_suggestions_prompt.human_message)
     else:
-        system_message_prompt = SystemMessagePromptTemplate.from_template(config.prompt.system_message + "\n{format_instructions}")
+        system_message_prompt = SystemMessagePromptTemplate.from_template(config.generate_suggestions_prompt.system_message + "\n{format_instructions}")
         system_message_prompt.prompt.partial_variables = {"format_instructions": output_parser.get_format_instructions()}
         system_message_prompt.prompt.input_variables.remove("format_instructions")
-        human_message_prompt = HumanMessagePromptTemplate.from_template(config.prompt.human_message + "\nJSON Response:")
+        human_message_prompt = HumanMessagePromptTemplate.from_template(config.generate_suggestions_prompt.human_message + "\nJSON Response:")
     chat_prompt = ChatPromptTemplate.from_messages([system_message_prompt, human_message_prompt])
 
     prompt_input, should_run = check_token_length_and_omit_from_input_if_necessary(chat_prompt, prompt_input, config.max_input_tokens, debug)
