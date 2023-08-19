@@ -68,7 +68,7 @@ def check_token_length_and_omit_from_input_if_necessary(prompt: ChatPromptTempla
 
 
 # pylint: disable-msg=too-many-locals
-async def suggest_feedback_basic(exercise: Exercise, submission: Submission, config: BasicApproachConfig, debug: bool) -> List[Feedback]:
+async def generate_suggestions(exercise: Exercise, submission: Submission, config: BasicApproachConfig, debug: bool) -> List[Feedback]:
     model = config.model.get_model()
 
     prompt_input = {
