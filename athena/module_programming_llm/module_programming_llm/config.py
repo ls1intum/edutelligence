@@ -18,10 +18,11 @@ from module_programming_llm.prompts.split_problem_statement_by_file import (
 
 class SplitProblemStatementsByFilePrompt(BaseModel):
     """\
-Features available: **{problem_statement}**, **{changed_files}**\
+Features available: **{problem_statement}**, **{changed_files_from_template_to_solution}**, **{changed_files_from_template_to_submission}**
 
 *Note: `changed_files` are the changed files between template and solution repository.*\
 """
+    tokens_before_split: int = Field(default=250, description="Split the problem statement into file-based ones after this number of tokens.")
     system_message: str = Field(default=split_problem_statements_by_file_system_template,
                                 description="Message for priming AI behavior and instructing it what to do.")
     human_message: str = Field(default=split_problem_statements_by_file_human_template,
@@ -30,10 +31,9 @@ Features available: **{problem_statement}**, **{changed_files}**\
 
 class SplitGradingInstructionsByFilePrompt(BaseModel):
     """\
-Features available: **{grading_instructions}**, **{changed_files}**
-
-*Note: `changed_files` are the changed files between template and solution repository.*\
+Features available: **{grading_instructions}**, **{changed_files_from_template_to_solution}**, **{changed_files_from_template_to_submission}**
 """
+    tokens_before_split: int = Field(default=250, description="Split the grading instructions into file-based ones after this number of tokens.")
     system_message: str = Field(default=split_grading_instructions_by_file_template,
                                 description="Message for priming AI behavior and instructing it what to do.")
     human_message: str = Field(default=split_grading_instructions_by_file_human_template,
