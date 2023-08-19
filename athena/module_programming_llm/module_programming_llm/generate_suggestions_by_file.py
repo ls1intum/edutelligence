@@ -1,17 +1,25 @@
 from typing import List, Optional, Sequence
-
+import asyncio
 from pydantic import BaseModel, Field
-from langchain.chains.openai_functions import create_structured_output_chain
 
 from athena import emit_meta
 from athena.programming import Exercise, Submission, Feedback
-from athena.logger import logger
 
 from module_programming_llm.config import BasicApproachConfig
-from module_programming_llm.split_grading_instructions_by_file import generate_and_store_split_grading_instructions_if_needed
-from module_programming_llm.split_problem_statement_by_file import generate_and_store_split_problem_statement_if_needed
-from module_programming_llm.helpers.llm_utils import check_prompt_length_and_omit_features_if_necessary, get_chat_prompt_with_formatting_instructions
-from module_programming_llm.helpers.utils import get_diff, get_programming_language_file_extension, load_files_from_repo, add_line_numbers
+from module_programming_llm.split_grading_instructions_by_file import split_grading_instructions_by_file
+from module_programming_llm.split_problem_statement_by_file import split_problem_statement_by_file
+from module_programming_llm.helpers.llm_utils import (
+    check_prompt_length_and_omit_features_if_necessary, 
+    get_chat_prompt_with_formatting_instructions,
+    num_tokens_from_string,
+    predict_and_parse,
+)
+from module_programming_llm.helpers.utils import(
+    get_diff,
+    load_files_from_repo, 
+    add_line_numbers, 
+    get_programming_language_file_extension
+)
 
 
 class FeedbackModel(BaseModel):
@@ -38,13 +46,26 @@ class AssessmentModel(BaseModel):
 async def generate_suggestions_by_file(exercise: Exercise, submission: Submission, config: BasicApproachConfig, debug: bool) -> List[Feedback]:
     model = config.model.get_model()
 
-    # Get split grading instructions
-    split_grading_instructions = generate_and_store_split_grading_instructions_if_needed(exercise=exercise, config=config, debug=debug)
-    file_grading_instructions = { item.file_name: item.grading_instructions for item in split_grading_instructions.instructions }
+    # Get split problem statement and grading instructions by file (if necessary)
+    split_problem_statement, split_grading_instructions = await asyncio.gather(
+        split_problem_statement_by_file(exercise=exercise, submission=submission, config=config, debug=debug),
+        split_grading_instructions_by_file(exercise=exercise, submission=submission, config=config, debug=debug)
+    )
 
-    # Get split problem statement
-    split_problem_statement = generate_and_store_split_problem_statement_if_needed(exercise=exercise, config=config, debug=debug)
-    file_problem_statements = { item.file_name: item.problem_statement for item in split_problem_statement.problem_statements }
+    is_short_problem_statement = num_tokens_from_string(exercise.problem_statement) <= config.split_problem_statement_by_file_prompt.tokens_before_split
+    file_problem_statements = { 
+        item.file_name: item.problem_statement 
+        for item in split_problem_statement.file_problem_statements 
+    } if split_problem_statement is not None else {}
+
+    is_short_grading_instructions = (
+        num_tokens_from_string(exercise.grading_instructions) <= config.split_grading_instructions_by_file_prompt.tokens_before_split 
+        if exercise.grading_instructions is not None else True
+    )
+    file_grading_instructions = { 
+        item.file_name: item.grading_instructions 
+        for item in split_grading_instructions.file_grading_instructions 
+    } if split_grading_instructions is not None else {}
 
     prompt_inputs: List[dict] = []
     
@@ -53,33 +74,64 @@ async def generate_suggestions_by_file(exercise: Exercise, submission: Submissio
     template_repo = exercise.get_template_repository()
     submission_repo = submission.get_repository()
     
-    file_extension = get_programming_language_file_extension(exercise.programming_language)
-    if file_extension is None:
-        raise ValueError(f"Could not determine file extension for programming language {exercise.programming_language}.")
+    changed_files_from_template_to_submission = get_diff(
+        src_repo=template_repo, 
+        dst_repo=submission_repo, 
+        file_path=None, 
+        name_only=True
+    ).split("\n")
 
-    files = load_files_from_repo(
+    # Changed text files
+    changed_files = load_files_from_repo(
         submission_repo, 
-        file_filter=lambda x: x.endswith(file_extension) if file_extension else False
+        file_filter=lambda x: x in changed_files_from_template_to_submission
     )
 
-    for file_path, content in files.items():
-        if content is None:
-            continue
-        
-        problem_statement = file_problem_statements.get(file_path, "No relevant problem statement section found.")
-        grading_instructions = file_grading_instructions.get(file_path, "No relevant grading instructions found.")
+    for file_path, file_content in changed_files.items():
+        problem_statement = (
+            exercise.problem_statement if is_short_problem_statement 
+            else file_problem_statements.get(file_path, "No relevant problem statement section found.")
+        )
+        problem_statement = problem_statement if problem_statement.strip() else "No problem statement found."
 
-        content = add_line_numbers(content)
-        solution_to_submission_diff = get_diff(src_repo=solution_repo, dst_repo=submission_repo, src_prefix="solution", dst_prefix="submission", file_path=file_path)
-        template_to_submission_diff = get_diff(src_repo=template_repo, dst_repo=submission_repo, src_prefix="template", dst_prefix="submission", file_path=file_path)
+        grading_instructions = (
+            exercise.grading_instructions or "" if is_short_grading_instructions
+            else file_grading_instructions.get(file_path, "No relevant grading instructions found.")
+        )
+        grading_instructions = grading_instructions if grading_instructions.strip() else "No grading instructions found."
+
+        file_content = add_line_numbers(file_content)
+        solution_to_submission_diff = get_diff(
+            src_repo=solution_repo, 
+            dst_repo=submission_repo, 
+            src_prefix="solution", 
+            dst_prefix="submission", 
+            file_path=file_path
+        )
+        template_to_submission_diff = get_diff(
+            src_repo=template_repo, 
+            dst_repo=submission_repo, 
+            src_prefix="template", 
+            dst_prefix="submission", 
+            file_path=file_path
+        )
+        template_to_solution_diff = get_diff(
+            src_repo=template_repo, 
+            dst_repo=solution_repo, 
+            src_prefix="template", 
+            dst_prefix="solution", 
+            file_path=file_path
+        )
 
         prompt_inputs.append({
             "file_path": file_path,
-            "submission": content,
+            "priority": len(template_to_solution_diff),
+            "submission_file": file_content,
             "max_points": exercise.max_points,
             "bonus_points": exercise.bonus_points,
             "solution_to_submission_diff": solution_to_submission_diff,
             "template_to_submission_diff": template_to_submission_diff,
+            "template_to_solution_diff": template_to_solution_diff,
             "grading_instructions": grading_instructions,
             "problem_statement": problem_statement,
         })
@@ -93,11 +145,15 @@ async def generate_suggestions_by_file(exercise: Exercise, submission: Submissio
 
     # Filter long prompts (omitting features if necessary)
     omittable_features = [
+        "template_to_solution_diff", # If it is even set (has the lowest priority since it is indirectly included in other diffs)
         "problem_statement", 
         "grading_instructions",
+        "solution_to_submission_diff",
         "template_to_submission_diff",
-        "solution_to_submission_diff"
     ]
+    # "submission_file" is not omittable, because it is the main input containing the line numbers
+    # In the future we might be able to include the line numbers in the diff, but for now we need to keep it
+
     prompt_inputs = [
         omitted_prompt_input for omitted_prompt_input, should_run in
         [check_prompt_length_and_omit_features_if_necessary(
@@ -110,70 +166,64 @@ async def generate_suggestions_by_file(exercise: Exercise, submission: Submissio
         if should_run
     ]
 
-    chain = create_structured_output_chain(AssessmentModel, llm=model, prompt=chat_prompt)
-    if not prompt_inputs:
-        return []
-    result = await chain.agenerate(prompt_inputs)
+    # If we have many files we need to filter and prioritize them
+    if len(prompt_inputs) > config.max_number_of_files:
+        programming_language_extension = get_programming_language_file_extension(programming_language=exercise.programming_language)
 
-    logger.info("Generated result: %s ", result)
+        # Prioritize files that have a diff between solution and submission
+        prompt_inputs = sorted(
+            prompt_inputs, 
+            key=lambda x: x["priority"], 
+            reverse=True
+        )
 
-    return []
-    # return predict_and_parse(
-    #     model=model, 
-    #     chat_prompt=chat_prompt, 
-    #     prompt_input={
-    #         "grading_instructions": exercise.grading_instructions, 
-    #         "changed_files": changed_files
-    #     }, 
-    #     pydantic_object=SplitGradingInstructions
-    # )
+        filtered_prompt_inputs = []
+        if programming_language_extension is not None:
+            filtered_prompt_inputs = [
+                prompt_input 
+                for prompt_input in prompt_inputs 
+                if prompt_input["file_path"].endswith(programming_language_extension)
+            ]
 
+        while len(filtered_prompt_inputs) < config.max_number_of_files and prompt_inputs:
+            filtered_prompt_inputs.append(prompt_inputs.pop(0))
+        prompt_inputs = filtered_prompt_inputs
+   
+    results: List[AssessmentModel] = await asyncio.gather(*[
+        predict_and_parse(
+            model=model, 
+            chat_prompt=chat_prompt, 
+            prompt_input=prompt_input, 
+            pydantic_object=AssessmentModel
+        ) for prompt_input in prompt_inputs
+    ])
 
+    if debug:
+        emit_meta(
+            "generate_suggestions", [
+                {
+                    "file_path": prompt_input["file_path"],
+                    "prompt": chat_prompt.format(**prompt_input),
+                    "result": result.dict()
+                }
+                for prompt_input, result in zip(prompt_inputs, results)
+            ]
+        )
 
+    feedbacks: List[Feedback] = []
+    for prompt_input, result in zip(prompt_inputs, results):
+        file_path = prompt_input["file_path"]
+        for feedback in result.feedbacks:
+            feedbacks.append(Feedback(
+                exercise_id=exercise.id,
+                submission_id=submission.id,
+                title=feedback.title,
+                description=feedback.description,
+                file_path=file_path,
+                line_start=feedback.line_start,
+                line_end=feedback.line_end,
+                credits=feedback.credits,
+                meta={}
+            ))
 
-
-# async def suggest_feedback(exercise: Exercise, submission: Submission) -> List[Feedback]:
-    
-#     # Filter long prompts
-#     input_list = [input for input in input_list if chat.get_num_tokens_from_messages(chat_prompt.format_messages(**input)) <= max_prompt_length]
-
-#     # Completion
-#     chain = LLMChain(llm=chat, prompt=chat_prompt)
-#     if not input_list:
-#         return []
-#     result = await chain.agenerate(input_list)
-    
-#     # Parse result
-#     feedback_proposals: List[Feedback] = []
-#     for input, generations in zip(input_list, result.generations):
-#         file_path = input["file_path"]
-#         for generation in generations:
-#             try:
-#                 feedbacks = json.loads(generation.text)
-#             except json.JSONDecodeError:
-#                 logger.error("Failed to parse feedback json: %s", generation.text)
-#                 continue
-#             if not isinstance(feedbacks, list):
-#                 logger.error("Feedback json is not a list: %s", generation.text)
-#                 continue
-
-#             for feedback in feedbacks:
-#                 line = feedback.get("line", None)
-#                 description = feedback.get("text", None)
-#                 credits = feedback.get("credits", 0.0)
-#                 feedback_proposals.append(
-#                     Feedback(
-#                         id=None,
-#                         exercise_id=exercise.id,
-#                         submission_id=submission.id,
-#                         title="Feedback",
-#                         description=description,
-#                         file_path=file_path,
-#                         line_start=line,
-#                         line_end=None,
-#                         credits=credits,
-#                         meta={},
-#                     )
-#                 )
-
-#     return feedback_proposals
+    return feedbacks

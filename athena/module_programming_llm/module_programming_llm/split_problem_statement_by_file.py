@@ -83,7 +83,7 @@ async def split_problem_statement_by_file(
     if num_tokens_from_prompt(chat_prompt, prompt_input) > config.max_input_tokens:
         return None
 
-    split_problem_statement = predict_and_parse(
+    split_problem_statement = await predict_and_parse(
         model=model, 
         chat_prompt=chat_prompt, 
         prompt_input=prompt_input,

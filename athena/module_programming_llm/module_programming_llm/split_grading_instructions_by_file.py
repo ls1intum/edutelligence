@@ -84,7 +84,7 @@ async def split_grading_instructions_by_file(
     if num_tokens_from_prompt(chat_prompt, prompt_input) > config.max_input_tokens:
         return None
 
-    split_grading_instructions = predict_and_parse(
+    split_grading_instructions = await predict_and_parse(
         model=model, 
         chat_prompt=chat_prompt, 
         prompt_input=prompt_input, 

@@ -43,9 +43,9 @@ Features available: **{grading_instructions}**, **{changed_files_from_template_t
 class GenerationPrompt(BaseModel):
     """\
 Features available: **{problem_statement}**, **{grading_instructions}**, **{max_points}**, **{bonus_points}**, \
-**{submission}**, **{solution_to_submission_diff}**, **{template_to_submission_diff}**
+**{submission_file}**, **{solution_to_submission_diff}**, **{template_to_submission_diff}**, **{template_to_solution_diff}**
 
-*Note: Prompt will be applied per file independently, submission is a single file.*\
+*Note: Prompt will be applied per file independently. Also, you don't have to include all features, e.g. template_to_solution_diff.*\
 """
     system_message: str = Field(default=generate_suggestions_by_file_system_template,
                                 description="Message for priming AI behavior and instructing it what to do.")
@@ -58,6 +58,7 @@ class BasicApproachConfig(BaseModel):
     max_input_tokens: int = Field(default=3000, description="Maximum number of tokens in the input prompt.")
     model: ModelConfigType = Field(default=DefaultModelConfig())  # type: ignore
     
+    max_number_of_files: int = Field(default=25, description="Maximum number of files.")
     split_problem_statement_by_file_prompt: SplitProblemStatementsByFilePrompt = Field(default=SplitProblemStatementsByFilePrompt())
     split_grading_instructions_by_file_prompt: SplitGradingInstructionsByFilePrompt = Field(default=SplitGradingInstructionsByFilePrompt())
     generate_suggestions_by_file_prompt: GenerationPrompt = Field(default=GenerationPrompt())
