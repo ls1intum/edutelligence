@@ -3,16 +3,16 @@ from athena import emit_meta
 
 from pydantic import BaseModel, Field
 
-from athena.programming import Exercise
-from athena.storage import store_exercise
-from athena.logger import logger
+from athena.programming import Exercise, Submission
 
 from module_programming_llm.config import BasicApproachConfig
-from module_programming_llm.helpers.llm_utils import get_chat_prompt_with_formatting_instructions, num_tokens_from_prompt, predict_and_parse
-from module_programming_llm.helpers.utils import get_diff, get_programming_language_file_extension
-
-
-FILE_GRADING_INSTRUCTIONS_KEY = "file_grading_instructions"
+from module_programming_llm.helpers.llm_utils import (
+    get_chat_prompt_with_formatting_instructions, 
+    num_tokens_from_string, 
+    num_tokens_from_prompt, 
+    predict_and_parse
+)
+from module_programming_llm.helpers.utils import get_diff
 
 
 class FileGradingInstruction(BaseModel):
@@ -22,34 +22,50 @@ class FileGradingInstruction(BaseModel):
 
 class SplitGradingInstructions(BaseModel):
     """Collection of grading instructions split by file"""
-    instructions: Sequence[FileGradingInstruction] = Field(..., description="File grading instructions")
+    file_grading_instructions: Sequence[FileGradingInstruction] = Field(..., description="File grading instructions")
 
 
-def split_grading_instructions_by_file(exercise: Exercise, config: BasicApproachConfig, debug: bool) -> SplitGradingInstructions:
+async def split_grading_instructions_by_file(
+        exercise: Exercise, 
+        submission: Submission,
+        config: BasicApproachConfig, 
+        debug: bool
+    ) -> Optional[SplitGradingInstructions]:
     """Split the general grading instructions by file
 
     Args:
-        exercise (Exercise): Exercise to split the grading instructions for
+        exercise (Exercise): Exercise to split the grading instructions for (respecting the changed files)
+        submission (Submission): Submission to split the grading instructions for (respecting the changed files)
         config (BasicApproachConfig): Configuration
 
     Returns:
-        SplitGradingInstructions: Grading instructions split by file, empty if input was too long
+        Optional[SplitGradingInstructions]: Split grading instructions, None if it is too short or too long
     """
-    if exercise.grading_instructions is None or exercise.grading_instructions.strip() == "":
-        return SplitGradingInstructions(instructions=[])
+
+    # Return None if the grading instructions are too short
+    if (exercise.grading_instructions is None 
+            or num_tokens_from_string(exercise.grading_instructions) <= config.split_problem_statement_by_file_prompt.tokens_before_split):
+        return None
     
     model = config.model.get_model()
     
-    solution_repo = exercise.get_solution_repository()
     template_repo = exercise.get_template_repository()
-    file_extension = get_programming_language_file_extension(exercise.programming_language) or ""
-    changed_files = get_diff(src_repo=template_repo, dst_repo=solution_repo, file_path=f"*{file_extension}", name_only=True)
+    solution_repo = exercise.get_solution_repository()
+    submission_repo = submission.get_repository()
 
-    # logger.info("Exercise: %s", file_extension)
-    # logger.info("Changed files: %s", changed_files)
-    # logger.info("Solution repo: %s", solution_repo)
-    # logger.info("Template repo: %s", template_repo)
-    # solution_to_submission_diff = get_diff(src_repo=solution_repo, dst_repo=submission_repo, src_prefix="solution", dst_prefix="submission", file_path=file_path)
+    changed_files_from_template_to_solution = get_diff(
+        src_repo=template_repo, 
+        dst_repo=solution_repo, 
+        file_path=None, 
+        name_only=True
+    ).split("\n")
+
+    changed_files_from_template_to_submission = get_diff(
+        src_repo=template_repo, 
+        dst_repo=submission_repo, 
+        file_path=None, 
+        name_only=True
+    ).split("\n")
 
     chat_prompt = get_chat_prompt_with_formatting_instructions(
         model=model, 
@@ -60,15 +76,13 @@ def split_grading_instructions_by_file(exercise: Exercise, config: BasicApproach
 
     prompt_input = {
         "grading_instructions": exercise.grading_instructions, 
-        "changed_files": changed_files
+        "changed_files_from_template_to_solution": ", ".join(changed_files_from_template_to_solution),
+        "changed_files_from_template_to_submission": ", ".join(changed_files_from_template_to_submission)
     }
 
-    # If the input is too long, return an empty SplitGradingInstructions object
-    prompt_length = num_tokens_from_prompt(chat_prompt, prompt_input)
-    if prompt_length > config.max_input_tokens:
-        if debug:
-            emit_meta(f"{FILE_GRADING_INSTRUCTIONS_KEY}_error", f"Input too long: {prompt_length} > {config.max_input_tokens}")
-        return SplitGradingInstructions(instructions=[])
+    # Return None if the prompt is too long
+    if num_tokens_from_prompt(chat_prompt, prompt_input) > config.max_input_tokens:
+        return None
 
     split_grading_instructions = predict_and_parse(
         model=model, 
@@ -78,25 +92,12 @@ def split_grading_instructions_by_file(exercise: Exercise, config: BasicApproach
     )
 
     if debug:
-        emit_meta(f"{FILE_GRADING_INSTRUCTIONS_KEY}_data", split_grading_instructions.dict())
+        emit_meta("file_problem_statement", {
+            "prompt": chat_prompt.format(**prompt_input),
+            "result": split_grading_instructions.dict()
+        })
 
-    return split_grading_instructions
+    if not split_grading_instructions.file_grading_instructions:
+        return None
 
-
-def generate_and_store_split_grading_instructions_if_needed(exercise: Exercise, config: BasicApproachConfig, debug: bool) -> SplitGradingInstructions:
-    """Generate and store the split grading instructions if needed
-
-    Args:
-        exercise (Exercise): Exercise to get the split grading instructions for
-        config (BasicApproachConfig): Configuration
-
-    Returns:
-        SplitGradingInstructions: Grading instructions split by file
-    """
-    if FILE_GRADING_INSTRUCTIONS_KEY in exercise.meta:
-        return SplitGradingInstructions.parse_obj(exercise.meta[FILE_GRADING_INSTRUCTIONS_KEY])
-
-    split_grading_instructions = split_grading_instructions_by_file(exercise=exercise, config=config, debug=debug)
-    exercise.meta[FILE_GRADING_INSTRUCTIONS_KEY] = split_grading_instructions.dict()
-    store_exercise(exercise)
     return split_grading_instructions
