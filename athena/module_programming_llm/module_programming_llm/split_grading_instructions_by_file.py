@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field
 
 from athena.programming import Exercise
 from athena.storage import store_exercise
+from athena.logger import logger
 
 from module_programming_llm.config import BasicApproachConfig
 from module_programming_llm.helpers.llm_utils import get_chat_prompt_with_formatting_instructions, num_tokens_from_prompt, predict_and_parse
@@ -43,6 +44,12 @@ def split_grading_instructions_by_file(exercise: Exercise, config: BasicApproach
     template_repo = exercise.get_template_repository()
     file_extension = get_programming_language_file_extension(exercise.programming_language) or ""
     changed_files = get_diff(src_repo=template_repo, dst_repo=solution_repo, file_path=f"*{file_extension}", name_only=True)
+
+    # logger.info("Exercise: %s", file_extension)
+    # logger.info("Changed files: %s", changed_files)
+    # logger.info("Solution repo: %s", solution_repo)
+    # logger.info("Template repo: %s", template_repo)
+    # solution_to_submission_diff = get_diff(src_repo=solution_repo, dst_repo=submission_repo, src_prefix="solution", dst_prefix="submission", file_path=file_path)
 
     chat_prompt = get_chat_prompt_with_formatting_instructions(
         model=model, 
