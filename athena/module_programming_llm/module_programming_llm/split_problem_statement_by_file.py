@@ -1,17 +1,18 @@
-from typing import Sequence
+from typing import Optional, Sequence
 from athena import emit_meta
 
 from pydantic import BaseModel, Field
 
-from athena.programming import Exercise
-from athena.storage import store_exercise
+from athena.programming import Exercise, Submission
 
 from module_programming_llm.config import BasicApproachConfig
-from module_programming_llm.helpers.llm_utils import get_chat_prompt_with_formatting_instructions, num_tokens_from_prompt, predict_and_parse
-from module_programming_llm.helpers.utils import get_diff, get_programming_language_file_extension
-
-
-FILE_PROBLEM_STATEMETS_KEY = "file_problem_statements"
+from module_programming_llm.helpers.llm_utils import (
+    get_chat_prompt_with_formatting_instructions, 
+    num_tokens_from_string, 
+    num_tokens_from_prompt, 
+    predict_and_parse
+)
+from module_programming_llm.helpers.utils import get_diff
 
 
 class FileProblemStatement(BaseModel):
@@ -21,28 +22,49 @@ class FileProblemStatement(BaseModel):
 
 class SplitProblemStatement(BaseModel):
     """Collection of problem statements split by file"""
-    problem_statements: Sequence[FileProblemStatement] = Field(..., description="File problem statements")
+    file_problem_statements: Sequence[FileProblemStatement] = Field(..., description="File problem statements")
 
 
-def split_problem_statement_by_file(exercise: Exercise, config: BasicApproachConfig, debug: bool) -> SplitProblemStatement:
+async def split_problem_statement_by_file(
+        exercise: Exercise, 
+        submission: Submission, 
+        config: BasicApproachConfig, 
+        debug: bool
+    ) -> Optional[SplitProblemStatement]:
     """Split the general problem statement by file
 
     Args:
-        exercise (Exercise): Exercise to split the problem statement for
+        exercise (Exercise): Exercise to split the problem statement for (respecting the changed files)
+        submission (Submission): Submission to split the problem statement for (respecting the changed files)
         config (BasicApproachConfig): Configuration
 
     Returns:
-        SplitProblemStatement: Problem statement split by file, empty if input was too long
+        Optional[SplitProblemStatement]: Split problem statement, None if it is too short or too long
     """
-    if exercise.problem_statement.strip() == "":
-        return SplitProblemStatement(problem_statements=[])
     
+    # Return None if the problem statement is too short
+    if num_tokens_from_string(exercise.problem_statement) <= config.split_problem_statement_by_file_prompt.tokens_before_split:
+        return None
+
     model = config.model.get_model()
-    
-    solution_repo = exercise.get_solution_repository()
+
     template_repo = exercise.get_template_repository()
-    file_extension = get_programming_language_file_extension(exercise.programming_language) or ""
-    changed_files = get_diff(src_repo=template_repo, dst_repo=solution_repo, file_path=f"*{file_extension}", name_only=True)
+    solution_repo = exercise.get_solution_repository()
+    submission_repo = submission.get_repository()
+
+    changed_files_from_template_to_solution = get_diff(
+        src_repo=template_repo, 
+        dst_repo=solution_repo, 
+        file_path=None, 
+        name_only=True
+    ).split("\n")
+
+    changed_files_from_template_to_submission = get_diff(
+        src_repo=template_repo, 
+        dst_repo=submission_repo, 
+        file_path=None, 
+        name_only=True
+    ).split("\n")
 
     chat_prompt = get_chat_prompt_with_formatting_instructions(
         model=model, 
@@ -50,18 +72,16 @@ def split_problem_statement_by_file(exercise: Exercise, config: BasicApproachCon
         human_message=config.split_problem_statement_by_file_prompt.system_message,
         pydantic_object=SplitProblemStatement
     )
-
+    
     prompt_input = {
         "problem_statement": exercise.problem_statement,
-        "changed_files": changed_files
+        "changed_files_from_template_to_solution": ", ".join(changed_files_from_template_to_solution),
+        "changed_files_from_template_to_submission": ", ".join(changed_files_from_template_to_submission)
     }
 
-    # If the input is too long, return an empty SplitProblemStatement object
-    prompt_length = num_tokens_from_prompt(chat_prompt, prompt_input)
-    if prompt_length > config.max_input_tokens:
-        if debug:
-            emit_meta(f"{FILE_PROBLEM_STATEMETS_KEY}_error", f"Input too long: {prompt_length} > {config.max_input_tokens}")
-        return SplitProblemStatement(problem_statements=[])
+    # Return None if the prompt is too long
+    if num_tokens_from_prompt(chat_prompt, prompt_input) > config.max_input_tokens:
+        return None
 
     split_problem_statement = predict_and_parse(
         model=model, 
@@ -71,25 +91,12 @@ def split_problem_statement_by_file(exercise: Exercise, config: BasicApproachCon
     )
 
     if debug:
-        emit_meta(f"{FILE_PROBLEM_STATEMETS_KEY}_data", split_problem_statement.dict())
+        emit_meta("file_problem_statement", {
+            "prompt": chat_prompt.format(**prompt_input),
+            "result": split_problem_statement.dict()
+        })
 
-    return split_problem_statement
+    if not split_problem_statement.file_problem_statements:
+        return None
 
-
-def generate_and_store_split_problem_statement_if_needed(exercise: Exercise, config: BasicApproachConfig, debug: bool) -> SplitProblemStatement:
-    """Generate and store the split problem statement if needed
-
-    Args:
-        exercise (Exercise): Exercise to split the problem statement for
-        config (BasicApproachConfig): Configuration
-
-    Returns:
-        SplitProblemStatement: Problem statement split by file
-    """
-    if FILE_PROBLEM_STATEMETS_KEY in exercise.meta:
-        return SplitProblemStatement.parse_obj(exercise.meta[FILE_PROBLEM_STATEMETS_KEY])
-
-    split_problem_statement = split_problem_statement_by_file(exercise=exercise, config=config, debug=debug)
-    exercise.meta[FILE_PROBLEM_STATEMETS_KEY] = split_problem_statement.dict()
-    store_exercise(exercise)
     return split_problem_statement

@@ -8,17 +8,11 @@ from athena.logger import logger
 from module_programming_llm.config import Configuration
 
 from module_programming_llm.generate_suggestions_by_file import generate_suggestions_by_file
-from module_programming_llm.split_grading_instructions_by_file import generate_and_store_split_grading_instructions_if_needed
-from module_programming_llm.split_problem_statement_by_file import generate_and_store_split_problem_statement_if_needed
 
 
 @submissions_consumer
-def receive_submissions(exercise: Exercise, submissions: List[Submission], module_config: Configuration):
+def receive_submissions(exercise: Exercise, submissions: List[Submission]):
     logger.info("receive_submissions: Received %d submissions for exercise %d", len(submissions), exercise.id)
-
-    # Split problem statements and grading instructions for later
-    generate_and_store_split_problem_statement_if_needed(exercise=exercise, config=module_config.approach, debug=module_config.debug)
-    generate_and_store_split_grading_instructions_if_needed(exercise=exercise, config=module_config.approach, debug=module_config.debug)
 
 
 @submission_selector
