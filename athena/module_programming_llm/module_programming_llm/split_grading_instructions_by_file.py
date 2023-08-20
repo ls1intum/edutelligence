@@ -1,10 +1,10 @@
 from typing import Optional, Sequence
-from athena import emit_meta
+from collections import defaultdict
 
 from pydantic import BaseModel, Field
-
 from langchain.prompts import ChatPromptTemplate
 
+from athena import emit_meta
 from athena.programming import Exercise, Submission
 
 from module_programming_llm.config import BasicApproachConfig
@@ -107,5 +107,21 @@ async def split_grading_instructions_by_file(
 
     if not split_grading_instructions.file_grading_instructions:
         return None
+
+    # Join duplicate file names (some responses contain multiple grading instructions for the same file)
+    file_grading_instructions_by_file_name = defaultdict(list)
+    for file_grading_instruction in split_grading_instructions.file_grading_instructions:
+        file_grading_instructions_by_file_name[file_grading_instruction.file_name].append(file_grading_instruction)
+
+    split_grading_instructions.file_grading_instructions = [
+        FileGradingInstruction(
+            file_name=file_name,
+            grading_instructions="\n".join(
+                file_grading_instruction.grading_instructions
+                for file_grading_instruction in file_grading_instructions
+            )
+        )
+        for file_name, file_grading_instructions in file_grading_instructions_by_file_name.items()
+    ]
 
     return split_grading_instructions
