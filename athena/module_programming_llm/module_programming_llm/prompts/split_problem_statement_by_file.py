@@ -11,7 +11,7 @@ Problem statement:
 Changed files from template to sample solution:
 {changed_files_from_template_to_solution}
 
-Changed files from template to student submission:
+Changed files from template to student submission (Pick from this list, very important!):
 {changed_files_from_template_to_submission}
 
 Problem statement by file:
