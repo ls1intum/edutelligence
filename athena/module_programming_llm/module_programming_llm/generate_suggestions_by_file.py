@@ -136,8 +136,8 @@ async def generate_suggestions_by_file(exercise: Exercise, submission: Submissio
         )
 
         prompt_inputs.append({
-            "file_path": file_path,
-            "priority": len(template_to_solution_diff),
+            "file_path": file_path, # Not really relevant for the prompt
+            "priority": len(template_to_solution_diff), # Not really relevant for the prompt
             "submission_file": file_content,
             "max_points": exercise.max_points,
             "bonus_points": exercise.bonus_points,
@@ -149,15 +149,15 @@ async def generate_suggestions_by_file(exercise: Exercise, submission: Submissio
         })
     
     # Filter long prompts (omitting features if necessary)
+    # "submission_file" is not omittable, because it is the main input containing the line numbers
+    # In the future we might be able to include the line numbers in the diff, but for now we need to keep it
     omittable_features = [
-        "template_to_solution_diff", # If it is even set (has the lowest priority since it is indirectly included in other diffs)
+        "template_to_solution_diff", # If it is even included in the prompt (has the lowest priority since it is indirectly included in other diffs)
         "problem_statement", 
         "grading_instructions",
         "solution_to_submission_diff",
-        "template_to_submission_diff",
+        "template_to_submission_diff", # In the future we might indicate the changed lines in the submission_file additionally
     ]
-    # "submission_file" is not omittable, because it is the main input containing the line numbers
-    # In the future we might be able to include the line numbers in the diff, but for now we need to keep it
 
     prompt_inputs = [
         omitted_prompt_input for omitted_prompt_input, should_run in
