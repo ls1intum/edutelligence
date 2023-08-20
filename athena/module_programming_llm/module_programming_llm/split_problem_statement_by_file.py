@@ -99,7 +99,7 @@ async def split_problem_statement_by_file(
     )
 
     if debug:
-        emit_meta("file_problem_statement", {
+        emit_meta("file_problem_statements", {
             "prompt": chat_prompt.format(**prompt_input),
             "result": split_problem_statement.dict()
         })
