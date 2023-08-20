@@ -2,7 +2,7 @@
 import inspect
 from fastapi import Depends
 from pydantic import BaseModel, ValidationError
-from typing import TypeVar, Callable, List, Union, Any, Coroutine, Type
+from typing import TypeVar, Callable, List, Dict, Union, Any, Coroutine, Type
 
 from athena.app import app
 from athena.authenticate import authenticated
@@ -58,11 +58,11 @@ def submissions_consumer(func: Union[
 
         With using module config (both synchronous and asynchronous forms):
         >>> @submissions_consumer
-        ... def sync_receive_submissions_with_config(exercise: Exercise, submissions: List[Submission], module_config: Optional[dict]):
+        ... def sync_receive_submissions_with_config(exercise: Exercise, submissions: List[Submission], module_config: Configuration):
         ...     # process submissions synchronously here using module_config
 
         >>> @submissions_consumer
-        ... async def async_receive_submissions_with_config(exercise: Exercise, submissions: List[Submission], module_config: Optional[dict]):
+        ... async def async_receive_submissions_with_config(exercise: Exercise, submissions: List[Submission], module_config: Configuration):
         ...     # process submissions asynchronously here using module_config
     """
     exercise_type = inspect.signature(func).parameters["exercise"].annotation
@@ -140,11 +140,11 @@ def submission_selector(func: Union[
 
         With using module config (both synchronous and asynchronous forms):
         >>> @submission_selector
-        ... def sync_select_submission_with_config(exercise: Exercise, submissions: List[Submission], module_config: Optional[dict]):
+        ... def sync_select_submission_with_config(exercise: Exercise, submissions: List[Submission], module_config: Configuration):
         ...     # process submissions here using module_config and return the chosen submission
 
         >>> @submission_selector
-        ... async def async_select_submission_with_config(exercise: Exercise, submissions: List[Submission], module_config: Optional[dict]):
+        ... async def async_select_submission_with_config(exercise: Exercise, submissions: List[Submission], module_config: Configuration):
         ...     # process submissions here using module_config and return the chosen submission
     """
     exercise_type = inspect.signature(func).parameters["exercise"].annotation
@@ -227,11 +227,11 @@ def feedback_consumer(func: Union[
 
         With using module config (both synchronous and asynchronous forms):
         >>> @feedback_consumer
-        ... def sync_process_feedback_with_config(exercise: Exercise, submission: Submission, feedbacks: List[Feedback], module_config: Optional[dict]):
+        ... def sync_process_feedback_with_config(exercise: Exercise, submission: Submission, feedbacks: List[Feedback], module_config: Configuration):
         ...     # process feedback here using module_config
 
         >>> @feedback_consumer
-        ... async def async_process_feedback_with_config(exercise: Exercise, submission: Submission, feedbacks: List[Feedback], module_config: Optional[dict]):
+        ... async def async_process_feedback_with_config(exercise: Exercise, submission: Submission, feedbacks: List[Feedback], module_config: Configuration):
         ...     # process feedback here using module_config
     """
     exercise_type = inspect.signature(func).parameters["exercise"].annotation
@@ -298,11 +298,11 @@ def feedback_provider(func: Union[
 
         With using module config (both synchronous and asynchronous forms):
         >>> @feedback_provider
-        ... def sync_suggest_feedback_with_config(exercise: Exercise, submission: Submission, module_config: Optional[dict]):
+        ... def sync_suggest_feedback_with_config(exercise: Exercise, submission: Submission, module_config: Configuration):
         ...     # suggest feedback here using module_config and return it as a list
 
         >>> @feedback_provider
-        ... async def async_suggest_feedback_with_config(exercise: Exercise, submission: Submission, module_config: Optional[dict]):
+        ... async def async_suggest_feedback_with_config(exercise: Exercise, submission: Submission, module_config: Configuration):
         ...     # suggest feedback here using module_config and return it as a list
     """
     exercise_type = inspect.signature(func).parameters["exercise"].annotation
@@ -368,25 +368,32 @@ def config_schema_provider(cls: Type[C]) -> Type[C]:
 
 
 def evaluation_provider(func: Union[
-    Callable[[E, S, List[F], List[F]], List[F]],
-    Callable[[E, S, List[F], List[F]], Coroutine[Any, Any, List[F]]]
+    Callable[[E, S, List[F], List[F]], Dict[str, Any]],
+    Callable[[E, S, List[F], List[F]], Coroutine[Any, Any, Dict[str, Any]]]
 ]):
     """
     Provide evaluated feedback to the Assessment Module Manager.
-    The evaluation provider is usually called while doing research and development by the Playground.
+    The evaluation provider is usually called during the research and development phase (by the Playground).
 
     This decorator can be used with several types of functions: synchronous or asynchronous.
+    The module_config is not available because it should somewhat statically be defined.
 
     Examples:
         Below are some examples of possible functions that you can decorate with this decorator:
 
         Without using module config (both synchronous and asynchronous forms):
         >>> @evaluation_provider
-        ... def sync_evaluate_feedback(exercise: Exercise, submission: Submission, true_feedbacks: List[Feedback], predicted_feedbacks: List[Feedback]):
+        ... def sync_evaluate_feedback(
+        ...     exercise: Exercise, submission: Submission, 
+        ...     true_feedbacks: List[Feedback], predicted_feedbacks: List[Feedback]
+        ... ) -> Dict[str, Any]:
         ...     # evaluate predicted feedback here and return it as a list
 
         >>> @feedback_provider
-        ... async def async_evaluate_feedback(exercise: Exercise, submission: Submission, true_feedbacks: List[Feedback], predicted_feedbacks: List[Feedback]):
+        ... async def async_evaluate_feedback(
+        ...     exercise: Exercise, submission: Submission, 
+        ...     true_feedbacks: List[Feedback], predicted_feedbacks: List[Feedback]
+        ... ) -> Dict[str, Any]:
         ...     # evaluate predicted feedback here and return it as a list
     """
     exercise_type = inspect.signature(func).parameters["exercise"].annotation
@@ -400,16 +407,16 @@ def evaluation_provider(func: Union[
         # Retrieve existing metadata for the exercise, submission and feedback
         exercise.meta.update(get_stored_exercise_meta(exercise) or {})
         submission.meta.update(get_stored_submission_meta(submission) or {})
-        # true_feedbacks = [feedback.update(get_stored_feedback_meta(feedback) or {}) for feedback in true_feedbacks]
-        # predicted_feedbacks = [feedback.update(get_stored_feedback_meta(feedback) or {}) for feedback in predicted_feedbacks]
+        for feedback in true_feedbacks:
+            feedback.meta.update(get_stored_feedback_meta(feedback) or {})
+        for feedback in predicted_feedbacks:
+            feedback.meta.update(get_stored_feedback_meta(feedback) or {})
 
         # Call the actual provider
         if inspect.iscoroutinefunction(func):
-            evaluated_feedbacks = await func(exercise, submission, true_feedbacks, predicted_feedbacks)
+            evaluation = await func(exercise, submission, true_feedbacks, predicted_feedbacks)
         else:
-            evaluated_feedbacks = func(exercise, submission, true_feedbacks, predicted_feedbacks)
+            evaluation = func(exercise, submission, true_feedbacks, predicted_feedbacks)
 
-        # Store evaluated feedback
-        evaluated_feedbacks = store_feedbacks(evaluated_feedbacks)
-        return evaluated_feedbacks
+        return evaluation
     return wrapper

@@ -26,35 +26,6 @@ def get_stored_feedback_meta(feedback: Feedback) -> Optional[dict]:
         return db.query(db_feedback_cls.meta).filter_by(id=feedback.id).scalar()  # type: ignore
 
 
-def store_feedbacks(feedbacks: List[Feedback], is_lms_id=False) -> List[Feedback]:
-    """Stores the given LMS feedbacks.
-
-    Args:
-        feedbacks (List[Feedback]): The feedbacks to store.
-        is_lms_id (bool, optional): Whether the feedbacks' ID is an LMS ID. Defaults to False.
-
-    Returns:
-        List[Feedback]: The stored feedbacks
-    """
-    if not feedbacks:
-        return []
-    
-    stored_feedbacks: List[Feedback] = []
-    db_feedback_cls = feedbacks[0].__class__.get_model_class()
-    with get_db() as db:
-        for feedback in feedbacks:
-            lms_id = None
-            if is_lms_id:
-                lms_id = feedback.id
-                internal_id = db.query(db_feedback_cls.id).filter_by(lms_id=lms_id).scalar()  # type: ignore
-                feedback.id = internal_id
-            stored_feedback_model = db.merge(feedback.to_model(lms_id=lms_id))
-            db.flush()
-            stored_feedbacks.append(stored_feedback_model.to_schema())
-        db.commit()
-    return stored_feedbacks
-
-
 def store_feedback(feedback: Feedback, is_lms_id=False) -> Feedback:
     """Stores the given LMS feedback.
 
@@ -65,7 +36,17 @@ def store_feedback(feedback: Feedback, is_lms_id=False) -> Feedback:
     Returns:
         Feedback: The stored feedback with its internal ID assigned.
     """
-    return store_feedbacks([feedback], is_lms_id)[0]
+    db_feedback_cls = feedback.__class__.get_model_class()
+    with get_db() as db:
+        lms_id = None
+        if is_lms_id:
+            lms_id = feedback.id
+            internal_id = db.query(db_feedback_cls.id).filter_by(lms_id=lms_id).scalar()  # type: ignore
+            feedback.id = internal_id
+
+        stored_feedback_model = db.merge(feedback.to_model(lms_id=lms_id))
+        db.commit()
+        return stored_feedback_model.to_schema()
 
 
 def get_stored_feedback_suggestions(
