@@ -24,7 +24,7 @@ class FileGradingInstruction(BaseModel):
 
 class SplitGradingInstructions(BaseModel):
     """Collection of grading instructions split by file"""
-    file_grading_instructions: Sequence[FileGradingInstruction] = Field(..., description="File grading instructions")
+    items: Sequence[FileGradingInstruction] = Field(..., description="File grading instructions")
 
 
 # pylint: disable=too-many-locals
@@ -106,15 +106,15 @@ async def split_grading_instructions_by_file(
             "result": split_grading_instructions.dict()
         })
 
-    if not split_grading_instructions.file_grading_instructions:
+    if not split_grading_instructions.items:
         return None
 
     # Join duplicate file names (some responses contain multiple grading instructions for the same file)
     file_grading_instructions_by_file_name = defaultdict(list)
-    for file_grading_instruction in split_grading_instructions.file_grading_instructions:
+    for file_grading_instruction in split_grading_instructions.items:
         file_grading_instructions_by_file_name[file_grading_instruction.file_name].append(file_grading_instruction)
 
-    split_grading_instructions.file_grading_instructions = [
+    split_grading_instructions.items = [
         FileGradingInstruction(
             file_name=file_name,
             grading_instructions="\n".join(
