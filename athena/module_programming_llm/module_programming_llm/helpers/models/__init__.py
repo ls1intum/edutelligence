@@ -1,6 +1,6 @@
 import os
 from typing import Type, Union, List
-from module_text_llm.helpers.models.model_config import ModelConfig
+from module_programming_llm.helpers.models.model_config import ModelConfig
 
 
 DefaultModelConfig: Type[ModelConfig]
@@ -8,7 +8,7 @@ default_model_name = os.environ.get("LLM_DEFAULT_MODEL")
 
 types: List[Type[ModelConfig]] = []
 try:
-    import module_text_llm.helpers.models.openai as openai_config
+    import module_programming_llm.helpers.models.openai as openai_config
     types.append(openai_config.OpenAIModelConfig)
     if default_model_name in openai_config.available_models:
         DefaultModelConfig = openai_config.OpenAIModelConfig
@@ -16,7 +16,7 @@ except AttributeError:
     pass
 
 try:
-    import module_text_llm.helpers.models.replicate as replicate_config
+    import module_programming_llm.helpers.models.replicate as replicate_config
     types.append(replicate_config.ReplicateModelConfig)
     if default_model_name in replicate_config.available_models:
         DefaultModelConfig = replicate_config.ReplicateModelConfig

@@ -1,22 +1,27 @@
 from pydantic import BaseModel, Field
 
 from athena import config_schema_provider
-from module_text_llm.helpers.models.openai import OpenAIModelConfig
-from .prompts.suggest_feedback_basic import system_template, human_template
+from module_text_llm.helpers.models import ModelConfigType, DefaultModelConfig
+from module_text_llm.prompts.generate_suggestions import system_template, human_template
 
 
-class BasicPrompt(BaseModel):
-    """Features available: **{problem_statement}**, **{grading_instructions}**, **{submission}**, **{max_points}**, **{bonus_points}**"""
+class GenerateSuggestionsPrompt(BaseModel):
+    """\
+Features available: **{problem_statement}**, **{example_solution}**, **{grading_instructions}**, **{max_points}**, **{bonus_points}**, **{submission}**
+
+_Note: **{problem_statement}**, **{example_solution}**, or **{grading_instructions}** might be omitted if the input is too long._\
+"""
     system_message: str = Field(default=system_template,
-                                description="A Message for priming AI behavior, usually passed in as the first of a sequence of input messages.")
+                                description="Message for priming AI behavior and instructing it what to do.")
     human_message: str = Field(default=human_template,
-                               description="A Message from a human. Usually the input on which the AI is supposed to act.")
+                               description="Message from a human. The input on which the AI is supposed to act.")
 
 
 class BasicApproachConfig(BaseModel):
     """This approach uses a LLM with a single prompt to generate feedback in a single step."""
-    model: OpenAIModelConfig = Field(default=OpenAIModelConfig()) # type: ignore
-    prompt: BasicPrompt = Field(default=BasicPrompt())
+    max_input_tokens: int = Field(default=3000, description="Maximum number of tokens in the input prompt.")
+    model: ModelConfigType = Field(default=DefaultModelConfig()) # type: ignore
+    generate_suggestions_prompt: GenerateSuggestionsPrompt = Field(default=GenerateSuggestionsPrompt())
 
 
 @config_schema_provider
