@@ -103,10 +103,10 @@ async def split_grading_instructions_by_file(
     if debug:
         emit_meta("file_grading_instructions", {
             "prompt": chat_prompt.format(**prompt_input),
-            "result": split_grading_instructions.dict()
+            "result": split_grading_instructions.dict() if split_grading_instructions is not None else None
         })
 
-    if not split_grading_instructions.items:
+    if split_grading_instructions is None or not split_grading_instructions.items:
         return None
 
     # Join duplicate file names (some responses contain multiple grading instructions for the same file)
