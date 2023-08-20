@@ -368,15 +368,17 @@ def config_schema_provider(cls: Type[C]) -> Type[C]:
 
 
 def evaluation_provider(func: Union[
-    Callable[[E, S, List[F], List[F]], Dict[str, Any]],
-    Callable[[E, S, List[F], List[F]], Coroutine[Any, Any, Dict[str, Any]]]
+    Callable[[E, S, List[F], List[F]], Dict[int, Any]],
+    Callable[[E, S, List[F], List[F]], Coroutine[Any, Any, Dict[int, Any]]]
 ]):
     """
     Provide evaluated feedback to the Assessment Module Manager.
-    The evaluation provider is usually called during the research and development phase (by the Playground).
+    
+    Note: The evaluation provider is usually called during the research and development phase (by the Playground).
+    The module_config is not available because it should somewhat statically be defined.
+    Return a dictionary of feedback IDs and their evaluation results.
 
     This decorator can be used with several types of functions: synchronous or asynchronous.
-    The module_config is not available because it should somewhat statically be defined.
 
     Examples:
         Below are some examples of possible functions that you can decorate with this decorator:
@@ -386,14 +388,14 @@ def evaluation_provider(func: Union[
         ... def sync_evaluate_feedback(
         ...     exercise: Exercise, submission: Submission, 
         ...     true_feedbacks: List[Feedback], predicted_feedbacks: List[Feedback]
-        ... ) -> Dict[str, Any]:
+        ... ) -> Dict[int, Any]:
         ...     # evaluate predicted feedback here and return it as a list
 
         >>> @feedback_provider
         ... async def async_evaluate_feedback(
         ...     exercise: Exercise, submission: Submission, 
         ...     true_feedbacks: List[Feedback], predicted_feedbacks: List[Feedback]
-        ... ) -> Dict[str, Any]:
+        ... ) -> Dict[int, Any]:
         ...     # evaluate predicted feedback here and return it as a list
     """
     exercise_type = inspect.signature(func).parameters["exercise"].annotation

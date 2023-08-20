@@ -53,8 +53,11 @@ export default function RequestEvaluation() {
         <span className="text-gray-500 text-sm">(OPTIONAL)</span>
       </h3>
       <p className="text-gray-500 mb-4">
-        {/* TODO */}
-        <code>@evaluation_provider</code>.
+        Evaluate a list of feedback suggestions during the research and
+        development phase. Compare the predicted feedback with the actual
+        feedback using the function annotated with{" "}
+        <code>@evaluation_provider</code>. Each module can implement custom
+        metrics to evaluate the feedback suggestions during evaluation.
       </p>
       <ExerciseSelect
         exerciseType={module.type}
