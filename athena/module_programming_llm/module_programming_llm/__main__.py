@@ -33,5 +33,6 @@ async def suggest_feedback(exercise: Exercise, submission: Submission, module_co
 
 
 if __name__ == "__main__":
+    # Preload for token estimation later
     tiktoken.get_encoding("cl100k_base")
     app.start()

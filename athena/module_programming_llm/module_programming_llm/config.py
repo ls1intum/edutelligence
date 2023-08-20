@@ -18,9 +18,7 @@ from module_programming_llm.prompts.split_problem_statement_by_file import (
 
 class SplitProblemStatementsByFilePrompt(BaseModel):
     """\
-Features available: **{problem_statement}**, **{changed_files_from_template_to_solution}**, **{changed_files_from_template_to_submission}**
-
-*Note: `changed_files` are the changed files between template and solution repository.*\
+Features available: **{problem_statement}**, **{changed_files_from_template_to_solution}**, **{changed_files_from_template_to_submission}**\
 """
     system_message: str = Field(default=split_problem_statements_by_file_system_template,
                                 description="Message for priming AI behavior and instructing it what to do.")
@@ -31,7 +29,7 @@ Features available: **{problem_statement}**, **{changed_files_from_template_to_s
 
 class SplitGradingInstructionsByFilePrompt(BaseModel):
     """\
-Features available: **{grading_instructions}**, **{changed_files_from_template_to_solution}**, **{changed_files_from_template_to_submission}**
+Features available: **{grading_instructions}**, **{changed_files_from_template_to_solution}**, **{changed_files_from_template_to_submission}**\
 """
     system_message: str = Field(default=split_grading_instructions_by_file_template,
                                 description="Message for priming AI behavior and instructing it what to do.")
@@ -53,11 +51,14 @@ Features available: **{problem_statement}**, **{grading_instructions}**, **{max_
 
 
 class BasicApproachConfig(BaseModel):
-    """This approach uses a LLM with a single prompt to generate feedback in a single step."""
+    """\
+This approach uses an LLM to split up the problem statement and grading instructions by file, if necessary. \
+Then, it generates suggestions for each file independently.\
+"""
     max_input_tokens: int = Field(default=3000, description="Maximum number of tokens in the input prompt.")
     model: ModelConfigType = Field(default=DefaultModelConfig())  # type: ignore
     
-    max_number_of_files: int = Field(default=25, description="Maximum number of files.")
+    max_number_of_files: int = Field(default=25, description="Maximum number of files. If exceeded, it will prioritize the most important ones.")
     split_problem_statement_by_file_prompt: SplitProblemStatementsByFilePrompt = Field(default=SplitProblemStatementsByFilePrompt())
     split_grading_instructions_by_file_prompt: SplitGradingInstructionsByFilePrompt = Field(default=SplitGradingInstructionsByFilePrompt())
     generate_suggestions_by_file_prompt: GenerationPrompt = Field(default=GenerationPrompt())
