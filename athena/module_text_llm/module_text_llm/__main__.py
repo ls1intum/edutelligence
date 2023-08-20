@@ -3,12 +3,13 @@ from typing import List
 import nltk
 import tiktoken
 
-from athena import app, submission_selector, submissions_consumer, feedback_consumer, feedback_provider
+from athena import app, submission_selector, submissions_consumer, feedback_consumer, feedback_provider, evaluation_provider
 from athena.text import Exercise, Submission, Feedback
 from athena.logger import logger
 
 from module_text_llm.config import Configuration
 from module_text_llm.generate_suggestions import generate_suggestions
+from module_text_llm.generate_evaluation import generate_evaluation
 
 
 @submissions_consumer
@@ -31,6 +32,15 @@ def process_incoming_feedback(exercise: Exercise, submission: Submission, feedba
 async def suggest_feedback(exercise: Exercise, submission: Submission, module_config: Configuration) -> List[Feedback]:
     logger.info("suggest_feedback: Suggestions for submission %d of exercise %d were requested", submission.id, exercise.id)
     return await generate_suggestions(exercise, submission, module_config.approach, module_config.debug)
+
+
+@evaluation_provider
+async def evaluate_feedback(exercise: Exercise, submission: Submission, true_feedbacks: List[Feedback], predicted_feedbacks: List[Feedback]) -> List[Feedback]:
+    logger.info(
+        "evaluate_feedback: Evaluation for submission %d of exercise %d was requested with %d true and %d predicted feedbacks", 
+        submission.id, exercise.id, len(true_feedbacks), len(predicted_feedbacks)
+    )
+    return await generate_evaluation(exercise, submission, true_feedbacks, predicted_feedbacks)
 
 
 if __name__ == "__main__":

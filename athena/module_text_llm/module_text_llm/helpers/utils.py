@@ -58,3 +58,28 @@ def get_index_range_from_line_range(line_start: Optional[int], line_end: Optiona
     line_end_index = min(max(line_end_index, 0), len(sentence_spans) - 1)
     
     return sentence_spans[line_start_index][0], sentence_spans[line_end_index][1]
+
+
+def get_line_range_from_index_range(index_start: Optional[int], index_end: Optional[int], content: str) -> Tuple[Optional[int], Optional[int]]:
+    if index_start is None and index_end is None:
+        return None, None
+
+    index_start = index_start or index_end or 0
+    index_end = index_end or index_start or 0
+
+    if index_start > index_end:
+        index_start, index_end = index_end, index_start
+
+    sentence_spans = get_sentence_spans(content)
+
+    line_start = None
+    line_end = None
+
+    for line_number, (start_index, end_index) in enumerate(sentence_spans, start=1):
+        if start_index <= index_start < end_index:
+            line_start = line_number
+        if start_index <= index_end <= end_index:
+            line_end = line_number
+            break
+    
+    return line_start, line_end
