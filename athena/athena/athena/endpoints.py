@@ -382,11 +382,11 @@ def evaluation_provider(func: Union[
 
         Without using module config (both synchronous and asynchronous forms):
         >>> @evaluation_provider
-        ... def sync_evaluate(exercise: Exercise, submission: Submission, true_feedbacks: List[Feedback], predicted_feedbacks: List[Feedback]):
+        ... def sync_evaluate_feedback(exercise: Exercise, submission: Submission, true_feedbacks: List[Feedback], predicted_feedbacks: List[Feedback]):
         ...     # evaluate predicted feedback here and return it as a list
 
         >>> @feedback_provider
-        ... async def async_evaluate(exercise: Exercise, submission: Submission, true_feedbacks: List[Feedback], predicted_feedbacks: List[Feedback]):
+        ... async def async_evaluate_feedback(exercise: Exercise, submission: Submission, true_feedbacks: List[Feedback], predicted_feedbacks: List[Feedback]):
         ...     # evaluate predicted feedback here and return it as a list
     """
     exercise_type = inspect.signature(func).parameters["exercise"].annotation
