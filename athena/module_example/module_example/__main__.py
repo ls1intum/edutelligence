@@ -91,6 +91,7 @@ def suggest_feedback(exercise: Exercise, submission: Submission, module_config: 
     ]
 
 
+# Only if it makes sense for your module (Optional)
 @evaluation_provider
 def evaluate_feedback(exercise: Exercise, submission: Submission, true_feedbacks: List[Feedback], predicted_feedbacks: List[Feedback]) -> List[Feedback]:
     logger.info(
