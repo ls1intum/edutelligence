@@ -218,6 +218,8 @@ async def generate_suggestions_by_file(exercise: Exercise, submission: Submissio
     feedbacks: List[Feedback] = []
     for prompt_input, result in zip(prompt_inputs, results):
         file_path = prompt_input["file_path"]
+        if result is None:
+            continue
         for feedback in result.feedbacks:
             feedbacks.append(Feedback(
                 exercise_id=exercise.id,
