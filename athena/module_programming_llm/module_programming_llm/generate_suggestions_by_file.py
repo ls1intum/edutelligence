@@ -54,7 +54,6 @@ async def generate_suggestions_by_file(exercise: Exercise, submission: Submissio
         pydantic_object=AssessmentModel
     )
 
-
     # Get split problem statement and grading instructions by file (if necessary)
     split_problem_statement, split_grading_instructions = await asyncio.gather(
         split_problem_statement_by_file(exercise=exercise, submission=submission, prompt=chat_prompt, config=config, debug=debug),
