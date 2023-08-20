@@ -104,8 +104,8 @@ async def generate_evaluation(
         item.id: {
             "correctness": {
                 "probability": item.probability,
-                "reason": item.reasoning,
-                "label": item.label
+                "comment": item.reasoning,
+                "label": item.label,
             }
         }
         for item in result.metrics

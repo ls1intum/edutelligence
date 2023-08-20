@@ -125,14 +125,16 @@ export default function InlineFeedback({
     <div
       className={twMerge(
         "mx-2 my-1 border border-gray-300 rounded-lg text-sm max-w-3xl",
-        ...(referenceType !== "unreferenced" ? [
-        "hover:outline outline-2 hover:shadow transition-all duration-200",
-        currentCredits < 0
-          ? "outline-red-300/50"
-          : currentCredits > 0
-          ? "outline-green-300/50"
-          : "outline-yellow-300/50",
-        ] : []),
+        ...(referenceType !== "unreferenced"
+          ? [
+              "hover:outline outline-2 hover:shadow transition-all duration-200",
+              currentCredits < 0
+                ? "outline-red-300/50"
+                : currentCredits > 0
+                ? "outline-green-300/50"
+                : "outline-yellow-300/50",
+            ]
+          : []),
         className
       )}
       onMouseEnter={() => setIsHovering(true)}
@@ -243,6 +245,70 @@ export default function InlineFeedback({
           </div>
         )}
       </div>
+      {feedback.evaluation && (
+        <div className="flex items-center justify-start px-4 py-2 border-t gap-1 border-gray-300 text-xs text-gray-600">
+          {Object.entries(feedback.evaluation).map(([key, value]) => (
+            <div
+              key={key}
+              className="flex flex-col items-center space-x-1 mr-2 gap-1"
+            >
+              <span className="font-semibold capitalize">{key}</span>
+              <div
+                className={twMerge(
+                  "rounded-md px-2 py-0.5 bg-gray-100 text-gray-800 capitalize",
+                  value.correct === true
+                    ? "bg-green-200"
+                    : value.correct === false
+                    ? "bg-red-200"
+                    : "bg-gray-100"
+                )}
+              >
+                {value.label}
+              </div>
+              {onFeedbackChange && (
+                <div className="space-x-1">
+                  <button
+                    className={twMerge(
+                      "rounded-md aspect-square p-2",
+                      value.correct === true
+                        ? "bg-green-400 shadow-md hover:bg-green-500"
+                        : "bg-gray-100 hover:bg-green-200 hover:shadow-md"
+                    )}
+                    onClick={() => {
+                      if (value.correct === true) {
+                        value.correct = undefined;
+                      } else {
+                        value.correct = true;
+                      }
+                      onFeedbackChange(feedback);
+                    }}
+                  >
+                    👍
+                  </button>
+                  <button
+                    className={twMerge(
+                      "rounded-md aspect-square p-2 bg-gray-100",
+                      value.correct === false
+                        ? "bg-red-400 shadow-md hover:bg-red-500"
+                        : "hover:bg-red-200 hover:shadow-md"
+                    )}
+                    onClick={() => {
+                      if (value.correct === false) {
+                        value.correct = undefined;
+                      } else {
+                        value.correct = false;
+                      }
+                      onFeedbackChange(feedback);
+                    }}
+                  >
+                    👎
+                  </button>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

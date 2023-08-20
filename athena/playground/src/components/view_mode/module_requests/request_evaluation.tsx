@@ -1,6 +1,7 @@
 import type { Submission } from "@/model/submission";
 import type { Exercise } from "@/model/exercise";
 import type { Feedback } from "@/model/feedback";
+import type ModuleResponse from "@/model/module_response";
 
 import { useEffect, useState } from "react";
 
@@ -26,6 +27,7 @@ export default function RequestEvaluation() {
   );
 
   const [predictedFeedbacks, setPredictedFeedbacks] = useState<Feedback[]>([]);
+  const [responseFeedbacks, setResponseFeedbacks] = useState<Feedback[]>([]);
 
   const {
     data: trueFeedbacks,
@@ -39,9 +41,55 @@ export default function RequestEvaluation() {
     error,
     mutate,
     reset,
-  } = useRequestEvaluaion();
+  } = useRequestEvaluaion({
+    onSuccess: (response, variables) => {
+      if (!response?.data) return;
+
+      const responseFeedbacks = [...variables.predictedFeedbacks];
+      responseFeedbacks.forEach((feedback) => {
+        feedback.evaluation = feedback.evaluation || {};
+
+        const evaluation = response.data[feedback.id];
+        if (evaluation) {
+          Object.entries(evaluation).forEach(([key, value]: [string, any]) => {
+            // @ts-ignore
+            feedback.evaluation[key] = { label: value.label, data: {} };
+            Object.entries(value).forEach(([subKey, subValue]) => {
+              if (subKey !== "label") {
+                // @ts-ignore
+                feedback.evaluation[key]["data"][subKey] = subValue;
+              }
+            });
+          });
+        }
+      });
+      setResponseFeedbacks(responseFeedbacks);
+    },
+  });
 
   useEffect(() => setExercise(undefined), [module, dataMode]);
+
+  const responseSubmissionView = (response: ModuleResponse | undefined) => {
+    if (!response || response.status !== 200) {
+      return null;
+    }
+    return (
+      submission && (
+        <Disclosure
+          title="Submission with Evaluated Feedbacks"
+          openedInitially
+          className={{ root: "ml-2" }}
+        >
+          <SubmissionDetail
+            identifier="evaluated_feedbacks"
+            submission={submission}
+            feedbacks={responseFeedbacks}
+            onFeedbacksChange={setResponseFeedbacks}
+          />
+        </Disclosure>
+      )
+    );
+  };
 
   return (
     <div className="bg-white rounded-md p-4 mb-8">
@@ -64,6 +112,7 @@ export default function RequestEvaluation() {
           reset();
           setSubmission(undefined);
           setPredictedFeedbacks([]);
+          setResponseFeedbacks([]);
         }}
         disabled={isLoading}
       />
@@ -75,6 +124,7 @@ export default function RequestEvaluation() {
             onChange={(submission) => {
               setSubmission(submission);
               setPredictedFeedbacks([]);
+              setResponseFeedbacks([]);
             }}
             disabled={isLoading}
           />
@@ -131,7 +181,9 @@ export default function RequestEvaluation() {
           response ??
           (error?.asModuleResponse ? error.asModuleResponse() : undefined)
         }
-      />
+      >
+        {responseSubmissionView(response)}
+      </ModuleResponseView>
       <button
         className="bg-primary-500 text-white rounded-md p-2 mt-4 hover:bg-primary-600 disabled:text-gray-500 disabled:bg-gray-200 disabled:cursor-not-allowed"
         onClick={async () => {

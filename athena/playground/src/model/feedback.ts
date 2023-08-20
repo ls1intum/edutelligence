@@ -16,6 +16,13 @@ type FeedbackBase = {
   meta: {
     [key: string]: any;
   };
+  evaluation?: { // Playground only
+    [key: string]: {
+      label: string;
+      correct?: boolean;
+      data?: any;
+    }
+  }
 };
 
 export type TextFeedback = FeedbackBase & {
