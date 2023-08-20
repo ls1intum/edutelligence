@@ -16,7 +16,7 @@ from module_text_llm.prompts.generate_evaluation import system_message, human_me
 
 class CorrectnessMetric(BaseModel):
     """Correctness metric for a single feedback"""
-    id: str = Field(..., description="Feedback ID")
+    id: int = Field(..., description="Feedback ID")
     reason: str = Field(..., description="Step-by-step reasoning")
     score: float = Field(..., description="Correctness score from 0.0 to 1.0")
 
@@ -87,7 +87,7 @@ async def generate_evaluation(exercise: Exercise, submission: Submission, true_f
             logger.warning("Feedback %s not found in evaluation result. Skipping.", feedback.id)
             continue
 
-        feedback.meta["currectness"] = {
+        feedback.meta["correctness"] = {
             "score": metric.score,
             "reason": metric.reason,
         }
