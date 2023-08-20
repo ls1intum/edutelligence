@@ -71,7 +71,7 @@ async def generate_suggestions(exercise: Exercise, submission: Submission, confi
             emit_meta("error", f"Input too long {num_tokens_from_prompt(chat_prompt, prompt_input)} > {config.max_input_tokens}")
         return []
 
-    result = predict_and_parse(
+    result = await predict_and_parse(
         model=model, 
         chat_prompt=chat_prompt, 
         prompt_input=prompt_input, 
@@ -79,7 +79,13 @@ async def generate_suggestions(exercise: Exercise, submission: Submission, confi
     )
 
     if debug:
-        emit_meta("prompt", chat_prompt.format(**prompt_input))
+        emit_meta("generate_suggestions", {
+            "prompt": chat_prompt.format(**prompt_input),
+            "result": result.dict() if result is not None else None
+        })
+
+    if result is None:
+        return []
 
     feedbacks = []
     for feedback in result.feedbacks:
