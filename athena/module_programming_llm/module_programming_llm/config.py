@@ -22,23 +22,22 @@ Features available: **{problem_statement}**, **{changed_files_from_template_to_s
 
 *Note: `changed_files` are the changed files between template and solution repository.*\
 """
-    tokens_before_split: int = Field(default=250, description="Split the problem statement into file-based ones after this number of tokens.")
     system_message: str = Field(default=split_problem_statements_by_file_system_template,
                                 description="Message for priming AI behavior and instructing it what to do.")
     human_message: str = Field(default=split_problem_statements_by_file_human_template,
                                description="Message from a human. The input on which the AI is supposed to act.")
-
+    tokens_before_split: int = Field(default=250, description="Split the problem statement into file-based ones after this number of tokens.")
+    
 
 class SplitGradingInstructionsByFilePrompt(BaseModel):
     """\
 Features available: **{grading_instructions}**, **{changed_files_from_template_to_solution}**, **{changed_files_from_template_to_submission}**
 """
-    tokens_before_split: int = Field(default=250, description="Split the grading instructions into file-based ones after this number of tokens.")
     system_message: str = Field(default=split_grading_instructions_by_file_template,
                                 description="Message for priming AI behavior and instructing it what to do.")
     human_message: str = Field(default=split_grading_instructions_by_file_human_template,
                                description="Message from a human. The input on which the AI is supposed to act.")
-
+    tokens_before_split: int = Field(default=250, description="Split the grading instructions into file-based ones after this number of tokens.")
 
 class GenerationPrompt(BaseModel):
     """\

@@ -69,7 +69,7 @@ async def split_problem_statement_by_file(
     chat_prompt = get_chat_prompt_with_formatting_instructions(
         model=model, 
         system_message=config.split_problem_statement_by_file_prompt.system_message,
-        human_message=config.split_problem_statement_by_file_prompt.system_message,
+        human_message=config.split_problem_statement_by_file_prompt.human_message,
         pydantic_object=SplitProblemStatement
     )
     
