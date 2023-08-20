@@ -24,22 +24,36 @@ export default function RequestEvaluation() {
   const { dataMode } = useBaseInfo();
 
   const [exercise, setExercise] = useState<Exercise | undefined>(undefined);
-  const [submission, setSubmission] = useState<Submission | undefined>(undefined);
+  const [submission, setSubmission] = useState<Submission | undefined>(
+    undefined
+  );
 
   const [predictedFeedbacks, setPredictedFeedbacks] = useState<Feedback[]>([]);
 
-  const { data: trueFeedbacks, isLoading: isLoadingTrueFeedbacks, error: errorTrueFeedbacks } = useFeedbacks(exercise, submission);
+  const {
+    data: trueFeedbacks,
+    isLoading: isLoadingTrueFeedbacks,
+    error: errorTrueFeedbacks,
+  } = useFeedbacks(exercise, submission);
 
-  const { data: response, isLoading, error, mutate, reset } = useRequestEvaluaion();
+  const {
+    data: response,
+    isLoading,
+    error,
+    mutate,
+    reset,
+  } = useRequestEvaluaion();
 
   useEffect(() => setExercise(undefined), [module, dataMode]);
 
   return (
     <div className="bg-white rounded-md p-4 mb-8">
-      <h3 className="text-2xl font-bold mb-4">Request Evaluation from Athena</h3>
+      <h3 className="text-2xl font-bold mb-4">
+        Request Evaluation from Athena
+      </h3>
       <p className="text-gray-500 mb-4">
         {/* TODO */}
-         <code>@evaluation_provider</code>.
+        <code>@evaluation_provider</code>.
       </p>
       <ExerciseSelect
         exerciseType={module.type}
@@ -65,25 +79,31 @@ export default function RequestEvaluation() {
           />
           <div className="space-y-1 mt-2">
             <ExerciseDetail exercise={exercise} />
-            {submission && (
-              trueFeedbacks ? (
-              <Disclosure title="True Feedbacks" openedInitially>
-                <SubmissionDetail
-                  identifier="trueFeedbacks"
-                  submission={submission}
-                  feedbacks={trueFeedbacks.filter(
-                    (f) => f.submission_id === submission.id
-                  )}
-                />
-              </Disclosure>
-            ) : (
-              <div className="text-gray-500 text-sm">
-                No true feedbacks available
-              </div>
-            )
-            )}
+            {submission &&
+              (trueFeedbacks ? (
+                <Disclosure title="True Feedbacks" openedInitially>
+                  <p className="text-gray-500 text-sm">
+                    The following feedbacks given by the tutor in the past.
+                  </p>
+                  <SubmissionDetail
+                    identifier="trueFeedbacks"
+                    submission={submission}
+                    feedbacks={trueFeedbacks.filter(
+                      (f) => f.submission_id === submission.id
+                    )}
+                  />
+                </Disclosure>
+              ) : (
+                <div className="text-gray-500 text-sm">
+                  No true feedbacks available
+                </div>
+              ))}
             {submission && (
               <Disclosure title="Predicted Feedbacks" openedInitially>
+                <p className="text-gray-500 text-sm">
+                  Provide feedback as <strong>predicted feedbacks</strong> to
+                  test the evaluation.
+                </p>
                 <SubmissionDetail
                   identifier="predictedFeedbacks"
                   submission={submission}
@@ -105,9 +125,12 @@ export default function RequestEvaluation() {
           </div>
         </>
       )}
-      <ModuleResponseView response={response ?? (error?.asModuleResponse ? error.asModuleResponse() : undefined)}>
-        {/* {responseSubmissionView(response)} */}
-      </ModuleResponseView>
+      <ModuleResponseView
+        response={
+          response ??
+          (error?.asModuleResponse ? error.asModuleResponse() : undefined)
+        }
+      />
       <button
         className="bg-primary-500 text-white rounded-md p-2 mt-4 hover:bg-primary-600 disabled:text-gray-500 disabled:bg-gray-200 disabled:cursor-not-allowed"
         onClick={async () => {
@@ -131,14 +154,14 @@ export default function RequestEvaluation() {
             predictedFeedbacks,
           });
         }}
-        disabled={
-          !exercise || isLoading || isLoadingTrueFeedbacks
-        }
+        disabled={!exercise || isLoading || isLoadingTrueFeedbacks}
       >
         {exercise
           ? isLoading || isLoadingTrueFeedbacks
             ? "Loading..."
             : "Request evaluation"
+          : exercise
+          ? "Please select a submission"
           : "Please select an exercise"}
       </button>
     </div>
