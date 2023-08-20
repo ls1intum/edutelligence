@@ -27,6 +27,7 @@ if len(os.environ.get("REPLICATE_API_TOKEN") or "") > 0:
     available_models = {
         name: Replicate(
             model=model,
+            input={ "temperature": 0.01 }
         )
         for name, model in replicate_models.items()
     }

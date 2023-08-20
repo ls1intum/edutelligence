@@ -171,10 +171,12 @@ def _get_available_models(openai_models: Dict[str, List[str]],
         openai_api_key = os.environ["LLM_OPENAI_API_KEY"]
         for model_name in openai_models["chat_completion"]:
             available_models[OPENAI_PREFIX + model_name] = ChatOpenAI(
-                model=model_name, openai_api_key=openai_api_key, client="")
+                model=model_name, openai_api_key=openai_api_key, client="", temperature=0
+                )
         for model_name in openai_models["completion"]:
             available_models[OPENAI_PREFIX + model_name] = OpenAI(
-                model=model_name, openai_api_key=openai_api_key, client="")
+                model=model_name, openai_api_key=openai_api_key, client="", temperature=0
+                )
 
     if azure_openai_available:
         azure_openai_api_key = os.environ["LLM_AZURE_OPENAI_API_KEY"]
@@ -190,6 +192,7 @@ def _get_available_models(openai_models: Dict[str, List[str]],
                     openai_api_version=azure_openai_api_version,
                     openai_api_key=azure_openai_api_key,
                     client="",
+                    temperature=0
                 )
 
     return available_models

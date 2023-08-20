@@ -1,4 +1,4 @@
-from typing import List, Sequence, Dict
+from typing import List, Sequence, Dict, Literal
 from pydantic import BaseModel, Field
 import json
 
@@ -18,8 +18,9 @@ from module_text_llm.prompts.generate_evaluation import system_message, human_me
 class CorrectnessMetric(BaseModel):
     """Correctness metric for a single feedback"""
     id: int = Field(..., description="Feedback ID")
-    reason: str = Field(..., description="Step-by-step reasoning")
-    score: float = Field(..., description="Correctness score from 0.0 to 1.0")
+    reasoning: str = Field(..., description="Step-by-step reasoning for or against the correctness of the feedback")
+    probability: float = Field(..., description="Probability of the feedback being correct from 0.00 to 1.00")
+    label: Literal["correct", "incorrect"] = Field(..., description="Label of the feedback's correctness")
 
 
 class Evaluation(BaseModel):
@@ -102,8 +103,9 @@ async def generate_evaluation(
     return { 
         item.id: {
             "correctness": {
-                "score": item.score,
-                "reason": item.reason
+                "probability": item.probability,
+                "reason": item.reasoning,
+                "label": item.label
             }
         }
         for item in result.metrics
