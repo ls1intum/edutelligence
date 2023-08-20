@@ -1,10 +1,10 @@
 from typing import Optional, Sequence
-from athena import emit_meta
+from collections import defaultdict
 
 from pydantic import BaseModel, Field
-
 from langchain.prompts import ChatPromptTemplate
 
+from athena import emit_meta
 from athena.programming import Exercise, Submission
 
 from module_programming_llm.config import BasicApproachConfig
@@ -106,5 +106,21 @@ async def split_problem_statement_by_file(
 
     if not split_problem_statement.file_problem_statements:
         return None
+
+    # Join duplicate file names (some responses contain multiple problem statements for the same file)
+    file_problem_statements_by_file_name = defaultdict(list)
+    for file_problem_statement in split_problem_statement.file_problem_statements:
+        file_problem_statements_by_file_name[file_problem_statement.file_name].append(file_problem_statement)
+
+    split_problem_statement.file_problem_statements = [
+        FileProblemStatement(
+            file_name=file_name,
+            problem_statement="\n".join(
+                file_problem_statement.problem_statement
+                for file_problem_statement in file_problem_statements
+            )
+        )
+        for file_name, file_problem_statements in file_problem_statements_by_file_name.items()
+    ]
 
     return split_problem_statement
