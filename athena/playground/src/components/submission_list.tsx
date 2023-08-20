@@ -1,6 +1,8 @@
 import type { Submission } from "@/model/submission";
 import type { Feedback } from "@/model/feedback";
 
+import { useId } from "react";
+
 import Disclosure from "@/components/disclosure";
 import SubmissionDetail from "@/components/details/submission_detail";
 
@@ -15,6 +17,8 @@ export default function SubmissionList({
   feedbacks,
   onFeedbacksChange,
 }: SubmissionListProps) {
+  const id = useId();
+
   let feedbacksBySubmissionId: Record<number, Feedback[]> = {};
   if (feedbacks) {
     feedbacksBySubmissionId = feedbacks.reduce((acc, feedback) => {
@@ -38,6 +42,7 @@ export default function SubmissionList({
       {submissions.map((submission) => (
         <Disclosure title={`Submission ${submission.id}`} key={submission.id} noContentIndent>
           <SubmissionDetail
+            identifier={`id-${id}-${submission.id}`}
             key={submission.id}
             submission={submission}
             feedbacks={feedbacksBySubmissionId[submission.id]}

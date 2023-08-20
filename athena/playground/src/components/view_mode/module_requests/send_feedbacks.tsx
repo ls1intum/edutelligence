@@ -128,6 +128,7 @@ export default function SendFeedbacks() {
             {selectedSubmission && !isAllSubmissions ? (
               <Disclosure title="Submission">
                 <SubmissionDetail
+                  identifier="send_feedbacks"
                   submission={selectedSubmission}
                   feedbacks={feedbacks.filter(
                     (f) => f.submission_id === selectedSubmission.id

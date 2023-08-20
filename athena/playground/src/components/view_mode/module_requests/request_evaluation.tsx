@@ -67,8 +67,9 @@ export default function RequestEvaluation() {
             <ExerciseDetail exercise={exercise} />
             {submission && (
               trueFeedbacks ? (
-              <Disclosure title="True Feedbacks">
+              <Disclosure title="True Feedbacks" openedInitially>
                 <SubmissionDetail
+                  identifier="trueFeedbacks"
                   submission={submission}
                   feedbacks={trueFeedbacks.filter(
                     (f) => f.submission_id === submission.id
@@ -82,8 +83,9 @@ export default function RequestEvaluation() {
             )
             )}
             {submission && (
-              <Disclosure title="Predicted Feedbacks">
+              <Disclosure title="Predicted Feedbacks" openedInitially>
                 <SubmissionDetail
+                  identifier="predictedFeedbacks"
                   submission={submission}
                   feedbacks={predictedFeedbacks.filter(
                     (f) => f.submission_id === submission.id
