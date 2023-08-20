@@ -44,7 +44,7 @@ async def evaluate_feedback(
         "evaluate_feedback: Evaluation for submission %d of exercise %d was requested with %d true and %d predicted feedbacks", 
         submission.id, exercise.id, len(true_feedbacks), len(predicted_feedbacks)
     )
-    return await generate_evaluation(exercise, submission, true_feedbacks, predicted_feedbacks)
+    return await generate_evaluation(exercise, submission, true_feedbacks, predicted_feedbacks, debug=module_config.debug)
 
 
 if __name__ == "__main__":

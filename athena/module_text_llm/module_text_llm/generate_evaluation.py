@@ -2,6 +2,7 @@ from typing import List, Sequence, Dict
 from pydantic import BaseModel, Field
 import json
 
+from athena import emit_meta
 from athena.text import Exercise, Submission, Feedback
 from athena.logger import logger
 
@@ -26,7 +27,14 @@ class Evaluation(BaseModel):
     metrics: Sequence[CorrectnessMetric] = Field(...)
 
 
-async def generate_evaluation(exercise: Exercise, submission: Submission, true_feedbacks: List[Feedback], predicted_feedbacks: List[Feedback]) -> Dict[int, dict]:
+async def generate_evaluation(
+        exercise: Exercise, 
+        submission: Submission, 
+        true_feedbacks: List[Feedback], 
+        predicted_feedbacks: List[Feedback], 
+        debug: bool
+    ) -> Dict[int, dict]:
+
     if evaluation_model is None:
         raise EnvironmentError("No evaluation model available, please set up LLM_EVALUATION_MODEL correctly"
                                "by setting it to one of the available models logged during startup.")
@@ -63,11 +71,13 @@ async def generate_evaluation(exercise: Exercise, submission: Submission, true_f
         prompt_input= prompt_input,
         max_input_tokens=max_input_tokens,
         omittable_features=omittable_features,
-        debug=False
+        debug=debug
     )
 
     if not should_run:
         logger.warning("Evaluation input too long. Skipping.")
+        if debug:
+            emit_meta("error", "Evaluation input too long. Skipping.")
         return {}
     
     result = await predict_and_parse(
@@ -79,8 +89,16 @@ async def generate_evaluation(exercise: Exercise, submission: Submission, true_f
 
     if result is None:
         logger.warning("Evaluation failed. Skipping.")
+        if debug:
+            emit_meta("error", "Evaluation failed, no results. Skipping.")
         return {}
    
+    if debug:
+        emit_meta("generate_evaluation", {
+            "prompt": chat_prompt.format(**prompt_input),
+            "result": result.dict()
+        })
+
     return { 
         item.id: {
             "correctness": {
