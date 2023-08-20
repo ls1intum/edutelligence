@@ -369,14 +369,17 @@ def config_schema_provider(cls: Type[C]) -> Type[C]:
 
 def evaluation_provider(func: Union[
     Callable[[E, S, List[F], List[F]], Dict[int, Any]],
-    Callable[[E, S, List[F], List[F]], Coroutine[Any, Any, Dict[int, Any]]]
+    Callable[[E, S, List[F], List[F]], Coroutine[Any, Any, Dict[int, Any]]],
+    Callable[[E, S, List[F], List[F], C], Dict[int, Any]],
+    Callable[[E, S, List[F], List[F], C], Coroutine[Any, Any, Dict[int, Any]]]
 ]):
     """
     Provide evaluated feedback to the Assessment Module Manager.
     
     Note: The evaluation provider is usually called during the research and development phase (by the Playground).
-    The module_config is not available because it should somewhat statically be defined.
     Return a dictionary of feedback IDs and their evaluation results.
+
+    Important: The module_config should not influence the evaluation results.
 
     This decorator can be used with several types of functions: synchronous or asynchronous.
 
@@ -397,15 +400,39 @@ def evaluation_provider(func: Union[
         ...     true_feedbacks: List[Feedback], predicted_feedbacks: List[Feedback]
         ... ) -> Dict[int, Any]:
         ...     # evaluate predicted feedback here and return it as a list
+
+        With using module config (both synchronous and asynchronous forms):
+        >>> @evaluation_provider
+        ... def sync_evaluate_feedback_with_config(
+        ...     exercise: Exercise, submission: Submission, 
+        ...     true_feedbacks: List[Feedback], predicted_feedbacks: List[Feedback],
+        ...     module_config: Configuration
+        ... ) -> Dict[int, Any]:
+        ...     # evaluate predicted feedback here using module_config and return it as a list
+
+        >>> @evaluation_provider
+        ... async def async_evaluate_feedback_with_config(
+        ...     exercise: Exercise, submission: Submission, 
+        ...     true_feedbacks: List[Feedback], predicted_feedbacks: List[Feedback],
+        ...     module_config: Configuration
+        ... ) -> Dict[int, Any]:
+        ...     # evaluate predicted feedback here using module_config and return it as a list
     """
     exercise_type = inspect.signature(func).parameters["exercise"].annotation
     submission_type = inspect.signature(func).parameters["submission"].annotation
     feedback_type = inspect.signature(func).parameters["predicted_feedbacks"].annotation.__args__[0]
+    module_config_type = inspect.signature(func).parameters["module_config"].annotation if "module_config" in inspect.signature(func).parameters else None
 
     @app.post("/evaluation", responses=module_responses)
     @authenticated
     @with_meta
-    async def wrapper(exercise: exercise_type, submission: submission_type, true_feedbacks: List[feedback_type], predicted_feedbacks: List[feedback_type]):
+    async def wrapper(
+            exercise: exercise_type, 
+            submission: submission_type, 
+            true_feedbacks: List[feedback_type], 
+            predicted_feedbacks: List[feedback_type],
+            module_config: module_config_type = Depends(get_dynamic_module_config_factory(module_config_type))
+        ):
         # Retrieve existing metadata for the exercise, submission and feedback
         exercise.meta.update(get_stored_exercise_meta(exercise) or {})
         submission.meta.update(get_stored_submission_meta(submission) or {})
@@ -414,11 +441,15 @@ def evaluation_provider(func: Union[
         for feedback in predicted_feedbacks:
             feedback.meta.update(get_stored_feedback_meta(feedback) or {})
 
+        kwargs = {}
+        if "module_config" in inspect.signature(func).parameters:
+            kwargs["module_config"] = module_config
+
         # Call the actual provider
         if inspect.iscoroutinefunction(func):
-            evaluation = await func(exercise, submission, true_feedbacks, predicted_feedbacks)
+            evaluation = await func(exercise, submission, true_feedbacks, predicted_feedbacks, **kwargs)
         else:
-            evaluation = func(exercise, submission, true_feedbacks, predicted_feedbacks)
+            evaluation = func(exercise, submission, true_feedbacks, predicted_feedbacks, **kwargs)
 
         return evaluation
     return wrapper

@@ -1,4 +1,3 @@
-import type ModuleResponse from "@/model/module_response";
 import type { Submission } from "@/model/submission";
 import type { Exercise } from "@/model/exercise";
 import type { Feedback } from "@/model/feedback";
@@ -16,8 +15,6 @@ import ModuleResponseView from "@/components/module_response_view";
 import Disclosure from "@/components/disclosure";
 import ExerciseDetail from "@/components/details/exercise_detail";
 import SubmissionDetail from "@/components/details/submission_detail";
-import SubmissionList from "@/components/submission_list";
-import { AthenaError } from "@/hooks/athena_fetcher";
 
 export default function RequestEvaluation() {
   const { module } = useModule();

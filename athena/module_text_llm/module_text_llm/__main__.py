@@ -1,4 +1,4 @@
-from typing import List
+from typing import Dict, List
 
 import nltk
 import tiktoken
@@ -35,7 +35,11 @@ async def suggest_feedback(exercise: Exercise, submission: Submission, module_co
 
 
 @evaluation_provider
-async def evaluate_feedback(exercise: Exercise, submission: Submission, true_feedbacks: List[Feedback], predicted_feedbacks: List[Feedback]) -> List[Feedback]:
+async def evaluate_feedback(
+        exercise: Exercise, submission: Submission, 
+        true_feedbacks: List[Feedback], predicted_feedbacks: List[Feedback], 
+        module_config: Configuration
+    ) -> Dict[int, dict]:
     logger.info(
         "evaluate_feedback: Evaluation for submission %d of exercise %d was requested with %d true and %d predicted feedbacks", 
         submission.id, exercise.id, len(true_feedbacks), len(predicted_feedbacks)

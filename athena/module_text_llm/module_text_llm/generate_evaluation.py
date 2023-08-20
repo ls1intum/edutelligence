@@ -1,4 +1,4 @@
-from typing import List, Sequence
+from typing import List, Sequence, Dict
 from pydantic import BaseModel, Field
 import json
 
@@ -26,9 +26,10 @@ class Evaluation(BaseModel):
     metrics: Sequence[CorrectnessMetric] = Field(...)
 
 
-async def generate_evaluation(exercise: Exercise, submission: Submission, true_feedbacks: List[Feedback], predicted_feedbacks: List[Feedback]) -> List[Feedback]:
+async def generate_evaluation(exercise: Exercise, submission: Submission, true_feedbacks: List[Feedback], predicted_feedbacks: List[Feedback]) -> Dict[int, dict]:
     if evaluation_model is None:
-        raise EnvironmentError("No evaluation model available, please set up LLM_EVALUATION_MODEL correctly.")
+        raise EnvironmentError("No evaluation model available, please set up LLM_EVALUATION_MODEL correctly"
+                               "by setting it to one of the available models logged during startup.")
     max_input_tokens = 3000
 
     def feedback_to_dict(feedback: Feedback):
@@ -67,7 +68,7 @@ async def generate_evaluation(exercise: Exercise, submission: Submission, true_f
 
     if not should_run:
         logger.warning("Evaluation input too long. Skipping.")
-        return predicted_feedbacks
+        return {}
     
     result = await predict_and_parse(
         model=evaluation_model, 
@@ -78,18 +79,14 @@ async def generate_evaluation(exercise: Exercise, submission: Submission, true_f
 
     if result is None:
         logger.warning("Evaluation failed. Skipping.")
-        return predicted_feedbacks
-    
-    # Add result to feedbacks
-    for feedback in predicted_feedbacks:
-        metric = next((metric for metric in result.metrics if metric.id == feedback.id), None)
-        if metric is None:
-            logger.warning("Feedback %s not found in evaluation result. Skipping.", feedback.id)
-            continue
-
-        feedback.meta["correctness"] = {
-            "score": metric.score,
-            "reason": metric.reason,
+        return {}
+   
+    return { 
+        item.id: {
+            "correctness": {
+                "score": item.score,
+                "reason": item.reason
+            }
         }
-
-    return predicted_feedbacks
+        for item in result.metrics
+     }
