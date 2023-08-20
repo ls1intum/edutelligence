@@ -1,6 +1,5 @@
-from typing import Type, TypeVar, List
-from pydantic import BaseModel
-
+from typing import Optional, Type, TypeVar, List
+from pydantic import BaseModel, ValidationError
 import tiktoken
 
 from langchain.chains import LLMChain
@@ -11,8 +10,9 @@ from langchain.prompts import (
     SystemMessagePromptTemplate,
     HumanMessagePromptTemplate,
 )
-from langchain.output_parsers import PydanticOutputParser, OutputFixingParser
 from langchain.chains.openai_functions import create_structured_output_chain
+from langchain.output_parsers import PydanticOutputParser
+from langchain.schema import OutputParserException
 
 from athena import emit_meta
 
@@ -114,7 +114,7 @@ def get_chat_prompt_with_formatting_instructions(
     return ChatPromptTemplate.from_messages([system_message_prompt, human_message_prompt])
 
 
-async def predict_and_parse(model: BaseLanguageModel, chat_prompt: ChatPromptTemplate, prompt_input: dict, pydantic_object: Type[T]):
+async def predict_and_parse(model: BaseLanguageModel, chat_prompt: ChatPromptTemplate, prompt_input: dict, pydantic_object: Type[T]) -> Optional[T]:
     """Predicts and parses the output of the model
 
     Args:
@@ -122,12 +122,23 @@ async def predict_and_parse(model: BaseLanguageModel, chat_prompt: ChatPromptTem
         chat_prompt (ChatPromptTemplate): Prompt to use
         prompt_input (dict): Input parameters to use for the prompt
         pydantic_object (Type[T]): Pydantic model to parse the output
+
+    Returns:
+        Optional[T]: Parsed output, or None if it could not be parsed
     """
     if supports_function_calling(model):
         chain = create_structured_output_chain(pydantic_object, llm=model, prompt=chat_prompt)
-        return chain.run(**prompt_input)
-    
-    output_parser = OutputFixingParser.from_llm(parser=PydanticOutputParser(pydantic_object=pydantic_object), llm=model)
-    chain = LLMChain(llm=model, prompt=chat_prompt)
-    output = chain.run(**prompt_input)
-    return output_parser.parse(output)
+        
+        try:
+            return await chain.arun(**prompt_input)
+        except (OutputParserException, ValidationError):
+            # In the future, we should probably have some recovery mechanism here (i.e. fix the output with another prompt)
+            return None
+
+    output_parser = PydanticOutputParser(pydantic_object=pydantic_object)
+    chain = LLMChain(llm=model, prompt=chat_prompt, output_parser=output_parser)
+    try:
+        return await chain.arun(**prompt_input)
+    except (OutputParserException, ValidationError):
+        # In the future, we should probably have some recovery mechanism here (i.e. fix the output with another prompt)
+        return None

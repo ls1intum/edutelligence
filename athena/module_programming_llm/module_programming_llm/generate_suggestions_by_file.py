@@ -194,7 +194,7 @@ async def generate_suggestions_by_file(exercise: Exercise, submission: Submissio
             filtered_prompt_inputs.append(prompt_inputs.pop(0))
         prompt_inputs = filtered_prompt_inputs
    
-    results: List[AssessmentModel] = await asyncio.gather(*[
+    results: List[Optional[AssessmentModel]] = await asyncio.gather(*[
         predict_and_parse(
             model=model, 
             chat_prompt=chat_prompt, 
@@ -209,7 +209,7 @@ async def generate_suggestions_by_file(exercise: Exercise, submission: Submissio
                 {
                     "file_path": prompt_input["file_path"],
                     "prompt": chat_prompt.format(**prompt_input),
-                    "result": result.dict()
+                    "result": result.dict() if result is not None else None
                 }
                 for prompt_input, result in zip(prompt_inputs, results)
             ]

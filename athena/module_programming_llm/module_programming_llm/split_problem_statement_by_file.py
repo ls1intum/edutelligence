@@ -102,10 +102,10 @@ async def split_problem_statement_by_file(
     if debug:
         emit_meta("file_problem_statements", {
             "prompt": chat_prompt.format(**prompt_input),
-            "result": split_problem_statement.dict()
+            "result": split_problem_statement.dict() if split_problem_statement is not None else None
         })
 
-    if not split_problem_statement.items:
+    if split_problem_statement is None or not split_problem_statement.items:
         return None
 
     # Join duplicate file names (some responses contain multiple problem statements for the same file)
