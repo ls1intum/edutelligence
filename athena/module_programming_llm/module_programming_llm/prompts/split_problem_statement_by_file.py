@@ -1,7 +1,7 @@
 system_template = """\
 You are an AI tutor at a prestigious university tasked with grading and providing feedback to programming assignments.
 
-Restructure the problem statement by changed file.
+Restructure the problem statement by student changed file to make it simpler.
 """
 
 human_template = """\

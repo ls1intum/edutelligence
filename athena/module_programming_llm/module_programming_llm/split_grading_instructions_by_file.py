@@ -3,6 +3,8 @@ from athena import emit_meta
 
 from pydantic import BaseModel, Field
 
+from langchain.prompts import ChatPromptTemplate
+
 from athena.programming import Exercise, Submission
 
 from module_programming_llm.config import BasicApproachConfig
@@ -28,6 +30,7 @@ class SplitGradingInstructions(BaseModel):
 async def split_grading_instructions_by_file(
         exercise: Exercise, 
         submission: Submission,
+        prompt: ChatPromptTemplate,
         config: BasicApproachConfig, 
         debug: bool
     ) -> Optional[SplitGradingInstructions]:
@@ -36,6 +39,7 @@ async def split_grading_instructions_by_file(
     Args:
         exercise (Exercise): Exercise to split the grading instructions for (respecting the changed files)
         submission (Submission): Submission to split the grading instructions for (respecting the changed files)
+        prompt (ChatPromptTemplate): Prompt template to check for grading_instructions
         config (BasicApproachConfig): Configuration
 
     Returns:
@@ -44,7 +48,11 @@ async def split_grading_instructions_by_file(
 
     # Return None if the grading instructions are too short
     if (exercise.grading_instructions is None 
-            or num_tokens_from_string(exercise.grading_instructions) <= config.split_problem_statement_by_file_prompt.tokens_before_split):
+            or num_tokens_from_string(exercise.grading_instructions) <= config.split_grading_instructions_by_file_prompt.tokens_before_split):
+        return None
+
+    # Return None if the grading instructions are not in the prompt
+    if "grading_instructions" not in prompt.input_variables:
         return None
     
     model = config.model.get_model()
@@ -92,7 +100,7 @@ async def split_grading_instructions_by_file(
     )
 
     if debug:
-        emit_meta("file_problem_statement", {
+        emit_meta("file_grading_instructions", {
             "prompt": chat_prompt.format(**prompt_input),
             "result": split_grading_instructions.dict()
         })
