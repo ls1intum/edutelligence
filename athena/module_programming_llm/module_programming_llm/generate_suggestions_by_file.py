@@ -63,7 +63,7 @@ async def generate_suggestions_by_file(exercise: Exercise, submission: Submissio
     is_short_problem_statement = num_tokens_from_string(exercise.problem_statement) <= config.split_problem_statement_by_file_prompt.tokens_before_split
     file_problem_statements = { 
         item.file_name: item.problem_statement 
-        for item in split_problem_statement.file_problem_statements 
+        for item in split_problem_statement.items 
     } if split_problem_statement is not None else {}
 
     is_short_grading_instructions = (
@@ -72,7 +72,7 @@ async def generate_suggestions_by_file(exercise: Exercise, submission: Submissio
     )
     file_grading_instructions = { 
         item.file_name: item.grading_instructions 
-        for item in split_grading_instructions.file_grading_instructions 
+        for item in split_grading_instructions.items 
     } if split_grading_instructions is not None else {}
 
     prompt_inputs: List[dict] = []

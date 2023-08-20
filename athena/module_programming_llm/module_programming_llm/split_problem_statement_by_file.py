@@ -24,7 +24,7 @@ class FileProblemStatement(BaseModel):
 
 class SplitProblemStatement(BaseModel):
     """Collection of problem statements split by file"""
-    file_problem_statements: Sequence[FileProblemStatement] = Field(..., description="File problem statements")
+    items: Sequence[FileProblemStatement] = Field(..., description="File problem statements")
 
 
 # pylint: disable=too-many-locals
@@ -105,15 +105,15 @@ async def split_problem_statement_by_file(
             "result": split_problem_statement.dict()
         })
 
-    if not split_problem_statement.file_problem_statements:
+    if not split_problem_statement.items:
         return None
 
     # Join duplicate file names (some responses contain multiple problem statements for the same file)
     file_problem_statements_by_file_name = defaultdict(list)
-    for file_problem_statement in split_problem_statement.file_problem_statements:
+    for file_problem_statement in split_problem_statement.items:
         file_problem_statements_by_file_name[file_problem_statement.file_name].append(file_problem_statement)
 
-    split_problem_statement.file_problem_statements = [
+    split_problem_statement.items = [
         FileProblemStatement(
             file_name=file_name,
             problem_statement="\n".join(
