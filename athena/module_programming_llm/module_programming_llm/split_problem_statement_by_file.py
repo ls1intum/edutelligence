@@ -27,6 +27,7 @@ class SplitProblemStatement(BaseModel):
     file_problem_statements: Sequence[FileProblemStatement] = Field(..., description="File problem statements")
 
 
+# pylint: disable=too-many-locals
 async def split_problem_statement_by_file(
         exercise: Exercise, 
         submission: Submission, 

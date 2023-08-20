@@ -27,6 +27,7 @@ class SplitGradingInstructions(BaseModel):
     file_grading_instructions: Sequence[FileGradingInstruction] = Field(..., description="File grading instructions")
 
 
+# pylint: disable=too-many-locals
 async def split_grading_instructions_by_file(
         exercise: Exercise, 
         submission: Submission,
