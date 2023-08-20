@@ -47,10 +47,18 @@ class AssessmentModel(BaseModel):
 async def generate_suggestions_by_file(exercise: Exercise, submission: Submission, config: BasicApproachConfig, debug: bool) -> List[Feedback]:
     model = config.model.get_model()
 
+    chat_prompt = get_chat_prompt_with_formatting_instructions(
+        model=model, 
+        system_message=config.generate_suggestions_by_file_prompt.system_message, 
+        human_message=config.generate_suggestions_by_file_prompt.human_message, 
+        pydantic_object=AssessmentModel
+    )
+
+
     # Get split problem statement and grading instructions by file (if necessary)
     split_problem_statement, split_grading_instructions = await asyncio.gather(
-        split_problem_statement_by_file(exercise=exercise, submission=submission, config=config, debug=debug),
-        split_grading_instructions_by_file(exercise=exercise, submission=submission, config=config, debug=debug)
+        split_problem_statement_by_file(exercise=exercise, submission=submission, prompt=chat_prompt, config=config, debug=debug),
+        split_grading_instructions_by_file(exercise=exercise, submission=submission, prompt=chat_prompt, config=config, debug=debug)
     )
 
     is_short_problem_statement = num_tokens_from_string(exercise.problem_statement) <= config.split_problem_statement_by_file_prompt.tokens_before_split
@@ -141,13 +149,6 @@ async def generate_suggestions_by_file(exercise: Exercise, submission: Submissio
             "problem_statement": problem_statement,
         })
     
-    chat_prompt = get_chat_prompt_with_formatting_instructions(
-        model=model, 
-        system_message=config.generate_suggestions_by_file_prompt.system_message, 
-        human_message=config.generate_suggestions_by_file_prompt.human_message, 
-        pydantic_object=AssessmentModel
-    )
-
     # Filter long prompts (omitting features if necessary)
     omittable_features = [
         "template_to_solution_diff", # If it is even set (has the lowest priority since it is indirectly included in other diffs)
