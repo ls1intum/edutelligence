@@ -400,8 +400,8 @@ def evaluation_provider(func: Union[
         # Retrieve existing metadata for the exercise, submission and feedback
         exercise.meta.update(get_stored_exercise_meta(exercise) or {})
         submission.meta.update(get_stored_submission_meta(submission) or {})
-        true_feedbacks = [feedback.update(get_stored_feedback_meta(feedback) or {}) for feedback in true_feedbacks]
-        predicted_feedbacks = [feedback.update(get_stored_feedback_meta(feedback) or {}) for feedback in predicted_feedbacks]
+        # true_feedbacks = [feedback.update(get_stored_feedback_meta(feedback) or {}) for feedback in true_feedbacks]
+        # predicted_feedbacks = [feedback.update(get_stored_feedback_meta(feedback) or {}) for feedback in predicted_feedbacks]
 
         # Call the actual provider
         if inspect.iscoroutinefunction(func):
