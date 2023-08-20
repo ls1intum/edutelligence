@@ -49,7 +49,8 @@ export default function RequestEvaluation() {
   return (
     <div className="bg-white rounded-md p-4 mb-8">
       <h3 className="text-2xl font-bold mb-4">
-        Request Evaluation from Athena
+        Request Evaluation from Athena{" "}
+        <span className="text-gray-500 text-sm">(OPTIONAL)</span>
       </h3>
       <p className="text-gray-500 mb-4">
         {/* TODO */}
