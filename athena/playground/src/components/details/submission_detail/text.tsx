@@ -10,6 +10,7 @@ type TextSubmissionDetailProps = {
   submission: TextSubmission;
   feedbacks?: Feedback[];
   onFeedbacksChange?: (feedback: Feedback[]) => void;
+  onFeedbacksChangeEvaluation?: (feedback: Feedback[]) => void;
 };
 
 export default function TextSubmissionDetail({
@@ -17,6 +18,7 @@ export default function TextSubmissionDetail({
   submission,
   feedbacks,
   onFeedbacksChange,
+  onFeedbacksChangeEvaluation,
 }: TextSubmissionDetailProps) {
   const unreferencedFeedbacks = feedbacks?.filter(
     (feedback) => getFeedbackReferenceType(feedback) === "unreferenced"
@@ -32,6 +34,7 @@ export default function TextSubmissionDetail({
           noFileFeedback
           feedbacks={feedbacks}
           onFeedbacksChange={onFeedbacksChange}
+          onFeedbacksChangeEvaluation={onFeedbacksChangeEvaluation}
           createNewFeedback={() => createNewFeedback(submission)}
         />
       </div>
@@ -48,6 +51,10 @@ export default function TextSubmissionDetail({
                   onFeedbackChange={
                     onFeedbacksChange &&
                     getOnFeedbackChange(feedback, feedbacks, onFeedbacksChange)
+                  }
+                  onFeedbackChangeEvaluation={
+                    onFeedbacksChangeEvaluation &&
+                      getOnFeedbackChange(feedback, feedbacks, onFeedbacksChangeEvaluation)
                   }
                 />
               )

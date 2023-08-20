@@ -23,6 +23,7 @@ export default function ModuleExperimentProgress({
       "sendingSubmissions",
       "sendingTrainingFeedbacks",
       "generatingFeedbackSuggestions",
+      "evaluatingFeedbackSuggestions",
       "finished",
     ];
     return steps.indexOf(step);
@@ -174,12 +175,16 @@ export default function ModuleExperimentProgress({
           )}
         </div>
       </li>
-      <li className="flex items-center space-x-2">
+
+     {/* Evaluating Feedback Suggestions */}
+     <li className="flex items-center space-x-2">
         <span
           className={twMerge(
             "flex items-center justify-center w-6 h-6 border rounded-full shrink-0",
-            stepToIndex(data.step) === 4
+            stepToIndex(data.step) > 4
               ? "text-green-500 border-green-500"
+              : stepToIndex(data.step) === 4
+              ? "text-yellow-500 border-yellow-500"
               : "text-gray-500 border-gray-500"
           )}
         >
@@ -188,7 +193,52 @@ export default function ModuleExperimentProgress({
         <div
           className={twMerge(
             "flex flex-col",
-            stepToIndex(data.step) === 4 ? "text-green-500" : "text-gray-500"
+            stepToIndex(data.step) > 4
+              ? "text-green-500"
+              : stepToIndex(data.step) === 4
+              ? "text-yellow-500"
+              : "text-gray-500"
+          )}
+        >
+          <span className="font-medium">Evaluating Feedback Suggestions</span>
+          {moduleRequests.requestEvaluation.isLoading && (
+            <span className="text-xs text-gray-500 animate-pulse">
+              Evaluating feedback suggestions... (
+              {data.evaluatedSubmissions.length + 1}/
+              {experiment.evaluationSubmissions.length})
+            </span>
+          )}
+          {moduleRequests.requestEvaluation.isError && (
+            <span className="text-xs text-red-500">
+              {moduleRequests.requestEvaluation.error.message}
+            </span>
+          )}
+          {moduleRequests.requestEvaluation.isSuccess && (
+            <span className="text-xs text-green-500">
+              Evaluated feedback suggestions (
+              {data.evaluatedSubmissions.length}/
+              {experiment.evaluationSubmissions.length})
+            </span>
+          )}
+        </div>
+      </li>
+
+      {/* Finished */}
+      <li className="flex items-center space-x-2">
+        <span
+          className={twMerge(
+            "flex items-center justify-center w-6 h-6 border rounded-full shrink-0",
+            stepToIndex(data.step) === 5
+              ? "text-green-500 border-green-500"
+              : "text-gray-500 border-gray-500"
+          )}
+        >
+          {experiment.trainingSubmissions ? 5 : 4}
+        </span>
+        <div
+          className={twMerge(
+            "flex flex-col",
+            stepToIndex(data.step) === 5 ? "text-green-500" : "text-gray-500"
           )}
         >
           <span className="font-medium">Finished</span>

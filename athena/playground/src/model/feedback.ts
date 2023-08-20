@@ -184,3 +184,25 @@ export const createNewFeedback = (submission: Submission): Feedback => {
     meta: {},
   };
 };
+
+export const addEvaluationToFeedbacks = (data: { [key: number]: any }, feedbacks: Feedback[]) => {
+  let newFeedbacks = [...feedbacks];
+  newFeedbacks.forEach((feedback) => {
+    feedback.evaluation = feedback.evaluation || {};
+
+    const evaluation = data[feedback.id];
+    if (evaluation) {
+      Object.entries(evaluation).forEach(([key, value]: [string, any]) => {
+        // @ts-ignore
+        feedback.evaluation[key] = { label: value.label, data: {} };
+        Object.entries(value).forEach(([subKey, subValue]) => {
+          if (subKey !== "label") {
+            // @ts-ignore
+            feedback.evaluation[key]["data"][subKey] = subValue;
+          }
+        });
+      });
+    }
+  });
+  return newFeedbacks;
+};

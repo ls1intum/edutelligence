@@ -202,6 +202,7 @@ const ConductBatchModuleExperiment = React.forwardRef<
                 viewSubmission.id
               )?.suggestions ?? []
             }
+            onFeedbacksChangeEvaluation={moduleExperiment.getFeedbackSuggestionsForSubmissionSetter(viewSubmission.id)}
           />
         </div>
         <Modal

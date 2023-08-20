@@ -13,6 +13,7 @@ type CodeEditorProps = {
   repositoryUrl: string;
   feedbacks?: Feedback[];
   onFeedbacksChange?: (feedback: Feedback[]) => void;
+  onFeedbacksChangeEvaluation?: (feedback: Feedback[]) => void;
   createNewFeedback?: () => Feedback;
 };
 
@@ -21,6 +22,7 @@ export default function CodeEditor({
   repositoryUrl,
   feedbacks,
   onFeedbacksChange,
+  onFeedbacksChangeEvaluation,
   createNewFeedback,
 }: CodeEditorProps) {
   const {
@@ -80,6 +82,7 @@ export default function CodeEditor({
                 filePath={selectedFile}
                 feedbacks={feedbacks}
                 onFeedbacksChange={onFeedbacksChange}
+                onFeedbacksChangeEvaluation={onFeedbacksChangeEvaluation}
                 createNewFeedback={createNewFeedback}
               />
             </div>

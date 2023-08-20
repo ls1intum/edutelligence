@@ -9,6 +9,7 @@ type SubmissionDetailProps = {
   submission: Submission;
   feedbacks?: Feedback[];
   onFeedbacksChange?: (feedback: Feedback[]) => void;
+  onFeedbacksChangeEvaluation?: (feedback: Feedback[]) => void;
 };
 
 export default function SubmissionDetail({
@@ -16,6 +17,7 @@ export default function SubmissionDetail({
   submission,
   feedbacks,
   onFeedbacksChange,
+  onFeedbacksChangeEvaluation,
 }: SubmissionDetailProps) {
   if (submission.type === "programming") {
     return (
@@ -24,6 +26,7 @@ export default function SubmissionDetail({
         submission={submission}
         feedbacks={feedbacks}
         onFeedbacksChange={onFeedbacksChange}
+        onFeedbacksChangeEvaluation={onFeedbacksChangeEvaluation}
       />
     );
   } else if (submission.type === "text") {
@@ -33,6 +36,7 @@ export default function SubmissionDetail({
         submission={submission}
         feedbacks={feedbacks}
         onFeedbacksChange={onFeedbacksChange}
+        onFeedbacksChangeEvaluation={onFeedbacksChangeEvaluation}
       />
     );
   } else {

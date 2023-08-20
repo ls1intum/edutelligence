@@ -9,6 +9,7 @@ import { useModule } from "@/hooks/module_context";
 import { useBaseInfo } from "@/hooks/base_info_context";
 import useRequestEvaluaion from "@/hooks/athena/request_evaluation";
 import useFeedbacks from "@/hooks/playground/feedbacks";
+import { addEvaluationToFeedbacks } from "@/model/feedback";
 
 import ExerciseSelect from "@/components/selectors/exercise_select";
 import SubmissionSelect from "@/components/selectors/submission_select";
@@ -42,28 +43,9 @@ export default function RequestEvaluation() {
     mutate,
     reset,
   } = useRequestEvaluaion({
-    onSuccess: (response, variables) => {
+    onSuccess: (response, { predictedFeedbacks }) => {
       if (!response?.data) return;
-
-      const responseFeedbacks = [...variables.predictedFeedbacks];
-      responseFeedbacks.forEach((feedback) => {
-        feedback.evaluation = feedback.evaluation || {};
-
-        const evaluation = response.data[feedback.id];
-        if (evaluation) {
-          Object.entries(evaluation).forEach(([key, value]: [string, any]) => {
-            // @ts-ignore
-            feedback.evaluation[key] = { label: value.label, data: {} };
-            Object.entries(value).forEach(([subKey, subValue]) => {
-              if (subKey !== "label") {
-                // @ts-ignore
-                feedback.evaluation[key]["data"][subKey] = subValue;
-              }
-            });
-          });
-        }
-      });
-      setResponseFeedbacks(responseFeedbacks);
+      setResponseFeedbacks(addEvaluationToFeedbacks(response.data, predictedFeedbacks));
     },
   });
 

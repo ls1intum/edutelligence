@@ -10,6 +10,7 @@ type ProgrammingSubmissionDetailProps = {
   submission: ProgrammingSubmission;
   feedbacks?: Feedback[];
   onFeedbacksChange?: (feedback: Feedback[]) => void;
+  onFeedbacksChangeEvaluation?: (feedback: Feedback[]) => void;
 };
 
 export default function ProgrammingSubmissionDetail({
@@ -17,6 +18,7 @@ export default function ProgrammingSubmissionDetail({
   submission,
   feedbacks,
   onFeedbacksChange,
+  onFeedbacksChangeEvaluation,
 }: ProgrammingSubmissionDetailProps) {
   const unreferencedFeedbacks = feedbacks?.filter((feedback) => getFeedbackReferenceType(feedback) === "unreferenced");
   return (
@@ -27,6 +29,7 @@ export default function ProgrammingSubmissionDetail({
         repositoryUrl={submission.repository_url}
         feedbacks={feedbacks}
         onFeedbacksChange={onFeedbacksChange}
+        onFeedbacksChangeEvaluation={onFeedbacksChangeEvaluation}
         createNewFeedback={() => createNewFeedback(submission)}
       />
       {((unreferencedFeedbacks && unreferencedFeedbacks.length > 0) || onFeedbacksChange) && (
@@ -40,6 +43,10 @@ export default function ProgrammingSubmissionDetail({
               onFeedbackChange={
                 onFeedbacksChange &&
                 getOnFeedbackChange(feedback, feedbacks, onFeedbacksChange)
+              }
+              onFeedbackChangeEvaluation={
+                onFeedbacksChangeEvaluation &&
+                  getOnFeedbackChange(feedback, feedbacks, onFeedbacksChangeEvaluation)
               }
             />)
           ))}

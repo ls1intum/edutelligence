@@ -20,6 +20,7 @@ type FileEditorProps = {
   autoHeight?: boolean;
   feedbacks?: Feedback[];
   onFeedbacksChange?: (feedback: Feedback[]) => void;
+  onFeedbacksChangeEvaluation?: (feedback: Feedback[]) => void;
   createNewFeedback?: () => Feedback;
 };
 
@@ -31,6 +32,7 @@ export default function FileEditor({
   autoHeight = false,
   feedbacks,
   onFeedbacksChange,
+  onFeedbacksChangeEvaluation,
   createNewFeedback,
 }: FileEditorProps) {
   const monaco = useMonaco();
@@ -342,6 +344,10 @@ export default function FileEditor({
                           feedbacks,
                           onFeedbacksChange
                         )
+                      }
+                      onFeedbackChangeEvaluation={
+                        onFeedbacksChangeEvaluation &&
+                          getOnFeedbackChange(feedback, feedbacks, onFeedbacksChangeEvaluation)
                       }
                       model={model}
                       className="mr-4"

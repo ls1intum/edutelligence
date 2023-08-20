@@ -14,6 +14,7 @@ import {
 type InlineFeedbackProps = {
   feedback: Feedback;
   onFeedbackChange?: (feedback: Feedback | undefined) => void;
+  onFeedbackChangeEvaluation?: (feedback: Feedback) => void;
   model?: editor.ITextModel;
   className?: string;
 };
@@ -21,6 +22,7 @@ type InlineFeedbackProps = {
 export default function InlineFeedback({
   feedback,
   onFeedbackChange,
+  onFeedbackChangeEvaluation,
   model,
   className,
 }: InlineFeedbackProps) {
@@ -265,7 +267,7 @@ export default function InlineFeedback({
               >
                 {value.label}
               </div>
-              {onFeedbackChange && (
+              {onFeedbackChangeEvaluation && (
                 <div className="space-x-1">
                   <button
                     className={twMerge(
@@ -280,7 +282,7 @@ export default function InlineFeedback({
                       } else {
                         value.correct = true;
                       }
-                      onFeedbackChange(feedback);
+                      onFeedbackChangeEvaluation(feedback);
                     }}
                   >
                     👍
@@ -298,7 +300,7 @@ export default function InlineFeedback({
                       } else {
                         value.correct = false;
                       }
-                      onFeedbackChange(feedback);
+                      onFeedbackChangeEvaluation(feedback);
                     }}
                   >
                     👎
