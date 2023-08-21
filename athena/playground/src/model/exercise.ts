@@ -16,7 +16,7 @@ type ExerciseBase = {
 
 export type TextExercise = ExerciseBase & {
   type: "text";
-  example_solution: string;
+  example_solution?: string;
 };
 
 export type ProgrammingExercise = ExerciseBase & {

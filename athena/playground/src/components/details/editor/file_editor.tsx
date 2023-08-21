@@ -45,17 +45,15 @@ export default function FileEditor({
     }
     if ("file_path" in feedback) {
       return feedback.file_path === filePath;
+    } else {
+      return true;
     }
-    return true;
   });
-  const modelPath =
-    (identifier ? `${identifier}/` : "") + (filePath ?? "default");
+  const modelPath = (identifier ? `${identifier}/` : "") + (filePath ?? "default");
 
   // Height used for autoHeight
   const [height, setHeight] = useState<number>(18);
-  const [hoverPosition, setHoverPosition] = useState<Position | undefined>(
-    undefined
-  );
+  const [hoverPosition, setHoverPosition] = useState<Position | undefined>(undefined);
   const [selection, setSelection] = useState<Selection | undefined>(undefined);
   const [isMounted, setIsMounted] = useState(false);
 
@@ -124,9 +122,7 @@ export default function FileEditor({
 
   // Setup listeners for adding feedback
   // Listening for mouse and selection events for adding feedback
-  const setupAddFeedbackHoverListeners = (
-    editor: editor.IStandaloneCodeEditor
-  ) => {
+  const setupAddFeedbackHoverListeners = (editor: editor.IStandaloneCodeEditor) => {
     editor.onMouseMove(function (e) {
       setHoverPosition(e.target.position ?? undefined);
     });
@@ -332,7 +328,7 @@ export default function FileEditor({
                 editorRef.current && (
                   <EditorWidget
                     editor={editorRef.current}
-                    key={`feedback-${feedback.id}-${index}`}
+                    key={`${filePath}-feedback-${feedback.id}-${index}`}
                     afterLineNumber={range?.endLineNumber ?? 0}
                     afterColumn={range?.endColumn ?? 0}
                     modelPath={modelPath}
