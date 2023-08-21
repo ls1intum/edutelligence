@@ -21,7 +21,7 @@ export default function ExerciseSelect({
     <label className="flex flex-col">
       <span className="text-lg font-bold">Exercise</span>
       <select
-        className="border border-gray-300 rounded-md p-2"
+        className="border border-gray-300 rounded-md p-2 disabled:opacity-50"
         value={exercise?.id ?? ""}
         disabled={disabled}
         onChange={(e) => onChange(data!.find((ex: Exercise) => ex.id === parseInt(e.target.value))!)}
@@ -34,7 +34,7 @@ export default function ExerciseSelect({
           .map((ex: Exercise) => {
             return ex.type === exerciseType ? (
               <option key={ex.id} value={ex.id}>
-                {ex.id} {ex.type}: {ex.title}
+                {ex.id} {ex.type}{ex.type === "programming" ? ` (${ex.programming_language})` : ""}: {ex.title}
               </option>
             ) : null;
           })}

@@ -9,6 +9,7 @@ import FileTree from "./file_tree";
 import FileEditor from "./file_editor";
 
 type CodeEditorProps = {
+  identifier?: string;
   repositoryUrl: string;
   feedbacks?: Feedback[];
   onFeedbacksChange?: (feedback: Feedback[]) => void;
@@ -16,33 +17,49 @@ type CodeEditorProps = {
 };
 
 export default function CodeEditor({
+  identifier,
   repositoryUrl,
   feedbacks,
   onFeedbacksChange,
   createNewFeedback,
 }: CodeEditorProps) {
-  const repository = useFetchAndUnzip(repositoryUrl);
+  const {
+    isError,
+    zip: repositoryZip,
+    tree,
+  } = useFetchAndUnzip(repositoryUrl);
   const [selectedFile, setSelectedFile] = useState<string | undefined>(
     undefined
   );
   const [fileContent, setFileContent] = useState<string | undefined>(undefined);
 
   useEffect(() => {
-    if (selectedFile && repository) {
-      repository.zip
+    if (selectedFile && repositoryZip) {
+      repositoryZip
         .file(selectedFile)
         ?.async("string")
         .then(setFileContent)
         .catch(console.error);
     }
-  }, [selectedFile, repository]);
+  }, [selectedFile, repositoryZip]);
+
+  if (isError) {
+    return (
+      <div className="text-red-500 text-sm">
+        Failed to load repository, did you link the downloaded repositories?
+        <div className="text-gray-500">
+          <code>npm run export:artemis:4-link-programming-repositories</code>
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div className="h-[50vh] border border-gray-100 rounded-lg overflow-hidden">
+    <div className="h-[60vh] border border-gray-100 rounded-lg overflow-hidden">
       <Allotment vertical={false} defaultSizes={[1, 4]}>
         <Allotment.Pane preferredSize={"20%"}>
           <FileTree
-            tree={repository.tree}
+            tree={tree}
             feedbacks={feedbacks}
             onSelectFile={setSelectedFile}
           />
@@ -55,7 +72,11 @@ export default function CodeEditor({
               </div>
               <FileEditor
                 content={fileContent}
-                identifier={repositoryUrl}
+                identifier={
+                  identifier
+                    ? `${identifier}-${repositoryUrl}`
+                    : repositoryUrl
+                }
                 filePath={selectedFile}
                 feedbacks={feedbacks}
                 onFeedbacksChange={onFeedbacksChange}
