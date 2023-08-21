@@ -75,7 +75,11 @@ async def generate_suggestions(exercise: Exercise, submission: Submission, confi
         model=model, 
         chat_prompt=chat_prompt, 
         prompt_input=prompt_input, 
-        pydantic_object=AssessmentModel
+        pydantic_object=AssessmentModel,
+        tags=[
+            f"exercise-{exercise.id}",
+            f"submission-{submission.id}",
+        ]
     )
 
     if debug:

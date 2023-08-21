@@ -85,7 +85,12 @@ async def generate_evaluation(
         model=evaluation_model, 
         chat_prompt=chat_prompt, 
         prompt_input=prompt_input, 
-        pydantic_object=Evaluation
+        pydantic_object=Evaluation,
+        tags=[
+            f"exercise-{exercise.id}",
+            f"submission-{submission.id}",
+            "evaluation"
+        ]
     )
 
     if result is None:
