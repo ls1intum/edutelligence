@@ -1,6 +1,7 @@
 import type { Feedback } from "@/model/feedback";
 import type { Experiment } from "@/components/view_mode/evaluation_mode/define_experiment";
 
+import { v4 as uuidv4 } from "uuid";
 import { useEffect, useRef, useState } from "react";
 import { useSendFeedbacks } from "./athena/send_feedbacks";
 import { addEvaluationToFeedbacks } from "@/model/feedback";
@@ -8,6 +9,7 @@ import useRequestSubmissionSelection from "./athena/request_submission_selection
 import useRequestFeedbackSuggestions from "./athena/request_feedback_suggestions";
 import useSendSubmissions from "./athena/send_submissions";
 import useRequestEvaluaion from "./athena/request_evaluation";
+import { useExperimentIdentifiersSetRunId } from "./experiment_identifiers_context";
 
 export type ExperimentStep =
   | "notStarted"
@@ -18,6 +20,8 @@ export type ExperimentStep =
   | "finished";
 
 export type BatchModuleExperimentState = {
+  // Run ID
+  runId: string;
   // The current step of the experiment
   step: ExperimentStep;
   // Submissions that have been sent to Athena
@@ -37,12 +41,15 @@ export type BatchModuleExperimentState = {
 export default function useBatchModuleExperiment(experiment: Experiment) {
   // State of the module experiment
   const [data, setData] = useState<BatchModuleExperimentState>({
+    runId: uuidv4(),
     step: "notStarted", // Not started
     didSendSubmissions: false,
     sentTrainingSubmissions: [],
     submissionsWithFeedbackSuggestions: new Map(),
     evaluatedSubmissions: [],
   });
+
+  const setContextRunId = useExperimentIdentifiersSetRunId();
 
   const [processingStep, setProcessingStep] = useState<
     ExperimentStep | undefined
@@ -63,6 +70,7 @@ export default function useBatchModuleExperiment(experiment: Experiment) {
 
   const exportData = () => {
     return {
+      runId: data.runId,
       step: data.step,
       didSendSubmissions: data.didSendSubmissions,
       sentTrainingSubmissions: data.sentTrainingSubmissions,
@@ -75,6 +83,7 @@ export default function useBatchModuleExperiment(experiment: Experiment) {
 
   const importData = (data: any) => {
     if (
+      data.runId === undefined ||
       data.step === undefined ||
       data.didSendSubmissions === undefined ||
       data.sentTrainingSubmissions === undefined ||
@@ -85,6 +94,7 @@ export default function useBatchModuleExperiment(experiment: Experiment) {
     }
 
     setData(() => ({
+      runId: data.runId,
       step: data.step,
       didSendSubmissions: data.didSendSubmissions,
       sentTrainingSubmissions: data.sentTrainingSubmissions,
@@ -389,6 +399,17 @@ export default function useBatchModuleExperiment(experiment: Experiment) {
   };
 
   useEffect(() => {
+    isMounted.current = true;
+    return () => {
+      isMounted.current = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    setContextRunId(data.runId);
+  }, [data.runId])
+
+  useEffect(() => {
     if (experiment.executionMode !== "batch") {
       console.error("Using useBatchModuleExperiment in non-batch experiment!");
       return;
@@ -417,13 +438,6 @@ export default function useBatchModuleExperiment(experiment: Experiment) {
       stepEvaluateFeedbackSuggestions();
     }
   }, [data.step]);
-
-  useEffect(() => {
-    isMounted.current = true;
-    return () => {
-      isMounted.current = false;
-    };
-  }, []);
 
   return {
     data,

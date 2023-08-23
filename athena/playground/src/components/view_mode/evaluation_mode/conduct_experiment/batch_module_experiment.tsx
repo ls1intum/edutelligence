@@ -9,6 +9,7 @@ import { FullScreenHandle } from "react-full-screen";
 import useHealth from "@/hooks/health";
 import useBatchModuleExperiment from "@/hooks/batch_module_experiment";
 import { ModuleProvider } from "@/hooks/module_context";
+import { ExperimentIdentifiersProvider } from "@/hooks/experiment_identifiers_context";
 import { ModuleConfiguration } from "../configure_modules";
 import ModuleExperimentProgress from "./module_experiment_progress";
 import SubmissionDetail from "@/components/details/submission_detail";
@@ -257,12 +258,17 @@ function ConductBatchModuleExperimentWrapped(
   ref: React.Ref<ConductBatchModuleExperimentHandles>
 ) {
   return (
-    <ModuleProvider
-      module={props.moduleConfiguration.moduleAndConfig.module}
-      moduleConfig={props.moduleConfiguration.moduleAndConfig.moduleConfig}
-    >
-      <ConductBatchModuleExperiment {...props} ref={ref} />
-    </ModuleProvider>
+    <ExperimentIdentifiersProvider experimentIdentifiers={{
+      experimentId: props.experiment.id,
+      moduleConfigurationId: props.moduleConfiguration.id,
+    }}>
+      <ModuleProvider
+        module={props.moduleConfiguration.moduleAndConfig.module}
+        moduleConfig={props.moduleConfiguration.moduleAndConfig.moduleConfig}
+      >
+        <ConductBatchModuleExperiment {...props} ref={ref} />
+      </ModuleProvider>
+    </ExperimentIdentifiersProvider>
   );
 }
 
