@@ -39,7 +39,7 @@ def generate_file_grading_instructions(exercise: Exercise):
 
 
 def generate_file_problem_statements(exercise: Exercise):
-    problem_statement = exercise.problem_statement
+    problem_statement = exercise.problem_statement or ""
 
     solution_repo = exercise.get_solution_repository()
     template_repo = exercise.get_template_repository()
