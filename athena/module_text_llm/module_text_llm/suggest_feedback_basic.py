@@ -1,4 +1,5 @@
 import csv
+import traceback
 from typing import List
 
 from langchain.chains import LLMChain
@@ -48,9 +49,10 @@ async def suggest_feedback_basic(exercise: Exercise, submission: Submission, con
             continue
 
         try:
-            credits = float(row["credits"])
-        except ValueError:
+            feedback_credits = float(row["credits"])
+        except (ValueError, TypeError):
             logger.warning("Could not parse credits from row %s", row)
+            traceback.print_exc()
             continue
 
         index_start, index_end = parse_line_number_reference_as_span(row["reference"], submission.text)
@@ -63,7 +65,7 @@ async def suggest_feedback_basic(exercise: Exercise, submission: Submission, con
             description=row["text"],
             index_start=index_start,
             index_end=index_end,
-            credits=credits,
+            credits=feedback_credits,
             meta={}
         ))
 
