@@ -30,7 +30,9 @@ if not types:
 if 'DefaultModelConfig' not in globals():
     DefaultModelConfig = types[0]
 
+type0 = types[0]
 if len(types) == 1:
-    ModelConfigType = types[0]
+    ModelConfigType = type0
 else:
-    ModelConfigType = Union[tuple(types)]  # type: ignore
+    type1 = types[1]
+    ModelConfigType = Union[type0, type1] # type: ignore

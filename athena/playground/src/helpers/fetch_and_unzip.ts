@@ -54,8 +54,9 @@ function buildFileTree(paths: string[], path: string = ""): FileTree[] {
   return tree;
 }
 
-export const useFetchAndUnzip = (url: string): { zip: JSZip, tree: FileTree[] } => {
-  const [zip, setZip] = useState<JSZip>(new JSZip());
+export const useFetchAndUnzip = (url: string) => {
+  const [isError, setIsError] = useState<boolean>(false);
+  const [zip, setZip] = useState<JSZip | undefined>();
   const [tree, setTree] = useState<FileTree[]>([]);
 
   useEffect(() => {
@@ -68,13 +69,18 @@ export const useFetchAndUnzip = (url: string): { zip: JSZip, tree: FileTree[] } 
 
         setZip(zip);
         setTree(tree);
+        setIsError(false);
       } catch (error) {
-        console.error("Error fetching or unzipping the file", error);
+        console.error(
+          "Error fetching or unzipping the file, you may link downloaded repositories with `npm run export:artemis:4-link-programming-repositories`",
+          error
+        );
+        setIsError(true);
       }
     };
 
     fetchData();
   }, [url]);
 
-  return { zip, tree };
+  return { isError, zip, tree };
 };
