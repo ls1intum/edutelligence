@@ -45,7 +45,7 @@ class AssessmentModel(BaseModel):
 
 # pylint: disable=too-many-locals
 async def generate_suggestions_by_file(exercise: Exercise, submission: Submission, config: BasicApproachConfig, debug: bool) -> List[Feedback]:
-    model = config.model.get_model()
+    model = config.model.get_model()  # type: ignore[attr-defined]
 
     chat_prompt = get_chat_prompt_with_formatting_instructions(
         model=model, 

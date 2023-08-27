@@ -55,7 +55,7 @@ async def split_problem_statement_by_file(
     if "problem_statement" not in prompt.input_variables:
         return None
 
-    model = config.model.get_model()
+    model = config.model.get_model()  # type: ignore[attr-defined]
 
     template_repo = exercise.get_template_repository()
     solution_repo = exercise.get_solution_repository()
