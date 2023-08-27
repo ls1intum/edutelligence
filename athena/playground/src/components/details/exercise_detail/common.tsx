@@ -11,9 +11,9 @@ export default function CommonExerciseDetail({ exercise, openedInitially }: { ex
       </div>
       {/* Problem Statement */}
       <Disclosure title="Problem Statement" openedInitially={openedInitially}>
-        {exercise.problem_statement.length > 0 ? (
+        {exercise.problem_statement ? (
           <Markdown
-            content={exercise.problem_statement}
+            content={exercise.problem_statement ?? ""}
             enablePlainTextSwitcher
           />
         ) : (

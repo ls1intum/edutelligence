@@ -8,8 +8,8 @@ import os
 from dataclasses import dataclass
 from typing import Dict, Tuple, Union, cast
 
-import torch
 from code_bert_score import score
+import torch
 
 from athena.logger import logger
 

@@ -2,7 +2,8 @@
 
 # This is the Dockerfile for the module_example.
 
-FROM python:3.11
+# Pytorch CPU version is not yet available for Python 3.1
+FROM python:3.10
 LABEL org.opencontainers.image.source=https://github.com/pal03377/Athena-New
 
 # Environment variable Python in Docker
@@ -21,6 +22,13 @@ COPY --from=athena /code /athena
 RUN poetry config virtualenvs.create true \
     && poetry config virtualenvs.in-project true \
     && poetry install --no-interaction --no-ansi
+
+# Re-install pytorch in the CPU version because we don't have a GPU
+RUN poetry source add --priority=supplemental torch-stable https://download.pytorch.org/whl/
+# Install PyTorch:
+RUN poetry add torch==2.0.0+cpu
+# Somehow, the torch library needs sympy to be installed manually as well
+RUN poetry add sympy==1.12
 
 # Project files
 COPY . ./
