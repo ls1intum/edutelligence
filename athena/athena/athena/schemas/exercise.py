@@ -21,7 +21,7 @@ class Exercise(Schema, ABC):
                                 example=0.0)
     grading_instructions: Optional[str] = Field(None, description="Markdown text that describes how the exercise is graded.",
                                       example="Give 1 point for each correct answer.")
-    problem_statement: str = Field("", description="Markdown text that describes the problem statement.",
+    problem_statement: Optional[str] = Field(None, description="Markdown text that describes the problem statement.",
                                    example="Write a program that prints 'Hello World!'")
 
     meta: dict = Field({}, example={"internal_id": "5"})

@@ -48,7 +48,7 @@ async def split_problem_statement_by_file(
     """
     
     # Return None if the problem statement is too short
-    if num_tokens_from_string(exercise.problem_statement) <= config.split_problem_statement_by_file_prompt.tokens_before_split:
+    if num_tokens_from_string(exercise.problem_statement or "No problem statement.") <= config.split_problem_statement_by_file_prompt.tokens_before_split:
         return None
     
     # Return None if the problem statement not in the prompt

@@ -1,7 +1,7 @@
 import type { Feedback } from "@/model/feedback";
 import type { FileTree } from "@/helpers/fetch_and_unzip";
 
-import { useState } from "react";
+import { useId, useState } from "react";
 import { FocusStyleManager } from "@blueprintjs/core";
 import { renderers as bpRenderers } from "react-complex-tree-blueprintjs-renderers";
 import {
@@ -31,6 +31,8 @@ export default function FileTree({
   feedbacks,
   onSelectFile,
 }: FileTreeProps) {
+  const treeId = useId();
+
   let items: { [index: string]: TreeItem<ItemData> } = {
     root: {
       index: "root",
@@ -98,7 +100,7 @@ export default function FileTree({
         items={items}
         getItemTitle={(item) => item.data.name}
         viewState={{
-          ["tree-1"]: {
+          [treeId]: {
             focusedItem,
             expandedItems,
             selectedItems,
@@ -127,7 +129,9 @@ export default function FileTree({
                   props.item.data.isDir
                     ? "rounded-full aspect-auto text-slate-500"
                     : "rounded text-blue-800 bg-blue-200",
-                  props.context.isSelected && props.item.data.isDir ? "text-white" : ""
+                  props.context.isSelected && props.item.data.isDir
+                    ? "text-white"
+                    : ""
                 )}
               >
                 {props.item.data.feedbackCount}
@@ -136,7 +140,7 @@ export default function FileTree({
           </>
         )}
       >
-        <Tree treeId={"tree-1"} rootItem="root" treeLabel="File Tree" />
+        <Tree treeId={treeId} rootItem="root" treeLabel="File Tree" />
       </ControlledTreeEnvironment>
     </div>
   );

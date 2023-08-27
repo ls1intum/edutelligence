@@ -1,22 +1,12 @@
 import { useBaseInfo, useBaseInfoDispatch } from "@/hooks/base_info_context";
-import useConfigSchema from "@/hooks/athena/config_schema";
 
 import Health from "@/components/health";
-import ModuleSelect from "@/components/selectors/module_select";
-import DataSelect from "@/components/selectors/data_select";
-import ModuleConfig from "@/components/module_config";
-import Disclosure from "@/components/disclosure";
+import DataModeSelect from "@/components/selectors/data_mode_select";
+import ViewModeSelect from "@/components/selectors/view_mode_select";
 
 export default function BaseInfoHeader() {
-  const {
-    mode,
-    athenaUrl,
-    athenaSecret,
-    module,
-    moduleConfig,
-  } = useBaseInfo();
+  const { dataMode, viewMode, athenaUrl, athenaSecret } = useBaseInfo();
   const dispatch = useBaseInfoDispatch();
-  const { data, error, isLoading } = useConfigSchema();
 
   return (
     <div className="bg-white rounded-md p-4 mb-8">
@@ -43,64 +33,14 @@ export default function BaseInfoHeader() {
         />
       </label>
       <br />
-      <ModuleSelect
-        module={module}
-        onChange={(value) => dispatch({ type: "SET_MODULE", payload: value })}
+      <DataModeSelect 
+        dataMode={dataMode} 
+        onChangeDataMode={(dataMode) => dispatch({ type: "SET_DATA_MODE", payload: dataMode })} 
       />
-      {module && (
-        <div className="mt-2 space-y-1">
-          {isLoading && <p className="text-gray-500">Loading...</p>}
-          {error &&
-            (error.status === 404 ? (
-              <p className="text-gray-500">
-                Config options not available, not implemented in the module
-              </p>
-            ) : (
-              <p className="text-red-500">
-                Failed to get config options from Athena
-              </p>
-            ))}
-          {data && (
-            <>
-              <p className="text-gray-500">
-                This module has a custom configuration. You can use the default
-                configuration or provide your own.
-              </p>
-              <label className="flex items-center cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={moduleConfig !== undefined}
-                  onChange={(e) => {
-                    if (e.target.checked) {
-                      dispatch({ type: "SET_MODULE_CONFIG", payload: {}});
-                    } else {
-                      dispatch({ type: "SET_MODULE_CONFIG", payload: undefined});
-                    }
-                  }}
-                />
-                <div className="ml-2 text-gray-700 font-normal">
-                  Use custom module config
-                </div>
-              </label>
-              {moduleConfig !== undefined && (
-                <Disclosure title="Configuration" openedInitially>
-                  <ModuleConfig
-                    module={module}
-                    moduleConfig={moduleConfig}
-                    onChangeConfig={(config) =>
-                      dispatch({ type: "SET_MODULE_CONFIG", payload: config })
-                    }
-                  />
-                </Disclosure>
-              )}
-            </>
-          )}
-        </div>
-      )}
       <br />
-      <DataSelect 
-        mode={mode} 
-        onChangeMode={(mode) => dispatch({ type: "SET_MODE", payload: mode })} 
+      <ViewModeSelect 
+        viewMode={viewMode} 
+        onChangeViewMode={(viewMode) => dispatch({ type: "SET_VIEW_MODE", payload: viewMode })} 
       />
     </div>
   );
