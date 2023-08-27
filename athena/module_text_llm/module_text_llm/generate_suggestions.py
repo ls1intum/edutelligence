@@ -12,7 +12,7 @@ from module_text_llm.helpers.llm_utils import (
     num_tokens_from_prompt,
     predict_and_parse
 )
-from module_text_llm.helpers.utils import add_sentence_numbers, get_index_range_from_line_range, num_tokens_from_string
+from module_text_llm.helpers.utils import add_sentence_numbers, get_index_range_from_line_range
 
 class FeedbackModel(BaseModel):
     title: str = Field(..., description="Very short title, i.e. feedback category", example="Logic Error")
