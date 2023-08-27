@@ -10,6 +10,11 @@ from .model_config import ModelConfig
 
 
 # Hardcoded list of models
+# If necessary, add more models from replicate here, the config below might need adjustments depending on the available
+# parameters of the model
+#
+# To update the version of the models, go to the respective page on replicate.com and copy the (latest) version id 
+# from and paste it after the colon in the value of the dictionary. Ever so often a new version is released.
 replicate_models = {
     # LLAMA 2 70B Chat
     # https://replicate.com/replicate/llama-2-70b-chat
