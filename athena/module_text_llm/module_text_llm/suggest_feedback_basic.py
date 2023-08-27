@@ -24,7 +24,7 @@ async def suggest_feedback_basic(exercise: Exercise, submission: Submission, con
         "max_points": exercise.max_points,
         "bonus_points": exercise.bonus_points,
         "grading_instructions": exercise.grading_instructions,
-        "problem_statement": exercise.problem_statement,
+        "problem_statement": exercise.problem_statement or "",
         # TODO: "example_solution": exercise.example_solution, MISSING
         "submission": add_sentence_numbers(submission.text)
     }
