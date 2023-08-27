@@ -60,7 +60,8 @@ async def generate_suggestions_by_file(exercise: Exercise, submission: Submissio
         split_grading_instructions_by_file(exercise=exercise, submission=submission, prompt=chat_prompt, config=config, debug=debug)
     )
 
-    is_short_problem_statement = num_tokens_from_string(exercise.problem_statement) <= config.split_problem_statement_by_file_prompt.tokens_before_split
+    problem_statement_tokens = num_tokens_from_string(exercise.problem_statement or "")
+    is_short_problem_statement = problem_statement_tokens <= config.split_problem_statement_by_file_prompt.tokens_before_split
     file_problem_statements = { 
         item.file_name: item.problem_statement 
         for item in split_problem_statement.items 
@@ -101,7 +102,7 @@ async def generate_suggestions_by_file(exercise: Exercise, submission: Submissio
 
     for file_path, file_content in changed_files.items():
         problem_statement = (
-            exercise.problem_statement if is_short_problem_statement 
+            exercise.problem_statement or "" if is_short_problem_statement 
             else file_problem_statements.get(file_path, "No relevant problem statement section found.")
         )
         problem_statement = problem_statement if problem_statement.strip() else "No problem statement found."
