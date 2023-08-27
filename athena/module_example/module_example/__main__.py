@@ -80,12 +80,61 @@ def suggest_feedback(exercise: Exercise, submission: Submission, module_config: 
         emit_meta("costs", "100.00€")
     
     return [
+        # Referenced feedback, line 8-9 in BinarySearch.java
         Feedback(
+            id=None,
             exercise_id=exercise.id,
             submission_id=submission.id,
             title="This is a suggestion.",
             description="There is something wrong here.",
             credits=-1.0,
+            file_path="BinarySearch.java",
+            line_start=8,
+            line_end=9,
+            grading_instruction_id=None,
+            meta={}
+        ),
+        # Referenced feedback, line 13-18 in BinarySearch.java
+        Feedback(
+            id=None,
+            exercise_id=exercise.id,
+            submission_id=submission.id,
+            title="This is a second suggestion.",
+            description="This is very good!",
+            credits=2.0,
+            file_path="BinarySearch.java",
+            line_start=13,
+            line_end=18,
+            grading_instruction_id=None,
+            meta={}
+        ),
+        # Unreferenced feedback without file
+        Feedback(
+            id=None,
+            exercise_id=exercise.id,
+            submission_id=submission.id,
+            title="This is an unreferenced suggestion.",
+            description="General feedback without any reference to the submission.",
+            credits=0.0,
+            file_path=None,
+            line_start=None,
+            line_end=None,
+            grading_instruction_id=None,
+            meta={}
+        ),
+        # Unreferenced feedback in BinarySearch.java
+        Feedback(
+            id=None,
+            exercise_id=exercise.id,
+            submission_id=submission.id,
+            title="This is an unreferenced suggestion in a file.",
+            description="General feedback with only the reference to a file (BinarySearch.java)",
+            credits=0.0,
+            file_path="BinarySearch.java",
+            line_start=None,
+            line_end=None,
+            grading_instruction_id=None,
+            meta={}
         )
     ]
 

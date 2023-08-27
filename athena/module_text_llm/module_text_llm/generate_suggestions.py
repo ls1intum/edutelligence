@@ -41,7 +41,7 @@ async def generate_suggestions(exercise: Exercise, submission: Submission, confi
         "max_points": exercise.max_points,
         "bonus_points": exercise.bonus_points,
         "grading_instructions": exercise.grading_instructions,
-        "problem_statement": exercise.problem_statement,
+        "problem_statement": exercise.problem_statement or "No problem statement.",
         "example_solution": exercise.example_solution,
         "submission": add_sentence_numbers(submission.text)
     }
