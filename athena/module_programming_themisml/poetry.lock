@@ -1808,7 +1808,7 @@ name = "uvicorn"
 version = "0.22.0"
 description = "The lightning-fast ASGI server."
 optional = false
-python-versions = ">=3.8"
+python-versions = ">=3.7"
 files = [
     {file = "uvicorn-0.22.0-py3-none-any.whl", hash = "sha256:e9434d3bbf05f310e762147f769c9f21235ee118ba2d2bf1155a7196448bd996"},
     {file = "uvicorn-0.22.0.tar.gz", hash = "sha256:79277ae03db57ce7d9aa0567830bbb51d7a612f54d6e1e3e92da3ef24c2c8ed8"},
@@ -1824,4 +1824,4 @@ standard = ["colorama (>=0.4)", "httptools (>=0.5.0)", "python-dotenv (>=0.13)",
 [metadata]
 lock-version = "2.0"
 python-versions = "^3.10"
-content-hash = "4b133148884c7c5fdcb1796d0845cf4d52434c0960cbd385f546ed5d921bf9fd"
+content-hash = "eaa23cc138a0197c9751c70224e04432e1502e819f1788a9a1490d47ba5a4034"
