@@ -35,4 +35,4 @@ if len(types) == 1:
 else:
     type0 = types[0]
     type1 = types[1]
-    ModelConfigType = Union[type0, type1]
+    ModelConfigType = Union[type0, type1] # type: ignore
