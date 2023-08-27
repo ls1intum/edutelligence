@@ -1,3 +1,4 @@
+from typing import Optional
 from pydantic import Field
 
 from .exercise_type import ExerciseType
@@ -9,4 +10,4 @@ class TextExercise(Exercise):
 
     type: ExerciseType = Field(ExerciseType.text, const=True)
 
-    example_solution: str = Field("", description="An example solution to the exercise.")
+    example_solution: Optional[str] = Field(None, description="An example solution to the exercise.")
