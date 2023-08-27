@@ -23,7 +23,7 @@ replicate_models = {
 }
 
 available_models = {}
-if len(os.environ.get("REPLICATE_API_TOKEN") or "") > 0:
+if os.environ.get("REPLICATE_API_TOKEN"):  # If Replicate is available
     available_models = {
         name: Replicate(
             model=model,
