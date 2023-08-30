@@ -24,7 +24,7 @@ function ModuleConfig({
   showOverrideCheckbox,
   collapsibleConfig,
 }: ModuleConfigProps) {
-  const { data, error, isLoading } = useConfigSchema();
+  const { data, error, isLoading } = useConfigSchema({ retry: false });
 
   return (
     <div className="mt-2 space-y-1">
@@ -32,7 +32,7 @@ function ModuleConfig({
       {error &&
         (error.status === 404 ? (
           <p className="text-gray-500">
-            Config options not available, not implemented in the module
+            Config options not available, not implemented for this module
           </p>
         ) : (
           <p className="text-red-500">
