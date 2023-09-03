@@ -43,6 +43,8 @@ def process_incoming_feedback(exercise: Exercise, submission: Submission, feedba
         methods = extract_methods(code)
         feedback_method = None
         for m in methods:
+            if m.line_start is None or m.line_end is None:
+                continue
             # method has to contain all feedback lines
             if m.line_start <= feedback.line_start and m.line_end >= feedback.line_end:
                 feedback_method = m

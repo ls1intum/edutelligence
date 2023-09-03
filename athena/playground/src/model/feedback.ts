@@ -10,6 +10,7 @@ type FeedbackBase = {
   credits: number;
   exercise_id: number;
   submission_id: number;
+  grading_instruction_id?: number;
   isSuggestion?: boolean; // Playground only
   isNew?: boolean; // Playground only
   isChanged?: boolean; // Playground only

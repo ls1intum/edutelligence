@@ -1,6 +1,6 @@
 # type: ignore # too much weird behavior of mypy with decorators
 import inspect
-from fastapi import Depends
+from fastapi import Depends, BackgroundTasks
 from pydantic import BaseModel, ValidationError
 from typing import TypeVar, Callable, List, Dict, Union, Any, Coroutine, Type
 
@@ -73,6 +73,7 @@ def submissions_consumer(func: Union[
     @authenticated
     @with_meta
     async def wrapper(
+            background_tasks: BackgroundTasks,
             exercise: exercise_type,
             submissions: List[submission_type],
             module_config: module_config_type = Depends(get_dynamic_module_config_factory(module_config_type))):
@@ -103,11 +104,8 @@ def submissions_consumer(func: Union[
         if "module_config" in inspect.signature(func).parameters:
             kwargs["module_config"] = module_config
 
-        # Call the actual consumer
-        if inspect.iscoroutinefunction(func):
-            await func(exercise, submissions, **kwargs)
-        else:
-            func(exercise, submissions, **kwargs)
+        # Call the actual consumer asynchronously
+        background_tasks.add_task(func, exercise, submissions, **kwargs)
 
         return None
     return wrapper
@@ -243,6 +241,7 @@ def feedback_consumer(func: Union[
     @authenticated
     @with_meta
     async def wrapper(
+            background_tasks: BackgroundTasks,
             exercise: exercise_type,
             submission: submission_type,
             feedbacks: List[feedback_type],
@@ -262,11 +261,8 @@ def feedback_consumer(func: Union[
         if "module_config" in inspect.signature(func).parameters:
             kwargs["module_config"] = module_config
 
-        # Call the actual consumer
-        if inspect.iscoroutinefunction(func):
-            await func(exercise, submission, feedbacks, **kwargs)
-        else:
-            func(exercise, submission, feedbacks, **kwargs)
+        # Call the actual consumer asynchronously
+        background_tasks.add_task(func, exercise, submission, feedbacks, **kwargs)
 
         return None
     return wrapper

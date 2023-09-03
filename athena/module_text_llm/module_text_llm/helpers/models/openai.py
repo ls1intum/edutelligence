@@ -90,8 +90,8 @@ def _use_openai_credentials():
     openai.api_version = None
 
 
-openai_available = len(os.environ.get("LLM_OPENAI_API_KEY") or "") > 0
-azure_openai_available = len(os.environ.get("LLM_AZURE_OPENAI_API_KEY") or "") > 0
+openai_available = bool(os.environ.get("LLM_OPENAI_API_KEY"))
+azure_openai_available = bool(os.environ.get("LLM_AZURE_OPENAI_API_KEY"))
 
 
 # This is a hack to make sure that the openai api is set correctly

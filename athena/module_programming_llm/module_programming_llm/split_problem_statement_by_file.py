@@ -48,14 +48,14 @@ async def split_problem_statement_by_file(
     """
     
     # Return None if the problem statement is too short
-    if num_tokens_from_string(exercise.problem_statement) <= config.split_problem_statement_by_file_prompt.tokens_before_split:
+    if num_tokens_from_string(exercise.problem_statement or "") <= config.split_problem_statement_by_file_prompt.tokens_before_split:
         return None
     
     # Return None if the problem statement not in the prompt
     if "problem_statement" not in prompt.input_variables:
         return None
 
-    model = config.model.get_model()
+    model = config.model.get_model()  # type: ignore[attr-defined]
 
     template_repo = exercise.get_template_repository()
     solution_repo = exercise.get_solution_repository()
@@ -83,7 +83,7 @@ async def split_problem_statement_by_file(
     )
     
     prompt_input = {
-        "problem_statement": exercise.problem_statement,
+        "problem_statement": exercise.problem_statement or "No problem statement.",
         "changed_files_from_template_to_solution": ", ".join(changed_files_from_template_to_solution),
         "changed_files_from_template_to_submission": ", ".join(changed_files_from_template_to_submission)
     }
