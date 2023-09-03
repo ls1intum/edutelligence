@@ -25,6 +25,12 @@ replicate_models = {
     # LLaMA 2 7B Chat
     # https://replicate.com/a16z-infra/llama-2-7b-chat
     "llama-2-7b-chat": "a16z-infra/llama-2-7b-chat:7b0bfc9aff140d5b75bacbed23e91fd3c34b01a1e958d32132de6e0a19796e2c",
+    # CodeLLAMA 2 13B 
+    # https://replicate.com/replicate/codellama-13b
+    "codellama-13b": "replicate/codellama-13b:1c914d844307b0588599b8393480a3ba917b660c7e9dfae681542b5325f228db",
+    # CodeLLAMA 2 34B
+    # https://replicate.com/replicate/codellama-34b
+    "codellama-34b": "replicate/codellama-34b:0666717e5ead8557dff55ee8f11924b5c0309f5f1ca52f64bb8eec405fdb38a7",
 }
 
 available_models = {}
