@@ -29,6 +29,7 @@ export type Experiment = {
   trainingSubmissions?: Submission[];
   evaluationSubmissions: Submission[];
   tutorFeedbacks: Feedback[];
+  runAutomaticEvaluation: boolean;
 };
 
 type ExperimentExport = {
@@ -39,6 +40,7 @@ type ExperimentExport = {
   executionMode: ExecutionMode;
   trainingSubmissionIds?: number[];
   evaluationSubmissionIds: number[];
+  runAutomaticEvaluation: boolean;
 };
 
 type DefineExperimentProps = {
@@ -63,6 +65,7 @@ export default function DefineExperiment({
   const [executionMode, setExecutionMode] = useState<ExecutionMode | undefined>(
     "batch"
   );
+  const [runAutomaticEvaluation, setRunAutomaticEvaluation] = useState<boolean>(false);
   const [trainingSubmissions, setTrainingSubmissions] = useState<Submission[] | undefined>(undefined);
   const [evaluationSubmissions, setEvaluationSubmissions] = useState<
     Submission[] | undefined
@@ -105,6 +108,7 @@ export default function DefineExperiment({
       exerciseType,
       exercise,
       executionMode,
+      runAutomaticEvaluation,
       trainingSubmissions,
       evaluationSubmissions,
       tutorFeedbacks: feedbacks || [],
@@ -127,6 +131,7 @@ export default function DefineExperiment({
         (s) => s.id
       ),
       // tutor feedback ids are not important for the export
+      runAutomaticEvaluation: experiment.runAutomaticEvaluation,
     };
   };
 
@@ -146,6 +151,7 @@ export default function DefineExperiment({
       executionMode,
       trainingSubmissionIds,
       evaluationSubmissionIds,
+      runAutomaticEvaluation,
     } = experimentExport;
     if (
       !id ||
@@ -153,7 +159,8 @@ export default function DefineExperiment({
       !exerciseType ||
       !exerciseId ||
       !executionMode ||
-      !evaluationSubmissionIds
+      !evaluationSubmissionIds ||
+      runAutomaticEvaluation === undefined
     ) {
       console.error("Invalid experiment export");
       return;
@@ -161,6 +168,7 @@ export default function DefineExperiment({
     console.log("Importing experiment", experimentExport);
 
     baseInfoDispatch({ type: "SET_DATA_MODE", payload: dataMode });
+    setRunAutomaticEvaluation(runAutomaticEvaluation);
     setExperimentId(id);
     setExerciseType(exerciseType);
     setExecutionMode(executionMode);
@@ -237,6 +245,19 @@ export default function DefineExperiment({
             executionMode={executionMode}
             onChangeExecutionMode={setExecutionMode}
           />
+          <label className="flex items-center cursor-pointer">
+            <input
+              disabled={experiment !== undefined}
+              type="checkbox"
+              checked={runAutomaticEvaluation}
+              onChange={(e) => {
+                setRunAutomaticEvaluation(e.target.checked);
+              }}
+            />
+            <div className="ml-2 text-gray-700 font-normal">
+              Run automatic evaluation <span className="text-gray-400">(if available, can be costly)</span>
+            </div>
+          </label>
           <ExerciseTypeSelect
             disabled={experiment !== undefined}
             exerciseType={exerciseType}

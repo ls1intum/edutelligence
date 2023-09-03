@@ -325,6 +325,14 @@ export default function useBatchModuleExperiment(experiment: Experiment) {
 
   // 4. Evaluate feedback suggestions
   const stepEvaluateFeedbackSuggestions = async () => {
+    if (!experiment.runAutomaticEvaluation) {
+      setData((prevState) => ({
+        ...prevState,
+        step: "finished",
+      }));
+      return;
+    }
+
     setProcessingStep("evaluatingFeedbackSuggestions");
     console.log("Evaluating feedback suggestions...");
 
@@ -368,7 +376,6 @@ export default function useBatchModuleExperiment(experiment: Experiment) {
         if (!isMounted.current) {
           return;
         }
-
         console.log("Received evaluation:", response.data);
         setData((prevState) => ({
           ...prevState,
