@@ -156,6 +156,8 @@ SELECT
       JSON_OBJECT(
         'id',
         p.id,
+        'language',
+        s.language,
         'text',
         s.`text`,
         'student_id',
