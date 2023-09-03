@@ -62,6 +62,8 @@ async def suggest_feedback(exercise: Exercise, submission: Submission) -> List[F
     method_blocks = {}
     repo_zip = submission.get_zip()
     for file_path in repo_zip.namelist():
+        if not file_path.endswith(".java"):
+            continue  # skip non-java files because our method extraction only works for java
         with repo_zip.open(file_path, "r") as f:
             try:
                 file_content = f.read().decode("utf-8")

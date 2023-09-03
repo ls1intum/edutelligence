@@ -29,8 +29,6 @@ def get_repository_zip(url: str, authorization_secret: Optional[str] = None) -> 
             if athena.app.state.repository_authorization_secret is None:
                 raise ValueError("Authorization secret for the repository API is not set. Pass authorization_secret to this function or add the X-Repository-Authorization-Secret header to the request from the assessment module manager.")
             authorization_secret = athena.app.state.repository_authorization_secret
-        logger.info("app.state: %s", athena.app.state)
-        logger.info("headers: %s", { "Authorization": cast(str, authorization_secret) })
         with httpx.stream("GET", url, headers={ "Authorization": cast(str, authorization_secret) }) as response:
             response.raise_for_status()
             with open(cache_file_path, "wb") as f:
