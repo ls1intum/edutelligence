@@ -254,9 +254,70 @@ export default function InlineFeedback({
           </div>
         )}
       </div>
-      {feedback.evaluation && (
+      {onFeedbackChangeEvaluation && (
         <div className="flex items-center justify-start px-4 py-2 border-t gap-1 border-gray-300 text-xs text-gray-600">
-          {Object.entries(feedback.evaluation).map(([key, value]) => (
+          <div className="space-x-1">
+                  <button
+                    className={twMerge(
+                      "rounded-md p-2",
+                      feedback.evaluation?.isAccepted === true
+                        ? "bg-green-400 shadow-md hover:bg-green-500 text-white"
+                        : "bg-gray-100 hover:bg-green-200 hover:shadow-md"
+                    )}
+                    onClick={() => {
+                      feedback.evaluation ||= {};
+                      if (feedback.evaluation.isAccepted === true) {
+                        feedback.evaluation.isAccepted = undefined;
+                      } else {
+                        feedback.evaluation.isAccepted = true;
+                      }
+                      onFeedbackChangeEvaluation(feedback);
+                    }}
+                  >
+                    👍 Accept
+                  </button>
+                  <button
+                    className={twMerge(
+                      "rounded-md p-2 bg-gray-100",
+                      feedback.evaluation?.isAccepted === false
+                        ? "bg-red-400 shadow-md hover:bg-red-500 text-white"
+                        : "hover:bg-red-200 hover:shadow-md"
+                    )}
+                    onClick={() => {
+                      feedback.evaluation ||= {};
+                      if (feedback.evaluation.isAccepted === false) {
+                        feedback.evaluation.isAccepted = undefined;
+                      } else {
+                        feedback.evaluation.isAccepted = false;
+                      }
+                      onFeedbackChangeEvaluation(feedback);
+                    }}
+                  >
+                    👎 Reject
+                  </button>
+                </div>
+                {/* Estimation by module_text_llm */}
+                {feedback.evaluation?.automatic?.module_text_llm && (
+                  <div className="flex items-center ml-2 gap-1">
+                    <code className="text-xs text-gray-500">module_text_llm</code>
+                    estimates
+                    
+                    <span className={twMerge("font-semibold", feedback.evaluation?.automatic?.module_text_llm.acceptance_label === "accepted" ? "text-green-800" : "text-red-800")}>
+                      {feedback.evaluation?.automatic?.module_text_llm.acceptance_label}
+                    </span>
+                    with
+                    <span className={twMerge("font-semibold", 
+                      feedback.evaluation?.automatic?.module_text_llm.level_of_needed_modification_label === "none" ? "text-green-800" :
+                      feedback.evaluation?.automatic?.module_text_llm.level_of_needed_modification_label === "minor" ? "text-yellow-800" :
+                      feedback.evaluation?.automatic?.module_text_llm.level_of_needed_modification_label === "major" ? "text-red-800" :
+                      "text-gray-800"
+                    )}>
+                      {feedback.evaluation?.automatic?.module_text_llm.level_of_needed_modification_label}
+                    </span>
+                    modification
+                  </div>
+                )}
+          {/* {Object.entries(feedback.evaluation).map(([key, value]) => (
             <div
               key={key}
               className="flex flex-col items-center space-x-1 mr-2 gap-1"
@@ -315,7 +376,7 @@ export default function InlineFeedback({
                 </div>
               )}
             </div>
-          ))}
+          ))} */}
         </div>
       )}
     </div>

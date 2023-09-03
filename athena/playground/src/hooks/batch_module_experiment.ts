@@ -10,6 +10,7 @@ import useRequestFeedbackSuggestions from "./athena/request_feedback_suggestions
 import useSendSubmissions from "./athena/send_submissions";
 import useRequestEvaluaion from "./athena/request_evaluation";
 import { useExperimentIdentifiersSetRunId } from "./experiment_identifiers_context";
+import { useModule } from "./module_context";
 
 export type ExperimentStep =
   | "notStarted"
@@ -49,6 +50,7 @@ export default function useBatchModuleExperiment(experiment: Experiment) {
     evaluatedSubmissions: [],
   });
 
+  const { module } = useModule();
   const setContextRunId = useExperimentIdentifiersSetRunId();
 
   const [processingStep, setProcessingStep] = useState<
@@ -373,6 +375,7 @@ export default function useBatchModuleExperiment(experiment: Experiment) {
           submissionsWithFeedbackSuggestions: new Map(
             prevState.submissionsWithFeedbackSuggestions.set(submission.id, {
               suggestions: addEvaluationToFeedbacks(
+                module.name,
                 response.data,
                 predictedFeedbacks
               ),

@@ -45,7 +45,7 @@ export default function RequestEvaluation() {
   } = useRequestEvaluaion({
     onSuccess: (response, { predictedFeedbacks }) => {
       if (!response?.data) return;
-      setResponseFeedbacks(addEvaluationToFeedbacks(response.data, predictedFeedbacks));
+      setResponseFeedbacks(addEvaluationToFeedbacks(module.name, response.data, predictedFeedbacks));
     },
   });
 

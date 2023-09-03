@@ -18,11 +18,10 @@ type FeedbackBase = {
     [key: string]: any;
   };
   evaluation?: { // Playground only
-    [key: string]: {
-      label: string;
-      correct?: boolean;
-      data?: any;
-    }
+    isAccepted?: boolean; // Similar to what a tutor would do
+    automatic?: { // Using the `/evaluate` endpoint of each module
+      [key: string]: any; // Module name as key
+    };
   }
 };
 
@@ -186,24 +185,12 @@ export const createNewFeedback = (submission: Submission): Feedback => {
   };
 };
 
-export const addEvaluationToFeedbacks = (data: { [key: number]: any }, feedbacks: Feedback[]) => {
+export const addEvaluationToFeedbacks = (module_name: string, data: { [key: number]: any }, feedbacks: Feedback[]) => {
   let newFeedbacks = [...feedbacks];
   newFeedbacks.forEach((feedback) => {
-    feedback.evaluation = feedback.evaluation || {};
-
-    const evaluation = data[feedback.id];
-    if (evaluation) {
-      Object.entries(evaluation).forEach(([key, value]: [string, any]) => {
-        // @ts-ignore
-        feedback.evaluation[key] = { label: value.label, data: {} };
-        Object.entries(value).forEach(([subKey, subValue]) => {
-          if (subKey !== "label") {
-            // @ts-ignore
-            feedback.evaluation[key]["data"][subKey] = subValue;
-          }
-        });
-      });
-    }
+    feedback.evaluation ||= {};
+    feedback.evaluation.automatic ||= {};
+    feedback.evaluation.automatic[module_name] = data[feedback.id];
   });
   return newFeedbacks;
 };
