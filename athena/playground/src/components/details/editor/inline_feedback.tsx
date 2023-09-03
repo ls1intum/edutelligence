@@ -193,11 +193,18 @@ export default function InlineFeedback({
                 {feedback.title ? feedback.title : <i>Missing title</i>}
               </span>
             )}
-            {feedback.isSuggestion && (
-              <span className="text-xs text-violet-800 rounded-full px-2 py-0.5 bg-violet-100">
-                Suggestion
-              </span>
-            )}
+            <div className="flex gap-1">
+              {feedback.isSuggestion && (
+                <span className="text-xs text-violet-800 rounded-full px-2 py-0.5 bg-violet-100">
+                  Suggestion
+                </span>
+              )}
+              {feedback.grading_instruction_id && (
+                <span className="text-xs text-orange-800 rounded-full px-2 py-0.5 bg-orange-100">
+                  Grading Instruction
+                </span>
+              )}
+            </div>
           </div>
           <div>
             {isEditing && onFeedbackChange ? (
