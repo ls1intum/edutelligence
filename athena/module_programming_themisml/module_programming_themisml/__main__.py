@@ -17,6 +17,9 @@ from .feedback_suggestions import get_feedback_suggestions
 @submissions_consumer
 def receive_submissions(exercise: Exercise, submissions: List[Submission]):
     logger.info("receive_submissions: Received %d submissions for exercise %d", len(submissions), exercise.id)
+    # Download submission already to have it in the cache => faster feedback suggestions later
+    for submission in submissions:
+        submission.get_zip()
 
 
 @submission_selector
@@ -77,6 +80,23 @@ async def suggest_feedback(exercise: Exercise, submission: Submission) -> List[F
             .filter(DBProgrammingFeedback.submission_id != submission.id) \
             .all()
         suggested_feedbacks = await get_feedback_suggestions(method_blocks, exercise_feedbacks, include_code=False)
+
+    suggested_feedbacks.append(Feedback(
+        id=None,
+        exercise_id=exercise.id,
+        submission_id=submission.id,
+        file_path="src/de/athena/BubbleSort.java",
+        line_start=10,
+        line_end=10,
+        title="Example feedback suggestion",
+        description="This is an example feedback suggestion.",
+        credits=1,
+        grading_instruction_id=None,
+        meta={}
+    ))
+
+    logger.info("Created %d feedback suggestions", len(suggested_feedbacks))
+    logger.debug("Feedback suggestions: %s", suggested_feedbacks)
 
     return suggested_feedbacks
 
