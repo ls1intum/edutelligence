@@ -38,7 +38,7 @@ def get_feedback_suggestions_for_method(
         feedback_code = feedback.get_referenced_code()
         similarity = sim_computer.get_similarity_score(method.source_code, feedback_code)
         if similarity.f1 >= SIMILARITY_SCORE_THRESHOLD:
-            logger.info("Found similar code with similarity score %d: %s", similarity, feedback)
+            logger.info("Found similar code with similarity score %d: %s", similarity.f1, feedback)
             original_code = feedback_code
             feedback_to_give = feedback.to_schema()
             if include_code:

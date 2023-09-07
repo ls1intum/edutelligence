@@ -49,9 +49,10 @@ def process_incoming_feedback(exercise: Exercise, submission: Submission, feedba
             if m.line_start is None or m.line_end is None:
                 continue
             # method has to contain all feedback lines
-            if m.line_start <= feedback.line_start and m.line_end >= feedback.line_end:
-                feedback_method = m
-                break
+            if m.line_start <= feedback.line_start:
+                if feedback.line_end is None or m.line_end >= feedback.line_end:
+                    feedback_method = m
+                    break
 
         feedback.meta["method_name"] = feedback_method.name if feedback_method else None
         store_feedback(feedback)
@@ -65,6 +66,8 @@ async def suggest_feedback(exercise: Exercise, submission: Submission) -> List[F
     method_blocks = {}
     repo_zip = submission.get_zip()
     for file_path in repo_zip.namelist():
+        if file_path.startswith(".git"):
+            continue  # skip git files
         with repo_zip.open(file_path, "r") as f:
             try:
                 file_content = f.read().decode("utf-8")
@@ -80,20 +83,6 @@ async def suggest_feedback(exercise: Exercise, submission: Submission) -> List[F
             .filter(DBProgrammingFeedback.submission_id != submission.id) \
             .all()
         suggested_feedbacks = await get_feedback_suggestions(method_blocks, exercise_feedbacks, include_code=False)
-
-    suggested_feedbacks.append(Feedback(
-        id=None,
-        exercise_id=exercise.id,
-        submission_id=submission.id,
-        file_path="src/de/athena/BubbleSort.java",
-        line_start=10,
-        line_end=10,
-        title="Example feedback suggestion",
-        description="This is an example feedback suggestion.",
-        credits=1,
-        grading_instruction_id=None,
-        meta={}
-    ))
 
     logger.info("Created %d feedback suggestions", len(suggested_feedbacks))
     logger.debug("Feedback suggestions: %s", suggested_feedbacks)
