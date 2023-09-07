@@ -39,5 +39,5 @@ class DBProgrammingFeedback(DBFeedback, Base):
                 return code
             if self.line_end is None:
                 raise ValueError("Unexpected: line_start is not None, but line_end is None (only line_start given)")
-            # only return the lines between line_start and line_end
-            return "\n".join(code.split("\n")[self.line_start:self.line_end + 1])
+            # Only return the lines between line_start and line_end. Line numbers are 1-based.
+            return "\n".join(code.split("\n")[self.line_start - 1 : self.line_end])
