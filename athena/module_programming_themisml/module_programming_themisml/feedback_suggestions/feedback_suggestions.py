@@ -1,106 +1,86 @@
-import asyncio
-import concurrent
-from multiprocessing import get_context
-from typing import Dict, List, cast
+from typing import Dict, List, Tuple
 
 from athena.logger import logger
-from athena.models import DBProgrammingFeedback
-from athena.programming import Feedback
-from athena.schemas import ProgrammingFeedback
+from athena.programming import Feedback, Submission
 
-from module_programming_themisml.extract_methods.method_node import MethodNode
+from module_programming_themisml.extract_methods import MethodNode, extract_methods
 from .code_similarity_computer import CodeSimilarityComputer
 
 SIMILARITY_SCORE_THRESHOLD = 0.95  # has to be really high - otherwise, there would just be too many feedback suggestions
-ASYNC_PROCESSING = False  # faster, but worse for debugging
 
 
-def get_feedback_suggestions_for_method(
-        feedbacks: List[DBProgrammingFeedback],
-        filepath: str,
-        method: MethodNode,
-        include_code: bool = False
-) -> List[ProgrammingFeedback]:
+def make_feedback_suggestion_from(feedback: Feedback, submission: Submission, submission_method: MethodNode) -> Feedback:
+    suggestion = feedback.copy()
+    # add meta information for debugging
+    suggestion.meta["original_feedback_id"] = feedback.id
+    suggestion.meta["method_name"] = submission_method.name
+    suggestion.meta["method_code"] = submission_method.source_code
+    # adjust for submission
+    suggestion.submission_id = submission.id
+    suggestion.line_start = submission_method.line_start
+    suggestion.line_end = submission_method.line_end
+    # remove ID
+    suggestion.id = None
+    return suggestion
+
+
+def create_feedback_suggestions(
+    submissions: List[Submission],
+    feedbacks: List[Feedback],
+) -> List[Feedback]:
     """
-    Get feedback suggestions from comparisons between a function block of a given submission
-    and multiple feedback rows
+    Get a list of all submissions that the given feedback could also apply to (similar code in same method).
+    Then generate feedback suggestions for those submissions.
     """
-    considered_feedbacks = []
-    sim_computer = CodeSimilarityComputer()
+    # group feedbacks by file path for faster access
+    feedbacks_by_file_path: Dict[str, List[Feedback]] = {}
     for feedback in feedbacks:
-        if feedback.file_path == filepath and feedback.meta.get("method_name") == method.name:
-            considered_feedbacks.append(feedback)
-            sim_computer.add_comparison(method.source_code, cast(str, feedback.meta["method_code"]))
+        if feedback.file_path not in feedbacks_by_file_path:
+            feedbacks_by_file_path[str(feedback.file_path)] = []
+        feedbacks_by_file_path[str(feedback.file_path)].append(feedback)
 
-    sim_computer.compute_similarity_scores()
+    # create suggestions that will be given if the similarity is high
+    code_comparisons_with_suggestions: Dict[Tuple[str, str], Feedback] = {}  # key: (code1, code2), value: feedback to give if the similarity is high
+    for submission in submissions:
+        for file_path, file_feedbacks in feedbacks_by_file_path.items():
+            # read file from submission
+            try:
+                code = submission.get_code(file_path)
+            except KeyError:  # KeyError is for when the file is not in the zip
+                logger.debug("File %s not found in submission %d.", file_path, submission.id)
+                continue
+            except UnicodeDecodeError:
+                logger.warning("File %s in submission %d is not UTF-8 encoded.", file_path, submission.id)
+                continue
+            # get all methods in the file of the submission
+            submission_methods = extract_methods(code)
+            # get all feedbacks that match methods in the submission
+            for s_method in submission_methods:
+                for feedback in file_feedbacks:
+                    if feedback.meta["method_name"] == s_method.name:
+                        # compare code (later) and add feedback as a possible suggestion (also later)
+                        suggestion = make_feedback_suggestion_from(feedback, submission, s_method)
+                        code_comparisons_with_suggestions[(s_method.source_code, feedback.meta["method_code"])] = suggestion
 
-    suggested = []
-    for feedback in considered_feedbacks:
-        similarity = sim_computer.get_similarity_score(method.source_code, feedback.meta["method_code"])
+    # compute similarity scores for all comparisons at once´
+    sim_computer = CodeSimilarityComputer()
+    for code1, code2 in code_comparisons_with_suggestions:
+        sim_computer.add_comparison(code1, code2)
+    sim_computer.compute_similarity_scores()  # compute all at once, enables vectorization
+
+    # create suggestions
+    suggestions: List[Feedback] = []
+    for (code1, code2), feedback in code_comparisons_with_suggestions.items():
+        similarity = sim_computer.get_similarity_score(code1, code2)
         if similarity.f1 >= SIMILARITY_SCORE_THRESHOLD:
+            # found similar code -> create feedback suggestion
             logger.info("Found similar code with similarity score %s: %s", similarity.f1, feedback)
-            original_code = feedback.meta["method_code"]
-            feedback_to_give = feedback.to_schema()
-            if include_code:
-                feedback_to_give.meta["code"] = method.source_code
-            feedback_to_give.line_start = method.line_start
-            feedback_to_give.line_end = method.line_end
-            feedback_to_give.meta = {
-                **feedback_to_give.meta,
-                "precision_score": similarity.precision,
-                "recall_score": similarity.recall,
-                "similarity_score": similarity.f1,
-                "similarity_score_f3": similarity.f3,
-            }
-            if include_code:
-                feedback_to_give.meta["originally_on_code"] = original_code
-            suggested.append(feedback_to_give)
-        if similarity.f1 == 1.0:
-            # no need to compare with other feedbacks, it cannot get higher
-            break
-    # sort by similarity score
-    suggested = sorted(suggested, key=lambda f: f.meta["similarity_score"], reverse=True)
+            # add meta information for debugging
+            feedback.meta["precision_score"] = similarity.precision
+            feedback.meta["recall_score"] = similarity.recall
+            feedback.meta["similarity_score"] = similarity.f1
+            feedback.meta["similarity_score_f3"] = similarity.f3
+            # add to suggestions
+            suggestions.append(feedback)
 
-    def ranges_overlap(start1, end1, start2, end2):
-        return (start1 <= start2 <= end1) or (start1 <= end2 <= end1) or (start2 <= start1 <= end2) or (start2 <= end1 <= end2)
-    
-    # remove overlapping suggestions
-    suggested_without_overlaps: List[Feedback] = []
-    for feedback in suggested:
-        overlapping = False
-        for already_suggested in suggested_without_overlaps:
-            if ranges_overlap(feedback.line_start, feedback.line_end, already_suggested.line_start, already_suggested.line_end):
-                overlapping = True
-                break
-        if not overlapping:
-            suggested_without_overlaps.append(feedback)
-    return suggested_without_overlaps
-
-
-async def get_feedback_suggestions(
-        function_blocks: Dict[str, List[MethodNode]],
-        feedbacks: List[DBProgrammingFeedback],
-        include_code: bool = False
-) -> List[ProgrammingFeedback]:
-    """
-    Get feedback suggestions from comparisons between function blocks of a given submission
-    and multiple feedback rows.
-    This is quicker than calling get_feedback_suggestions_for_method for each method
-    because it uses multiple processes to do the comparisons in parallel.
-    """
-    if ASYNC_PROCESSING:
-        loop = asyncio.get_event_loop()
-        # Doing it like this for compatibility with FastAPI / Uvicorn, see https://github.com/tiangolo/fastapi/issues/1487#issuecomment-657290725
-        with concurrent.futures.ProcessPoolExecutor(mp_context=get_context("spawn")) as pool:  # type: ignore
-            results = await asyncio.gather(*[
-                loop.run_in_executor(pool, get_feedback_suggestions_for_method,
-                                    feedbacks, filepath, method, include_code)
-                for filepath, methods in function_blocks.items()
-                for method in methods
-            ])
-    else:
-        results = []
-        for filepath, methods in function_blocks.items():
-            for method in methods:
-                results.append(get_feedback_suggestions_for_method(feedbacks, filepath, method, include_code))
-    return [result for result_list in results for result in result_list]
+    return suggestions
