@@ -92,27 +92,28 @@ SELECT
     'grading_instructions',
     CONCAT(
       e.grading_instructions,
-      '\n',
+      '\n\n',
       COALESCE(
         (
           SELECT
             GROUP_CONCAT(
               CONCAT(
+                'Grading criterion - "',
                 gc.title,
-                ':\n',
+                '":\n',
                 COALESCE(
                   (
                     SELECT
                       GROUP_CONCAT(
                         CONCAT(
-                          '  - ',
+                          '  - Feedback: "',
                           gi.feedback,
-                          ' (',
+                          '" (',
                           gi.credits,
-                          ' credits) [',
+                          ' points) [Usage description: ',
                           gi.instruction_description,
                           ']'
-                        ) SEPARATOR '\n '
+                        ) SEPARATOR '\n'
                       )
                     FROM
                       grading_instruction gi
