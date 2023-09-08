@@ -5,12 +5,13 @@ from typing import Dict, List, cast
 
 from athena.logger import logger
 from athena.models import DBProgrammingFeedback
+from athena.programming import Feedback
 from athena.schemas import ProgrammingFeedback
 
 from module_programming_themisml.extract_methods.method_node import MethodNode
 from .code_similarity_computer import CodeSimilarityComputer
 
-SIMILARITY_SCORE_THRESHOLD = 0.75
+SIMILARITY_SCORE_THRESHOLD = 0.95  # has to be really high - otherwise, there would just be too many feedback suggestions
 ASYNC_PROCESSING = False  # faster, but worse for debugging
 
 
@@ -54,7 +55,23 @@ def get_feedback_suggestions_for_method(
             if include_code:
                 feedback_to_give.meta["originally_on_code"] = original_code
             suggested.append(feedback_to_give)
-    return sorted(suggested, key=lambda f: f.meta["similarity_score"], reverse=True)
+    # sort by similarity score
+    suggested = sorted(suggested, key=lambda f: f.meta["similarity_score"], reverse=True)
+
+    def ranges_overlap(start1, end1, start2, end2):
+        return (start1 <= start2 <= end1) or (start1 <= end2 <= end1) or (start2 <= start1 <= end2) or (start2 <= end1 <= end2)
+    
+    # remove overlapping suggestions
+    suggested_without_overlaps: List[Feedback] = []
+    for feedback in suggested:
+        overlapping = False
+        for already_suggested in suggested_without_overlaps:
+            if ranges_overlap(feedback.line_start, feedback.line_end, already_suggested.line_start, already_suggested.line_end):
+                overlapping = True
+                break
+        if not overlapping:
+            suggested_without_overlaps.append(feedback)
+    return suggested_without_overlaps
 
 
 async def get_feedback_suggestions(
