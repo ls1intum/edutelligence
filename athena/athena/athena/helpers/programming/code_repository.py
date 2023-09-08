@@ -6,7 +6,8 @@ from zipfile import ZipFile
 import httpx
 from git.repo import Repo
 
-cache_dir = Path(tempfile.mkdtemp())
+cache_dir = Path("./.repo-cache") # Path(tempfile.mkdtemp())
+cache_dir.mkdir(parents=True, exist_ok=True)
 
 
 def get_repository_zip(url: str) -> ZipFile:

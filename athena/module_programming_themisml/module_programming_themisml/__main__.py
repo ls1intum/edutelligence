@@ -1,7 +1,7 @@
 """
 Entry point for the module_programming_themisml module.
 """
-from typing import List, cast
+from typing import List
 
 from athena import app, submissions_consumer, submission_selector, feedback_consumer, feedback_provider
 from athena.database import get_db
@@ -9,6 +9,7 @@ from athena.models import DBProgrammingFeedback
 from athena.programming import Exercise, Submission, Feedback
 from athena.logger import logger
 from athena.storage import store_feedback
+from module_programming_themisml.feedback_suggestions.code_similarity_computer import CodeSimilarityComputer
 
 from .extract_methods import extract_methods
 from .feedback_suggestions import get_feedback_suggestions
@@ -55,12 +56,17 @@ def process_incoming_feedback(exercise: Exercise, submission: Submission, feedba
                     break
 
         feedback.meta["method_name"] = feedback_method.name if feedback_method else None
+        feedback.meta["method_code"] = feedback_method.source_code if feedback_method else None
         store_feedback(feedback)
+    logger.debug("Feedbacks processed")
 
 
 @feedback_provider
 async def suggest_feedback(exercise: Exercise, submission: Submission) -> List[Feedback]:
     logger.info("suggest_feedback: Suggestions for submission %d of exercise %d were requested", submission.id, exercise.id)
+
+    # temporary addition for measuring performance: clear previous cache
+    CodeSimilarityComputer.cache = {}
 
     # find all methods in all files
     method_blocks = {}

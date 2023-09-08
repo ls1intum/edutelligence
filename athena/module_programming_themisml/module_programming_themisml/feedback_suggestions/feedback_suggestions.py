@@ -1,7 +1,7 @@
 import asyncio
 import concurrent
 from multiprocessing import get_context
-from typing import Dict, List
+from typing import Dict, List, cast
 
 from athena.logger import logger
 from athena.models import DBProgrammingFeedback
@@ -11,7 +11,7 @@ from module_programming_themisml.extract_methods.method_node import MethodNode
 from .code_similarity_computer import CodeSimilarityComputer
 
 SIMILARITY_SCORE_THRESHOLD = 0.75
-ASYNC_PROCESSING = True  # faster, but worse for debugging
+ASYNC_PROCESSING = False  # faster, but worse for debugging
 
 
 def get_feedback_suggestions_for_method(
@@ -29,17 +29,16 @@ def get_feedback_suggestions_for_method(
     for feedback in feedbacks:
         if feedback.file_path == filepath and feedback.meta.get("method_name") == method.name:
             considered_feedbacks.append(feedback)
-            sim_computer.add_comparison(method.source_code, feedback.get_referenced_code())
+            sim_computer.add_comparison(method.source_code, cast(str, feedback.meta["method_code"]))
 
     sim_computer.compute_similarity_scores()
 
     suggested = []
     for feedback in considered_feedbacks:
-        feedback_code = feedback.get_referenced_code()
-        similarity = sim_computer.get_similarity_score(method.source_code, feedback_code)
+        similarity = sim_computer.get_similarity_score(method.source_code, feedback.meta["method_code"])
         if similarity.f1 >= SIMILARITY_SCORE_THRESHOLD:
-            logger.info("Found similar code with similarity score %d: %s", similarity.f1, feedback)
-            original_code = feedback_code
+            logger.info("Found similar code with similarity score %s: %s", similarity.f1, feedback)
+            original_code = feedback.meta["method_code"]
             feedback_to_give = feedback.to_schema()
             if include_code:
                 feedback_to_give.meta["code"] = method.source_code
