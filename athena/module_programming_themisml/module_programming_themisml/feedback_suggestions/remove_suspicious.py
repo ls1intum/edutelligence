@@ -24,8 +24,6 @@ def filter_suspicious(suggestions: List[Feedback], n_submissions: int) -> List[F
     suspicious: Dict[int, bool] = {}  # feedback id: is suspicious
     # (1) classify suggestions as suspicious if they affect too many other submissions
     for suggestion in suggestions:
-        if suggestion.meta["n_feedback_suggestions"] is None:
-            continue
         if suggestion.meta["n_feedback_suggestions"] > 0.1 * n_submissions:
             suspicious[cast(int, suggestion.id)] = True
         # find all other suggestions for the same method

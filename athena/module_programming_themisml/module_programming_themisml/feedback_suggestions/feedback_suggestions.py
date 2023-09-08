@@ -1,4 +1,5 @@
 from typing import Dict, List, Tuple
+from athena.helpers.programming.feedback import format_feedback_title
 
 from athena.logger import logger
 from athena.programming import Feedback, Submission
@@ -10,15 +11,17 @@ SIMILARITY_SCORE_THRESHOLD = 0.95  # has to be really high - otherwise, there wo
 
 
 def make_feedback_suggestion_from(feedback: Feedback, submission: Submission, submission_method: MethodNode) -> Feedback:
-    suggestion = feedback.copy()
+    suggestion = feedback.copy(deep=True)
     # add meta information for debugging
     suggestion.meta["original_feedback_id"] = feedback.id
-    suggestion.meta["method_name"] = submission_method.name
+    suggestion.meta["original_method_code"] = suggestion.meta["method_code"]
     suggestion.meta["method_code"] = submission_method.source_code
     # adjust for submission
     suggestion.submission_id = submission.id
     suggestion.line_start = submission_method.line_start
     suggestion.line_end = submission_method.line_end
+    # regenerate title from filename and line numbers
+    suggestion.title = format_feedback_title(suggestion.file_path, suggestion.line_start, suggestion.line_end)
     # remove ID
     suggestion.id = None
     return suggestion

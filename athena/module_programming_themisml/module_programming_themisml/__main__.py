@@ -39,12 +39,20 @@ def process_incoming_feedback(exercise: Exercise, submission: Submission, feedba
     feedbacks = list(filter(lambda f: f.file_path is not None and f.line_start is not None, feedbacks))
 
     # Add method metadata to feedbacks
+    feedbacks_with_method = []
     for feedback in feedbacks:
         feedback_method = get_feedback_method(submission, feedback)
-        feedback.meta["method_name"] = feedback_method.name if feedback_method else None
-        feedback.meta["method_code"] = feedback_method.source_code if feedback_method else None
-        if feedback_method is not None:
-            logger.debug("Feedback #%d: Found method %s", feedback.id, feedback_method.name)
+        if feedback_method is None:
+            # don't consider feedback without a method
+            continue
+        logger.debug("Feedback #%d: Found method %s", feedback.id, feedback_method.name)
+        feedback.meta["method_name_before_modifications"] = feedback_method.name
+        feedback.meta["method_name"] = feedback_method.name
+        feedback.meta["method_code"] = feedback_method.source_code
+        feedback.meta["method_line_start"] = feedback_method.line_start
+        feedback.meta["method_line_end"] = feedback_method.line_end
+        feedbacks_with_method.append(feedback)
+    feedbacks = feedbacks_with_method
 
     # find all submissions for this exercise
     exercise_submissions = cast(List[Submission], list(get_stored_submissions(exercise.id)))
@@ -57,6 +65,10 @@ def process_incoming_feedback(exercise: Exercise, submission: Submission, feedba
     for feedback in feedbacks:
         # count how many suggestions were given based on this feedback
         feedback.meta["n_feedback_suggestions"] = len([f for f in feedback_suggestions if f.meta["original_feedback_id"] == feedback.id])
+        # store the information on the suggestions as well for quicker access later
+        for suggestion in feedback_suggestions:
+            if suggestion.meta["original_feedback_id"] == feedback.id:
+                suggestion.meta["n_feedback_suggestions"] = feedback.meta["n_feedback_suggestions"]
 
     # save to database
     store_feedback_suggestions(feedback_suggestions)  # type: ignore

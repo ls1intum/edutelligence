@@ -1,7 +1,7 @@
 from typing import Optional
 
 
-def format_feedback_text(file_path: Optional[str], line_start: Optional[int] = None, line_end: Optional[int] = None) -> str:
+def format_feedback_title(file_path: Optional[str], line_start: Optional[int] = None, line_end: Optional[int] = None) -> str:
     """Returns a consistent feedback text for an optional file path and line number.
 
     Args:
