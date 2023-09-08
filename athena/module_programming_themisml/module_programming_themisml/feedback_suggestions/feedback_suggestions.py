@@ -55,6 +55,9 @@ def get_feedback_suggestions_for_method(
             if include_code:
                 feedback_to_give.meta["originally_on_code"] = original_code
             suggested.append(feedback_to_give)
+        if similarity.f1 == 1.0:
+            # no need to compare with other feedbacks, it cannot get higher
+            break
     # sort by similarity score
     suggested = sorted(suggested, key=lambda f: f.meta["similarity_score"], reverse=True)
 
