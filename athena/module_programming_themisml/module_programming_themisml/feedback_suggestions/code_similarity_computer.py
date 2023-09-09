@@ -92,6 +92,7 @@ class CodeSimilarityComputer:
 
         # F1 is the similarity score, F3 is similar to F1 but with a higher weight for recall than precision
         precision, recall, f1, f3 = score(  # noqa
+            # put all wanted comparisons into two vectors to compute all pairwise comparisons with vectorization (performance optimization)
             cands=[c[0] for c in wanted_comparisons],
             refs=[c[1] for c in wanted_comparisons],
             device=get_optimal_torch_device(),

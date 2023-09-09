@@ -16,6 +16,12 @@ from .feedback_suggestions import create_feedback_suggestions, filter_overlappin
 @submissions_consumer
 def receive_submissions(exercise: Exercise, submissions: List[Submission]):
     logger.info("receive_submissions: Received %d submissions for exercise %d", len(submissions), exercise.id)
+
+    # ThemisML currently only works with Java
+    if exercise.programming_language.lower() != "java":
+        logger.info("ThemisML only works with Java. Not consuming feedback.")
+        return
+
     # Download submission already to have it in the cache => faster feedback suggestions later
     for submission in submissions:
         submission.get_zip()
@@ -34,6 +40,11 @@ def select_submission(exercise: Exercise, submissions: List[Submission]) -> Subm
 def process_incoming_feedback(exercise: Exercise, submission: Submission, feedbacks: List[Feedback]):
     logger.info("process_feedback: Received %d feedbacks for submission %d of exercise %d", len(feedbacks), submission.id, exercise.id)
     logger.info("process_feedback: Feedbacks: %s", feedbacks)
+
+    # ThemisML currently only works with Java
+    if exercise.programming_language.lower() != "java":
+        logger.info("ThemisML only works with Java. Not consuming feedback.")
+        return
 
     # Remove unreferenced feedbacks
     feedbacks = list(filter(lambda f: f.file_path is not None and f.line_start is not None, feedbacks))
@@ -82,10 +93,17 @@ def process_incoming_feedback(exercise: Exercise, submission: Submission, feedba
 async def suggest_feedback(exercise: Exercise, submission: Submission) -> List[Feedback]:
     logger.info("suggest_feedback: Suggestions for submission %d of exercise %d were requested", submission.id, exercise.id)
 
+    # ThemisML currently only works with Java
+    if exercise.programming_language.lower() != "java":
+        logger.info("ThemisML only works with Java. Returning no suggestions.")
+        return []
+
     suggested_feedbacks = cast(List[Feedback], list(get_stored_feedback_suggestions(exercise.id, submission.id)))
-    logger.debug("Found Feedback suggestions: %s", suggested_feedbacks)
+    logger.debug("Found %d feedback suggestions (unfiltered)", len(suggested_feedbacks))
     suggested_feedbacks = filter_suspicious(suggested_feedbacks, count_stored_submissions(exercise.id))
+    logger.debug("Found %d feedback suggestions (removed suspicious suggestions)", len(suggested_feedbacks))
     suggested_feedbacks = filter_overlapping_suggestions(suggested_feedbacks)
+    logger.debug("Found %d feedback suggestions (removed overlapping suggestions)", len(suggested_feedbacks))
 
     logger.info("Suggesting %d filtered feedback suggestions", len(suggested_feedbacks))
     logger.debug("Suggested Feedback suggestions: %s", suggested_feedbacks)

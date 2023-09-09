@@ -65,7 +65,7 @@ def create_feedback_suggestions(
                         suggestion = make_feedback_suggestion_from(feedback, submission, s_method)
                         code_comparisons_with_suggestions[(s_method.source_code, feedback.meta["method_code"])] = suggestion
 
-    # compute similarity scores for all comparisons at once´
+    # compute similarity scores for all comparisons at once
     sim_computer = CodeSimilarityComputer()
     for code1, code2 in code_comparisons_with_suggestions:
         sim_computer.add_comparison(code1, code2)
