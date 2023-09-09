@@ -96,7 +96,12 @@ async def split_grading_instructions_by_file(
         model=model, 
         chat_prompt=chat_prompt, 
         prompt_input=prompt_input, 
-        pydantic_object=SplitGradingInstructions
+        pydantic_object=SplitGradingInstructions,
+        tags=[
+            f"exercise-{exercise.id}",
+            f"submission-{submission.id}",
+            "split-grading-instructions-by-file"
+        ]
     )
 
     if debug:

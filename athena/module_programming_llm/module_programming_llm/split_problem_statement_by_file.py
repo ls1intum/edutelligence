@@ -95,7 +95,12 @@ async def split_problem_statement_by_file(
         model=model, 
         chat_prompt=chat_prompt, 
         prompt_input=prompt_input,
-        pydantic_object=SplitProblemStatement
+        pydantic_object=SplitProblemStatement,
+        tags=[
+            f"exercise-{exercise.id}",
+            f"submission-{submission.id}",
+            "split-problem-statement-by-file"
+        ]
     )
 
     if debug:
