@@ -15,7 +15,7 @@ from module_text_llm.helpers.llm_utils import (
 from module_text_llm.helpers.utils import add_sentence_numbers, get_index_range_from_line_range
 
 class FeedbackModel(BaseModel):
-    title: str = Field(..., description="Very short title, i.e. feedback category", example="Logic Error")
+    title: str = Field(..., description="Very short title, i.e. feedback category or similar", example="Logic Error")
     description: str = Field(..., description="Feedback description")
     line_start: Optional[int] = Field(..., description="Referenced line number start, or empty if unreferenced")
     line_end: Optional[int] = Field(..., description="Referenced line number end, or empty if unreferenced")

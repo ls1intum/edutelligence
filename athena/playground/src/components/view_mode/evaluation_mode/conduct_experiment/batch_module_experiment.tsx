@@ -53,7 +53,7 @@ const ConductBatchModuleExperiment = React.forwardRef<
     ref: ForwardedRef<ConductBatchModuleExperimentHandles>
   ) => {
     const { data: health } = useHealth();
-    const moduleExperiment = useBatchModuleExperiment(experiment);
+    const moduleExperiment = useBatchModuleExperiment(experiment, moduleConfiguration);
 
     const [showProgress, setShowProgress] = useState(true);
     const [isConfigModalOpen, setConfigModalOpen] = useState(false);

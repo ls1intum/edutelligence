@@ -11,6 +11,7 @@ import useSendSubmissions from "./athena/send_submissions";
 import useRequestEvaluaion from "./athena/request_evaluation";
 import { useExperimentIdentifiersSetRunId } from "./experiment_identifiers_context";
 import { useModule } from "./module_context";
+import { ModuleConfiguration } from "@/components/view_mode/evaluation_mode/configure_modules";
 
 export type ExperimentStep =
   | "notStarted"
@@ -39,7 +40,7 @@ export type BatchModuleExperimentState = {
   evaluatedSubmissions: number[];
 };
 
-export default function useBatchModuleExperiment(experiment: Experiment) {
+export default function useBatchModuleExperiment(experiment: Experiment, moduleConfiguration: ModuleConfiguration) {
   // State of the module experiment
   const [data, setData] = useState<BatchModuleExperimentState>({
     runId: uuidv4(),
@@ -73,6 +74,8 @@ export default function useBatchModuleExperiment(experiment: Experiment) {
   const exportData = () => {
     return {
       runId: data.runId,
+      experimentId: experiment.id,
+      moduleConfigurationId: moduleConfiguration.id,
       step: data.step,
       didSendSubmissions: data.didSendSubmissions,
       sentTrainingSubmissions: data.sentTrainingSubmissions,

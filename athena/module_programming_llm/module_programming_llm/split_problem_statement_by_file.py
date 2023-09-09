@@ -23,7 +23,6 @@ class FileProblemStatement(BaseModel):
 
 
 class SplitProblemStatement(BaseModel):
-    """Collection of problem statements split by file"""
     items: Sequence[FileProblemStatement] = Field(..., description="File problem statements")
 
 

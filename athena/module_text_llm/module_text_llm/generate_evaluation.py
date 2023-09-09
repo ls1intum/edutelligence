@@ -17,19 +17,12 @@ from module_text_llm.prompts.generate_evaluation import system_message, human_me
 
 
 class AccuracyMetric(BaseModel):
-    """Accuracy of a single feedback, estimating the tutor's agreement with the machine-generated feedback."""
     id: int = Field(..., description="Feedback ID")
-    reasoning: str = Field(..., description="Step-by-step critical reasoning of the rating")
-    acceptance_label: Literal["accepted", "rejected"] = Field(..., description=(
-        "Tutor's action on the feedback suggestion. Accepting when the feedback is a good starting point for the tutor's own feedback. "
-        "Rejecting when the feedback is not useful."
-    ))
-    level_of_needed_modification_label: Literal["none", "minor", "major"] = Field(..., description=(
-        "Tutor's estimation of the level of modification needed to make the feedback useful."
-    ))
+    reasoning: str = Field(..., description="Step-by-step critical reasoning of the labels")
+    acceptance_label: Literal["accepted", "rejected"] = Field(..., description="Estimated acceptance label")
+    level_of_needed_modification_label: Literal["no", "minor", "major"] = Field(..., description="Estimated level of needed modification")
 
 class Evaluation(BaseModel):
-    """Collection of feedback metrics making up an evaluation"""
     metrics: Sequence[AccuracyMetric] = Field(...)
 
 
