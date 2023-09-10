@@ -60,6 +60,9 @@ def create_feedback_suggestions(
             # get all feedbacks that match methods in the submission
             for s_method in submission_methods:
                 for feedback in file_feedbacks:
+                    if feedback.submission_id == submission.id:
+                        # don't compare feedback with itself
+                        continue
                     if feedback.meta["method_name"] == s_method.name:
                         # compare code (later) and add feedback as a possible suggestion (also later)
                         suggestion = make_feedback_suggestion_from(feedback, submission, s_method)
