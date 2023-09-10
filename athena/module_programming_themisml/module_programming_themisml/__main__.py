@@ -16,15 +16,7 @@ from .feedback_suggestions import create_feedback_suggestions, filter_overlappin
 @submissions_consumer
 def receive_submissions(exercise: Exercise, submissions: List[Submission]):
     logger.info("receive_submissions: Received %d submissions for exercise %d", len(submissions), exercise.id)
-
-    # ThemisML currently only works with Java
-    if exercise.programming_language.lower() != "java":
-        logger.info("ThemisML only works with Java. Not consuming feedback.")
-        return
-
-    # Download submission already to have it in the cache => faster feedback suggestions later
-    for submission in submissions:
-        submission.get_zip()
+    # Nothing else to do
 
 
 @submission_selector
@@ -57,7 +49,6 @@ def process_incoming_feedback(exercise: Exercise, submission: Submission, feedba
             # don't consider feedback without a method
             continue
         logger.debug("Feedback #%d: Found method %s", feedback.id, feedback_method.name)
-        feedback.meta["method_name_before_modifications"] = feedback_method.name
         feedback.meta["method_name"] = feedback_method.name
         feedback.meta["method_code"] = feedback_method.source_code
         feedback.meta["method_line_start"] = feedback_method.line_start

@@ -1,12 +1,12 @@
 """
 When evaluating ThemisML, we found the following problems with the suggestions:
-(1) Sometimes, there was a feedback on something banale like a getter, which was actually meant for another method.
-    This caused suggestions almost all the other submissions, which were not helpful.
+(1) Sometimes, there was a feedback on something banal like a getter, which was actually meant for another method.
+    This caused suggestions for almost all the other submissions, which were not helpful.
     We therefore classify a suggestion as "suspicious" if it affects too many other submissions (> 10%).
 (2) However, this would also sometimes classify a suggestion as suspicious if it is actually helpful.
     Therefore, we make a suggestion non-supicious if there are at least 3 other suggestions for the same method.
     This makes a mistake like described above unlikely.
-(3) Suggestions are also suspicious if they include words that hint at other parts of the code, like
+(3) Suggestions are also non-suspicious if they include words that hint at other parts of the code, like
     "again", "consequential error", "previous", "later", "earlier", "above", "below" and German equivalents of these words.
 """
 
