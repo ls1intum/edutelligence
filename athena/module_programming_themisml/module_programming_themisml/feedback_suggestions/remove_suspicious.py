@@ -2,7 +2,7 @@
 When evaluating ThemisML, we found the following problems with the suggestions:
 (1) Sometimes, there was a feedback on something banal like a getter, which was actually meant for another method.
     This caused suggestions for almost all the other submissions, which were not helpful.
-    We therefore classify a suggestion as "suspicious" if it affects too many other submissions (> 10%).
+    We therefore classify a suggestion as "suspicious" if it affects too many other submissions (> 10% and > 2).
 (2) However, this would also sometimes classify a suggestion as suspicious if it is actually helpful.
     Therefore, we make a suggestion non-supicious if there are at least 3 other suggestions for the same method.
     This makes a mistake like described above unlikely.
@@ -24,14 +24,15 @@ def filter_suspicious(suggestions: List[Feedback], n_submissions: int) -> List[F
     suspicious: Dict[int, bool] = {}  # feedback id: is suspicious
     # (1) classify suggestions as suspicious if they affect too many other submissions
     for suggestion in suggestions:
-        if suggestion.meta["n_feedback_suggestions"] > 0.1 * n_submissions:
+        n_feedback_suggestions = suggestion.meta.get("n_feedback_suggestions", 999999)
+        if n_feedback_suggestions > 2 and n_feedback_suggestions > 0.1 * n_submissions:
             suspicious[cast(int, suggestion.id)] = True
         # find all other suggestions for the same method
         other_suggestions: List[Feedback] = []
         for other_suggestion in suggestions:
             if other_suggestion.id == suggestion.id:
                 continue
-            if other_suggestion.file_path == suggestion.file_path and other_suggestion.meta["method_name"] == suggestion.meta["method_name"]:
+            if other_suggestion.file_path == suggestion.file_path and other_suggestion.meta.get("method_name") == suggestion.meta.get("method_name"):
                 other_suggestions.append(other_suggestion)
         # (2) make suggestion non-suspicious if there are at least 3 other suggestions for the same method
         if len(other_suggestions) >= 3:
