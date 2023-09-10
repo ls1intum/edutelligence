@@ -29,7 +29,7 @@ def filter_overlapping_suggestions(suggestions: List[Feedback]) -> List[Feedback
     suggestions: List of suggestions to filter
     """
     # sort suggestions by similarity_score to keep the most accurate ones
-    suggestions.sort(key=lambda s: s.meta["similarity_score"], reverse=True)
+    suggestions.sort(key=lambda s: s.meta.get("similarity_score", 0), reverse=True)
     # skip suggestions if they overlap with a suggestion that was already added
     added_suggestions: List[Feedback] = []
     for suggestion in suggestions:
