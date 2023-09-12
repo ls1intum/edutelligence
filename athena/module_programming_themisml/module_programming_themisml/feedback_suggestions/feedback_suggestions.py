@@ -5,7 +5,7 @@ from athena.logger import logger
 from athena.programming import Feedback, Submission
 
 from module_programming_themisml.extract_methods import MethodNode, extract_methods
-from .code_similarity_computer import CodeSimilarityComputer
+from .code_similarity_computer import CodeSimilarityComputer, cache_key
 
 SIMILARITY_SCORE_THRESHOLD = 0.95  # has to be really high - otherwise, there would just be too many feedback suggestions
 
@@ -68,7 +68,7 @@ def create_feedback_suggestions(
                     if feedback.meta["method_name"] == s_method.name:
                         # compare code (later) and add feedback as a possible suggestion (also later)
                         suggestion = make_feedback_suggestion_from(feedback, submission, s_method)
-                        comparison_key = (s_method.source_code, feedback.meta["method_code"])
+                        comparison_key = cache_key(s_method.source_code, feedback.meta["method_code"])
                         if comparison_key not in code_comparisons_with_suggestions:
                             code_comparisons_with_suggestions[comparison_key] = []
                         code_comparisons_with_suggestions[comparison_key].append(suggestion)
@@ -82,12 +82,12 @@ def create_feedback_suggestions(
 
     # create suggestions
     suggestions: List[Feedback] = []
-    for (code1, code2), suggestions in code_comparisons_with_suggestions.items():
+    for (code1, code2), suggestions_for_comparison in code_comparisons_with_suggestions.items():
         similarity = sim_computer.get_similarity_score(code1, code2)
         if similarity.f1 >= SIMILARITY_SCORE_THRESHOLD:
             # found similar code -> create feedback suggestion
-            logger.info("Found similar code with similarity score %s: %s", similarity.f1, suggestions)
-            for suggestion_to_give in suggestions:
+            logger.info("Found similar code with similarity score %s: %s", similarity.f1, suggestions_for_comparison)
+            for suggestion_to_give in suggestions_for_comparison:
                 # add meta information for debugging
                 suggestion_to_give.meta["precision_score"] = similarity.precision
                 suggestion_to_give.meta["recall_score"] = similarity.recall
