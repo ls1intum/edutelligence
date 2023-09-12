@@ -45,7 +45,7 @@ def create_feedback_suggestions(
 
     # create suggestions that will be given if the similarity is high
     logger.debug("Reading code from %d submissions", len(submissions))
-    code_comparisons_with_suggestions: Dict[Tuple[str, str], Feedback] = {}  # key: (code1, code2), value: feedback to give if the similarity is high
+    code_comparisons_with_suggestions: Dict[Tuple[str, str], List[Feedback]] = {}  # key: (code1, code2), value: list of suggestions to give if the similarity is high
     for submission in submissions:
         for file_path, file_feedbacks in feedbacks_by_file_path.items():
             # read file from submission
@@ -68,7 +68,10 @@ def create_feedback_suggestions(
                     if feedback.meta["method_name"] == s_method.name:
                         # compare code (later) and add feedback as a possible suggestion (also later)
                         suggestion = make_feedback_suggestion_from(feedback, submission, s_method)
-                        code_comparisons_with_suggestions[(s_method.source_code, feedback.meta["method_code"])] = suggestion
+                        comparison_key = (s_method.source_code, feedback.meta["method_code"])
+                        if comparison_key not in code_comparisons_with_suggestions:
+                            code_comparisons_with_suggestions[comparison_key] = []
+                        code_comparisons_with_suggestions[comparison_key].append(suggestion)
 
     # compute similarity scores for all comparisons at once
     sim_computer = CodeSimilarityComputer()
@@ -79,17 +82,18 @@ def create_feedback_suggestions(
 
     # create suggestions
     suggestions: List[Feedback] = []
-    for (code1, code2), feedback in code_comparisons_with_suggestions.items():
+    for (code1, code2), suggestions in code_comparisons_with_suggestions.items():
         similarity = sim_computer.get_similarity_score(code1, code2)
         if similarity.f1 >= SIMILARITY_SCORE_THRESHOLD:
             # found similar code -> create feedback suggestion
-            logger.info("Found similar code with similarity score %s: %s", similarity.f1, feedback)
-            # add meta information for debugging
-            feedback.meta["precision_score"] = similarity.precision
-            feedback.meta["recall_score"] = similarity.recall
-            feedback.meta["similarity_score"] = similarity.f1
-            feedback.meta["similarity_score_f3"] = similarity.f3
-            # add to suggestions
-            suggestions.append(feedback)
+            logger.info("Found similar code with similarity score %s: %s", similarity.f1, suggestions)
+            for suggestion_to_give in suggestions:
+                # add meta information for debugging
+                suggestion_to_give.meta["precision_score"] = similarity.precision
+                suggestion_to_give.meta["recall_score"] = similarity.recall
+                suggestion_to_give.meta["similarity_score"] = similarity.f1
+                suggestion_to_give.meta["similarity_score_f3"] = similarity.f3
+                # add to suggestions
+                suggestions.append(suggestion_to_give)
 
     return suggestions
