@@ -36,6 +36,7 @@ def create_feedback_suggestions(
     Then generate feedback suggestions for those submissions.
     """
     # group feedbacks by file path for faster access
+    logger.debug("Grouping %d feedbacks by file path", len(feedbacks))
     feedbacks_by_file_path: Dict[str, List[Feedback]] = {}
     for feedback in feedbacks:
         if feedback.file_path not in feedbacks_by_file_path:
@@ -43,6 +44,7 @@ def create_feedback_suggestions(
         feedbacks_by_file_path[str(feedback.file_path)].append(feedback)
 
     # create suggestions that will be given if the similarity is high
+    logger.debug("Reading code from %d submissions", len(submissions))
     code_comparisons_with_suggestions: Dict[Tuple[str, str], Feedback] = {}  # key: (code1, code2), value: feedback to give if the similarity is high
     for submission in submissions:
         for file_path, file_feedbacks in feedbacks_by_file_path.items():
@@ -72,6 +74,7 @@ def create_feedback_suggestions(
     sim_computer = CodeSimilarityComputer()
     for code1, code2 in code_comparisons_with_suggestions:
         sim_computer.add_comparison(code1, code2)
+    logger.debug("Computing similarity scores for %d code comparisons", len(code_comparisons_with_suggestions))
     sim_computer.compute_similarity_scores()  # compute all at once, enables vectorization
 
     # create suggestions

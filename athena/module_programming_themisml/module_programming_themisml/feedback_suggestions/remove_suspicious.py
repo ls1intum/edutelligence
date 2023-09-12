@@ -21,6 +21,8 @@ def filter_suspicious(suggestions: List[Feedback], n_submissions: int) -> List[F
     suggestions: List of suggestions to filter
     n_submissions: Number of submissions for the exercise
     """
+    return suggestions # TODO: temporarily disabled
+
     suspicious: Dict[int, bool] = {}  # feedback id: is suspicious
     # (1) classify suggestions as suspicious if they affect too many other submissions
     for suggestion in suggestions:
