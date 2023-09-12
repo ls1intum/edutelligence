@@ -35,6 +35,9 @@ def create_feedback_suggestions(
     Get a list of all submissions that the given feedback could also apply to (similar code in same method).
     Then generate feedback suggestions for those submissions.
     """
+    if len(feedbacks) == 0:
+        return []  # nothing to do
+
     # group feedbacks by file path for faster access
     logger.debug("Grouping %d feedbacks by file path", len(feedbacks))
     feedbacks_by_file_path: Dict[str, List[Feedback]] = {}
