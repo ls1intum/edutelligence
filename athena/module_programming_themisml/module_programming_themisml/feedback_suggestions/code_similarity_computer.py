@@ -65,8 +65,9 @@ class CodeSimilarityComputer:
     It also caches the similarity scores for faster computation and auto-assigns a similarity
     of 1.0 to identical code snippets (ignoring whitespace).
     """
-    # keys are with all whitespace removed
-    cache: Dict[Tuple[str, str], Union[SimilarityScore, UncomputedComparison]] = {}
+    def __init__(self) -> None:
+        # keys are with all whitespace removed
+        self.cache: Dict[Tuple[str, str], Union[SimilarityScore, UncomputedComparison]] = {}
 
     def add_comparison(self, code1: str, code2: str):
         """Add a comparison to later compute."""
