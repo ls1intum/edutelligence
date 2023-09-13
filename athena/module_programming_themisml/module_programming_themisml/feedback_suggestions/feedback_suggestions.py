@@ -1,4 +1,5 @@
 from typing import Dict, Iterable, List
+import gc
 
 from athena.helpers.programming.feedback import format_feedback_title
 from athena.logger import logger
@@ -119,5 +120,9 @@ def create_feedback_suggestions(
                 s_comp.suggestion.meta["similarity_score_f3"] = similarity.f3
                 # add to suggestions
                 suggestions.append(s_comp.suggestion)
+        # clear memory to prevent being killed by OOM killer
+        del sim_computer
+        del comparisons_with_suggestions
+        gc.collect()
 
     return suggestions
