@@ -260,9 +260,7 @@ def feedback_consumer(func: Union[
             kwargs["module_config"] = module_config
 
         # Call the actual consumer asynchronously
-        # background_tasks.add_task(func, exercise, submission, feedbacks, **kwargs)
-        # Call directly for easier evaluation for now
-        func(exercise, submission, feedbacks, **kwargs)
+        background_tasks.add_task(func, exercise, submission, feedbacks, **kwargs)
 
         return None
     return wrapper
