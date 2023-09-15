@@ -4,14 +4,12 @@ from pathlib import Path
 from typing import Optional, cast
 from zipfile import ZipFile
 
-import athena # for importing athena.app (which is not directly possible because of circular imports)
-from athena.logger import logger
+import athena  # for importing athena.app (which is not directly possible because of circular imports)
 
 import httpx
 from git.repo import Repo
 
-cache_dir = Path("./.repo-cache") # Path(tempfile.mkdtemp())
-cache_dir.mkdir(parents=True, exist_ok=True)
+cache_dir = Path(tempfile.mkdtemp())
 
 
 def get_repository_zip(url: str, authorization_secret: Optional[str] = None) -> ZipFile:
