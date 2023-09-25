@@ -1,4 +1,6 @@
 import configparser
+import os
+
 from typing import List, cast
 
 from pydantic import AnyHttpUrl
@@ -15,7 +17,7 @@ def list_modules() -> List[Module]:
     return [
         Module(
             name=module,
-            url=cast(AnyHttpUrl, modules_config[module]["url"]),
+            url=cast(AnyHttpUrl, os.environ.get(f"{module.upper()}_SECRET", modules_config[module]["url"])),
             type=ExerciseType(modules_config[module]["type"]),
         )
         for module in modules_config.sections()
