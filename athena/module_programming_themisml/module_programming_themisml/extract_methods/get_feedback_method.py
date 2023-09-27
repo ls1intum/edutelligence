@@ -3,7 +3,8 @@ from typing import Optional
 from athena.programming import Feedback, Submission
 from athena.logger import logger
 
-from module_programming_themisml.extract_methods import extract_methods, MethodNode
+from .extract_methods import extract_methods
+from .method_node import MethodNode
 
 
 def get_feedback_method(submission: Submission, feedback: Feedback) -> Optional[MethodNode]:
