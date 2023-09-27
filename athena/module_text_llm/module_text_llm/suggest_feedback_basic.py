@@ -61,6 +61,7 @@ async def suggest_feedback_basic(exercise: Exercise, submission: Submission, con
             id=None,
             exercise_id=exercise.id,
             submission_id=submission.id,
+            grading_instruction_id=None,
             title="Feedback",
             description=row["text"],
             index_start=index_start,

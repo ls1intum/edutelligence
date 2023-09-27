@@ -49,7 +49,7 @@ async def request_to_module(module: Module, module_config: Optional[str], path: 
         # We need the Athena secret with the LMS to access repositories.
         # In order to only have to configure it once for the whole of Athena,
         # we pass it to the module from here.
-        headers['X-Repository-Authorization-Secret'] = env.SECRET
+        headers['X-Repository-Authorization-Secret'] = env.SECRET or ""
 
     try:
         async with httpx.AsyncClient(base_url=module.url, timeout=600) as client:
