@@ -11,7 +11,7 @@ Meaning, the feedback you provide should be appliable to the submission with lit
 # Problem statement
 {problem_statement}
 
-n# Example solution
+# Example solution
 {example_solution}
 
 # Grading instructions
