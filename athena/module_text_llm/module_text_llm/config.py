@@ -1,7 +1,7 @@
 from pydantic import BaseModel, Field
 
 from athena import config_schema_provider
-from module_text_llm.helpers.models.openai import OpenAIModelConfig
+from module_text_llm.helpers.models import ModelConfigType, DefaultModelConfig
 from .prompts.suggest_feedback_basic import system_template, human_template
 
 
@@ -15,7 +15,7 @@ class BasicPrompt(BaseModel):
 
 class BasicApproachConfig(BaseModel):
     """This approach uses a LLM with a single prompt to generate feedback in a single step."""
-    model: OpenAIModelConfig = Field(default=OpenAIModelConfig()) # type: ignore
+    model: ModelConfigType = Field(default=DefaultModelConfig()) # type: ignore
     prompt: BasicPrompt = Field(default=BasicPrompt())
 
 
