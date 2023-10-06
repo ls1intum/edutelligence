@@ -4,14 +4,26 @@ import app.config as config
 
 @pytest.fixture(scope="function")
 def model_configs():
-    llm_model_config1 = config.LLMModelConfig(
-        name="test1", description="test", llm_credentials={}
+    llm_model_config1 = config.OpenAIConfig(
+        type="openai",
+        name="test1",
+        description="test",
+        spec={"context_length": 100},
+        llm_credentials={},
     )
-    llm_model_config2 = config.LLMModelConfig(
-        name="test2", description="test", llm_credentials={}
+    llm_model_config2 = config.OpenAIConfig(
+        type="openai",
+        name="test2",
+        description="test",
+        spec={"context_length": 100},
+        llm_credentials={},
     )
-    llm_model_config3 = config.LLMModelConfig(
-        name="test3", description="test", llm_credentials={}
+    llm_model_config3 = config.OpenAIConfig(
+        type="openai",
+        name="test3",
+        description="test",
+        spec={"context_length": 100},
+        llm_credentials={},
     )
     config.settings.pyris.llms = {
         "GPT35_TURBO": llm_model_config1,

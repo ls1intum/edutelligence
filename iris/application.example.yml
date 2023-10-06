@@ -11,8 +11,11 @@ pyris:
 
   llms:
     DUMMY:
+      type: "openai"
       name: "Dummy model"
       description: "Dummy model for testing"
+      spec:
+        context_length: 100
       llm_credentials:
         api_base: ""
         api_type: ""

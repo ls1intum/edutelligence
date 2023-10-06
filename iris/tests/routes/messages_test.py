@@ -7,12 +7,20 @@ import app.config as config
 
 @pytest.fixture(scope="function")
 def model_configs():
-    llm_model_config = config.LLMModelConfig(
-        name="test", description="test", llm_credentials={}
+    llm_model_config = config.OpenAIConfig(
+        type="openai",
+        name="test",
+        description="test",
+        spec={"context_length": 100},
+        llm_credentials={},
     )
     config.settings.pyris.llms = {"GPT35_TURBO": llm_model_config}
     api_key_config = config.APIKeyConfig(
-        token="secret", comment="test", llm_access=["GPT35_TURBO"]
+        type="openai",
+        token="secret",
+        comment="test",
+        spec={"context_length": 100},
+        llm_access=["GPT35_TURBO"],
     )
     config.settings.pyris.api_keys = [api_key_config]
 

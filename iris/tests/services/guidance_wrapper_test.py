@@ -3,10 +3,14 @@ import guidance
 
 from app.models.dtos import Content, ContentType
 from app.services.guidance_wrapper import GuidanceWrapper
-from app.config import LLMModelConfig
+from app.config import OpenAIConfig
 
-llm_model_config = LLMModelConfig(
-    name="test", description="test", llm_credentials={}
+llm_model_config = OpenAIConfig(
+    type="openai",
+    name="test",
+    description="test",
+    spec={"context_length": 100},
+    llm_credentials={},
 )
 
 

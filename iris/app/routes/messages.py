@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends
+from guidance._program_executor import SyntaxException
 from parsimonious.exceptions import IncompleteParseError
 
 from app.core.custom_exceptions import (
@@ -37,11 +38,16 @@ def send_message(body: SendMessageRequest) -> SendMessageResponse:
         content = CircuitBreaker.protected_call(
             func=guidance.query,
             cache_key=body.preferred_model,
-            accepted_exceptions=(KeyError, SyntaxError, IncompleteParseError),
+            accepted_exceptions=(
+                KeyError,
+                SyntaxError,
+                SyntaxException,
+                IncompleteParseError,
+            ),
         )
     except KeyError as e:
         raise MissingParameterException(str(e))
-    except (SyntaxError, IncompleteParseError) as e:
+    except (SyntaxError, SyntaxException, IncompleteParseError) as e:
         raise InvalidTemplateException(str(e))
     except Exception as e:
         raise InternalServerException(str(e))

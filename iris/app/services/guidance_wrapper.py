@@ -69,5 +69,4 @@ class GuidanceWrapper:
         return content == "1"
 
     def _get_llm(self):
-        llm_credentials = self.model.llm_credentials
-        return guidance.llms.OpenAI(**llm_credentials)
+        return self.model.get_instance()
