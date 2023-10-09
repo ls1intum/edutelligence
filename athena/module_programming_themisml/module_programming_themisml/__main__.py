@@ -88,6 +88,49 @@ async def suggest_feedback(exercise: Exercise, submission: Submission) -> List[F
     if exercise.programming_language.lower() != "java":
         logger.info("ThemisML only works with Java. Returning no suggestions.")
         return []
+    
+    # TODO: Remove this again
+    return [
+        Feedback(
+            id=None,
+            title="Feedback Suggestion",
+            description="This is referenced test suggestion #1 from ThemisML",
+            credits=-1,
+            grading_instruction_id=None,
+            meta={},
+            exercise_id=exercise.id,
+            submission_id=submission.id,
+            file_path="src/de/athena/BubbleSort.java",
+            line_start=14,
+            line_end=14
+        ),
+        Feedback(
+            id=None,
+            title="Feedback Suggestion",
+            description="This is referenced test suggestion #1 from ThemisML",
+            credits=1,
+            grading_instruction_id=None,
+            meta={},
+            exercise_id=exercise.id,
+            submission_id=submission.id,
+            file_path="src/de/athena/Client.java",
+            line_start=18,
+            line_end=18
+        ),
+        Feedback(
+            id=None,
+            title="Feedback Suggestion",
+            description="This is an unreferenced test suggestion from ThemisML",
+            credits=-2,
+            grading_instruction_id=None,
+            meta={},
+            exercise_id=exercise.id,
+            submission_id=submission.id,
+            file_path=None,
+            line_start=None,
+            line_end=None
+        )
+    ]
 
     suggested_feedbacks = cast(List[Feedback], list(get_stored_feedback_suggestions(exercise.id, submission.id)))
     logger.debug("Found %d feedback suggestions (unfiltered)", len(suggested_feedbacks))

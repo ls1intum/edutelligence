@@ -50,6 +50,45 @@ def suggest_feedback(exercise: Exercise, submission: Submission) -> List[Feedbac
         "suggest_feedback: Suggestions for submission %d of exercise %d were requested",
         submission.id, exercise.id
     )
+    # TODO: Remove this again
+    return [
+        Feedback(
+            id=None,
+            exercise_id=exercise.id,
+            submission_id=submission.id,
+            title="Suggestion",
+            description="This is referenced test suggestion #1 from CoFee",
+            index_start=10,
+            index_end=20,
+            credits=1.0,
+            grading_instruction_id=None,
+            meta={}
+        ),
+        Feedback(
+            id=None,
+            exercise_id=exercise.id,
+            submission_id=submission.id,
+            title="Suggestion",
+            description="This is referenced test suggestion #2 from CoFee",
+            index_start=30,
+            index_end=40,
+            credits=-1.0,
+            grading_instruction_id=None,
+            meta={}
+        ),
+        Feedback(
+            id=None,
+            exercise_id=exercise.id,
+            submission_id=submission.id,
+            title="Suggestion",
+            description="This is an unreferenced suggestion from CoFee",
+            index_start=None,
+            index_end=None,
+            credits=2.0,
+            grading_instruction_id=None,
+            meta={}
+        )
+    ]
     suggestions = suggest_feedback_for_submission(submission)
     logger.info("suggest_feedback: Returning %d suggestions", len(suggestions))
     return suggestions
