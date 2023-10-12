@@ -151,7 +151,38 @@ SELECT
     'bonus_points',
     e.bonus_points,
     'meta',
-    JSON_OBJECT(),
+    JSON_OBJECT(
+      'grading_criterions',
+      (
+        SELECT
+          JSON_ARRAYAGG(
+            JSON_OBJECT(
+              'id', gc.id,
+              'title', gc.title,
+              'grading_instructions',
+              (
+                SELECT
+                  JSON_ARRAYAGG(
+                    JSON_OBJECT(
+                      'id', gi.id,
+                      'feedback', gi.feedback,
+                      'credits', gi.credits,
+                      'instruction_description', gi.instruction_description
+                    )
+                  )
+                FROM
+                  grading_instruction gi
+                WHERE
+                  gi.grading_criterion_id = gc.id
+              )
+            )
+          )
+        FROM
+          grading_criterion gc
+        WHERE
+          gc.exercise_id = e.id
+      )
+    ),
     'submissions',
     JSON_ARRAYAGG(
       JSON_OBJECT(
