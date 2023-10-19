@@ -24,10 +24,10 @@ from module_programming_llm.helpers.utils import (
 
 
 class FeedbackModel(BaseModel):
-    title: str = Field(..., description="Very short title, i.e. feedback category", example="Logic Error")
-    description: str = Field(..., description="Feedback description")
-    line_start: Optional[int] = Field(..., description="Referenced line number start, or empty if unreferenced")
-    line_end: Optional[int] = Field(..., description="Referenced line number end, or empty if unreferenced")
+    title: str = Field(description="Very short title, i.e. feedback category", example="Logic Error")
+    description: str = Field(description="Feedback description")
+    line_start: Optional[int] = Field(description="Referenced line number start, or empty if unreferenced")
+    line_end: Optional[int] = Field(description="Referenced line number end, or empty if unreferenced")
     credits: float = Field(0.0, description="Number of points received/deducted")
 
     class Config:
@@ -37,7 +37,7 @@ class FeedbackModel(BaseModel):
 class AssessmentModel(BaseModel):
     """Collection of feedbacks making up an assessment"""
     
-    feedbacks: Sequence[FeedbackModel] = Field(..., description="Assessment feedbacks")
+    feedbacks: Sequence[FeedbackModel] = Field(description="Assessment feedbacks")
 
     class Config:
         title = "Assessment"

@@ -18,13 +18,13 @@ from module_programming_llm.helpers.utils import get_diff
 
 
 class FileGradingInstruction(BaseModel):
-    file_name: str = Field(..., description="File name")
-    grading_instructions: str = Field(..., description="Grading instructions relevant for this file")
+    file_name: str = Field(description="File name")
+    grading_instructions: str = Field(description="Grading instructions relevant for this file")
 
 
 class SplitGradingInstructions(BaseModel):
     """Collection of grading instructions split by file"""
-    items: Sequence[FileGradingInstruction] = Field(..., description="File grading instructions")
+    items: Sequence[FileGradingInstruction] = Field(description="File grading instructions")
 
 
 # pylint: disable=too-many-locals

@@ -18,13 +18,13 @@ from module_programming_llm.helpers.utils import get_diff
 
 
 class FileProblemStatement(BaseModel):
-    file_name: str = Field(..., description="File name")
-    problem_statement: str = Field(..., description="Problem statement relevant for this file")
+    file_name: str = Field(description="File name")
+    problem_statement: str = Field(description="Problem statement relevant for this file")
 
 
 class SplitProblemStatement(BaseModel):
     """Collection of problem statements split by file"""
-    items: Sequence[FileProblemStatement] = Field(..., description="File problem statements")
+    items: Sequence[FileProblemStatement] = Field(description="File problem statements")
 
 
 # pylint: disable=too-many-locals

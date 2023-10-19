@@ -115,7 +115,7 @@ def get_chat_prompt_with_formatting_instructions(
 
 
 async def predict_and_parse(model: BaseLanguageModel, chat_prompt: ChatPromptTemplate, prompt_input: dict, pydantic_object: Type[T]) -> Optional[T]:
-    """Predicts and parses the output of the model
+    """Predicts an LLM completion using the model and parses the output using the provided Pydantic model
 
     Args:
         model (BaseLanguageModel): The model to predict with
