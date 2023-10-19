@@ -52,6 +52,7 @@ def check_prompt_length_and_omit_features_if_necessary(prompt: ChatPromptTemplat
                       should_run is True if the model should run, False otherwise
     """
     if num_tokens_from_prompt(prompt, prompt_input) <= max_input_tokens:
+        # Full prompt fits into LLM context => should run with full prompt
         return prompt_input, True
 
     omitted_features = []
@@ -122,7 +123,7 @@ async def predict_and_parse(
         pydantic_object: Type[T],
         tags: Optional[List[str]],
     ) -> Optional[T]:
-    """Predicts and parses the output of the model
+    """Predicts an LLM completion using the model and parses the output using the provided Pydantic model
 
     Args:
         model (BaseLanguageModel): The model to predict with

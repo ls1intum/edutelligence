@@ -18,8 +18,8 @@ from module_programming_llm.helpers.utils import get_diff
 
 
 class FileProblemStatement(BaseModel):
-    file_name: str = Field(..., description="File name")
-    problem_statement: str = Field(..., description="Problem statement relevant for this file")
+    file_name: str = Field(description="File name")
+    problem_statement: str = Field(description="Problem statement relevant for this file")
 
 
 class SplitProblemStatement(BaseModel):

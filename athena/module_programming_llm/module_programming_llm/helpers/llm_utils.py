@@ -122,7 +122,7 @@ async def predict_and_parse(
         pydantic_object: Type[T],
         tags: Optional[List[str]],
     ) -> Optional[T]:
-    """Predicts and parses the output of the model
+    """Predicts an LLM completion using the model and parses the output using the provided Pydantic model
 
     Args:
         model (BaseLanguageModel): The model to predict with
