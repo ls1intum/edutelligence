@@ -8,11 +8,11 @@ class DBStructuredGradingInstruction(Base):
     __tablename__ = "structured_grading_instructions"
 
     id = Column(Integer, primary_key=True, index=True)
-    usage_limit = Column(Integer)
-    grading_outcome = Column(String)
-    feedback_credits = Column(Float)
-    usage_description = Column(String)
-    feedback_description = Column(String)
+    feedback_credits = Column(Float, nullable=False)
+    feedback_description = Column(String, nullable=False)
+    grading_outcome = Column(String, nullable=False)
+    usage_description = Column(String, nullable=False)
+    usage_limit = Column(Integer, nullable=False)
 
     criterion_id = Column(Integer, ForeignKey("structured_grading_criterions.id", ondelete="CASCADE"), index=True)
 
