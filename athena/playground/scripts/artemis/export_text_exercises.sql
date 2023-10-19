@@ -100,46 +100,38 @@ SELECT
     'type',
     'text',
     'grading_instructions',
-    CONCAT(
-      e.grading_instructions,
-      '\n',
-      COALESCE(
-        (
-          SELECT
-            GROUP_CONCAT(
-              CONCAT(
-                gc.title,
-                ':\n',
-                COALESCE(
-                  (
-                    SELECT
-                      GROUP_CONCAT(
-                        CONCAT(
-                          '  - ',
-                          gi.feedback,
-                          ' (',
-                          gi.credits,
-                          ' credits) [',
-                          gi.instruction_description,
-                          ']'
-                        ) SEPARATOR '\n '
-                      )
-                    FROM
-                      grading_instruction gi
-                    WHERE
-                      gi.grading_criterion_id = gc.id
-                  ),
-                  ''
+    e.grading_instructions, -- unstructured grading instructions
+    'structured_grading_criterions',
+    (
+      SELECT
+        JSON_ARRAYAGG(
+          JSON_OBJECT(
+            'id', gc.id,
+            'title', gc.title,
+            'structured_grading_instructions',
+            (
+              SELECT
+                JSON_ARRAYAGG(
+                  JSON_OBJECT(
+                    'id', gi.id,
+                    'feedback_credits', gi.credits,
+                    'feedback_description', gi.feedback,
+                    'grading_outcome', gi.grading_scale, -- scale would imply a range, but it is a string
+                    'usage_limit', gi.usage_count,
+                    'usage_description', gi.instruction_description
+                  )
                 )
-              ) SEPARATOR '\n\n'
+              FROM
+                grading_instruction gi
+              WHERE
+                gi.grading_criterion_id = gc.id
             )
-          FROM
-            grading_criterion gc
-          WHERE
-            gc.exercise_id = e.id
-        ),
-        ''
-      )
+          )
+        )
+      FROM
+        grading_criterion gc
+      WHERE
+        gc.exercise_id = e.id
     ),
     'problem_statement',
     e.problem_statement,
@@ -156,6 +148,8 @@ SELECT
       JSON_OBJECT(
         'id',
         p.id,
+        'language',
+        s.language,
         'text',
         s.`text`,
         'student_id',
