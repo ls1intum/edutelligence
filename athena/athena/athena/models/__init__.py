@@ -12,3 +12,5 @@ from .db_programming_submission import DBProgrammingSubmission
 from .db_text_submission import DBTextSubmission
 from .db_programming_feedback import DBProgrammingFeedback
 from .db_text_feedback import DBTextFeedback
+from .db_structured_grading_criterion import DBStructuredGradingCriterion
+from .db_structured_grading_instruction import DBStructuredGradingInstruction

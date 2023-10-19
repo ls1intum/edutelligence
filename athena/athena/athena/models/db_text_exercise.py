@@ -10,5 +10,7 @@ class DBTextExercise(DBExercise, Base):
 
     example_solution: str = Column(String)  # type: ignore
 
+    structured_grading_criterions = relationship("DBStructuredGradingCriterion", back_populates="exercise")
     submissions = relationship("DBTextSubmission", back_populates="exercise")
     feedbacks = relationship("DBTextFeedback", back_populates="exercise")
+
