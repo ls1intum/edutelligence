@@ -100,6 +100,7 @@ async def generate_suggestions_by_file(exercise: Exercise, submission: Submissio
         file_filter=lambda file_path: file_path in changed_files_from_template_to_submission
     )
 
+    # Gather prompt inputs for each changed file (independently)
     for file_path, file_content in changed_files.items():
         problem_statement = (
             exercise.problem_statement or "" if is_short_problem_statement 
@@ -150,6 +151,7 @@ async def generate_suggestions_by_file(exercise: Exercise, submission: Submissio
         })
     
     # Filter long prompts (omitting features if necessary)
+    # Lowest priority features are at the top of the list (i.e. they are omitted first if necessary)
     # "submission_file" is not omittable, because it is the main input containing the line numbers
     # In the future we might be able to include the line numbers in the diff, but for now we need to keep it
     omittable_features = [
