@@ -43,7 +43,7 @@ def get_repository(url: str) -> Repo:
         repo_zip.extractall(cache_dir_path)
         if not (cache_dir_path / ".git").exists():
             repo = Repo.init(cache_dir_path, initial_branch='main')
-            repo.index.add(repo.untracked_files)
-            repo.index.commit("Initial commit")
+            repo.git.add(all=True, force=True)
+            repo.git.commit('-m', 'Initial commit')
 
     return Repo(cache_dir_path)
