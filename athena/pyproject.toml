@@ -22,7 +22,7 @@ module_programming_themisml = {path = "./module_programming_themisml", develop =
 # start linter with `poetry run prospector`
 
 [tool.poetry.group.dev.dependencies]
-types-requests = "^2.31.0.0"
+types-requests = "^2.31.0.8"
 
 [build-system]
 requires = ["poetry-core"]
