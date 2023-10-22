@@ -15,6 +15,7 @@ services:
       - ./Caddyfile:/etc/caddy/Caddyfile
 
   assessment_module_manager:
+    hostname: assessment-module-manager
     env_file:
       - ${ATHENA_ENV_DIR:-./env_example}/assessment_module_manager.env
     depends_on:
@@ -22,7 +23,7 @@ services:
     image: ls1tum/athena_assessment_module_manager:${ATHENA_TAG:-develop}
 
   module_example:
-    hostname: module_example
+    hostname: module-example
     env_file:
       - ${ATHENA_ENV_DIR:-./env_example}/module_example.env
     depends_on:
@@ -30,7 +31,7 @@ services:
     image: ls1tum/athena_module_example:${ATHENA_TAG:-develop}
 
   module_programming_llm:
-    hostname: module_programming_llm
+    hostname: module-programming-llm
     env_file:
       - ${ATHENA_ENV_DIR:-./env_example}/module_programming_llm.env
     depends_on:
@@ -38,13 +39,13 @@ services:
     image: ls1tum/athena_module_programming_llm:${ATHENA_TAG:-develop}
 
   module_text_llm:
-    hostname: module_text_llm
+    hostname: module-text-llm
     env_file:
       - ${ATHENA_ENV_DIR:-./env_example}/module_text_llm.env
     image: ls1tum/athena_module_text_llm:${ATHENA_TAG:-develop}
 
   module_text_cofee:
-    hostname: module_text_cofee
+    hostname: module-text-cofee
     env_file:
       - ${ATHENA_ENV_DIR:-./env_example}/module_text_cofee.env
     depends_on:
@@ -52,7 +53,7 @@ services:
     image: ls1tum/athena_module_text_cofee:${ATHENA_TAG:-develop}
 
   module_programming_themisml:
-    hostname: module_programming_themisml
+    hostname: module-programming-themisml
     env_file:
       - ${ATHENA_ENV_DIR:-./env_example}/module_programming_themisml.env
     depends_on:
