@@ -3,16 +3,13 @@
 # This is the Dockerfile for the module_example.
 
 # Pytorch CPU version is not yet available for Python 3.12
-FROM python:3.11-alpine
+FROM python:3.11
 LABEL org.opencontainers.image.source=https://github.com/pal03377/Athena-New
  
 # Environment variable Python in Docker
 ENV PYTHONUNBUFFERED=1
 
 WORKDIR /code
-
-# Build tools for poetry
-RUN apk add --no-cache gcc g++ libffi-dev postgresql-dev
 
 # Poetry
 RUN pip install --no-cache-dir poetry==1.6.1
