@@ -7,7 +7,7 @@ from pydantic.generics import GenericModel
 
 from .module import Module
 from .list_modules import list_modules
-from athena import ExerciseType, authenticate
+from athena import ExerciseType
 from assessment_module_manager import env
 from assessment_module_manager.logger import logger
 

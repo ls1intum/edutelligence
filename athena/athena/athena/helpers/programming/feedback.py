@@ -2,7 +2,7 @@ from typing import Optional
 
 
 def format_feedback_title(file_path: Optional[str], line_start: Optional[int] = None, line_end: Optional[int] = None) -> str:
-    """Returns a consistent feedback text for an optional file path and line number.
+    """Returns a consistent feedback title for an optional file path and line number.
 
     Args:
         file_path (Optional[str]): Path to the file that the feedback is given on. Defaults to None.
@@ -10,7 +10,7 @@ def format_feedback_title(file_path: Optional[str], line_start: Optional[int] = 
         line_end (Optional[int]): The end line number of the feedback. Defaults to None. Cannot be None if line_start is not None.
 
     Returns:
-        str: The formatted feedback text (not standardized, just if you don't have a better title)
+        str: The formatted feedback title (not standardized, just if you don't have a better title)
     """
     if file_path is None:
         return "Feedback"
