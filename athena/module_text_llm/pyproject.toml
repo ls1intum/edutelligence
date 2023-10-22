@@ -9,11 +9,12 @@ license = "MIT"
 python = "^3.10"
 athena = {path = "../athena", develop = true}
 openai = "^0.27.8"
-langchain = "^0.0.225"
+langchain = "^0.0.312"
 python-dotenv = "^1.0.0"
 nltk = "^3.8.1"
-gitpython = "^3.1.31"
+gitpython = "^3.1.37"
 replicate = "^0.11.0"
+tiktoken = "^0.4.0"
 
 [tool.poetry.scripts]
 module = "athena:run_module"

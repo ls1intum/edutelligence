@@ -101,7 +101,7 @@ function all_logs {
 }
 
 function cleanup {
-  docker image prune -f
+  docker image prune -a -f # remove all unused images
 }
 
 function run_docker_compose_cmd {
