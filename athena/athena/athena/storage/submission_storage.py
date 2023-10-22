@@ -4,6 +4,15 @@ from athena.database import get_db
 from athena.schemas import Submission
 
 
+def count_stored_submissions(
+        submission_cls: Type[Submission], exercise_id: int
+) -> int:
+    """Returns the number of submissions for the given exercise."""
+    db_submission_cls = submission_cls.get_model_class()
+    with get_db() as db:
+        return db.query(db_submission_cls).filter_by(exercise_id=exercise_id).count()  # type: ignore
+
+
 def get_stored_submissions(
         submission_cls: Type[Submission], exercise_id: int, only_ids: Union[List[int], None] = None
 ) -> Iterable[Submission]:

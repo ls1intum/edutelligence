@@ -13,6 +13,7 @@ from .database import create_tables
 from .logger import logger
 from .module_config import get_module_config
 from .metadata import MetaDataMiddleware
+from .helpers.programming.repository_authorization_middleware import init_repo_auth_middleware
 
 
 class FastAPIWithStart(FastAPI):
@@ -51,6 +52,10 @@ class FastAPIWithStart(FastAPI):
 
 
 app: FastAPIWithStart = FastAPIWithStart()
+
+# Initialize the repository authorization middleware for programming modules (also initializing it for other modules does not hurt)
+init_repo_auth_middleware(app)
+
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
