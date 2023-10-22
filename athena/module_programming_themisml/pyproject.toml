@@ -10,7 +10,7 @@ python = "^3.10"
 athena = {path = "../athena", develop = true}
 antlr4-python3-runtime = "^4.13.1"
 code-bert-score = "^0.4.1"
-torch = "^2.1.0"
+torch = "^2.0.0"
 
 [tool.poetry.scripts]
 module = "athena:run_module"
