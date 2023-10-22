@@ -60,7 +60,7 @@ if available_models:
 
         model_name: ReplicateModel = Field(default=default_replicate_model,  # type: ignore
                                            description="The name of the model to use.")
-        max_new_tokens: PositiveInt = Field(1024, description="""\
+        max_new_tokens: PositiveInt = Field(1000, description="""\
 Maximum number of tokens to generate. A word is generally 2-3 tokens (minimum: 1)\
 """)
         min_new_tokens: int = Field(-1, description="""\

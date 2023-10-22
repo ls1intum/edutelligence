@@ -9,7 +9,7 @@ from git.repo import Repo
 from langchain.document_loaders import GitLoader
 
 
-def load_files_from_repo(repo: Repo, file_filter: Optional[Callable[[str], bool]] = None) -> Dict[str, Optional[str]]:
+def load_files_from_repo(repo: Repo, file_filter: Optional[Callable[[str], bool]] = None) -> Dict[str, str]:
     return {
         doc.metadata['file_path']: doc.page_content
         for doc in GitLoader(repo_path=str(repo.working_tree_dir), file_filter=file_filter).load()
@@ -34,7 +34,7 @@ def add_line_numbers(content: str) -> str:
     )
 
 
-def get_file_extension(programming_language: str) -> str | None:
+def get_programming_language_file_extension(programming_language: str) -> str | None:
     # JAVA, C, OCAML, HASKELL, PYTHON, SWIFT, VHDL, ASSEMBLER, EMPTY, KOTLIN
     file_extensions = {
         "JAVA": ".java",

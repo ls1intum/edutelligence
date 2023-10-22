@@ -4,6 +4,12 @@ import os
 from .module.list_modules import list_modules
 
 PRODUCTION = os.environ.get("PRODUCTION", "0") == "1"
+SECRET = os.getenv("SECRET")
+if SECRET is None:
+    if PRODUCTION == "1":
+        raise ValueError("Missing SECRET environment variable. "
+                         "Set it to a random string to secure the communication between the LMS and the assessment module manager.")
+    SECRET = "abcdef12345"  # noqa: This secret is only used for development setups for simplicity
 
 MODULE_SECRETS = {}
 for module in list_modules():

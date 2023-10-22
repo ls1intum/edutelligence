@@ -1,5 +1,4 @@
 import inspect
-import os
 from functools import wraps
 from typing import Callable
 
@@ -9,13 +8,11 @@ from fastapi.security import APIKeyHeader
 from athena import env
 from athena.logger import logger
 
-SECRET = os.getenv("SECRET")
-
 api_key_header = APIKeyHeader(name='Authorization', auto_error=False)
 
 
 def verify_secret(secret: str):
-    if secret != SECRET:
+    if secret != env.SECRET:
         if env.PRODUCTION:
             raise HTTPException(status_code=401, detail="Invalid API secret.")
         logger.warning("DEBUG MODE: Ignoring invalid API secret.")
