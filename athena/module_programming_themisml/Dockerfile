@@ -15,7 +15,7 @@ WORKDIR /code
 RUN apk add --no-cache gcc g++ libffi-dev
 
 # Poetry
-RUN pip install --no-cache-dir poetry==1.5.0
+RUN pip install --no-cache-dir poetry==1.3.0 # needs to be 1.3.0 because of https://github.com/python-poetry/poetry/issues/7611
 
 # Dependencies
 COPY pyproject.toml poetry.lock ./
