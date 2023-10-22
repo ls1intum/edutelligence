@@ -12,7 +12,7 @@ ENV PYTHONUNBUFFERED=1
 WORKDIR /code
 
 # Build tools for poetry
-RUN apk add --no-cache gcc g++ libffi-dev
+RUN apk add --no-cache gcc g++ libffi-dev postgresql-devel
 
 # Poetry
 RUN pip install --no-cache-dir poetry==1.3.0 # needs to be 1.3.0 because of https://github.com/python-poetry/poetry/issues/7611
