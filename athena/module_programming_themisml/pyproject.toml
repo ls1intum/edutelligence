@@ -10,7 +10,11 @@ python = "^3.10"
 athena = {path = "../athena", develop = true}
 antlr4-python3-runtime = "^4.13.1"
 code-bert-score = "^0.4.1"
-torch = "^2.1.0"
+torch = [
+    {url = "https://download.pytorch.org/whl/cpu/torch-2.1.0%2Bcpu-cp311-cp311-linux_x86_64.whl", platform = "linux", python = ">=3.11 <3.12"},
+    {url = "https://download.pytorch.org/whl/cpu/torch-2.1.0-cp311-none-macosx_11_0_arm64.whl", platform = "darwin", python = ">=3.11 <3.12"},
+    {url = "https://download.pytorch.org/whl/cpu/torch-2.1.0%2Bcpu-cp311-cp311-win_amd64.whl", platform = "win32", python = ">=3.11 <3.12"}
+]
 
 [tool.poetry.scripts]
 module = "athena:run_module"

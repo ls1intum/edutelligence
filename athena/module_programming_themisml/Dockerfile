@@ -15,7 +15,7 @@ WORKDIR /code
 RUN apk add --no-cache gcc g++ libffi-dev postgresql-dev
 
 # Poetry
-RUN pip install --no-cache-dir poetry==1.3.0 # needs to be 1.3.0 because of https://github.com/python-poetry/poetry/issues/7611
+RUN pip install --no-cache-dir poetry==1.6.1
 
 # Dependencies
 COPY pyproject.toml poetry.lock ./
@@ -25,11 +25,6 @@ COPY --from=athena /code /athena
 RUN poetry config virtualenvs.create true \
     && poetry config virtualenvs.in-project true \
     && poetry install --no-interaction --no-ansi
-
-# Re-install pytorch in the CPU version because we don't have a GPU
-RUN poetry add https://download.pytorch.org/whl/cpu/torch-2.1.0%2Bcpu-cp311-cp311-linux_x86_64.whl
-# Somehow, the torch library needs sympy to be installed manually as well
-RUN poetry add sympy==1.12
 
 # Project files
 COPY . ./
