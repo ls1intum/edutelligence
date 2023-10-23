@@ -22,11 +22,12 @@ import ModuleLLMConfig from "./module_llm";
 // 4. Add your component to the customModuleConfigComponents object
 //
 // Use ModuleLLMConfig as example.
-type CustomModuleConfig = "module_text_llm";
+type CustomModuleConfig = "module_text_llm" | "module_programming_llm";
 const customModuleConfigComponents: {
   [key in CustomModuleConfig]: React.FC<ModuleConfigSelectProps>;
 } = {
   module_text_llm: ModuleLLMConfig,
+  module_programming_llm: ModuleLLMConfig,
 };
 
 type SetConfig = Dispatch<SetStateAction<any>>;

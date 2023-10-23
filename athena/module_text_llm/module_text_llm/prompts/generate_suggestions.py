@@ -8,19 +8,14 @@ VERY IMPORTANT: Effective feedback for text assignments should be:
 human_template = """\
 Problem statement:
 {problem_statement}
+
+Example solution:
+{example_solution}
+
 Grading instructions:
 {grading_instructions}
-Student\'s submission to grade (with sentence numbers <number>: <sentence>):
-{submission}
-
-Respond in the following CSV format:
-reference,credits,text
-"<sentence numbers range (<start>-<end>), or empty if unreferenced>","<number of credits (float)>","<feedback comment>"
-
-IMPORTANT: Do not include anything else in your response other than the raw CSV data.
-
 Max points: {max_points}, bonus points: {bonus_points}
 
-CSV response:
-reference,credits,text\
+Student\'s submission to grade (with sentence numbers <number>: <sentence>):
+{submission}
 """
