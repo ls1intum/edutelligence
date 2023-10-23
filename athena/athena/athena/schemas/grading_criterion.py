@@ -9,6 +9,7 @@ from .schema import Schema
 class StructuredGradingInstruction(Schema, ABC):
     """Part of a grading criterion (called "GradingInstruction" in Artemis)."""
 
+    id: int = Field(example=1)
     credits: float = Field(description="The number of credits assigned for this feedback.", example=1.0)
     grading_scale: str = Field(description="The grading outcome for this instruction.", example="Weak example", default="")
     instruction_description: str = Field(description="Description of how to use this grading instruction.", example="Some instructions", default="")
