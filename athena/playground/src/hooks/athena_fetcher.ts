@@ -3,6 +3,7 @@ import type ModuleResponse from "@/model/module_response";
 import baseUrl from "@/helpers/base_url";
 import { useBaseInfo } from "@/hooks/base_info_context";
 import { useModule } from "@/hooks/module_context";
+import { useExperimentIdentifiers } from "@/hooks/experiment_identifiers_context";
 
 export class AthenaError extends Error {
   status: number;
@@ -37,6 +38,21 @@ export class AthenaError extends Error {
 export function useAthenaFetcher() {
   const { module, moduleConfig } = useModule();
   const { athenaUrl, athenaSecret } = useBaseInfo();  
+  const { experimentId, moduleConfigurationId, runId } = useExperimentIdentifiers();
+
+  const headers: { [key: string]: string } = {};
+  if (moduleConfig) {
+    headers["X-Module-Config"] = JSON.stringify(moduleConfig);
+  }
+  if (experimentId) {
+    headers["X-Experiment-ID"] = experimentId;
+  }
+  if (moduleConfigurationId) {
+    headers["X-Module-Configuration-ID"] = moduleConfigurationId;
+  }
+  if (runId) {
+    headers["X-Run-ID"] = runId;
+  }
 
   return (
     async (moduleRoute: string, body?: any) => {
@@ -50,9 +66,7 @@ export function useAthenaFetcher() {
           headers: {
             "Content-Type": "application/json",
             "Authorization": athenaSecret,
-            ...(moduleConfig && {
-              "X-Module-Config": JSON.stringify(moduleConfig),
-            }),
+            ...headers,
           },
           ...(body && { body: JSON.stringify(body) }),
         }

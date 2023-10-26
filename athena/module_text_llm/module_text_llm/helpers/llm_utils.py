@@ -14,7 +14,7 @@ from langchain.chains.openai_functions import create_structured_output_chain
 from langchain.output_parsers import PydanticOutputParser
 from langchain.schema import OutputParserException
 
-from athena import emit_meta
+from athena import emit_meta, get_experiment_environment
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -115,7 +115,13 @@ def get_chat_prompt_with_formatting_instructions(
     return ChatPromptTemplate.from_messages([system_message_prompt, human_message_prompt])
 
 
-async def predict_and_parse(model: BaseLanguageModel, chat_prompt: ChatPromptTemplate, prompt_input: dict, pydantic_object: Type[T]) -> Optional[T]:
+async def predict_and_parse(
+        model: BaseLanguageModel, 
+        chat_prompt: ChatPromptTemplate, 
+        prompt_input: dict, 
+        pydantic_object: Type[T], 
+        tags: Optional[List[str]]
+    ) -> Optional[T]:
     """Predicts an LLM completion using the model and parses the output using the provided Pydantic model
 
     Args:
@@ -123,12 +129,23 @@ async def predict_and_parse(model: BaseLanguageModel, chat_prompt: ChatPromptTem
         chat_prompt (ChatPromptTemplate): Prompt to use
         prompt_input (dict): Input parameters to use for the prompt
         pydantic_object (Type[T]): Pydantic model to parse the output
+        tags (Optional[List[str]]: List of tags to tag the prediction with
 
     Returns:
         Optional[T]: Parsed output, or None if it could not be parsed
     """
+    experiment = get_experiment_environment()
+
+    tags = tags or []
+    if experiment.experiment_id is not None:
+        tags.append(f"experiment-{experiment.experiment_id}")
+    if experiment.module_configuration_id is not None:
+        tags.append(f"module-configuration-{experiment.module_configuration_id}")
+    if experiment.run_id is not None:
+        tags.append(f"run-{experiment.run_id}")
+
     if supports_function_calling(model):
-        chain = create_structured_output_chain(pydantic_object, llm=model, prompt=chat_prompt)
+        chain = create_structured_output_chain(pydantic_object, llm=model, prompt=chat_prompt, tags=tags)
         
         try:
             return await chain.arun(**prompt_input)
@@ -137,7 +154,7 @@ async def predict_and_parse(model: BaseLanguageModel, chat_prompt: ChatPromptTem
             return None
 
     output_parser = PydanticOutputParser(pydantic_object=pydantic_object)
-    chain = LLMChain(llm=model, prompt=chat_prompt, output_parser=output_parser)
+    chain = LLMChain(llm=model, prompt=chat_prompt, output_parser=output_parser, tags=tags)
     try:
         return await chain.arun(**prompt_input)
     except (OutputParserException, ValidationError):
