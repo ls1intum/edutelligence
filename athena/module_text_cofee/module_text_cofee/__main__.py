@@ -65,7 +65,7 @@ def suggest_feedback(exercise: Exercise, submission: Submission) -> List[Feedbac
             index_start=10,
             index_end=20,
             credits=1.0,
-            grading_instruction_id=grading_instruction_to_use.id if grading_instruction_to_use else None,
+            structured_grading_instruction_id=grading_instruction_to_use.id if grading_instruction_to_use else None,
             meta={}
         ),
         Feedback(
@@ -77,7 +77,7 @@ def suggest_feedback(exercise: Exercise, submission: Submission) -> List[Feedbac
             index_start=30,
             index_end=40,
             credits=-1.0,
-            grading_instruction_id=None,
+            structured_grading_instruction_id=None,
             meta={}
         ),
         Feedback(
@@ -89,7 +89,7 @@ def suggest_feedback(exercise: Exercise, submission: Submission) -> List[Feedbac
             index_start=None,
             index_end=None,
             credits=2.0,
-            grading_instruction_id=None,
+            structured_grading_instruction_id=None,
             meta={}
         )
     ]
