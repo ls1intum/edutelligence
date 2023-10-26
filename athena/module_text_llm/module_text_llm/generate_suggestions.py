@@ -12,7 +12,7 @@ from module_text_llm.helpers.llm_utils import (
     num_tokens_from_prompt,
     predict_and_parse
 )
-from module_text_llm.helpers.utils import add_sentence_numbers, get_index_range_from_line_range
+from module_text_llm.helpers.utils import add_sentence_numbers, get_index_range_from_line_range, format_grading_instructions
 
 class FeedbackModel(BaseModel):
     title: str = Field(description="Very short title, i.e. feedback category", example="Logic Error")
@@ -20,6 +20,7 @@ class FeedbackModel(BaseModel):
     line_start: Optional[int] = Field(description="Referenced line number start, or empty if unreferenced")
     line_end: Optional[int] = Field(description="Referenced line number end, or empty if unreferenced")
     credits: float = Field(0.0, description="Number of points received/deducted")
+    grading_instruction_id: Optional[int] = Field(description="ID of the grading instruction that was used to generate this feedback, or empty if no grading instruction was used")
 
     class Config:
         title = "Feedback"
@@ -40,7 +41,7 @@ async def generate_suggestions(exercise: Exercise, submission: Submission, confi
     prompt_input = {
         "max_points": exercise.max_points,
         "bonus_points": exercise.bonus_points,
-        "grading_instructions": exercise.grading_instructions,
+        "grading_instructions": format_grading_instructions(exercise.grading_instructions, exercise.grading_criteria),
         "problem_statement": exercise.problem_statement or "No problem statement.",
         "example_solution": exercise.example_solution,
         "submission": add_sentence_numbers(submission.text)
@@ -90,6 +91,17 @@ async def generate_suggestions(exercise: Exercise, submission: Submission, confi
     feedbacks = []
     for feedback in result.feedbacks:
         index_start, index_end = get_index_range_from_line_range(feedback.line_start, feedback.line_end, submission.text)
+
+        grading_instruction = None
+        if feedback.grading_instruction_id is not None and exercise.grading_criteria is not None:
+            for grading_criterion in exercise.grading_criteria:
+                for instruction in grading_criterion.structured_grading_instructions:
+                    if instruction.id == feedback.grading_instruction_id:
+                        grading_instruction = instruction
+                        break
+                if grading_instruction is not None:
+                    break
+
         feedbacks.append(Feedback(
             exercise_id=exercise.id,
             submission_id=submission.id,
@@ -98,6 +110,7 @@ async def generate_suggestions(exercise: Exercise, submission: Submission, confi
             index_start=index_start,
             index_end=index_end,
             credits=feedback.credits,
+            grading_instruction=grading_instruction,
             meta={}
         ))
 
