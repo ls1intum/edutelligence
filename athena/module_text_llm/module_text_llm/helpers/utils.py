@@ -18,7 +18,7 @@ def add_sentence_numbers(content: str) -> str:
     return "\n".join(
         f"{str(sentence_number).rjust(sentence_numbers_max_length)}: {sentence}" 
         for sentence_number, sentence 
-        in enumerate(sentences, start=1)
+        in enumerate(sentences)
     )
 
 
@@ -51,10 +51,8 @@ def get_index_range_from_line_range(line_start: Optional[int], line_end: Optiona
         line_start, line_end = line_end, line_start
 
     sentence_spans = get_sentence_spans(content)
-    line_start_index = int(line_start)
-    line_start_index = min(max(line_start_index, 0), len(sentence_spans) - 1)
+    line_start_index = min(max(int(line_start), 0), len(sentence_spans) - 1)
 
-    line_end_index = int(line_end)
-    line_end_index = min(max(line_end_index, 0), len(sentence_spans) - 1)
+    line_end_index = min(max(int(line_end), 0), len(sentence_spans) - 1)
     
     return sentence_spans[line_start_index][0], sentence_spans[line_end_index][1]
