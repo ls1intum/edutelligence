@@ -113,6 +113,7 @@ SELECT
               SELECT
                 JSON_ARRAYAGG(
                   JSON_OBJECT(
+                    'id', gi.id,
                     'credits', gi.credits,
                     'feedback', gi.feedback,
                     'grading_scale', gi.grading_scale,
