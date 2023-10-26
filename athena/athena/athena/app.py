@@ -13,6 +13,7 @@ from .database import create_tables
 from .logger import logger
 from .module_config import get_module_config
 from .metadata import MetaDataMiddleware
+from .experiment import ExperimentMiddleware
 from .helpers.programming.repository_authorization_middleware import init_repo_auth_middleware
 
 
@@ -25,6 +26,7 @@ class FastAPIWithStart(FastAPI):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.add_middleware(MetaDataMiddleware)
+        self.add_middleware(ExperimentMiddleware)
 
 
     def start(self) -> None:
