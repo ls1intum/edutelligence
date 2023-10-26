@@ -10,8 +10,8 @@ class ProgrammingFeedback(Feedback, BaseModel):
     file_path: Optional[str] = Field(None, example="src/pe1/MergeSort.java")
 
     # The line values will always be either both None or both an int:
-    line_start: Optional[int] = Field(None, example=1)
-    line_end: Optional[int] = Field(None, example=2)
+    line_start: Optional[int] = Field(None, description="Start line number, 0-indexed", ge=0, example=1)
+    line_end: Optional[int] = Field(None, description="End line number, 0-indexed", ge=0, example=2)
 
     @validator('line_start')
     def validate_line_start(cls, v, values, **kwargs):
