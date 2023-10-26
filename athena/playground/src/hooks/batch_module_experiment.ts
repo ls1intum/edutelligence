@@ -161,11 +161,11 @@ export default function useBatchModuleExperiment(experiment: Experiment) {
         (feedback) => feedback.submission_id === submission?.id
       );
       
-      try {  
-        console.log(
-          `Sending training feedbacks to Athena... (${num}/${submissionsToSend.length})`
-        );
+      console.log(
+        `Sending training feedbacks to Athena... (${num}/${submissionsToSend.length})`
+      );
 
+      try {  
         if (submissionFeedbacks.length > 0) {
           await sendFeedbacks.mutateAsync({
             exercise: experiment.exercise,
