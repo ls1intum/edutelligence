@@ -181,7 +181,7 @@ SELECT
                 ),
                 'line_end',
                 NULL,
-                'grading_instruction_id',
+                'structured_grading_instruction_id',
                 f.grading_instruction_id,
                 'credits',
                 f.credits,
