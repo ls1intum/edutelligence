@@ -16,6 +16,7 @@ from module_programming_llm.helpers.llm_utils import (
     predict_and_parse,
 )
 from module_programming_llm.helpers.utils import (
+    find_grading_instruction,
     get_diff,
     load_files_from_repo, 
     add_line_numbers, 
@@ -225,16 +226,8 @@ async def generate_suggestions_by_file(exercise: Exercise, submission: Submissio
         if result is None:
             continue
         for feedback in result.feedbacks:
-            grading_instruction = None
-            if feedback.grading_instruction_id is not None and exercise.grading_criteria is not None:
-                for grading_criterion in exercise.grading_criteria:
-                    for instruction in grading_criterion.structured_grading_instructions:
-                        if instruction.id == feedback.grading_instruction_id:
-                            grading_instruction = instruction
-                            break
-                    if grading_instruction is not None:
-                        break
-
+            grading_instruction = find_grading_instruction(grading_instruction_id=feedback.grading_instruction_id, 
+                                                           grading_criteria=exercise.grading_criteria)
             feedbacks.append(Feedback(
                 exercise_id=exercise.id,
                 submission_id=submission.id,
