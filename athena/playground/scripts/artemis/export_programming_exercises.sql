@@ -90,46 +90,38 @@ SELECT
     'type',
     'programming',
     'grading_instructions',
-    CONCAT(
-      e.grading_instructions,
-      '\n',
-      COALESCE(
-        (
-          SELECT
-            GROUP_CONCAT(
-              CONCAT(
-                gc.title,
-                ':\n',
-                COALESCE(
-                  (
-                    SELECT
-                      GROUP_CONCAT(
-                        CONCAT(
-                          '  - ',
-                          gi.feedback,
-                          ' (',
-                          gi.credits,
-                          ' credits) [',
-                          gi.instruction_description,
-                          ']'
-                        ) SEPARATOR '\n '
-                      )
-                    FROM
-                      grading_instruction gi
-                    WHERE
-                      gi.grading_criterion_id = gc.id
-                  ),
-                  ''
+    e.grading_instructions, -- unstructured grading instructions
+    'grading_criteria',
+    (
+      SELECT
+        JSON_ARRAYAGG(
+          JSON_OBJECT(
+            'id', gc.id,
+            'title', gc.title,
+            'structured_grading_instructions',
+            (
+              SELECT
+                JSON_ARRAYAGG(
+                  JSON_OBJECT(
+                    'id', gi.id,
+                    'credits', gi.credits,
+                    'feedback', gi.feedback,
+                    'grading_scale', gi.grading_scale,
+                    'usage_count', gi.usage_count,
+                    'instruction_description', gi.instruction_description
+                  )
                 )
-              ) SEPARATOR '\n\n'
+              FROM
+                grading_instruction gi
+              WHERE
+                gi.grading_criterion_id = gc.id
             )
-          FROM
-            grading_criterion gc
-          WHERE
-            gc.exercise_id = e.id
-        ),
-        ''
-      )
+          )
+        )
+      FROM
+        grading_criterion gc
+      WHERE
+        gc.exercise_id = e.id
     ),
     'problem_statement',
     e.problem_statement,
@@ -182,14 +174,14 @@ SELECT
                 'file_path',
                 COALESCE(SUBSTRING_INDEX(SUBSTRING_INDEX(f.reference, 'file:', -1), '_line:', 1), NULL),
                 'line_start',
-                IF( -- If line number is not NULL, add 1 to it (because line numbers start at 1 in the IDE)
+                IF(
                   f.reference IS NOT NULL, 
-                  COALESCE(CAST(SUBSTRING_INDEX(SUBSTRING_INDEX(f.reference, '_line:', -1), 'file:', -1) AS UNSIGNED), NULL) + 1,
+                  COALESCE(CAST(SUBSTRING_INDEX(SUBSTRING_INDEX(f.reference, '_line:', -1), 'file:', -1) AS UNSIGNED), NULL),
                   NULL
                 ),
                 'line_end',
                 NULL,
-                'grading_instruction_id',
+                'structured_grading_instruction_id',
                 f.grading_instruction_id,
                 'credits',
                 f.credits,

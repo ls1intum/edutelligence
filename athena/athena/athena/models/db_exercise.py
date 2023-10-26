@@ -13,4 +13,5 @@ class DBExercise(Model):
     bonus_points = Column(Float, index=True, nullable=False)
     grading_instructions = Column(String)
     problem_statement = Column(String)
+    grading_criteria = Column(JSON, nullable=True)
     meta = Column(JSON, nullable=False)
