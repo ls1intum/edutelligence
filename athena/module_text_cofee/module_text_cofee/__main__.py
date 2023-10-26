@@ -51,6 +51,10 @@ def suggest_feedback(exercise: Exercise, submission: Submission) -> List[Feedbac
         submission.id, exercise.id
     )
     # TODO: Remove this again
+    grading_instruction_to_use = None
+    if exercise.grading_criteria:
+        if exercise.grading_criteria[0].structured_grading_instructions:
+            grading_instruction_to_use = exercise.grading_criteria[0].structured_grading_instructions[0]
     return [
         Feedback(
             id=None,
@@ -61,7 +65,7 @@ def suggest_feedback(exercise: Exercise, submission: Submission) -> List[Feedbac
             index_start=10,
             index_end=20,
             credits=1.0,
-            grading_instruction_id=None,
+            grading_instruction_id=grading_instruction_to_use.id if grading_instruction_to_use else None,
             meta={}
         ),
         Feedback(

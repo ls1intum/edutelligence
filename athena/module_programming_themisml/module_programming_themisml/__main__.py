@@ -90,13 +90,17 @@ async def suggest_feedback(exercise: Exercise, submission: Submission) -> List[F
         return []
     
     # TODO: Remove this again
+    grading_instruction_to_use = None
+    if exercise.grading_criteria:
+        if exercise.grading_criteria[0].structured_grading_instructions:
+            grading_instruction_to_use = exercise.grading_criteria[0].structured_grading_instructions[0]
     return [
         Feedback(
             id=None,
             title="Feedback Suggestion",
             description="This is referenced test suggestion #1 from ThemisML",
             credits=-1,
-            structured_grading_instruction=None,
+            grading_instruction_id=grading_instruction_to_use.id if grading_instruction_to_use else None
             exercise_id=exercise.id,
             submission_id=submission.id,
             file_path="src/de/athena/BubbleSort.java",
@@ -109,7 +113,7 @@ async def suggest_feedback(exercise: Exercise, submission: Submission) -> List[F
             title="Feedback Suggestion",
             description="This is referenced test suggestion #1 from ThemisML",
             credits=1,
-            structured_grading_instruction=None,
+            grading_instruction_id=None,
             exercise_id=exercise.id,
             submission_id=submission.id,
             file_path="src/de/athena/Client.java",
@@ -122,7 +126,7 @@ async def suggest_feedback(exercise: Exercise, submission: Submission) -> List[F
             title="Feedback Suggestion",
             description="This is an unreferenced test suggestion from ThemisML",
             credits=-2,
-            structured_grading_instruction=None,
+            grading_instruction_id=None,
             exercise_id=exercise.id,
             submission_id=submission.id,
             file_path=None,
