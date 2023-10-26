@@ -14,7 +14,7 @@ from module_programming_llm.helpers.llm_utils import (
     num_tokens_from_prompt, 
     predict_and_parse
 )
-from module_programming_llm.helpers.utils import get_diff
+from module_programming_llm.helpers.utils import format_grading_instructions, get_diff
 
 
 class FileGradingInstruction(BaseModel):
@@ -47,9 +47,11 @@ async def split_grading_instructions_by_file(
         Optional[SplitGradingInstructions]: Split grading instructions, None if it is too short or too long
     """
 
+    grading_instructions = format_grading_instructions(exercise.grading_instructions, exercise.grading_criteria)
+
     # Return None if the grading instructions are too short
-    if (exercise.grading_instructions is None 
-            or num_tokens_from_string(exercise.grading_instructions) <= config.split_grading_instructions_by_file_prompt.tokens_before_split):
+    if (grading_instructions is None 
+            or num_tokens_from_string(grading_instructions) <= config.split_grading_instructions_by_file_prompt.tokens_before_split):
         return None
 
     # Return None if the grading instructions are not in the prompt
@@ -84,7 +86,7 @@ async def split_grading_instructions_by_file(
     )
 
     prompt_input = {
-        "grading_instructions": exercise.grading_instructions, 
+        "grading_instructions": grading_instructions,
         "changed_files_from_template_to_solution": ", ".join(changed_files_from_template_to_solution),
         "changed_files_from_template_to_submission": ", ".join(changed_files_from_template_to_submission)
     }

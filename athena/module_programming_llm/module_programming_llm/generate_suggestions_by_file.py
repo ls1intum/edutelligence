@@ -29,6 +29,7 @@ class FeedbackModel(BaseModel):
     line_start: Optional[int] = Field(description="Referenced line number start, or empty if unreferenced")
     line_end: Optional[int] = Field(description="Referenced line number end, or empty if unreferenced")
     credits: float = Field(0.0, description="Number of points received/deducted")
+    grading_instruction_id: Optional[int] = Field(description="ID of the grading instruction that was used to generate this feedback, or empty if no grading instruction was used")
 
     class Config:
         title = "Feedback"
@@ -224,6 +225,16 @@ async def generate_suggestions_by_file(exercise: Exercise, submission: Submissio
         if result is None:
             continue
         for feedback in result.feedbacks:
+            grading_instruction = None
+            if feedback.grading_instruction_id is not None and exercise.grading_criteria is not None:
+                for grading_criterion in exercise.grading_criteria:
+                    for instruction in grading_criterion.structured_grading_instructions:
+                        if instruction.id == feedback.grading_instruction_id:
+                            grading_instruction = instruction
+                            break
+                    if grading_instruction is not None:
+                        break
+
             feedbacks.append(Feedback(
                 exercise_id=exercise.id,
                 submission_id=submission.id,
@@ -233,6 +244,7 @@ async def generate_suggestions_by_file(exercise: Exercise, submission: Submissio
                 line_start=feedback.line_start,
                 line_end=feedback.line_end,
                 credits=feedback.credits,
+                grading_instruction=grading_instruction,
                 meta={}
             ))
 
