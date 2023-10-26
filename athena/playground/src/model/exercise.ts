@@ -1,6 +1,6 @@
 export type ExerciseType = "text" | "programming";
 
-type StructuredGradingInstruction = {
+export type StructuredGradingInstruction = {
   id: number;
   credits: number;
   feedback: string;
@@ -9,7 +9,7 @@ type StructuredGradingInstruction = {
   instruction_description: string;
 };
 
-type GradingCriteria = {
+export type GradingCriteria = {
   id: number;
   title: string;
   structured_grading_instructions: StructuredGradingInstruction[]
