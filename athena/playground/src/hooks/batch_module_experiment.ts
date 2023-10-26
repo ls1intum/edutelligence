@@ -160,22 +160,21 @@ export default function useBatchModuleExperiment(experiment: Experiment) {
       const submissionFeedbacks = experiment.tutorFeedbacks.filter(
         (feedback) => feedback.submission_id === submission?.id
       );
-      if (submissionFeedbacks.length === 0) {
-        continue;
-      }
+      
+      try {  
+        console.log(
+          `Sending training feedbacks to Athena... (${num}/${submissionsToSend.length})`
+        );
 
-      console.log(
-        `Sending training feedbacks to Athena... (${num}/${submissionsToSend.length})`
-      );
-
-      try {
-        await sendFeedbacks.mutateAsync({
-          exercise: experiment.exercise,
-          submission,
-          feedbacks: submissionFeedbacks,
-        });
-        if (!isMounted.current) {
-          return;
+        if (submissionFeedbacks.length > 0) {
+          await sendFeedbacks.mutateAsync({
+            exercise: experiment.exercise,
+            submission,
+            feedbacks: submissionFeedbacks,
+          });
+          if (!isMounted.current) {
+            return;
+          }
         }
 
         setData((prevState) => ({
