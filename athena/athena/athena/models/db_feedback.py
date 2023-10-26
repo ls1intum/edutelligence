@@ -12,7 +12,7 @@ class DBFeedback(Model):
     title = Column(String)
     description = Column(String)
     credits = Column(Float, nullable=False)
-    structured_grading_instruction = Column(JSON)
+    grading_instruction_id = Column(BigInteger)
     meta = Column(JSON, nullable=False)
 
     # not in the schema, but used in the database to distinguish between feedbacks and feedback suggestions

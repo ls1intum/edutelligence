@@ -91,7 +91,7 @@ def suggest_feedback(exercise: Exercise, submission: Submission, module_config: 
             file_path="BinarySearch.java",
             line_start=8,
             line_end=9,
-            structured_grading_instruction=None,
+            grading_instruction_id=None,
             meta={}
         ),
         # Referenced feedback, line 13-18 in BinarySearch.java
@@ -105,7 +105,7 @@ def suggest_feedback(exercise: Exercise, submission: Submission, module_config: 
             file_path="BinarySearch.java",
             line_start=13,
             line_end=18,
-            structured_grading_instruction=None,
+            grading_instruction_id=None,
             meta={}
         ),
         # Unreferenced feedback without file
@@ -119,7 +119,7 @@ def suggest_feedback(exercise: Exercise, submission: Submission, module_config: 
             file_path=None,
             line_start=None,
             line_end=None,
-            structured_grading_instruction=None,
+            grading_instruction_id=None,
             meta={}
         ),
         # Unreferenced feedback in BinarySearch.java
@@ -133,7 +133,7 @@ def suggest_feedback(exercise: Exercise, submission: Submission, module_config: 
             file_path="BinarySearch.java",
             line_start=None,
             line_end=None,
-            structured_grading_instruction=None,
+            grading_instruction_id=None,
             meta={}
         )
     ]
