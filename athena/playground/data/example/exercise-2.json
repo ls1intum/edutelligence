@@ -6,6 +6,36 @@
   "max_points": 10,
   "bonus_points": 0,
   "grading_instructions": "Give full points if the student provides their name.",
+  "grading_criteria": [
+    {
+      "id": 1,
+      "title": "Full name",
+      "structured_grading_instructions": [
+        {
+          "id": 123,
+          "credits": 10.0,
+          "grading_scale": "correct",
+          "instruction_description": "when correct",
+          "feedback": "You provided your full name. Good job!",
+          "usage_count": 1
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Additional comment",
+      "structured_grading_instructions": [
+        {
+          "id": 124,
+          "credits": 0.0,
+          "grading_scale": "just some comment",
+          "instruction_description": "comment",
+          "feedback": "This is just a comment.",
+          "usage_count": 0
+        }
+      ]
+    }
+  ],
   "problem_statement": "Write your name in the text field below.",
   "example_solution": "Maximilian",
   "meta": {},
@@ -21,6 +51,7 @@
           "title": "You should write your full name.",
           "index_start": null,
           "index_end": null,
+          "structured_grading_instruction_id": 123,
           "credits": -0.5,
           "meta": {}
         }

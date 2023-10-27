@@ -7,6 +7,36 @@
   "bonus_points": 0,
   "problem_statement": "-> file:problem-statement.md",
   "grading_instructions": "-> file:grading-instructions.md",
+  "grading_criteria": [
+    {
+      "id": 1,
+      "title": "Hello world",
+      "structured_grading_instructions": [
+        {
+          "id": 123,
+          "credits": 10.0,
+          "grading_scale": "correct",
+          "instruction_description": "when correct",
+          "feedback": "You said hello world. Good job!",
+          "usage_count": 1
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Additional comment",
+      "structured_grading_instructions": [
+        {
+          "id": 124,
+          "credits": 0.0,
+          "grading_scale": "just some comment",
+          "instruction_description": "comment",
+          "feedback": "This is just a comment.",
+          "usage_count": 0
+        }
+      ]
+    }
+  ],
   "programming_language": "java",
   "solution_repository_url": "{{exerciseDataUrl}}/solution.zip",
   "template_repository_url": "{{exerciseDataUrl}}/template.zip",
@@ -36,6 +66,7 @@
           "file_path": "BinarySearch.java",
           "line_start": 16,
           "line_end": null,
+          "structured_grading_instruction_id": 123,
           "credits": -2.0,
           "meta": {}
         }
@@ -58,6 +89,7 @@
           "file_path": "src/mttpe1/BubbleSort.java",
           "line_start": 13,
           "line_end": 20,
+          "structured_grading_instruction_id": 124,
           "credits": 2.0,
           "meta": {}
         },
