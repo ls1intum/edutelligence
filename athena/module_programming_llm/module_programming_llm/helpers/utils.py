@@ -30,7 +30,7 @@ def add_line_numbers(content: str) -> str:
     return "\n".join(
         f"{str(line_number).rjust(line_number_max_length)} {line}" 
         for line_number, line 
-        in enumerate(lines, start=1)
+        in enumerate(lines)
     )
 
 

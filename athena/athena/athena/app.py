@@ -13,6 +13,7 @@ from .database import create_tables
 from .logger import logger
 from .module_config import get_module_config
 from .metadata import MetaDataMiddleware
+from .experiment import ExperimentMiddleware
 from .helpers.programming.repository_authorization_middleware import init_repo_auth_middleware
 
 
@@ -25,6 +26,7 @@ class FastAPIWithStart(FastAPI):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.add_middleware(MetaDataMiddleware)
+        self.add_middleware(ExperimentMiddleware)
 
 
     def start(self) -> None:
@@ -47,7 +49,8 @@ class FastAPIWithStart(FastAPI):
                 port=conf.port,
                 # reload on changes to the module or the athena package
                 reload=True,
-                reload_dirs=[conf.name, "../athena"],
+                # Reload only on source changes (not .venv to prevent high CPU usage, see https://github.com/encode/uvicorn/issues/338#issuecomment-642298366)
+                reload_dirs=["../" + conf.name + "/" + conf.name, "../athena/athena"],
             )
 
 

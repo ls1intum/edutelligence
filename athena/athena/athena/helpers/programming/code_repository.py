@@ -52,6 +52,9 @@ def get_repository(url: str, authorization_secret: Optional[str] = None) -> Repo
         repo_zip.extractall(cache_dir_path)
         if not (cache_dir_path / ".git").exists():
             repo = Repo.init(cache_dir_path, initial_branch='main')
+            # Config username and email to prevent Git errors
+            repo.config_writer().set_value("user", "name", "athena").release()
+            repo.config_writer().set_value("user", "email", "doesnotexist.athena@cit.tum.de").release()
             repo.git.add(all=True, force=True)
             repo.git.commit('-m', 'Initial commit')
 

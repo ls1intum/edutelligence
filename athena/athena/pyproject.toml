@@ -6,7 +6,7 @@ authors = ["Paul Schwind <paul.schwind@tum.de>"]
 license = "MIT"
 
 [tool.poetry.dependencies]
-python = "^3.10"
+python = "3.11.*"
 fastapi = "^0.96.0"
 uvicorn = "^0.23.0"
 httpx = "^0.24.1"
