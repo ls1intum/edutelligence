@@ -1,5 +1,20 @@
 export type ExerciseType = "text" | "programming";
 
+export type StructuredGradingInstruction = {
+  id: number;
+  credits: number;
+  feedback: string;
+  usage_count: number;
+  grading_scale: string;
+  instruction_description: string;
+};
+
+export type GradingCriteria = {
+  id: number;
+  title: string;
+  structured_grading_instructions: StructuredGradingInstruction[]
+};
+
 type ExerciseBase = {
   id: number;
   course_id: number;
@@ -8,6 +23,7 @@ type ExerciseBase = {
   max_points: number;
   bonus_points: number;
   grading_instructions?: string;
+  grading_criteria?: GradingCriteria[];
   problem_statement?: string;
   meta: {
     [key: string]: any;
