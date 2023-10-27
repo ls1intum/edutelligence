@@ -6,7 +6,7 @@ authors = ["Paul Schwind <paul.schwind@tum.de>"]
 license = "MIT"
 
 [tool.poetry.dependencies]
-python = "^3.11"
+python = "3.11.*"
 athena = {path = "../athena", develop = true}
 antlr4-python3-runtime = "^4.13.1"
 code-bert-score = "^0.4.1"

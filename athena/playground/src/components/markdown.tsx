@@ -60,11 +60,11 @@ export default function Markdown({
   );
 
   return (
-    <>
+    <div>
       {switcherButton}
       <div className="bg-slate-100 p-4 rounded-md">
         {view === "plaintext" ? plainTextView : markdownView}
       </div>
-    </>
+    </div>
   );
 }
