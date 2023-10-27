@@ -100,7 +100,7 @@ async def suggest_feedback(exercise: Exercise, submission: Submission) -> List[F
             title="Feedback Suggestion",
             description="This is referenced test suggestion #1 from ThemisML",
             credits=-1,
-            structured_grading_instruction_id=grading_instruction_to_use.id if grading_instruction_to_use else None
+            structured_grading_instruction_id=grading_instruction_to_use.id if grading_instruction_to_use else None,
             exercise_id=exercise.id,
             submission_id=submission.id,
             file_path="src/de/athena/BubbleSort.java",
