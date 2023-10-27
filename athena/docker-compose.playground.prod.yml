@@ -10,7 +10,7 @@ services:
     image: ls1tum/athena_playground:${ATHENA_TAG:-develop}
 
   log_viewer:
-    hostname: log_viewer
+    hostname: log-viewer
     image: ls1tum/athena_log_viewer:${ATHENA_TAG:-develop}
     env_file:
       - ${ATHENA_ENV_DIR:-./env_example}/log_viewer.env

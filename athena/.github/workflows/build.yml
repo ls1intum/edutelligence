@@ -8,8 +8,6 @@ on:
     branches:
       - develop
   pull_request:
-    branches:
-      - develop
 
 # prevent Docker image push conflicts
 concurrency: 

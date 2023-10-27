@@ -187,7 +187,7 @@ SELECT
                   WHEN tb.end_index IS NOT NULL AND tb.end_index > 0 THEN tb.end_index
                   ELSE 0
                 END,
-                'grading_instruction_id',
+                'structured_grading_instruction_id',
                 f.grading_instruction_id,
                 'credits',
                 f.credits,

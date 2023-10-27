@@ -5,6 +5,7 @@ from pathlib import Path
 from .app import app
 from .schemas import ExerciseType, GradingCriterion, StructuredGradingInstruction
 from .metadata import emit_meta, get_meta
+from .experiment import get_experiment_environment
 from .endpoints import submission_selector, submissions_consumer, feedback_consumer, feedback_provider, config_schema_provider  # type: ignore
 
 
@@ -29,6 +30,7 @@ __all__ = [
     "config_schema_provider",
     "emit_meta",
     "get_meta",
+    "get_experiment_environment",
     "ExerciseType",
     "GradingCriterion",
     "StructuredGradingInstruction",

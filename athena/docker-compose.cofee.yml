@@ -10,7 +10,7 @@ services:
   traefik:
     image: traefik:v2.9.6
     container_name: cofee-traefik
-    hostname: module_text_cofee_old
+    hostname: module-text-cofee-old
     restart: unless-stopped
     depends_on:
       # These components have API endpoints managed by traefik
