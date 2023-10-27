@@ -12,7 +12,7 @@ from module_text_llm.helpers.llm_utils import (
     num_tokens_from_prompt,
     predict_and_parse
 )
-from module_text_llm.helpers.utils import add_sentence_numbers, get_index_range_from_line_range
+from module_text_llm.helpers.utils import add_sentence_numbers, get_index_range_from_line_range, format_grading_instructions
 
 class FeedbackModel(BaseModel):
     title: str = Field(description="Very short title, i.e. feedback category", example="Logic Error")
@@ -20,6 +20,9 @@ class FeedbackModel(BaseModel):
     line_start: Optional[int] = Field(description="Referenced line number start, or empty if unreferenced")
     line_end: Optional[int] = Field(description="Referenced line number end, or empty if unreferenced")
     credits: float = Field(0.0, description="Number of points received/deducted")
+    grading_instruction_id: Optional[int] = Field(
+        description="ID of the grading instruction that was used to generate this feedback, or empty if no grading instruction was used"
+    )
 
     class Config:
         title = "Feedback"
@@ -40,7 +43,7 @@ async def generate_suggestions(exercise: Exercise, submission: Submission, confi
     prompt_input = {
         "max_points": exercise.max_points,
         "bonus_points": exercise.bonus_points,
-        "grading_instructions": exercise.grading_instructions,
+        "grading_instructions": format_grading_instructions(exercise.grading_instructions, exercise.grading_criteria),
         "problem_statement": exercise.problem_statement or "No problem statement.",
         "example_solution": exercise.example_solution,
         "submission": add_sentence_numbers(submission.text)
@@ -102,6 +105,7 @@ async def generate_suggestions(exercise: Exercise, submission: Submission, confi
             index_start=index_start,
             index_end=index_end,
             credits=feedback.credits,
+            structured_grading_instruction_id=feedback.grading_instruction_id,
             meta={}
         ))
 
