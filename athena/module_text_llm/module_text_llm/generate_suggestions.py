@@ -95,17 +95,6 @@ async def generate_suggestions(exercise: Exercise, submission: Submission, confi
     feedbacks = []
     for feedback in result.feedbacks:
         index_start, index_end = get_index_range_from_line_range(feedback.line_start, feedback.line_end, submission.text)
-
-        grading_instruction = None
-        if feedback.grading_instruction_id is not None and exercise.grading_criteria is not None:
-            for grading_criterion in exercise.grading_criteria:
-                for instruction in grading_criterion.structured_grading_instructions:
-                    if instruction.id == feedback.grading_instruction_id:
-                        grading_instruction = instruction
-                        break
-                if grading_instruction is not None:
-                    break
-
         feedbacks.append(Feedback(
             exercise_id=exercise.id,
             submission_id=submission.id,
@@ -114,7 +103,7 @@ async def generate_suggestions(exercise: Exercise, submission: Submission, confi
             index_start=index_start,
             index_end=index_end,
             credits=feedback.credits,
-            grading_instruction=grading_instruction,
+            structured_grading_instruction_id=feedback.grading_instruction_id,
             meta={}
         ))
 

@@ -59,29 +59,6 @@ def format_grading_instructions(grading_instructions: Optional[str], grading_cri
     return result.strip()
 
 
-def find_grading_instruction(grading_instruction_id: Optional[int], grading_criteria: Optional[List[GradingCriterion]]):
-    """Find a grading instruction by its ID in a list of grading criteria.
-
-    Args:
-        grading_instruction_id (Optional[int]): Grading instruction ID
-        grading_criteria (Optional[List[GradingCriterion]]): List of grading criteria with nested grading instructions
-
-    Returns:
-        Optional[StructuredGradingInstruction]: Grading instruction or None if not found
-    """
-    grading_instruction = None
-    if grading_instruction_id is not None and grading_criteria is not None:
-        for grading_criterion in grading_criteria:
-            for instruction in grading_criterion.structured_grading_instructions:
-                if instruction.id == grading_instruction_id:
-                    grading_instruction = instruction
-                    break
-            if grading_instruction is not None:
-                break
-    
-    return grading_instruction
-
-
 def add_line_numbers(content: str) -> str:
     lines = content.splitlines()
     line_number_max_length = len(str(len(lines)))
