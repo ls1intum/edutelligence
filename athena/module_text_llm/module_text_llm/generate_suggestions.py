@@ -20,7 +20,9 @@ class FeedbackModel(BaseModel):
     line_start: Optional[int] = Field(description="Referenced line number start, or empty if unreferenced")
     line_end: Optional[int] = Field(description="Referenced line number end, or empty if unreferenced")
     credits: float = Field(0.0, description="Number of points received/deducted")
-    grading_instruction_id: Optional[int] = Field(description="ID of the grading instruction that was used to generate this feedback, or empty if no grading instruction was used")
+    grading_instruction_id: Optional[int] = Field(
+        description="ID of the grading instruction that was used to generate this feedback, or empty if no grading instruction was used"
+    )
 
     class Config:
         title = "Feedback"

@@ -8,7 +8,7 @@ from git import Remote
 from git.repo import Repo
 from langchain.document_loaders import GitLoader
 
-from athena import GradingCriterion, StructuredGradingInstruction
+from athena import GradingCriterion
 
 def load_files_from_repo(repo: Repo, file_filter: Optional[Callable[[str], bool]] = None) -> Dict[str, str]:
     return {
