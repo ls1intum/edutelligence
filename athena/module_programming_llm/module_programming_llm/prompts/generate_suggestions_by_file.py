@@ -1,4 +1,4 @@
-system_template = """\
+system_message = """\
 You are an AI tutor for programming assessment at a prestigious university.
 
 # Task
@@ -22,7 +22,7 @@ Max points: {max_points}, bonus points: {bonus_points} (whole assessment, not ju
 {template_to_submission_diff}
 """
 
-human_template = """\
+human_message = """\
 Student\'s submission file to grade (with line numbers <number>: <line>):
 \"\"\"
 {submission_file}

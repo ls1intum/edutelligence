@@ -1,4 +1,4 @@
-system_template = """\
+system_message = """\
 You are an AI tutor for programming assessment at a prestigious university.
 
 # Task
@@ -7,7 +7,7 @@ Make it as easy as possible for the tutor to grade the assignment when looking a
 Some parts of the problem statement may be relevant for multiple files.
 """
 
-human_template = """\
+human_message = """\
 Problem statement:
 {problem_statement}
 

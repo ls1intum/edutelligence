@@ -3,16 +3,16 @@ from pydantic import BaseModel, Field
 from athena import config_schema_provider
 from module_programming_llm.helpers.models import ModelConfigType, DefaultModelConfig
 from module_programming_llm.prompts.generate_suggestions_by_file import (
-    system_template as generate_suggestions_by_file_system_template,
-    human_template as generate_suggestions_by_file_human_template
+    system_message as generate_suggestions_by_file_system_message,
+    human_message as generate_suggestions_by_file_human_message
 ) 
 from module_programming_llm.prompts.split_grading_instructions_by_file import (
-    system_template as split_grading_instructions_by_file_template, 
-    human_template as split_grading_instructions_by_file_human_template
+    system_message as split_grading_instructions_by_file_message, 
+    human_message as split_grading_instructions_by_file_human_message
 )
 from module_programming_llm.prompts.split_problem_statement_by_file import (
-    system_template as split_problem_statements_by_file_system_template,
-    human_template as split_problem_statements_by_file_human_template
+    system_message as split_problem_statements_by_file_system_message,
+    human_message as split_problem_statements_by_file_human_message
 )
 
 
@@ -20,9 +20,9 @@ class SplitProblemStatementsByFilePrompt(BaseModel):
     """\
 Features available: **{problem_statement}**, **{changed_files_from_template_to_solution}**, **{changed_files_from_template_to_submission}**\
 """
-    system_message: str = Field(default=split_problem_statements_by_file_system_template,
+    system_message: str = Field(default=split_problem_statements_by_file_system_message,
                                 description="Message for priming AI behavior and instructing it what to do.")
-    human_message: str = Field(default=split_problem_statements_by_file_human_template,
+    human_message: str = Field(default=split_problem_statements_by_file_human_message,
                                description="Message from a human. The input on which the AI is supposed to act.")
     tokens_before_split: int = Field(default=250, description="Split the problem statement into file-based ones after this number of tokens.")
     
@@ -31,9 +31,9 @@ class SplitGradingInstructionsByFilePrompt(BaseModel):
     """\
 Features available: **{grading_instructions}**, **{changed_files_from_template_to_solution}**, **{changed_files_from_template_to_submission}**\
 """
-    system_message: str = Field(default=split_grading_instructions_by_file_template,
+    system_message: str = Field(default=split_grading_instructions_by_file_message,
                                 description="Message for priming AI behavior and instructing it what to do.")
-    human_message: str = Field(default=split_grading_instructions_by_file_human_template,
+    human_message: str = Field(default=split_grading_instructions_by_file_human_message,
                                description="Message from a human. The input on which the AI is supposed to act.")
     tokens_before_split: int = Field(default=250, description="Split the grading instructions into file-based ones after this number of tokens.")
 
@@ -44,9 +44,9 @@ Features available: **{problem_statement}**, **{grading_instructions}**, **{max_
 
 *Note: Prompt will be applied per file independently. Also, you don't have to include all features, e.g. template_to_solution_diff.*\
 """
-    system_message: str = Field(default=generate_suggestions_by_file_system_template,
+    system_message: str = Field(default=generate_suggestions_by_file_system_message,
                                 description="Message for priming AI behavior and instructing it what to do.")
-    human_message: str = Field(default=generate_suggestions_by_file_human_template,
+    human_message: str = Field(default=generate_suggestions_by_file_human_message,
                                description="Message from a human. The input on which the AI is supposed to act.")
 
 
