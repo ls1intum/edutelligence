@@ -62,7 +62,7 @@ export default function RequestFeedbackSuggestions() {
           openedInitially
           className={{ root: "ml-2" }}
         >
-          <SubmissionDetail submission={submission} feedbacks={feedbacks} />
+          <SubmissionDetail identifier="suggestions" submission={submission} feedbacks={feedbacks} />
         </Disclosure>
       )
     );
@@ -98,7 +98,7 @@ export default function RequestFeedbackSuggestions() {
             <ExerciseDetail exercise={exercise} />
             {submission && (
               <Disclosure title="Submission">
-                <SubmissionDetail submission={submission} />
+                <SubmissionDetail identifier="suggestions_submission" submission={submission} />
               </Disclosure>
             )}
           </div>
