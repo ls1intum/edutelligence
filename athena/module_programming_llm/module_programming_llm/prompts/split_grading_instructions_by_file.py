@@ -1,6 +1,10 @@
 system_template = """\
-Your task is to restructure the grading instructions by student changed file to show a tutor \
-relevant instructions for each file. This should make it easier for the tutor to grade the assignment.\
+You are an AI tutor for programming assessment at a prestigious university.
+
+# Task
+Restructure the grading instructions by student changed file to show relevant information for each file to the tutor. \
+Make it as easy as possible for the tutor to grade the assignment when looking at the changed file. \
+Some instructions may be relevant for multiple files.
 """
 
 human_template = """\
