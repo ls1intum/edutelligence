@@ -38,6 +38,7 @@ if os.environ.get("REPLICATE_API_TOKEN"):  # If Replicate is available
     available_models = {
         name: Replicate(
             model=model,
+            input={ "temperature": 0.01 }
         )
         for name, model in replicate_models.items()
     }
