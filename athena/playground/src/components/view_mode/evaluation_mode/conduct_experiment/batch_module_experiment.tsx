@@ -31,8 +31,8 @@ type ConductBatchModuleExperimentProps = {
 };
 
 export type ConductBatchModuleExperimentHandles = {
-  importData: (data: any) => boolean;
-  exportData: () => any;
+  importData: ReturnType<typeof useBatchModuleExperiment>["importData"];
+  exportData: ReturnType<typeof useBatchModuleExperiment>["exportData"];
 };
 
 // ForwardRef is needed to expose the ref to the parent component

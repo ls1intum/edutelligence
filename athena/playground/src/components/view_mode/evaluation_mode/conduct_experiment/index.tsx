@@ -51,15 +51,23 @@ export default function ConductExperiment({
     downloadJSONFiles(
       moduleViewRefs.current.flatMap((moduleViewRef, index) => {
         if (!moduleViewRef) return [];
+        // TODO: Separate results from manualRatings
         const data = moduleViewRef.exportData();
-        return data.step !== "notStarted"
-          ? [
-              {
-                name: `${experiment.exerciseType}_results_${moduleConfigurations[index].name}_${experiment.id}`,
-                data: data,
-              },
-            ]
-          : [];
+
+        let files: { name: string; data: any }[] = [];
+        if (data.results.step !== "notStarted") {
+          files.push({
+            name: `${experiment.exerciseType}_results_${moduleConfigurations[index].name}_${experiment.id}`,
+            data: data.results,
+          });
+          if (data.manualRatings) {
+            files.push({
+              name: `${experiment.exerciseType}_manual_ratings_${moduleConfigurations[index].name}_${experiment.id}`,
+              data: data.manualRatings,
+            });
+          }
+        }
+        return files;
       })
     );
   };
@@ -94,6 +102,8 @@ export default function ConductExperiment({
       alert("Module view not found.");
       return;
     }
+
+    // TODO: Handle manual ratings (i.e. import order of multiple files)
 
     if (moduleViewRef.importData(data)) {
       alert(

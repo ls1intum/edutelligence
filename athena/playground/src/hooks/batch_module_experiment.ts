@@ -1,4 +1,5 @@
 import type { Feedback } from "@/model/feedback";
+import type { ManualRating } from "@/model/manual_rating";
 import type { Experiment } from "@/components/view_mode/evaluation_mode/define_experiment";
 
 import { useEffect, useRef, useState } from "react";
@@ -38,6 +39,11 @@ export default function useBatchModuleExperiment(experiment: Experiment) {
     submissionsWithFeedbackSuggestions: new Map(),
   });
 
+  // Stores annotations for manual evaluation
+  const [submissionsWithManualRatings, setSubmissionsWithManualRatings] = useState<
+    Map<number, ManualRating[]>
+  >(new Map());
+
   const [processingStep, setProcessingStep] = useState<
     ExperimentStep | undefined
   >(undefined);
@@ -56,37 +62,74 @@ export default function useBatchModuleExperiment(experiment: Experiment) {
   };
 
   const exportData = () => {
-    return {
-      step: data.step,
-      didSendSubmissions: data.didSendSubmissions,
-      sentTrainingSubmissions: data.sentTrainingSubmissions,
-      submissionsWithFeedbackSuggestions: Object.fromEntries(
-        data.submissionsWithFeedbackSuggestions
+    return { 
+      results: {
+        type: "results",
+        step: data.step,
+        didSendSubmissions: data.didSendSubmissions,
+        sentTrainingSubmissions: data.sentTrainingSubmissions,
+        submissionsWithFeedbackSuggestions: Object.fromEntries(
+          data.submissionsWithFeedbackSuggestions
+        ),
+      },
+      ...(
+        submissionsWithManualRatings.size > 0 ? {
+          manualRatings: {
+            type: "manualRatings",
+            submissionsWithManualRatings: Object.fromEntries(
+              submissionsWithManualRatings
+            ),
+          },
+        } : {}
       ),
     };
   };
 
   const importData = (data: any) => {
-    if (
-      data.step === undefined ||
-      data.didSendSubmissions === undefined ||
-      data.sentTrainingSubmissions === undefined ||
-      data.submissionsWithFeedbackSuggestions === undefined
-    ) {
-      return false;
-    }
+    if (data.type === "results") {
+      if (data.step === undefined ||
+        data.didSendSubmissions === undefined ||
+        data.sentTrainingSubmissions === undefined ||
+        data.submissionsWithFeedbackSuggestions === undefined) {
+        return false;
+      }
 
-    setData(() => ({
-      step: data.step,
-      didSendSubmissions: data.didSendSubmissions,
-      sentTrainingSubmissions: data.sentTrainingSubmissions,
-      submissionsWithFeedbackSuggestions: new Map(
-        Object.entries(data.submissionsWithFeedbackSuggestions).map(
+      setData(() => ({
+        step: data.step,
+        didSendSubmissions: data.didSendSubmissions,
+        sentTrainingSubmissions: data.sentTrainingSubmissions,
+        submissionsWithFeedbackSuggestions: new Map(
+          Object.entries(data.submissionsWithFeedbackSuggestions).map(
+            ([key, value]) => [Number(key), value as any]
+          )
+        ),
+      }));
+
+      return true;
+    } else if (data.type === "manualRatings") {
+      if (data.submissionsWithManualRatings === undefined) {
+        return false;
+      }
+      // TODO: Check for run id to be the same
+      setSubmissionsWithManualRatings(() => new Map(
+        Object.entries(data.submissionsWithManualRatings).map(
           ([key, value]) => [Number(key), value as any]
         )
-      ),
-    }));
-    return true;
+      ));
+
+      return true;
+    }
+
+    // Unknown type
+    return false;
+  };
+
+  const getManualRatingsSetter = (submissionId: number) => (manualRatings: ManualRating[]) => {
+    setSubmissionsWithManualRatings((prevState) => {
+      const newMap = new Map(prevState);
+      newMap.set(submissionId, manualRatings);
+      return newMap;
+    });
   };
 
   const continueAfterTraining = (data.step === "sendingTrainingFeedbacks" && data.sentTrainingSubmissions.length === experiment.trainingSubmissions?.length) ? (() => {
@@ -322,6 +365,7 @@ export default function useBatchModuleExperiment(experiment: Experiment) {
 
   return {
     data,
+    getManualRatingsSetter,
     startExperiment,
     continueAfterTraining,
     exportData,
