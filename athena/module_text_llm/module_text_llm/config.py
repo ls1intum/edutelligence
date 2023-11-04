@@ -2,7 +2,10 @@ from pydantic import BaseModel, Field
 
 from athena import config_schema_provider
 from module_text_llm.helpers.models import ModelConfigType, DefaultModelConfig
-from module_text_llm.prompts.generate_suggestions import system_template, human_template
+from module_text_llm.prompts.generate_suggestions import (
+  system_message as generate_suggestions_system_message, 
+  human_message as generate_suggestions_human_message
+)
 
 
 class GenerateSuggestionsPrompt(BaseModel):
@@ -11,9 +14,9 @@ Features available: **{problem_statement}**, **{example_solution}**, **{grading_
 
 _Note: **{problem_statement}**, **{example_solution}**, or **{grading_instructions}** might be omitted if the input is too long._\
 """
-    system_message: str = Field(default=system_template,
+    system_message: str = Field(default=generate_suggestions_system_message,
                                 description="Message for priming AI behavior and instructing it what to do.")
-    human_message: str = Field(default=human_template,
+    human_message: str = Field(default=generate_suggestions_human_message,
                                description="Message from a human. The input on which the AI is supposed to act.")
 
 

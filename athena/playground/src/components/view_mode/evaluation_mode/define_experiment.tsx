@@ -286,6 +286,7 @@ export default function DefineExperiment({
             onClick={() => {
               if (experiment && confirm("Cancel experiment?")) {
                 onChangeExperiment(undefined);
+                setExperimentId(uuidv4());
               }
             }}
           >

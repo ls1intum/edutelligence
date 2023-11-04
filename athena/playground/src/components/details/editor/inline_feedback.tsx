@@ -203,7 +203,7 @@ export default function InlineFeedback({
               )}
               {feedback.structured_grading_instruction_id && (
                 <span className="text-xs text-orange-800 rounded-full px-2 py-0.5 bg-orange-100">
-                  Grading Instruction {feedback.structured_grading_instruction_id}
+                  Grading&nbsp;Instruction&nbsp;{feedback.structured_grading_instruction_id}
                 </span>
               )}
             </div>

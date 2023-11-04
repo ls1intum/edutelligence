@@ -49,7 +49,7 @@ export default function SelectSubmission() {
           openedInitially
           className={{ root: "ml-2" }}
         >
-          <SubmissionDetail submission={submission} />
+          <SubmissionDetail identifier="submission_selection" submission={submission} />
         </Disclosure>
       )
     );

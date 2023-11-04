@@ -60,7 +60,7 @@ export default function StructuredGradingInstructionDetail({
             </span>
             <div className="flex gap-1">
               <span className="text-xs text-orange-800 rounded-full px-2 py-0.5 bg-orange-100">
-                Grading Instruction {instruction.id}
+                Grading&nbsp;Instruction&nbsp;{instruction.id}
               </span>
             </div>
           </div>

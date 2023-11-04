@@ -1,9 +1,13 @@
-system_template = """\
-Your task is to restructure the problem statement by student changed file to show the student \
-relevant information for each file. This should make it easier for the student to solve the assignment.\
+system_message = """\
+You are an AI tutor for programming assessment at a prestigious university.
+
+# Task
+Restructure the problem statement by student changed file to show relevant information for each file to the tutor. \
+Make it as easy as possible for the tutor to grade the assignment when looking at the changed file. \
+Some parts of the problem statement may be relevant for multiple files.
 """
 
-human_template = """\
+human_message = """\
 Problem statement:
 {problem_statement}
 
