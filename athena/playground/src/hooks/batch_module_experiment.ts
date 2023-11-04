@@ -122,10 +122,10 @@ export default function useBatchModuleExperiment(experiment: Experiment, moduleC
 
       return true;
     } else if (importedData.type === "manualRatings") {
+      // Relies on the fact that the manual ratings have to be imported after the results
       if (importedData.submissionsWithManualRatings === undefined || importedData.runId !== data.runId) {
         return false;
       }
-      // TODO: Check for run id to be the same
       setSubmissionsWithManualRatings(() => new Map(
         Object.entries(importedData.submissionsWithManualRatings).map(
           ([key, value]) => [Number(key), value as any]
