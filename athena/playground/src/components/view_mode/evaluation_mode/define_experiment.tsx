@@ -32,6 +32,7 @@ export type Experiment = {
 };
 
 type ExperimentExport = {
+  type: "experiment";
   id: string;
   dataMode: DataMode;
   exerciseType: string;
@@ -115,6 +116,7 @@ export default function DefineExperiment({
 
   const getExperimentExport = (experiment: Experiment): ExperimentExport => {
     return {
+      type: "experiment",
       id: experiment.id,
       dataMode: experiment.dataMode,
       exerciseType: experiment.exerciseType,
@@ -139,6 +141,7 @@ export default function DefineExperiment({
   const importExperiment = async (fileContent: string) => {
     const experimentExport = JSON.parse(fileContent) as ExperimentExport;
     const {
+      type,
       id,
       dataMode,
       exerciseType,
@@ -147,6 +150,11 @@ export default function DefineExperiment({
       trainingSubmissionIds,
       evaluationSubmissionIds,
     } = experimentExport;
+    if (type !== "experiment") {
+      alert("Invalid type in experiment data, expected 'experiment'");
+      return;
+    }
+
     if (
       !id ||
       !dataMode ||
@@ -155,7 +163,7 @@ export default function DefineExperiment({
       !executionMode ||
       !evaluationSubmissionIds
     ) {
-      console.error("Invalid experiment export");
+      alert("Invalid experiment data")
       return;
     }
     console.log("Importing experiment", experimentExport);
@@ -177,9 +185,11 @@ export default function DefineExperiment({
       );
       setTrainingSubmissions(trainingSubmissions);
       setEvaluationSubmissions(evaluationSubmissions);
+      alert("Experiment imported successfully");
     } else {
       setTrainingSubmissions(undefined);
       setEvaluationSubmissions(undefined);
+      alert("Failed to import experiment, exercise not found");
     }
   };
 
