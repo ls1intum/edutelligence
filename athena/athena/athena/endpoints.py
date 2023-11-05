@@ -360,6 +360,7 @@ def config_schema_provider(cls: Type[C]) -> Type[C]:
 
     return cls
 
+
 def evaluation_provider(func: Union[
     Callable[[E, S, List[F], List[F]], Any],
     Callable[[E, S, List[F], List[F]], Coroutine[Any, Any, Any]]
