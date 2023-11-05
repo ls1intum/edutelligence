@@ -52,14 +52,21 @@ export default function ConductExperiment({
       moduleViewRefs.current.flatMap((moduleViewRef, index) => {
         if (!moduleViewRef) return [];
         const data = moduleViewRef.exportData();
-        return data.step !== "notStarted"
-          ? [
-              {
-                name: `${experiment.exerciseType}_results_${moduleConfigurations[index].name}_${experiment.id}`,
-                data: data,
-              },
-            ]
-          : [];
+
+        let files: { name: string; data: any }[] = [];
+        if (data.results.step !== "notStarted") {
+          files.push({
+            name: `${experiment.exerciseType}_results_${moduleConfigurations[index].name}_${experiment.id}_run-${data.results.runId}`,
+            data: data.results,
+          });
+          if (data.manualRatings) {
+            files.push({
+              name: `${experiment.exerciseType}_manual_ratings_${moduleConfigurations[index].name}_${experiment.id}_run-${data.manualRatings.runId}`,
+              data: data.manualRatings,
+            });
+          }
+        }
+        return files;
       })
     );
   };
@@ -95,12 +102,21 @@ export default function ConductExperiment({
       return;
     }
 
-    if (moduleViewRef.importData(data)) {
-      alert(
-        `Successfully imported data for ${moduleConfigurations[index].name}`
-      );
-    } else {
-      alert(`Failed to import data for ${data.moduleConfigurationId}.`);
+    if (
+      !data.type ||
+      (data.type !== "results" && data.type !== "manualRatings")
+    ) {
+      alert("No correct type found in the data i.e. 'results' or 'manualRatings'");
+      return;
+    }
+    const type = data.type as "results" | "manualRatings";
+
+    try {
+      moduleViewRef.importData(data);
+      alert(`Successfully imported ${type} data for ${moduleConfigurations[index].name}`);
+    } catch (error) {
+      console.log(error);
+      alert(`Failed to import ${type} data for ${moduleConfigurations[index].name}: ${(error as Error).message}`);
     }
   };
 
@@ -178,15 +194,42 @@ export default function ConductExperiment({
                 onChange={(e) => {
                   if (!e.target.files) return;
 
-                  Array.from(e.target.files).forEach((file) => {
+                  // Create an array to hold the parsed JSON data from each file
+                  const fileDataArray: any[] = [];
+                  let filesProcessed = 0;
+
+                  const files = Array.from(e.target.files);
+                  files.forEach((file) => {
                     const reader = new FileReader();
                     reader.onload = (e) => {
+                      filesProcessed += 1;
                       if (e.target && typeof e.target.result === "string") {
-                        handleImport(JSON.parse(e.target.result));
+                        const jsonData = JSON.parse(e.target.result);
+                        fileDataArray.push(jsonData);
+
+                        // If all files have been read, sort and import
+                        if (filesProcessed === files.length) {
+                          // Sort the array by 'type', 'results' first and then 'manualRatings'
+                          const sortedData = fileDataArray.sort((a, b) => {
+                            if (a.type === "results" && b.type !== "results") {
+                              return -1;
+                            }
+                            if (a.type !== "results" && b.type === "results") {
+                              return 1;
+                            }
+                            return 0;
+                          });
+
+                          // Call handleImport for each item in the sorted array
+                          sortedData.forEach((data) => handleImport(data));
+                        }
                       }
                     };
                     reader.readAsText(file);
                   });
+
+                  // Reset the input value so that the onChange event will fire again if the same file is selected
+                  e.target.value = '';
                 }}
               />
             </label>

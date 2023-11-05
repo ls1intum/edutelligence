@@ -1,15 +1,19 @@
 import type { TextSubmission } from "@/model/submission";
 import type { Feedback } from "@/model/feedback";
+import type { ManualRating } from "@/model/manual_rating";
 
 import FileEditor from "@/components/details/editor/file_editor";
 import InlineFeedback from "@/components/details/editor/inline_feedback";
-import { getOnFeedbackChange, getFeedbackReferenceType, createNewFeedback } from "@/model/feedback";
+import { createFeedbackItemUpdater, getFeedbackReferenceType, createNewFeedback } from "@/model/feedback";
+import { createManualRatingItemUpdater } from "@/model/manual_rating";
 
 type TextSubmissionDetailProps = {
   identifier?: string;
   submission: TextSubmission;
   feedbacks?: Feedback[];
   onFeedbacksChange?: (feedback: Feedback[]) => void;
+  manualRatings?: ManualRating[];
+  onManualRatingsChange?: (manualRatings: ManualRating[]) => void;
 };
 
 export default function TextSubmissionDetail({
@@ -17,6 +21,8 @@ export default function TextSubmissionDetail({
   submission,
   feedbacks,
   onFeedbacksChange,
+  manualRatings,
+  onManualRatingsChange,
 }: TextSubmissionDetailProps) {
   const unreferencedFeedbacks = feedbacks?.filter(
     (feedback) => getFeedbackReferenceType(feedback) === "unreferenced"
@@ -32,6 +38,8 @@ export default function TextSubmissionDetail({
           noFileFeedback
           feedbacks={feedbacks}
           onFeedbacksChange={onFeedbacksChange}
+          manualRatings={manualRatings}
+          onManualRatingsChange={onManualRatingsChange}
           createNewFeedback={() => createNewFeedback(submission)}
         />
       </div>
@@ -45,9 +53,16 @@ export default function TextSubmissionDetail({
                 <InlineFeedback
                   key={feedback.id}
                   feedback={feedback}
+                  manualRating={manualRatings?.find(
+                    (manualRating) => manualRating.feedbackId === feedback.id
+                  )}
                   onFeedbackChange={
                     onFeedbacksChange &&
-                    getOnFeedbackChange(feedback, feedbacks, onFeedbacksChange)
+                    createFeedbackItemUpdater(feedback, feedbacks, onFeedbacksChange)
+                  }
+                  onManualRatingChange={
+                    onManualRatingsChange &&
+                    createManualRatingItemUpdater(feedback.id, manualRatings, onManualRatingsChange)
                   }
                 />
               )

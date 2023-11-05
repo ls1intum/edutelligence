@@ -105,7 +105,10 @@ export default function ConfigureModules({
   const handleExport = () => {
     downloadJSONFiles(moduleConfigurationsState.map((config) => ({
       name: `${experiment.exerciseType}_module_config_${config.name}`,
-      data: config,
+      data: {
+        type: "moduleConfiguration",
+        ...config,
+      }
     })));
   };
 
@@ -117,7 +120,17 @@ export default function ConfigureModules({
         if (!(e.target && typeof e.target.result === "string")) return;
 
         // Load json file
-        const moduleConfiguration = JSON.parse(e.target.result) as ModuleConfiguration;
+        const data = JSON.parse(e.target.result);
+        if (data.type !== "moduleConfiguration") {
+          alert("Invalid type in module configuration data");
+          return;
+        }
+
+        if (!data.id || !data.name || !data.moduleAndConfig) {
+          alert("Invalid module configuration data");
+          return;
+        }
+        const moduleConfiguration = data as ModuleConfiguration;
 
         // 1. Check if module configuration is of the correct type
         if (experiment.exerciseType !== moduleConfiguration.moduleAndConfig.module.type) {
@@ -201,7 +214,11 @@ export default function ConfigureModules({
               className="hidden"
               type="file"
               accept=".json"
-              onChange={(e) => handleImport(e.target.files)}
+              onChange={(e) => {
+                handleImport(e.target.files);
+                // Reset the input value so that the onChange event will fire again if the same file is selected
+                e.target.value = '';
+              }}
             />
           </label>
           <button
