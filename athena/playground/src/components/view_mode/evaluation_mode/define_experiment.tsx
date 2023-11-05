@@ -233,6 +233,8 @@ export default function DefineExperiment({
                   };
                   reader.readAsText(file);
                 }
+                // Reset the input value so that the onChange event will fire again if the same file is selected
+                e.target.value = '';
               }}
             />
           </label>

@@ -214,7 +214,11 @@ export default function ConfigureModules({
               className="hidden"
               type="file"
               accept=".json"
-              onChange={(e) => handleImport(e.target.files)}
+              onChange={(e) => {
+                handleImport(e.target.files);
+                // Reset the input value so that the onChange event will fire again if the same file is selected
+                e.target.value = '';
+              }}
             />
           </label>
           <button
