@@ -2,7 +2,7 @@
 import inspect
 from fastapi import Depends, BackgroundTasks
 from pydantic import BaseModel, ValidationError
-from typing import TypeVar, Callable, List, Union, Any, Coroutine, Type
+from typing import TypeVar, Callable, Dict, List, Union, Any, Coroutine, Type
 
 from athena.app import app
 from athena.authenticate import authenticated
@@ -359,3 +359,11 @@ def config_schema_provider(cls: Type[C]) -> Type[C]:
         return cls.schema()
 
     return cls
+
+def evaluation_provider(func: Union[
+    Callable[[E, S, List[F], List[F]], Dict[int, Any]],
+    Callable[[E, S, List[F], List[F]], Coroutine[Any, Any, Dict[int, Any]]],
+    Callable[[E, S, List[F], List[F], C], Dict[int, Any]],
+    Callable[[E, S, List[F], List[F], C], Coroutine[Any, Any, Dict[int, Any]]]
+]):
+    pass
