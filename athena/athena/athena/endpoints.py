@@ -2,7 +2,7 @@
 import inspect
 from fastapi import Depends, BackgroundTasks
 from pydantic import BaseModel, ValidationError
-from typing import TypeVar, Callable, Dict, List, Union, Any, Coroutine, Type
+from typing import TypeVar, Callable, List, Union, Any, Coroutine, Type
 
 from athena.app import app
 from athena.authenticate import authenticated
@@ -361,9 +361,61 @@ def config_schema_provider(cls: Type[C]) -> Type[C]:
     return cls
 
 def evaluation_provider(func: Union[
-    Callable[[E, S, List[F], List[F]], Dict[int, Any]],
-    Callable[[E, S, List[F], List[F]], Coroutine[Any, Any, Dict[int, Any]]],
-    Callable[[E, S, List[F], List[F], C], Dict[int, Any]],
-    Callable[[E, S, List[F], List[F], C], Coroutine[Any, Any, Dict[int, Any]]]
+    Callable[[E, S, List[F], List[F]], Any],
+    Callable[[E, S, List[F], List[F]], Coroutine[Any, Any, Any]]
 ]):
-    pass
+    """
+    Provide evaluated feedback to the Assessment Module Manager.
+    
+    Note: The evaluation provider is usually called during the research and development phase (by the Playground).
+    Return arbitrary evaluation results.
+
+    This decorator can be used with several types of functions: synchronous or asynchronous.
+
+    Examples:
+        Below are some examples of possible functions that you can decorate with this decorator:
+
+        Without using module config (both synchronous and asynchronous forms):
+        >>> @evaluation_provider
+        ... def sync_evaluate_feedback(
+        ...     exercise: Exercise, submission: Submission, 
+        ...     true_feedbacks: List[Feedback], predicted_feedbacks: List[Feedback]
+        ... ) -> Any:
+        ...     # evaluate predicted feedback here and return evaluation results
+
+        >>> @feedback_provider
+        ... async def async_evaluate_feedback(
+        ...     exercise: Exercise, submission: Submission, 
+        ...     true_feedbacks: List[Feedback], predicted_feedbacks: List[Feedback]
+        ... ) -> Any:
+        ...     # evaluate predicted feedback here and return evaluation results
+    """
+    exercise_type = inspect.signature(func).parameters["exercise"].annotation
+    submission_type = inspect.signature(func).parameters["submission"].annotation
+    feedback_type = inspect.signature(func).parameters["predicted_feedbacks"].annotation.__args__[0]
+
+    @app.post("/evaluation", responses=module_responses)
+    @authenticated
+    @with_meta
+    async def wrapper(
+            exercise: exercise_type, 
+            submission: submission_type, 
+            true_feedbacks: List[feedback_type], 
+            predicted_feedbacks: List[feedback_type],
+        ):
+        # Retrieve existing metadata for the exercise, submission and feedback
+        exercise.meta.update(get_stored_exercise_meta(exercise) or {})
+        submission.meta.update(get_stored_submission_meta(submission) or {})
+        for feedback in true_feedbacks:
+            feedback.meta.update(get_stored_feedback_meta(feedback) or {})
+        for feedback in predicted_feedbacks:
+            feedback.meta.update(get_stored_feedback_meta(feedback) or {})
+
+        # Call the actual provider
+        if inspect.iscoroutinefunction(func):
+            evaluation = await func(exercise, submission, true_feedbacks, predicted_feedbacks)
+        else:
+            evaluation = func(exercise, submission, true_feedbacks, predicted_feedbacks)
+
+        return evaluation
+    return wrapper
