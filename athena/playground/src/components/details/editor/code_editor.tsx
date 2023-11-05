@@ -1,4 +1,5 @@
 import type { Feedback } from "@/model/feedback";
+import type { ManualRating } from "@/model/manual_rating";
 
 import { useEffect, useState } from "react";
 import { Allotment } from "allotment";
@@ -14,6 +15,8 @@ type CodeEditorProps = {
   feedbacks?: Feedback[];
   onFeedbacksChange?: (feedback: Feedback[]) => void;
   createNewFeedback?: () => Feedback;
+  manualRatings?: ManualRating[];
+  onManualRatingsChange?: (manualRatings: ManualRating[]) => void;
 };
 
 export default function CodeEditor({
@@ -22,6 +25,8 @@ export default function CodeEditor({
   feedbacks,
   onFeedbacksChange,
   createNewFeedback,
+  manualRatings,
+  onManualRatingsChange,
 }: CodeEditorProps) {
   const {
     isError,
@@ -81,6 +86,8 @@ export default function CodeEditor({
                 feedbacks={feedbacks}
                 onFeedbacksChange={onFeedbacksChange}
                 createNewFeedback={createNewFeedback}
+                manualRatings={manualRatings}
+                onManualRatingsChange={onManualRatingsChange}
               />
             </div>
           ) : (
