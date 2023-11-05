@@ -106,17 +106,17 @@ export default function ConductExperiment({
       !data.type ||
       (data.type !== "results" && data.type !== "manualRatings")
     ) {
-      alert("No correct type found in the data i.e. results or manualRatings");
+      alert("No correct type found in the data i.e. 'results' or 'manualRatings'");
       return;
     }
     const type = data.type as "results" | "manualRatings";
 
-    if (moduleViewRef.importData(data)) {
-      alert(
-        `Successfully imported ${type} data for ${moduleConfigurations[index].name}`
-      );
-    } else {
-      alert(`Failed to import ${type} data for ${data.moduleConfigurationId}.`);
+    try {
+      moduleViewRef.importData(data);
+      alert(`Successfully imported ${type} data for ${moduleConfigurations[index].name}`);
+    } catch (error) {
+      console.log(error);
+      alert(`Failed to import ${type} data for ${moduleConfigurations[index].name}: ${(error as Error).message}`);
     }
   };
 

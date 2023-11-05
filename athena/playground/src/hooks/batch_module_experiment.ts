@@ -105,7 +105,7 @@ export default function useBatchModuleExperiment(experiment: Experiment, moduleC
         importedData.didSendSubmissions === undefined ||
         importedData.sentTrainingSubmissions === undefined ||
         importedData.submissionsWithFeedbackSuggestions === undefined) {
-        return false;
+        throw new Error("Invalid results data");
       }
 
       setData(() => ({
@@ -119,24 +119,23 @@ export default function useBatchModuleExperiment(experiment: Experiment, moduleC
           )
         ),
       }));
-
-      return true;
+      return;
     } else if (importedData.type === "manualRatings") {
       // Relies on the fact that the manual ratings have to be imported after the results
-      if (importedData.submissionsWithManualRatings === undefined || importedData.runId !== data.runId) {
-        return false;
+      if (importedData.runId !== data.runId) {
+        throw new Error("Run ID does not match, have you imported the results first?");
+      }
+      if (importedData.submissionsWithManualRatings === undefined) {
+        throw new Error("Invalid manual ratings data");
       }
       setSubmissionsWithManualRatings(() => new Map(
         Object.entries(importedData.submissionsWithManualRatings).map(
           ([key, value]) => [Number(key), value as any]
         )
       ));
-
-      return true;
+      return;
     }
-
-    // Unknown type
-    return false;
+    throw new Error("Unknown import data type");
   };
 
   const getManualRatingsSetter = (submissionId: number) => (manualRatings: ManualRating[]) => {
