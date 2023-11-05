@@ -137,10 +137,10 @@ export function getFeedbackReferenceType(
  * @param onFeedbacksChange - onFeedbacksChange function that should be transformed
  * @returns a onFeedbackChange function for the given feedback
  * @example
- *   const onFeedbackChange = getOnFeedbackChange(feedback, feedbacks, onFeedbacksChange);
+ *   const onFeedbackChange = createFeedbackItemUpdater(feedback, feedbacks, onFeedbacksChange);
  *   onFeedbackChange(newFeedback);
  */
-export function getOnFeedbackChange(
+export function createFeedbackItemUpdater(
   feedback: Feedback,
   feedbacks: Feedback[],
   onFeedbacksChange: (feedbacks: Feedback[]) => void

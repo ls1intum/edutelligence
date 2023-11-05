@@ -1,4 +1,5 @@
 import type { Feedback } from "@/model/feedback";
+import type { ManualRating } from "@/model/manual_rating";
 
 import { useEffect, useRef, useState } from "react";
 import TextareaAutosize from "react-textarea-autosize";
@@ -14,6 +15,8 @@ import {
 type InlineFeedbackProps = {
   feedback: Feedback;
   onFeedbackChange?: (feedback: Feedback | undefined) => void;
+  manualRating?: ManualRating;
+  onManualRatingChange?: (manualRating: ManualRating) => void;
   model?: editor.ITextModel;
   className?: string;
 };
@@ -21,6 +24,8 @@ type InlineFeedbackProps = {
 export default function InlineFeedback({
   feedback,
   onFeedbackChange,
+  manualRating,
+  onManualRatingChange,
   model,
   className,
 }: InlineFeedbackProps) {
@@ -140,13 +145,28 @@ export default function InlineFeedback({
       onMouseEnter={() => setIsHovering(true)}
       onMouseLeave={() => setIsHovering(false)}
     >
-      <div className="flex items-center justify-start px-4 py-2 border-b border-gray-300 text-xs text-gray-600">
-        {referenceType === "unreferenced" && "Unreferenced"}
-        {"file_path" in feedback &&
-          referenceType === "unreferenced_file" &&
-          `References ${feedback.file_path}`}
-        {referenceType === "referenced" &&
-          `References ${formatReference(feedback)}`}
+      <div className="flex items-center justify-between px-4 py-2 border-b border-gray-300 text-xs text-gray-600">
+        <div>
+          {referenceType === "unreferenced" && "Unreferenced"}
+          {"file_path" in feedback &&
+            referenceType === "unreferenced_file" &&
+            `References ${feedback.file_path}`}
+          {referenceType === "referenced" &&
+            `References ${formatReference(feedback)}`}
+        </div>
+        <div className="flex gap-1">
+          {feedback.structured_grading_instruction_id && (
+            <span className="text-xs text-orange-800 rounded-full px-2 py-0.5 bg-orange-100">
+              Grading&nbsp;Instruction&nbsp;
+              {feedback.structured_grading_instruction_id}
+            </span>
+          )}
+          {feedback.isSuggestion && (
+            <span className="text-xs text-violet-800 rounded-full px-2 py-0.5 bg-violet-100">
+              Suggestion
+            </span>
+          )}
+        </div>
       </div>
       <div className="flex justify-start items-start space-x-2 px-4 py-2">
         {isEditing && onFeedbackChange ? (
@@ -195,18 +215,6 @@ export default function InlineFeedback({
                 {feedback.title ? feedback.title : <i>Missing title</i>}
               </span>
             )}
-            <div className="flex gap-1">
-              {feedback.isSuggestion && (
-                <span className="text-xs text-violet-800 rounded-full px-2 py-0.5 bg-violet-100">
-                  Suggestion
-                </span>
-              )}
-              {feedback.structured_grading_instruction_id && (
-                <span className="text-xs text-orange-800 rounded-full px-2 py-0.5 bg-orange-100">
-                  Grading&nbsp;Instruction&nbsp;{feedback.structured_grading_instruction_id}
-                </span>
-              )}
-            </div>
           </div>
           <div>
             {isEditing && onFeedbackChange ? (
@@ -252,6 +260,54 @@ export default function InlineFeedback({
           </div>
         )}
       </div>
+      {onManualRatingChange && (
+        <div className="flex items-center justify-start px-4 py-2 border-t gap-1 border-gray-300 text-xs text-gray-600">
+          <div className="space-x-1">
+            <button
+              className={twMerge(
+                "rounded-md p-2",
+                manualRating?.isAccepted === true
+                  ? "bg-green-400 shadow-md hover:bg-green-500 text-white"
+                  : "bg-gray-100 hover:bg-green-200 hover:shadow-md"
+              )}
+              onClick={() => {
+                let newManualRating = manualRating || {
+                  feedbackId: feedback.id,
+                };
+                if (newManualRating.isAccepted === true) {
+                  newManualRating.isAccepted = undefined;
+                } else {
+                  newManualRating.isAccepted = true;
+                }
+                onManualRatingChange(newManualRating);
+              }}
+            >
+              👍 Accept
+            </button>
+            <button
+              className={twMerge(
+                "rounded-md p-2 bg-gray-100",
+                manualRating?.isAccepted === false
+                  ? "bg-red-400 shadow-md hover:bg-red-500 text-white"
+                  : "hover:bg-red-200 hover:shadow-md"
+              )}
+              onClick={() => {
+                let newManualRating = manualRating || {
+                  feedbackId: feedback.id,
+                };
+                if (newManualRating.isAccepted === false) {
+                  newManualRating.isAccepted = undefined;
+                } else {
+                  newManualRating.isAccepted = false;
+                }
+                onManualRatingChange(newManualRating);
+              }}
+            >
+              👎 Reject
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

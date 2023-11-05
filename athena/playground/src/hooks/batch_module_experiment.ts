@@ -384,6 +384,7 @@ export default function useBatchModuleExperiment(experiment: Experiment, moduleC
 
   return {
     data,
+    submissionsWithManualRatings,
     getManualRatingsSetter,
     startExperiment,
     continueAfterTraining,
