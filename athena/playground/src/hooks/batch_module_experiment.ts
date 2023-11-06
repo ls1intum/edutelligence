@@ -1,5 +1,6 @@
 import type { Feedback } from "@/model/feedback";
 import type { ManualRating } from "@/model/manual_rating";
+import type { AutomaticEvaluation } from "@/model/automatic_evaluation";
 import type { Experiment } from "@/components/view_mode/evaluation_mode/define_experiment";
 import type { ModuleConfiguration } from "@/components/view_mode/evaluation_mode/configure_modules";
 
@@ -9,6 +10,7 @@ import { useSendFeedbacks } from "./athena/send_feedbacks";
 import useRequestSubmissionSelection from "./athena/request_submission_selection";
 import useRequestFeedbackSuggestions from "./athena/request_feedback_suggestions";
 import useSendSubmissions from "./athena/send_submissions";
+import useRequestEvaluation from "./athena/request_evaluation";
 import { useExperimentIdentifiersSetRunId } from "./experiment_identifiers_context";
 
 export type ExperimentStep =
@@ -48,6 +50,11 @@ export default function useBatchModuleExperiment(experiment: Experiment, moduleC
   // Stores annotations for manual evaluation
   const [submissionsWithManualRatings, setSubmissionsWithManualRatings] = useState<
     Map<number, ManualRating[]>
+  >(new Map());
+
+  // Stores automatic evaluation of submissions
+  const [submissionsWithAutomaticEvaluation, setSubmissionsWithAutomaticEvaluation] = useState<
+    Map<number, AutomaticEvaluation>
   >(new Map());
 
   const [processingStep, setProcessingStep] = useState<
@@ -95,6 +102,19 @@ export default function useBatchModuleExperiment(experiment: Experiment, moduleC
           },
         } : {}
       ),
+      ...(
+        submissionsWithAutomaticEvaluation.size > 0 ? {
+          automaticEvaluation: {
+            type: "automaticEvaluation",
+            runId: data.runId,
+            experimentId: experiment.id,
+            moduleConfigurationId: moduleConfiguration.id,
+            submissionsWithAutomaticEvaluation: Object.fromEntries(
+              submissionsWithAutomaticEvaluation
+            ),
+          },
+        } : {}
+      ),
     };
   };
 
@@ -108,6 +128,7 @@ export default function useBatchModuleExperiment(experiment: Experiment, moduleC
         throw new Error("Invalid results data");
       }
 
+      setProcessingStep(undefined);
       setData(() => ({
         runId: importedData.runId,
         step: importedData.step,
@@ -134,7 +155,22 @@ export default function useBatchModuleExperiment(experiment: Experiment, moduleC
         )
       ));
       return;
+    } else if (importedData.type === "automaticEvaluation") {
+      // Relies on the fact that the automatic evaluations have to be imported after the results
+      if (importedData.runId !== data.runId) {
+        throw new Error("Run ID does not match, have you imported the results first?");
+      }
+      if (importedData.submissionsWithAutomaticEvaluation === undefined) {
+        throw new Error("Invalid automatic evaluation data");
+      }
+      setSubmissionsWithAutomaticEvaluation(() => new Map(
+        Object.entries(importedData.submissionsWithAutomaticEvaluation).map(
+          ([key, value]) => [Number(key), value as any]
+        )
+      ));
+      return;
     }
+
     throw new Error("Unknown import data type");
   };
 
@@ -158,6 +194,7 @@ export default function useBatchModuleExperiment(experiment: Experiment, moduleC
   const sendFeedbacks = useSendFeedbacks();
   const requestSubmissionSelection = useRequestSubmissionSelection();
   const requestFeedbackSuggestions = useRequestFeedbackSuggestions();
+  const requestEvaluation = useRequestEvaluation();
 
   // 1. Send submissions to Athena
   const stepSendSubmissions = () => {
@@ -338,8 +375,68 @@ export default function useBatchModuleExperiment(experiment: Experiment, moduleC
 
     setData((prevState) => ({
       ...prevState,
-      step: "finished",
+      step: "finished", // Automatic evaluation is done separately
     }));
+  };
+
+  // 4. Automatic evaluation (after results are 'finished')
+  const stepAutomaticEvaluation = async () => {
+    setProcessingStep("finished");
+
+    console.log("Running automatic evaluation...");
+
+    let remainingSubmissions = experiment.evaluationSubmissions.filter(
+      (submission) => !submissionsWithAutomaticEvaluation.has(submission.id)
+    );
+    
+    let index = 0;
+    for (const submission of remainingSubmissions) {
+      console.log(
+        `Evaluating... (${index + 1}/${
+          remainingSubmissions.length
+        })`
+      );
+
+      const predictedFeedbacks = data.submissionsWithFeedbackSuggestions.get(
+        submission.id
+      )?.suggestions ?? [];
+
+      if (predictedFeedbacks.length === 0) {
+        // Skip if there are no predicted feedbacks
+        setSubmissionsWithAutomaticEvaluation((prevState) => {
+          const newMap = new Map(prevState);
+          newMap.set(submission.id, {});
+          return newMap;
+        });
+        continue;
+      }
+
+      try {
+        const response = await requestEvaluation.mutateAsync({
+          exercise: experiment.exercise,
+          submission,
+          trueFeedbacks: experiment.tutorFeedbacks.filter(
+            (feedback) => feedback.submission_id === submission.id
+          ),
+          predictedFeedbacks: predictedFeedbacks,
+        });
+        if (!isMounted.current) {
+          return;
+        }
+        console.log(`Received evaluation for submission ${submission.id}:`, response.data);
+
+        setSubmissionsWithAutomaticEvaluation((prevState) => {
+          const newMap = new Map(prevState);
+          newMap.set(submission.id, response.data);
+          return newMap;
+        });
+      } catch (error) {
+        console.error(
+          `Error while evaluating submission ${submission.id}:`,
+          error
+        );
+      }
+    }
   };
 
   useEffect(() => {
@@ -375,10 +472,12 @@ export default function useBatchModuleExperiment(experiment: Experiment, moduleC
       processingStep !== "generatingFeedbackSuggestions"
     ) {
       stepGenerateFeedbackSuggestions();
+    } else if (
+      data.step === "finished" &&
+      processingStep !== "finished"
+    ) {
+      stepAutomaticEvaluation();
     }
-    // TODO: Add automatic evaluation step here
-    // Note: Evaluate tutor feedback more globally to not do it multiple times
-    // Note 2: Actually, I probably want to have it in parallel with the feedback suggestions for the interactive mode!
   }, [data.step]);
 
   return {
@@ -394,6 +493,7 @@ export default function useBatchModuleExperiment(experiment: Experiment, moduleC
       sendFeedbacks,
       requestSubmissionSelection,
       requestFeedbackSuggestions,
+      requestEvaluation,
     },
   };
 }
