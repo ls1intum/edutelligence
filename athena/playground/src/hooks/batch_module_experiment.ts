@@ -412,7 +412,7 @@ export default function useBatchModuleExperiment(experiment: Experiment, moduleC
       }
 
       try {
-        const response = await requestEvaluation.mutateAsync({
+        const responses = await requestEvaluation.mutateAsync({
           exercise: experiment.exercise,
           submission,
           trueFeedbacks: experiment.tutorFeedbacks.filter(
@@ -423,11 +423,16 @@ export default function useBatchModuleExperiment(experiment: Experiment, moduleC
         if (!isMounted.current) {
           return;
         }
-        console.log(`Received evaluation for submission ${submission.id}:`, response.data);
+
+        const data = Object.fromEntries(
+          responses.map((response) => [response.module_name, response.data])
+        );
+
+        console.log(`Received evaluation for submission ${submission.id}:`, data);
 
         setSubmissionsWithAutomaticEvaluation((prevState) => {
           const newMap = new Map(prevState);
-          newMap.set(submission.id, response.data);
+          newMap.set(submission.id, data);
           return newMap;
         });
       } catch (error) {
