@@ -40,7 +40,7 @@ export default function RequestEvaluation() {
     error,
     mutate,
     reset,
-  } = useRequestEvaluation();
+  } = useRequestEvaluation(undefined, true) // onlyUseContextModule = true for module requests only
 
   useEffect(() => setExercise(undefined), [module, dataMode]);
 
@@ -130,7 +130,7 @@ export default function RequestEvaluation() {
       )}
       <ModuleResponseView
         response={
-          response ??
+          response?.at(0) ??
           (error?.asModuleResponse ? error.asModuleResponse() : undefined)
         }
       />

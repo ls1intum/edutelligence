@@ -18,6 +18,7 @@ def list_modules() -> List[Module]:
             name=module,
             url=cast(AnyHttpUrl, modules_config[module]["url"]),
             type=ExerciseType(modules_config[module]["type"]),
+            supports_evaluation=modules_config[module].getboolean("supports_evaluation"),
         )
         for module in modules_config.sections()
     ]
