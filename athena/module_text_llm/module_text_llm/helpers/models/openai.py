@@ -28,6 +28,9 @@ AZURE_OPENAI_PREFIX = "azure_openai_"
 # the models to azure that we want to use.                              #
 #########################################################################
 
+# Prevent LangChain error, we will set the key later
+os.environ["OPENAI_API_KEY"] = ""
+
 def _wrap(old: Any, new: Any) -> Callable:
     def repl(*args: Any, **kwargs: Any) -> Any:
         new(args[0])  # args[0] is self
