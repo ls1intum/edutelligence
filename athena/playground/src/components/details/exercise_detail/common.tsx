@@ -54,7 +54,7 @@ export default function CommonExerciseDetail({
                       <i>Missing criterion title</i>
                     )}
                     <span className="text-xs text-orange-800 rounded-full px-2 py-0.5 bg-orange-100">
-                      Grading Criterion {criterion.id}
+                      Grading&nbsp;Criterion&nbsp;{criterion.id}
                     </span>
                   </span>
                   {criterion.structured_grading_instructions.map(
