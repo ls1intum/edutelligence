@@ -1,7 +1,7 @@
 # Generated from JavaParser.g4 by ANTLR 4.11.1
 from antlr4 import *
 
-from .method_node import MethodNode
+from ...method_node import MethodNode
 
 JAVA_METHOD_DECLARATIONS = ["methodDeclaration", "constructorDeclaration", "genericMethodDeclaration",
                             "genericConstructorDeclaration"]

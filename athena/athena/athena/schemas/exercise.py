@@ -1,10 +1,11 @@
 from abc import ABC
-from typing import Optional
+from typing import List, Optional
 
 from pydantic import Field
 
 from .exercise_type import ExerciseType
 from .schema import Schema
+from .grading_criterion import GradingCriterion
 
 
 class Exercise(Schema, ABC):
@@ -21,6 +22,7 @@ class Exercise(Schema, ABC):
                                 example=0.0)
     grading_instructions: Optional[str] = Field(None, description="Markdown text that describes how the exercise is graded.",
                                       example="Give 1 point for each correct answer.")
+    grading_criteria: Optional[List[GradingCriterion]] = Field(None, description="The structured grading criteria for the exercise as a structured list.")
     problem_statement: Optional[str] = Field(None, description="Markdown text that describes the problem statement.",
                                    example="Write a program that prints 'Hello World!'")
 

@@ -8,8 +8,6 @@ on:
     branches:
       - develop
   pull_request:
-    branches:
-      - develop
 
 # prevent Docker image push conflicts
 concurrency: 
@@ -68,7 +66,7 @@ jobs:
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
-          password: ${{ secrets.GHCR_PAT }}
+          password: ${{ secrets.GITHUB_TOKEN }}
       
       - name: Docker meta
         id: meta

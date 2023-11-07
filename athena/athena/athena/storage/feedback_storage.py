@@ -50,7 +50,7 @@ def store_feedback(feedback: Feedback, is_lms_id=False) -> Feedback:
 
 
 def get_stored_feedback_suggestions(
-        feedback_cls: Type[Feedback], exercise_id: str, submission_id: int
+        feedback_cls: Type[Feedback], exercise_id: int, submission_id: int
 ) -> Iterable[Feedback]:
     """Returns a list of feedback suggestions for the given exercise in the given submission."""
     db_feedback_cls = feedback_cls.get_model_class()

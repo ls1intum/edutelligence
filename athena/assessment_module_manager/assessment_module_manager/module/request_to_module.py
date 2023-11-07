@@ -7,6 +7,7 @@ from pydantic.generics import GenericModel
 
 from .module import Module
 from .list_modules import list_modules
+from athena import ExerciseType
 from assessment_module_manager import env
 from assessment_module_manager.logger import logger
 
@@ -32,17 +33,20 @@ async def find_module_by_name(module_name: str) -> Optional[Module]:
     return None
 
 
-async def request_to_module(module: Module, module_config: Optional[str], path: str, data: Optional[dict], method: str) -> ModuleResponse:
+async def request_to_module(module: Module, headers: dict, path: str, data: Optional[dict], method: str) -> ModuleResponse:
     """
     Helper function to send a request to a module.
     It raises appropriate FastAPI HTTPException if the request fails.
     """
     module_secret = env.MODULE_SECRETS[module.name]
-    headers = {}
     if module_secret:
         headers['Authorization'] = module_secret
-    if module_config:
-        headers['X-Module-Config'] = module_config
+
+    if module.type == ExerciseType.programming:
+        # We need the Athena secret with the LMS to access repositories.
+        # In order to only have to configure it once for the whole of Athena,
+        # we pass it to the module from here.
+        headers['X-Repository-Authorization-Secret'] = env.SECRET or ""
 
     try:
         async with httpx.AsyncClient(base_url=module.url, timeout=600) as client:

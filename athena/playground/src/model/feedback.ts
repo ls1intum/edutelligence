@@ -10,7 +10,7 @@ type FeedbackBase = {
   credits: number;
   exercise_id: number;
   submission_id: number;
-  grading_instruction_id?: number;
+  structured_grading_instruction_id?: number;
   isSuggestion?: boolean; // Playground only
   isNew?: boolean; // Playground only
   isChanged?: boolean; // Playground only
@@ -70,9 +70,9 @@ export function getFeedbackRange(
       return undefined;
     }
     return {
-      startLineNumber: (feedback.line_start || feedback.line_end)!,
+      startLineNumber: (feedback.line_start || feedback.line_end)! + 1, // Monaco line numbers are 1-indexed
       startColumn: 0,
-      endLineNumber: (feedback.line_end || feedback.line_start)!,
+      endLineNumber: (feedback.line_end || feedback.line_start)! + 1, // Monaco line numbers are 1-indexed
       endColumn: Infinity,
     };
   } else if (feedback.type === "text") {
@@ -137,10 +137,10 @@ export function getFeedbackReferenceType(
  * @param onFeedbacksChange - onFeedbacksChange function that should be transformed
  * @returns a onFeedbackChange function for the given feedback
  * @example
- *   const onFeedbackChange = getOnFeedbackChange(feedback, feedbacks, onFeedbacksChange);
+ *   const onFeedbackChange = createFeedbackItemUpdater(feedback, feedbacks, onFeedbacksChange);
  *   onFeedbackChange(newFeedback);
  */
-export function getOnFeedbackChange(
+export function createFeedbackItemUpdater(
   feedback: Feedback,
   feedbacks: Feedback[],
   onFeedbacksChange: (feedbacks: Feedback[]) => void

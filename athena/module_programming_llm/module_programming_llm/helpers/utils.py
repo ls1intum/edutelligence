@@ -8,8 +8,9 @@ from git import Remote
 from git.repo import Repo
 from langchain.document_loaders import GitLoader
 
+from athena import GradingCriterion
 
-def load_files_from_repo(repo: Repo, file_filter: Optional[Callable[[str], bool]] = None) -> Dict[str, Optional[str]]:
+def load_files_from_repo(repo: Repo, file_filter: Optional[Callable[[str], bool]] = None) -> Dict[str, str]:
     return {
         doc.metadata['file_path']: doc.page_content
         for doc in GitLoader(repo_path=str(repo.working_tree_dir), file_filter=file_filter).load()
@@ -24,17 +25,51 @@ def merge_repos_by_filepath(*repos: Repo, file_filter: Optional[Callable[[str], 
         yield (file, [doc.get(file) for doc in docs])
 
 
+def format_grading_instructions(grading_instructions: Optional[str], grading_criteria: Optional[List[GradingCriterion]]) -> Optional[str]:
+    """Formats grading instructions and the grading criteria with nested structured grading instructions into a single string.
+
+    Args:
+        grading_instructions (Optional[str]): Grading instructions
+        grading_criteria (Optional[List[GradingCriterion]]): Grading criteria with nested structured grading instructions
+
+    Returns:
+        Optional[str]: Formatted grading instructions or None if no grading instructions or grading criteria are provided
+    """
+
+    if not grading_instructions and not grading_criteria:
+        return None
+
+    result = ""
+    if grading_instructions:
+        result += grading_instructions + "\n\n"
+
+    if grading_criteria:
+        for grading_criterion in grading_criteria:
+            result += f'Criterion > "{(grading_criterion.title or "Unnamed criterion")}":\n'
+            for grading_instruction in grading_criterion.structured_grading_instructions:
+                result += f'  - grading_instruction_id={grading_instruction.id} > "{grading_instruction.feedback}": ('
+                if grading_instruction.usage_count > 0:
+                    result += f'can be used {grading_instruction.usage_count} times in total'
+                else:
+                    result += "can be used unlimited times"
+                result += f', gives {grading_instruction.credits} credits for "{grading_instruction.grading_scale}" grading scale, '
+                result += f'usage description: "{grading_instruction.instruction_description}")\n'
+            result += "\n"
+
+    return result.strip()
+
+
 def add_line_numbers(content: str) -> str:
     lines = content.splitlines()
     line_number_max_length = len(str(len(lines)))
     return "\n".join(
         f"{str(line_number).rjust(line_number_max_length)} {line}" 
         for line_number, line 
-        in enumerate(lines, start=1)
+        in enumerate(lines)
     )
 
 
-def get_file_extension(programming_language: str) -> str | None:
+def get_programming_language_file_extension(programming_language: str) -> str | None:
     # JAVA, C, OCAML, HASKELL, PYTHON, SWIFT, VHDL, ASSEMBLER, EMPTY, KOTLIN
     file_extensions = {
         "JAVA": ".java",

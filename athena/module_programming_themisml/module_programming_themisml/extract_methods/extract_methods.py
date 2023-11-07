@@ -1,8 +1,8 @@
 from antlr4 import InputStream, CommonTokenStream, ParseTreeWalker
 
-from .languages.JavaLexer import JavaLexer
-from .languages.JavaParser import JavaParser
-from .method_parser_listener import MethodParserListener, JAVA_METHOD_DECLARATIONS
+from .languages.java.JavaLexer import JavaLexer
+from .languages.java.JavaParser import JavaParser
+from .languages.java.java_method_parser_listener import MethodParserListener, JAVA_METHOD_DECLARATIONS
 
 
 def _get_tree_for(source_code: str):

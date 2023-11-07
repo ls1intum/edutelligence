@@ -1,13 +1,15 @@
 import type { Feedback, FeedbackReferenceType } from "@/model/feedback";
+import type { ManualRating } from "@/model/manual_rating";
 
 import { useEffect, useRef, useState } from "react";
 import { Editor, Monaco, useMonaco } from "@monaco-editor/react";
 import { Position, Selection, editor } from "monaco-editor";
+import { createManualRatingItemUpdater } from "@/model/manual_rating";
 
 import {
   getFeedbackRange,
   getFeedbackReferenceType,
-  getOnFeedbackChange,
+  createFeedbackItemUpdater,
 } from "@/model/feedback";
 import InlineFeedback from "./inline_feedback";
 import { EditorWidget } from "./editor_widget";
@@ -21,6 +23,8 @@ type FileEditorProps = {
   feedbacks?: Feedback[];
   onFeedbacksChange?: (feedback: Feedback[]) => void;
   createNewFeedback?: () => Feedback;
+  manualRatings?: ManualRating[];
+  onManualRatingsChange?: (manualRatings: ManualRating[]) => void;
 };
 
 export default function FileEditor({
@@ -32,6 +36,8 @@ export default function FileEditor({
   feedbacks,
   onFeedbacksChange,
   createNewFeedback,
+  manualRatings,
+  onManualRatingsChange,
 }: FileEditorProps) {
   const monaco = useMonaco();
   const editorRef = useRef<editor.IStandaloneCodeEditor>();
@@ -337,11 +343,18 @@ export default function FileEditor({
                       feedback={feedback}
                       onFeedbackChange={
                         onFeedbacksChange &&
-                        getOnFeedbackChange(
+                        createFeedbackItemUpdater(
                           feedback,
                           feedbacks,
                           onFeedbacksChange
                         )
+                      }
+                      manualRating={manualRatings?.find(
+                        (manualRating) => manualRating.feedbackId === feedback.id
+                      )}
+                      onManualRatingChange={
+                        onManualRatingsChange &&
+                        createManualRatingItemUpdater(feedback.id, manualRatings, onManualRatingsChange)
                       }
                       model={model}
                       className="mr-4"

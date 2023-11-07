@@ -4,19 +4,19 @@ Entry point for the module_programming_themisml module.
 from typing import List, cast
 
 from athena import app, submissions_consumer, submission_selector, feedback_consumer, feedback_provider
-from athena.database import get_db
-from athena.models import DBProgrammingFeedback
-from athena.programming import Exercise, Submission, Feedback
+from athena.programming import Exercise, Submission, Feedback, get_stored_feedback_suggestions, get_stored_submissions, count_stored_submissions
 from athena.logger import logger
 from athena.storage import store_feedback
+from athena.storage.feedback_storage import store_feedback_suggestions
 
-from .extract_methods import extract_methods
-from .feedback_suggestions import get_feedback_suggestions
+from .extract_methods import get_feedback_method
+from .feedback_suggestions import create_feedback_suggestions, filter_overlapping_suggestions, filter_suspicious
 
 
 @submissions_consumer
 def receive_submissions(exercise: Exercise, submissions: List[Submission]):
     logger.info("receive_submissions: Received %d submissions for exercise %d", len(submissions), exercise.id)
+    # Nothing else to do
 
 
 @submission_selector
@@ -30,53 +30,74 @@ def select_submission(exercise: Exercise, submissions: List[Submission]) -> Subm
 
 @feedback_consumer
 def process_incoming_feedback(exercise: Exercise, submission: Submission, feedbacks: List[Feedback]):
-    logger.info("process_feedback: Received feedbacks for submission %d of exercise %d", submission.id, exercise.id)
+    logger.info("process_feedback: Received %d feedbacks for submission %d of exercise %d", len(feedbacks), submission.id, exercise.id)
     logger.info("process_feedback: Feedbacks: %s", feedbacks)
 
+    # ThemisML currently only works with Java
+    if exercise.programming_language.lower() != "java":
+        logger.info("ThemisML only works with Java. Not consuming feedback.")
+        return
+
+    # Remove unreferenced feedbacks
+    feedbacks = list(filter(lambda f: f.file_path is not None and f.line_start is not None, feedbacks))
+
+    # Add method metadata to feedbacks
+    feedbacks_with_method = []
     for feedback in feedbacks:
-        if feedback.file_path is None or feedback.line_start is None:
-            logger.debug("Feedback #%d: Cannot process without knowledge about method.", feedback.id)
+        feedback_method = get_feedback_method(submission, feedback)
+        if feedback_method is None:
+            # don't consider feedback without a method
             continue
+        logger.debug("Feedback #%d: Found method %s", feedback.id, feedback_method.name)
+        feedback.meta["method_name"] = feedback_method.name
+        feedback.meta["method_code"] = feedback_method.source_code
+        feedback.meta["method_line_start"] = feedback_method.line_start
+        feedback.meta["method_line_end"] = feedback_method.line_end
+        feedbacks_with_method.append(feedback)
+    feedbacks = feedbacks_with_method
 
-        # find method that the feedback is on
-        code = submission.get_code(feedback.file_path)
-        methods = extract_methods(code)
-        feedback_method = None
-        for m in methods:
-            if m.line_start is None or m.line_end is None:
-                continue
-            # method has to contain all feedback lines
-            if m.line_start <= feedback.line_start and m.line_end >= feedback.line_end:
-                feedback_method = m
-                break
+    # find all submissions for this exercise
+    exercise_submissions = cast(List[Submission], list(get_stored_submissions(exercise.id)))
 
-        feedback.meta["method_name"] = feedback_method.name if feedback_method else None
+    # create feedback suggestions
+    logger.info("Creating feedback suggestions for %d feedbacks", len(feedbacks))
+    feedback_suggestions = create_feedback_suggestions(exercise_submissions, feedbacks)
+
+    # additionally, store metadata about how impactful each feedback was, i.e. how many suggestions were given based on it
+    for feedback in feedbacks:
+        # count how many suggestions were given based on this feedback
+        feedback.meta["n_feedback_suggestions"] = len([f for f in feedback_suggestions if f.meta["original_feedback_id"] == feedback.id])
+        # store the information on the suggestions as well for quicker access later
+        for suggestion in feedback_suggestions:
+            if suggestion.meta["original_feedback_id"] == feedback.id:
+                suggestion.meta["n_feedback_suggestions"] = feedback.meta["n_feedback_suggestions"]
+
+    # save to database
+    store_feedback_suggestions(feedback_suggestions)  # type: ignore
+    for feedback in feedbacks:
         store_feedback(feedback)
+
+    logger.debug("Feedbacks processed")
 
 
 @feedback_provider
 async def suggest_feedback(exercise: Exercise, submission: Submission) -> List[Feedback]:
     logger.info("suggest_feedback: Suggestions for submission %d of exercise %d were requested", submission.id, exercise.id)
 
-    # find all methods in all files
-    method_blocks = {}
-    repo_zip = submission.get_zip()
-    for file_path in repo_zip.namelist():
-        with repo_zip.open(file_path, "r") as f:
-            try:
-                file_content = f.read().decode("utf-8")
-            except UnicodeDecodeError:
-                # skip binary files
-                continue
-        method_blocks[file_path] = extract_methods(file_content)
+    # ThemisML currently only works with Java
+    if exercise.programming_language.lower() != "java":
+        logger.info("ThemisML only works with Java. Returning no suggestions.")
+        return []
 
-    with get_db() as db:
-        # find all feedbacks for this exercise, except for the current submission
-        exercise_feedbacks = db.query(DBProgrammingFeedback) \
-            .filter_by(exercise_id=exercise.id) \
-            .filter(DBProgrammingFeedback.submission_id != submission.id) \
-            .all()
-        suggested_feedbacks = await get_feedback_suggestions(method_blocks, exercise_feedbacks, include_code=False)
+    suggested_feedbacks = cast(List[Feedback], list(get_stored_feedback_suggestions(exercise.id, submission.id)))
+    logger.debug("Found %d feedback suggestions (unfiltered)", len(suggested_feedbacks))
+    suggested_feedbacks = filter_suspicious(suggested_feedbacks, count_stored_submissions(exercise.id))
+    logger.debug("Found %d feedback suggestions (removed suspicious suggestions)", len(suggested_feedbacks))
+    suggested_feedbacks = filter_overlapping_suggestions(suggested_feedbacks)
+    logger.debug("Found %d feedback suggestions (removed overlapping suggestions)", len(suggested_feedbacks))
+
+    logger.info("Suggesting %d filtered feedback suggestions", len(suggested_feedbacks))
+    logger.debug("Suggested Feedback suggestions: %s", suggested_feedbacks)
 
     return suggested_feedbacks
 

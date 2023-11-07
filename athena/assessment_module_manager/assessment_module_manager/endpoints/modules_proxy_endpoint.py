@@ -46,10 +46,28 @@ async def proxy_to_module(
     if module.type != module_type:
         raise HTTPException(status_code=400, detail=f"Found module {module_name} is not of type {module_type}.")
     
+    # Prepare headers (except Authorization)
+    headers = {}
+    
+    # Module configuration
     module_config = request.headers.get('X-Module-Config')
+    if module_config:
+        headers['X-Module-Config'] = module_config
+
+    # Experiment information tracking experiment, module configuration, and run
+    experiment_id = request.headers.get('X-Experiment-ID')
+    if experiment_id:
+        headers['X-Experiment-ID'] = experiment_id
+    module_configuration_id = request.headers.get('X-Module-Configuration-ID')
+    if module_configuration_id:
+        headers['X-Module-Configuration-ID'] = module_configuration_id
+    run_id = request.headers.get('X-Run-ID')
+    if run_id:
+        headers['X-Run-ID'] = run_id
+
     resp = await request_to_module(
         module,
-        module_config,
+        headers,
         '/' + path,
         data,
         method=request.method,

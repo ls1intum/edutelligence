@@ -2,6 +2,7 @@ import configparser
 import os
 
 from typing import List, cast
+from pathlib import Path
 
 from pydantic import AnyHttpUrl
 
@@ -13,7 +14,7 @@ from .module import Module
 def list_modules() -> List[Module]:
     """Get a list of all Athena modules that are available."""
     modules_config = configparser.ConfigParser()
-    modules_config.read("modules.ini")
+    modules_config.read(Path(__file__).parent.parent.parent / "modules.ini")
     return [
         Module(
             name=module,

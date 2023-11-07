@@ -8,7 +8,7 @@ readme = "README.md"
 packages = []
 
 [tool.poetry.dependencies]
-python = "^3.10"
+python = "3.11.*"
 prospector = "^1.10.2"
 assessment_module_manager = {path = "./assessment_module_manager", develop = true}
 athena = {path = "./athena", develop = true}
@@ -22,7 +22,7 @@ module_programming_themisml = {path = "./module_programming_themisml", develop =
 # start linter with `poetry run prospector`
 
 [tool.poetry.group.dev.dependencies]
-types-requests = "^2.31.0.0"
+types-requests = "^2.31.0.8"
 
 [build-system]
 requires = ["poetry-core"]

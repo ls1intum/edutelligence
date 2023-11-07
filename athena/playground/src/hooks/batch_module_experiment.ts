@@ -1,11 +1,15 @@
 import type { Feedback } from "@/model/feedback";
+import type { ManualRating } from "@/model/manual_rating";
 import type { Experiment } from "@/components/view_mode/evaluation_mode/define_experiment";
+import type { ModuleConfiguration } from "@/components/view_mode/evaluation_mode/configure_modules";
 
+import { v4 as uuidv4 } from "uuid";
 import { useEffect, useRef, useState } from "react";
 import { useSendFeedbacks } from "./athena/send_feedbacks";
 import useRequestSubmissionSelection from "./athena/request_submission_selection";
 import useRequestFeedbackSuggestions from "./athena/request_feedback_suggestions";
 import useSendSubmissions from "./athena/send_submissions";
+import { useExperimentIdentifiersSetRunId } from "./experiment_identifiers_context";
 
 export type ExperimentStep =
   | "notStarted"
@@ -15,6 +19,8 @@ export type ExperimentStep =
   | "finished";
 
 export type BatchModuleExperimentState = {
+  // Run ID
+  runId: string;
   // The current step of the experiment
   step: ExperimentStep;
   // Submissions that have been sent to Athena
@@ -29,19 +35,26 @@ export type BatchModuleExperimentState = {
   >;
 };
 
-export default function useBatchModuleExperiment(experiment: Experiment) {
+export default function useBatchModuleExperiment(experiment: Experiment, moduleConfiguration: ModuleConfiguration) {
   // State of the module experiment
   const [data, setData] = useState<BatchModuleExperimentState>({
+    runId: uuidv4(),
     step: "notStarted", // Not started
     didSendSubmissions: false,
     sentTrainingSubmissions: [],
     submissionsWithFeedbackSuggestions: new Map(),
   });
 
+  // Stores annotations for manual evaluation
+  const [submissionsWithManualRatings, setSubmissionsWithManualRatings] = useState<
+    Map<number, ManualRating[]>
+  >(new Map());
+
   const [processingStep, setProcessingStep] = useState<
     ExperimentStep | undefined
   >(undefined);
   const isMounted = useRef(true);
+  const setContextRunId = useExperimentIdentifiersSetRunId();
 
   const startExperiment = () => {
     // Skip if the experiment has already started
@@ -56,37 +69,81 @@ export default function useBatchModuleExperiment(experiment: Experiment) {
   };
 
   const exportData = () => {
-    return {
-      step: data.step,
-      didSendSubmissions: data.didSendSubmissions,
-      sentTrainingSubmissions: data.sentTrainingSubmissions,
-      submissionsWithFeedbackSuggestions: Object.fromEntries(
-        data.submissionsWithFeedbackSuggestions
+    return { 
+      results: {
+        type: "results",
+        runId: data.runId,
+        experimentId: experiment.id,
+        moduleConfigurationId: moduleConfiguration.id,
+        step: data.step,
+        didSendSubmissions: data.didSendSubmissions,
+        sentTrainingSubmissions: data.sentTrainingSubmissions,
+        submissionsWithFeedbackSuggestions: Object.fromEntries(
+          data.submissionsWithFeedbackSuggestions
+        ),
+      },
+      ...(
+        submissionsWithManualRatings.size > 0 ? {
+          manualRatings: {
+            type: "manualRatings",
+            runId: data.runId,
+            experimentId: experiment.id,
+            moduleConfigurationId: moduleConfiguration.id,
+            submissionsWithManualRatings: Object.fromEntries(
+              submissionsWithManualRatings
+            ),
+          },
+        } : {}
       ),
     };
   };
 
-  const importData = (data: any) => {
-    if (
-      data.step === undefined ||
-      data.didSendSubmissions === undefined ||
-      data.sentTrainingSubmissions === undefined ||
-      data.submissionsWithFeedbackSuggestions === undefined
-    ) {
-      return false;
-    }
+  const importData = (importedData: any) => {
+    if (importedData.type === "results") {
+      if (importedData.runId === undefined ||
+        importedData.step === undefined ||
+        importedData.didSendSubmissions === undefined ||
+        importedData.sentTrainingSubmissions === undefined ||
+        importedData.submissionsWithFeedbackSuggestions === undefined) {
+        throw new Error("Invalid results data");
+      }
 
-    setData(() => ({
-      step: data.step,
-      didSendSubmissions: data.didSendSubmissions,
-      sentTrainingSubmissions: data.sentTrainingSubmissions,
-      submissionsWithFeedbackSuggestions: new Map(
-        Object.entries(data.submissionsWithFeedbackSuggestions).map(
+      setData(() => ({
+        runId: importedData.runId,
+        step: importedData.step,
+        didSendSubmissions: importedData.didSendSubmissions,
+        sentTrainingSubmissions: importedData.sentTrainingSubmissions,
+        submissionsWithFeedbackSuggestions: new Map(
+          Object.entries(importedData.submissionsWithFeedbackSuggestions).map(
+            ([key, value]) => [Number(key), value as any]
+          )
+        ),
+      }));
+      return;
+    } else if (importedData.type === "manualRatings") {
+      // Relies on the fact that the manual ratings have to be imported after the results
+      if (importedData.runId !== data.runId) {
+        throw new Error("Run ID does not match, have you imported the results first?");
+      }
+      if (importedData.submissionsWithManualRatings === undefined) {
+        throw new Error("Invalid manual ratings data");
+      }
+      setSubmissionsWithManualRatings(() => new Map(
+        Object.entries(importedData.submissionsWithManualRatings).map(
           ([key, value]) => [Number(key), value as any]
         )
-      ),
-    }));
-    return true;
+      ));
+      return;
+    }
+    throw new Error("Unknown import data type");
+  };
+
+  const getManualRatingsSetter = (submissionId: number) => (manualRatings: ManualRating[]) => {
+    setSubmissionsWithManualRatings((prevState) => {
+      const newMap = new Map(prevState);
+      newMap.set(submissionId, manualRatings);
+      return newMap;
+    });
   };
 
   const continueAfterTraining = (data.step === "sendingTrainingFeedbacks" && data.sentTrainingSubmissions.length === experiment.trainingSubmissions?.length) ? (() => {
@@ -160,22 +217,21 @@ export default function useBatchModuleExperiment(experiment: Experiment) {
       const submissionFeedbacks = experiment.tutorFeedbacks.filter(
         (feedback) => feedback.submission_id === submission?.id
       );
-      if (submissionFeedbacks.length === 0) {
-        continue;
-      }
-
+      
       console.log(
         `Sending training feedbacks to Athena... (${num}/${submissionsToSend.length})`
       );
 
-      try {
-        await sendFeedbacks.mutateAsync({
-          exercise: experiment.exercise,
-          submission,
-          feedbacks: submissionFeedbacks,
-        });
-        if (!isMounted.current) {
-          return;
+      try {  
+        if (submissionFeedbacks.length > 0) {
+          await sendFeedbacks.mutateAsync({
+            exercise: experiment.exercise,
+            submission,
+            feedbacks: submissionFeedbacks,
+          });
+          if (!isMounted.current) {
+            return;
+          }
         }
 
         setData((prevState) => ({
@@ -287,6 +343,17 @@ export default function useBatchModuleExperiment(experiment: Experiment) {
   };
 
   useEffect(() => {
+    isMounted.current = true;
+    return () => {
+      isMounted.current = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    setContextRunId(data.runId);
+  }, [data.runId])
+
+  useEffect(() => {
     if (experiment.executionMode !== "batch") {
       console.error("Using useBatchModuleExperiment in non-batch experiment!");
       return;
@@ -314,15 +381,10 @@ export default function useBatchModuleExperiment(experiment: Experiment) {
     // Note 2: Actually, I probably want to have it in parallel with the feedback suggestions for the interactive mode!
   }, [data.step]);
 
-  useEffect(() => {
-    isMounted.current = true;
-    return () => {
-      isMounted.current = false;
-    };
-  }, []);
-
   return {
     data,
+    submissionsWithManualRatings,
+    getManualRatingsSetter,
     startExperiment,
     continueAfterTraining,
     exportData,

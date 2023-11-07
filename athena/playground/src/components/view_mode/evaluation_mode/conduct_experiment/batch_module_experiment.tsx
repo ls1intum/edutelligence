@@ -9,6 +9,7 @@ import { FullScreenHandle } from "react-full-screen";
 import useHealth from "@/hooks/health";
 import useBatchModuleExperiment from "@/hooks/batch_module_experiment";
 import { ModuleProvider } from "@/hooks/module_context";
+import { ExperimentIdentifiersProvider } from "@/hooks/experiment_identifiers_context";
 import { ModuleConfiguration } from "../configure_modules";
 import ModuleExperimentProgress from "./module_experiment_progress";
 import SubmissionDetail from "@/components/details/submission_detail";
@@ -30,8 +31,8 @@ type ConductBatchModuleExperimentProps = {
 };
 
 export type ConductBatchModuleExperimentHandles = {
-  importData: (data: any) => boolean;
-  exportData: () => any;
+  importData: ReturnType<typeof useBatchModuleExperiment>["importData"];
+  exportData: ReturnType<typeof useBatchModuleExperiment>["exportData"];
 };
 
 // ForwardRef is needed to expose the ref to the parent component
@@ -52,7 +53,7 @@ const ConductBatchModuleExperiment = React.forwardRef<
     ref: ForwardedRef<ConductBatchModuleExperimentHandles>
   ) => {
     const { data: health } = useHealth();
-    const moduleExperiment = useBatchModuleExperiment(experiment);
+    const moduleExperiment = useBatchModuleExperiment(experiment, moduleConfiguration);
 
     const [showProgress, setShowProgress] = useState(true);
     const [isConfigModalOpen, setConfigModalOpen] = useState(false);
@@ -202,6 +203,8 @@ const ConductBatchModuleExperiment = React.forwardRef<
                 viewSubmission.id
               )?.suggestions ?? []
             }
+            manualRatings={moduleExperiment.submissionsWithManualRatings.get(viewSubmission.id)}
+            onManualRatingsChange={moduleExperiment.getManualRatingsSetter(viewSubmission.id)}
           />
         </div>
         <Modal
@@ -256,12 +259,17 @@ function ConductBatchModuleExperimentWrapped(
   ref: React.Ref<ConductBatchModuleExperimentHandles>
 ) {
   return (
-    <ModuleProvider
-      module={props.moduleConfiguration.moduleAndConfig.module}
-      moduleConfig={props.moduleConfiguration.moduleAndConfig.moduleConfig}
-    >
-      <ConductBatchModuleExperiment {...props} ref={ref} />
-    </ModuleProvider>
+    <ExperimentIdentifiersProvider experimentIdentifiers={{
+      experimentId: props.experiment.id,
+      moduleConfigurationId: props.moduleConfiguration.id,
+    }}>
+      <ModuleProvider
+        module={props.moduleConfiguration.moduleAndConfig.module}
+        moduleConfig={props.moduleConfiguration.moduleAndConfig.moduleConfig}
+      >
+        <ConductBatchModuleExperiment {...props} ref={ref} />
+      </ModuleProvider>
+    </ExperimentIdentifiersProvider>
   );
 }
 

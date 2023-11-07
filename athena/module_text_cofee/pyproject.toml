@@ -6,8 +6,8 @@ authors = ["Paul Schwind <paul.schwind@tum.de>"]
 license = "MIT"
 
 [tool.poetry.dependencies]
-python = "^3.10"
-protobuf = "^4.23.2"
+python = "3.11.*"
+protobuf = "^4.24.4"
 requests = "^2.31.0"
 
 [tool.poetry.dev-dependencies]
