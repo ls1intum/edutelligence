@@ -1,10 +1,13 @@
+import json
 import os
 from typing import List, Any
 
 import nltk
 import tiktoken
+from langsmith import Client as LangsmithClient
+from langsmith.schemas import Run
 
-from athena import app, submission_selector, submissions_consumer, feedback_consumer, feedback_provider, evaluation_provider
+from athena import app, get_experiment_environment, submission_selector, submissions_consumer, feedback_consumer, feedback_provider, evaluation_provider
 from athena.text import Exercise, Submission, Feedback
 from athena.logger import logger
 
@@ -48,6 +51,48 @@ async def evaluate_feedback(
     evaluation = {}
     if bool(os.environ.get("LLM_ENABLE_LLM_AS_A_JUDGE")):
         evaluation["llm_as_a_judge"] = await generate_evaluation(exercise, submission, true_feedbacks, predicted_feedbacks)
+
+    # Gather LLM token usage and response times
+    if bool(os.environ.get("LANGCHAIN_TRACING_V2")):
+        experiment = get_experiment_environment()
+        client = LangsmithClient()
+        project_name = os.environ.get("LANGCHAIN_PROJECT")
+        runs = list(client.list_runs(
+            project_name=project_name,
+            filter=f'and(has(tags, "run-{experiment.run_id}"), has(tags, "submission-{submission.id}"))'
+        ))
+        logger.info("evaluate_feedback: Found %d runs for submission %d of exercise %d.", len(runs), submission.id, exercise.id)
+        
+        def get_statistics(runs: List[Run]):
+            return {
+                "response_time": sum((run.end_time - run.start_time).total_seconds() for run in runs if run.end_time is not None),
+                "prompt_tokens": sum(run.prompt_tokens for run in runs if run.prompt_tokens is not None),
+                "completion_tokens": sum(run.completion_tokens for run in runs if run.completion_tokens is not None),
+                "total_tokens": sum(run.total_tokens for run in runs if run.total_tokens is not None),
+            }
+
+        suggestion_runs = []
+        evaluation_runs = []
+        for run in runs:
+            if "evaluation" in (run.tags or []):
+                evaluation_runs.append(run)
+            else:
+                suggestion_runs.append(run)
+
+        if suggestion_runs or evaluation_runs:
+            evaluation["runs"] = {}
+            if suggestion_runs:
+                evaluation["runs"]["suggestions"] = {
+                    "count": len(suggestion_runs),
+                    "statistics": get_statistics(suggestion_runs),
+                    "runs": [json.loads(run.json()) for run in suggestion_runs]
+                }
+            if evaluation_runs:
+                evaluation["runs"]["evaluation"] = {
+                    "count": len(evaluation_runs),
+                    "statistics": get_statistics(evaluation_runs),
+                    "runs": [json.loads(run.json()) for run in evaluation_runs]
+                }
 
     return evaluation
 
