@@ -84,13 +84,13 @@ async def evaluate_feedback(
             if suggestion_runs:
                 evaluation["runs"]["suggestions"] = {
                     "count": len(suggestion_runs),
-                    "statistics": get_statistics(suggestion_runs),
+                    **get_statistics(suggestion_runs),
                     "runs": [json.loads(run.json()) for run in suggestion_runs]
                 }
             if evaluation_runs:
                 evaluation["runs"]["evaluation"] = {
                     "count": len(evaluation_runs),
-                    "statistics": get_statistics(evaluation_runs),
+                    **get_statistics(evaluation_runs),
                     "runs": [json.loads(run.json()) for run in evaluation_runs]
                 }
 
