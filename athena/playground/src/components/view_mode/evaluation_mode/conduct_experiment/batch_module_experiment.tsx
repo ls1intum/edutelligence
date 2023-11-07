@@ -2,7 +2,12 @@ import type { Submission } from "@/model/submission";
 import type { Experiment } from "../define_experiment";
 import type { ExperimentStep } from "@/hooks/batch_module_experiment";
 
-import React, { useImperativeHandle, useState, ForwardedRef, useEffect } from "react";
+import React, {
+  useImperativeHandle,
+  useState,
+  ForwardedRef,
+  useEffect,
+} from "react";
 import Modal from "react-modal";
 import { FullScreenHandle } from "react-full-screen";
 
@@ -14,6 +19,7 @@ import { ModuleConfiguration } from "../configure_modules";
 import ModuleExperimentProgress from "./module_experiment_progress";
 import SubmissionDetail from "@/components/details/submission_detail";
 import ModuleConfigSelect from "@/components/selectors/module_config_select";
+import { twMerge } from "tailwind-merge";
 
 type ConductBatchModuleExperimentProps = {
   experiment: Experiment;
@@ -53,7 +59,10 @@ const ConductBatchModuleExperiment = React.forwardRef<
     ref: ForwardedRef<ConductBatchModuleExperimentHandles>
   ) => {
     const { data: health } = useHealth();
-    const moduleExperiment = useBatchModuleExperiment(experiment, moduleConfiguration);
+    const moduleExperiment = useBatchModuleExperiment(
+      experiment,
+      moduleConfiguration
+    );
 
     const [showProgress, setShowProgress] = useState(true);
     const [isConfigModalOpen, setConfigModalOpen] = useState(false);
@@ -88,14 +97,6 @@ const ConductBatchModuleExperiment = React.forwardRef<
             <div className="flex items-center justify-between gap-2">
               <h4 className="text-lg font-bold">{moduleConfiguration.name}</h4>
               <div className="flex flex-1 justify-end gap-1 mb-1 self-start">
-                {moduleExperiment.continueAfterTraining && (
-                <button 
-                  className="rounded-md p-2 bg-primary-500 hover:bg-primary-600 text-white text-base leading-none"
-                  onClick={moduleExperiment.continueAfterTraining}
-                  >
-                  Start Generating
-                </button>
-                )}
                 <button
                   disabled={moduleOrderControl.isFirstModule}
                   className="w-8 h-8 rounded-md p-2 bg-gray-100 hover:bg-gray-200 font-bold text-gray-500 hover:text-gray-600 text-base leading-none disabled:text-gray-300 disabled:bg-gray-50 disabled:cursor-not-allowed"
@@ -125,16 +126,29 @@ const ConductBatchModuleExperiment = React.forwardRef<
                     Unhealthy
                   </span>
                 )}
-                {moduleExperiment.data.step === "finished" ? (
+                {moduleExperiment.data.step === "finished" &&
+                moduleExperiment.submissionsWithAutomaticEvaluation?.size ===
+                  moduleExperiment.data.submissionsWithFeedbackSuggestions
+                    .size ? (
                   <span className="rounded-full bg-green-500 text-white px-2 py-0.5 text-xs">
                     Finished
                   </span>
-                ) : moduleExperiment.data.step !== undefined ? (
-                  <span className="rounded-full bg-yellow-500 text-white px-2 py-0.5 text-xs">
-                    {moduleExperiment.continueAfterTraining ?
+                ) : moduleExperiment.data.step !== "notStarted" ? (
+                  <span
+                    className={twMerge(
+                      "rounded-full text-white px-2 py-0.5 text-xs",
+                      moduleExperiment.continueAfterTraining ||
+                        moduleExperiment.continueWithAutomaticEvaluation
+                        ? "bg-primary-300"
+                        : "bg-yellow-500"
+                    )}
+                  >
+                    {moduleExperiment.continueAfterTraining ||
+                    moduleExperiment.continueWithAutomaticEvaluation ? (
                       <>Waiting&nbsp;to&nbsp;Continue</>
-                    : <>In&nbsp;Progress</>
-                    }
+                    ) : (
+                      <>In&nbsp;Progress</>
+                    )}
                   </span>
                 ) : (
                   <span className="rounded-full bg-gray-500 text-white px-2 py-0.5 text-xs">
@@ -203,8 +217,12 @@ const ConductBatchModuleExperiment = React.forwardRef<
                 viewSubmission.id
               )?.suggestions ?? []
             }
-            manualRatings={moduleExperiment.submissionsWithManualRatings.get(viewSubmission.id)}
-            onManualRatingsChange={moduleExperiment.getManualRatingsSetter(viewSubmission.id)}
+            manualRatings={moduleExperiment.submissionsWithManualRatings.get(
+              viewSubmission.id
+            )}
+            onManualRatingsChange={moduleExperiment.getManualRatingsSetter(
+              viewSubmission.id
+            )}
           />
         </div>
         <Modal
@@ -259,10 +277,12 @@ function ConductBatchModuleExperimentWrapped(
   ref: React.Ref<ConductBatchModuleExperimentHandles>
 ) {
   return (
-    <ExperimentIdentifiersProvider experimentIdentifiers={{
-      experimentId: props.experiment.id,
-      moduleConfigurationId: props.moduleConfiguration.id,
-    }}>
+    <ExperimentIdentifiersProvider
+      experimentIdentifiers={{
+        experimentId: props.experiment.id,
+        moduleConfigurationId: props.moduleConfiguration.id,
+      }}
+    >
       <ModuleProvider
         module={props.moduleConfiguration.moduleAndConfig.module}
         moduleConfig={props.moduleConfiguration.moduleAndConfig.moduleConfig}
