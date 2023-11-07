@@ -197,7 +197,7 @@ export default function ModuleExperimentProgress({
                 submissionsWithAutomaticEvaluation?.size ===
                   data.submissionsWithFeedbackSuggestions.size
                 ? "text-green-500 border-green-500"
-                : stepToIndex(data.step) === 4
+                : stepToIndex(data.step) === 4 && submissionsWithAutomaticEvaluation !== undefined
                 ? "text-yellow-500 border-yellow-500"
                 : "text-gray-500 border-gray-500"
             )}
@@ -211,7 +211,7 @@ export default function ModuleExperimentProgress({
                 submissionsWithAutomaticEvaluation?.size ===
                   data.submissionsWithFeedbackSuggestions.size
                 ? "text-green-500"
-                : stepToIndex(data.step) === 4
+                : stepToIndex(data.step) === 4 && submissionsWithAutomaticEvaluation !== undefined
                 ? "text-yellow-500"
                 : "text-gray-500"
             )}
