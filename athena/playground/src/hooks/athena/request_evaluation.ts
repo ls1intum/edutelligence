@@ -48,7 +48,7 @@ export default function useRequestEvaluation(
       const modules = onlyUseContextModule
         ? [contextModule]
         : Object.values(health?.modules ?? {}).filter(
-            (module) => module.healthy && module.type === contextModule.type
+            (module) => module.healthy && module.type === contextModule.type && module.supportsEvaluation
           );
 
       const results = await Promise.allSettled(
