@@ -59,7 +59,7 @@ async def evaluate_feedback(
         evaluation["llm_statistics"] = get_llm_statistics(submission)
 
     # 3. Feedback statistics
-    evaluation["feedback_statistics"] = get_feedback_statistics(exercise, submission, true_feedbacks, predicted_feedbacks)
+    evaluation["feedback_statistics"] = get_feedback_statistics(exercise, true_feedbacks, predicted_feedbacks)
 
     return evaluation
 
