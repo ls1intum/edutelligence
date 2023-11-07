@@ -51,7 +51,7 @@ async def evaluate_feedback(
     evaluation = {}
 
     # 1. LLM as a judge
-    if bool(os.environ.get("LLM_ENABLE_LLM_AS_A_JUDGE")):
+    if len(predicted_feedbacks) > 0 and bool(os.environ.get("LLM_ENABLE_LLM_AS_A_JUDGE")):
         evaluation["llm_as_a_judge"] = await generate_evaluation(exercise, submission, true_feedbacks, predicted_feedbacks)
 
     # 2. LangSmith runs, token usage, and respose times
