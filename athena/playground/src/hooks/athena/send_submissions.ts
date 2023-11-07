@@ -25,6 +25,7 @@ export default function useSendSubmissions(
     mutationFn: async ({ exercise, submissions }) => {
       return await athenaFetcher("/submissions", { exercise, submissions });
     },
+    retry: 3,
     ...options,
   });
 }

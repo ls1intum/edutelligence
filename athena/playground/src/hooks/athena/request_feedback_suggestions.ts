@@ -40,6 +40,7 @@ export default function useRequestFeedbackSuggestions(
       }
       return response;
     },
+    retry: 3,
     ...options,
   });
 }

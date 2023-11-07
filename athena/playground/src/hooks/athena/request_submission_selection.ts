@@ -26,6 +26,7 @@ export default function useRequestSubmissionSelection(
       const submissionIds = submissions.map((submission) => submission.id)
       return await athenaFetcher("/select_submission", { exercise, submission_ids: submissionIds });
     },
+    retry: 3,
     ...options,
   });
 }
