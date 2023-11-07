@@ -52,8 +52,7 @@ def get_llm_statistics(submission: Submission):
     return llm_statistics
 
 
-def get_feedback_statistics(exercise: Exercise, submission: Submission,
-                            true_feedbacks: List[Feedback], predicted_feedbacks: List[Feedback]):
+def get_feedback_statistics(exercise: Exercise, true_feedbacks: List[Feedback], predicted_feedbacks: List[Feedback]):
     actual_feedback_count = len(true_feedbacks)
     actual_feedback_with_grading_instructions = []
     suggestions_count = len(predicted_feedbacks)
