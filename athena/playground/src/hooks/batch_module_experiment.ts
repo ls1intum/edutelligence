@@ -406,16 +406,6 @@ export default function useBatchModuleExperiment(experiment: Experiment, moduleC
         submission.id
       )?.suggestions ?? [];
 
-      if (predictedFeedbacks.length === 0) {
-        // Skip if there are no predicted feedbacks
-        setSubmissionsWithAutomaticEvaluation((prevState) => {
-          const newMap = new Map(prevState);
-          newMap.set(submission.id, {});
-          return newMap;
-        });
-        continue;
-      }
-
       try {
         const responses = await requestEvaluation.mutateAsync({
           exercise: experiment.exercise,
