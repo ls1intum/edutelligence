@@ -14,7 +14,7 @@ export default function ModuleExperimentProgress({
   experiment,
   moduleExperiment,
 }: ModuleExperimentProgressProps) {
-  const data = moduleExperiment.data;
+  const { data, submissionsWithAutomaticEvaluation } = moduleExperiment;
   const moduleRequests = moduleExperiment.moduleRequests;
 
   const stepToIndex = (step: ExperimentStep) => {
@@ -86,10 +86,11 @@ export default function ModuleExperimentProgress({
             className={twMerge(
               "flex items-center justify-center w-6 h-6 border rounded-full shrink-0",
               stepToIndex(data.step) >= 2
-              ? stepToIndex(data.step) > 2 || moduleExperiment.continueAfterTraining
-                ? "text-green-500 border-green-500"
-                : "text-yellow-500 border-yellow-500"
-              : "text-gray-500 border-gray-500"
+                ? stepToIndex(data.step) > 2 ||
+                  moduleExperiment.continueAfterTraining
+                  ? "text-green-500 border-green-500"
+                  : "text-yellow-500 border-yellow-500"
+                : "text-gray-500 border-gray-500"
             )}
           >
             2
@@ -98,10 +99,11 @@ export default function ModuleExperimentProgress({
             className={twMerge(
               "flex flex-col",
               stepToIndex(data.step) >= 2
-              ? stepToIndex(data.step) > 2 || moduleExperiment.continueAfterTraining
-                ? "text-green-500"
-                : "text-yellow-500"
-              : "text-gray-500"
+                ? stepToIndex(data.step) > 2 ||
+                  moduleExperiment.continueAfterTraining
+                  ? "text-green-500"
+                  : "text-yellow-500"
+                : "text-gray-500"
             )}
           >
             <span className="font-medium">Sending Training Feedback</span>
@@ -129,70 +131,121 @@ export default function ModuleExperimentProgress({
       )}
 
       {/* Generate Feedback Suggestions */}
-      <li className="flex items-center space-x-2">
-        <span
-          className={twMerge(
-            "flex items-center justify-center w-6 h-6 border rounded-full shrink-0",
-            stepToIndex(data.step) > 3
-              ? "text-green-500 border-green-500"
-              : stepToIndex(data.step) === 3
-              ? "text-yellow-500 border-yellow-500"
-              : "text-gray-500 border-gray-500"
-          )}
-        >
-          {experiment.trainingSubmissions ? 3 : 2}
-        </span>
-        <div
-          className={twMerge(
-            "flex flex-col",
-            stepToIndex(data.step) > 3
-              ? "text-green-500"
-              : stepToIndex(data.step) === 3
-              ? "text-yellow-500"
-              : "text-gray-500"
-          )}
-        >
-          <span className="font-medium">Generating Feedback Suggestions</span>
-          {moduleRequests.requestFeedbackSuggestions.isLoading && (
-            <span className="text-xs text-gray-500 animate-pulse">
-              Generating feedback suggestions... (
-              {data.submissionsWithFeedbackSuggestions.size + 1}/
-              {experiment.evaluationSubmissions.length})
-            </span>
-          )}
-          {moduleRequests.requestFeedbackSuggestions.isError && (
-            <span className="text-xs text-red-500">
-              {moduleRequests.requestFeedbackSuggestions.error.message}
-            </span>
-          )}
-          {moduleRequests.requestFeedbackSuggestions.isSuccess && (
-            <span className="text-xs text-green-500">
-              Generated feedback suggestions (
-              {data.submissionsWithFeedbackSuggestions.size}/
-              {experiment.evaluationSubmissions.length})
-            </span>
-          )}
+      <li className="flex items-center justify-between space-x-2">
+        <div className="flex items-center space-x-2">
+          <span
+            className={twMerge(
+              "flex items-center justify-center w-6 h-6 border rounded-full shrink-0",
+              stepToIndex(data.step) > 3
+                ? "text-green-500 border-green-500"
+                : stepToIndex(data.step) === 3
+                ? "text-yellow-500 border-yellow-500"
+                : "text-gray-500 border-gray-500"
+            )}
+          >
+            {experiment.trainingSubmissions ? 3 : 2}
+          </span>
+          <div
+            className={twMerge(
+              "flex flex-col",
+              stepToIndex(data.step) > 3
+                ? "text-green-500"
+                : stepToIndex(data.step) === 3
+                ? "text-yellow-500"
+                : "text-gray-500"
+            )}
+          >
+            <span className="font-medium">Generating Feedback Suggestions</span>
+            {moduleRequests.requestFeedbackSuggestions.isLoading && (
+              <span className="text-xs text-gray-500 animate-pulse">
+                Generating feedback suggestions... (
+                {data.submissionsWithFeedbackSuggestions.size + 1}/
+                {experiment.evaluationSubmissions.length})
+              </span>
+            )}
+            {moduleRequests.requestFeedbackSuggestions.isError && (
+              <span className="text-xs text-red-500">
+                {moduleRequests.requestFeedbackSuggestions.error.message}
+              </span>
+            )}
+            {moduleRequests.requestFeedbackSuggestions.isSuccess && (
+              <span className="text-xs text-green-500">
+                Generated feedback suggestions (
+                {data.submissionsWithFeedbackSuggestions.size}/
+                {experiment.evaluationSubmissions.length})
+              </span>
+            )}
+          </div>
         </div>
+        {moduleExperiment.continueAfterTraining && (
+          <button
+            className="rounded-md p-2 bg-primary-500 hover:bg-primary-600 text-white text-base leading-none"
+            onClick={moduleExperiment.continueAfterTraining}
+          >
+            Start Generating
+          </button>
+        )}
       </li>
-      <li className="flex items-center space-x-2">
-        <span
-          className={twMerge(
-            "flex items-center justify-center w-6 h-6 border rounded-full shrink-0",
-            stepToIndex(data.step) === 4
-              ? "text-green-500 border-green-500"
-              : "text-gray-500 border-gray-500"
-          )}
-        >
-          {experiment.trainingSubmissions ? 4 : 3}
-        </span>
-        <div
-          className={twMerge(
-            "flex flex-col",
-            stepToIndex(data.step) === 4 ? "text-green-500" : "text-gray-500"
-          )}
-        >
-          <span className="font-medium">Finished</span>
+
+      {/* Run Automatic Evaluation */}
+      <li className="flex items-center justify-between space-x-2">
+        <div className="flex items-center space-x-2">
+          <span
+            className={twMerge(
+              "flex items-center justify-center w-6 h-6 border rounded-full shrink-0",
+              stepToIndex(data.step) === 4 &&
+                submissionsWithAutomaticEvaluation?.size ===
+                  data.submissionsWithFeedbackSuggestions.size
+                ? "text-green-500 border-green-500"
+                : stepToIndex(data.step) === 4
+                ? "text-yellow-500 border-yellow-500"
+                : "text-gray-500 border-gray-500"
+            )}
+          >
+            {experiment.trainingSubmissions ? 4 : 3}
+          </span>
+          <div
+            className={twMerge(
+              "flex flex-col",
+              stepToIndex(data.step) === 4 &&
+                submissionsWithAutomaticEvaluation?.size ===
+                  data.submissionsWithFeedbackSuggestions.size
+                ? "text-green-500"
+                : stepToIndex(data.step) === 4
+                ? "text-yellow-500"
+                : "text-gray-500"
+            )}
+          >
+            <span className="font-medium">Run Automatic Evaluation</span>
+            {moduleRequests.requestEvaluation.isLoading && (
+              <span className="text-xs text-gray-500 animate-pulse">
+                Evaluating submissions... (
+                {(submissionsWithAutomaticEvaluation?.size ?? 0) + 1}/
+                {experiment.evaluationSubmissions.length})
+              </span>
+            )}
+            {moduleRequests.requestEvaluation.isError && (
+              <span className="text-xs text-red-500">
+                {moduleRequests.requestEvaluation.error.message}
+              </span>
+            )}
+            {moduleRequests.requestEvaluation.isSuccess && (
+              <span className="text-xs text-green-500">
+                Evaluated submissions (
+                {submissionsWithAutomaticEvaluation?.size ?? 0}/
+                {experiment.evaluationSubmissions.length})
+              </span>
+            )}
+          </div>
         </div>
+        {moduleExperiment.continueWithAutomaticEvaluation && (
+          <button
+            className="self-end rounded-md p-2 bg-primary-500 hover:bg-primary-600 text-white text-base leading-none"
+            onClick={moduleExperiment.continueWithAutomaticEvaluation}
+          >
+            Start Evaluating
+          </button>
+        )}
       </li>
     </ol>
   );

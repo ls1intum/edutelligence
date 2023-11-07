@@ -54,8 +54,8 @@ export default function useBatchModuleExperiment(experiment: Experiment, moduleC
 
   // Stores automatic evaluation of submissions
   const [submissionsWithAutomaticEvaluation, setSubmissionsWithAutomaticEvaluation] = useState<
-    Map<number, AutomaticEvaluation>
-  >(new Map());
+    Map<number, AutomaticEvaluation> | undefined
+  >(undefined);
 
   const [processingStep, setProcessingStep] = useState<
     ExperimentStep | undefined
@@ -103,7 +103,7 @@ export default function useBatchModuleExperiment(experiment: Experiment, moduleC
         } : {}
       ),
       ...(
-        submissionsWithAutomaticEvaluation.size > 0 ? {
+        submissionsWithAutomaticEvaluation && submissionsWithAutomaticEvaluation.size > 0 ? {
           automaticEvaluation: {
             type: "automaticEvaluation",
             runId: data.runId,
@@ -187,6 +187,10 @@ export default function useBatchModuleExperiment(experiment: Experiment, moduleC
       ...prevState,
       step: "generatingFeedbackSuggestions",
     }));
+  }) : undefined;
+
+  const continueWithAutomaticEvaluation = (data.step === "finished" && submissionsWithAutomaticEvaluation === undefined) ? (() => {
+    stepAutomaticEvaluation();
   }) : undefined;
 
   // Module requests
@@ -386,7 +390,7 @@ export default function useBatchModuleExperiment(experiment: Experiment, moduleC
     console.log("Running automatic evaluation...");
 
     let remainingSubmissions = experiment.evaluationSubmissions.filter(
-      (submission) => !submissionsWithAutomaticEvaluation.has(submission.id)
+      (submission) => !submissionsWithAutomaticEvaluation?.has(submission.id)
     );
     
     let index = 0;
@@ -477,20 +481,18 @@ export default function useBatchModuleExperiment(experiment: Experiment, moduleC
       processingStep !== "generatingFeedbackSuggestions"
     ) {
       stepGenerateFeedbackSuggestions();
-    } else if (
-      data.step === "finished" &&
-      processingStep !== "finished"
-    ) {
-      stepAutomaticEvaluation();
-    }
+    } 
+    // Automatic evaluation is triggered manually
   }, [data.step]);
 
   return {
     data,
     submissionsWithManualRatings,
+    submissionsWithAutomaticEvaluation,
     getManualRatingsSetter,
     startExperiment,
     continueAfterTraining,
+    continueWithAutomaticEvaluation,
     exportData,
     importData,
     moduleRequests: {
