@@ -190,6 +190,7 @@ export default function useBatchModuleExperiment(experiment: Experiment, moduleC
   }) : undefined;
 
   const continueWithAutomaticEvaluation = (data.step === "finished" && submissionsWithAutomaticEvaluation === undefined) ? (() => {
+    setSubmissionsWithAutomaticEvaluation((prevState) => new Map(prevState));
     stepAutomaticEvaluation();
   }) : undefined;
 

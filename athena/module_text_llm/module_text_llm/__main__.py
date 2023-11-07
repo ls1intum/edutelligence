@@ -47,7 +47,7 @@ async def evaluate_feedback(
     
     evaluation = {}
     if bool(os.environ.get("LLM_ENABLE_LLM_AS_A_JUDGE")):
-        evaluation["llm-as-a-judge"] = await generate_evaluation(exercise, submission, true_feedbacks, predicted_feedbacks)
+        evaluation["llm_as_a_judge"] = await generate_evaluation(exercise, submission, true_feedbacks, predicted_feedbacks)
 
     return evaluation
 
