@@ -17,7 +17,20 @@ export default async function handler(
   const url = req.query.url;
   let response;
   const secret = req.headers["authorization"] as string;
-  const moduleConfig = req.headers["x-module-config"] as string | undefined;
+  const forwardHeaders = [
+    "X-Module-Config", 
+    "X-Experiment-ID", 
+    "X-Module-Configuration-ID",
+    "X-Run-ID",
+  ]
+
+  const headers = Object.fromEntries(
+    forwardHeaders.flatMap((header) => {
+      const value = req.headers[header.toLowerCase()] as string | undefined;
+      return value ? [[header, value]] : [];
+    })
+  )
+  
   if (!secret) {
     console.warn("No secret provided");
   }
@@ -27,7 +40,7 @@ export default async function handler(
         "Content-Type": "application/json",
         Accept: "application/json",
         "Authorization": secret,
-        ...(moduleConfig && { "X-Module-Config": moduleConfig }),
+        ...headers,
       },
       method: req.method,
       ...(req.method === "POST" ? { body: JSON.stringify(req.body) } : {}),
