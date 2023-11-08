@@ -59,7 +59,11 @@ def send_submissions(exercise: Exercise, submissions: List[Submission]):
         # TODO: remove this again:
         verify=False,  # Ignore SSL errors for now, because athenetest1-01 has an invalid certificate
     )
-    resp.raise_for_status()
+    try:
+        resp.raise_for_status()
+    except requests.exceptions.HTTPError as e:
+        logger.error("Failed to send submissions to CoFee: %s", e)
+        raise e
     logger.info("Submissions sent to CoFee")
 
 
