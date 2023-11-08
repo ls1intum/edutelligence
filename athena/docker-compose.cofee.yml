@@ -68,7 +68,7 @@ services:
     container_name: cofee-embedding
     restart: unless-stopped
     depends_on:
-      - load-balancerdatabase
+      - load-balancer
     expose:
        - 8000
     env_file:
