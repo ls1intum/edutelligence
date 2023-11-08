@@ -1,23 +1,59 @@
-Evaluation Data
+Evaluation Data for Athena Playground
 ===========================================
 
-The Playground comes bundled with a basic set of example data to test Athena's functionalities. For more comprehensive evaluation, you can load your own data or use anonymized data from `Artemis <https://github.com/ls1intum/Artemis>`_, an open-source LMS.
+The Athena Playground is equipped with a set of example data for initial testing. To conduct a more thorough evaluation, users have the option to use their own datasets or request anonymized data from `Artemis <https://github.com/ls1intum/Artemis>`_, an open-source LMS.
+
 
 Example Data
--------------------------------------------
-This data is provided within the `playground/data/example` directory and is automatically utilized when launching the Playground. 
+------------
+
+Located in ``playground/data/example``, this default dataset is automatically used when the Playground is initiated.
+
 
 Evaluation Data
--------------------------------------------
-The `playground/data/evaluation` directory is designated for your custom data used for evaluation purposes. Initially, it's left empty for you to populate. 
+---------------
 
-Artemis Evaluation Data
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-If you're integrating with Artemis LMS and would like to evaluate their data, you can request an anonymized database dump from the Artemis team. This request requires a valid reason and a signed data protection agreement (NDA). For further details, please get in touch with the Artemis team.
+The directory ``playground/data/evaluation`` is reserved for your custom data. It is initially empty, ready to be filled with your evaluation datasets.
 
-Once the database dump is acquired, follow these steps to export the data to the Playground:
+
+Exporting Evaluation Data from Artemis
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+To evaluate using data from Artemis, you can request an anonymized database dump, contingent on a valid justification and a signed data protection agreement. Contact the Artemis team for details.
+
+Steps to Export Evaluation Data from Artemis:
+"""""""""""""""""""""""""""""""""""""""""""""
+
+1. **Setup a MySQL database:**
+   Create a new MySQL database and user. You can use the same database instance as Artemis or a separate one. You can follow the instructions in the `Artemis documentation <https://docs.artemis.cit.tum.de/dev/setup/database.html#mysql-setup>`_ to set up a MySQL database.
+
+
+2. **Load the Database Dump:**
+   Use the command below to import the anonymized data into your local MySQL database. You will only need to do this once to populate the database. The script will ask you for the database ``host``, ``port``, ``user``, ``password``, and ``database``. Additionally, you will need to provide the path to the anonymized database dump, e.g. ``/home/user/artemis-database-dump.sql``.
+
+   .. code-block:: bash
+
+       npm run export:artemis:1-load-anonymized-database-dump
+
+.. image:: ../images/load-anonymized-database-dump.png
+    :width: 500px
+    :alt: Example terminal screenshot of the command to load the anonymized database dump
+    :align: center
+
+3. **Export the Data:**
+   This command exports the data specified in ``playground/scripts/artemis/evaluation_data/text_exercises.json`` to your local ``playground/data/evaluation`` directory.
+
+   .. code-block:: bash
+
+       npm run export:artemis:2-export-evaluation-data
+
+
+To evaluate using data from Artemis, you can request an anonymized database dump, contingent on a valid justification and a signed data protection agreement. Contact the Artemis team for details.
+
+Steps to Export Evaluation Data from Artemis:
 
 1. **Load the Database Dump:**
+    Use the command below to import the anonymized data into your local MySQL database.
 
     .. code-block:: bash
 
@@ -31,24 +67,83 @@ Once the database dump is acquired, follow these steps to export the data to the
 
         npm run export:artemis:2-export-evaluation-data
 
-    This exports exercises listed under `playground/scripts/artemis/evaluation_data` to the `playground/data/evaluation` directory, where you can use it for evaluation purposes.
-
 Artemis Programming Exercises
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-Artemis programming exercises are not included in the anonymized database dump. To access these exercises, you'll need to request them separately from the Artemis team. Once you have the programming exercises, an instructor from the course can export them using the following commands:
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-1. **Download the Repositories:**
+Programming exercises are not part of the anonymized database dump and must be requested separately from the Artemis team. You can find the selected exercise and their participation IDs for export in ``playground/scripts/artemis/evaluation_data/programming_exercises.json``.
 
-    .. code-block:: bash
+Steps for Instructors to Export Programming Exercises:
+""""""""""""""""""""""""""""""""""""""""""""""""""""""
 
-        npm run export:artemis:3-download-programming-repositories
+1. **Download Repositories:**
+   Instructors can download materials and submissions from Artemis using the command below, then zip and transfer them to you. Keep in mind that this command will take a long time to run if there are many participations to download.
 
-    This command exports the programming exercises' materials and submissions to the `playground/data/evaluation` directory. The instructor should then zip these and send them to you.
+   .. code-block:: bash
+
+       npm run export:artemis:3-download-programming-repositories
 
 2. **Link the Repositories:**
+   Put the downloaded repositories in the ``playground/data/evaluation`` directory and link them to the respective exercises using the following command. This command will also validate if there are any missing repositories. Without this step, the programming repositories will not be available in the Playground.
 
-    .. code-block:: bash
+   .. code-block:: bash
 
-        npm run export:artemis:4-link-programming-repositories
+       npm run export:artemis:4-link-programming-repositories
 
-    This command links the repositories to the `exercise-*.json` files and validates if there are any missing repositories.
+
+Generating ``programming_exercises.json``
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The SQL script provided below can be adapted to generate a ``programming_exercises.json`` file, located at ``playground/scripts/artemis/evaluation_data/programming_exercises.json``. Similar logic applies to create ``text_exercises.json``. The script collects data on selected exercises, aggregates participation data, and formats it into a JSON structure suitable for export scripts.
+
+**Note:** The provided SQL script is an example and should be tailored to include the specific IDs of the programming exercises you wish to export. You might want to reduce the number of participations to export if you don't need all of them. ``anonymized_artemis`` should be replaced with the name of your database.
+
+.. code-block:: sql
+    
+    WITH temp_course_exercises AS (
+        SELECT
+            DISTINCT e.id,
+            c.id AS course_id,
+            0 as is_exam_exercise -- Course exercises
+        FROM
+            anonymized_artemis.exercise e
+            JOIN anonymized_artemis.course c ON e.course_id = c.id
+    ),
+    temp_exam_exercises AS (
+        SELECT
+            DISTINCT e.id,
+            c.id AS course_id,
+            1 as is_exam_exercise -- Exam exercises
+        FROM
+            anonymized_artemis.course c
+            JOIN anonymized_artemis.exam ex ON ex.course_id = c.id
+            JOIN anonymized_artemis.exercise_group eg ON eg.exam_id = ex.id
+            JOIN anonymized_artemis.exercise e ON e.exercise_group_id = eg.id
+    ),
+    temp_exercises AS (
+        SELECT * FROM temp_course_exercises
+        UNION
+        SELECT * FROM temp_exam_exercises
+    )
+    SELECT JSON_OBJECT(
+        c.title, JSON_OBJECT(
+            'course_id', c.id,
+            'semester', c.semester,
+            'exercises', JSON_ARRAYAGG(
+                JSON_OBJECT(
+                    'id', e.id,
+                    'title', e.title,
+                    'is_exam_exercise', te.is_exam_exercise
+                )
+            ),
+            'participations', JSON_ARRAYAGG(
+                (SELECT JSON_ARRAYAGG(p.id)
+                 FROM anonymized_artemis.participation p -- Note: This contains also participations that are maybe unneccessary  
+                 WHERE p.exercise_id = e.id)
+            )
+        )
+    )
+    FROM temp_exercises te
+    JOIN anonymized_artemis.exercise e ON te.id = e.id
+    JOIN anonymized_artemis.course c ON c.id = te.course_id
+    WHERE e.id IN (2610, 3782, 2111, 2104, 3187, 3781, 6344, 6433, 3942, 3693, 4864, 4896, 3913, 3914, 3908, 3185, 3184) -- Programming exercises to export
+    GROUP BY c.id, c.title, c.semester;
