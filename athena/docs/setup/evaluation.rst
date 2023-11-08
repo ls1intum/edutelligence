@@ -48,25 +48,6 @@ Steps to Export Evaluation Data from Artemis:
        npm run export:artemis:2-export-evaluation-data
 
 
-To evaluate using data from Artemis, you can request an anonymized database dump, contingent on a valid justification and a signed data protection agreement. Contact the Artemis team for details.
-
-Steps to Export Evaluation Data from Artemis:
-
-1. **Load the Database Dump:**
-    Use the command below to import the anonymized data into your local MySQL database.
-
-    .. code-block:: bash
-
-        npm run export:artemis:1-load-anonymized-database-dump
-
-    This command loads the data into your local MySQL database. You can use the same database as Artemis.
-
-2. **Export the Data:**
-
-    .. code-block:: bash
-
-        npm run export:artemis:2-export-evaluation-data
-
 Artemis Programming Exercises
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
@@ -75,14 +56,14 @@ Programming exercises are not part of the anonymized database dump and must be r
 Steps for Instructors to Export Programming Exercises:
 """"""""""""""""""""""""""""""""""""""""""""""""""""""
 
-1. **Download Repositories:**
+4. **Download Repositories:**
    Instructors can download materials and submissions from Artemis using the command below, then zip and transfer them to you. Keep in mind that this command will take a long time to run if there are many participations to download.
 
    .. code-block:: bash
 
        npm run export:artemis:3-download-programming-repositories
 
-2. **Link the Repositories:**
+5. **Link the Repositories:**
    Put the downloaded repositories in the ``playground/data/evaluation`` directory and link them to the respective exercises using the following command. This command will also validate if there are any missing repositories. Without this step, the programming repositories will not be available in the Playground.
 
    .. code-block:: bash
