@@ -36,6 +36,7 @@ def get_cofee_url() -> str:
 def send_submissions(exercise: Exercise, submissions: List[Submission]):
     """Send submissions to old Athena-CoFee server."""
     logger.info("Sending %d submissions to CoFee", len(submissions))
+    logger.debug("Sending to %s with submissions: %s", get_cofee_url(), submissions)
     module_url = os.environ.get("MODULE_URL", f"http://localhost:{get_module_config().port}")
     resp = requests.post(
         f"{get_cofee_url()}/submit",
