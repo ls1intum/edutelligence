@@ -15,7 +15,7 @@ def get_llm_statistics(submission: Submission):
     project_name = os.environ.get("LANGCHAIN_PROJECT")
     runs = list(client.list_runs(
         project_name=project_name,
-        filter=f'and(has(tags, "run-{experiment.run_id}"), has(tags, "submission-{submission.id}"))'
+        filter=f'has(tags, "submission-{submission.id}")' if experiment.run_id is None else f'and(has(tags, "run-{experiment.run_id}"), has(tags, "submission-{submission.id}"))'
     ))
 
     def get_statistics(runs: List[Run]):
