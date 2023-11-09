@@ -227,12 +227,19 @@ async def generate_suggestions_by_file(exercise: Exercise, submission: Submissio
             ]
         )
 
+    grading_instruction_ids = set(
+        grading_instruction.id 
+        for criterion in exercise.grading_criteria or [] 
+        for grading_instruction in criterion.structured_grading_instructions
+    )
+
     feedbacks: List[Feedback] = []
     for prompt_input, result in zip(prompt_inputs, results):
         file_path = prompt_input["file_path"]
         if result is None:
             continue
         for feedback in result.feedbacks:
+            grading_instruction_id = feedback.grading_instruction_id if feedback.grading_instruction_id in grading_instruction_ids else None
             feedbacks.append(Feedback(
                 exercise_id=exercise.id,
                 submission_id=submission.id,
@@ -242,7 +249,7 @@ async def generate_suggestions_by_file(exercise: Exercise, submission: Submissio
                 line_start=feedback.line_start,
                 line_end=feedback.line_end,
                 credits=feedback.credits,
-                structured_grading_instruction_id=feedback.grading_instruction_id,
+                structured_grading_instruction_id=grading_instruction_id,
                 meta={}
             ))
 
