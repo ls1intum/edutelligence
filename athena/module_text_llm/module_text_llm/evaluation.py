@@ -78,34 +78,29 @@ def get_feedback_statistics(exercise: Exercise, true_feedbacks: List[Feedback], 
             suggestions_with_grading_instructions.append(feedback)
             suggested_sgi_usage[feedback.structured_grading_instruction_id] += 1
 
-    actual_feedback_with_grading_instructions_count = len(
-        actual_feedback_with_grading_instructions)
-    suggestions_with_grading_instructions_count = len(
-        suggestions_with_grading_instructions)
+    unmatched_suggestions_with_grading_instructions = suggestions_with_grading_instructions.copy()
 
     # Match SGIs
     matched_feedback = 0
-    unmatched_feedback = actual_feedback_count - \
-        actual_feedback_with_grading_instructions_count
-    unmatched_suggestions = suggestions_count - \
-        suggestions_with_grading_instructions_count
+    unmatched_feedback = actual_feedback_count - len(actual_feedback_with_grading_instructions)
+    unmatched_suggestions = suggestions_count - len(suggestions_with_grading_instructions)
 
     for feedback in actual_feedback_with_grading_instructions:
-        for index, suggestion in enumerate(suggestions_with_grading_instructions):
+        for index, suggestion in enumerate(unmatched_suggestions_with_grading_instructions):
             if feedback.structured_grading_instruction_id == suggestion.structured_grading_instruction_id:
                 matched_feedback += 1
-                del suggestions_with_grading_instructions[index]
+                del unmatched_suggestions_with_grading_instructions[index]
                 break
         else:
             unmatched_feedback += 1
 
-    unmatched_suggestions += len(suggestions_with_grading_instructions)
+    unmatched_suggestions += len(unmatched_suggestions_with_grading_instructions)
 
     feedback_statistics = {
         "actual_feedback_count": actual_feedback_count,
         "suggestions_count": suggestions_count,
-        "actual_feedback_with_grading_instructions_count": actual_feedback_with_grading_instructions_count,
-        "suggestions_with_grading_instructions_count": suggestions_with_grading_instructions_count,
+        "actual_feedback_with_grading_instructions_count": len(actual_feedback_with_grading_instructions),
+        "suggestions_with_grading_instructions_count":len(suggestions_with_grading_instructions),
         "actual_sgi_usage": actual_sgi_usage,
         "suggested_sgi_usage": suggested_sgi_usage,
         "matched_feedback": matched_feedback,

@@ -407,9 +407,7 @@ def evaluation_provider(func: Union[
         # Retrieve existing metadata for the exercise, submission and feedback
         exercise.meta.update(get_stored_exercise_meta(exercise) or {})
         submission.meta.update(get_stored_submission_meta(submission) or {})
-        for feedback in true_feedbacks:
-            feedback.meta.update(get_stored_feedback_meta(feedback) or {})
-        for feedback in predicted_feedbacks:
+        for feedback in true_feedbacks + predicted_feedbacks:
             feedback.meta.update(get_stored_feedback_meta(feedback) or {})
 
         # Call the actual provider
