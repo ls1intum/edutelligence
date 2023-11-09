@@ -68,13 +68,13 @@ def get_feedback_statistics(exercise: Exercise, true_feedbacks: List[Feedback], 
 
     # Count SGIs in actual feedbacks
     for feedback in true_feedbacks:
-        if feedback.structured_grading_instruction_id:
+        if feedback.structured_grading_instruction_id and feedback.structured_grading_instruction_id in actual_sgi_usage:
             actual_feedback_with_grading_instructions.append(feedback)
             actual_sgi_usage[feedback.structured_grading_instruction_id] += 1
 
     # Count SGIs in suggested feedbacks
     for feedback in predicted_feedbacks:
-        if feedback.structured_grading_instruction_id:
+        if feedback.structured_grading_instruction_id and feedback.structured_grading_instruction_id in suggested_sgi_usage:
             suggestions_with_grading_instructions.append(feedback)
             suggested_sgi_usage[feedback.structured_grading_instruction_id] += 1
 
