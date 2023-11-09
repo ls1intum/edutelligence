@@ -26,7 +26,6 @@ export function useSendFeedbacks(
     mutationFn: async ({ exercise, submission, feedbacks }) => {
       return await athenaFetcher("/feedbacks", { exercise, submission, feedbacks });
     },
-    retry: 3,
     ...options,
   });
 }

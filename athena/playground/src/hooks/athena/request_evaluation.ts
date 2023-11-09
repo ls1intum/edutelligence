@@ -74,7 +74,6 @@ export default function useRequestEvaluation(
         }
       });
     },
-    retry: 3,
     ...options,
   });
 }

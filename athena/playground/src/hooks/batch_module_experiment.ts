@@ -195,11 +195,13 @@ export default function useBatchModuleExperiment(experiment: Experiment, moduleC
   }) : undefined;
 
   // Module requests
-  const sendSubmissions = useSendSubmissions();
-  const sendFeedbacks = useSendFeedbacks();
-  const requestSubmissionSelection = useRequestSubmissionSelection();
-  const requestFeedbackSuggestions = useRequestFeedbackSuggestions();
-  const requestEvaluation = useRequestEvaluation();
+  // By default useMutation does not retry, but we want to retry a few times to not get stuck
+  // If we still get stuck we can just `Export` -> `Cancel Experiment` -> `Import` again to continue for now
+  const sendSubmissions = useSendSubmissions({ retry: 3 });
+  const sendFeedbacks = useSendFeedbacks({ retry: 3 });
+  const requestSubmissionSelection = useRequestSubmissionSelection({ retry: 3 });
+  const requestFeedbackSuggestions = useRequestFeedbackSuggestions({ retry: 3 });
+  const requestEvaluation = useRequestEvaluation({ retry: 3 });
 
   // 1. Send submissions to Athena
   const stepSendSubmissions = () => {
