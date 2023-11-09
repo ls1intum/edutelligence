@@ -396,10 +396,11 @@ export default function useBatchModuleExperiment(experiment: Experiment, moduleC
       (submission) => !submissionsWithAutomaticEvaluation?.has(submission.id)
     );
     
-    let index = 0;
+    let num = 0;
     for (const submission of remainingSubmissions) {
+      num += 1;
       console.log(
-        `Evaluating... (${index + 1}/${
+        `Evaluating... (${num}/${
           remainingSubmissions.length
         })`
       );
