@@ -12,7 +12,7 @@ To run the playground, run the following command in the ``playground`` folder:
 
 You can reach the playground at http://localhost:3000.
 
-.. image:: ../images/playground.png
+.. image:: ../images/playground/playground.png
     :width: 500px
     :alt: Athena Playground
     :align: center
