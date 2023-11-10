@@ -138,8 +138,14 @@ Request Evaluation is essential for assessing the quality of feedback provided b
 Evaluation Mode
 ---------------
 
+Evaluation Mode enables comprehensive evaluation and comparison of different modules through experiments.
+
+
 Define Experiment
 ^^^^^^^^^^^^^^^^^
+
+Define Experiment allows you to set up and customize experiments. You can choose execution modes, exercise types, and manage training and evaluation data, laying the groundwork for in-depth structured module comparison and analysis. Experiments can be exported and imported, allowing you to reuse and share them with others as benchmarks.
+
 
 .. figure:: ../images/playground/evaluation_mode/define_experiment.png
     :width: 500px
@@ -156,6 +162,8 @@ Define Experiment
 Configure Modules
 ^^^^^^^^^^^^^^^^^
 
+Here, you can select and configure the modules for your experiment. This step is crucial for ensuring that each module is set up with the appropriate parameters for effective comparison and analysis. Module configurations can be exported and imported, allowing you to reuse them in other experiments and share them with others for reproducibility.
+
 .. figure:: ../images/playground/evaluation_mode/configure_modules.png
     :width: 500px
     :alt: Configure Modules Interface of the Athena Playground
@@ -171,8 +179,20 @@ Configure Modules
 Conduct Experiment
 ^^^^^^^^^^^^^^^^^^
 
-Text Exercises
-""""""""""""""
+You can conduct experiments with modules on exercises. This feature allows you to analyze module performance in generating and evaluating feedback on submissions. The interface is column-based, with the first column displaying the exercise details, the second column displaying the selected submission with historical feedback, and the next columns displaying the generated feedback suggestions from each module.
+
+Currently, only the batch mode is supported, where all submissions are processed at once and the following steps are performed:
+1. Send submissions
+2. Send feedback for training submissions if there are any
+3. Generate feedback suggestions for all evaluation submissions
+4. Run automatic evaluation
+
+Additionally, you can annotate the generated feedback suggestions like a tutor would do in the Artemis interface with: ``Accept`` or ``Reject``.
+
+The ``results``, ``manual ratings``, and ``automatic evaluation`` can be exported and imported, allowing you to analyze and visualize the results in other tools, or continue the experiment at a later time.
+
+For Text Exercises
+""""""""""""""""""
 
 .. figure:: ../images/playground/evaluation_mode/conduct_experiment_text.png
     :width: 500px
@@ -186,8 +206,8 @@ Text Exercises
         Video version of Athena_ConductExperimentText on TUM-Live.
     </iframe>
 
-Programming Exercises
-"""""""""""""""""""""
+For Programming Exercises
+"""""""""""""""""""""""""
 
 .. raw:: html
 
