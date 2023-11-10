@@ -6,12 +6,13 @@ Welcome to the Athena Playground Interface, a versatile tool designed for develo
 Base Configuration
 ------------------
 
+The Base Configuration section is your starting point in the Athena Playground. Here, you connect to the Athena instance, monitor the health status of Athena and its modules, and set up your working environment. You can switch between example and evaluation datasets, and choose between Module Requests and Evaluation Mode for varied testing experiences.
+
 .. figure:: ../images/playground/base_info_header.png
     :width: 500px
     :alt: Base Info Header Interface of the Athena Playground
 
     Base Info Header Interface of the Athena Playground
-
 
 .. raw:: html
 
@@ -22,6 +23,8 @@ Base Configuration
 Module Requests
 ---------------
 
+This section is designed to test individual requests to Athena modules, allowing you to observe and understand their responses in isolation. First, select a healthy module from the dropdown menu. Then, you can optionally choose to use a custom configuration for all subsequent requests. Afterward, you can test the following requests.
+
 .. figure:: ../images/playground/module_requests/select_module.png
     :width: 500px
     :alt: Module Requests Select Module Interface of the Athena Playground
@@ -30,6 +33,8 @@ Module Requests
 
 Get Config Schema
 ^^^^^^^^^^^^^^^^^
+
+This feature enables you to fetch and view the JSON configuration schema of a module. It's a critical tool for understanding the expected runtime configuration options for different modules, ensuring seamless integration and functioning with your system.
 
 .. figure:: ../images/playground/module_requests/get_config_schema.png
     :width: 500px
@@ -46,6 +51,8 @@ Get Config Schema
 Send Submissions
 ^^^^^^^^^^^^^^^^
 
+Send Submissions is a key feature for pushing exercise materials and submissions to Athena modules. It's a foundational step, allowing modules to process and analyze data for later.
+
 .. figure:: ../images/playground/module_requests/send_submissions.png
     :width: 500px
     :alt: Send Submissions Request Interface of the Athena Playground
@@ -60,6 +67,9 @@ Send Submissions
 
 Select Submission
 ^^^^^^^^^^^^^^^^^
+
+Selecting submissions is crucial for improving the efficiency of generated feedback suggestions. This feature allows modules to propose a specific submissions, which can then be used to generate feedback suggestions. For instance, CoFee uses this to select the submission with the highest information gain so it can generate more relevant feedback suggestions for the remaining submissions.
+
 
 .. figure:: ../images/playground/module_requests/request_submission_selection.png
     :width: 500px
@@ -76,6 +86,9 @@ Select Submission
 Send Feedback
 ^^^^^^^^^^^^^
 
+Send Feedback enables the transmission of (tutor) feedback to Athena modules. This feature is pivotal in creating a learning loop, where modules can refine their responses based on real feedback.
+
+
 .. figure:: ../images/playground/module_requests/send_feedback.png
     :width: 500px
     :alt: Send Feedback Request Interface of the Athena Playground
@@ -91,6 +104,8 @@ Send Feedback
 Generate Feedback Suggestions
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
+This function is at the heart of Athena's feedback mechanism. It responds with generated feedback suggestions for a given submission.
+
 .. figure:: ../images/playground/module_requests/generate_suggestions.png
     :width: 500px
     :alt: Generate Feedback Suggestions Request Interface of the Athena Playground
@@ -105,6 +120,8 @@ Generate Feedback Suggestions
 
 Request Evaluation
 ^^^^^^^^^^^^^^^^^^
+
+Request Evaluation is essential for assessing the quality of feedback provided by Athena modules. It allows the comparison between module-generated feedback and historical tutor feedback, offering a quantitative analysis of the module's performance.
 
 .. figure:: ../images/playground/module_requests/evaluation.png
     :width: 500px
