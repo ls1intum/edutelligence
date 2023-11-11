@@ -38,7 +38,7 @@ if os.environ.get("REPLICATE_API_TOKEN"):  # If Replicate is available
     available_models = {
         name: Replicate(
             model=model,
-            input={ "temperature": 0.01 }
+            model_kwargs={ "temperature": 0.01 }
         )
         for name, model in replicate_models.items()
     }
@@ -103,15 +103,15 @@ Gradually decrease penalty over this many tokens (minimum: 1)\
             model = available_models[self.model_name.value]
             kwargs = model._lc_kwargs
 
-            input_kwargs = {}
+            model_kwargs = {}
             for attr, value in self.dict().items():
                 # Skip model_name
                 if attr == "model_name":
                     continue
-                input_kwargs[attr] = value
+                model_kwargs[attr] = value
 
             # Set model parameters
-            kwargs["input"] = input_kwargs
+            kwargs["model_kwargs"] = model_kwargs
 
             # Initialize a copy of the model using the config
             model = model.__class__(**kwargs)
