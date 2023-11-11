@@ -1,7 +1,7 @@
 Python and Poetry Setup
 ===========================================
 
-- Athena requires Python 3.10. You can install it from the `Python website <https://www.python.org/downloads/>`_.
+- Athena requires Python 3.11. You can install it from the `Python website <https://www.python.org/downloads/>`_.
 - Athena uses `Poetry <https://python-poetry.org/>`_ instead of pip to manage dependencies. You can find installation instructions on the `Poetry website <https://python-poetry.org/docs/>`_.
 
 You can install all dependencies of a poetry project using
