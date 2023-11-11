@@ -94,7 +94,7 @@ Example:
                 )
             ]
 
-Provide Config Schema
+Provide Config Schema (Optional)
 ~~~~~~~~~~~~~~~~~~~~~~
 Get a schema for config options of the module as json schema. The config complying to the schema can then be provided in the header of a request `X-Module-Config` to override the default values. The module can decorate one pydantic model with ``@config_schema_provider`` to provide the schema and should have default values set for all fields as default configuration. The configuration class can be appended to the function signature of all other decorators to provide the configuration to the function.
 
@@ -107,6 +107,37 @@ Example:
         class Configuration(BaseModel):
             debug: bool = Field(False, description="Whether the module is in debug mode.")
             ...
+
+Provide Evaluation (Optional)
+~~~~~~~~~~~~~~~~~~
+Get an arbitrary evaluation for a submission with historical ``true_feedback`` and feedback suggestions ``predicted_feedback``. The Playground would usually call this when conducting an evaluation during an experiment. The module will receive the request at the function annotated with ``@evaluation_provider``.
+
+If you want to have the ``/evaluation`` endpoint available during the Playground evaluation mode, you need to set ``supports_evaluation = true`` in the ``modules.ini`` and ``modules.docker.ini`` files.
+
+Example: 
+    .. code-block:: python
+
+        from athena import *
+
+        @evaluation_provider
+        def evaluate_feedback(exercise: Exercise, submission: Submission, true_feedbacks: List[Feedback], predicted_feedbacks: List[Feedback]) -> Any:
+            # Do something with the true and predicted feedback and return the evaluation result
+            ...
+            # Example: Generate some example evaluation result
+            evaluation_results = []
+            true_feedback_embeddings = [random.random() for _ in true_feedbacks] 
+            predicted_feedback_embeddings = [random.random() for _ in predicted_feedbacks]
+            for feedback, embedding in zip(predicted_feedbacks, predicted_feedback_embeddings):
+                feedback_evaluation = {
+                    "feedback_id": feedback.id,
+                    "embedding": embedding,
+                    "has_match": len([t for t in true_feedback_embeddings if abs(t - embedding) < 0.1]) > 0,
+                    "correctness": random.random()
+                }
+                evaluation_results.append(feedback_evaluation)
+            ...
+            # Return arbitrary evaluation results
+            return evaluation_results
 
 Environment Variables
 ---------------------
