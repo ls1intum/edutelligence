@@ -1,9 +1,9 @@
 # Module Programming LLM
 
-Generating feedback for programming exercises using large language models.
+Generating feedback for programming exercises using Large Language Models.
 
 It implements the approach described in the following master's thesis:
-> **An LLM-Enabled Approach for Automated Feedback Generation on Text and Programming Exercises**  
+> **Leveraging LLMs for Automated Feedback Generation on Exercises**  
 > Felix T.J. Dietrich
 
 ## Development Setup
