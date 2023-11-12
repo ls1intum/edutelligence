@@ -1,10 +1,11 @@
 """
 Entry point for the module_example module.
 """
-from typing import List
+import random
+from typing import List, Any
 from pydantic import BaseModel, Field
 
-from athena import app, config_schema_provider, submissions_consumer, submission_selector, feedback_consumer, feedback_provider, emit_meta
+from athena import app, config_schema_provider, submissions_consumer, submission_selector, feedback_consumer, feedback_provider, evaluation_provider, emit_meta
 from athena.programming import Exercise, Submission, Feedback
 from athena.logger import logger
 from athena.storage import store_exercise, store_submissions, store_feedback
@@ -137,6 +138,31 @@ def suggest_feedback(exercise: Exercise, submission: Submission, module_config: 
             meta={}
         )
     ]
+
+
+# Only if it makes sense for a module (Optional)
+@evaluation_provider
+def evaluate_feedback(exercise: Exercise, submission: Submission, true_feedbacks: List[Feedback], predicted_feedbacks: List[Feedback]) -> Any:
+    logger.info(
+        "evaluate_feedback: Evaluation for submission %d of exercise %d was requested with %d true and %d predicted feedbacks", 
+        submission.id, exercise.id, len(true_feedbacks), len(predicted_feedbacks)
+    )
+
+    # Do something with the true and predicted feedback and return the evaluation result
+    # Generate some example evaluation result
+    evaluation_results = []
+    true_feedback_embeddings = [random.random() for _ in true_feedbacks] 
+    predicted_feedback_embeddings = [random.random() for _ in predicted_feedbacks]
+    for feedback, embedding in zip(predicted_feedbacks, predicted_feedback_embeddings):
+        feedback_evaluation = {
+            "feedback_id": feedback.id,
+            "embedding": embedding,
+            "has_match": len([t for t in true_feedback_embeddings if abs(t - embedding) < 0.1]) > 0,
+            "correctness": random.random()
+        }
+        evaluation_results.append(feedback_evaluation)
+
+    return evaluation_results
 
 
 if __name__ == "__main__":

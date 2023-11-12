@@ -6,7 +6,7 @@ from .app import app
 from .schemas import ExerciseType, GradingCriterion, StructuredGradingInstruction
 from .metadata import emit_meta, get_meta
 from .experiment import get_experiment_environment
-from .endpoints import submission_selector, submissions_consumer, feedback_consumer, feedback_provider, config_schema_provider  # type: ignore
+from .endpoints import submission_selector, submissions_consumer, feedback_consumer, feedback_provider, config_schema_provider, evaluation_provider  # type: ignore
 
 
 @app.get("/")
@@ -28,6 +28,7 @@ __all__ = [
     "feedback_consumer",
     "feedback_provider",
     "config_schema_provider",
+    "evaluation_provider",
     "emit_meta",
     "get_meta",
     "get_experiment_environment",

@@ -65,6 +65,12 @@ export default function ConductExperiment({
               data: data.manualRatings,
             });
           }
+          if (data.automaticEvaluation) {
+            files.push({
+              name: `${experiment.exerciseType}_automatic_evaluation_${moduleConfigurations[index].name}_${experiment.id}_run-${data.automaticEvaluation.runId}`,
+              data: data.automaticEvaluation,
+            });
+          }
         }
         return files;
       })
@@ -102,14 +108,11 @@ export default function ConductExperiment({
       return;
     }
 
-    if (
-      !data.type ||
-      (data.type !== "results" && data.type !== "manualRatings")
-    ) {
-      alert("No correct type found in the data i.e. 'results' or 'manualRatings'");
+    if (!data.type || !["results", "manualRatings", "automaticEvaluation"].includes(data.type)) {
+      alert("No correct type found in the data i.e. 'results', 'manualRatings', or 'automaticEvaluation'.");
       return;
     }
-    const type = data.type as "results" | "manualRatings";
+    const type = data.type as "results" | "manualRatings" | "automaticEvaluation";
 
     try {
       moduleViewRef.importData(data);
@@ -209,7 +212,7 @@ export default function ConductExperiment({
 
                         // If all files have been read, sort and import
                         if (filesProcessed === files.length) {
-                          // Sort the array by 'type', 'results' first and then 'manualRatings'
+                          // Sort the array by 'type', 'results' first and then 'manualRatings' or 'automaticEvaluation'
                           const sortedData = fileDataArray.sort((a, b) => {
                             if (a.type === "results" && b.type !== "results") {
                               return -1;

@@ -2,7 +2,7 @@ import type { ModuleMeta } from '@/model/health_response';
 
 import { ReactNode, createContext, useContext, useReducer } from 'react';
 
-type Module = {
+export type Module = {
   module: ModuleMeta;
   moduleConfig: any;
 };

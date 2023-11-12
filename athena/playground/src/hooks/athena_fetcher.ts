@@ -1,4 +1,5 @@
 import type ModuleResponse from "@/model/module_response";
+import type { Module } from "@/hooks/module_context";
 
 import baseUrl from "@/helpers/base_url";
 import { useBaseInfo } from "@/hooks/base_info_context";
@@ -36,27 +37,34 @@ export class AthenaError extends Error {
  * @returns A function that can be used to fetch data from the module or that returns undefined if the module is not set.
  */
 export function useAthenaFetcher() {
-  const { module, moduleConfig } = useModule();
+  const { module: contextModule, moduleConfig: contextModuleConfig } = useModule();
   const { athenaUrl, athenaSecret } = useBaseInfo();  
   const { experimentId, moduleConfigurationId, runId } = useExperimentIdentifiers();
 
-  const headers: { [key: string]: string } = {};
-  if (moduleConfig) {
-    headers["X-Module-Config"] = JSON.stringify(moduleConfig);
-  }
-  if (experimentId) {
-    headers["X-Experiment-ID"] = experimentId;
-  }
-  if (moduleConfigurationId) {
-    headers["X-Module-Configuration-ID"] = moduleConfigurationId;
-  }
-  if (runId) {
-    headers["X-Run-ID"] = runId;
-  }
-
   return (
-    async (moduleRoute: string, body?: any) => {
-      const url = `${athenaUrl}/modules/${module.type}/${module.name}${moduleRoute}`;
+    async (moduleRoute: string, body?: any, overrideModule?: Module) => {
+      let targetModule = contextModule;
+      let targetModuleConfig = contextModuleConfig;
+      if (overrideModule) {
+        targetModule = overrideModule.module;
+        targetModuleConfig = overrideModule.moduleConfig;
+      }
+
+      const headers: { [key: string]: string } = {};
+      if (targetModuleConfig) {
+        headers["X-Module-Config"] = JSON.stringify(targetModuleConfig);
+      }
+      if (experimentId) {
+        headers["X-Experiment-ID"] = experimentId;
+      }
+      if (moduleConfigurationId) {
+        headers["X-Module-Configuration-ID"] = moduleConfigurationId;
+      }
+      if (runId) {
+        headers["X-Run-ID"] = runId;
+      }
+
+      const url = `${athenaUrl}/modules/${targetModule.type}/${targetModule.name}${moduleRoute}`;
       const response = await fetch(
         `${baseUrl}/api/athena_request?${new URLSearchParams({
           url: url,

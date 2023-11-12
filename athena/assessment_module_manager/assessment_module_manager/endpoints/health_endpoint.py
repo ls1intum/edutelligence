@@ -27,6 +27,7 @@ class HealthResponse(BaseModel):
     """
     Response indicating whether the Assessment Module Manager is healthy,
     and whether all the modules are healthy (i.e. reachable).
+    Additional information about the modules is also provided.
     """
     status: str = Field(const=True, default="ok", example="ok")
     modules: dict = Field(
@@ -35,7 +36,8 @@ class HealthResponse(BaseModel):
                 "module_example": {
                     "url": "http://localhost:5001",
                     "type": "programming",
-                    "healthy": True
+                    "healthy": True,
+                    "supportsEvaluation": True
                 }
             }
         ]
@@ -56,6 +58,7 @@ async def get_health() -> HealthResponse:
                 "url": module.url,
                 "type": module.type,
                 "healthy": await is_healthy(module),
+                "supportsEvaluation": module.supports_evaluation
             }
             for module in get_modules()
         }
