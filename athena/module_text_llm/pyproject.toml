@@ -15,7 +15,7 @@ nltk = "^3.8.1"
 gitpython = "^3.1.37"
 replicate = "^0.11.0"
 tiktoken = "^0.4.0"
-langsmith = "^0.0.60"
+langsmith = "^0.0.63"
 
 [tool.poetry.scripts]
 module = "athena:run_module"
