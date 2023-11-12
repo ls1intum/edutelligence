@@ -14,6 +14,14 @@ It connects to an LMS (Learning Management System) and provides endpoints for th
 
 Athena will use the information it is given and provide the automatic suggestions by using sub-modules depending on the exercise type.
 
+
+.. toctree::
+    :caption: Overview
+    :includehidden:
+    :maxdepth: 1
+
+    overview/playground
+
 .. toctree::
     :caption: Setup
     :includehidden:
