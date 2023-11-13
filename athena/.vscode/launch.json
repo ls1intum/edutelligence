@@ -9,32 +9,28 @@
             "type": "python",
             "request": "launch",
             "cwd": "${workspaceFolder}/assessment_module_manager",
-            "module": "assessment_module_manager",
-            "justMyCode": true
+            "module": "assessment_module_manager"
         },
         {
             "name": "Module Example",
             "type": "python",
             "request": "launch",
             "cwd": "${workspaceFolder}/module_example",
-            "module": "module_example",
-            "justMyCode": true
+            "module": "module_example"
         },
         {
             "name": "Module Programming LLM",
             "type": "python",
             "request": "launch",
             "cwd": "${workspaceFolder}/module_programming_llm",
-            "module": "module_programming_llm",
-            "justMyCode": true
+            "module": "module_programming_llm"
         },
         {
             "name": "Module Text LLM",
             "type": "python",
             "request": "launch",
             "cwd": "${workspaceFolder}/module_text_llm",
-            "module": "module_text_llm",
-            "justMyCode": true
+            "module": "module_text_llm"
         },
         {
             "name": "Module Text CoFee",

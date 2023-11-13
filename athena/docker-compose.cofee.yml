@@ -19,6 +19,9 @@ services:
     expose:
       - 4999
       - 8080
+    # for local debugging, add the following and also change the callbackUrl in adapter.py
+    ports:
+      - 80:8000
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./module_text_cofee/traefik.docker.yml:/etc/traefik/traefik.yml
@@ -28,7 +31,7 @@ services:
   # http://localhost/getTask
   # http://localhost/sendTaskResult
   load-balancer:
-    image: ghcr.io/ls1intum/athena/load-balancer
+    image: ghcr.io/ls1intum/athena/load-balancer:2dbf9c8
     container_name: cofee-load-balancer
     restart: unless-stopped
     expose:
@@ -47,7 +50,7 @@ services:
       - traefik.http.routers.balancer.entrypoints=web
 
   segmentation:
-    image: ghcr.io/ls1intum/athena/segmentation
+    image: ghcr.io/ls1intum/athena/segmentation:2dbf9c8
     container_name: cofee-segmentation
     restart: unless-stopped
     depends_on:
@@ -64,7 +67,7 @@ services:
   # http://localhost/upload
   # http://localhost/feedback_consistency
   embedding:
-    image: ghcr.io/ls1intum/athena/embedding
+    image: ghcr.io/ls1intum/athena/embedding:2dbf9c8
     container_name: cofee-embedding
     restart: unless-stopped
     depends_on:
@@ -82,7 +85,7 @@ services:
       - traefik.http.services.cofee-embedding.loadbalancer.server.port=8000 # set service name this way
 
   clustering:
-    image: ghcr.io/ls1intum/athena/clustering
+    image: ghcr.io/ls1intum/athena/clustering:2dbf9c8
     container_name: cofee-clustering
     restart: unless-stopped
     depends_on:
