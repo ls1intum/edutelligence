@@ -16,4 +16,8 @@ You'll have to do this once in the following folders to set up the project:
 - ``athena``
 - ``module_*`` (for each module)
 
+.. note::
+    | The ``psycopg2`` module needs PostgreSQL to be installed on your system. You can find installation instructions on the `PostgreSQL website <https://www.postgresql.org/download/>`_.
+    | Example to install it on MacOS: ``brew install postgresql``
+
 You can find more information about Poetry in the `Poetry documentation <https://python-poetry.org/docs/>`_.
