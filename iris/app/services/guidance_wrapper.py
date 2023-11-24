@@ -1,7 +1,7 @@
 import guidance
+import re
 
 from app.config import LLMModelConfig
-from app.models.dtos import Content, ContentType
 from app.services.guidance_functions import truncate
 
 
@@ -21,7 +21,7 @@ class GuidanceWrapper:
         self.handlebars = handlebars
         self.parameters = parameters
 
-    def query(self) -> Content:
+    def query(self) -> dict:
         """Get response from a chosen LLM model.
 
         Returns:
@@ -29,8 +29,16 @@ class GuidanceWrapper:
 
         Raises:
             Reraises exception from guidance package
-            ValueError: if handlebars do not generate 'response'
         """
+
+        # Perform a regex search to find the names of the variables
+        # being generated in the program. This regex matches strings like:
+        #    {{gen 'response' temperature=0.0 max_tokens=500}}
+        #    {{#geneach 'values' num_iterations=3}}
+        #    {{set 'answer' (truncate response 3)}}
+        # and extracts the variable names 'response', 'values', and 'answer'
+        pattern = r'{{#?(?:gen|geneach|set) +[\'"]([^\'"]+)[\'"]'
+        var_names = re.findall(pattern, self.handlebars)
 
         template = guidance(self.handlebars)
         result = template(
@@ -42,10 +50,13 @@ class GuidanceWrapper:
         if isinstance(result._exception, Exception):
             raise result._exception
 
-        if "response" not in result:
-            raise ValueError("The handlebars do not generate 'response'")
+        generated_vars = {
+            var_name: result[var_name]
+            for var_name in var_names
+            if var_name in result
+        }
 
-        return Content(type=ContentType.TEXT, textContent=result["response"])
+        return generated_vars
 
     def is_up(self) -> bool:
         """Check if the chosen LLM model is up.
@@ -64,7 +75,7 @@ class GuidanceWrapper:
         content = (
             GuidanceWrapper(model=self.model, handlebars=handlebars)
             .query()
-            .text_content
+            .get("response")
         )
         return content == "1"
 

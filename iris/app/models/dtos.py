@@ -13,6 +13,7 @@ class ContentType(str, Enum):
     TEXT = "text"
 
 
+# V1 API only
 class Content(BaseModel):
     text_content: str = Field(..., alias="textContent")
     type: ContentType
@@ -20,7 +21,6 @@ class Content(BaseModel):
 
 class SendMessageRequest(BaseModel):
     class Template(BaseModel):
-        id: int
         content: str
 
     template: Template
@@ -28,6 +28,7 @@ class SendMessageRequest(BaseModel):
     parameters: dict
 
 
+# V1 API only
 class SendMessageResponse(BaseModel):
     class Message(BaseModel):
         sent_at: datetime = Field(
@@ -37,6 +38,18 @@ class SendMessageResponse(BaseModel):
 
     used_model: str = Field(..., alias="usedModel")
     message: Message
+
+
+class SendMessageRequestV2(BaseModel):
+    template: str
+    preferred_model: str = Field(..., alias="preferredModel")
+    parameters: dict
+
+
+class SendMessageResponseV2(BaseModel):
+    used_model: str = Field(..., alias="usedModel")
+    sent_at: datetime = Field(alias="sentAt", default_factory=datetime.utcnow)
+    content: dict
 
 
 class ModelStatus(BaseModel):

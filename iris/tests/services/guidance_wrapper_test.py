@@ -1,7 +1,6 @@
 import pytest
 import guidance
 
-from app.models.dtos import Content, ContentType
 from app.services.guidance_wrapper import GuidanceWrapper
 from app.config import OpenAIConfig
 
@@ -33,9 +32,8 @@ def test_query_success(mocker):
 
     result = guidance_wrapper.query()
 
-    assert isinstance(result, Content)
-    assert result.type == ContentType.TEXT
-    assert result.text_content == "the output"
+    assert isinstance(result, dict)
+    assert result["response"] == "the output"
 
 
 def test_query_using_truncate_function(mocker):
@@ -59,9 +57,9 @@ def test_query_using_truncate_function(mocker):
 
     result = guidance_wrapper.query()
 
-    assert isinstance(result, Content)
-    assert result.type == ContentType.TEXT
-    assert result.text_content == "the"
+    assert isinstance(result, dict)
+    assert result["answer"] == "the output"
+    assert result["response"] == "the"
 
 
 def test_query_missing_required_params(mocker):
@@ -84,30 +82,5 @@ def test_query_missing_required_params(mocker):
     with pytest.raises(KeyError, match="Command/variable 'query' not found!"):
         result = guidance_wrapper.query()
 
-        assert isinstance(result, Content)
-        assert result.type == ContentType.TEXT
-        assert result.text_content == "the output"
-
-
-def test_query_handlebars_not_generate_response(mocker):
-    mocker.patch.object(
-        GuidanceWrapper,
-        "_get_llm",
-        return_value=guidance.llms.Mock("the output"),
-    )
-
-    handlebars = "Not a valid handlebars"
-    guidance_wrapper = GuidanceWrapper(
-        model=llm_model_config,
-        handlebars=handlebars,
-        parameters={"query": "Something"},
-    )
-
-    with pytest.raises(
-        ValueError, match="The handlebars do not generate 'response'"
-    ):
-        result = guidance_wrapper.query()
-
-        assert isinstance(result, Content)
-        assert result.type == ContentType.TEXT
-        assert result.text_content == "the output"
+        assert isinstance(result, dict)
+        assert result["response"] == "the output"
