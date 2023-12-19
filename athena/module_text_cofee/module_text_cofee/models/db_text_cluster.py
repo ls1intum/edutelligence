@@ -9,7 +9,7 @@ from athena.logger import logger
 
 
 class DBTextCluster(Base):
-    __tablename__ = "text_clusters"
+    __tablename__ = "cofee_text_clusters"
 
     id: int = Column(Integer, primary_key=True, index=True)  # type: ignore
     probabilities: bytes = Column(LargeBinary)  # type: ignore

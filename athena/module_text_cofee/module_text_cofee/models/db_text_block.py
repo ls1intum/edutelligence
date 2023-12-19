@@ -8,7 +8,7 @@ from athena.logger import logger
 
 
 class DBTextBlock(Base):
-    __tablename__ = "text_blocks"
+    __tablename__ = "cofee_text_blocks"
 
     id = Column(String, primary_key=True, index=True)  # type: ignore
     text = Column(String)  # type: ignore
@@ -18,7 +18,7 @@ class DBTextBlock(Base):
 
     # foreign keys
     submission_id = Column(Integer, ForeignKey("text_submissions.id"))  # FK to athena-native table
-    cluster_id = Column(Integer, ForeignKey("text_clusters.id"))  # FK to custom table
+    cluster_id = Column(Integer, ForeignKey("cofee_text_clusters.id"))  # FK to custom table
 
     submission = relationship("DBTextSubmission")
     cluster = relationship("DBTextCluster", back_populates="blocks")
