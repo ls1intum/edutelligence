@@ -20,6 +20,7 @@ Athena will use the information it is given and provide the automatic suggestion
     :includehidden:
     :maxdepth: 1
 
+    overview/athena
     overview/playground
 
 .. toctree::
