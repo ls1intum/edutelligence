@@ -9,8 +9,8 @@ from athena.logger import logger
 from athena.storage import store_feedback
 from athena.storage.feedback_storage import store_feedback_suggestions
 
-from .extract_methods import get_feedback_method
-from .feedback_suggestions import create_feedback_suggestions, filter_overlapping_suggestions, filter_suspicious
+from module_programming_themisml.extract_methods import get_feedback_method
+from module_programming_themisml.feedback_suggestions import create_feedback_suggestions, filter_overlapping_suggestions, filter_suspicious
 
 
 @submissions_consumer

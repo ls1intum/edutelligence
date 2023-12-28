@@ -4,6 +4,7 @@ Instead, use the decorators in the `athena` package.
 The only exception is the `start` method, which is used to start the module.
 """
 import uvicorn
+from uvicorn.config import LOGGING_CONFIG
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -31,6 +32,8 @@ class FastAPIWithStart(FastAPI):
 
     def start(self) -> None:
         """Start Athena. You have to ensure to have `app` in your module main scope so that it can be imported."""
+        LOGGING_CONFIG["formatters"]["default"]["fmt"] = "%(asctime)s %(levelname)s --- [%(name)s] : %(message)s"
+        LOGGING_CONFIG["formatters"]["access"]["fmt"] = "%(asctime)s %(levelname)s --- [%(name)s] : %(message)s"
         logger.info("Starting athena module")
 
         conf = get_module_config()

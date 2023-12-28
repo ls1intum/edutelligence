@@ -2,7 +2,7 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-from .logger import logger
+from assessment_module_manager.logger import logger
 
 description = """
 This is the Athena API. You are interacting with the Assessment Module Manager, 

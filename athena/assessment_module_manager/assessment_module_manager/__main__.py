@@ -3,15 +3,18 @@ Entry point for the assessment module manager.
 """
 import uvicorn
 
-from .app import app
-from . import endpoints, env
-from .logger import logger
+from uvicorn.config import LOGGING_CONFIG
+from assessment_module_manager.app import app
+from assessment_module_manager import endpoints, env
+from assessment_module_manager.logger import logger
 
 
 def main():
     """
     Start the assessment module manager using uvicorn.
     """
+    LOGGING_CONFIG["formatters"]["default"]["fmt"] = "%(asctime)s %(levelname)s --- [%(name)s] : %(message)s"
+    LOGGING_CONFIG["formatters"]["access"]["fmt"] = "%(asctime)s %(levelname)s --- [%(name)s] : %(message)s"
     logger.info("Starting assessment module manager")
 
     if env.PRODUCTION:
