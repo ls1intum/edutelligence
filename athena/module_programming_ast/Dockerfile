@@ -1,10 +1,9 @@
 # syntax=docker/dockerfile:1
 
-# This is the Dockerfile for the module_programming_themisml.
+# This is the Dockerfile for the module_programming_ast.
 
-# Pytorch CPU version is not yet available for Python 3.12
 FROM python:3.11
-LABEL org.opencontainers.image.source=https://github.com/pal03377/Athena-New
+LABEL org.opencontainers.image.source=https://github.com/ls1intum/Athena
 
 # Environment variable Python in Docker
 ENV PYTHONUNBUFFERED=1
@@ -12,7 +11,7 @@ ENV PYTHONUNBUFFERED=1
 WORKDIR /code
 
 # Poetry
-RUN pip install --no-cache-dir poetry==1.6.1
+RUN pip install --no-cache-dir poetry==1.5.0
 
 # Dependencies
 COPY pyproject.toml poetry.lock ./

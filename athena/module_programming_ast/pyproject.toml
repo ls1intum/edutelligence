@@ -1,0 +1,17 @@
+[tool.poetry]
+name = "module_programming_ast"
+version = "0.1.0"
+description = "Programming assessment AST module."
+authors = ["Marlon Bucciarelli <marlon.bucciarelli@tum.de>"]
+license = "MIT"
+
+[tool.poetry.dependencies]
+python = "3.11.*"
+athena = {path = "../athena", develop = true}
+
+[tool.poetry.scripts]
+module = "athena:run_module"
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"

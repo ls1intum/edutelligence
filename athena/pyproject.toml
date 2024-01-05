@@ -18,7 +18,7 @@ module_programming_llm = {path = "./module_programming_llm", develop = true}
 module_text_llm = {path = "./module_text_llm", develop = true}
 module_text_cofee = {path = "./module_text_cofee", develop = true}
 module_programming_themisml = {path = "./module_programming_themisml", develop = true}
-
+module_programming_ast = {path = "./module_programming_ast", develop = true}
 # start linter with `poetry run prospector`
 
 [tool.poetry.group.dev.dependencies]

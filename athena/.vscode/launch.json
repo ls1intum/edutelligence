@@ -41,14 +41,21 @@
             "type": "python",
             "request": "launch",
             "cwd": "${workspaceFolder}/module_text_cofee",
-            "module": "module_text_cofee",
+            "module": "module_text_cofee"
         },
         {
             "name": "Module Programming ThemisML",
             "type": "python",
             "request": "launch",
             "cwd": "${workspaceFolder}/module_programming_themisml",
-            "module": "module_programming_themisml",
+            "module": "module_programming_themisml"
         },
+        {
+            "name": "Module Programming AST",
+            "type": "python",
+            "request": "launch",
+            "cwd": "${workspaceFolder}/module_programming_ast",
+            "module": "module_programming_ast"
+        }
     ]
 }

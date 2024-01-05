@@ -60,6 +60,14 @@ services:
       - postgres
     image: ls1tum/athena_module_programming_themisml:${ATHENA_TAG:-develop}
 
+  module_programming_ast:
+    hostname: module-programming-ast
+    env_file:
+      - ${ATHENA_ENV_DIR:-./env_example}/module_programming_ast.env
+    depends_on:
+      - postgres
+    image: ls1tum/athena_module_programming_ast:${ATHENA_TAG:-develop}
+
   postgres:
     hostname: postgres
     image: postgres:15
@@ -70,7 +78,6 @@ services:
       - ./postgres-init.sql:/docker-entrypoint-initdb.d/init.sql
     ports:
       - "5432:5432"
-
 
 volumes:
   postgres_data:
