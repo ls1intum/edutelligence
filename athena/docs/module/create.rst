@@ -9,7 +9,7 @@ To create a new Athena Module, follow the following steps:
     * ``module_something/pyproject.toml``
     * rename ``module_something/module_example`` to ``module_something/module_something``
 3. Delete the ``poetry.lock`` file, then run ``poetry install`` in your module folder to recreate it.
-4. Update the ``.env`` file to include the following values:
+4. Update the ``module.conf`` file to include the following values:
     * ``MODULE_NAME``: The name of your module, e.g. ``module_something``
     * ``MODULE_TYPE``: The type of exercise your module supports, e.g. ``text`` or ``programming``
     * ``PORT``: The port your module will run on, e.g. ``5002``. Look for the ports that existing modules are using and use a port that is not already in use. It's best if you just count one up from the highest number (e.g. if the highest used port is 5002, use 5003).
