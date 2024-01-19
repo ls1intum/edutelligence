@@ -1,6 +1,6 @@
 {
     "pyris-test": {
         "status": "dependabot/github_actions/actions/checkout-4",
-        "color": "green"
+        "color": "red"
     }
 }
