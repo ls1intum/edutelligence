@@ -32,26 +32,48 @@ export type ProgrammingFeedback = FeedbackBase & {
   line_end?: number;
 };
 
-export type Feedback = TextFeedback | ProgrammingFeedback;
+export type ModellingFeedback = FeedbackBase & {
+  type: "modelling";
+  element_ids?: string[];
+};
 
+export type Feedback = TextFeedback | ProgrammingFeedback | ModellingFeedback;
+
+/**
+ * Returns the formatted reference of a given feedback. This can be a line range or an element ID depending on the
+ * exercise type.
+ * @param feedback The Feedback that is connected to the reference that should be formatted.
+ */
 export function formatReference(feedback: Feedback): string {
-  if (feedback.type === "text") {
-    if (
-      feedback.index_start !== undefined &&
-      feedback.index_end !== undefined
-    ) {
-      return `${feedback.index_start}-${feedback.index_end}`;
+  switch (feedback.type) {
+    case "text":
+      if (
+        feedback.index_start !== undefined &&
+        feedback.index_end !== undefined
+      ) {
+        return `${feedback.index_start}-${feedback.index_end}`;
+      }
+      break;
+
+    case "programming":
+      if (feedback.file_path !== undefined && feedback.line_start !== undefined) {
+        return `file:${feedback.file_path}_line:${feedback.line_start}${
+          feedback.line_end !== undefined ? "-" + feedback.line_end : ""
+        }`;
+      } else if (feedback.file_path !== undefined) {
+        return `file:${feedback.file_path}`;
+      }
+
+      break;
+
+    case "modelling":
+      if (feedback.element_ids) {
+        return `[${feedback.element_ids.join(", ")}]`
+      }
+      break;
     }
-  } else if (feedback.type === "programming") {
-    if (feedback.file_path !== undefined && feedback.line_start !== undefined) {
-      return `file:${feedback.file_path}_line:${feedback.line_start}${
-        feedback.line_end !== undefined ? "-" + feedback.line_end : ""
-      }`;
-    } else if (feedback.file_path !== undefined) {
-      return `file:${feedback.file_path}`;
-    }
-  }
-  return "";
+
+    return "";
 }
 
 /**
@@ -65,37 +87,42 @@ export function getFeedbackRange(
   model: editor.ITextModel,
   feedback: Feedback
 ): IRange | undefined {
-  if (feedback.type === "programming") {
-    if (feedback.line_start === undefined && feedback.line_end === undefined) {
+
+  switch (feedback.type) {
+    case "programming":
+      if (feedback.line_start === undefined && feedback.line_end === undefined) {
+        return undefined;
+      }
+      return {
+        startLineNumber: (feedback.line_start || feedback.line_end)! + 1, // Monaco line numbers are 1-indexed
+        startColumn: 0,
+        endLineNumber: (feedback.line_end || feedback.line_start)! + 1, // Monaco line numbers are 1-indexed
+        endColumn: Infinity,
+      };
+
+    case "text":
+      if (
+        feedback.index_start === undefined &&
+        feedback.index_end === undefined
+      ) {
+        return undefined;
+      }
+      const startPosition = model.getPositionAt(
+        feedback.index_start ?? feedback.index_end!
+      );
+      const endPosition = model.getPositionAt(
+        feedback.index_end ?? feedback.index_start!
+      );
+      return {
+        startLineNumber: startPosition.lineNumber,
+        startColumn: startPosition.column,
+        endLineNumber: endPosition.lineNumber,
+        endColumn: endPosition.column,
+      };
+    default:
       return undefined;
-    }
-    return {
-      startLineNumber: (feedback.line_start || feedback.line_end)! + 1, // Monaco line numbers are 1-indexed
-      startColumn: 0,
-      endLineNumber: (feedback.line_end || feedback.line_start)! + 1, // Monaco line numbers are 1-indexed
-      endColumn: Infinity,
-    };
-  } else if (feedback.type === "text") {
-    if (
-      feedback.index_start === undefined &&
-      feedback.index_end === undefined
-    ) {
-      return undefined;
-    }
-    const startPosition = model.getPositionAt(
-      feedback.index_start ?? feedback.index_end!
-    );
-    const endPosition = model.getPositionAt(
-      feedback.index_end ?? feedback.index_start!
-    );
-    return {
-      startLineNumber: startPosition.lineNumber,
-      startColumn: startPosition.column,
-      endLineNumber: endPosition.lineNumber,
-      endColumn: endPosition.column,
-    };
+
   }
-  return undefined;
 }
 
 export type FeedbackReferenceType =
@@ -109,23 +136,34 @@ export type FeedbackReferenceType =
  * @param feedback - the feedback
  * @returns the reference type of the feedback
  */
-export function getFeedbackReferenceType(
-  feedback: Feedback
-): FeedbackReferenceType {
-  if (feedback.type === "programming") {
-    if (feedback.file_path != undefined && feedback.line_start != undefined) {
-      return "referenced";
-    } else if (feedback.file_path != undefined) {
-      return "unreferenced_file";
-    }
-  } else if (feedback.type === "text") {
-    if (
-      feedback.index_start != undefined &&
-      feedback.index_end != undefined
-    ) {
-      return "referenced";
-    }
+export function getFeedbackReferenceType(feedback: Feedback): FeedbackReferenceType {
+  switch (feedback.type) {
+    case "programming":
+      if (feedback.file_path != undefined && feedback.line_start != undefined) {
+        return "referenced";
+      } else if (feedback.file_path != undefined) {
+        return "unreferenced_file";
+      }
+      break;
+
+    case "text":
+      if (
+        feedback.index_start != undefined &&
+        feedback.index_end != undefined
+      ) {
+        return "referenced";
+      }
+      break;
+
+    /*
+    case "modelling":
+      if (feedback.element_id) {
+        return "referenced";
+      }
+      break;
+     */
   }
+
   return "unreferenced";
 }
 

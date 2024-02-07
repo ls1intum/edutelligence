@@ -10,4 +10,7 @@ from .text_submission import TextSubmission, TextLanguageEnum
 from .programming_feedback import ProgrammingFeedback
 from .programming_exercise import ProgrammingExercise
 from .programming_submission import ProgrammingSubmission
+from .modelling_feedback import ModellingFeedback
+from .modelling_exercise import ModellingExercise
+from .modelling_submission import ModellingSubmission
 from .grading_criterion import GradingCriterion, StructuredGradingInstruction

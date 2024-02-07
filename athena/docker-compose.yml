@@ -71,4 +71,10 @@ services:
     ports:
       - "5007:5007"
 
-
+  module_modelling_llm:
+    hostname: module-modelling-llm
+    build: ./module_modelling_llm
+    depends_on:
+      - athena
+    ports:
+      - "5008:5008"

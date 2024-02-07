@@ -4,6 +4,7 @@ import type { ManualRating } from "@/model/manual_rating";
 
 import TextSubmissionDetail from "./text";
 import ProgrammingSubmissionDetail from "./programming";
+import ModellingSubmissionDetail from "@/components/details/submission_detail/modelling";
 
 type SubmissionDetailProps = {
   identifier?: string;
@@ -22,6 +23,7 @@ export default function SubmissionDetail({
   manualRatings,
   onManualRatingsChange,
 }: SubmissionDetailProps) {
+
   if (submission.type === "programming") {
     return (
       <ProgrammingSubmissionDetail
@@ -36,6 +38,17 @@ export default function SubmissionDetail({
   } else if (submission.type === "text") {
     return (
       <TextSubmissionDetail
+        identifier={identifier}
+        submission={submission}
+        feedbacks={feedbacks}
+        onFeedbacksChange={onFeedbacksChange}
+        manualRatings={manualRatings}
+        onManualRatingsChange={onManualRatingsChange}
+      />
+    );
+  } else if (submission.type === "modelling") {
+    return (
+      <ModellingSubmissionDetail
         identifier={identifier}
         submission={submission}
         feedbacks={feedbacks}
