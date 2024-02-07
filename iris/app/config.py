@@ -1,8 +1,27 @@
 import os
-
+import types
+import copy
 from guidance.llms import OpenAI
+import guidance.llms._openai
 from pyaml_env import parse_config
-from pydantic import BaseModel, validator, Field, typing
+from pydantic import BaseModel, validator
+
+old_add_text_to_chat_mode = guidance.llms._openai.add_text_to_chat_mode
+
+
+def new_add_text_to_chat_mode(chat_mode):
+    if isinstance(chat_mode, (types.AsyncGeneratorType, types.GeneratorType)):
+        return guidance.llms._openai.add_text_to_chat_mode_generator(chat_mode)
+    else:
+        for c in chat_mode["choices"]:
+            if "message" in c and "content" in c["message"]:
+                c["text"] = c["message"]["content"]
+            else:
+                c["text"] = " "
+        return chat_mode
+
+
+guidance.llms._openai.add_text_to_chat_mode = new_add_text_to_chat_mode
 
 
 class LLMModelSpecs(BaseModel):
@@ -21,7 +40,6 @@ class LLMModelConfig(BaseModel):
 class OpenAIConfig(LLMModelConfig):
     spec: LLMModelSpecs
     llm_credentials: dict
-    instance: typing.Any = Field(repr=False)
 
     @validator("type")
     def check_type(cls, v):
@@ -30,15 +48,13 @@ class OpenAIConfig(LLMModelConfig):
         return v
 
     def get_instance(cls):
-        if cls.instance is not None:
-            return cls.instance
-        cls.instance = OpenAI(**cls.llm_credentials)
-        return cls.instance
+        print("Specs", cls.llm_credentials)
+        llm_credentials = copy.deepcopy(cls.llm_credentials)
+        return OpenAI(**llm_credentials)
 
 
 class StrategyLLMConfig(LLMModelConfig):
     llms: list[str]
-    instance: typing.Any = Field(repr=False)
 
     @validator("type")
     def check_type(cls, v):
@@ -47,13 +63,9 @@ class StrategyLLMConfig(LLMModelConfig):
         return v
 
     def get_instance(cls):
-        if cls.instance is not None:
-            return cls.instance
-        # Local import needed to avoid circular dependency
         from app.llms.strategy_llm import StrategyLLM
 
-        cls.instance = StrategyLLM(cls.llms)
-        return cls.instance
+        return StrategyLLM(cls.llms)
 
 
 class APIKeyConfig(BaseModel):

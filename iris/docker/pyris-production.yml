@@ -15,8 +15,11 @@ services:
         condition: service_started
     pull_policy: always
     restart: always
+    environment:
+      OPENAI_LOG: "debug"
     volumes:
       - ${PYRIS_APPLICATION_YML_FILE:-../application.example.yml}:/app/application.yml:ro
+    command: "poetry run uvicorn app.main:app --host '0.0.0.0'"
     networks:
       - pyris
 
