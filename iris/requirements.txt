@@ -5,3 +5,4 @@ uvicorn==0.23.1
 black==24.1.1
 flake8==7.0.0
 pre-commit==3.6.0
+pydantic==2.6.1

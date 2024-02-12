@@ -1,20 +1,16 @@
 from abc import ABCMeta, abstractmethod
+from pydantic import BaseModel
 
 from domain import IrisMessage
 from llm import CompletionArguments
 
 
-class AbstractLlmWrapper(metaclass=ABCMeta):
+class AbstractLlmWrapper(BaseModel, metaclass=ABCMeta):
     """Abstract class for the llm wrappers"""
 
     id: str
     name: str
     description: str
-
-    def __init__(self, id: str, name: str, description: str):
-        self.id = id
-        self.name = name
-        self.description = description
 
 
 class AbstractLlmCompletionWrapper(AbstractLlmWrapper, metaclass=ABCMeta):

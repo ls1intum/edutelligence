@@ -1,7 +1,7 @@
 from domain import IrisMessage
 from llm import RequestHandlerInterface, CompletionArguments
 from llm.llm_manager import LlmManager
-from llm.wrapper import (
+from llm.wrapper.abstract_llm_wrapper import (
     AbstractLlmCompletionWrapper,
     AbstractLlmChatCompletionWrapper,
     AbstractLlmEmbeddingWrapper,

@@ -1,20 +1,17 @@
+from typing import Literal, Any
 from openai import OpenAI
 from openai.lib.azure import AzureOpenAI
 
-from llm.wrapper import (
-    AbstractLlmEmbeddingWrapper,
-)
+from llm.wrapper.abstract_llm_wrapper import AbstractLlmEmbeddingWrapper
 
 
 class BaseOpenAIEmbeddingWrapper(AbstractLlmEmbeddingWrapper):
-
-    def __init__(self, client, model: str, **kwargs):
-        super().__init__(**kwargs)
-        self.client = client
-        self.model = model
+    model: str
+    api_key: str
+    _client: OpenAI
 
     def create_embedding(self, text: str) -> list[float]:
-        response = self.client.embeddings.create(
+        response = self._client.embeddings.create(
             model=self.model,
             input=text,
             encoding_format="float",
@@ -23,35 +20,28 @@ class BaseOpenAIEmbeddingWrapper(AbstractLlmEmbeddingWrapper):
 
 
 class OpenAIEmbeddingWrapper(BaseOpenAIEmbeddingWrapper):
+    type: Literal["openai_embedding"]
 
-    def __init__(self, model: str, api_key: str, **kwargs):
-        client = OpenAI(api_key=api_key)
-        model = model
-        super().__init__(client, model, **kwargs)
+    def model_post_init(self, __context: Any) -> None:
+        self._client = OpenAI(api_key=self.api_key)
 
     def __str__(self):
         return f"OpenAIEmbedding('{self.model}')"
 
 
 class AzureEmbeddingWrapper(BaseOpenAIEmbeddingWrapper):
+    type: Literal["azure_embedding"]
+    endpoint: str
+    azure_deployment: str
+    api_version: str
 
-    def __init__(
-        self,
-        model: str,
-        endpoint: str,
-        azure_deployment: str,
-        api_version: str,
-        api_key: str,
-        **kwargs,
-    ):
-        client = AzureOpenAI(
-            azure_endpoint=endpoint,
-            azure_deployment=azure_deployment,
-            api_version=api_version,
-            api_key=api_key,
+    def model_post_init(self, __context: Any) -> None:
+        self._client = AzureOpenAI(
+            azure_endpoint=self.endpoint,
+            azure_deployment=self.azure_deployment,
+            api_version=self.api_version,
+            api_key=self.api_key,
         )
-        model = model
-        super().__init__(client, model, **kwargs)
 
     def __str__(self):
         return f"AzureEmbedding('{self.model}')"
