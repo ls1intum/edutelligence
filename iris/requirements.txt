@@ -4,5 +4,5 @@ fastapi==0.109.2
 uvicorn==0.27.1
 black==24.1.1
 flake8==7.0.0
-pre-commit==3.6.0
+pre-commit==3.6.1
 pydantic==2.6.1
