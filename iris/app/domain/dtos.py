@@ -1,13 +1,20 @@
-from domain import Course, ProgrammingExercise, IrisMessage, ProgrammingSubmission, CodeHint
+from domain import (
+    Course,
+    ProgrammingExercise,
+    IrisMessage,
+    ProgrammingSubmission,
+    CodeHint,
+)
 
 
 class ProgrammingExerciseTutorChatDTO:
-    def __init__(self,
-                 course: Course,
-                 exercise: ProgrammingExercise,
-                 submission: ProgrammingSubmission,
-                 chat_history: [IrisMessage]
-                 ):
+    def __init__(
+        self,
+        course: Course,
+        exercise: ProgrammingExercise,
+        submission: ProgrammingSubmission,
+        chat_history: [IrisMessage],
+    ):
         self.course = course
         self.exercise = exercise
         self.submission = submission
@@ -15,13 +22,14 @@ class ProgrammingExerciseTutorChatDTO:
 
 
 class CodeEditorChatDTO:
-    def __init__(self,
-                 problem_statement: str,
-                 solution_repository: dict[str, str],
-                 template_repository: dict[str, str],
-                 test_repository: dict[str, str],
-                 chat_history: [IrisMessage]
-                 ):
+    def __init__(
+        self,
+        problem_statement: str,
+        solution_repository: dict[str, str],
+        template_repository: dict[str, str],
+        test_repository: dict[str, str],
+        chat_history: [IrisMessage],
+    ):
         self.problem_statement = problem_statement
         self.solution_repository = solution_repository
         self.template_repository = template_repository
@@ -30,13 +38,14 @@ class CodeEditorChatDTO:
 
 
 class CodeEditorAdaptDTO:
-    def __init__(self,
-                 problem_statement: str,
-                 solution_repository: dict[str, str],
-                 template_repository: dict[str, str],
-                 test_repository: dict[str, str],
-                 instructions: str
-                 ):
+    def __init__(
+        self,
+        problem_statement: str,
+        solution_repository: dict[str, str],
+        template_repository: dict[str, str],
+        test_repository: dict[str, str],
+        instructions: str,
+    ):
         self.problem_statement = problem_statement
         self.solution_repository = solution_repository
         self.template_repository = template_repository

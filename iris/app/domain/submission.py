@@ -5,7 +5,9 @@ class BuildLogEntry:
 
 
 class ProgrammingSubmission:
-    def __init__(self, commit_hash: str, build_failed: bool, build_log_entries: [BuildLogEntry]):
+    def __init__(
+        self, commit_hash: str, build_failed: bool, build_log_entries: [BuildLogEntry]
+    ):
         self.commit_hash = commit_hash
         self.build_failed = build_failed
         self.build_log_entries = build_log_entries
