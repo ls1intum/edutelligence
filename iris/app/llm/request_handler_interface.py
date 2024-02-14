@@ -26,7 +26,7 @@ class RequestHandlerInterface(metaclass=ABCMeta):
     @abstractmethod
     def chat_completion(
         self, messages: list[any], arguments: CompletionArguments
-    ) -> [IrisMessage]:
+    ) -> IrisMessage:
         """Create a completion from the chat messages"""
         raise NotImplementedError
 

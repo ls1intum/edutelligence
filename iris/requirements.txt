@@ -6,3 +6,4 @@ black==24.1.1
 flake8==7.0.0
 pre-commit==3.6.1
 pydantic==2.6.1
+langchain==0.1.6

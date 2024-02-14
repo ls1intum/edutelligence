@@ -19,7 +19,7 @@ class BasicRequestHandler(RequestHandlerInterface):
         self.llm_manager = LlmManager()
 
     def completion(self, prompt: str, arguments: CompletionArguments) -> str:
-        llm = self.llm_manager.get_llm_by_id(self.model).llm
+        llm = self.llm_manager.get_llm_by_id(self.model)
         if isinstance(llm, AbstractLlmCompletionWrapper):
             return llm.completion(prompt, arguments)
         else:
@@ -30,7 +30,7 @@ class BasicRequestHandler(RequestHandlerInterface):
     def chat_completion(
         self, messages: list[IrisMessage], arguments: CompletionArguments
     ) -> IrisMessage:
-        llm = self.llm_manager.get_llm_by_id(self.model).llm
+        llm = self.llm_manager.get_llm_by_id(self.model)
         if isinstance(llm, AbstractLlmChatCompletionWrapper):
             return llm.chat_completion(messages, arguments)
         else:
@@ -39,7 +39,7 @@ class BasicRequestHandler(RequestHandlerInterface):
             )
 
     def create_embedding(self, text: str) -> list[float]:
-        llm = self.llm_manager.get_llm_by_id(self.model).llm
+        llm = self.llm_manager.get_llm_by_id(self.model)
         if isinstance(llm, AbstractLlmEmbeddingWrapper):
             return llm.create_embedding(text)
         else:
