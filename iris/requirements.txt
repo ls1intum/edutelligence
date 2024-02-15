@@ -6,3 +6,7 @@ black==24.1.1
 flake8==7.0.0
 pre-commit==3.6.1
 pydantic==2.6.1
+unstructured[all-docs]
+pymupdf==1.23.22
+PyYAML~=6.0.1
+unstructured==0.11.8
