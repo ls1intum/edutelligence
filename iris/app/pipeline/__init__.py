@@ -1,1 +1,1 @@
-from pipeline.pipeline import SimplePipeline
+from pipeline.pipeline import AbstractPipeline
