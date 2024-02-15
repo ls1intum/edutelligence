@@ -6,19 +6,20 @@ from domain import IrisMessage, IrisMessageRole
 
 
 class BasePipeline(metaclass=ABCMeta):
-    """ Abstract class for all pipelines """
+    """Abstract class for all pipelines"""
+
     def __init__(self, name=None):
         self.name = name
 
     def __repr__(self):
-        return f'{self.__class__.__name__} {self.name if self.name is not None else id(self)}'
+        return f"{self.__class__.__name__} {self.name if self.name is not None else id(self)}"
 
     def __str__(self):
-        return f'{self.__class__.__name__} {self.name if self.name is not None else id(self)}'
+        return f"{self.__class__.__name__} {self.name if self.name is not None else id(self)}"
 
     @abstractmethod
     def run(self, *args, **kwargs) -> IrisMessage:
-        """ Run the pipeline """
+        """Run the pipeline"""
         raise NotImplementedError
 
 
@@ -29,7 +30,7 @@ class SimplePipeline(BasePipeline):
         self.pipeline = {"query": itemgetter("query")} | llm | StrOutputParser()
 
     def run(self, *args, query: IrisMessage, **kwargs) -> IrisMessage:
-        """ A simple pipeline that does not have any memory etc."""
+        """A simple pipeline that does not have any memory etc."""
         if query is None:
             raise ValueError("IrisMessage must not be None")
         message = query.text
