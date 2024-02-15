@@ -5,7 +5,7 @@ from langchain_core.output_parsers import StrOutputParser
 from domain import IrisMessage, IrisMessageRole
 
 
-class BasePipeline(metaclass=ABCMeta):
+class AbstractPipeline(metaclass=ABCMeta):
     """Abstract class for all pipelines"""
 
     def __init__(self, name=None):
@@ -19,18 +19,19 @@ class BasePipeline(metaclass=ABCMeta):
 
     @abstractmethod
     def run(self, *args, **kwargs) -> IrisMessage:
-        """Run the pipeline"""
+        """Runs the pipeline"""
         raise NotImplementedError
 
 
-class SimplePipeline(BasePipeline):
+class SimplePipeline(AbstractPipeline):
+    """A simple pipeline that does not have any memory etc."""
+
     def __init__(self, llm, name=None):
         super().__init__(name=name)
         self.llm = llm
         self.pipeline = {"query": itemgetter("query")} | llm | StrOutputParser()
 
     def run(self, *args, query: IrisMessage, **kwargs) -> IrisMessage:
-        """A simple pipeline that does not have any memory etc."""
         if query is None:
             raise ValueError("IrisMessage must not be None")
         message = query.text
