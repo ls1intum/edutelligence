@@ -1,13 +1,21 @@
-class BuildLogEntry:
-    def __init__(self, time: str, message: str):
-        self.time = time
-        self.message = message
+from pydantic import BaseModel
 
 
-class ProgrammingSubmission:
-    def __init__(
-        self, commit_hash: str, build_failed: bool, build_log_entries: [BuildLogEntry]
-    ):
-        self.commit_hash = commit_hash
-        self.build_failed = build_failed
-        self.build_log_entries = build_log_entries
+class BuildLogEntry(BaseModel):
+    time: str
+    message: str
+
+    def __str__(self):
+        return f'BuildLogEntry(time="{self.time}", message="{self.message}")'
+
+
+class ProgrammingSubmission(BaseModel):
+    commit_hash: str
+    build_failed: bool
+    build_log_entries: [BuildLogEntry]
+
+    def __str__(self):
+        return (
+            f'ProgrammingSubmission(commit_hash="{self.commit_hash}", build_failed={self.build_failed}, '
+            f"build_log_entries={self.build_log_entries})"
+        )
