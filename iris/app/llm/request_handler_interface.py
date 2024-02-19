@@ -1,36 +1,34 @@
 from abc import ABCMeta, abstractmethod
 
 from domain import IrisMessage
-from llm.generation_arguments import CompletionArguments
+from llm.completion_arguments import CompletionArguments
 
 
-class RequestHandlerInterface(metaclass=ABCMeta):
+class RequestHandler(metaclass=ABCMeta):
     """Interface for the request handlers"""
 
     @classmethod
-    def __subclasshook__(cls, subclass):
+    def __subclasshook__(cls, subclass) -> bool:
         return (
-            hasattr(subclass, "completion")
-            and callable(subclass.completion)
-            and hasattr(subclass, "chat_completion")
-            and callable(subclass.chat_completion)
-            and hasattr(subclass, "create_embedding")
-            and callable(subclass.create_embedding)
+            hasattr(subclass, "complete")
+            and callable(subclass.complete)
+            and hasattr(subclass, "chat")
+            and callable(subclass.chat)
+            and hasattr(subclass, "embed")
+            and callable(subclass.embed)
         )
 
     @abstractmethod
-    def completion(self, prompt: str, arguments: CompletionArguments) -> str:
+    def complete(self, prompt: str, arguments: CompletionArguments) -> str:
         """Create a completion from the prompt"""
         raise NotImplementedError
 
     @abstractmethod
-    def chat_completion(
-        self, messages: list[any], arguments: CompletionArguments
-    ) -> IrisMessage:
+    def chat(self, messages: list[any], arguments: CompletionArguments) -> IrisMessage:
         """Create a completion from the chat messages"""
         raise NotImplementedError
 
     @abstractmethod
-    def create_embedding(self, text: str) -> list[float]:
+    def embed(self, text: str) -> list[float]:
         """Create an embedding from the text"""
         raise NotImplementedError

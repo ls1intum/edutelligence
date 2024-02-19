@@ -5,15 +5,15 @@ from langchain_core.language_models.llms import BaseLLM
 from langchain_core.outputs import LLMResult
 from langchain_core.outputs.generation import Generation
 
-from llm import RequestHandlerInterface, CompletionArguments
+from llm import RequestHandler, CompletionArguments
 
 
 class IrisLangchainCompletionModel(BaseLLM):
     """Custom langchain chat model for our own request handler"""
 
-    request_handler: RequestHandlerInterface
+    request_handler: RequestHandler
 
-    def __init__(self, request_handler: RequestHandlerInterface, **kwargs: Any) -> None:
+    def __init__(self, request_handler: RequestHandler, **kwargs: Any) -> None:
         super().__init__(request_handler=request_handler, **kwargs)
 
     def _generate(
@@ -26,9 +26,7 @@ class IrisLangchainCompletionModel(BaseLLM):
         generations = []
         args = CompletionArguments(stop=stop)
         for prompt in prompts:
-            completion = self.request_handler.completion(
-                prompt=prompt, arguments=args, **kwargs
-            )
+            completion = self.request_handler.complete(prompt=prompt, arguments=args)
             generations.append([Generation(text=completion)])
         return LLMResult(generations=generations)
 
