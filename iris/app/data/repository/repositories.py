@@ -8,6 +8,9 @@ class Repositories:
     def __init__(self, client: weaviate.WeaviateClient):
         self.collection = init_schema(client)
 
+    def retrieve(self, question:str):
+        pass
+
     def ingest(self, repositories: dict[str, str]):
         pass
 

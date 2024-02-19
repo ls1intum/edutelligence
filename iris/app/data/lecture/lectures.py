@@ -69,7 +69,7 @@ class Lectures:
                 if not embeddings_created:
                     raise RuntimeError("Failed to create embeddings.")
 
-    def query_database(self, user_message: str, lecture_id: int = None):
+    def retrieve(self, user_message: str, lecture_id: int = None):
         response = self.collection.query.near_text(
             near_text=user_message,
             filters=(
