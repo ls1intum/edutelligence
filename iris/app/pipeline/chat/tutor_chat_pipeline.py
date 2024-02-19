@@ -7,12 +7,12 @@ from langchain_core.runnables import Runnable
 
 from domain import IrisMessage, IrisMessageRole
 from llm.langchain import IrisLangchainChatModel
-from pipeline.chat.chat_pipeline import ProgrammingExerciseTutorChatPipeline
+from pipeline.chat.chat_pipeline import ChatPipeline
 
 logger = logging.getLogger(__name__)
 
 
-class TutorChatPipelineReferenceImpl(ProgrammingExerciseTutorChatPipeline):
+class TutorChatPipelineReferenceImpl(ChatPipeline):
     """Tutor chat pipeline that answers exercises related questions from students."""
 
     llm: IrisLangchainChatModel
@@ -38,7 +38,7 @@ class TutorChatPipelineReferenceImpl(ProgrammingExerciseTutorChatPipeline):
         # Create the pipeline
         self.pipeline = prompt | llm | StrOutputParser()
 
-    def _run(self, query: IrisMessage) -> IrisMessage:
+    def __call__(self, query: IrisMessage, **kwargs) -> IrisMessage:
         """
         Runs the pipeline
             :param query: The query

@@ -6,12 +6,12 @@ from langchain_core.prompts import ChatPromptTemplate, SystemMessagePromptTempla
 from langchain_core.runnables import Runnable
 
 from llm.langchain import IrisLangchainChatModel
-from pipeline import AbstractPipeline
+from pipeline import Pipeline
 
 logger = logging.getLogger(__name__)
 
 
-class SummaryPipeline(AbstractPipeline):
+class SummaryPipeline(Pipeline):
     """A generic summary pipeline that can be used to summarize any text"""
 
     llm: IrisLangchainChatModel
@@ -19,8 +19,8 @@ class SummaryPipeline(AbstractPipeline):
     prompt_str: str
     prompt: ChatPromptTemplate
 
-    def __init__(self, llm: IrisLangchainChatModel, name=None):
-        super().__init__(name=name)
+    def __init__(self, llm: IrisLangchainChatModel):
+        super().__init__(implementation_id="summary_pipeline")
         # Set the langchain chat model
         self.llm = llm
         # Load the prompt from a file
