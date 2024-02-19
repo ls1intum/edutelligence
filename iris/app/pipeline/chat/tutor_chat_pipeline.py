@@ -5,42 +5,38 @@ from langchain_core.runnables import Runnable
 
 from domain import IrisMessage, IrisMessageRole
 from llm.langchain import IrisLangchainChatModel
-from pipeline import AbstractPipeline
-
+from pipeline.chat.chat_pipeline import ProgrammingExerciseTutorChatPipeline
 
 logger = logging.getLogger(__name__)
 
 
-class TutorChatPipeline(AbstractPipeline):
+class TutorChatPipelineReferenceImpl(ProgrammingExerciseTutorChatPipeline):
     """Tutor chat pipeline that answers exercises related questions from students."""
 
     llm: IrisLangchainChatModel
     pipeline: Runnable
-    prompt_str: str
-    prompt: ChatPromptTemplate
 
-    def __init__(self, llm: IrisLangchainChatModel, name=None):
-        super().__init__(name=name)
+    def __init__(self, llm: IrisLangchainChatModel):
+        super().__init__(implementation_id="tutor_chat_pipeline_reference_impl")
         # Set the langchain chat model
         self.llm = llm
         # Load the prompt from a file
         with open("../prompts/iris_tutor_chat_prompt.txt", "r") as file:
             logger.debug("Loading tutor chat prompt...")
-            self.prompt_str = file.read()
+            prompt_str = file.read()
         # Create the prompt
-        self.prompt = ChatPromptTemplate.from_messages(
+        prompt = ChatPromptTemplate.from_messages(
             [
-                SystemMessagePromptTemplate.from_template(self.prompt_str),
+                SystemMessagePromptTemplate.from_template(prompt_str),
             ]
         )
         # Create the pipeline
-        self.pipeline = self.prompt | llm | StrOutputParser()
+        self.pipeline = prompt | llm | StrOutputParser()
 
-    def __call__(self, query: IrisMessage, **kwargs) -> IrisMessage:
+    def _run(self, query: IrisMessage) -> IrisMessage:
         """
         Runs the pipeline
             :param query: The query
-            :param kwargs: keyword arguments
             :return: IrisMessage
         """
         if query is None:

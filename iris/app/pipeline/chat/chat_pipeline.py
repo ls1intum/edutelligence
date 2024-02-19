@@ -5,7 +5,10 @@ from pipeline import Pipeline
 
 
 class ProgrammingExerciseTutorChatPipeline(Pipeline, ABC):
-    """Abstract class for the programming exercise tutor chat pipeline implementations"""
+    """
+    Abstract class for the programming exercise tutor chat pipeline implementations.
+    This class defines the signature of all implementations of this Iris feature.
+    """
 
     def __call__(self, query: IrisMessage, **kwargs) -> IrisMessage:
         return self._run(query)
