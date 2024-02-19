@@ -12,15 +12,15 @@ class BasicRequestHandler(RequestHandler):
         self.llm_manager = LlmManager()
 
     def complete(self, prompt: str, arguments: CompletionArguments) -> str:
-        llm = self.llm_manager.get_by_id(self.model_id)
+        llm = self.llm_manager.get_llm_by_id(self.model_id)
         return llm.complete(prompt, arguments)
 
     def chat(
         self, messages: list[IrisMessage], arguments: CompletionArguments
     ) -> IrisMessage:
-        llm = self.llm_manager.get_by_id(self.model_id)
+        llm = self.llm_manager.get_llm_by_id(self.model_id)
         return llm.chat(messages, arguments)
 
     def embed(self, text: str) -> list[float]:
-        llm = self.llm_manager.get_by_id(self.model_id)
+        llm = self.llm_manager.get_llm_by_id(self.model_id)
         return llm.embed(text)
