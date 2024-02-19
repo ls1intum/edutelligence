@@ -14,4 +14,3 @@ class Pipeline(metaclass=ABCMeta):
         Extracts the required parameters from the kwargs runs the pipeline.
         """
         raise NotImplementedError
-
