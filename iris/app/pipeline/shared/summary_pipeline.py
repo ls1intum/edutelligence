@@ -3,7 +3,6 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate, SystemMessagePromptTemplate
 from langchain_core.runnables import Runnable
 
-from domain import IrisMessage, IrisMessageRole
 from llm.langchain import IrisLangchainChatModel
 from pipeline import AbstractPipeline
 
