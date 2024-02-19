@@ -1,21 +1,17 @@
-from abc import ABCMeta, abstractmethod
-
-from domain import IrisMessage
+from abc import ABCMeta
 
 
-class AbstractPipeline(metaclass=ABCMeta):
+class Pipeline(metaclass=ABCMeta):
     """Abstract class for all pipelines"""
 
-    name: str
+    implementation_id: str
 
-    def __init__(self, name=None):
-        self.name = name
+    def __init__(self, implementation_id=None):
+        self.implementation_id = implementation_id
 
-    @abstractmethod
-    def __call__(self, **kwargs) -> IrisMessage:
+    def __call__(self, **kwargs):
         """
-        Runs the pipeline and is intended to be called by __call__
-        :param kwargs: keyword arguments
-        :return: IrisMessage
+        Extracts the required parameters from the kwargs runs the pipeline.
         """
         raise NotImplementedError
+

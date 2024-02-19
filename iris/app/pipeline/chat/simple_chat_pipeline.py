@@ -5,26 +5,23 @@ from langchain_core.runnables import Runnable
 
 from domain import IrisMessage, IrisMessageRole
 from llm.langchain import IrisLangchainChatModel
-from pipeline import AbstractPipeline
+from pipeline.chat.chat_pipeline import ProgrammingExerciseTutorChatPipeline
 
 
-class SimpleChatPipeline(AbstractPipeline):
+class SimpleChatPipeline(ProgrammingExerciseTutorChatPipeline):
     """A simple chat pipeline that uses our custom langchain chat model for our own request handler"""
 
     llm: IrisLangchainChatModel
     pipeline: Runnable
 
-    def __init__(self, llm: IrisLangchainChatModel, name=None):
+    def __init__(self, llm: IrisLangchainChatModel):
         self.llm = llm
         self.pipeline = {"query": itemgetter("query")} | llm | StrOutputParser()
-        super().__init__(name=name)
+        super().__init__(implementation_id="simple_chat_pipeline")
 
-    def __call__(self, query: IrisMessage, **kwargs) -> IrisMessage:
+    def _run(self, query: IrisMessage) -> IrisMessage:
         """
-        Runs the pipeline and is intended to be called by __call__
-        :param query: The query
-        :param kwargs: keyword arguments
-        :return: IrisMessage
+        Gets a response from the langchain chat model
         """
         if query is None:
             raise ValueError("IrisMessage must not be None")
