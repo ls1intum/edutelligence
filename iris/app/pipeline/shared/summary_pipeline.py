@@ -1,4 +1,6 @@
 import logging
+import os
+
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate, SystemMessagePromptTemplate
 from langchain_core.runnables import Runnable
@@ -22,7 +24,8 @@ class SummaryPipeline(AbstractPipeline):
         # Set the langchain chat model
         self.llm = llm
         # Load the prompt from a file
-        with open("../prompts/summary_prompt.txt", "r") as file:
+        dirname = os.path.dirname(__file__)
+        with open(os.path.join(dirname, "../prompts/summary_prompt.txt"), "r") as file:
             logger.debug("Loading summary prompt...")
             self.prompt_str = file.read()
         # Create the prompt
