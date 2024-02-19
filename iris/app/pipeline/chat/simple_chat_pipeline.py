@@ -19,10 +19,7 @@ class SimpleChatPipeline(AbstractPipeline):
         self.pipeline = {"query": itemgetter("query")} | llm | StrOutputParser()
         super().__init__(name=name)
 
-    def __call__(self, query: IrisMessage, **kwargs):
-        return self._run(query=query, **kwargs)
-
-    def _run(self, query: IrisMessage, **kwargs) -> IrisMessage:
+    def __call__(self, query: IrisMessage, **kwargs) -> IrisMessage:
         """
         Runs the pipeline and is intended to be called by __call__
         :param query: The query
