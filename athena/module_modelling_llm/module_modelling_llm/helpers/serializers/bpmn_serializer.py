@@ -103,7 +103,7 @@ class IDShortener:
             prefix = "id"
 
         if id not in self.id_map:
-            self.id_map[id] = f"{prefix}{'-' if prefix else ''}{self.id_counter}"
+            self.id_map[id] = f"{prefix}{'_' if prefix else ''}{self.id_counter}"
             self.id_counter += 1
 
         return self.id_map[id]
@@ -232,7 +232,7 @@ class BPMNSerializer:
         :param tag: The prefixed tag
         :param prefix: The prefix to prepend
         """
-        return f"{prefix}{':' if prefix else ''}{tag}"
+        return f"{prefix if prefix else ''}{':' if prefix else ''}{tag}"
 
     def __shorten_id(self, element_id: str, prefix: Optional[str] = None) -> str:
         """
