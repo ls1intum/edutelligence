@@ -4,11 +4,7 @@ from ollama import Client, Message
 
 from domain import IrisMessage, IrisMessageRole
 from llm import CompletionArguments
-from llm.wrapper.abstract_llm_wrapper import (
-    AbstractLlmChatCompletionWrapper,
-    AbstractLlmCompletionWrapper,
-    AbstractLlmEmbeddingWrapper,
-)
+from llm.external.model import ChatModel, CompletionModel, EmbeddingModel
 
 
 def convert_to_ollama_messages(messages: list[IrisMessage]) -> list[Message]:
@@ -21,10 +17,10 @@ def convert_to_iris_message(message: Message) -> IrisMessage:
     return IrisMessage(role=IrisMessageRole(message["role"]), text=message["content"])
 
 
-class OllamaWrapper(
-    AbstractLlmCompletionWrapper,
-    AbstractLlmChatCompletionWrapper,
-    AbstractLlmEmbeddingWrapper,
+class OllamaModel(
+    CompletionModel,
+    ChatModel,
+    EmbeddingModel,
 ):
     type: Literal["ollama"]
     model: str
@@ -34,19 +30,19 @@ class OllamaWrapper(
     def model_post_init(self, __context: Any) -> None:
         self._client = Client(host=self.host)  # TODO: Add authentication (httpx auth?)
 
-    def completion(self, prompt: str, arguments: CompletionArguments) -> str:
+    def complete(self, prompt: str, arguments: CompletionArguments) -> str:
         response = self._client.generate(model=self.model, prompt=prompt)
         return response["response"]
 
-    def chat_completion(
-        self, messages: list[any], arguments: CompletionArguments
-    ) -> any:
+    def chat(
+        self, messages: list[IrisMessage], arguments: CompletionArguments
+    ) -> IrisMessage:
         response = self._client.chat(
             model=self.model, messages=convert_to_ollama_messages(messages)
         )
         return convert_to_iris_message(response["message"])
 
-    def create_embedding(self, text: str) -> list[float]:
+    def embed(self, text: str) -> list[float]:
         response = self._client.embeddings(model=self.model, prompt=text)
         return list(response)
 

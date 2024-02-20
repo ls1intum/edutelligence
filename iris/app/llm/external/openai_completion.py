@@ -3,15 +3,15 @@ from openai import OpenAI
 from openai.lib.azure import AzureOpenAI
 
 from llm import CompletionArguments
-from llm.wrapper.abstract_llm_wrapper import AbstractLlmCompletionWrapper
+from llm.external.model import CompletionModel
 
 
-class BaseOpenAICompletionWrapper(AbstractLlmCompletionWrapper):
+class OpenAICompletionModel(CompletionModel):
     model: str
     api_key: str
     _client: OpenAI
 
-    def completion(self, prompt: str, arguments: CompletionArguments) -> any:
+    def complete(self, prompt: str, arguments: CompletionArguments) -> any:
         response = self._client.completions.create(
             model=self.model,
             prompt=prompt,
@@ -22,7 +22,7 @@ class BaseOpenAICompletionWrapper(AbstractLlmCompletionWrapper):
         return response
 
 
-class OpenAICompletionWrapper(BaseOpenAICompletionWrapper):
+class DirectOpenAICompletionModel(OpenAICompletionModel):
     type: Literal["openai_completion"]
 
     def model_post_init(self, __context: Any) -> None:
@@ -32,7 +32,7 @@ class OpenAICompletionWrapper(BaseOpenAICompletionWrapper):
         return f"OpenAICompletion('{self.model}')"
 
 
-class AzureCompletionWrapper(BaseOpenAICompletionWrapper):
+class AzureOpenAICompletionModel(OpenAICompletionModel):
     type: Literal["azure_completion"]
     endpoint: str
     azure_deployment: str

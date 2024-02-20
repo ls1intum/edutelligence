@@ -7,6 +7,7 @@ flake8==7.0.0
 pre-commit==3.6.1
 pydantic==2.6.1
 pymupdf==1.23.22
-PyYAML~=6.0.1
 unstructured==0.11.8
 weaviate-client==4.4.4
+PyYAML==6.0.1
+langchain==0.1.6
