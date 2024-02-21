@@ -1,8 +1,8 @@
 import weaviate
 import os
 
-from data.lecture.lectures import Lectures
-from data.repository.repositories import Repositories
+from lecture.lectures import Lectures
+from repository.repositories import Repositories
 
 
 class VectorDatabase:

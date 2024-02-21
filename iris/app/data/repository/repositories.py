@@ -12,12 +12,12 @@ class Repositories:
     def __init__(self, client: weaviate.WeaviateClient):
         self.collection = init_schema(client)
 
-    def split_code(self, code: [str], language: Language):
+    def split_code(self, code: str, language: Language, chunk_size: int, chunk_overlap: int):
         """
         Split the code into chunks of 1500 characters with an overlap of 100 characters
         """
         python_splitter = RecursiveCharacterTextSplitter.from_language(
-            language=language, chunk_size=1500, chunk_overlap=100
+            language=language, chunk_size=chunk_size, chunk_overlap=chunk_overlap
         )
         return python_splitter.create_documents(code)
 
@@ -33,7 +33,7 @@ class Repositories:
         #            with open(file_path, 'r') as file:
         #                code = file.read()
         for file in files:
-            chunks = self.split_code(file[RepositoryChunk.CONTENT], Language.JAVA)
+            chunks = self.split_code(file[RepositoryChunk.CONTENT], Language.JAVA, 1500, 100)
             for chunk in chunks:
                 files_contents.append(
                     {
@@ -67,6 +67,8 @@ class Repositories:
                     properties=chunk,
                     vector=embed_chunk
                 )
+    def update(self, repository: dict[str, str]):# this is most likely not necessary
+        pass
 
     def create_tree_structure(self):
         pass
