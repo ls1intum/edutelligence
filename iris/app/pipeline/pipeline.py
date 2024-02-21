@@ -1,12 +1,9 @@
-from abc import abstractmethod
-
-from common import SingletonABCMeta
+from abc import abstractmethod, ABCMeta
 
 
-class Pipeline(metaclass=SingletonABCMeta):
+class Pipeline(metaclass=ABCMeta):
     """Abstract class for all pipelines"""
 
-    _is_abstract = True
     implementation_id: str
 
     def __init__(self, implementation_id=None):

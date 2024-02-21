@@ -16,7 +16,6 @@ logger = logging.getLogger(__name__)
 class TutorChatPipeline(Pipeline):
     """Tutor chat pipeline that answers exercises related questions from students."""
 
-    _is_abstract: bool = False
     llm: IrisLangchainChatModel
     pipeline: Runnable
 

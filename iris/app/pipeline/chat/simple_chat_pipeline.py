@@ -11,7 +11,6 @@ from pipeline import Pipeline
 class SimpleChatPipeline(Pipeline):
     """A simple chat pipeline that uses our custom langchain chat model for our own request handler"""
 
-    _is_abstract: bool = False
     llm: IrisLangchainChatModel
     pipeline: Runnable
 
