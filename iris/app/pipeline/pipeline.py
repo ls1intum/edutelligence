@@ -12,6 +12,12 @@ class Pipeline(metaclass=SingletonABCMeta):
     def __init__(self, implementation_id=None):
         self.implementation_id = implementation_id
 
+    def __str__(self):
+        return f"{self.__class__.__name__}"
+
+    def __repr__(self):
+        return f"{self.__class__.__name__}"
+
     @abstractmethod
     def __call__(self, **kwargs):
         """

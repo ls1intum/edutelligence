@@ -40,6 +40,12 @@ class TutorChatPipeline(Pipeline):
         # Create the pipeline
         self.pipeline = prompt | llm | StrOutputParser()
 
+    def __repr__(self):
+        return f"{self.__class__.__name__}(llm={self.llm})"
+
+    def __str__(self):
+        return f"{self.__class__.__name__}(llm={self.llm})"
+
     def __call__(self, query: IrisMessage, **kwargs) -> IrisMessage:
         """
         Runs the pipeline

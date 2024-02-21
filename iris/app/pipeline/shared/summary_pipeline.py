@@ -40,6 +40,12 @@ class SummaryPipeline(Pipeline):
         # Create the pipeline
         self.pipeline = self.prompt | llm | StrOutputParser()
 
+    def __repr__(self):
+        return f"{self.__class__.__name__}(llm={self.llm})"
+
+    def __str__(self):
+        return f"{self.__class__.__name__}(llm={self.llm})"
+
     def __call__(self, query: str, **kwargs) -> str:
         """
         Runs the pipeline
@@ -48,12 +54,12 @@ class SummaryPipeline(Pipeline):
             :return: summary text as string
         """
         if _cache := self._cache.get(query):
-            logger.debug(f"Returning cached summary for query: {query}")
+            logger.debug(f"Returning cached summary for query: {query[:20]}...")
             return _cache
         if query is None:
             raise ValueError("Query must not be None")
         logger.debug("Running summary pipeline...")
         response = self.pipeline.invoke({"text": query})
-        logger.debug(f"Response from summary pipeline: {response}")
+        logger.debug(f"Response from summary pipeline: {response[:20]}...")
         self._cache[query] = response
         return response
