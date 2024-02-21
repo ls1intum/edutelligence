@@ -54,8 +54,8 @@ class TutorChatPipeline(Pipeline):
         """
         if query is None:
             raise ValueError("IrisMessage must not be None")
-        message = query.text
         logger.debug("Running tutor chat pipeline...")
+        message = query.text
         response = self.pipeline.invoke({"question": message})
         logger.debug(f"Response from tutor chat pipeline: {response}")
         return IrisMessage(role=IrisMessageRole.ASSISTANT, text=response)

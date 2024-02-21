@@ -53,12 +53,12 @@ class SummaryPipeline(Pipeline):
             :param kwargs: keyword arguments
             :return: summary text as string
         """
-        if _cache := self._cache.get(query):
-            logger.debug(f"Returning cached summary for query: {query[:20]}...")
-            return _cache
         if query is None:
             raise ValueError("Query must not be None")
         logger.debug("Running summary pipeline...")
+        if _cache := self._cache.get(query):
+            logger.debug(f"Returning cached summary for query: {query[:20]}...")
+            return _cache
         response = self.pipeline.invoke({"text": query})
         logger.debug(f"Response from summary pipeline: {response[:20]}...")
         self._cache[query] = response
