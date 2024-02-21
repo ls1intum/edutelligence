@@ -1,5 +1,6 @@
 import logging
 import os
+from typing import Dict
 
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate, SystemMessagePromptTemplate
@@ -14,7 +15,8 @@ logger = logging.getLogger(__name__)
 class SummaryPipeline(Pipeline):
     """A generic summary pipeline that can be used to summarize any text"""
 
-    _is_abstract = False
+    _is_abstract: bool = False
+    _cache: Dict = {}
     llm: IrisLangchainChatModel
     pipeline: Runnable
     prompt_str: str
@@ -45,9 +47,13 @@ class SummaryPipeline(Pipeline):
             :param kwargs: keyword arguments
             :return: summary text as string
         """
+        if _cache := self._cache.get(query):
+            logger.debug(f"Returning cached summary for query: {query}")
+            return _cache
         if query is None:
             raise ValueError("Query must not be None")
         logger.debug("Running summary pipeline...")
         response = self.pipeline.invoke({"text": query})
         logger.debug(f"Response from summary pipeline: {response}")
+        self._cache[query] = response
         return response

@@ -13,10 +13,10 @@ from pipeline import Pipeline
 logger = logging.getLogger(__name__)
 
 
-class TutorChatPipelineReferenceImpl(Pipeline):
+class TutorChatPipeline(Pipeline):
     """Tutor chat pipeline that answers exercises related questions from students."""
 
-    _is_abstract = False
+    _is_abstract: bool = False
     llm: IrisLangchainChatModel
     pipeline: Runnable
 
