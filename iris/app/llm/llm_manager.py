@@ -5,16 +5,16 @@ from pydantic import BaseModel, Field
 import yaml
 
 from common import Singleton
-from llm.wrapper import AbstractLlmWrapper, LlmWrapper
+from llm.external import LanguageModel, AnyLLM
 
 
 # Small workaround to get pydantic discriminators working
 class LlmList(BaseModel):
-    llms: list[LlmWrapper] = Field(discriminator="type")
+    llms: list[AnyLLM] = Field(discriminator="type")
 
 
 class LlmManager(metaclass=Singleton):
-    entries: list[AbstractLlmWrapper]
+    entries: list[LanguageModel]
 
     def __init__(self):
         self.entries = []

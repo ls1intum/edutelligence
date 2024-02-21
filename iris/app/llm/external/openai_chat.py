@@ -1,11 +1,12 @@
 from typing import Literal, Any
+
 from openai import OpenAI
 from openai.lib.azure import AzureOpenAI
 from openai.types.chat import ChatCompletionMessageParam, ChatCompletionMessage
 
 from domain import IrisMessage, IrisMessageRole
 from llm import CompletionArguments
-from llm.wrapper.abstract_llm_wrapper import AbstractLlmChatCompletionWrapper
+from llm.external.model import ChatModel
 
 
 def convert_to_open_ai_messages(
@@ -22,13 +23,13 @@ def convert_to_iris_message(message: ChatCompletionMessage) -> IrisMessage:
     return IrisMessage(role=message_role, text=message.content)
 
 
-class BaseOpenAIChatCompletionWrapper(AbstractLlmChatCompletionWrapper):
+class OpenAIChatModel(ChatModel):
     model: str
     api_key: str
     _client: OpenAI
 
-    def chat_completion(
-        self, messages: list[any], arguments: CompletionArguments
+    def chat(
+        self, messages: list[IrisMessage], arguments: CompletionArguments
     ) -> IrisMessage:
         response = self._client.chat.completions.create(
             model=self.model,
@@ -40,7 +41,7 @@ class BaseOpenAIChatCompletionWrapper(AbstractLlmChatCompletionWrapper):
         return convert_to_iris_message(response.choices[0].message)
 
 
-class OpenAIChatCompletionWrapper(BaseOpenAIChatCompletionWrapper):
+class DirectOpenAIChatModel(OpenAIChatModel):
     type: Literal["openai_chat"]
 
     def model_post_init(self, __context: Any) -> None:
@@ -50,7 +51,7 @@ class OpenAIChatCompletionWrapper(BaseOpenAIChatCompletionWrapper):
         return f"OpenAIChat('{self.model}')"
 
 
-class AzureChatCompletionWrapper(BaseOpenAIChatCompletionWrapper):
+class AzureOpenAIChatModel(OpenAIChatModel):
     type: Literal["azure_chat"]
     endpoint: str
     azure_deployment: str
