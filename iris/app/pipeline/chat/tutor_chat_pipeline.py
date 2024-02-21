@@ -7,14 +7,16 @@ from langchain_core.runnables import Runnable
 
 from domain import IrisMessage, IrisMessageRole
 from llm.langchain import IrisLangchainChatModel
-from pipeline.chat.chat_pipeline import ChatPipeline
+
+from pipeline import Pipeline
 
 logger = logging.getLogger(__name__)
 
 
-class TutorChatPipelineReferenceImpl(ChatPipeline):
+class TutorChatPipelineReferenceImpl(Pipeline):
     """Tutor chat pipeline that answers exercises related questions from students."""
 
+    _is_abstract = False
     llm: IrisLangchainChatModel
     pipeline: Runnable
 

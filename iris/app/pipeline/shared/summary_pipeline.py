@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 class SummaryPipeline(Pipeline):
     """A generic summary pipeline that can be used to summarize any text"""
 
+    _is_abstract = False
     llm: IrisLangchainChatModel
     pipeline: Runnable
     prompt_str: str

@@ -5,12 +5,13 @@ from langchain_core.runnables import Runnable
 
 from domain import IrisMessage, IrisMessageRole
 from llm.langchain import IrisLangchainChatModel
-from pipeline.chat.chat_pipeline import ChatPipeline
+from pipeline import Pipeline
 
 
-class SimpleChatPipeline(ChatPipeline):
+class SimpleChatPipeline(Pipeline):
     """A simple chat pipeline that uses our custom langchain chat model for our own request handler"""
 
+    _is_abstract = False
     llm: IrisLangchainChatModel
     pipeline: Runnable
 
