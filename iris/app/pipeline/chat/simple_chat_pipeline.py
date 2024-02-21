@@ -4,6 +4,7 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import Runnable
 
 from domain import IrisMessage, IrisMessageRole
+from domain.dtos import BaseChatModel
 from llm.langchain import IrisLangchainChatModel
 from pipeline import Pipeline
 
@@ -25,12 +26,13 @@ class SimpleChatPipeline(Pipeline):
         self.pipeline = {"query": itemgetter("query")} | llm | StrOutputParser()
         super().__init__(implementation_id="simple_chat_pipeline")
 
-    def __call__(self, query: IrisMessage, **kwargs) -> IrisMessage:
+    def __call__(self, dto: BaseChatModel, **kwargs) -> IrisMessage:
         """
         Gets a response from the langchain chat model
         """
+        query = dto.query
         if query is None:
             raise ValueError("IrisMessage must not be None")
         message = query.text
-        response = self.pipeline.invoke({"query": message})
+        response = self.pipeline.invoke({"question": message})
         return IrisMessage(role=IrisMessageRole.ASSISTANT, text=response)

@@ -1,11 +1,17 @@
 import logging
 import os
+from typing import List
 
 from langchain_core.output_parsers import StrOutputParser
-from langchain_core.prompts import ChatPromptTemplate, SystemMessagePromptTemplate
+from langchain_core.prompts import (
+    ChatPromptTemplate,
+    SystemMessagePromptTemplate,
+    MessagesPlaceholder,
+)
 from langchain_core.runnables import Runnable
 
 from domain import IrisMessage, IrisMessageRole
+from domain.dtos import ProgrammingExerciseTutorChatDTO
 from llm.langchain import IrisLangchainChatModel
 
 from pipeline import Pipeline
@@ -34,6 +40,8 @@ class TutorChatPipeline(Pipeline):
         prompt = ChatPromptTemplate.from_messages(
             [
                 SystemMessagePromptTemplate.from_template(prompt_str),
+                MessagesPlaceholder(variable_name="history"),
+                ("human", "{question}"),
             ]
         )
         # Create the pipeline
@@ -45,16 +53,28 @@ class TutorChatPipeline(Pipeline):
     def __str__(self):
         return f"{self.__class__.__name__}(llm={self.llm})"
 
-    def __call__(self, query: IrisMessage, **kwargs) -> IrisMessage:
+    def __call__(self, dto: ProgrammingExerciseTutorChatDTO, **kwargs) -> IrisMessage:
         """
         Runs the pipeline
             :param query: The query
             :return: IrisMessage
         """
-        if query is None:
-            raise ValueError("IrisMessage must not be None")
         logger.debug("Running tutor chat pipeline...")
+        query: IrisMessage = dto.query
+        history: List[IrisMessage] = dto.chat_history
+        problem_statement: str = dto.exercise.problem_statement
+        exercise_title: str = dto.exercise.title
         message = query.text
-        response = self.pipeline.invoke({"question": message})
+        if not message:
+            raise ValueError("IrisMessage must not be empty")
+        response = self.pipeline.invoke(
+            {
+                "question": message,
+                "history": history,
+                "problem_statement": problem_statement,
+                "file_names": [],  # TODO: [file.name for file in dto.submission.files if file.name.endswith(".java")],
+                "exercise_title": exercise_title,
+            }
+        )
         logger.debug(f"Response from tutor chat pipeline: {response}")
         return IrisMessage(role=IrisMessageRole.ASSISTANT, text=response)
