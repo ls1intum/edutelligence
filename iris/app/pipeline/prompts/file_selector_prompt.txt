@@ -1,0 +1,8 @@
+This is the student's submitted code repository and the corresponding build information. You can reference a file by its path to view it.
+Here are the paths of all files in the assignment repository:
+{repository}
+Build logs:
+{build_log}
+
+It's important to avoid giving unnecessary information, only name a file if it's really necessary.
+{format_instructions}

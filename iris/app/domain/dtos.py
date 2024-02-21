@@ -1,3 +1,5 @@
+from typing import List
+
 from pydantic import BaseModel
 
 from domain import (
@@ -18,7 +20,7 @@ class SettingsDTO(BaseModel):
 
 class BaseChatModel(BaseModel):
     query: IrisMessage
-    chat_history: [IrisMessage]
+    chat_history: List[IrisMessage]
     settings: SettingsDTO
 
     def __str__(self):

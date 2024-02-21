@@ -1,3 +1,5 @@
+from typing import List
+
 from pydantic import BaseModel
 
 
@@ -19,7 +21,7 @@ class CodeHint(BaseModel):
     title: str
     description: str
     content: str
-    solution_entries: [ProgrammingExerciseSolutionEntry]
+    solution_entries: List[ProgrammingExerciseSolutionEntry]
 
     def __str__(self):
         return (

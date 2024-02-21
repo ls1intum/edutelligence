@@ -1,3 +1,5 @@
+from typing import List
+
 from pydantic import BaseModel
 
 
@@ -12,7 +14,7 @@ class BuildLogEntry(BaseModel):
 class ProgrammingSubmission(BaseModel):
     commit_hash: str
     build_failed: bool
-    build_log_entries: [BuildLogEntry]
+    build_log_entries: List[BuildLogEntry]
 
     def __str__(self):
         return (
