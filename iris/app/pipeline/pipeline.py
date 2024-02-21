@@ -6,7 +6,7 @@ class Pipeline(metaclass=ABCMeta):
 
     implementation_id: str
 
-    def __init__(self, implementation_id=None):
+    def __init__(self, implementation_id=None, **kwargs):
         self.implementation_id = implementation_id
 
     def __str__(self):
@@ -21,3 +21,8 @@ class Pipeline(metaclass=ABCMeta):
         Extracts the required parameters from the kwargs runs the pipeline.
         """
         raise NotImplementedError("Subclasses must implement the __call__ method.")
+
+    @classmethod
+    def __subclasshook__(cls, subclass) -> bool:
+        # Check if the subclass implements the __call__ method and checks if the subclass is callable
+        return hasattr(subclass, "__call__") and callable(subclass.__call__)
