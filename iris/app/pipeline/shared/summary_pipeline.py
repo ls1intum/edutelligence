@@ -43,7 +43,7 @@ class SummaryPipeline(Pipeline):
         return f"{self.__class__.__name__}(llm={self.llm})"
 
     def __str__(self):
-        return f"(ref at {id(self)}) {self.__class__.__name__}(implementation_id={self.implementation_id}, llm={self.llm})"
+        return f"{self.__class__.__name__}(llm={self.llm})"
 
     def __call__(self, query: str, **kwargs) -> str:
         """
