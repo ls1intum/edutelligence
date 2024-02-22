@@ -8,7 +8,6 @@ from app.vector_repository.lecture_schema import init_schema, LectureSlideChunk
 from content_service.Retrieval.abstract_retrieval import AbstractRetrieval
 
 
-
 class LectureRetrieval(AbstractRetrieval):
     """
     Class for ingesting repositories into a database.

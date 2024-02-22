@@ -1,4 +1,3 @@
-
 import os
 import weaviate
 from app.data.repository_schema import init_schema, RepositoryChunk
@@ -31,13 +30,17 @@ def chunk_files(path: str):
     files_contents = []
     for directory_path, subdir, files in os.walk(path):
         for filename in files:
-            if filename.endswith('.java'):
+            if filename.endswith(".java"):
                 file_path = os.path.join(directory_path, filename)
-                with open(file_path, 'r') as file:
+                with open(file_path, "r") as file:
                     code = file.read()
-                files_contents.append({RepositoryChunk.FILEPATH: filename, RepositoryChunk.CONTENT: code})
+                files_contents.append(
+                    {RepositoryChunk.FILEPATH: filename, RepositoryChunk.CONTENT: code}
+                )
     for file in files_contents:
-        chunks = split_code(file[RepositoryChunk.CONTENT], Language.JAVA, CHUNKSIZE, OVERLAP)
+        chunks = split_code(
+            file[RepositoryChunk.CONTENT], Language.JAVA, CHUNKSIZE, OVERLAP
+        )
         for chunk in chunks:
             files_contents.append(
                 {
@@ -45,7 +48,7 @@ def chunk_files(path: str):
                     RepositoryChunk.COURSE_ID: "tbd",
                     RepositoryChunk.EXERCISE_ID: "tbd",
                     RepositoryChunk.REPOSITORY_ID: "tbd",
-                    RepositoryChunk.FILEPATH: file[RepositoryChunk.FILEPATH]
+                    RepositoryChunk.FILEPATH: file[RepositoryChunk.FILEPATH],
                 }
             )
     return files_contents
@@ -55,6 +58,7 @@ class RepositoryIngestion(AbstractIngestion):
     """
     Ingest the repositories into the weaviate database
     """
+
     def __init__(self, client: weaviate.WeaviateClient):
         self.collection = init_schema(client)
         self.request_handler = BasicRequestHandler("gpt35")
@@ -67,11 +71,10 @@ class RepositoryIngestion(AbstractIngestion):
         chunks = chunk_files(self, repo_path)
         with self.collection.batch.dynamic() as batch:
             for chunk in enumerate(chunks):
-                embed_chunk = self.iris_embedding_model.embed_query(chunk[RepositoryChunk.CONTENT])
-                batch.add_object(
-                    properties=chunk,
-                    vector=embed_chunk
+                embed_chunk = self.iris_embedding_model.embed_query(
+                    chunk[RepositoryChunk.CONTENT]
                 )
+                batch.add_object(properties=chunk, vector=embed_chunk)
         return True
 
     def update(self, repository: dict[str, str]):  # this is most likely not necessary

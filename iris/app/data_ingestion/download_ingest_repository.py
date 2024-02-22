@@ -1,8 +1,8 @@
-import os
 import tempfile
 import zipfile
 
 import requests
+
 DOWNLOAD_BUFFER_SIZE = 8 * 1024
 
 
@@ -32,5 +32,3 @@ def unzip(zip_file_path: str, directory_to: str):
     # Open the zip file in read mode and extract all contents
     with zipfile.ZipFile(zip_file_path) as zip_ref:
         zip_ref.extractall(directory_to)
-
-#CALL THE RIGHT PIPELINE FOR INGESTION OF CODE (CHUNK THE CODE THEN GET A DESCRIPTION OF THE CODE, THEN EMBED IT AND SAVE IT IN THE DB)

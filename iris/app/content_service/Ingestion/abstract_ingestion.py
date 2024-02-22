@@ -1,6 +1,5 @@
 from abc import ABC, abstractmethod
 from typing import List, Dict
-from langchain.text_splitter import Language
 
 
 class AbstractIngestion(ABC):
@@ -16,7 +15,7 @@ class AbstractIngestion(ABC):
         pass
 
     @abstractmethod
-    def ingest(self, path: str)-> bool:
+    def ingest(self, path: str) -> bool:
         """
         Abstract method to ingest repositories into the database.
         """

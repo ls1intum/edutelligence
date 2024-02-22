@@ -1,4 +1,4 @@
-from typing import List, Dict
+from typing import Dict
 import weaviate
 
 from app.vector_repository.lecture_schema import init_schema
@@ -13,7 +13,8 @@ class LectureIngestion(AbstractIngestion):  # Inherits from the abstract class
     def chunk_files(self, path: str):
         # Implement chunking logic here or raise NotImplementedError if not applicable
         pass
-    def ingest(self, lecture_path)-> bool:
+
+    def ingest(self, lecture_path) -> bool:
         """
         Ingest the lectures into the weaviate database
         """
