@@ -1,17 +1,23 @@
 import json
+from typing import List
+
 import weaviate
 import weaviate.classes as wvc
 
-from lecture_schema import init_schema, LectureSlideChunk
+from app.vector_repository.lecture_schema import init_schema, LectureSlideChunk
+from content_service.Retrieval.abstract_retrieval import AbstractRetrieval
 
-class Lectures:
+
+
+class LectureRetrieval(AbstractRetrieval):
+    """
+    Class for ingesting repositories into a database.
+    """
 
     def __init__(self, client: weaviate.WeaviateClient):
         self.collection = init_schema(client)
 
-    def ingest(self, lectures):
-        pass
-    def retrieve(self, user_message: str, lecture_id: int = None):
+    def retrieve(self, user_message: str, lecture_id: int = None) -> List[str]:
         response = self.collection.query.near_text(
             near_text=user_message,
             filters=(
@@ -29,3 +35,6 @@ class Lectures:
         )
         print(json.dumps(response, indent=2))
         return response
+
+    def get_collection(self, path: str):
+        pass

@@ -29,7 +29,7 @@ def init_schema(client: WeaviateClient) -> Collection:
     return client.collections.create(
         name=COLLECTION_NAME,
         vectorizer_config=wvc.config.Configure.Vectorizer.none(),  # We do not want to vectorize the text automatically
-        # HNSW is preferred over FLAT for large amounts of data, which is the case here
+        # HNSW is preferred over FLAT for large amounts of vector_repository, which is the case here
         vector_index_config=wvc.config.Configure.VectorIndex.hnsw(
             distance_metric=wvc.config.VectorDistances.COSINE  # select preferred distance metric
         ),
