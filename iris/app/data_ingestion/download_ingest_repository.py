@@ -32,3 +32,4 @@ def unzip(zip_file_path: str, directory_to: str):
     # Open the zip file in read mode and extract all contents
     with zipfile.ZipFile(zip_file_path) as zip_ref:
         zip_ref.extractall(directory_to)
+    return directory_to
