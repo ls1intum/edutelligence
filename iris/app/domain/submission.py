@@ -12,7 +12,7 @@ class BuildLogEntry(BaseModel):
 class ProgrammingSubmission(BaseModel):
     commit_hash: str
     build_failed: bool
-    build_log_entries: [BuildLogEntry]
+    build_log_entries: list[BuildLogEntry]
 
     def __str__(self):
         return (

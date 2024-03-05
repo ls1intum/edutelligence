@@ -13,7 +13,7 @@ class ProgrammingExerciseTutorChatDTO(BaseModel):
     course: Course
     exercise: ProgrammingExercise
     submission: ProgrammingSubmission
-    chat_history: [IrisMessage]
+    chat_history: list[IrisMessage]
 
     def __str__(self):
         return (
@@ -27,7 +27,7 @@ class CodeEditorChatDTO(BaseModel):
     solution_repository: dict[str, str]
     template_repository: dict[str, str]
     test_repository: dict[str, str]
-    chat_history: [IrisMessage]
+    chat_history: list[IrisMessage]
 
     def __str__(self):
         return (

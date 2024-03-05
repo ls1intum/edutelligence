@@ -19,7 +19,7 @@ class CodeHint(BaseModel):
     title: str
     description: str
     content: str
-    solution_entries: [ProgrammingExerciseSolutionEntry]
+    solution_entries: list[ProgrammingExerciseSolutionEntry]
 
     def __str__(self):
         return (
