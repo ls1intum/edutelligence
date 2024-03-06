@@ -3,3 +3,4 @@ from domain.course import Course
 from domain.exercise import ProgrammingExercise
 from domain.submission import ProgrammingSubmission
 from domain.codehint import CodeHint
+from domain.pyris_image import PyrisImage

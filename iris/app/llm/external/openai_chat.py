@@ -12,9 +12,22 @@ from llm.external.model import ChatModel
 def convert_to_open_ai_messages(
     messages: list[IrisMessage],
 ) -> list[ChatCompletionMessageParam]:
-    return [
-        {"role": message.role.value, "content": message.text} for message in messages
-    ]
+    openai_messages = []
+    for message in messages:
+        if message.images:
+            content = [{"type": "text", "content": message.text}]
+            for image in message.images:
+                content.append(
+                    {
+                        "type": "image_url",
+                        "image_url": f"data:image/jpeg;base64,{image.base64}",
+                    }
+                )
+        else:
+            content = message.text
+        openai_message = {"role": message.role.value, "content": content}
+        openai_messages.append(openai_message)
+    return openai_messages
 
 
 def convert_to_iris_message(message: ChatCompletionMessage) -> IrisMessage:
