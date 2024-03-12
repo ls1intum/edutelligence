@@ -1,4 +1,4 @@
-from abc import abstractmethod, ABCMeta
+from abc import ABCMeta
 
 
 class Pipeline(metaclass=ABCMeta):
@@ -15,14 +15,15 @@ class Pipeline(metaclass=ABCMeta):
     def __repr__(self):
         return f"{self.__class__.__name__}"
 
-    @abstractmethod
     def __call__(self, **kwargs):
         """
         Extracts the required parameters from the kwargs runs the pipeline.
         """
         raise NotImplementedError("Subclasses must implement the __call__ method.")
 
-    @classmethod
-    def __subclasshook__(cls, subclass) -> bool:
-        # Check if the subclass implements the __call__ method and checks if the subclass is callable
-        return hasattr(subclass, "__call__") and callable(subclass.__call__)
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        if "__call__" not in cls.__dict__:
+            raise NotImplementedError(
+                "Subclasses of Pipeline interface must implement the __call__ method."
+            )

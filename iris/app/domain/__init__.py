@@ -1,5 +1,7 @@
-from domain.message import IrisMessage, IrisMessageRole
-from domain.course import Course
-from domain.exercise import ProgrammingExercise
-from domain.submission import ProgrammingSubmission
-from domain.codehint import CodeHint
+from .error_response_dto import IrisErrorResponseDTO
+from .pipeline_execution_dto import PipelineExecutionDTO
+from .pipeline_execution_settings_dto import PipelineExecutionSettingsDTO
+from ..domain.tutor_chat.tutor_chat_pipeline_execution_dto import (
+    TutorChatPipelineExecutionDTO,
+)
+from .iris_message import IrisMessage, IrisMessageRole

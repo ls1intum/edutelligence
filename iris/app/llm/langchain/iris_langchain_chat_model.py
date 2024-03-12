@@ -8,20 +8,28 @@ from langchain_core.messages import BaseMessage
 from langchain_core.outputs import ChatResult
 from langchain_core.outputs.chat_generation import ChatGeneration
 
-from common import (
+from ...common import (
     convert_iris_message_to_langchain_message,
     convert_langchain_message_to_iris_message,
 )
-from llm import RequestHandler, CompletionArguments
+from ...llm import RequestHandler, CompletionArguments
 
 
 class IrisLangchainChatModel(BaseChatModel):
     """Custom langchain chat model for our own request handler"""
 
     request_handler: RequestHandler
+    completion_args: CompletionArguments
 
-    def __init__(self, request_handler: RequestHandler, **kwargs: Any) -> None:
-        super().__init__(request_handler=request_handler, **kwargs)
+    def __init__(
+        self,
+        request_handler: RequestHandler,
+        completion_args: Optional[CompletionArguments] = CompletionArguments(stop=None),
+        **kwargs: Any
+    ) -> None:
+        super().__init__(
+            request_handler=request_handler, completion_args=completion_args, **kwargs
+        )
 
     def _generate(
         self,
@@ -31,9 +39,8 @@ class IrisLangchainChatModel(BaseChatModel):
         **kwargs: Any
     ) -> ChatResult:
         iris_messages = [convert_langchain_message_to_iris_message(m) for m in messages]
-        iris_message = self.request_handler.chat(
-            iris_messages, CompletionArguments(stop=stop)
-        )
+        self.completion_args.stop = stop
+        iris_message = self.request_handler.chat(iris_messages, self.completion_args)
         base_message = convert_iris_message_to_langchain_message(iris_message)
         chat_generation = ChatGeneration(message=base_message)
         return ChatResult(generations=[chat_generation])

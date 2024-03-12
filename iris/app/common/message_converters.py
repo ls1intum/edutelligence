@@ -1,6 +1,5 @@
 from langchain_core.messages import BaseMessage
-
-from domain import IrisMessage, IrisMessageRole
+from ..domain.iris_message import IrisMessage, IrisMessageRole
 
 
 def convert_iris_message_to_langchain_message(iris_message: IrisMessage) -> BaseMessage:

@@ -2,8 +2,8 @@ from typing import Literal, Any
 from openai import OpenAI
 from openai.lib.azure import AzureOpenAI
 
-from llm import CompletionArguments
-from llm.external.model import CompletionModel
+from ...llm import CompletionArguments
+from ...llm.external.model import CompletionModel
 
 
 class OpenAICompletionModel(CompletionModel):

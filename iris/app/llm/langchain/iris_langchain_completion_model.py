@@ -5,7 +5,7 @@ from langchain_core.language_models.llms import BaseLLM
 from langchain_core.outputs import LLMResult
 from langchain_core.outputs.generation import Generation
 
-from llm import RequestHandler, CompletionArguments
+from ...llm import RequestHandler, CompletionArguments
 
 
 class IrisLangchainCompletionModel(BaseLLM):
