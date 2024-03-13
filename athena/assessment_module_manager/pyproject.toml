@@ -8,7 +8,7 @@ license = "MIT"
 [tool.poetry.dependencies]
 python = "3.11.*"
 athena = {path = "../athena", develop = true}
-fastapi = "^0.96.0"
+fastapi = "^0.109.1"
 uvicorn = "^0.23.0"
 httpx = "^0.24.1"
 
