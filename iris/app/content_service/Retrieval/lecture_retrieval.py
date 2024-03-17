@@ -1,39 +1,44 @@
 import json
+from abc import ABC
 from typing import List
 
 import weaviate
 import weaviate.classes as wvc
 
-from app.vector_repository.lecture_schema import init_schema, LectureSlideChunk
+from app.vector_database.lectureschema import init_lecture_schema, LectureSchema
 from content_service.Retrieval.abstract_retrieval import AbstractRetrieval
 
 
-class LectureRetrieval(AbstractRetrieval):
+class LectureRetrieval(AbstractRetrieval, ABC):
     """
     Class for ingesting repositories into a database.
     """
 
     def __init__(self, client: weaviate.WeaviateClient):
-        self.collection = init_schema(client)
+        self.collection = init_lecture_schema(client)
 
-    def retrieve(self, user_message: str, lecture_id: int = None) -> List[str]:
-        response = self.collection.query.near_text(
-            near_text=user_message,
+    def retrieve(
+        self,
+        user_message: str,
+        hybrid_factor: float,
+        lecture_id: int = None,
+        message_vector: [float] = None,
+    ) -> List[str]:
+        response = self.collection.query.hybrid(
+            query=user_message,
             filters=(
-                wvc.query.Filter.by_property(LectureSlideChunk.LECTURE_ID).equal(
-                    lecture_id
-                )
+                wvc.query.Filter.by_property(LectureSchema.LECTURE_ID).equal(lecture_id)
                 if lecture_id
                 else None
             ),
+            alpha=hybrid_factor,
+            vector=message_vector,
             return_properties=[
-                LectureSlideChunk.PAGE_CONTENT,
-                LectureSlideChunk.COURSE_NAME,
+                LectureSchema.PAGE_TEXT_CONTENT,
+                LectureSchema.PAGE_IMAGE_DESCRIPTION,
+                LectureSchema.COURSE_NAME,
             ],
             limit=5,
         )
         print(json.dumps(response, indent=2))
         return response
-
-    def get_collection(self, path: str):
-        pass

@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import List, Dict
+from typing import List
 
 
 class AbstractRetrieval(ABC):
@@ -8,15 +8,8 @@ class AbstractRetrieval(ABC):
     """
 
     @abstractmethod
-    def retrieve(self, path: str) -> List[str]:
+    def retrieve(self, path: str, hybrid_factor: float) -> List[str]:
         """
         Abstract method to ingest repositories into the database.
-        """
-        pass
-
-    @abstractmethod
-    def get_collection(self, path: str):
-        """
-        Abstract method to update a repository in the database.
         """
         pass

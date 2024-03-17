@@ -4,9 +4,9 @@ from openai import OpenAI
 from openai.lib.azure import AzureOpenAI
 from openai.types.chat import ChatCompletionMessageParam, ChatCompletionMessage
 
-from domain import IrisMessage, IrisMessageRole
-from llm import CompletionArguments
-from llm.external.model import ChatModel
+from ...domain import IrisMessage, IrisMessageRole
+from ...llm import CompletionArguments
+from ...llm.external.model import ChatModel
 
 
 def convert_to_open_ai_messages(

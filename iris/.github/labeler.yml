@@ -1,3 +1,18 @@
 "component:LLM":
   - changed-files:
       - any-glob-to-any-file: app/llm/**
+"component:Pipeline":
+  - changed-files:
+      - any-glob-to-any-file: app/pipeline/**
+"component:FastAPI":
+  - changed-files:
+      - any-glob-to-any-file: app/web/**
+"component:Domain":
+  - changed-files:
+      - any-glob-to-any-file: app/domain/**
+"component:Docker":
+  - changed-files:
+      - any-glob-to-any-file: docker/**
+"component:CI/CD":
+  - changed-files:
+      - any-glob-to-any-file: .github/**

@@ -4,8 +4,10 @@ from pydantic import BaseModel, Field
 
 import yaml
 
-from common import Singleton
-from llm.external import LanguageModel, AnyLLM
+from ..common import Singleton
+from ..llm.capability import RequirementList
+from ..llm.capability.capability_checker import calculate_capability_scores
+from ..llm.external import LanguageModel, AnyLLM
 
 
 # Small workaround to get pydantic discriminators working
@@ -26,6 +28,7 @@ class LlmManager(metaclass=Singleton):
                 return llm
 
     def load_llms(self):
+        """Load the llms from the config file"""
         path = os.environ.get("LLM_CONFIG_PATH")
         if not path:
             raise Exception("LLM_CONFIG_PATH not set")
@@ -34,3 +37,13 @@ class LlmManager(metaclass=Singleton):
             loaded_llms = yaml.safe_load(file)
 
         self.entries = LlmList.parse_obj({"llms": loaded_llms}).llms
+
+    def get_llms_sorted_by_capabilities_score(
+        self, requirements: RequirementList, invert_cost: bool = False
+    ):
+        """Get the llms sorted by their capability to requirement scores"""
+        scores = calculate_capability_scores(
+            [llm.capabilities for llm in self.entries], requirements, invert_cost
+        )
+        sorted_llms = sorted(zip(scores, self.entries), key=lambda pair: -pair[0])
+        return [llm for _, llm in sorted_llms]
