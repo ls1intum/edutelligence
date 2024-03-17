@@ -2,7 +2,7 @@ from typing import Literal, Any
 
 from openai import OpenAI
 from openai.lib.azure import AzureOpenAI
-from openai.types.chat import ChatCompletionMessageParam, ChatCompletionMessage
+from openai.types.chat import ChatCompletionMessage
 
 from domain import IrisMessage, IrisMessageRole
 from llm import CompletionArguments
@@ -11,7 +11,10 @@ from llm.external.model import ChatModel
 
 def convert_to_open_ai_messages(
     messages: list[IrisMessage],
-) -> list[ChatCompletionMessageParam]:
+) -> list[dict[str, Any]]:
+    """
+    Convert IrisMessage to OpenAI ChatCompletionMessageParam
+    """
     openai_messages = []
     for message in messages:
         if message.images:
@@ -20,7 +23,7 @@ def convert_to_open_ai_messages(
                 content.append(
                     {
                         "type": "image_url",
-                        "image_url": f"data:image/jpeg;base64,{image.base64}",
+                        "image_url": f"data:image/{image.type};base64,{image.base64}",
                     }
                 )
         else:
@@ -31,7 +34,9 @@ def convert_to_open_ai_messages(
 
 
 def convert_to_iris_message(message: ChatCompletionMessage) -> IrisMessage:
-    # Get IrisMessageRole from the string message.role
+    """
+    Convert OpenAI ChatCompletionMessage to IrisMessage
+    """
     message_role = IrisMessageRole(message.role)
     return IrisMessage(role=message_role, text=message.content)
 
