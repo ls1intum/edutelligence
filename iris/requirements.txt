@@ -9,4 +9,4 @@ PyYAML==6.0.1
 uvicorn==0.27.1
 requests~=2.31.0
 weaviate-client==4.5.4
-PyMuPDF=1.23.22
+PyMuPDF==1.23.22
