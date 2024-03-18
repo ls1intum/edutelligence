@@ -58,9 +58,9 @@ class LectureIngestion(AbstractIngestion):  # Inherits from the abstract class
             for index, chunk in enumerate(chunks):
                 # embed the
                 embed_chunk = embedding_model.embed(
-                    chunk[1][
-                        LectureSchema.PAGE_TEXT_CONTENT
-                        ] + "\n" + chunk[1][LectureSchema.PAGE_IMAGE_DESCRIPTION]
+                    chunk[1][LectureSchema.PAGE_TEXT_CONTENT]
+                    + "\n"
+                    + chunk[1][LectureSchema.PAGE_IMAGE_DESCRIPTION]
                 )
                 batch.add_object(properties=chunk, vector=embed_chunk)
         return True
