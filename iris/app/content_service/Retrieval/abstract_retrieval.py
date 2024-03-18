@@ -4,7 +4,7 @@ from typing import List
 
 class AbstractRetrieval(ABC):
     """
-    Abstract class for ingesting repositories into a database.
+    Abstract class for retrieving data from a database.
     """
 
     @abstractmethod
