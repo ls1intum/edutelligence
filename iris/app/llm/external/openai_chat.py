@@ -4,9 +4,9 @@ from openai import OpenAI
 from openai.lib.azure import AzureOpenAI
 from openai.types.chat import ChatCompletionMessage
 
-from domain import IrisMessage, IrisMessageRole
-from llm import CompletionArguments
-from llm.external.model import ChatModel
+from ...domain import IrisMessage, IrisMessageRole
+from ...llm import CompletionArguments
+from ...llm.external.model import ChatModel
 
 
 def convert_to_open_ai_messages(
@@ -24,6 +24,7 @@ def convert_to_open_ai_messages(
                     {
                         "type": "image_url",
                         "image_url": f"data:image/{image.type};base64,{image.base64}",
+                        "detail": "high",
                     }
                 )
         else:

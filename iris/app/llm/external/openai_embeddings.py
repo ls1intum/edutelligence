@@ -2,7 +2,7 @@ from typing import Literal, Any
 from openai import OpenAI
 from openai.lib.azure import AzureOpenAI
 
-from llm.external.model import EmbeddingModel
+from ...llm.external.model import EmbeddingModel
 
 
 class OpenAIEmbeddingModel(EmbeddingModel):

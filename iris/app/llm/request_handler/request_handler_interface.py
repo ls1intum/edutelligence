@@ -1,7 +1,7 @@
 from abc import ABCMeta, abstractmethod
 
-from domain import IrisMessage
-from llm.completion_arguments import CompletionArguments
+from ...domain import IrisMessage
+from ...llm import CompletionArguments
 
 
 class RequestHandler(metaclass=ABCMeta):

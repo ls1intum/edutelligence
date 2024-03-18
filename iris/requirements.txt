@@ -8,3 +8,4 @@ pre-commit==3.6.2
 pydantic==2.6.3
 PyYAML==6.0.1
 uvicorn==0.27.1
+requests~=2.31.0

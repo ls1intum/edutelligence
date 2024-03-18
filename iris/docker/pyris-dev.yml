@@ -1,0 +1,21 @@
+# ----------------------------------------------------------------------------------------------------------------------
+# Setup for a Pyris development server.
+# ----------------------------------------------------------------------------------------------------------------------
+
+services:
+  pyris-app:
+    extends:
+      file: ./pyris.yml
+      service: pyris-app
+    pull_policy: never
+    restart: "no"
+    volumes:
+      - ../application.local.yml:/config/application.yml:ro
+      - ../llm_config.local.yml:/config/llm_config.yml:ro
+    networks:
+      - pyris
+
+networks:
+  pyris:
+    driver: "bridge"
+    name: pyris

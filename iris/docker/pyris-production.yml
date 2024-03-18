@@ -1,0 +1,42 @@
+# ----------------------------------------------------------------------------------------------------------------------
+# Setup for a Pyris production server.
+# ----------------------------------------------------------------------------------------------------------------------
+# It is designed to take in a lot of environment variables to take in all the configuration of the deployment.
+# ----------------------------------------------------------------------------------------------------------------------
+
+services:
+  pyris-app:
+    extends:
+      file: ./pyris.yml
+      service: pyris-app
+    image: ghcr.io/ls1intum/pyris:${PYRIS_DOCKER_TAG:-latest}
+    depends_on:
+      nginx:
+        condition: service_started
+    pull_policy: always
+    restart: unless-stopped
+    volumes:
+      - ${PYRIS_APPLICATION_YML_FILE}:/config/application.yml:ro
+      - ${PYRIS_LLM_CONFIG_YML_FILE}:/config/llm_config.yml:ro
+    networks:
+      - pyris
+
+  nginx:
+    extends:
+      file: ./nginx.yml
+      service: nginx
+    restart: always
+    volumes:
+      - type: bind
+        source: ${NGINX_PROXY_SSL_CERTIFICATE_PATH:-./nginx/certs/pyris-nginx+4.pem}
+        target: "/certs/fullchain.pem"
+      - type: bind
+        source: ${NGINX_PROXY_SSL_CERTIFICATE_KEY_PATH:-./nginx/certs/pyris-nginx+4-key.pem}
+        target: "/certs/priv_key.pem"
+    networks:
+      - pyris
+
+networks:
+  pyris:
+    driver: "bridge"
+    name: pyris

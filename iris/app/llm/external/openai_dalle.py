@@ -5,7 +5,7 @@ from typing import Literal, Any
 import requests
 from openai import OpenAI
 
-from domain import PyrisImage
+from domain.iris_image import IrisImage
 from llm.external.model import ImageGenerationModel
 
 
@@ -26,7 +26,10 @@ class OpenAIDalleWrapper(ImageGenerationModel):
         ] = "256x256",
         quality: Literal["standard", "hd"] = "standard",
         **kwargs
-    ) -> [PyrisImage]:
+    ) -> [IrisImage]:
+        """
+        Generate images from the prompt
+        """
         response = self._client.images.generate(
             model=self.model,
             prompt=prompt,
@@ -49,7 +52,7 @@ class OpenAIDalleWrapper(ImageGenerationModel):
                 )
 
             iris_images.append(
-                PyrisImage(
+                IrisImage(
                     prompt=image.revised_prompt,
                     base64=image.b64_json,
                     timestamp=datetime.fromtimestamp(response.created),

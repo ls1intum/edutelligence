@@ -4,10 +4,10 @@ from pydantic import BaseModel, Field
 
 import yaml
 
-from common import Singleton
-from llm.capability import RequirementList
-from llm.capability.capability_checker import calculate_capability_scores
-from llm.external import LanguageModel, AnyLLM
+from ..common import Singleton
+from ..llm.capability import RequirementList
+from ..llm.capability.capability_checker import calculate_capability_scores
+from ..llm.external import LanguageModel, AnyLLM
 
 
 # Small workaround to get pydantic discriminators working
