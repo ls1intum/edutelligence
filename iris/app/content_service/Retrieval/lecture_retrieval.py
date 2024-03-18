@@ -11,7 +11,7 @@ from content_service.Retrieval.abstract_retrieval import AbstractRetrieval
 
 class LectureRetrieval(AbstractRetrieval, ABC):
     """
-    Class for ingesting repositories into a database.
+    Class for retrieving lecture data from the database.
     """
 
     def __init__(self, client: weaviate.WeaviateClient):
