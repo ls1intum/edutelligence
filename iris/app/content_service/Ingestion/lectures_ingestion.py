@@ -56,14 +56,12 @@ class LectureIngestion(AbstractIngestion):  # Inherits from the abstract class
         """
         chunks = self.chunk_data(lecture_path)
         with self.collection.batch.dynamic() as batch:
-            for chunk in enumerate(chunks):
+            for index, chunk in enumerate(chunks):
                 # embed the
                 embed_chunk = embedding_model.embed(
-                    chunk[
+                    chunk[1][
                         LectureSchema.PAGE_TEXT_CONTENT
-                        + "\n"
-                        + chunk[LectureSchema.PAGE_IMAGE_DESCRIPTION]
-                    ]
+                        ] + "\n" + chunk[1][LectureSchema.PAGE_IMAGE_DESCRIPTION]
                 )
                 batch.add_object(properties=chunk, vector=embed_chunk)
         return True
