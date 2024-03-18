@@ -78,9 +78,9 @@ class RepositoryIngestion(AbstractIngestion, ABC):
         """
         chunks = self.chunk_files(repo_path)
         with self.collection.batch.dynamic() as batch:
-            for chunk in enumerate(chunks):
+            for index, chunk in enumerate(chunks):
                 embed_chunk = self.iris_embedding_model.embed_query(
-                    chunk[RepositorySchema.CONTENT]
+                    chunk[1][RepositorySchema.CONTENT]
                 )
                 batch.add_object(properties=chunk, vector=embed_chunk)
         return True
