@@ -3,7 +3,7 @@ from typing import Dict
 import fitz
 import weaviate
 from app.vector_database.lectureschema import init_lecture_schema, LectureSchema
-from content_service.Ingestion.abstract_ingestion import AbstractIngestion
+from ..Ingestion.abstract_ingestion import AbstractIngestion
 from app.llm import BasicRequestHandler
 
 

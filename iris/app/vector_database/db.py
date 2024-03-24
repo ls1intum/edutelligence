@@ -7,6 +7,9 @@ from repository_schema import init_repository_schema
 
 
 class VectorDatabase:
+    """
+    Vector Database class
+    """
     def __init__(self):
         """weaviate_host = os.getenv("WEAVIATE_HOST")
         weaviate_port = os.getenv("WEAVIATE_PORT")
