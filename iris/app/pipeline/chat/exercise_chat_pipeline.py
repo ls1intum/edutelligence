@@ -11,10 +11,10 @@ from langchain_core.runnables import Runnable
 from ...domain.data.build_log_entry import BuildLogEntryDTO
 from ...domain.data.feedback_dto import FeedbackDTO
 from ..prompts.iris_tutor_chat_prompts import (
-    iris_initial_system_prompt,
+    iris_exercise_initial_system_prompt,
     chat_history_system_prompt,
     final_system_prompt,
-    guide_system_prompt,
+    guide_exercise_system_prompt,
 )
 from ...domain import TutorChatPipelineExecutionDTO
 from ...domain.data.submission_dto import SubmissionDTO
@@ -22,6 +22,7 @@ from ...domain.data.message_dto import MessageDTO
 from ...web.status.status_update import TutorChatStatusCallback
 from .file_selector_pipeline import FileSelectorPipeline
 from ...llm.langchain import IrisLangchainChatModel
+from tutor_chat_pipeline import _add_conversation_to_prompt
 
 from ..pipeline import Pipeline
 
@@ -58,7 +59,7 @@ class ExerciseChatPipeline(Pipeline):
         # Set up the initial prompt
         self.prompt = ChatPromptTemplate.from_messages(
             [
-                ("system", iris_initial_system_prompt),
+                ("system", iris_exercise_initial_system_prompt),
                 ("system", chat_history_system_prompt),
             ]
         )
@@ -80,7 +81,7 @@ class ExerciseChatPipeline(Pipeline):
         programming_language = dto.exercise.programming_language.value.lower()
 
         # Add the chat history and user question to the prompt
-        self._add_conversation_to_prompt(history, query)
+        self.prompt = _add_conversation_to_prompt(history, query, self.prompt)
 
         self.callback.in_progress("Looking up files in the repository...")
         # Create the file selection prompt based on the current prompt
@@ -121,34 +122,13 @@ class ExerciseChatPipeline(Pipeline):
             response_draft = (self.prompt | self.pipeline).invoke({})
             self.prompt += AIMessagePromptTemplate.from_template(f"{response_draft}")
             self.prompt += SystemMessagePromptTemplate.from_template(
-                guide_system_prompt
+                guide_exercise_system_prompt
             )
             response = (self.prompt | self.pipeline).invoke({})
             logger.info(f"Response from Exercise chat pipeline: {response}")
             self.callback.done("Generated response", final_result=response)
         except Exception as e:
             self.callback.error(f"Failed to generate response: {e}")
-
-    def _add_conversation_to_prompt(
-            self,
-            chat_history: List[MessageDTO],
-            user_question: MessageDTO,
-    ):
-        """
-        Adds the chat history and user question to the prompt
-            :param chat_history: The chat history
-            :param user_question: The user question
-            :return: The prompt with the chat history
-        """
-        if chat_history is not None and len(chat_history) > 0:
-            chat_history_messages = [
-                message.convert_to_langchain_message() for message in chat_history
-            ]
-            self.prompt += chat_history_messages
-            self.prompt += SystemMessagePromptTemplate.from_template(
-                "Now, consider the student's newest and latest input:"
-            )
-        self.prompt += user_question.convert_to_langchain_message()
 
     def _add_student_repository_to_prompt(
             self, student_repository: Dict[str, str], selected_files: List[str]

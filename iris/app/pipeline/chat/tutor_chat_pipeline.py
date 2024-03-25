@@ -1,16 +1,41 @@
 import logging
+from typing import List
+
 from exercise_chat_pipeline import ExerciseChatPipeline
 from lecture_chat_pipeline import LectureChatPipeline
 from langchain_core.output_parsers import StrOutputParser
-from langchain_core.prompts import PromptTemplate
+from langchain_core.prompts import PromptTemplate, SystemMessagePromptTemplate, ChatPromptTemplate
 from langchain_core.runnables import Runnable
 from ...domain import TutorChatPipelineExecutionDTO
+from ...domain.data.message_dto import MessageDTO
 from ...web.status.status_update import TutorChatStatusCallback
 from ...llm import BasicRequestHandler, CompletionArguments
 from ...llm.langchain import IrisLangchainChatModel
 from ..pipeline import Pipeline
 
 logger = logging.getLogger(__name__)
+
+
+def _add_conversation_to_prompt(
+        chat_history: List[MessageDTO],
+        user_question: MessageDTO,
+        prompt: ChatPromptTemplate
+):
+    """
+    Adds the chat history and user question to the prompt
+        :param chat_history: The chat history
+        :param user_question: The user question
+        :return: The prompt with the chat history
+    """
+    if chat_history is not None and len(chat_history) > 0:
+        chat_history_messages = [
+            message.convert_to_langchain_message() for message in chat_history
+        ]
+        prompt += chat_history_messages
+        prompt += SystemMessagePromptTemplate.from_template(
+            "Now, consider the student's newest and latest input:"
+        )
+    prompt += user_question.convert_to_langchain_message()
 
 
 class TutorChatPipeline(Pipeline):

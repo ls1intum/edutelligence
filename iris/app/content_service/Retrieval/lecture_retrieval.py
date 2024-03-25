@@ -22,8 +22,8 @@ class LectureRetrieval(AbstractRetrieval, ABC):
         user_message: str,
         hybrid_factor: float,
         lecture_id: int = None,
-        message_vector: [float] = None,
-    ) -> List[str]:
+        embedding_vector: [float] = None,
+    ) -> List[dict]:
         response = self.collection.query.hybrid(
             query=user_message,
             filters=(
@@ -32,13 +32,12 @@ class LectureRetrieval(AbstractRetrieval, ABC):
                 else None
             ),
             alpha=hybrid_factor,
-            vector=message_vector,
+            vector=embedding_vector,
             return_properties=[
                 LectureSchema.PAGE_TEXT_CONTENT,
                 LectureSchema.PAGE_IMAGE_DESCRIPTION,
-                LectureSchema.COURSE_NAME,
             ],
-            limit=5,
+            limit=3,
         )
         print(json.dumps(response, indent=2))
-        return response
+        return response["data"]["Get"][self.collection.name][0]
