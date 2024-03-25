@@ -4,7 +4,7 @@ from langchain_core.prompts import (
     ChatPromptTemplate,
     SystemMessagePromptTemplate,
     HumanMessagePromptTemplate,
-    AIMessagePromptTemplate
+    AIMessagePromptTemplate,
 )
 from langchain_core.runnables import Runnable
 
@@ -38,7 +38,12 @@ class ExerciseChatPipeline(Pipeline):
     file_selector_pipeline: FileSelectorPipeline
     prompt: ChatPromptTemplate
 
-    def __init__(self, callback: TutorChatStatusCallback, pipeline: Runnable, llm: IrisLangchainChatModel):
+    def __init__(
+        self,
+        callback: TutorChatStatusCallback,
+        pipeline: Runnable,
+        llm: IrisLangchainChatModel,
+    ):
         super().__init__(implementation_id="exercise_chat_pipeline")
         self.llm = llm
         self.callback = callback
@@ -131,7 +136,7 @@ class ExerciseChatPipeline(Pipeline):
             self.callback.error(f"Failed to generate response: {e}")
 
     def _add_student_repository_to_prompt(
-            self, student_repository: Dict[str, str], selected_files: List[str]
+        self, student_repository: Dict[str, str], selected_files: List[str]
     ):
         """Adds the student repository to the prompt
         :param student_repository: The student repository
@@ -147,9 +152,9 @@ class ExerciseChatPipeline(Pipeline):
                 )
 
     def _add_exercise_context_to_prompt(
-            self,
-            submission: SubmissionDTO,
-            selected_files: List[str],
+        self,
+        submission: SubmissionDTO,
+        selected_files: List[str],
     ):
         """Adds the exercise context to the prompt
         :param submission: The submission
@@ -176,12 +181,12 @@ class ExerciseChatPipeline(Pipeline):
         """
         if feedbacks is not None and len(feedbacks) > 0:
             prompt = (
-                         "These are the feedbacks for the student's repository:\n%s"
-                     ) % "\n---------\n".join(str(log) for log in feedbacks)
+                "These are the feedbacks for the student's repository:\n%s"
+            ) % "\n---------\n".join(str(log) for log in feedbacks)
             self.prompt += SystemMessagePromptTemplate.from_template(prompt)
 
     def _add_build_logs_to_prompt(
-            self, build_logs: List[BuildLogEntryDTO], build_failed: bool
+        self, build_logs: List[BuildLogEntryDTO], build_failed: bool
     ):
         """Adds the build logs to the prompt
         :param build_logs: The build logs
@@ -189,9 +194,9 @@ class ExerciseChatPipeline(Pipeline):
         """
         if build_logs is not None and len(build_logs) > 0:
             prompt = (
-                         f"Here is the information if the build failed: {build_failed}\n"
-                         "These are the build logs for the student's repository:\n%s"
-                     ) % "\n".join(str(log) for log in build_logs)
+                f"Here is the information if the build failed: {build_failed}\n"
+                "These are the build logs for the student's repository:\n%s"
+            ) % "\n".join(str(log) for log in build_logs)
             self.prompt += SystemMessagePromptTemplate.from_template(prompt)
 
     def _generate_file_selection_prompt(self) -> ChatPromptTemplate:

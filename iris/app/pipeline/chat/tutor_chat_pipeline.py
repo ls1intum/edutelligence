@@ -4,7 +4,11 @@ from typing import List
 from exercise_chat_pipeline import ExerciseChatPipeline
 from lecture_chat_pipeline import LectureChatPipeline
 from langchain_core.output_parsers import StrOutputParser
-from langchain_core.prompts import PromptTemplate, SystemMessagePromptTemplate, ChatPromptTemplate
+from langchain_core.prompts import (
+    PromptTemplate,
+    SystemMessagePromptTemplate,
+    ChatPromptTemplate,
+)
 from langchain_core.runnables import Runnable
 from ...domain import TutorChatPipelineExecutionDTO
 from ...domain.data.message_dto import MessageDTO
@@ -17,9 +21,9 @@ logger = logging.getLogger(__name__)
 
 
 def _add_conversation_to_prompt(
-        chat_history: List[MessageDTO],
-        user_question: MessageDTO,
-        prompt: ChatPromptTemplate
+    chat_history: List[MessageDTO],
+    user_question: MessageDTO,
+    prompt: ChatPromptTemplate,
 ):
     """
     Adds the chat history and user question to the prompt
@@ -57,8 +61,12 @@ class TutorChatPipeline(Pipeline):
 
         # Create the pipelines
         self.pipeline = self.llm | StrOutputParser()
-        self.exercise_pipeline = ExerciseChatPipeline(callback=callback, pipeline=self.pipeline, llm=self.llm)
-        self.lecture_pipeline = LectureChatPipeline(callback=callback, pipeline=self.pipeline, llm=self.llm)
+        self.exercise_pipeline = ExerciseChatPipeline(
+            callback=callback, pipeline=self.pipeline, llm=self.llm
+        )
+        self.lecture_pipeline = LectureChatPipeline(
+            callback=callback, pipeline=self.pipeline, llm=self.llm
+        )
 
     def __repr__(self):
         return f"{self.__class__.__name__}(llm={self.llm})"
@@ -88,11 +96,10 @@ class TutorChatPipeline(Pipeline):
 
                 Classification:"""
             )
-            chain = (routing_prompt | self.pipeline)
+            chain = routing_prompt | self.pipeline
             response = chain.invoke({"question": dto.chat_history[-1]})
             if "Lecture_content" in response:
                 # Execute lecture content pipeline
                 self.lecture_pipeline.__call__(dto)
             else:
                 self.exercise_pipeline.__call__(dto)
-

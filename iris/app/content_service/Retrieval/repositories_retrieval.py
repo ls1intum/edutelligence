@@ -3,7 +3,10 @@ from typing import List
 
 import weaviate
 
-from ...vector_database.repository_schema import RepositorySchema, init_repository_schema
+from ...vector_database.repository_schema import (
+    RepositorySchema,
+    init_repository_schema,
+)
 
 from ..Retrieval.abstract_retrieval import AbstractRetrieval
 

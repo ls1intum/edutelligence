@@ -2,12 +2,17 @@ import logging
 from typing import List
 
 from langchain_core.prompts import (
-    ChatPromptTemplate, AIMessagePromptTemplate, SystemMessagePromptTemplate,
+    ChatPromptTemplate,
+    AIMessagePromptTemplate,
+    SystemMessagePromptTemplate,
 )
 from langchain_core.runnables import Runnable
 
-from ..prompts.iris_tutor_chat_prompts import iris_lecture_initial_system_prompt, chat_history_system_prompt, \
-    guide_lecture_system_prompt
+from ..prompts.iris_tutor_chat_prompts import (
+    iris_lecture_initial_system_prompt,
+    chat_history_system_prompt,
+    guide_lecture_system_prompt,
+)
 from ...content_service.Retrieval.lecture_retrieval import LectureRetrieval
 from ...domain import TutorChatPipelineExecutionDTO
 from ...domain.data.message_dto import MessageDTO
@@ -33,8 +38,13 @@ class LectureChatPipeline(Pipeline):
     db: WeaviateClient
     retriever: LectureRetrieval
 
-    def __init__(self, callback: TutorChatStatusCallback, pipeline: Runnable, llm: IrisLangchainChatModel,
-                 llm_embedding: IrisLangchainEmbeddingModel):
+    def __init__(
+        self,
+        callback: TutorChatStatusCallback,
+        pipeline: Runnable,
+        llm: IrisLangchainChatModel,
+        llm_embedding: IrisLangchainEmbeddingModel,
+    ):
         super().__init__(implementation_id="lecture_chat_pipeline")
         self.llm = llm
         self.llm_embedding = llm_embedding
@@ -68,10 +78,13 @@ class LectureChatPipeline(Pipeline):
         # Add the chat history and user question to the prompt
         self.prompt = _add_conversation_to_prompt(history, query, self.prompt)
         self.callback.in_progress("Retrieve relevant chunks of the lectures...")
-        retrieved_lecture_chunks = self.retriever.retrieve(query.contents[0].text_content,
-                                                           hybrid_factor=1,
-                                                           embedding_vector=self.llm_embedding.embed_query(
-                                                               query.contents[0].text_content))
+        retrieved_lecture_chunks = self.retriever.retrieve(
+            query.contents[0].text_content,
+            hybrid_factor=1,
+            embedding_vector=self.llm_embedding.embed_query(
+                query.contents[0].text_content
+            ),
+        )
         self._add_relevant_chunks_to_prompt(retrieved_lecture_chunks)
         self.prompt += SystemMessagePromptTemplate.from_template(
             "Answer the user query based on the above provided Context"
@@ -92,8 +105,8 @@ class LectureChatPipeline(Pipeline):
             self.callback.error(f"Failed to generate response: {e}")
 
     def _add_relevant_chunks_to_prompt(
-            self,
-            retrieved_lecture_chunks: List[dict],
+        self,
+        retrieved_lecture_chunks: List[dict],
     ):
         """
         Adds the relevant chunks of the lecture to the prompt
@@ -104,8 +117,12 @@ class LectureChatPipeline(Pipeline):
                 "Next you will find the relevant chunks of the lecture:"
             )
             self.prompt += SystemMessagePromptTemplate.from_template(
-                LectureSchema.PAGE_TEXT_CONTENT + ": " + chunk[LectureSchema.PAGE_TEXT_CONTENT]
+                LectureSchema.PAGE_TEXT_CONTENT
+                + ": "
+                + chunk[LectureSchema.PAGE_TEXT_CONTENT]
             )
             self.prompt += SystemMessagePromptTemplate.from_template(
-                LectureSchema.PAGE_IMAGE_DESCRIPTION + ": " + chunk[LectureSchema.PAGE_IMAGE_DESCRIPTION]
+                LectureSchema.PAGE_IMAGE_DESCRIPTION
+                + ": "
+                + chunk[LectureSchema.PAGE_IMAGE_DESCRIPTION]
             )
