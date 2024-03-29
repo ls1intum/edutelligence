@@ -77,7 +77,7 @@ class LectureChatPipeline(Pipeline):
 
         # Add the chat history and user question to the prompt
         self.prompt = _add_conversation_to_prompt(history, query, self.prompt)
-        self.callback.in_progress("Retrieve relevant chunks of the lectures...")
+        self.callback.in_progress("Retrieve relevant lecture content...")
         retrieved_lecture_chunks = self.retriever.retrieve(
             query.contents[0].text_content,
             hybrid_factor=1,
@@ -89,7 +89,6 @@ class LectureChatPipeline(Pipeline):
         self.prompt += SystemMessagePromptTemplate.from_template(
             "Answer the user query based on the above provided Context"
         )
-        # Retrieve relevant chunks of the lectures
         self.callback.in_progress("Generating response...")
 
         try:
@@ -104,25 +103,27 @@ class LectureChatPipeline(Pipeline):
         except Exception as e:
             self.callback.error(f"Failed to generate response: {e}")
 
-    def _add_relevant_chunks_to_prompt(
-        self,
-        retrieved_lecture_chunks: List[dict],
-    ):
+    def _add_relevant_chunks_to_prompt(self, retrieved_lecture_chunks: List[dict]):
         """
         Adds the relevant chunks of the lecture to the prompt
-            :param retrieved_lecture_chunks: The retrieved lecture chunks
+        :param retrieved_lecture_chunks: The retrieved lecture chunks
         """
-        for chunk in retrieved_lecture_chunks:
-            self.prompt += SystemMessagePromptTemplate.from_template(
+        # Initial message about the lecture chunks
+        chunk_messages = [
+            SystemMessagePromptTemplate.from_template(
                 "Next you will find the relevant chunks of the lecture:"
             )
-            self.prompt += SystemMessagePromptTemplate.from_template(
-                LectureSchema.PAGE_TEXT_CONTENT
-                + ": "
-                + chunk[LectureSchema.PAGE_TEXT_CONTENT]
+        ]
+
+        # Iterate over the chunks to create formatted messages for each
+        for i, chunk in enumerate(retrieved_lecture_chunks, start=1):
+            text_content_msg = (
+                f"{LectureSchema.PAGE_TEXT_CONTENT}{i}:"
+                f" {chunk.get(LectureSchema.PAGE_TEXT_CONTENT)}" + "\n"
             )
-            self.prompt += SystemMessagePromptTemplate.from_template(
-                LectureSchema.PAGE_IMAGE_DESCRIPTION
-                + ": "
-                + chunk[LectureSchema.PAGE_IMAGE_DESCRIPTION]
+            image_desc_msg = (
+                f"{LectureSchema.PAGE_IMAGE_DESCRIPTION}{i}: "
+                f"{chunk.get(LectureSchema.PAGE_IMAGE_DESCRIPTION)}" + "\n"
             )
+            self.prompt += SystemMessagePromptTemplate.from_template(text_content_msg)
+            self.prompt += SystemMessagePromptTemplate.from_template(image_desc_msg)

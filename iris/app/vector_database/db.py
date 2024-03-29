@@ -25,10 +25,10 @@ class VectorDatabase:
         # Connect to the Weaviate Cloud Service until we set up a proper docker for this project
         self.client = weaviate.connect_to_wcs(
             cluster_url=os.getenv(
-                "https://try-repository-pipeline-99b1nlo4.weaviate.network"
+                "https://pyrisv2-0r7l130v.weaviate.network"
             ),  # Replace with your WCS URL
             auth_credentials=weaviate.auth.AuthApiKey(
-                os.getenv("2IPqwB6mwGMIs92UJ3StB0Wovj0MquBxs9Ql")
+                os.getenv("K33S5szDoHY8R3Xwp26RT4cvdJkpshdYX8Ly")
             ),  # Replace with your WCS key
         )
         print(self.client.is_ready())
