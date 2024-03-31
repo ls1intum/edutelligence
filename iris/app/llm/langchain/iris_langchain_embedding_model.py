@@ -1,4 +1,4 @@
-from typing import List, Any
+from typing import List
 from langchain_core.embeddings import Embeddings
 from ...llm import RequestHandler
 

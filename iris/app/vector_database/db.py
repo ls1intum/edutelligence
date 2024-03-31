@@ -1,5 +1,3 @@
-import os
-
 import weaviate
 from weaviate import WeaviateClient
 
