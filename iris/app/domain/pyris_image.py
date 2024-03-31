@@ -9,8 +9,8 @@ class PyrisImage:
     prompt: str
     base64: str
     timestamp: datetime
-    mime_type: str = ("jpeg",)
-    raw_data: any = (None,)
+    mime_type: str = "jpeg"
+    raw_data: any = None
 
     def __init__(
         self,
