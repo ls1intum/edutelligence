@@ -15,9 +15,9 @@ logger = logging.getLogger(__name__)
 
 
 def add_conversation_to_prompt(
-        chat_history: List[MessageDTO],
-        user_question: MessageDTO,
-        prompt: ChatPromptTemplate,
+    chat_history: List[MessageDTO],
+    user_question: MessageDTO,
+    prompt: ChatPromptTemplate,
 ):
     """
     Adds the chat history and user question to the prompt

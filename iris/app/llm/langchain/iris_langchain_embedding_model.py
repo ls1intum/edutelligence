@@ -2,6 +2,7 @@ from typing import List, Any
 from langchain_core.embeddings import Embeddings
 from ...llm import RequestHandler
 
+
 class IrisLangchainEmbeddingModel(Embeddings):
     """Custom langchain embedding for our own request handler"""
 

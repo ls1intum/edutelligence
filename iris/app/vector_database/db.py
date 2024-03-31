@@ -11,6 +11,7 @@ class VectorDatabase:
     """
     Vector Database class
     """
+
     client: WeaviateClient
 
     def __init__(self):
@@ -28,7 +29,9 @@ class VectorDatabase:
         self.client = weaviate.connect_to_wcs(
             cluster_url="https://pyrisv2-0r7l130v.weaviate.network",
             # Replace with your WCS URL
-            auth_credentials=weaviate.auth.AuthApiKey("K33S5szDoHY8R3Xwp26RT4cvdJkpshdYX8Ly")
+            auth_credentials=weaviate.auth.AuthApiKey(
+                "K33S5szDoHY8R3Xwp26RT4cvdJkpshdYX8Ly"
+            ),
         )  # Replace with your WCS key
         print(self.client.is_ready())
         self.repositories = init_repository_schema(self.client)

@@ -1,9 +1,7 @@
 import logging
 from .lecture_chat_pipeline import LectureChatPipeline
 from langchain_core.output_parsers import StrOutputParser
-from langchain_core.prompts import (
-    PromptTemplate
-)
+from langchain_core.prompts import PromptTemplate
 from langchain_core.runnables import Runnable
 from ...domain import TutorChatPipelineExecutionDTO
 from ...web.status.status_update import TutorChatStatusCallback
@@ -11,7 +9,9 @@ from ...llm import BasicRequestHandler, CompletionArguments
 from ...llm.langchain import IrisLangchainChatModel, IrisLangchainEmbeddingModel
 from ..pipeline import Pipeline
 from .exercise_chat_pipeline import ExerciseChatPipeline
+
 logger = logging.getLogger(__name__)
+
 
 class TutorChatPipeline(Pipeline):
     """Tutor chat pipeline that answers exercises related questions from students."""
@@ -29,7 +29,9 @@ class TutorChatPipeline(Pipeline):
             request_handler=request_handler, completion_args=completion_args
         )
         request_handler_embedding = BasicRequestHandler("ada")
-        self.llm_embedding = IrisLangchainEmbeddingModel(request_handler=request_handler_embedding)
+        self.llm_embedding = IrisLangchainEmbeddingModel(
+            request_handler=request_handler_embedding
+        )
         self.callback = callback
 
         # Create the pipelines
@@ -38,7 +40,10 @@ class TutorChatPipeline(Pipeline):
             callback=callback, pipeline=self.pipeline, llm=self.llm
         )
         self.lecture_pipeline = LectureChatPipeline(
-            callback=callback, pipeline=self.pipeline, llm=self.llm, llm_embedding=self.llm_embedding
+            callback=callback,
+            pipeline=self.pipeline,
+            llm=self.llm,
+            llm_embedding=self.llm_embedding,
         )
 
     def __repr__(self):

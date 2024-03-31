@@ -110,8 +110,6 @@ class LectureChatPipeline(Pipeline):
         """
         # Iterate over the chunks to create formatted messages for each
         for i, chunk in enumerate(retrieved_lecture_chunks, start=1):
-            text_content_msg = (
-                f" {chunk.get(LectureSchema.PAGE_TEXT_CONTENT)}" + "\n"
-            )
+            text_content_msg = f" {chunk.get(LectureSchema.PAGE_TEXT_CONTENT)}" + "\n"
             text_content_msg = text_content_msg.replace("{", "{{").replace("}", "}}")
             self.prompt += SystemMessagePromptTemplate.from_template(text_content_msg)
