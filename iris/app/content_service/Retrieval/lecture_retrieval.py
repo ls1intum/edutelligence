@@ -26,6 +26,7 @@ class LectureRetrieval(AbstractRetrieval, ABC):
     ) -> List[dict]:
         response = self.collection.query.hybrid(
             query=user_message,
+            limit=3,
             filters=(
                 wvc.query.Filter.by_property(LectureSchema.LECTURE_ID).equal(lecture_id)
                 if lecture_id
@@ -33,11 +34,6 @@ class LectureRetrieval(AbstractRetrieval, ABC):
             ),
             alpha=hybrid_factor,
             vector=embedding_vector,
-            return_properties=[
-                LectureSchema.PAGE_TEXT_CONTENT,
-                LectureSchema.PAGE_IMAGE_DESCRIPTION,
-            ],
-            limit=3,
         )
-        print(json.dumps(response, indent=2))
-        return response["data"]["Get"][self.collection.name][0]
+        relevant_chunks = [obj.properties for obj in response.objects]
+        return relevant_chunks

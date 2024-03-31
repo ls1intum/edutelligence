@@ -22,7 +22,7 @@ from ...llm.langchain import IrisLangchainChatModel, IrisLangchainEmbeddingModel
 from ..pipeline import Pipeline
 from weaviate import WeaviateClient
 from ...vector_database.db import VectorDatabase
-from tutor_chat_pipeline import _add_conversation_to_prompt
+from ..shared.summary_pipeline import add_conversation_to_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -76,8 +76,8 @@ class LectureChatPipeline(Pipeline):
         query: MessageDTO = dto.chat_history[-1]
 
         # Add the chat history and user question to the prompt
-        self.prompt = _add_conversation_to_prompt(history, query, self.prompt)
-        self.callback.in_progress("Retrieve relevant lecture content...")
+        self.prompt = add_conversation_to_prompt(history, query, self.prompt)
+        self.callback.in_progress("Looking up files in the repository...")
         retrieved_lecture_chunks = self.retriever.retrieve(
             query.contents[0].text_content,
             hybrid_factor=1,
@@ -89,8 +89,8 @@ class LectureChatPipeline(Pipeline):
         self.prompt += SystemMessagePromptTemplate.from_template(
             "Answer the user query based on the above provided Context"
         )
+        self.callback.done("Looked up files in the repository")
         self.callback.in_progress("Generating response...")
-
         try:
             response_draft = (self.prompt | self.pipeline).invoke({})
             self.prompt += AIMessagePromptTemplate.from_template(f"{response_draft}")
@@ -108,22 +108,10 @@ class LectureChatPipeline(Pipeline):
         Adds the relevant chunks of the lecture to the prompt
         :param retrieved_lecture_chunks: The retrieved lecture chunks
         """
-        # Initial message about the lecture chunks
-        chunk_messages = [
-            SystemMessagePromptTemplate.from_template(
-                "Next you will find the relevant chunks of the lecture:"
-            )
-        ]
-
         # Iterate over the chunks to create formatted messages for each
         for i, chunk in enumerate(retrieved_lecture_chunks, start=1):
             text_content_msg = (
-                f"{LectureSchema.PAGE_TEXT_CONTENT}{i}:"
                 f" {chunk.get(LectureSchema.PAGE_TEXT_CONTENT)}" + "\n"
             )
-            image_desc_msg = (
-                f"{LectureSchema.PAGE_IMAGE_DESCRIPTION}{i}: "
-                f"{chunk.get(LectureSchema.PAGE_IMAGE_DESCRIPTION)}" + "\n"
-            )
+            text_content_msg = text_content_msg.replace("{", "{{").replace("}", "}}")
             self.prompt += SystemMessagePromptTemplate.from_template(text_content_msg)
-            self.prompt += SystemMessagePromptTemplate.from_template(image_desc_msg)

@@ -112,7 +112,6 @@ standards set by the educational institution or governing bodies.
 
 Support a positive learning environment: Responses should aim to support a positive, engaging, and supportive 
 learning environment for all students.
-
 """
 guide_exercise_system_prompt = """Review the response draft. I want you to rewrite it, if it does not adhere to the 
 following rules. Only output the answer. Omit explanations.

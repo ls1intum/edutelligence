@@ -22,7 +22,7 @@ from ...domain.data.message_dto import MessageDTO
 from ...web.status.status_update import TutorChatStatusCallback
 from .file_selector_pipeline import FileSelectorPipeline
 from ...llm.langchain import IrisLangchainChatModel
-from tutor_chat_pipeline import _add_conversation_to_prompt
+from ..shared.summary_pipeline import add_conversation_to_prompt
 
 from ..pipeline import Pipeline
 
@@ -86,7 +86,7 @@ class ExerciseChatPipeline(Pipeline):
         programming_language = dto.exercise.programming_language.value.lower()
 
         # Add the chat history and user question to the prompt
-        self.prompt = _add_conversation_to_prompt(history, query, self.prompt)
+        self.prompt = add_conversation_to_prompt(history, query, self.prompt)
 
         self.callback.in_progress("Looking up files in the repository...")
         # Create the file selection prompt based on the current prompt
