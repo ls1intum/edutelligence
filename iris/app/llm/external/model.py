@@ -23,7 +23,9 @@ class CompletionModel(LanguageModel, metaclass=ABCMeta):
         return hasattr(subclass, "complete") and callable(subclass.complete)
 
     @abstractmethod
-    def complete(self, prompt: str, arguments: CompletionArguments, images: [PyrisImage] = None) -> str:
+    def complete(
+        self, prompt: str, arguments: CompletionArguments, images: [PyrisImage] = None
+    ) -> str:
         """Create a completion from the prompt"""
         raise NotImplementedError(
             f"The LLM {self.__str__()} does not support completion"
@@ -39,7 +41,7 @@ class ChatModel(LanguageModel, metaclass=ABCMeta):
 
     @abstractmethod
     def chat(
-            self, messages: list[IrisMessage], arguments: CompletionArguments
+        self, messages: list[IrisMessage], arguments: CompletionArguments
     ) -> IrisMessage:
         """Create a completion from the chat messages"""
         raise NotImplementedError(

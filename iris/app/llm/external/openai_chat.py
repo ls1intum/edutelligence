@@ -1,8 +1,8 @@
-from typing import Literal, Any, List, Dict
+from typing import Literal, Any
 
 from openai import OpenAI
 from openai.lib.azure import AzureOpenAI
-from openai.types.chat import ChatCompletionMessageParam, ChatCompletionMessage
+from openai.types.chat import ChatCompletionMessage
 
 from ...domain import IrisMessage, IrisMessageRole
 from ...llm import CompletionArguments
@@ -20,7 +20,7 @@ def convert_to_open_ai_messages(
                 content.append(
                     {
                         "type": "image_url",
-                        "image_url": f"data:image/{image.type};base64,{image.base64}",
+                        "image_url": f"data:image/{image.mime_type};base64,{image.base64}",
                         "detail": "high",
                     }
                 )

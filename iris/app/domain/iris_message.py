@@ -16,9 +16,10 @@ class IrisMessage(BaseModel):
     images: list[PyrisImage] | None
 
     def __init__(
-            self, role: IrisMessageRole, text: str, images: list[PyrisImage] | None = None
+        self, role: IrisMessageRole, text: str, images: list[PyrisImage] | None = None
     ):
         super().__init__(role=role, text=text)
         self.images = images
+
     def __str__(self):
         return f"{self.role.lower()}: {self.text}"

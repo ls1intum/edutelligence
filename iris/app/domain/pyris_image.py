@@ -5,11 +5,13 @@ class PyrisImage:
     """
     Represents an image from the Pyris dataset
     """
+
     prompt: str
     base64: str
     timestamp: datetime
-    mime_type: str = "jpeg",
-    raw_data: any = None,
+    mime_type: str = ("jpeg",)
+    raw_data: any = (None,)
+
     def __init__(
         self,
         prompt: str,
