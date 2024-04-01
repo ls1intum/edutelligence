@@ -12,7 +12,7 @@ class LectureIngestion(AbstractIngestion):  # Inherits from the abstract class
     def __init__(self, client: weaviate.WeaviateClient):
         self.collection = init_lecture_schema(client)
 
-    def chunk_data(self, lecture_path: str):#, llm: BasicRequestHandler):
+    def chunk_data(self, lecture_path: str):  # , llm: BasicRequestHandler):
         """
         Chunk the data from the lecture into smaller pieces
         """
@@ -28,7 +28,7 @@ class LectureIngestion(AbstractIngestion):  # Inherits from the abstract class
                 img_bytes = pix.tobytes("png")
                 # Encode the bytes to Base64 and then decode to a string
                 img_base64 = base64.b64encode(img_bytes).decode("utf-8")
-                #image_interpretation = llm.interpret_image(img_base64, page_content)
+                # image_interpretation = llm.interpret_image(img_base64, page_content)
                 page_content = page.get_text()
                 data.append(
                     {
@@ -53,11 +53,16 @@ class LectureIngestion(AbstractIngestion):  # Inherits from the abstract class
                 )
         return data
 
-    def ingest(self, lecture_path, image_llm: BasicRequestHandler = None, embedding_model: BasicRequestHandler = None) -> bool:
+    def ingest(
+        self,
+        lecture_path,
+        image_llm: BasicRequestHandler = None,
+        embedding_model: BasicRequestHandler = None,
+    ) -> bool:
         """
         Ingest the repositories into the weaviate database
         """
-        chunks = self.chunk_data(lecture_path)#, image_llm)
+        chunks = self.chunk_data(lecture_path)  # , image_llm)
         with self.collection.batch.dynamic() as batch:
             for index, chunk in enumerate(chunks):
                 # embed the
