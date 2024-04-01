@@ -2,9 +2,9 @@ import base64
 from typing import Dict
 import fitz
 import weaviate
-from app.vector_database.lectureschema import init_lecture_schema, LectureSchema
-from content_service.Ingestion.abstract_ingestion import AbstractIngestion
-from app.llm import BasicRequestHandler
+from ...vector_database.lectureschema import init_lecture_schema, LectureSchema
+from .abstract_ingestion import AbstractIngestion
+from ...llm import BasicRequestHandler
 
 
 class LectureIngestion(AbstractIngestion):  # Inherits from the abstract class
@@ -12,7 +12,10 @@ class LectureIngestion(AbstractIngestion):  # Inherits from the abstract class
     def __init__(self, client: weaviate.WeaviateClient):
         self.collection = init_lecture_schema(client)
 
-    def chunk_data(self, lecture_path: str):
+    def chunk_data(self, lecture_path: str):#, llm: BasicRequestHandler):
+        """
+        Chunk the data from the lecture into smaller pieces
+        """
         doc = fitz.open(lecture_path)  # Explicitly annotate as an Iterable of fitz.Page
         data = []
         for page_num in range(doc.page_count):
@@ -25,6 +28,7 @@ class LectureIngestion(AbstractIngestion):  # Inherits from the abstract class
                 img_bytes = pix.tobytes("png")
                 # Encode the bytes to Base64 and then decode to a string
                 img_base64 = base64.b64encode(img_bytes).decode("utf-8")
+                #image_interpretation = llm.interpret_image(img_base64, page_content)
                 page_content = page.get_text()
                 data.append(
                     {
@@ -49,18 +53,18 @@ class LectureIngestion(AbstractIngestion):  # Inherits from the abstract class
                 )
         return data
 
-    def ingest(self, lecture_path, embedding_model: BasicRequestHandler = None) -> bool:
+    def ingest(self, lecture_path, image_llm: BasicRequestHandler = None, embedding_model: BasicRequestHandler = None) -> bool:
         """
         Ingest the repositories into the weaviate database
         """
-        chunks = self.chunk_data(lecture_path)
+        chunks = self.chunk_data(lecture_path)#, image_llm)
         with self.collection.batch.dynamic() as batch:
             for index, chunk in enumerate(chunks):
                 # embed the
                 embed_chunk = embedding_model.embed(
-                    chunk[1][LectureSchema.PAGE_TEXT_CONTENT]
+                    chunk[LectureSchema.PAGE_TEXT_CONTENT]
                     + "\n"
-                    + chunk[1][LectureSchema.PAGE_IMAGE_DESCRIPTION]
+                    + chunk[LectureSchema.PAGE_IMAGE_DESCRIPTION]
                 )
                 batch.add_object(properties=chunk, vector=embed_chunk)
         return True

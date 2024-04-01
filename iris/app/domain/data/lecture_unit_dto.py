@@ -10,3 +10,4 @@ class LectureUnitDTO(BaseModel):
     release_date: Optional[datetime] = Field(alias="releaseDate", default=None)
     name: Optional[str] = None
     attachment_version: int = Field(alias="attachmentVersion")
+    pdf: str = Field(alias="pdf")
