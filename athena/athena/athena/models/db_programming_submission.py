@@ -8,7 +8,7 @@ from .big_integer_with_autoincrement import BigIntegerWithAutoincrement
 
 class DBProgrammingSubmission(DBSubmission, Base):
     __tablename__ = "programming_submissions"
-    repository_url: str = Column(String, nullable=False)  # type: ignore
+    repository_uri: str = Column(String, nullable=False)  # type: ignore
 
     exercise_id = Column(BigIntegerWithAutoincrement, ForeignKey("programming_exercises.id", ondelete="CASCADE"), index=True)
 

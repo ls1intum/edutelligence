@@ -1,6 +1,6 @@
 # type: ignore # too much weird behavior of mypy with decorators
 import inspect
-from fastapi import Depends, BackgroundTasks
+from fastapi import Depends, BackgroundTasks, Body
 from pydantic import BaseModel, ValidationError
 from typing import TypeVar, Callable, List, Union, Any, Coroutine, Type
 
@@ -14,10 +14,10 @@ from athena.schemas.schema import to_camel
 from athena.storage import get_stored_submission_meta, get_stored_exercise_meta, get_stored_feedback_meta, \
     store_exercise, store_feedback, store_feedback_suggestions, store_submissions, get_stored_submissions
 
-
 E = TypeVar('E', bound=Exercise)
 S = TypeVar('S', bound=Submission)
 F = TypeVar('F', bound=Feedback)
+G = TypeVar('G', bound=bool)
 
 # Config type
 C = TypeVar("C", bound=BaseModel)
@@ -75,7 +75,7 @@ def submissions_consumer(func: Union[
             exercise: exercise_type,
             submissions: List[submission_type],
             module_config: module_config_type = Depends(get_dynamic_module_config_factory(module_config_type))):
-        
+
         # Retrieve existing metadata for the exercise and submissions
         exercise_meta = get_stored_exercise_meta(exercise) or {}
         exercise_meta.update(exercise.meta)
@@ -152,7 +152,7 @@ def submission_selector(func: Union[
         exercise: exercise_type
         submission_ids: List[int]
         module_config: module_config_type = Depends(get_dynamic_module_config_factory(module_config_type))
-    
+
         class Config:
             # Allow camelCase field names in the API (converted to snake_case)
             alias_generator = to_camel
@@ -270,7 +270,8 @@ def feedback_provider(func: Union[
     Callable[[E, S], List[F]],
     Callable[[E, S], Coroutine[Any, Any, List[F]]],
     Callable[[E, S, C], List[F]],
-    Callable[[E, S, C], Coroutine[Any, Any, List[F]]]
+    Callable[[E, S, C], Coroutine[Any, Any, List[F]]],
+    Callable[[E, S, G, C], List[F]],
 ]):
     """
     Provide feedback to the Assessment Module Manager.
@@ -302,6 +303,7 @@ def feedback_provider(func: Union[
     exercise_type = inspect.signature(func).parameters["exercise"].annotation
     submission_type = inspect.signature(func).parameters["submission"].annotation
     module_config_type = inspect.signature(func).parameters["module_config"].annotation if "module_config" in inspect.signature(func).parameters else None
+    is_graded_type = inspect.signature(func).parameters["is_graded"].annotation if "is_graded" in inspect.signature(func).parameters else None
 
     @app.post("/feedback_suggestions", responses=module_responses)
     @authenticated
@@ -309,8 +311,9 @@ def feedback_provider(func: Union[
     async def wrapper(
             exercise: exercise_type,
             submission: submission_type,
+            is_graded: is_graded_type = Body(False),
             module_config: module_config_type = Depends(get_dynamic_module_config_factory(module_config_type))):
-        
+
         # Retrieve existing metadata for the exercise, submission and feedback
         exercise.meta.update(get_stored_exercise_meta(exercise) or {})
         submission.meta.update(get_stored_submission_meta(submission) or {})
@@ -321,6 +324,9 @@ def feedback_provider(func: Union[
         kwargs = {}
         if "module_config" in inspect.signature(func).parameters:
             kwargs["module_config"] = module_config
+
+        if "is_graded" in inspect.signature(func).parameters:
+            kwargs["is_graded"] = is_graded
 
         # Call the actual provider
         if inspect.iscoroutinefunction(func):
@@ -399,11 +405,11 @@ def evaluation_provider(func: Union[
     @authenticated
     @with_meta
     async def wrapper(
-            exercise: exercise_type, 
-            submission: submission_type, 
-            true_feedbacks: List[feedback_type], 
+            exercise: exercise_type,
+            submission: submission_type,
+            true_feedbacks: List[feedback_type],
             predicted_feedbacks: List[feedback_type],
-        ):
+    ):
         # Retrieve existing metadata for the exercise, submission and feedback
         exercise.meta.update(get_stored_exercise_meta(exercise) or {})
         submission.meta.update(get_stored_submission_meta(submission) or {})

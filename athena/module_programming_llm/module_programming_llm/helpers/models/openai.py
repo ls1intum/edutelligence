@@ -166,7 +166,7 @@ def _get_available_deployments(openai_models: Dict[str, List[str]], model_aliase
     return available_deployments
 
 
-def _get_available_models(openai_models: Dict[str, List[str]], 
+def _get_available_models(openai_models: Dict[str, List[str]],
                           available_deployments: Dict[str, Dict[str, Any]]):
     available_models: Dict[str, BaseLanguageModel] = {}
 
@@ -239,8 +239,6 @@ if available_models:
     logger.info("Available openai models: %s", ", ".join(available_models.keys()))
 
     OpenAIModel = Enum('OpenAIModel', {name: name for name in available_models})  # type: ignore
-
-
     default_model_name = "gpt-3.5-turbo"
     if "LLM_DEFAULT_MODEL" in os.environ and os.environ["LLM_DEFAULT_MODEL"] in available_models:
         default_model_name = os.environ["LLM_DEFAULT_MODEL"]
@@ -249,9 +247,9 @@ if available_models:
 
     default_openai_model = OpenAIModel[default_model_name]
 
-
     # Long descriptions will be displayed in the playground UI and are copied from the OpenAI docs
     class OpenAIModelConfig(ModelConfig):
+
         """OpenAI LLM configuration."""
 
         model_name: OpenAIModel = Field(default=default_openai_model,  # type: ignore

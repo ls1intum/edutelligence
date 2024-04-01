@@ -126,11 +126,11 @@ SELECT
     'problem_statement',
     e.problem_statement,
     -- repository urls will be set later by another script (after zip import)
-    'solution_repository_url',
+    'solution_repository_uri',
     NULL,
-    'template_repository_url',
+    'template_repository_uri',
     NULL,
-    'tests_repository_url',
+    'tests_repository_uri',
     NULL,
     'programming_language',
     e.programming_language,
@@ -146,7 +146,7 @@ SELECT
         'id',
         p.id,
         -- repository url will be set later by another script (after zip import)
-        'repository_url',
+        'repository_uri',
         NULL,
         'student_id',
         p.student_id,

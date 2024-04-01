@@ -20,6 +20,9 @@ class Feedback(Schema, ABC):
     structured_grading_instruction_id: Optional[int] = Field(None,
                                                              description="The id of the structured grading instruction that this feedback belongs to.",
                                                              example=1)
+    is_graded: Optional[bool] = Field(None,
+                                                             description="Graded or non graded.",
+                                                             example=False)
 
     meta: dict = Field({}, example={})
 
