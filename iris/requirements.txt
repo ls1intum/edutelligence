@@ -1,10 +1,10 @@
 black==24.3.0
 fastapi==0.110.0
 flake8==7.0.0
-langchain==0.1.13
-ollama==0.1.7
-openai==1.14.3
-pre-commit==3.6.2
+langchain==0.1.14
+ollama==0.1.8
+openai==1.16.0
+pre-commit==3.7.0
 pydantic==2.6.4
 PyYAML==6.0.1
 uvicorn==0.29.0
