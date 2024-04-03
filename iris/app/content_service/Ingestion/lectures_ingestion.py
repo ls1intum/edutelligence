@@ -6,34 +6,51 @@ from ...vector_database.lectureschema import init_lecture_schema, LectureSchema
 from .abstract_ingestion import AbstractIngestion
 from ...llm import BasicRequestHandler
 
+image_interpretation_prompt = f'This page is part of a {lecture_name} lecture,' \
+                              f' describe and explain it in no more than 500 tokens, respond only with the explanation nothing more,' \
+                              f' here is a description of the lecture: {lecture_description}' \
+                              f' Here is the content of the page before the one you need to interpret: {previous_page_content}'
+
+
+
+def interpret_image(llm, img_base64, page_content, name_of_lecture, description_of_lecture):
+    """ Interpret the image using the langchain model """
+    pass
+
 
 class LectureIngestion(AbstractIngestion):  # Inherits from the abstract class
 
     def __init__(self, client: weaviate.WeaviateClient):
         self.collection = init_lecture_schema(client)
 
-    def chunk_data(self, lecture_path: str):  # , llm: BasicRequestHandler):
+    def chunk_data(self,
+                   lecture_path: str,
+                   llm: BasicRequestHandler,
+                   name_of_lecture: str = None,
+                   description_of_lecture: str = None):
         """
         Chunk the data from the lecture into smaller pieces
         """
-        doc = fitz.open(lecture_path)  # Explicitly annotate as an Iterable of fitz.Page
+        doc = fitz.open(lecture_path)
         data = []
+        page_content = ""
         for page_num in range(doc.page_count):
             page = doc.load_page(page_num)
-            # Check if the page has images
             if page.get_images(full=True):
-                # Render the page to an image (pixmap)
                 pix = page.get_pixmap()
-                # Convert the pixmap to bytes
                 img_bytes = pix.tobytes("png")
-                # Encode the bytes to Base64 and then decode to a string
                 img_base64 = base64.b64encode(img_bytes).decode("utf-8")
-                # image_interpretation = llm.interpret_image(img_base64, page_content)
+                image_interpretation = interpret_image(llm,
+                                                       img_base64,
+                                                       page_content,
+                                                       name_of_lecture,
+                                                       description_of_lecture
+                                                       )
                 page_content = page.get_text()
                 data.append(
                     {
                         LectureSchema.PAGE_TEXT_CONTENT: page_content,
-                        LectureSchema.PAGE_IMAGE_DESCRIPTION: "",  # image_interpretation,
+                        LectureSchema.PAGE_IMAGE_DESCRIPTION: image_interpretation,
                         LectureSchema.PAGE_NUMBER: page_num + 1,
                         LectureSchema.LECTURE_NAME: lecture_path,
                         LectureSchema.PAGE_BASE64: img_base64,
@@ -54,10 +71,10 @@ class LectureIngestion(AbstractIngestion):  # Inherits from the abstract class
         return data
 
     def ingest(
-        self,
-        lecture_path,
-        image_llm: BasicRequestHandler = None,
-        embedding_model: BasicRequestHandler = None,
+            self,
+            lecture_path,
+            image_llm: BasicRequestHandler = None,
+            embedding_model: BasicRequestHandler = None,
     ) -> bool:
         """
         Ingest the repositories into the weaviate database
