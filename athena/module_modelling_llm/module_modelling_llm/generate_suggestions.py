@@ -15,7 +15,7 @@ from module_modelling_llm.helpers.llm_utils import (
 )
 from module_modelling_llm.helpers.models.diagram_types import DiagramType
 from module_modelling_llm.helpers.serializers.diagram_model_serializer import DiagramModelSerializer
-from module_modelling_llm.helpers.utils import format_grading_instructions
+from module_modelling_llm.helpers.utils import format_grading_instructions, get_elements
 from module_modelling_llm.prompts.submission_format.submission_format_remarks import get_submission_format_remarks
 
 
@@ -41,8 +41,28 @@ class AssessmentModel(BaseModel):
         title = "Assessment"
 
 
+def filter_ids_for_model(ids: List[str], model: dict) -> List[str]:
+    """
+    Filter a list of element ids based on whether a corresponding element is present in a given diagram model.
+    :param ids: List of ids that should be filtered
+    :param model: Diagram model in which elements with the given ids should be contained
+    :return The filtered list of IDs
+    """
+    elements: list[dict] = get_elements(model)
+    model_ids: set[str] = {str(element.get("id")) for element in elements}
+    return list(filter(lambda id: id in model_ids, ids))
+
+
 async def generate_suggestions(exercise: Exercise, submission: Submission, config: BasicApproachConfig, debug: bool) -> \
         List[Feedback]:
+    """
+    Generate feedback suggestions for modeling exercise submissions
+    :param exercise: The exercise for which a submission is assessed
+    :param submission: The submission that is assessed
+    :param config: A configuration object for the feedback module
+    :param debug: Indicates whether additional debugging information should be provided
+    :return: A list of feedback items for the assessed submission
+    """
     model = config.model.get_model()  # type: ignore[attr-defined]
 
     serialized_example_solution = None
@@ -52,7 +72,7 @@ async def generate_suggestions(exercise: Exercise, submission: Submission, confi
         serialized_example_solution, _ = DiagramModelSerializer.serialize_model(example_solution_diagram)
 
     submission_diagram = json.loads(submission.model)
-    submission_format_remarks = get_submission_format_remarks(DiagramType[submission_diagram.get("type")])
+    submission_format_remarks = get_submission_format_remarks(submission_diagram.get("type"))
 
     # Having the LLM reference IDs that a specific feedback item applies to seems to work a lot more reliable with
     # shorter IDs, especially if they are prefixed with "id_". We therefore map the UUIDs used in Apollon diagrams to
@@ -125,16 +145,18 @@ async def generate_suggestions(exercise: Exercise, submission: Submission, confi
     feedbacks = []
     for feedback in result.feedbacks:
         grading_instruction_id = feedback.grading_instruction_id if feedback.grading_instruction_id in grading_instruction_ids else None
+        element_ids = list(
+            map(lambda element_id: reverse_id_map[
+                element_id.strip()
+            ] if reverse_id_map else element_id.strip(), feedback.element_ids.split(","))
+        ) if feedback.element_ids else []
+
         feedbacks.append(Feedback(
             exercise_id=exercise.id,
             submission_id=submission.id,
             title=feedback.title,
             description=feedback.description,
-            element_ids=list(
-                map(lambda element_id: reverse_id_map[
-                    element_id.strip()
-                ] if reverse_id_map else element_id.strip(), feedback.element_ids.split(","))
-            ) if feedback.element_ids else [],
+            element_ids=filter_ids_for_model(element_ids, submission_diagram),
             credits=feedback.credits,
             structured_grading_instruction_id=grading_instruction_id,
             meta={}

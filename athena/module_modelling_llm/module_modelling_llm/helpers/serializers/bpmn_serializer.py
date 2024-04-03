@@ -120,6 +120,12 @@ class IDShortener:
         """
         return {value: key for key, value in self.id_map.items()}
 
+    def reset(self):
+        """
+        Reset the IDShortener's internal ID map
+        """
+        self.id_map = {}
+
 
 class BPMNSerializer:
     __start_event_definition_map = {
@@ -773,6 +779,10 @@ class BPMNSerializer:
         :param omit_layout_info: Indicates whether layouting information should be included in the diagram
         :return: An Elementtree Element representing the serialized BPMN diagram
         """
+
+        if self.id_shortener:
+            # The IDShortener is reset to ensure no prior ID mappings are cached
+            self.id_shortener.reset()
 
         definitions: ElementTree.Element = ElementTree.Element(self.__prefix_tag("definitions", self.__bpmn_prefix))
 

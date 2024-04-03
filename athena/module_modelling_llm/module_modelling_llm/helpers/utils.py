@@ -46,3 +46,16 @@ def format_grading_instructions(grading_instructions: Optional[str],
             result += "\n"
 
     return result.strip()
+
+
+def get_elements(model: dict) -> list[dict]:
+    """
+    Helper method to retrieve the elements of a model backwards compatible with Apollon version 2 diagrams
+    """
+
+    elements: list | dict = model.get("elements", {})
+
+    if isinstance(elements, list):
+        return elements
+
+    return list(elements.values())
