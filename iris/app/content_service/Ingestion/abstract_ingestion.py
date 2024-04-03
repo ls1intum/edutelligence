@@ -10,9 +10,7 @@ class AbstractIngestion(ABC):
     """
 
     @abstractmethod
-    def chunk_data(self,
-                   path: str,
-                   llm: BasicRequestHandler) -> List[Dict[str, str]]:
+    def chunk_data(self, path: str, llm: BasicRequestHandler) -> List[Dict[str, str]]:
         """
         Abstract method to chunk code files in the root directory.
         """

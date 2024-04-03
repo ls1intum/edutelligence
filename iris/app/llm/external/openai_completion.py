@@ -12,7 +12,9 @@ class OpenAICompletionModel(CompletionModel):
     api_key: str
     _client: OpenAI
 
-    def complete(self, prompt: str, arguments: CompletionArguments, images: [PyrisImage] = None) -> any:
+    def complete(
+        self, prompt: str, arguments: CompletionArguments, images: [PyrisImage] = None
+    ) -> any:
         response = self._client.completions.create(
             model=self.model,
             prompt=prompt,
