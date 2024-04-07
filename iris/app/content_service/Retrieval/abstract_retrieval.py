@@ -10,6 +10,6 @@ class AbstractRetrieval(ABC):
     @abstractmethod
     def retrieve(self, path: str, hybrid_factor: float) -> List[str]:
         """
-        Abstract method to ingest repositories into the database.
+        Abstract method to retrieve data from the database.
         """
         pass
