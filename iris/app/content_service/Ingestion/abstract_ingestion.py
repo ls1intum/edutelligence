@@ -1,9 +1,6 @@
 from abc import ABC, abstractmethod
 from typing import List, Dict
 
-from app.llm import BasicRequestHandler
-
-
 class AbstractIngestion(ABC):
     """
     Abstract class for ingesting repositories into a database.

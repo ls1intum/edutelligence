@@ -3,7 +3,6 @@ from weaviate import WeaviateClient
 from weaviate.collections import Collection
 
 
-
 # Potential improvement:
 # Don't store the names of the courses, lectures, and units for every single chunk
 # These can be looked up via the IDs when needed - query Artemis? or store locally?
@@ -13,6 +12,7 @@ class LectureSchema:
     """
     Schema for the lecture slides
     """
+
     COLLECTION_NAME = "LectureSlides"
     COURSE_NAME = "course_name"
     LECTURE_ID = "lecture_id"

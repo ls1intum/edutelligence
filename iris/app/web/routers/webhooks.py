@@ -22,10 +22,11 @@ def run_lecture_update_pipeline_worker(dto):
         logger.error(traceback.format_exc())
 
 
-@router.post("/lecture-units",
-             status_code=status.HTTP_202_ACCEPTED,
-             dependencies=[Depends(TokenValidator())]
-             )
+@router.post(
+    "/lecture-units",
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(TokenValidator())],
+)
 def lecture_webhook(dto: LectureUnitDTO):
     thread = Thread(target=run_lecture_update_pipeline_worker, args=(dto,))
     thread.start()
