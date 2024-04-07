@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
 from typing import List, Dict
 
+
 class AbstractIngestion(ABC):
     """
     Abstract class for ingesting repositories into a database.
