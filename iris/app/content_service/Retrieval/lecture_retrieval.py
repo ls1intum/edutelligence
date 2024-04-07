@@ -1,4 +1,3 @@
-import json
 from abc import ABC
 from typing import List
 
@@ -6,7 +5,7 @@ import weaviate
 import weaviate.classes as wvc
 
 from app.vector_database.lectureschema import init_lecture_schema, LectureSchema
-from content_service.Retrieval.abstract_retrieval import AbstractRetrieval
+from ..Retrieval.abstract_retrieval import AbstractRetrieval
 
 
 class LectureRetrieval(AbstractRetrieval, ABC):
@@ -22,23 +21,18 @@ class LectureRetrieval(AbstractRetrieval, ABC):
         user_message: str,
         hybrid_factor: float,
         lecture_id: int = None,
-        message_vector: [float] = None,
-    ) -> List[str]:
+        embedding_vector: [float] = None,
+    ) -> List[dict]:
         response = self.collection.query.hybrid(
             query=user_message,
+            limit=3,
             filters=(
                 wvc.query.Filter.by_property(LectureSchema.LECTURE_ID).equal(lecture_id)
                 if lecture_id
                 else None
             ),
             alpha=hybrid_factor,
-            vector=message_vector,
-            return_properties=[
-                LectureSchema.PAGE_TEXT_CONTENT,
-                LectureSchema.PAGE_IMAGE_DESCRIPTION,
-                LectureSchema.COURSE_NAME,
-            ],
-            limit=5,
+            vector=embedding_vector,
         )
-        print(json.dumps(response, indent=2))
-        return response
+        relevant_chunks = [obj.properties for obj in response.objects]
+        return relevant_chunks

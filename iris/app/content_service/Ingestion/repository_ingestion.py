@@ -13,7 +13,7 @@ from app.vector_database.repository_schema import (
     init_repository_schema,
     RepositorySchema,
 )
-from content_service.Ingestion.abstract_ingestion import AbstractIngestion
+from ..Ingestion.abstract_ingestion import AbstractIngestion
 
 CHUNKSIZE = 512
 OVERLAP = 51

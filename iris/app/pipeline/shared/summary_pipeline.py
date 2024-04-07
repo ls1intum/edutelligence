@@ -1,16 +1,40 @@
 import logging
 import os
-from typing import Dict
+from typing import Dict, List
 
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate, SystemMessagePromptTemplate
 from langchain_core.runnables import Runnable
 
+from ...domain.data.message_dto import MessageDTO
 from ...llm import BasicRequestHandler
 from ...llm.langchain import IrisLangchainCompletionModel
 from ...pipeline import Pipeline
 
 logger = logging.getLogger(__name__)
+
+
+def add_conversation_to_prompt(
+    chat_history: List[MessageDTO],
+    user_question: MessageDTO,
+    prompt: ChatPromptTemplate,
+):
+    """
+    Adds the chat history and user question to the prompt
+        :param chat_history: The chat history
+        :param user_question: The user question
+        :return: The prompt with the chat history
+    """
+    if chat_history is not None and len(chat_history) > 0:
+        chat_history_messages = [
+            message.convert_to_langchain_message() for message in chat_history
+        ]
+        prompt += chat_history_messages
+        prompt += SystemMessagePromptTemplate.from_template(
+            "Now, consider the student's newest and latest input:"
+        )
+    prompt += user_question.convert_to_langchain_message()
+    return prompt
 
 
 class SummaryPipeline(Pipeline):
@@ -25,7 +49,7 @@ class SummaryPipeline(Pipeline):
     def __init__(self):
         super().__init__(implementation_id="summary_pipeline")
         # Set the langchain chat model
-        request_handler = BasicRequestHandler("gpt35-completion")
+        request_handler = BasicRequestHandler("gpt35")
         self.llm = IrisLangchainCompletionModel(
             request_handler=request_handler, max_tokens=1000
         )

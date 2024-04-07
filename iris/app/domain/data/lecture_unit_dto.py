@@ -8,6 +8,7 @@ class LectureUnitDTO(BaseModel):
     id: int
     lecture_id: int = Field(alias="lectureId")
     release_date: Optional[datetime] = Field(alias="releaseDate", default=None)
-    name: Optional[str] = None
+    unit_name: Optional[str] = Field(alias="unitName", default="")
+    lecture_name: Optional[str] = Field(alias="lectureName", default="")
     attachment_version: int = Field(alias="attachmentVersion")
-    pdf: str = Field(alias="pdf")
+    raw_data: str = Field(alias="rawData")

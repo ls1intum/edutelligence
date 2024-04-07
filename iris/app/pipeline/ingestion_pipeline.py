@@ -1,4 +1,0 @@
-class IngestionPipeline:
-    """
-    RetrieveIngest class
-    """

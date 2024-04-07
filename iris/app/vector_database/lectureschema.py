@@ -2,7 +2,6 @@ import weaviate.classes as wvc
 from weaviate import WeaviateClient
 from weaviate.collections import Collection
 
-COLLECTION_NAME = "LectureSlides"
 
 
 # Potential improvement:
@@ -14,10 +13,8 @@ class LectureSchema:
     """
     Schema for the lecture slides
     """
-
-    COURSE_ID = "course_id"
+    COLLECTION_NAME = "LectureSlides"
     COURSE_NAME = "course_name"
-    LECTURE_DESCRIPTION = "lecture_description"
     LECTURE_ID = "lecture_id"
     LECTURE_NAME = "lecture_name"
     LECTURE_UNIT_ID = "lecture_unit_id"  # The attachment unit ID in Artemis
@@ -32,10 +29,10 @@ def init_lecture_schema(client: WeaviateClient) -> Collection:
     """
     Initialize the schema for the lecture slides
     """
-    if client.collections.exists(COLLECTION_NAME):
-        return client.collections.get(COLLECTION_NAME)
+    if client.collections.exists(LectureSchema.COLLECTION_NAME):
+        return client.collections.get(LectureSchema.COLLECTION_NAME)
     return client.collections.create(
-        name=COLLECTION_NAME,
+        name=LectureSchema.COLLECTION_NAME,
         vectorizer_config=wvc.config.Configure.Vectorizer.none(),
         # We do not want to vectorize the text automatically
         # HNSW is preferred over FLAT for large amounts of vector_database, which is the case here
