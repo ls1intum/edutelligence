@@ -1,5 +1,6 @@
 from pydantic import BaseModel, Field
 
+
 class LectureUnitDTO(BaseModel):
     pdf_file_base64: str = Field(alias="pdfFile")  # base64-encoded PDF content
     lecture_unit_id: int = Field(alias="lectureUnitId")
