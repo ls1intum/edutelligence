@@ -3,7 +3,7 @@ from asyncio.log import logger
 from threading import Thread
 
 
-from fastapi import APIRouter, status, Response, Depends
+from fastapi import APIRouter, status, Depends
 from app.dependencies import TokenValidator
 from ...domain.ingestion_pipeline_execution_dto import IngestionPipelineExecutionDto
 from ...pipeline.lecture_ingestion_pipeline import LectureIngestionPipeline
