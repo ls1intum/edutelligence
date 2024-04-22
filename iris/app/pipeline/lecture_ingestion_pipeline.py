@@ -22,7 +22,7 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
         super().__init__()
         self.collection = init_lecture_schema(client)
         self.dto = dto
-        self.llm_image = BasicRequestHandler("gptvision")
+        self.llm_vision = BasicRequestHandler("gptvision")
         self.llm = BasicRequestHandler("gpt35")
         self.llm_embedding = BasicRequestHandler("ada")
 
@@ -32,14 +32,14 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
                 self.delete_lecture_unit(
                     lecture_unit.lecture_id, lecture_unit.lecture_unit_id
                 )
-                pdf_path = self.save_pdf(lecture_unit)
+                pdf_path = self.save_pdf(lecture_unit.pdf_file_base64)
                 chunks = self.chunk_data(
                     lecture_path=pdf_path, lecture_unit_dto=lecture_unit
                 )
                 with self.collection.batch.dynamic() as batch:
                     for index, chunk in enumerate(chunks):
                         # embed the
-                        embed_chunk = self.llm_embedding.embed_query(
+                        embed_chunk = self.llm_embedding.embed(
                             chunk[LectureSchema.PAGE_TEXT_CONTENT]
                             + "\n"
                             + chunk[LectureSchema.PAGE_IMAGE_DESCRIPTION]
@@ -60,8 +60,8 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
             logger.error(f"Error deleting lecture unit: {e}")
             return False
 
-    def save_pdf(self, lecture_unit):
-        binary_data = base64.b64decode(lecture_unit.pdf_file_base64)
+    def save_pdf(self, pdf_file_base64):
+        binary_data = base64.b64decode(pdf_file_base64)
         fd, temp_pdf_file_path = tempfile.mkstemp(suffix=".pdf")
         os.close(fd)
         with open(temp_pdf_file_path, "wb") as temp_pdf_file:
@@ -95,14 +95,18 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
                     lecture_unit_dto.lecture_name,
                 )
                 page_content = page.get_text()
-                data.append(
-                    {
-                        LectureSchema.LECTURE_ID: lecture_unit_dto.lecture_id,
-                        LectureSchema.LECTURE_UNIT_NAME: lecture_unit_dto.unit_name,
-                        LectureSchema.PAGE_TEXT_CONTENT: page_content,
-                        LectureSchema.PAGE_IMAGE_DESCRIPTION: image_interpretation,
-                        LectureSchema.PAGE_BASE64: img_base64,
-                        LectureSchema.PAGE_NUMBER: page_num + 1,
+                data.append({
+                    LectureSchema.LECTURE_ID: lecture_unit_dto.lecture_id,
+                    LectureSchema.LECTURE_NAME: lecture_unit_dto.lecture_name,
+                    LectureSchema.LECTURE_UNIT_ID: lecture_unit_dto.lecture_unit_id,
+                    LectureSchema.LECTURE_UNIT_NAME: lecture_unit_dto.lecture_unit_name,
+                    LectureSchema.COURSE_ID: lecture_unit_dto.course_id,
+                    LectureSchema.COURSE_NAME: lecture_unit_dto.course_name,
+                    LectureSchema.COURSE_DESCRIPTION: lecture_unit_dto.course_description,
+                    LectureSchema.PAGE_NUMBER: page_num + 1,
+                    LectureSchema.PAGE_TEXT_CONTENT: page_content,
+                    LectureSchema.PAGE_IMAGE_DESCRIPTION: image_interpretation,
+                    LectureSchema.PAGE_BASE64: img_base64,
                     }
                 )
 
@@ -110,10 +114,16 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
                 page_content = page.get_text()
                 data.append(
                     {
+                        LectureSchema.LECTURE_ID: lecture_unit_dto.lecture_id,
+                        LectureSchema.LECTURE_NAME: lecture_unit_dto.lecture_name,
+                        LectureSchema.LECTURE_UNIT_ID: lecture_unit_dto.lecture_unit_id,
+                        LectureSchema.LECTURE_UNIT_NAME: lecture_unit_dto.lecture_unit_name,
+                        LectureSchema.COURSE_ID: lecture_unit_dto.course_id,
+                        LectureSchema.COURSE_NAME: lecture_unit_dto.course_name,
+                        LectureSchema.COURSE_DESCRIPTION: lecture_unit_dto.course_description,
+                        LectureSchema.PAGE_NUMBER: page_num + 1,
                         LectureSchema.PAGE_TEXT_CONTENT: page_content,
                         LectureSchema.PAGE_IMAGE_DESCRIPTION: "",
-                        LectureSchema.PAGE_NUMBER: page_num + 1,
-                        LectureSchema.LECTURE_NAME: lecture_unit_dto.lecture_name,
                         LectureSchema.PAGE_BASE64: "",
                     }
                 )
@@ -149,11 +159,11 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
             f" Here is the content of the page before the one you need to interpret:"
             f" {last_page_content}"
         )
-        iris_message = IrisMessage(
-            role=IrisMessageRole.SYSTEM, text=image_interpretation_prompt
-        )
         image = PyrisImage(base64=img_base64)
-        response = self.llm_image.chat(
-            [iris_message, image], CompletionArguments(temperature=0.2, max_tokens=1000)
+        iris_message = IrisMessage(
+            role=IrisMessageRole.SYSTEM, text=image_interpretation_prompt, images=[image]
+        )
+        response = self.llm_vision.chat(
+            [iris_message], CompletionArguments(temperature=0.2, max_tokens=1000)
         )
         return response.text

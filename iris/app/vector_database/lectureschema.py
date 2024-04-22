@@ -15,6 +15,7 @@ class LectureSchema:
 
     COLLECTION_NAME = "LectureSlides"
     COURSE_NAME = "course_name"
+    COURSE_DESCRIPTION = "course_description"
     COURSE_ID = "course_id"
     LECTURE_ID = "lecture_id"
     LECTURE_NAME = "lecture_name"
@@ -53,8 +54,8 @@ def init_lecture_schema(client: WeaviateClient) -> Collection:
                 data_type=wvc.config.DataType.TEXT,
             ),
             wvc.config.Property(
-                name=LectureSchema.LECTURE_DESCRIPTION,
-                description="The description of the lecture",
+                name=LectureSchema.COURSE_DESCRIPTION,
+                description="The description of the COURSE",
                 data_type=wvc.config.DataType.TEXT,
             ),
             wvc.config.Property(
