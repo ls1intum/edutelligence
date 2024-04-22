@@ -26,47 +26,42 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
         self.llm = BasicRequestHandler("gpt35")
         self.llm_embedding = BasicRequestHandler("ada")
 
-    def __call__(
-        self,
-        updated: str = "UPDATED",
-    ) -> bool:
+    def __call__(self) -> bool:
+        try:
+            for lecture_unit in self.dto.lecture_units:
+                self.delete_lecture_unit(
+                    lecture_unit.lecture_id, lecture_unit.lecture_unit_id
+                )
+                pdf_path = self.save_pdf(lecture_unit)
+                chunks = self.chunk_data(
+                    lecture_path=pdf_path, lecture_unit_dto=lecture_unit
+                )
+                with self.collection.batch.dynamic() as batch:
+                    for index, chunk in enumerate(chunks):
+                        # embed the
+                        embed_chunk = self.llm_embedding.embed_query(
+                            chunk[LectureSchema.PAGE_TEXT_CONTENT]
+                            + "\n"
+                            + chunk[LectureSchema.PAGE_IMAGE_DESCRIPTION]
+                        )
+                        batch.add_object(properties=chunk, vector=embed_chunk)
+                self.cleanup_temporary_file(pdf_path)
+        except Exception as e:
+            logger.error(f"Error updating lecture unit: {e}")
+            return False
 
-        if updated == "UPDATED":
-            try:
-                for lecture_unit in self.dto.lecture_units:
-                    self.delete_lecture_unit(
-                        lecture_unit.lecture_id, lecture_unit.lecture_unit_id
-                    )
-                    pdf_path = self.save_pdf(lecture_unit)
-                    chunks = self.chunk_data(
-                        lecture_path=pdf_path, lecture_unit_dto=lecture_unit
-                    )
-                    with self.collection.batch.dynamic() as batch:
-                        for index, chunk in enumerate(chunks):
-                            # embed the
-                            embed_chunk = self.llm_embedding.embed_query(
-                                chunk[LectureSchema.PAGE_TEXT_CONTENT]
-                                + "\n"
-                                + chunk[LectureSchema.PAGE_IMAGE_DESCRIPTION]
-                            )
-                            batch.add_object(properties=chunk, vector=embed_chunk)
-                    self.cleanup_temporary_file(pdf_path)
-            except Exception as e:
-                logger.error(f"Error updating lecture unit: {e}")
-                return False
-        else:
-            try:
-                for lecture_unit in self.dto.lecture_units:
-                    self.delete_lecture_unit(
-                        lecture_unit.lecture_id, lecture_unit.lecture_unit_id
-                    )
-            except Exception as e:
-                logger.error(f"Error deleting lecture unit: {e}")
-                return False
-        return True
+    def delete(self):
+        try:
+            for lecture_unit in self.dto.lecture_units:
+                self.delete_lecture_unit(
+                    lecture_unit.lecture_id, lecture_unit.lecture_unit_id
+                )
+        except Exception as e:
+            logger.error(f"Error deleting lecture unit: {e}")
+            return False
 
     def save_pdf(self, lecture_unit):
-        binary_data = base64.b64decode(lecture_unit.rawData)
+        binary_data = base64.b64decode(lecture_unit.pdf_file_base64)
         fd, temp_pdf_file_path = tempfile.mkstemp(suffix=".pdf")
         os.close(fd)
         with open(temp_pdf_file_path, "wb") as temp_pdf_file:
@@ -137,8 +132,10 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
                     lecture_unit_id
                 )
             )
+            return True
         except Exception as e:
             print(f"Error deleting lecture unit: {e}")
+            return False
 
     def interpret_image(
         self, img_base64: str, last_page_content: str, name_of_lecture: str

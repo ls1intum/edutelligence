@@ -22,7 +22,7 @@ from ...domain.data.build_log_entry import BuildLogEntryDTO
 from ...domain.data.feedback_dto import FeedbackDTO
 from ...domain.data.message_dto import MessageDTO
 from ...domain.data.submission_dto import SubmissionDTO
-from ...vector_database.db import VectorDatabase
+from ...vector_database.database import VectorDatabase
 from ...vector_database.lectureschema import LectureSchema
 from ...web.status.status_update import TutorChatStatusCallback
 from ...llm import BasicRequestHandler, CompletionArguments

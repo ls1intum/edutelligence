@@ -2,36 +2,37 @@ import traceback
 from asyncio.log import logger
 from threading import Thread
 
-from ...domain.data.lecture_unit_dto import LectureUnitDTO
 
 from fastapi import APIRouter, status, Response, Depends
-
 from app.dependencies import TokenValidator
+from ...domain.ingestion_pipeline_execution_dto import IngestionPipelineExecutionDto
 from ...pipeline.lecture_ingestion_pipeline import LectureIngestionPipeline
-from ...vector_database.db import VectorDatabase
+from ...vector_database.database import VectorDatabase
 
 router = APIRouter(prefix="/api/v1/webhooks", tags=["webhooks"])
 
 
-def run_lecture_update_pipeline_worker(dto):
+def run_lecture_update_pipeline_worker(dto: IngestionPipelineExecutionDto):
+    """
+    Run the tutor chat pipeline in a separate thread"""
     try:
-        pipeline = LectureIngestionPipeline(VectorDatabase().client)
-        pipeline(dto=dto)
+        db = VectorDatabase()
+        client = db.get_client()
+        pipeline = LectureIngestionPipeline(client, dto=dto)
+        pipeline()
     except Exception as e:
         logger.error(f"Error running tutor chat pipeline: {e}")
         logger.error(traceback.format_exc())
 
 
 @router.post(
-    "/lecture-units",
+    "/lectures",
     status_code=status.HTTP_202_ACCEPTED,
     dependencies=[Depends(TokenValidator())],
 )
-def lecture_webhook(dto: LectureUnitDTO):
+def lecture_webhook(dto: IngestionPipelineExecutionDto):
+    """
+    Webhook endpoint to trigger the tutor chat pipeline
+    """
     thread = Thread(target=run_lecture_update_pipeline_worker, args=(dto,))
     thread.start()
-
-
-@router.post("/assignment")
-def assignment_webhook():
-    return Response(status_code=status.HTTP_501_NOT_IMPLEMENTED)

@@ -15,6 +15,7 @@ class LectureSchema:
 
     COLLECTION_NAME = "LectureSlides"
     COURSE_NAME = "course_name"
+    COURSE_ID = "course_id"
     LECTURE_ID = "lecture_id"
     LECTURE_NAME = "lecture_name"
     LECTURE_UNIT_ID = "lecture_unit_id"  # The attachment unit ID in Artemis
