@@ -10,7 +10,7 @@ from ...llm.external.model import ChatModel
 
 
 def convert_to_open_ai_messages(
-        messages: list[IrisMessage],
+    messages: list[IrisMessage],
 ) -> list[dict[str, Any]]:
     """
     Convert IrisMessages to OpenAI messages
@@ -26,7 +26,7 @@ def convert_to_open_ai_messages(
                         "image_url": {
                             "url": f"data:image/{image.mime_type};base64,{image.base64}",
                             "detail": "high",
-                        }
+                        },
                     }
                 )
         else:
@@ -48,7 +48,7 @@ class OpenAIChatModel(ChatModel):
     _client: OpenAI
 
     def chat(
-            self, messages: list[IrisMessage], arguments: CompletionArguments
+        self, messages: list[IrisMessage], arguments: CompletionArguments
     ) -> IrisMessage:
         response = self._client.chat.completions.create(
             model=self.model,

@@ -3,10 +3,12 @@ from pydantic import BaseModel
 from typing import List, Optional
 from .pyris_image import PyrisImage
 
+
 class IrisMessageRole(str, Enum):
     USER = "user"
     ASSISTANT = "assistant"
     SYSTEM = "system"
+
 
 class IrisMessage(BaseModel):
     text: str = ""

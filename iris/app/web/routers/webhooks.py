@@ -21,7 +21,7 @@ def run_lecture_update_pipeline_worker(dto: IngestionPipelineExecutionDto):
         pipeline = LectureIngestionPipeline(client, dto=dto)
         pipeline()
     except Exception as e:
-        logger.error(f"Error running tutor chat pipeline: {e}")
+        logger.error(f"Error Ingestion pipeline: {e}")
         logger.error(traceback.format_exc())
 
 

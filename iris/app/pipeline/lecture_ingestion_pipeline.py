@@ -95,18 +95,19 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
                     lecture_unit_dto.lecture_name,
                 )
                 page_content = page.get_text()
-                data.append({
-                    LectureSchema.LECTURE_ID: lecture_unit_dto.lecture_id,
-                    LectureSchema.LECTURE_NAME: lecture_unit_dto.lecture_name,
-                    LectureSchema.LECTURE_UNIT_ID: lecture_unit_dto.lecture_unit_id,
-                    LectureSchema.LECTURE_UNIT_NAME: lecture_unit_dto.lecture_unit_name,
-                    LectureSchema.COURSE_ID: lecture_unit_dto.course_id,
-                    LectureSchema.COURSE_NAME: lecture_unit_dto.course_name,
-                    LectureSchema.COURSE_DESCRIPTION: lecture_unit_dto.course_description,
-                    LectureSchema.PAGE_NUMBER: page_num + 1,
-                    LectureSchema.PAGE_TEXT_CONTENT: page_content,
-                    LectureSchema.PAGE_IMAGE_DESCRIPTION: image_interpretation,
-                    LectureSchema.PAGE_BASE64: img_base64,
+                data.append(
+                    {
+                        LectureSchema.LECTURE_ID: lecture_unit_dto.lecture_id,
+                        LectureSchema.LECTURE_NAME: lecture_unit_dto.lecture_name,
+                        LectureSchema.LECTURE_UNIT_ID: lecture_unit_dto.lecture_unit_id,
+                        LectureSchema.LECTURE_UNIT_NAME: lecture_unit_dto.lecture_unit_name,
+                        LectureSchema.COURSE_ID: lecture_unit_dto.course_id,
+                        LectureSchema.COURSE_NAME: lecture_unit_dto.course_name,
+                        LectureSchema.COURSE_DESCRIPTION: lecture_unit_dto.course_description,
+                        LectureSchema.PAGE_NUMBER: page_num + 1,
+                        LectureSchema.PAGE_TEXT_CONTENT: page_content,
+                        LectureSchema.PAGE_IMAGE_DESCRIPTION: image_interpretation,
+                        LectureSchema.PAGE_BASE64: img_base64,
                     }
                 )
 
@@ -161,7 +162,9 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
         )
         image = PyrisImage(base64=img_base64)
         iris_message = IrisMessage(
-            role=IrisMessageRole.SYSTEM, text=image_interpretation_prompt, images=[image]
+            role=IrisMessageRole.SYSTEM,
+            text=image_interpretation_prompt,
+            images=[image],
         )
         response = self.llm_vision.chat(
             [iris_message], CompletionArguments(temperature=0.2, max_tokens=1000)
