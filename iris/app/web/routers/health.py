@@ -10,4 +10,6 @@ router = APIRouter(prefix="/api/v1/health", tags=["health"])
     dependencies=[Depends(TokenValidator())],
 )
 def health_check():
-    return Response(status_code=status.HTTP_200_OK)
+    return Response(
+        status_code=status.HTTP_200_OK, content=b"[]", media_type="application/json"
+    )
