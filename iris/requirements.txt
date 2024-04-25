@@ -1,11 +1,11 @@
-black==24.3.0
-fastapi==0.110.0
+black==24.4.0
+fastapi==0.110.2
 flake8==7.0.0
-langchain==0.1.14
+langchain==0.1.16
 ollama==0.1.8
-openai==1.16.0
+openai==1.23.2
 pre-commit==3.7.0
-pydantic==2.6.4
+pydantic==2.7.0
 PyYAML==6.0.1
 uvicorn==0.29.0
 requests~=2.31.0

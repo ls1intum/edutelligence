@@ -10,9 +10,6 @@ services:
       file: ./pyris.yml
       service: pyris-app
     image: ghcr.io/ls1intum/pyris:${PYRIS_DOCKER_TAG:-latest}
-    depends_on:
-      nginx:
-        condition: service_started
     pull_policy: always
     restart: unless-stopped
     volumes:
@@ -26,6 +23,9 @@ services:
       file: ./nginx.yml
       service: nginx
     restart: always
+    depends_on:
+      pyris-app:
+        condition: service_started
     volumes:
       - type: bind
         source: ${NGINX_PROXY_SSL_CERTIFICATE_PATH:-./nginx/certs/pyris-nginx+4.pem}
