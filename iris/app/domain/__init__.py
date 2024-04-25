@@ -5,3 +5,4 @@ from app.domain.tutor_chat.tutor_chat_pipeline_execution_dto import (
     TutorChatPipelineExecutionDTO,
 )
 from .pyris_message import PyrisMessage, IrisMessageRole
+from .pyris_image import PyrisImage
