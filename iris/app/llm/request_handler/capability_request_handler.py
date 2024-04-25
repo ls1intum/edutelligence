@@ -1,6 +1,6 @@
 from enum import Enum
 
-from app.domain import IrisMessage
+from app.domain import PyrisMessage
 from app.llm.capability import RequirementList
 from app.llm.external.model import (
     ChatModel,
@@ -41,8 +41,8 @@ class CapabilityRequestHandler(RequestHandler):
         return llm.complete(prompt, arguments)
 
     def chat(
-        self, messages: list[IrisMessage], arguments: CompletionArguments
-    ) -> IrisMessage:
+        self, messages: list[PyrisMessage], arguments: CompletionArguments
+    ) -> PyrisMessage:
         llm = self._select_model(ChatModel)
         return llm.chat(messages, arguments)
 

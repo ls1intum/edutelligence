@@ -43,23 +43,16 @@ class TutorChatStatusCallback(StatusCallback):
         self, run_id: str, base_url: str, initial_stages: List[StageDTO] = None
     ):
         url = f"{base_url}/api/public/pyris/pipelines/tutor-chat/runs/{run_id}/status"
-        if initial_stages is not None and len(initial_stages) > 0:
-            stages = initial_stages
-            current_stage_index = len(initial_stages)
-        else:
-            stages = []
-            current_stage_index = 0
-
-        stages.append(
-            StageDTO(weight=30, state=StageStateEnum.NOT_STARTED, name="File Lookup")
-        )
-        stages.append(
+        current_stage_index = len(initial_stages) if initial_stages else 0
+        stages = initial_stages or []
+        stages += [
+            StageDTO(weight=30, state=StageStateEnum.NOT_STARTED, name="File Lookup"),
             StageDTO(
                 weight=70,
                 state=StageStateEnum.NOT_STARTED,
                 name="Response Generation",
-            )
-        )
+            ),
+        ]
         status = TutorChatStatusUpdateDTO(stages=stages)
         stage = stages[current_stage_index]
         super().__init__(url, run_id, status, stage, current_stage_index)
