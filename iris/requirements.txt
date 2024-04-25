@@ -1,8 +1,8 @@
-black==24.2.0
-fastapi==0.110.0
+black==24.4.0
+fastapi==0.110.2
 flake8==7.0.0
-langchain==0.1.11
-openai==1.13.3
+langchain==0.1.16
+openai==1.23.2
 pre-commit==3.6.2
 pydantic==2.6.3
 PyYAML==6.0.1
