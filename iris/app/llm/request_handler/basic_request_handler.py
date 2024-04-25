@@ -1,4 +1,4 @@
-from app.domain import IrisMessage
+from app.domain import PyrisMessage
 from app.llm.request_handler import RequestHandler
 from app.llm.completion_arguments import CompletionArguments
 from app.llm.llm_manager import LlmManager
@@ -17,8 +17,8 @@ class BasicRequestHandler(RequestHandler):
         return llm.complete(prompt, arguments)
 
     def chat(
-        self, messages: list[IrisMessage], arguments: CompletionArguments
-    ) -> IrisMessage:
+        self, messages: list[PyrisMessage], arguments: CompletionArguments
+    ) -> PyrisMessage:
         llm = self.llm_manager.get_llm_by_id(self.model_id)
         return llm.chat(messages, arguments)
 

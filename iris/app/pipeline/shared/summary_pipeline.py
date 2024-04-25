@@ -1,12 +1,11 @@
 import logging
 import os
-from typing import Dict
 
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate, SystemMessagePromptTemplate
 from langchain_core.runnables import Runnable
 
-from ...llm import BasicRequestHandler
+from ...llm import CapabilityRequestHandler, RequirementList
 from ...llm.langchain import IrisLangchainCompletionModel
 from ...pipeline import Pipeline
 
@@ -16,7 +15,6 @@ logger = logging.getLogger(__name__)
 class SummaryPipeline(Pipeline):
     """A generic summary pipeline that can be used to summarize any text"""
 
-    _cache: Dict = {}
     llm: IrisLangchainCompletionModel
     pipeline: Runnable
     prompt_str: str
@@ -25,7 +23,12 @@ class SummaryPipeline(Pipeline):
     def __init__(self):
         super().__init__(implementation_id="summary_pipeline")
         # Set the langchain chat model
-        request_handler = BasicRequestHandler("gpt35-completion")
+        request_handler = CapabilityRequestHandler(
+            requirements=RequirementList(
+                gpt_version_equivalent=3.5,
+                context_length=4096,
+            )
+        )
         self.llm = IrisLangchainCompletionModel(
             request_handler=request_handler, max_tokens=1000
         )
@@ -59,10 +62,6 @@ class SummaryPipeline(Pipeline):
         if query is None:
             raise ValueError("Query must not be None")
         logger.info("Running summary pipeline...")
-        if _cache := self._cache.get(query):
-            logger.info(f"Returning cached summary for query: {query[:20]}...")
-            return _cache
         response: str = self.pipeline.invoke({"text": query})
         logger.info(f"Response from summary pipeline: {response[:20]}...")
-        self._cache[query] = response
         return response

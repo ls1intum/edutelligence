@@ -1,6 +1,6 @@
 from abc import ABCMeta, abstractmethod
 
-from ...domain import IrisMessage
+from ...domain import PyrisMessage
 from ...llm import CompletionArguments
 
 
@@ -24,7 +24,7 @@ class RequestHandler(metaclass=ABCMeta):
         raise NotImplementedError
 
     @abstractmethod
-    def chat(self, messages: list[any], arguments: CompletionArguments) -> IrisMessage:
+    def chat(self, messages: list[any], arguments: CompletionArguments) -> PyrisMessage:
         """Create a completion from the chat messages"""
         raise NotImplementedError
 
