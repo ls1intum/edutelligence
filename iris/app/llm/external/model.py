@@ -1,7 +1,7 @@
 from abc import ABCMeta, abstractmethod
 from pydantic import BaseModel
 
-from ...domain import IrisMessage
+from ...domain import PyrisMessage
 from ...llm import CompletionArguments
 from ...llm.capability import CapabilityList
 
@@ -39,8 +39,8 @@ class ChatModel(LanguageModel, metaclass=ABCMeta):
 
     @abstractmethod
     def chat(
-        self, messages: list[IrisMessage], arguments: CompletionArguments
-    ) -> IrisMessage:
+        self, messages: list[PyrisMessage], arguments: CompletionArguments
+    ) -> PyrisMessage:
         """Create a completion from the chat messages"""
         raise NotImplementedError(
             f"The LLM {self.__str__()} does not support chat completion"

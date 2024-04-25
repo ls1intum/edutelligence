@@ -21,7 +21,7 @@ class ProgrammingLanguage(str, Enum):
 class ProgrammingExerciseDTO(BaseModel):
     id: int
     name: str
-    programming_language: ProgrammingLanguage = Field(alias="programmingLanguage")
+    programming_language: Optional[str] = Field(alias="programmingLanguage")
     template_repository: Dict[str, str] = Field(alias="templateRepository")
     solution_repository: Dict[str, str] = Field(alias="solutionRepository")
     test_repository: Dict[str, str] = Field(alias="testRepository")
