@@ -1,26 +1,35 @@
+from datetime import datetime
 from typing import Literal, Any
 
 from openai import OpenAI
 from openai.lib.azure import AzureOpenAI
 from openai.types.chat import ChatCompletionMessageParam, ChatCompletionMessage
 
-from ...domain import IrisMessage, IrisMessageRole
+from ...common.message_converters import map_role_to_str, map_str_to_role
+from app.domain.data.text_message_content_dto import TextMessageContentDTO
+from ...domain import PyrisMessage
 from ...llm import CompletionArguments
 from ...llm.external.model import ChatModel
 
 
 def convert_to_open_ai_messages(
-    messages: list[IrisMessage],
+    messages: list[PyrisMessage],
 ) -> list[ChatCompletionMessageParam]:
     return [
-        {"role": message.role.value, "content": message.text} for message in messages
+        {
+            "role": map_role_to_str(message.sender),
+            "content": message.contents[0].text_content,
+        }
+        for message in messages
     ]
 
 
-def convert_to_iris_message(message: ChatCompletionMessage) -> IrisMessage:
-    # Get IrisMessageRole from the string message.role
-    message_role = IrisMessageRole(message.role)
-    return IrisMessage(role=message_role, text=message.content)
+def convert_to_iris_message(message: ChatCompletionMessage) -> PyrisMessage:
+    return PyrisMessage(
+        sender=map_str_to_role(message.role),
+        contents=[TextMessageContentDTO(textContent=message.content)],
+        send_at=datetime.now(),
+    )
 
 
 class OpenAIChatModel(ChatModel):
@@ -29,8 +38,8 @@ class OpenAIChatModel(ChatModel):
     _client: OpenAI
 
     def chat(
-        self, messages: list[IrisMessage], arguments: CompletionArguments
-    ) -> IrisMessage:
+        self, messages: list[PyrisMessage], arguments: CompletionArguments
+    ) -> PyrisMessage:
         response = self._client.chat.completions.create(
             model=self.model,
             messages=convert_to_open_ai_messages(messages),

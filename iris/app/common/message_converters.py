@@ -1,9 +1,15 @@
+from datetime import datetime
+
 from langchain_core.messages import BaseMessage
-from ..domain.iris_message import IrisMessage, IrisMessageRole
+
+from app.domain.data.text_message_content_dto import TextMessageContentDTO
+from app.domain.pyris_message import PyrisMessage, IrisMessageRole
 
 
-def convert_iris_message_to_langchain_message(iris_message: IrisMessage) -> BaseMessage:
-    match iris_message.role:
+def convert_iris_message_to_langchain_message(
+    iris_message: PyrisMessage,
+) -> BaseMessage:
+    match iris_message.sender:
         case IrisMessageRole.USER:
             role = "human"
         case IrisMessageRole.ASSISTANT:
@@ -11,11 +17,19 @@ def convert_iris_message_to_langchain_message(iris_message: IrisMessage) -> Base
         case IrisMessageRole.SYSTEM:
             role = "system"
         case _:
-            raise ValueError(f"Unknown message role: {iris_message.role}")
-    return BaseMessage(content=iris_message.text, type=role)
+            raise ValueError(f"Unknown message role: {iris_message.sender}")
+    if len(iris_message.contents) == 0:
+        raise ValueError("IrisMessage contents must not be empty")
+    message = iris_message.contents[0]
+    # Check if the message is of type TextMessageContentDTO
+    if not isinstance(message, TextMessageContentDTO):
+        raise ValueError("Message must be of type TextMessageContentDTO")
+    return BaseMessage(content=message.text_content, type=role)
 
 
-def convert_langchain_message_to_iris_message(base_message: BaseMessage) -> IrisMessage:
+def convert_langchain_message_to_iris_message(
+    base_message: BaseMessage,
+) -> PyrisMessage:
     match base_message.type:
         case "human":
             role = IrisMessageRole.USER
@@ -25,4 +39,33 @@ def convert_langchain_message_to_iris_message(base_message: BaseMessage) -> Iris
             role = IrisMessageRole.SYSTEM
         case _:
             raise ValueError(f"Unknown message type: {base_message.type}")
-    return IrisMessage(text=base_message.content, role=role)
+    contents = [TextMessageContentDTO(textContent=base_message.content)]
+    return PyrisMessage(
+        contents=contents,
+        sender=role,
+        send_at=datetime.now(),
+    )
+
+
+def map_role_to_str(role: IrisMessageRole) -> str:
+    match role:
+        case IrisMessageRole.USER:
+            return "user"
+        case IrisMessageRole.ASSISTANT:
+            return "assistant"
+        case IrisMessageRole.SYSTEM:
+            return "system"
+        case _:
+            raise ValueError(f"Unknown message role: {role}")
+
+
+def map_str_to_role(role: str) -> IrisMessageRole:
+    match role:
+        case "user":
+            return IrisMessageRole.USER
+        case "assistant":
+            return IrisMessageRole.ASSISTANT
+        case "system":
+            return IrisMessageRole.SYSTEM
+        case _:
+            raise ValueError(f"Unknown message role: {role}")
