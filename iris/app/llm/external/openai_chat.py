@@ -12,20 +12,25 @@ from ...llm.external.model import ChatModel
 def convert_to_open_ai_messages(
     messages: list[IrisMessage],
 ) -> list[dict[str, Any]]:
+    """
+    Convert IrisMessages to OpenAI messages
+    """
     openai_messages = []
     for message in messages:
         if message.images:
-            content = [{"type": "text", "content": message.text}]
+            content = [{"type": "text", "text": message.text}]
             for image in message.images:
                 content.append(
                     {
                         "type": "image_url",
-                        "image_url": f"data:image/{image.mime_type};base64,{image.base64}",
-                        "detail": "high",
+                        "image_url": {
+                            "url": f"data:image/{image.mime_type};base64,{image.base64}",
+                            "detail": "high",
+                        },
                     }
                 )
         else:
-            content = message.text
+            content = [{"type": "text", "text": message.text}]
         openai_message = {"role": message.role.value, "content": content}
         openai_messages.append(openai_message)
     return openai_messages
@@ -50,7 +55,6 @@ class OpenAIChatModel(ChatModel):
             messages=convert_to_open_ai_messages(messages),
             temperature=arguments.temperature,
             max_tokens=arguments.max_tokens,
-            stop=arguments.stop,
         )
         return convert_to_iris_message(response.choices[0].message)
 

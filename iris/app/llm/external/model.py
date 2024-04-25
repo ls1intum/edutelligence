@@ -1,7 +1,7 @@
 from abc import ABCMeta, abstractmethod
 from pydantic import BaseModel
 
-from ...domain import IrisMessage
+from ...domain import IrisMessage, PyrisImage
 from ...llm import CompletionArguments
 from ...llm.capability import CapabilityList
 
@@ -23,7 +23,9 @@ class CompletionModel(LanguageModel, metaclass=ABCMeta):
         return hasattr(subclass, "complete") and callable(subclass.complete)
 
     @abstractmethod
-    def complete(self, prompt: str, arguments: CompletionArguments) -> str:
+    def complete(
+        self, prompt: str, arguments: CompletionArguments, images: [PyrisImage] = None
+    ) -> str:
         """Create a completion from the prompt"""
         raise NotImplementedError(
             f"The LLM {self.__str__()} does not support completion"

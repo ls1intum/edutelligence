@@ -2,6 +2,7 @@ from typing import Literal, Any
 from openai import OpenAI
 from openai.lib.azure import AzureOpenAI
 
+from ...domain import PyrisImage
 from ...llm import CompletionArguments
 from ...llm.external.model import CompletionModel
 
@@ -11,7 +12,9 @@ class OpenAICompletionModel(CompletionModel):
     api_key: str
     _client: OpenAI
 
-    def complete(self, prompt: str, arguments: CompletionArguments) -> any:
+    def complete(
+        self, prompt: str, arguments: CompletionArguments, images: [PyrisImage] = None
+    ) -> any:
         response = self._client.completions.create(
             model=self.model,
             prompt=prompt,

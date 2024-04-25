@@ -1,27 +1,17 @@
-from datetime import datetime
+from pydantic import BaseModel
+from typing import Optional
 
 
-class PyrisImage:
-    """
-    Represents an image from the Pyris dataset
-    """
-
-    prompt: str
+class PyrisImage(BaseModel):
     base64: str
-    timestamp: datetime
-    mime_type: str = "jpeg"
-    raw_data: any = None
+    prompt: Optional[str] = None
+    mime_type: Optional[str] = "jpeg"
 
-    def __init__(
-        self,
-        prompt: str,
-        base64: str,
-        timestamp: datetime,
-        mime_type: str = "jpeg",
-        raw_data: any = None,
-    ):
-        self.prompt = prompt
-        self.base64 = base64
-        self.timestamp = timestamp
-        self.raw_data = raw_data
-        self.mime_type = mime_type
+    class Config:
+        schema_extra = {
+            "example": {
+                "prompt": "Example prompt",
+                "base64": "base64EncodedString==",
+                "mime_type": "jpeg",
+            }
+        }
