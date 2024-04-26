@@ -1,3 +1,4 @@
+import base64
 import logging
 from typing import List, Dict
 
@@ -9,10 +10,11 @@ from langchain_core.prompts import (
     AIMessagePromptTemplate,
 )
 from langchain_core.runnables import Runnable
+from ...domain.data.image_message_content_dto import ImageMessageContentDTO
 
 from ...common import convert_iris_message_to_langchain_message
-from ...domain import PyrisMessage
-from ...llm import CapabilityRequestHandler, RequirementList
+from ...domain import PyrisMessage, IrisMessageRole
+from ...llm import CapabilityRequestHandler, RequirementList, BasicRequestHandler
 from ...domain.data.build_log_entry import BuildLogEntryDTO
 from ...domain.data.feedback_dto import FeedbackDTO
 from ..prompts.iris_tutor_chat_prompts import (
@@ -31,7 +33,6 @@ from ...llm.langchain import IrisLangchainChatModel
 from ..pipeline import Pipeline
 
 logger = logging.getLogger(__name__)
-
 
 class TutorChatPipeline(Pipeline):
     """Tutor chat pipeline that answers exercises related questions from students."""
@@ -74,6 +75,7 @@ class TutorChatPipeline(Pipeline):
             :param dto: The pipeline execution data transfer object
             :param kwargs: The keyword arguments
         """
+
         # Set up the initial prompt
         self.prompt = ChatPromptTemplate.from_messages(
             [

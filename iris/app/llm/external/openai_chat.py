@@ -5,7 +5,7 @@ from openai import OpenAI
 from openai.lib.azure import AzureOpenAI
 from openai.types.chat import ChatCompletionMessageParam, ChatCompletionMessage
 
-from ...common.message_converters import map_str_to_role
+from ...common.message_converters import map_str_to_role, map_role_to_str
 from app.domain.data.text_message_content_dto import TextMessageContentDTO
 from ...domain import PyrisMessage
 from ...domain.data.image_message_content_dto import ImageMessageContentDTO
@@ -47,7 +47,7 @@ def convert_to_open_ai_messages(
             case _:
                 content = [{"type": "text", "text": ""}]
 
-        openai_message = {"role": message.sender.value, "content": content}
+        openai_message = {"role": map_role_to_str(message.sender), "content": content}
         openai_messages.append(openai_message)
     return openai_messages
 
@@ -76,7 +76,6 @@ class OpenAIChatModel(ChatModel):
             messages=convert_to_open_ai_messages(messages),
             temperature=arguments.temperature,
             max_tokens=arguments.max_tokens,
-            stop=arguments.stop,
         )
         return convert_to_iris_message(response.choices[0].message)
 
