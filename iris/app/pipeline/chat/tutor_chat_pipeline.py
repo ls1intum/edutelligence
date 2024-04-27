@@ -16,10 +16,10 @@ from ...llm import CapabilityRequestHandler, RequirementList
 from ...domain.data.build_log_entry import BuildLogEntryDTO
 from ...domain.data.feedback_dto import FeedbackDTO
 from ..prompts.iris_tutor_chat_prompts import (
-    iris_initial_system_prompt,
+    iris_exercise_initial_system_prompt,
     chat_history_system_prompt,
     final_system_prompt,
-    guide_system_prompt,
+    guide_exercise_system_prompt,
 )
 from ...domain import TutorChatPipelineExecutionDTO
 from ...domain.data.submission_dto import SubmissionDTO
@@ -74,10 +74,11 @@ class TutorChatPipeline(Pipeline):
             :param dto: The pipeline execution data transfer object
             :param kwargs: The keyword arguments
         """
+
         # Set up the initial prompt
         self.prompt = ChatPromptTemplate.from_messages(
             [
-                ("system", iris_initial_system_prompt),
+                ("system", iris_exercise_initial_system_prompt),
                 ("system", chat_history_system_prompt),
             ]
         )
@@ -140,7 +141,7 @@ class TutorChatPipeline(Pipeline):
             response_draft = (self.prompt | self.pipeline).invoke({})
             self.prompt += AIMessagePromptTemplate.from_template(f"{response_draft}")
             self.prompt += SystemMessagePromptTemplate.from_template(
-                guide_system_prompt
+                guide_exercise_system_prompt
             )
             response = (self.prompt | self.pipeline).invoke({})
             logger.info(f"Response from tutor chat pipeline: {response}")

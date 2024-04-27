@@ -6,7 +6,8 @@ import fitz
 import weaviate
 import weaviate.classes as wvc
 from . import Pipeline
-from ..domain import PyrisImage, IrisMessageRole, IrisMessage
+from ..domain import IrisMessageRole, PyrisMessage
+from ..domain.data.image_message_content_dto import ImageMessageContentDTO
 from ..domain.data.lecture_unit_dto import LectureUnitDTO
 from ..domain.ingestion_pipeline_execution_dto import IngestionPipelineExecutionDto
 from ..vector_database.lectureschema import init_lecture_schema, LectureSchema
@@ -17,7 +18,7 @@ from ..llm import BasicRequestHandler, CompletionArguments
 class LectureIngestionPipeline(AbstractIngestion, Pipeline):
 
     def __init__(
-        self, client: weaviate.WeaviateClient, dto: IngestionPipelineExecutionDto
+            self, client: weaviate.WeaviateClient, dto: IngestionPipelineExecutionDto
     ):
         super().__init__()
         self.collection = init_lecture_schema(client)
@@ -73,9 +74,9 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
         os.remove(file_path)
 
     def chunk_data(
-        self,
-        lecture_path: str,
-        lecture_unit_dto: LectureUnitDTO = None,
+            self,
+            lecture_path: str,
+            lecture_unit_dto: LectureUnitDTO = None,
     ):
         """
         Chunk the data from the lecture into smaller pieces
@@ -139,7 +140,7 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
                 where=wvc.query.Filter.by_property(LectureSchema.LECTURE_ID).equal(
                     lecture_id
                 )
-                & wvc.query.Filter.by_property(LectureSchema.LECTURE_UNIT_ID).equal(
+                      & wvc.query.Filter.by_property(LectureSchema.LECTURE_UNIT_ID).equal(
                     lecture_unit_id
                 )
             )
@@ -149,7 +150,7 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
             return False
 
     def interpret_image(
-        self, img_base64: str, last_page_content: str, name_of_lecture: str
+            self, img_base64: str, last_page_content: str, name_of_lecture: str
     ):
         """
         Interpret the image passed
@@ -160,13 +161,13 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
             f" Here is the content of the page before the one you need to interpret:"
             f" {last_page_content}"
         )
-        image = PyrisImage(base64=img_base64)
-        iris_message = IrisMessage(
-            role=IrisMessageRole.SYSTEM,
-            text=image_interpretation_prompt,
-            images=[image],
+        image = ImageMessageContentDTO(base64=[img_base64], prompt=image_interpretation_prompt)
+        iris_message = PyrisMessage(
+            sender=IrisMessageRole.SYSTEM,
+            contents=[image]
         )
-        response = self.llm_vision.chat(
+        llm_vision = BasicRequestHandler("")
+        response = llm_vision.chat(
             [iris_message], CompletionArguments(temperature=0.2, max_tokens=1000)
         )
-        return response.text
+        return response.contents[0].text_content

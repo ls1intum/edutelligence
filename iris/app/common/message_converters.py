@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Literal
 
 from langchain_core.messages import BaseMessage
 
@@ -47,7 +48,7 @@ def convert_langchain_message_to_iris_message(
     )
 
 
-def map_role_to_str(role: IrisMessageRole) -> str:
+def map_role_to_str(role: IrisMessageRole) -> Literal["user", "assistant", "system"]:
     match role:
         case IrisMessageRole.USER:
             return "user"
