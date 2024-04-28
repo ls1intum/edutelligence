@@ -113,13 +113,11 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
         lecture_path: str,
         lecture_unit_dto: LectureUnitDTO = None,
     ):
-
         """
         Chunk the data from the lecture into smaller pieces
         """
         doc = fitz.open(lecture_path)
         data = []
-        return data
         page_content = ""
         for page_num in range(doc.page_count):
             page = doc.load_page(page_num)
