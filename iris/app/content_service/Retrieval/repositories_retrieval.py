@@ -41,5 +41,6 @@ class RepositoryRetrieval(AbstractRetrieval):
             limit=5,
         )
         import logging
+
         logging.debug(json.dumps(response, indent=2))
         return response

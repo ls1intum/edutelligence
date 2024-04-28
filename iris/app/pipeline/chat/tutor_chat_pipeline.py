@@ -23,7 +23,7 @@ from ..prompts.iris_tutor_chat_prompts import (
 )
 from ...domain import TutorChatPipelineExecutionDTO
 from ...domain.data.submission_dto import SubmissionDTO
-from ...web.status.status_update import TutorChatStatusCallback
+from ...web.status.TutorChatStatusCallback import TutorChatStatusCallback
 from .file_selector_pipeline import FileSelectorPipeline
 from ...llm import CompletionArguments
 from ...llm.langchain import IrisLangchainChatModel
@@ -182,7 +182,7 @@ class TutorChatPipeline(Pipeline):
         for file in selected_files:
             if file in student_repository:
                 self.prompt += SystemMessagePromptTemplate.from_template(
-                    f"For reference, we have access to the student's '{file}' file:"
+                    f"For reference, we have access to the student's '{file}' file: "
                 )
                 self.prompt += HumanMessagePromptTemplate.from_template(
                     student_repository[file].replace("{", "{{").replace("}", "}}")

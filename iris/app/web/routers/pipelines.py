@@ -7,7 +7,7 @@ from app.domain import (
     TutorChatPipelineExecutionDTO,
 )
 from app.pipeline.chat.tutor_chat_pipeline import TutorChatPipeline
-from app.web.status.status_update import TutorChatStatusCallback
+from app.web.status.TutorChatStatusCallback import TutorChatStatusCallback
 from app.dependencies import TokenValidator
 
 router = APIRouter(prefix="/api/v1/pipelines", tags=["pipelines"])

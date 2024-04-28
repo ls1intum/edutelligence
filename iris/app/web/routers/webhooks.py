@@ -5,7 +5,10 @@ from threading import Thread
 
 from fastapi import APIRouter, status, Depends
 from app.dependencies import TokenValidator
-from ...domain.ingestion_pipeline_execution_dto import IngestionPipelineExecutionDto
+from app.domain.ingestion.ingestion_pipeline_execution_dto import (
+    IngestionPipelineExecutionDto,
+)
+from ..status.IngestionStatusCallback import IngestionStatusCallback
 from ...pipeline.lecture_ingestion_pipeline import LectureIngestionPipeline
 from ...vector_database.database import VectorDatabase
 
@@ -16,9 +19,14 @@ def run_lecture_update_pipeline_worker(dto: IngestionPipelineExecutionDto):
     """
     Run the tutor chat pipeline in a separate thread"""
     try:
+        callback = IngestionStatusCallback(
+            run_id=dto.settings.authentication_token,
+            base_url=dto.settings.artemis_base_url,
+            initial_stages=dto.initial_stages,
+        )
         db = VectorDatabase()
         client = db.get_client()
-        pipeline = LectureIngestionPipeline(client, dto=dto)
+        pipeline = LectureIngestionPipeline(client=client, dto=dto, callback=callback)
         pipeline()
     except Exception as e:
         logger.error(f"Error Ingestion pipeline: {e}")
