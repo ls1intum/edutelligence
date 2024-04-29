@@ -1,4 +1,7 @@
+from typing import Optional
+
 from app.domain import PyrisMessage
+from app.domain.data.image_message_content_dto import ImageMessageContentDTO
 from app.llm.request_handler import RequestHandler
 from app.llm.completion_arguments import CompletionArguments
 from app.llm.llm_manager import LlmManager
@@ -12,9 +15,14 @@ class BasicRequestHandler(RequestHandler):
         self.model_id = model_id
         self.llm_manager = LlmManager()
 
-    def complete(self, prompt: str, arguments: CompletionArguments) -> str:
+    def complete(
+        self,
+        prompt: str,
+        arguments: CompletionArguments,
+        image: Optional[ImageMessageContentDTO] = None,
+    ) -> str:
         llm = self.llm_manager.get_llm_by_id(self.model_id)
-        return llm.complete(prompt, arguments)
+        return llm.complete(prompt, arguments, image)
 
     def chat(
         self, messages: list[PyrisMessage], arguments: CompletionArguments
