@@ -12,6 +12,10 @@ logger = logging.getLogger(__name__)
 
 
 class StatusCallback(ABC):
+    """
+    A callback class for sending status updates to the Artemis API.
+    """
+
     url: str
     run_id: str
     status: StatusUpdateDTO
@@ -114,4 +118,4 @@ class StatusCallback(ABC):
         next_stage = self.get_next_stage()
         if next_stage is not None:
             self.stage = next_stage
-            self.on_status_update()
+        self.on_status_update()
