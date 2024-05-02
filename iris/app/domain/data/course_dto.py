@@ -8,14 +8,12 @@ class CourseDTO(BaseModel):
     id: int
     name: Optional[str] = None
     description: Optional[str] = None
-    organizational_details: Optional[str] = Field(None, alias="organizationalDetails")
     language: Optional[str] = None
     default_programming_language: Optional[str] = Field(
         None, alias="defaultProgrammingLanguage"
     )
     start_date: Optional[datetime] = Field(alias="startDate", default=None)
     end_date: Optional[datetime] = Field(alias="endDate", default=None)
-    online_course: Optional[bool] = Field(None, alias="onlineCourse")
 
     def get_end_date(self):
         """

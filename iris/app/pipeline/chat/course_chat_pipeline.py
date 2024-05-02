@@ -83,10 +83,8 @@ class CourseChatPipeline(Pipeline):
         query: PyrisMessage = dto.chat_history[-1]
         name: str = dto.course.course_name
         description: str = dto.course.course_description
-        organizational_details: str = dto.course.organizational_details
         language: str = dto.course.language
         programming_language: str = dto.course.get_default_programming_language()
-        online_course: str = dto.course.is_online_course()
         start_date: str = dto.course.get_start_date()
         end_date: str = dto.course.get_end_date()
 
@@ -103,8 +101,6 @@ class CourseChatPipeline(Pipeline):
             programming_language=programming_language,
             start_date=start_date,
             end_date=end_date,
-            online_course=online_course,
-            organizational_details=organizational_details,
         )
         self.prompt = ChatPromptTemplate.from_messages(prompt_val)
         try:
