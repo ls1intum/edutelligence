@@ -3,8 +3,8 @@ from typing import Optional
 from xml.dom import minidom
 from xml.etree import ElementTree
 
-from module_modelling_llm.helpers.models.diagram_types import DiagramType
-from module_modelling_llm.helpers.serializers.bpmn_serializer import BPMNSerializer
+from module_modeling_llm.helpers.models.diagram_types import DiagramType
+from module_modeling_llm.helpers.serializers.bpmn_serializer import BPMNSerializer
 
 
 class DiagramModelSerializer:

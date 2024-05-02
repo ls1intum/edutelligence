@@ -5,7 +5,7 @@ from pydantic import Field
 from .feedback import Feedback
 
 
-class ModellingFeedback(Feedback):
-    """Feedback on a modelling exercise."""
+class ModelingFeedback(Feedback):
+    """Feedback on a modeling exercise."""
 
     element_ids: Optional[List[str]] = Field([], description="referenced diagram element IDs", example=["id_1"])

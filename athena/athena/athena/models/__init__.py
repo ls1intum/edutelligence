@@ -8,10 +8,10 @@ from .db_submission import DBSubmission
 from .db_feedback import DBFeedback
 from .db_programming_exercise import DBProgrammingExercise
 from .db_text_exercise import DBTextExercise
-from .db_modelling_exercise import DBModellingExercise
+from .db_modeling_exercise import DBModelingExercise
 from .db_programming_submission import DBProgrammingSubmission
 from .db_text_submission import DBTextSubmission
-from .db_modelling_submission import DBModellingSubmission
+from .db_modeling_submission import DBModelingSubmission
 from .db_programming_feedback import DBProgrammingFeedback
 from .db_text_feedback import DBTextFeedback
-from .db_modelling_feedback import DBModellingFeedback
+from .db_modeling_feedback import DBModelingFeedback

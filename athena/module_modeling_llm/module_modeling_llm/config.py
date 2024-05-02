@@ -1,8 +1,8 @@
 from pydantic import BaseModel, Field
 
 from athena import config_schema_provider
-from module_modelling_llm.helpers.models import ModelConfigType, DefaultModelConfig
-from module_modelling_llm.prompts.generate_suggestions import (
+from module_modeling_llm.helpers.models import ModelConfigType, DefaultModelConfig
+from module_modeling_llm.prompts.generate_suggestions import (
     system_message as generate_suggestions_system_message,
     human_message as generate_suggestions_human_message
 )

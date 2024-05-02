@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 
-# This is the Dockerfile for the modelling exercise feedback module.
+# This is the Dockerfile for the modeling exercise feedback module.
 
 FROM python:3.11
 LABEL org.opencontainers.image.source=https://github.com/ls1intum/Athena

@@ -5,18 +5,18 @@ from pydantic import BaseModel, Field
 
 from athena import emit_meta
 from athena.logger import logger
-from athena.modelling import Exercise, Submission, Feedback
-from module_modelling_llm.config import BasicApproachConfig
-from module_modelling_llm.helpers.llm_utils import (
+from athena.modeling import Exercise, Submission, Feedback
+from module_modeling_llm.config import BasicApproachConfig
+from module_modeling_llm.helpers.llm_utils import (
     get_chat_prompt_with_formatting_instructions,
     check_prompt_length_and_omit_features_if_necessary,
     num_tokens_from_prompt,
     predict_and_parse
 )
-from module_modelling_llm.helpers.models.diagram_types import DiagramType
-from module_modelling_llm.helpers.serializers.diagram_model_serializer import DiagramModelSerializer
-from module_modelling_llm.helpers.utils import format_grading_instructions, get_elements
-from module_modelling_llm.prompts.submission_format.submission_format_remarks import get_submission_format_remarks
+from module_modeling_llm.helpers.models.diagram_types import DiagramType
+from module_modeling_llm.helpers.serializers.diagram_model_serializer import DiagramModelSerializer
+from module_modeling_llm.helpers.utils import format_grading_instructions, get_elements
+from module_modeling_llm.prompts.submission_format.submission_format_remarks import get_submission_format_remarks
 
 
 class FeedbackModel(BaseModel):

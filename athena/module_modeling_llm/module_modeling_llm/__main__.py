@@ -5,9 +5,9 @@ import tiktoken
 
 from athena import app, submission_selector, submissions_consumer, feedback_consumer, feedback_provider
 from athena.logger import logger
-from athena.modelling import Exercise, Submission, Feedback
-from module_modelling_llm.config import Configuration
-from module_modelling_llm.generate_suggestions import generate_suggestions
+from athena.modeling import Exercise, Submission, Feedback
+from module_modeling_llm.config import Configuration
+from module_modeling_llm.generate_suggestions import generate_suggestions
 
 
 @submissions_consumer

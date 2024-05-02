@@ -76,13 +76,13 @@ services:
       - postgres
     image: ls1tum/athena_module_programming_code_embedding:${ATHENA_TAG:-develop}
 
-  module_modelling_llm:
-    hostname: module-modelling-llm
+  module_modeling_llm:
+    hostname: module-modeling-llm
     env_file:
-      - ${ATHENA_ENV_DIR:-./env_example}/module_modelling_llm.env
+      - ${ATHENA_ENV_DIR:-./env_example}/module_modeling_llm.env
     depends_on:
       - postgres
-    image: ls1tum/athena_module_modelling_llm:${ATHENA_TAG:-develop}
+    image: ls1tum/athena_module_modeling_llm:${ATHENA_TAG:-develop}
 
   postgres:
     hostname: postgres

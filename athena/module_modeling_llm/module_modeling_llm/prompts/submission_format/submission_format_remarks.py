@@ -1,7 +1,7 @@
-from module_modelling_llm.helpers.models.diagram_types import DiagramType
-from module_modelling_llm.prompts.submission_format.bpmn import \
+from module_modeling_llm.helpers.models.diagram_types import DiagramType
+from module_modeling_llm.prompts.submission_format.bpmn import \
     submission_format_remarks as bpmn_submission_format_remarks
-from module_modelling_llm.prompts.submission_format.general import \
+from module_modeling_llm.prompts.submission_format.general import \
     submission_format_remarks as general_submission_format_remarks
 
 

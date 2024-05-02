@@ -1,8 +1,8 @@
 {
   "id": 5,
   "course_id": 2,
-  "title": "Process Modelling with BPMN: Pizza delivery",
-  "type": "modelling",
+  "title": "Process Modeling with BPMN: Pizza delivery",
+  "type": "modeling",
   "max_points": 10.0,
   "bonus_points": 0,
   "grading_instructions": "For every correct diagram element, give 1 point. For every missing element, give 0 points.",

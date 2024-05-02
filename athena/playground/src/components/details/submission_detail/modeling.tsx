@@ -1,6 +1,6 @@
 import React, {useEffect, useRef, useState}  from 'react';
 
-import type {ModellingSubmission} from "@/model/submission";
+import type {ModelingSubmission} from "@/model/submission";
 import type {Feedback} from "@/model/feedback";
 import {createFeedbackItemUpdater, createNewFeedback, getFeedbackReferenceType} from "@/model/feedback";
 import type {ManualRating} from "@/model/manual_rating";
@@ -9,23 +9,23 @@ import {createManualRatingItemUpdater} from "@/model/manual_rating";
 import InlineFeedback from "@/components/details/editor/inline_feedback";
 
 
-type ModellingSubmissionDetailProps = {
+type ModelingSubmissionDetailProps = {
   identifier?: string;
-  submission: ModellingSubmission;
+  submission: ModelingSubmission;
   feedbacks?: Feedback[];
   onFeedbacksChange?: (feedback: Feedback[]) => void;
   manualRatings?: ManualRating[];
   onManualRatingsChange?: (manualRatings: ManualRating[]) => void;
 };
 
-export default function ModellingSubmissionDetail({
+export default function ModelingSubmissionDetail({
   identifier,
   submission,
   feedbacks,
   onFeedbacksChange,
   manualRatings,
   onManualRatingsChange,
-}: ModellingSubmissionDetailProps) {
+}: ModelingSubmissionDetailProps) {
   const unreferencedFeedbacks = feedbacks?.filter(
     (feedback) => getFeedbackReferenceType(feedback) === "unreferenced"
   );

@@ -1,6 +1,6 @@
-# Module Modelling LLM
+# Module Modeling LLM
 
-Generating feedback for modelling exercises using Large Language Models.
+Generating feedback for modeling exercises using Large Language Models.
 
 It implements the approach described in the following master's thesis:
 > **Leveraging LLMs for Automated Feedback Generation on Exercises**  

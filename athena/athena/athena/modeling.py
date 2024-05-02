@@ -1,20 +1,20 @@
-"""Import this to use schemas and decorators specific to modelling exercises."""
+"""Import this to use schemas and decorators specific to modeling exercises."""
 
 import functools
 
 import athena.storage
 from .module_config import get_module_config
-from .schemas import ModellingExercise, ModellingFeedback, ModellingSubmission
+from .schemas import ModelingExercise, ModelingFeedback, ModelingSubmission
 
 module_type = get_module_config().type
-if module_type.name != "modelling":
-    raise ImportError(f"Importing athena.modelling from a module of type {module_type}. This is probably a mistake, "
+if module_type.name != "modeling":
+    raise ImportError(f"Importing athena.modeling from a module of type {module_type}. This is probably a mistake, "
                       f"you should only import the file related to the exercise type that your module handles")
 
 # re-export with shorter names, because the module will only use these
-Exercise = ModellingExercise
-Submission = ModellingSubmission
-Feedback = ModellingFeedback
+Exercise = ModelingExercise
+Submission = ModelingSubmission
+Feedback = ModelingFeedback
 
 # re-export without the need to give the type of the requested schema
 get_stored_exercises = functools.partial(athena.storage.get_stored_exercises, Exercise)

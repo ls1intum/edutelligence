@@ -1,8 +1,8 @@
 {
   "id": 6,
   "course_id": 2,
-  "title": "Process Modelling with BPMN: Obtaining a loan",
-  "type": "modelling",
+  "title": "Process Modeling with BPMN: Obtaining a loan",
+  "type": "modeling",
   "max_points": 10.0,
   "bonus_points": 0,
   "grading_instructions": "Evaluate the following 10 criteria: 1. Give 1 point if all elements described in the problem statement are present in the submission, 0 otherwise. 2. Give 1 point if the outgoing flows from an exclusive gateway are also labeled if there is more than one outgoing flow from the exclusive gateway, 0 otherwise. 3. Give 1 point if a start-event is present in the student's submission, 0 otherwise. 4. Give 1 point if an end-event is present in the student's submission, 0 otherwise. 5. Give 1 point if if the activities in the submission have the same order as in the problem statement, 0 otherwise. 6. Give 1 point if all pools and swimlanes are labeled, 0 otherwise. 7. Give 1 point if the submission does not contain elements that are not described in the problem statement, 0 otherwise. 8. Give 1 point if all diagram elements are connected, 0 otherwise. 9. Give 1 point if all tasks are named in the \"Verb Object\"-format where a name consists of a verb followed by the object, 0 otherwise. 10. Give 1 point if no sequence flows connect elements in two different pools, 0 otherwise.",
