@@ -60,3 +60,27 @@ class EmbeddingModel(LanguageModel, metaclass=ABCMeta):
         raise NotImplementedError(
             f"The LLM {self.__str__()} does not support embeddings"
         )
+
+
+class ImageGenerationModel(LanguageModel, metaclass=ABCMeta):
+    """Abstract class for the llm image generation wrappers"""
+
+    @classmethod
+    def __subclasshook__(cls, subclass):
+        return hasattr(subclass, "generate_images") and callable(
+            subclass.generate_images
+        )
+
+    @abstractmethod
+    def generate_images(
+        self,
+        prompt: str,
+        n: int = 1,
+        size: str = "256x256",
+        quality: str = "standard",
+        **kwargs,
+    ) -> list:
+        """Create an image from the prompt"""
+        raise NotImplementedError(
+            f"The LLM {self.__str__()} does not support image generation"
+        )

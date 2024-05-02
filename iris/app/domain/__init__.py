@@ -8,3 +8,4 @@ from app.domain.course_chat.course_chat_pipeline_execution_dto import (
     CourseChatPipelineExecutionDTO,
 )
 from .pyris_message import PyrisMessage, IrisMessageRole
+from app.domain.data import image_message_content_dto

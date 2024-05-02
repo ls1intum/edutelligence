@@ -1,7 +1,7 @@
+from pydantic import BaseModel
 from typing import Optional
-
-from pydantic import BaseModel, Field
 
 
 class ImageMessageContentDTO(BaseModel):
-    image_data: Optional[str] = Field(alias="imageData", default=None)
+    base64: str
+    prompt: Optional[str]

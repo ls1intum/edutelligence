@@ -1,6 +1,8 @@
 from abc import ABCMeta, abstractmethod
+from typing import Optional
 
 from ...domain import PyrisMessage
+from ...domain.data.image_message_content_dto import ImageMessageContentDTO
 from ...llm import CompletionArguments
 
 
@@ -19,7 +21,12 @@ class RequestHandler(metaclass=ABCMeta):
         )
 
     @abstractmethod
-    def complete(self, prompt: str, arguments: CompletionArguments) -> str:
+    def complete(
+        self,
+        prompt: str,
+        arguments: CompletionArguments,
+        image: Optional[ImageMessageContentDTO] = None,
+    ) -> str:
         """Create a completion from the prompt"""
         raise NotImplementedError
 
