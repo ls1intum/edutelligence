@@ -7,22 +7,16 @@ from langchain.text_splitter import (
     RecursiveCharacterTextSplitter,
 )
 
+from app.content_service.Ingestion.abstract_ingestion import AbstractIngestion
 from app.llm import BasicRequestHandler
 from app.llm.langchain.iris_langchain_embedding_model import IrisLangchainEmbeddingModel
 from app.vector_database.repository_schema import (
     init_repository_schema,
     RepositorySchema,
 )
-from content_service.Ingestion.abstract_ingestion import AbstractIngestion
-
-CHUNKSIZE = 512
-OVERLAP = 51
 
 
 def split_code(code: str, language: Language, chunk_size: int, chunk_overlap: int):
-    """
-    Split the code into chunks of 1500 characters with an overlap of 100 characters
-    """
     python_splitter = RecursiveCharacterTextSplitter.from_language(
         language=language, chunk_size=chunk_size, chunk_overlap=chunk_overlap
     )
@@ -39,14 +33,16 @@ class RepositoryIngestion(AbstractIngestion, ABC):
         self.request_handler = BasicRequestHandler("gpt35")
         self.iris_embedding_model = IrisLangchainEmbeddingModel(self.request_handler)
 
-    def chunk_files(self, path: str):
+    def chunk_files(self, path: str, programming_language: Language):
         """
         Chunk the code files in the root directory
         """
+        chunk_size = 512
+        overlap = 51
         files_contents = []
         for directory_path, subdir, files in os.walk(path):
             for filename in files:
-                if filename.endswith(".java"):
+                if filename.endswith("." + programming_language.value):
                     file_path = os.path.join(directory_path, filename)
                     with open(file_path, "r") as file:
                         code = file.read()
@@ -58,7 +54,7 @@ class RepositoryIngestion(AbstractIngestion, ABC):
                     )
         for file in files_contents:
             chunks = split_code(
-                file[RepositorySchema.CONTENT], Language.JAVA, CHUNKSIZE, OVERLAP
+                file[RepositorySchema.CONTENT], programming_language.JAVA, chunk_size, overlap
             )
             for chunk in chunks:
                 files_contents.append(
@@ -80,13 +76,7 @@ class RepositoryIngestion(AbstractIngestion, ABC):
         with self.collection.batch.dynamic() as batch:
             for index, chunk in enumerate(chunks):
                 embed_chunk = self.iris_embedding_model.embed_query(
-                    chunk[1][RepositorySchema.CONTENT]
+                    chunk[index][RepositorySchema.CONTENT]
                 )
                 batch.add_object(properties=chunk, vector=embed_chunk)
         return True
-
-    def update(self, repository: dict[str, str]):  # this is most likely not necessary
-        """
-        Update the repository in the weaviate database
-        """
-        pass

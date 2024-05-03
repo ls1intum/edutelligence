@@ -5,8 +5,8 @@ from typing import List
 import weaviate
 import weaviate.classes as wvc
 
+from app.content_service.Retrieval.abstract_retrieval import AbstractRetrieval
 from app.vector_database.lectureschema import init_lecture_schema, LectureSchema
-from content_service.Retrieval.abstract_retrieval import AbstractRetrieval
 
 
 class LectureRetrieval(AbstractRetrieval, ABC):
@@ -40,5 +40,4 @@ class LectureRetrieval(AbstractRetrieval, ABC):
             ],
             limit=5,
         )
-        print(json.dumps(response, indent=2))
         return response

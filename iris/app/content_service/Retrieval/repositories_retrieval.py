@@ -2,17 +2,15 @@ import json
 from typing import List
 
 import weaviate
-
-from vector_database.repository_schema import RepositorySchema, init_repository_schema
-
-from content_service.Retrieval.abstract_retrieval import AbstractRetrieval
-
 import weaviate.classes as wvc
+
+from app.content_service.Retrieval.abstract_retrieval import AbstractRetrieval
+from app.vector_database.repository_schema import init_repository_schema, RepositorySchema
 
 
 class RepositoryRetrieval(AbstractRetrieval):
     """
-    Class for Retrieving vector_database for from the database.
+    Class for Retrieving repository code for from the vector database.
     """
 
     def __init__(self, client: weaviate.WeaviateClient):
@@ -37,5 +35,4 @@ class RepositoryRetrieval(AbstractRetrieval):
             ],
             limit=5,
         )
-        print(json.dumps(response, indent=2))
         return response
