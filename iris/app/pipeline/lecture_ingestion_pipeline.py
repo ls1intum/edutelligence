@@ -12,7 +12,7 @@ from ..domain.data.lecture_unit_dto import LectureUnitDTO
 from app.domain.ingestion.ingestion_pipeline_execution_dto import (
     IngestionPipelineExecutionDto,
 )
-from ..vector_database.lectureschema import init_lecture_schema, LectureSchema
+from ..vector_database.lecture_schema import init_lecture_schema, LectureSchema
 from ..content_service.Ingestion.abstract_ingestion import AbstractIngestion
 from ..llm import BasicRequestHandler, CompletionArguments
 from ..web.status import IngestionStatusCallback

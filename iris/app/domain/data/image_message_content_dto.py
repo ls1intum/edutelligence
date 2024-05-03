@@ -1,9 +1,9 @@
 from pydantic import BaseModel, Field
-from typing import List, Optional
+from typing import Optional
 
 
 class ImageMessageContentDTO(BaseModel):
-    base64: List[str] = Field(..., alias="base64")  # List of base64-encoded strings
+    base64: str = Field(..., alias="base64")  # List of base64-encoded strings
     prompt: Optional[str] = Field(default=None, alias="prompt")
 
     class Config:

@@ -25,12 +25,10 @@ def init_repository_schema(client: WeaviateClient) -> Collection:
         return client.collections.get(COLLECTION_NAME)
     return client.collections.create(
         name=COLLECTION_NAME,
-        vectorizer_config=wvc.config.Configure.Vectorizer.none(),  # We do not want to vectorize the text automatically
-        # HNSW is preferred over FLAT for large amounts of vector_database, which is the case here
+        vectorizer_config=wvc.config.Configure.Vectorizer.none(),
         vector_index_config=wvc.config.Configure.VectorIndex.hnsw(
-            distance_metric=wvc.config.VectorDistances.COSINE  # select preferred distance metric
+            distance_metric=wvc.config.VectorDistances.COSINE
         ),
-        # The properties are like the columns of a table in a relational database
         properties=[
             wvc.config.Property(
                 name=RepositorySchema.CONTENT,

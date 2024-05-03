@@ -24,35 +24,35 @@ def convert_to_ollama_images(base64_images: list[str]) -> list[bytes] | None:
 
 def convert_to_ollama_messages(messages: list[PyrisMessage]) -> list[Message]:
     """
-    Convert a list of PyrisMessage to a list of Message
+    Convert a list of PyrisMessages to a list of Ollama Messages
     """
     messages_to_return = []
     for message in messages:
-        match message.contents[0]:
-            case ImageMessageContentDTO():
-                messages_to_return.append(
-                    Message(
-                        role=map_role_to_str(message.sender),
-                        content=message.contents[0].text_content,
-                        images=message.contents[0].base64,
-                    )
-                )
-            case TextMessageContentDTO():
-                messages_to_return.append(
-                    Message(
-                        role=map_role_to_str(message.sender),
-                        content=message.contents[0].text_content,
-                    )
-                )
-            case JsonMessageContentDTO():
-                messages_to_return.append(
-                    Message(
-                        role=map_role_to_str(message.sender),
-                        content=message.contents[0].text_content,
-                    )
-                )
-            case _:
-                continue
+        if len(message.contents) == 0:
+            continue
+        text_content = ""
+        images = []
+        for content in message.contents:
+            match content:
+                case ImageMessageContentDTO():
+                    images.append(content.base64)
+                case TextMessageContentDTO():
+                    if len(text_content) > 0:
+                        text_content += "\n"
+                    text_content += content.text_content
+                case JsonMessageContentDTO():
+                    if len(text_content) > 0:
+                        text_content += "\n"
+                    text_content += content.json_content
+                case _:
+                    continue
+        messages_to_return.append(
+            Message(
+                role=map_role_to_str(message.sender),
+                content=text_content,
+                images=convert_to_ollama_images(images),
+            )
+        )
     return messages_to_return
 
 
@@ -88,7 +88,7 @@ class OllamaModel(
         image: Optional[ImageMessageContentDTO] = None,
     ) -> str:
         response = self._client.generate(
-            model=self.model, prompt=prompt, images=image.base64 if image else None
+            model=self.model, prompt=prompt, images=[image.base64] if image else None
         )
         return response["response"]
 
