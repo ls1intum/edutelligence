@@ -42,3 +42,9 @@ class VectorDatabase:
         collection.data.delete_many(
             where=wvc.query.Filter.by_property(property_name).equal(object_property)
         )
+
+    def get_client(self):
+        """
+        Get the Weaviate client
+        """
+        return self.client
