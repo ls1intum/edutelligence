@@ -14,12 +14,11 @@ class VectorDatabase:
     """
 
     def __init__(self):
-        # Connect to the Weaviate Cloud Service until we set up a proper docker for this project
         self.client = weaviate.connect_to_wcs(
-            cluster_url=os.getenv(),  # Replace with your WCS URL
+            cluster_url=os.getenv("WEAVIATE_CLUSTER_URL"),  # Replace with your WCS URL
             auth_credentials=weaviate.auth.AuthApiKey(
-                os.getenv()
-            ),  # Replace with your WCS key
+                os.getenv("WEAVIATE_AUTH_KEY")
+            ),
         )
         self.repositories = init_repository_schema(self.client)
         self.lectures = init_lecture_schema(self.client)
@@ -33,9 +32,9 @@ class VectorDatabase:
         """
         if self.client.collections.exists(collection_name):
             if self.client.collections.delete(collection_name):
-                logger.log(f"Collection {collection_name} deleted")
+                logger.info(f"Collection {collection_name} deleted")
             else:
-                logger.log(f"Collection {collection_name} failed to delete")
+                logger.error(f"Collection {collection_name} failed to delete")
 
     def delete_object(self, collection_name, property_name, object_property):
         """
