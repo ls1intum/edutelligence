@@ -1,6 +1,7 @@
 import base64
 from datetime import datetime
 from typing import Literal, Any, Optional
+from pydantic import Field
 
 from ollama import Client, Message
 
@@ -76,6 +77,7 @@ class OllamaModel(
     type: Literal["ollama"]
     model: str
     host: str
+    options: dict[str, Any] = Field(default={})
     _client: Client
 
     def model_post_init(self, __context: Any) -> None:
@@ -88,7 +90,10 @@ class OllamaModel(
         image: Optional[ImageMessageContentDTO] = None,
     ) -> str:
         response = self._client.generate(
-            model=self.model, prompt=prompt, images=[image.base64] if image else None
+            model=self.model,
+            prompt=prompt,
+            images=[image.base64] if image else None,
+            options=self.options,
         )
         return response["response"]
 
@@ -96,12 +101,16 @@ class OllamaModel(
         self, messages: list[PyrisMessage], arguments: CompletionArguments
     ) -> PyrisMessage:
         response = self._client.chat(
-            model=self.model, messages=convert_to_ollama_messages(messages)
+            model=self.model,
+            messages=convert_to_ollama_messages(messages),
+            options=self.options,
         )
         return convert_to_iris_message(response["message"])
 
     def embed(self, text: str) -> list[float]:
-        response = self._client.embeddings(model=self.model, prompt=text)
+        response = self._client.embeddings(
+            model=self.model, prompt=text, options=self.options
+        )
         return list(response)
 
     def __str__(self):
