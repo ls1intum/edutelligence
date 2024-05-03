@@ -74,6 +74,7 @@ class TutorChatPipeline(Pipeline):
             :param dto: The pipeline execution data transfer object
             :param kwargs: The keyword arguments
         """
+
         # Set up the initial prompt
         self.prompt = ChatPromptTemplate.from_messages(
             [

@@ -1,7 +1,7 @@
-from typing import Optional
-
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class TextMessageContentDTO(BaseModel):
-    text_content: Optional[str] = Field(alias="textContent", default=None)
+    model_config = ConfigDict(populate_by_name=True)
+
+    text_content: str = Field(alias="textContent")
