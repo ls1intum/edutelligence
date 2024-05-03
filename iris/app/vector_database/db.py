@@ -12,11 +12,11 @@ class VectorDatabase:
     """
     Class to interact with the Weaviate vector database
     """
+
     def __init__(self):
         # Connect to the Weaviate Cloud Service until we set up a proper docker for this project
         self.client = weaviate.connect_to_wcs(
-            cluster_url=os.getenv(
-            ),  # Replace with your WCS URL
+            cluster_url=os.getenv(),  # Replace with your WCS URL
             auth_credentials=weaviate.auth.AuthApiKey(
                 os.getenv()
             ),  # Replace with your WCS key

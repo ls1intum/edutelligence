@@ -54,7 +54,10 @@ class RepositoryIngestion(AbstractIngestion, ABC):
                     )
         for file in files_contents:
             chunks = split_code(
-                file[RepositorySchema.CONTENT], programming_language.JAVA, chunk_size, overlap
+                file[RepositorySchema.CONTENT],
+                programming_language.JAVA,
+                chunk_size,
+                overlap,
             )
             for chunk in chunks:
                 files_contents.append(

@@ -5,7 +5,10 @@ import weaviate
 import weaviate.classes as wvc
 
 from app.content_service.Retrieval.abstract_retrieval import AbstractRetrieval
-from app.vector_database.repository_schema import init_repository_schema, RepositorySchema
+from app.vector_database.repository_schema import (
+    init_repository_schema,
+    RepositorySchema,
+)
 
 
 class RepositoryRetrieval(AbstractRetrieval):
