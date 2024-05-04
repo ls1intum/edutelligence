@@ -93,6 +93,7 @@ class OllamaModel(
             model=self.model,
             prompt=prompt,
             images=[image.base64] if image else None,
+            format="json" if arguments.response_format == "JSON" else "",
             options=self.options,
         )
         return response["response"]
@@ -103,6 +104,7 @@ class OllamaModel(
         response = self._client.chat(
             model=self.model,
             messages=convert_to_ollama_messages(messages),
+            format="json" if arguments.response_format == "JSON" else "",
             options=self.options,
         )
         return convert_to_iris_message(response["message"])

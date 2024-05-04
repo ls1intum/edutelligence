@@ -4,6 +4,7 @@ from typing import Literal, Any
 from openai import OpenAI
 from openai.lib.azure import AzureOpenAI
 from openai.types.chat import ChatCompletionMessage, ChatCompletionMessageParam
+from openai.types.chat.completion_create_params import ResponseFormat
 
 from ...common.message_converters import map_str_to_role, map_role_to_str
 from app.domain.data.text_message_content_dto import TextMessageContentDTO
@@ -76,11 +77,15 @@ class OpenAIChatModel(ChatModel):
     def chat(
         self, messages: list[PyrisMessage], arguments: CompletionArguments
     ) -> PyrisMessage:
+        # noinspection PyTypeChecker
         response = self._client.chat.completions.create(
             model=self.model,
             messages=convert_to_open_ai_messages(messages),
             temperature=arguments.temperature,
             max_tokens=arguments.max_tokens,
+            response_format=ResponseFormat(
+                type=("json_object" if arguments.response_format == "JSON" else "text")
+            ),
         )
         return convert_to_iris_message(response.choices[0].message)
 
