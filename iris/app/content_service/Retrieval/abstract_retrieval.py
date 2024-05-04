@@ -8,7 +8,7 @@ class AbstractRetrieval(ABC):
     """
 
     @abstractmethod
-    def retrieve(self, path: str, hybrid_factor: float) -> List[str]:
+    def retrieve(self, path: str, hybrid_factor: float, result_limit: int) -> List[str]:
         """
         Abstract method to retrieve data from the database.
         """

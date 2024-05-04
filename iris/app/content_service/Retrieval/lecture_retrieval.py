@@ -20,6 +20,7 @@ class LectureRetrieval(AbstractRetrieval, ABC):
         self,
         user_message: str,
         hybrid_factor: float,
+        result_limit: int,
         lecture_id: int = None,
         message_vector: [float] = None,
     ) -> List[str]:
@@ -37,6 +38,6 @@ class LectureRetrieval(AbstractRetrieval, ABC):
                 LectureSchema.PAGE_IMAGE_DESCRIPTION,
                 LectureSchema.COURSE_NAME,
             ],
-            limit=5,
+            limit=result_limit,
         )
         return response
