@@ -27,7 +27,9 @@ class LectureRetrieval(AbstractRetrieval, ABC):
         response = self.collection.query.hybrid(
             query=user_message,
             filters=(
-                wvc.query.Filter.by_property(LectureSchema.LECTURE_ID.value).equal(lecture_id)
+                wvc.query.Filter.by_property(LectureSchema.LECTURE_ID.value).equal(
+                    lecture_id
+                )
                 if lecture_id
                 else None
             ),

@@ -89,7 +89,6 @@ def init_lecture_schema(client: WeaviateClient) -> Collection:
             ),
             wvc.config.Property(
                 name=LectureSchema.PAGE_NUMBER.value,
-
                 description="The page number of the slide",
                 data_type=wvc.config.DataType.INT,
             ),

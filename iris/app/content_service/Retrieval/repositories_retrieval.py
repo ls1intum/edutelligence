@@ -27,9 +27,9 @@ class RepositoryRetrieval(AbstractRetrieval):
         response = self.collection.query.near_text(
             near_text=user_message,
             filters=(
-                wvc.query.Filter.by_property(RepositorySchema.REPOSITORY_ID.value).equal(
-                    repository_id
-                )
+                wvc.query.Filter.by_property(
+                    RepositorySchema.REPOSITORY_ID.value
+                ).equal(repository_id)
                 if repository_id
                 else None
             ),

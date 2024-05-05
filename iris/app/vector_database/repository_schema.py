@@ -9,6 +9,7 @@ class RepositorySchema(Enum):
     """
     Schema for the student repository
     """
+
     COLLECTION_NAME = "StudentRepository"
     CONTENT = "content"
     COURSE_ID = "course_id"
