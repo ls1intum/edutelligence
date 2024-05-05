@@ -42,6 +42,7 @@ class PageData(TypedDict):
     """
     Page data to be ingested
     """
+
     lecture_id: int
     lecture_name: str
     lecture_unit_id: int
@@ -58,10 +59,10 @@ class PageData(TypedDict):
 class LectureIngestionPipeline(AbstractIngestion, Pipeline):
 
     def __init__(
-            self,
-            client: weaviate.WeaviateClient,
-            dto: IngestionPipelineExecutionDto,
-            callback: IngestionStatusCallback,
+        self,
+        client: weaviate.WeaviateClient,
+        dto: IngestionPipelineExecutionDto,
+        callback: IngestionStatusCallback,
     ):
         super().__init__()
         self.collection = init_lecture_schema(client)
@@ -126,9 +127,9 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
             return False
 
     def chunk_data(
-            self,
-            lecture_path: str,
-            lecture_unit_dto: LectureUnitDTO = None,
+        self,
+        lecture_path: str,
+        lecture_unit_dto: LectureUnitDTO = None,
     ):
         """
         Chunk the data from the lecture into smaller pieces
@@ -149,17 +150,19 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
                 )
                 page_content = page.get_text()
                 page_data: PageData = {
-                    'lecture_id': lecture_unit_dto.lecture_id,
-                    'lecture_name': lecture_unit_dto.lecture_name,
-                    'lecture_unit_id': lecture_unit_dto.lecture_unit_id,
-                    'lecture_unit_name': lecture_unit_dto.lecture_unit_name,
-                    'course_id': lecture_unit_dto.course_id,
-                    'course_name': lecture_unit_dto.course_name,
-                    'course_description': lecture_unit_dto.course_description,
-                    'page_number': page_num + 1,
-                    'page_text_content': page_content,
-                    'page_image_description': image_interpretation if image_interpretation else "",
-                    'page_base64': img_base64 if img_base64 else ""
+                    "lecture_id": lecture_unit_dto.lecture_id,
+                    "lecture_name": lecture_unit_dto.lecture_name,
+                    "lecture_unit_id": lecture_unit_dto.lecture_unit_id,
+                    "lecture_unit_name": lecture_unit_dto.lecture_unit_name,
+                    "course_id": lecture_unit_dto.course_id,
+                    "course_name": lecture_unit_dto.course_name,
+                    "course_description": lecture_unit_dto.course_description,
+                    "page_number": page_num + 1,
+                    "page_text_content": page_content,
+                    "page_image_description": (
+                        image_interpretation if image_interpretation else ""
+                    ),
+                    "page_base64": img_base64 if img_base64 else "",
                 }
                 data.append(page_data)
 
@@ -190,7 +193,7 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
                 where=wvc.query.Filter.by_property(
                     LectureSchema.LECTURE_ID.value
                 ).equal(lecture_id)
-                      & wvc.query.Filter.by_property(
+                & wvc.query.Filter.by_property(
                     LectureSchema.LECTURE_UNIT_ID.value
                 ).equal(lecture_unit_id)
             )
@@ -200,7 +203,7 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
             return False
 
     def interpret_image(
-            self, img_base64: str, last_page_content: str, name_of_lecture: str
+        self, img_base64: str, last_page_content: str, name_of_lecture: str
     ):
         """
         Interpret the image passed
