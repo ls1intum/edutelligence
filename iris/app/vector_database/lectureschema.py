@@ -1,30 +1,26 @@
+from enum import Enum
+
 import weaviate.classes as wvc
 from weaviate import WeaviateClient
 from weaviate.collections import Collection
 
-COLLECTION_NAME = "LectureSlides"
 
-
-# Potential improvement:
-# Don't store the names of the courses, lectures, and units for every single chunk
-# These can be looked up via the IDs when needed - query Artemis? or store locally?
-
-
-class LectureSchema:
+class LectureSchema(Enum):
     """
     Schema for the lecture slides
     """
 
-    COURSE_ID = "course_id"
+    COLLECTION_NAME = "LectureSlides"
     COURSE_NAME = "course_name"
-    LECTURE_DESCRIPTION = "lecture_description"
+    COURSE_DESCRIPTION = "course_description"
+    COURSE_ID = "course_id"
     LECTURE_ID = "lecture_id"
     LECTURE_NAME = "lecture_name"
-    LECTURE_UNIT_ID = "lecture_unit_id"  # The attachment unit ID in Artemis
+    LECTURE_UNIT_ID = "lecture_unit_id"
     LECTURE_UNIT_NAME = "lecture_unit_name"
-    PAGE_TEXT_CONTENT = "page_text_content"  # The only property which will be embedded
-    PAGE_IMAGE_DESCRIPTION = "page_image_explanation"  # The description of the slide if the slide contains an image
-    PAGE_BASE64 = "page_base64"  # The base64 encoded image of the slide if the slide contains an image
+    PAGE_TEXT_CONTENT = "page_text_content"
+    PAGE_IMAGE_DESCRIPTION = "page_image_explanation"
+    PAGE_BASE64 = "page_base64"
     PAGE_NUMBER = "page_number"
 
 
@@ -32,70 +28,67 @@ def init_lecture_schema(client: WeaviateClient) -> Collection:
     """
     Initialize the schema for the lecture slides
     """
-    if client.collections.exists(COLLECTION_NAME):
-        return client.collections.get(COLLECTION_NAME)
+    if client.collections.exists(LectureSchema.COLLECTION_NAME.value):
+        return client.collections.get(LectureSchema.COLLECTION_NAME.value)
     return client.collections.create(
-        name=COLLECTION_NAME,
+        name=LectureSchema.COLLECTION_NAME.value,
         vectorizer_config=wvc.config.Configure.Vectorizer.none(),
-        # We do not want to vectorize the text automatically
-        # HNSW is preferred over FLAT for large amounts of vector_database, which is the case here
         vector_index_config=wvc.config.Configure.VectorIndex.hnsw(
-            distance_metric=wvc.config.VectorDistances.COSINE  # select preferred distance metric
+            distance_metric=wvc.config.VectorDistances.COSINE
         ),
-        # The properties are like the columns of a table in a relational database
         properties=[
             wvc.config.Property(
-                name=LectureSchema.COURSE_ID,
+                name=LectureSchema.COURSE_ID.value,
                 description="The ID of the course",
                 data_type=wvc.config.DataType.INT,
             ),
             wvc.config.Property(
-                name=LectureSchema.COURSE_NAME,
+                name=LectureSchema.COURSE_NAME.value,
                 description="The name of the course",
                 data_type=wvc.config.DataType.TEXT,
             ),
             wvc.config.Property(
-                name=LectureSchema.LECTURE_DESCRIPTION,
-                description="The description of the lecture",
+                name=LectureSchema.COURSE_DESCRIPTION.value,
+                description="The description of the COURSE",
                 data_type=wvc.config.DataType.TEXT,
             ),
             wvc.config.Property(
-                name=LectureSchema.LECTURE_ID,
+                name=LectureSchema.LECTURE_ID.value,
                 description="The ID of the lecture",
                 data_type=wvc.config.DataType.INT,
             ),
             wvc.config.Property(
-                name=LectureSchema.LECTURE_NAME,
+                name=LectureSchema.LECTURE_NAME.value,
                 description="The name of the lecture",
                 data_type=wvc.config.DataType.TEXT,
             ),
             wvc.config.Property(
-                name=LectureSchema.LECTURE_UNIT_ID,
+                name=LectureSchema.LECTURE_UNIT_ID.value,
                 description="The ID of the lecture unit",
                 data_type=wvc.config.DataType.INT,
             ),
             wvc.config.Property(
-                name=LectureSchema.LECTURE_UNIT_NAME,
+                name=LectureSchema.LECTURE_UNIT_NAME.value,
                 description="The name of the lecture unit",
                 data_type=wvc.config.DataType.TEXT,
             ),
             wvc.config.Property(
-                name=LectureSchema.PAGE_TEXT_CONTENT,
+                name=LectureSchema.PAGE_TEXT_CONTENT.value,
                 description="The original text content from the slide",
                 data_type=wvc.config.DataType.TEXT,
             ),
             wvc.config.Property(
-                name=LectureSchema.PAGE_IMAGE_DESCRIPTION,
+                name=LectureSchema.PAGE_IMAGE_DESCRIPTION.value,
                 description="The description of the slide if the slide contains an image",
-                data_type=wvc.config.DataType.TEXT,
+                data_type=wvc.config.DataType.TEXT.value,
             ),
             wvc.config.Property(
-                name=LectureSchema.PAGE_BASE64,
+                name=LectureSchema.PAGE_BASE64.value,
                 description="The base64 encoded image of the slide if the slide contains an image",
-                data_type=wvc.config.DataType.TEXT,
+                data_type=wvc.config.DataType.TEXT.value,
             ),
             wvc.config.Property(
-                name=LectureSchema.PAGE_NUMBER,
+                name=LectureSchema.PAGE_NUMBER.value,
                 description="The page number of the slide",
                 data_type=wvc.config.DataType.INT,
             ),

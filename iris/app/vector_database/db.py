@@ -1,36 +1,44 @@
+import logging
+import os
 import weaviate
-from weaviate import WeaviateClient
+from lectureschema import init_lecture_schema
+from repository_schema import init_repository_schema
+import weaviate.classes as wvc
 
-from .lectureschema import init_lecture_schema
-from .repository_schema import init_repository_schema
+logger = logging.getLogger(__name__)
 
 
 class VectorDatabase:
     """
-    Vector Database class
+    Class to interact with the Weaviate vector database
     """
 
-    client: WeaviateClient
-
     def __init__(self):
-        """weaviate_host = os.getenv("WEAVIATE_HOST")
-        weaviate_port = os.getenv("WEAVIATE_PORT")
-        assert weaviate_host, "WEAVIATE_HOST environment variable must be set"
-        assert weaviate_port, "WEAVIATE_PORT environment variable must be set"
-        assert (
-            weaviate_port.isdigit()
-        ), "WEAVIATE_PORT environment variable must be an integer"
-        self._client = weaviate.connect_to_local(
-            host=weaviate_host, port=int(weaviate_port)
-        )"""
-        # Connect to the Weaviate Cloud Service until we set up a proper docker for this project
         self.client = weaviate.connect_to_wcs(
-            cluster_url="https://pyrisv2-0r7l130v.weaviate.network",
-            # Replace with your WCS URL
-            auth_credentials=weaviate.auth.AuthApiKey(
-                "K33S5szDoHY8R3Xwp26RT4cvdJkpshdYX8Ly"
-            ),
-        )  # Replace with your WCS key
-        print(self.client.is_ready())
+            cluster_url=os.getenv("WEAVIATE_CLUSTER_URL"),
+            auth_credentials=weaviate.auth.AuthApiKey(os.getenv("WEAVIATE_AUTH_KEY")),
+        )
         self.repositories = init_repository_schema(self.client)
         self.lectures = init_lecture_schema(self.client)
+
+    def __del__(self):
+        self.client.close()
+
+    def delete_collection(self, collection_name):
+        """
+        Delete a collection from the database
+        """
+        if self.client.collections.exists(collection_name):
+            if self.client.collections.delete(collection_name):
+                logger.info(f"Collection {collection_name} deleted")
+            else:
+                logger.error(f"Collection {collection_name} failed to delete")
+
+    def delete_object(self, collection_name, property_name, object_property):
+        """
+        Delete an object from the collection inside the databse
+        """
+        collection = self.client.collections.get(collection_name)
+        collection.data.delete_many(
+            where=wvc.query.Filter.by_property(property_name).equal(object_property)
+        )

@@ -1,6 +1,8 @@
-from pydantic import BaseModel, Field, Json
-from typing import Any, Optional
+from pydantic import BaseModel, ConfigDict, Field, Json
+from typing import Any
 
 
 class JsonMessageContentDTO(BaseModel):
-    json_content: Optional[Json[Any]] = Field(alias="jsonContent", default=None)
+    model_config = ConfigDict(populate_by_name=True)
+
+    json_content: Json[Any] = Field(alias="jsonContent")

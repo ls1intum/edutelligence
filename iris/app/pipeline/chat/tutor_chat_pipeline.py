@@ -15,12 +15,8 @@ from ...domain import PyrisMessage
 from ...llm import CapabilityRequestHandler, RequirementList
 from ...domain.data.build_log_entry import BuildLogEntryDTO
 from ...domain.data.feedback_dto import FeedbackDTO
-from ..prompts.iris_tutor_chat_prompts import (
-    iris_initial_system_prompt,
-    chat_history_system_prompt,
-    final_system_prompt,
-    guide_system_prompt,
-)
+from ..prompts.iris_tutor_chat_prompts import iris_initial_system_prompt, chat_history_system_prompt,\
+    final_system_prompt, guide_system_prompt
 from ...domain import TutorChatPipelineExecutionDTO
 from ...domain.data.submission_dto import SubmissionDTO
 from ...web.status.status_update import TutorChatStatusCallback
@@ -74,6 +70,7 @@ class TutorChatPipeline(Pipeline):
             :param dto: The pipeline execution data transfer object
             :param kwargs: The keyword arguments
         """
+
         # Set up the initial prompt
         self.prompt = ChatPromptTemplate.from_messages(
             [
