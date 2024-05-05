@@ -80,12 +80,12 @@ def init_lecture_schema(client: WeaviateClient) -> Collection:
             wvc.config.Property(
                 name=LectureSchema.PAGE_IMAGE_DESCRIPTION.value,
                 description="The description of the slide if the slide contains an image",
-                data_type=wvc.config.DataType.TEXT.value,
+                data_type=wvc.config.DataType.TEXT,
             ),
             wvc.config.Property(
                 name=LectureSchema.PAGE_BASE64.value,
                 description="The base64 encoded image of the slide if the slide contains an image",
-                data_type=wvc.config.DataType.TEXT.value,
+                data_type=wvc.config.DataType.TEXT,
             ),
             wvc.config.Property(
                 name=LectureSchema.PAGE_NUMBER.value,
