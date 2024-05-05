@@ -27,18 +27,18 @@ class RepositoryRetrieval(AbstractRetrieval):
         response = self.collection.query.near_text(
             near_text=user_message,
             filters=(
-                wvc.query.Filter.by_property(RepositorySchema.REPOSITORY_ID).equal(
+                wvc.query.Filter.by_property(RepositorySchema.REPOSITORY_ID.value).equal(
                     repository_id
                 )
                 if repository_id
                 else None
             ),
             return_properties=[
-                RepositorySchema.REPOSITORY_ID,
-                RepositorySchema.COURSE_ID,
-                RepositorySchema.CONTENT,
-                RepositorySchema.EXERCISE_ID,
-                RepositorySchema.FILEPATH,
+                RepositorySchema.REPOSITORY_ID.value,
+                RepositorySchema.COURSE_ID.value,
+                RepositorySchema.CONTENT.value,
+                RepositorySchema.EXERCISE_ID.value,
+                RepositorySchema.FILEPATH.value,
             ],
             limit=result_limit,
         )
