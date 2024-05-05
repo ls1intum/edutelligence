@@ -1,13 +1,13 @@
-from datetime import datetime
-from typing import Optional
-
 from pydantic import BaseModel, Field
 
 
 class LectureUnitDTO(BaseModel):
-    id: int
+    to_update: bool = Field(alias="toUpdate")
+    pdf_file_base64: str = Field(alias="pdfFile")
+    lecture_unit_id: int = Field(alias="lectureUnitId")
+    lecture_unit_name: str = Field(alias="lectureUnitName")
     lecture_id: int = Field(alias="lectureId")
-    release_date: Optional[datetime] = Field(alias="releaseDate", default=None)
-    name: Optional[str] = None
-    attachment_version: int = Field(alias="attachmentVersion")
-    pdf: str = Field(alias="pdf")
+    lecture_name: str = Field(alias="lectureName")
+    course_id: int = Field(alias="courseId")
+    course_name: str = Field(alias="courseName")
+    course_description: str = Field(alias="courseDescription")
