@@ -5,6 +5,7 @@ from ...llm import RequestHandler
 
 class IrisLangchainEmbeddingModel(Embeddings):
     """Custom langchain embedding for our own request handler"""
+
     request_handler: RequestHandler
 
     def __init__(self, request_handler: RequestHandler, **kwargs: Any) -> None:
