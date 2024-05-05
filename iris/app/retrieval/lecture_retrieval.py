@@ -5,7 +5,7 @@ import weaviate
 import weaviate.classes as wvc
 
 from app.retrieval.abstract_retrieval import AbstractRetrieval
-from app.vector_database.lectureschema import init_lecture_schema, LectureSchema
+from app.vector_database.lecture_schema import init_lecture_schema, LectureSchema
 
 
 class LectureRetrieval(AbstractRetrieval, ABC):
@@ -23,7 +23,7 @@ class LectureRetrieval(AbstractRetrieval, ABC):
         result_limit: int,
         lecture_id: int = None,
         message_vector: [float] = None,
-    ) -> List[str]:
+    ) -> List[dict]:
         response = self.collection.query.hybrid(
             query=user_message,
             filters=(

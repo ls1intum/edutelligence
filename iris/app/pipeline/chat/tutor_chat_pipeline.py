@@ -12,7 +12,7 @@ from langchain_core.runnables import Runnable
 
 from ...common import convert_iris_message_to_langchain_message
 from ...domain import PyrisMessage
-from ...llm import CapabilityRequestHandler, RequirementList
+from ...llm import CapabilityRequestHandler, RequirementList, BasicRequestHandler
 from ...domain.data.build_log_entry import BuildLogEntryDTO
 from ...domain.data.feedback_dto import FeedbackDTO
 from ..prompts.iris_tutor_chat_prompts import (
@@ -23,10 +23,13 @@ from ..prompts.iris_tutor_chat_prompts import (
 )
 from ...domain import TutorChatPipelineExecutionDTO
 from ...domain.data.submission_dto import SubmissionDTO
+from ...retrieval.lecture_retrieval import LectureRetrieval
+from ...vector_database.db import VectorDatabase
+from ...vector_database.lecture_schema import LectureSchema
 from ...web.status.status_update import TutorChatStatusCallback
 from .file_selector_pipeline import FileSelectorPipeline
 from ...llm import CompletionArguments
-from ...llm.langchain import IrisLangchainChatModel
+from ...llm.langchain import IrisLangchainChatModel, IrisLangchainEmbeddingModel
 
 from ..pipeline import Pipeline
 
@@ -57,6 +60,12 @@ class TutorChatPipeline(Pipeline):
             request_handler=request_handler, completion_args=completion_args
         )
         self.callback = callback
+        request_handler_embedding = BasicRequestHandler("")
+        self.llm_embedding = IrisLangchainEmbeddingModel(
+            request_handler=request_handler_embedding
+        )
+        self.db = VectorDatabase().client
+        self.retriever = LectureRetrieval(self.db)
 
         # Create the pipelines
         self.file_selector_pipeline = FileSelectorPipeline()
@@ -71,8 +80,8 @@ class TutorChatPipeline(Pipeline):
     def __call__(self, dto: TutorChatPipelineExecutionDTO, **kwargs):
         """
         Runs the pipeline
-            :param dto: The pipeline execution data transfer object
-            :param kwargs: The keyword arguments
+        :param dto:  execution data transfer object
+        :param kwargs: The keyword arguments
         """
 
         # Set up the initial prompt
@@ -101,6 +110,18 @@ class TutorChatPipeline(Pipeline):
 
         # Add the chat history and user question to the prompt
         self._add_conversation_to_prompt(history, query)
+        retrieved_lecture_chunks = self.retriever.retrieve(
+            query.contents[0].text_content,
+            hybrid_factor=1,
+            result_limit=3,
+            message_vector=self.llm_embedding.embed_query(
+                query.contents[0].text_content
+            ),
+        )
+        self.prompt += SystemMessagePromptTemplate.from_template(
+            "Next you will find relevant lecture content to answer the student's question:"
+        )
+        self._add_relevant_chunks_to_prompt(retrieved_lecture_chunks)
 
         self.callback.in_progress("Looking up files in the repository...")
         # Create the file selection prompt based on the current prompt
@@ -150,30 +171,8 @@ class TutorChatPipeline(Pipeline):
             print(e)
             self.callback.error(f"Failed to generate response: {e}")
 
-    def _add_conversation_to_prompt(
-        self,
-        chat_history: List[PyrisMessage],
-        user_question: PyrisMessage,
-    ):
-        """
-        Adds the chat history and user question to the prompt
-            :param chat_history: The chat history
-            :param user_question: The user question
-            :return: The prompt with the chat history
-        """
-        if chat_history is not None and len(chat_history) > 0:
-            chat_history_messages = [
-                convert_iris_message_to_langchain_message(message)
-                for message in chat_history
-            ]
-            self.prompt += chat_history_messages
-            self.prompt += SystemMessagePromptTemplate.from_template(
-                "Now, consider the student's newest and latest input:"
-            )
-        self.prompt += convert_iris_message_to_langchain_message(user_question)
-
     def _add_student_repository_to_prompt(
-        self, student_repository: Dict[str, str], selected_files: List[str]
+            self, student_repository: Dict[str, str], selected_files: List[str]
     ):
         """Adds the student repository to the prompt
         :param student_repository: The student repository
@@ -189,9 +188,9 @@ class TutorChatPipeline(Pipeline):
                 )
 
     def _add_exercise_context_to_prompt(
-        self,
-        submission: SubmissionDTO,
-        selected_files: List[str],
+            self,
+            submission: SubmissionDTO,
+            selected_files: List[str],
     ):
         """Adds the exercise context to the prompt
         :param submission: The submission
@@ -218,12 +217,12 @@ class TutorChatPipeline(Pipeline):
         """
         if feedbacks is not None and len(feedbacks) > 0:
             prompt = (
-                "These are the feedbacks for the student's repository:\n%s"
-            ) % "\n---------\n".join(str(log) for log in feedbacks)
+                         "These are the feedbacks for the student's repository:\n%s"
+                     ) % "\n---------\n".join(str(log) for log in feedbacks)
             self.prompt += SystemMessagePromptTemplate.from_template(prompt)
 
     def _add_build_logs_to_prompt(
-        self, build_logs: List[BuildLogEntryDTO], build_failed: bool
+            self, build_logs: List[BuildLogEntryDTO], build_failed: bool
     ):
         """Adds the build logs to the prompt
         :param build_logs: The build logs
@@ -231,9 +230,9 @@ class TutorChatPipeline(Pipeline):
         """
         if build_logs is not None and len(build_logs) > 0:
             prompt = (
-                f"Here is the information if the build failed: {build_failed}\n"
-                "These are the build logs for the student's repository:\n%s"
-            ) % "\n".join(str(log) for log in build_logs)
+                         f"Here is the information if the build failed: {build_failed}\n"
+                         "These are the build logs for the student's repository:\n%s"
+                     ) % "\n".join(str(log) for log in build_logs)
             self.prompt += SystemMessagePromptTemplate.from_template(prompt)
 
     def _generate_file_selection_prompt(self) -> ChatPromptTemplate:
@@ -252,3 +251,36 @@ class TutorChatPipeline(Pipeline):
             '{{"selected_files": [<file1>, <file2>, ...]}}'
         )
         return file_selection_prompt
+
+    def _add_relevant_chunks_to_prompt(self, retrieved_lecture_chunks: List[dict]):
+        """
+        Adds the relevant chunks of the lecture to the prompt
+        :param retrieved_lecture_chunks: The retrieved lecture chunks
+        """
+        # Iterate over the chunks to create formatted messages for each
+        for i, chunk in enumerate(retrieved_lecture_chunks, start=1):
+            text_content_msg = f" {chunk.get(LectureSchema.PAGE_TEXT_CONTENT)}" + "\n"
+            text_content_msg = text_content_msg.replace("{", "{{").replace("}", "}}")
+            self.prompt += SystemMessagePromptTemplate.from_template(text_content_msg)
+
+    def _add_conversation_to_prompt(
+            self,
+            chat_history: List[PyrisMessage],
+            user_question: PyrisMessage,
+    ):
+        """
+        Adds the chat history and user question to the prompt
+            :param chat_history: The chat history
+            :param user_question: The user question
+            :return: The prompt with the chat history
+        """
+        if chat_history is not None and len(chat_history) > 0:
+            chat_history_messages = [
+                convert_iris_message_to_langchain_message(message)
+                for message in chat_history
+            ]
+            self.prompt += chat_history_messages
+            self.prompt += SystemMessagePromptTemplate.from_template(
+                "Now, consider the student's newest and latest input:"
+            )
+        self.prompt += convert_iris_message_to_langchain_message(user_question)
