@@ -16,13 +16,13 @@ from ..vector_database.lecture_schema import init_lecture_schema, LectureSchema
 from ..content_service.Ingestion.abstract_ingestion import AbstractIngestion
 from ..llm import BasicRequestHandler, CompletionArguments
 from ..web.status import IngestionStatusCallback
+from typing import TypedDict, Optional
 
 
 def cleanup_temporary_file(file_path):
     """
     Cleanup the temporary file
     """
-    # Delete the temporary file
     os.remove(file_path)
 
 
@@ -38,20 +38,37 @@ def save_pdf(pdf_file_base64):
     return temp_pdf_file_path
 
 
+class PageData(TypedDict):
+    """
+    Page data to be ingested
+    """
+    lecture_id: int
+    lecture_name: str
+    lecture_unit_id: int
+    lecture_unit_name: str
+    course_id: int
+    course_name: str
+    course_description: str
+    page_number: int
+    page_text_content: str
+    page_image_description: Optional[str]
+    page_base64: Optional[str]
+
+
 class LectureIngestionPipeline(AbstractIngestion, Pipeline):
 
     def __init__(
-        self,
-        client: weaviate.WeaviateClient,
-        dto: IngestionPipelineExecutionDto,
-        callback: IngestionStatusCallback,
+            self,
+            client: weaviate.WeaviateClient,
+            dto: IngestionPipelineExecutionDto,
+            callback: IngestionStatusCallback,
     ):
         super().__init__()
         self.collection = init_lecture_schema(client)
         self.dto = dto
-        self.llm_vision = BasicRequestHandler("gptvision")
-        self.llm = BasicRequestHandler("gpt35")
-        self.llm_embedding = BasicRequestHandler("ada")
+        self.llm_vision = BasicRequestHandler("")
+        self.llm = BasicRequestHandler("")
+        self.llm_embedding = BasicRequestHandler("")
         self.callback = callback
 
     def __call__(self) -> bool:
@@ -109,9 +126,9 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
             return False
 
     def chunk_data(
-        self,
-        lecture_path: str,
-        lecture_unit_dto: LectureUnitDTO = None,
+            self,
+            lecture_path: str,
+            lecture_unit_dto: LectureUnitDTO = None,
     ):
         """
         Chunk the data from the lecture into smaller pieces
@@ -131,39 +148,37 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
                     lecture_unit_dto.lecture_name,
                 )
                 page_content = page.get_text()
-                data.append(
-                    {
-                        LectureSchema.LECTURE_ID.value: lecture_unit_dto.lecture_id,
-                        LectureSchema.LECTURE_NAME.value: lecture_unit_dto.lecture_name,
-                        LectureSchema.LECTURE_UNIT_ID.value: lecture_unit_dto.lecture_unit_id,
-                        LectureSchema.LECTURE_UNIT_NAME.value: lecture_unit_dto.lecture_unit_name,
-                        LectureSchema.COURSE_ID.value: lecture_unit_dto.course_id,
-                        LectureSchema.COURSE_NAME.value: lecture_unit_dto.course_name,
-                        LectureSchema.COURSE_DESCRIPTION.value: lecture_unit_dto.course_description,
-                        LectureSchema.PAGE_NUMBER.value: page_num + 1,
-                        LectureSchema.PAGE_TEXT_CONTENT.value: page_content,
-                        LectureSchema.PAGE_IMAGE_DESCRIPTION.value: image_interpretation,
-                        LectureSchema.PAGE_BASE64.value: img_base64,
-                    }
-                )
+                page_data: PageData = {
+                    'lecture_id': lecture_unit_dto.lecture_id,
+                    'lecture_name': lecture_unit_dto.lecture_name,
+                    'lecture_unit_id': lecture_unit_dto.lecture_unit_id,
+                    'lecture_unit_name': lecture_unit_dto.lecture_unit_name,
+                    'course_id': lecture_unit_dto.course_id,
+                    'course_name': lecture_unit_dto.course_name,
+                    'course_description': lecture_unit_dto.course_description,
+                    'page_number': page_num + 1,
+                    'page_text_content': page_content,
+                    'page_image_description': image_interpretation if image_interpretation else "",
+                    'page_base64': img_base64 if img_base64 else ""
+                }
+                data.append(page_data)
 
             else:
                 page_content = page.get_text()
-                data.append(
-                    {
-                        LectureSchema.LECTURE_ID.value: lecture_unit_dto.lecture_id,
-                        LectureSchema.LECTURE_NAME.value: lecture_unit_dto.lecture_name,
-                        LectureSchema.LECTURE_UNIT_ID.value: lecture_unit_dto.lecture_unit_id,
-                        LectureSchema.LECTURE_UNIT_NAME.value: lecture_unit_dto.lecture_unit_name,
-                        LectureSchema.COURSE_ID.value: lecture_unit_dto.course_id,
-                        LectureSchema.COURSE_NAME.value: lecture_unit_dto.course_name,
-                        LectureSchema.COURSE_DESCRIPTION.value: lecture_unit_dto.course_description,
-                        LectureSchema.PAGE_NUMBER.value: page_num + 1,
-                        LectureSchema.PAGE_TEXT_CONTENT.value: page_content,
-                        LectureSchema.PAGE_IMAGE_DESCRIPTION.value: "",
-                        LectureSchema.PAGE_BASE64.value: "",
-                    }
-                )
+                page_data: PageData = {
+                    LectureSchema.LECTURE_ID.value: lecture_unit_dto.lecture_id,
+                    LectureSchema.LECTURE_NAME.value: lecture_unit_dto.lecture_name,
+                    LectureSchema.LECTURE_UNIT_ID.value: lecture_unit_dto.lecture_unit_id,
+                    LectureSchema.LECTURE_UNIT_NAME.value: lecture_unit_dto.lecture_unit_name,
+                    LectureSchema.COURSE_ID.value: lecture_unit_dto.course_id,
+                    LectureSchema.COURSE_NAME.value: lecture_unit_dto.course_name,
+                    LectureSchema.COURSE_DESCRIPTION.value: lecture_unit_dto.course_description,
+                    LectureSchema.PAGE_NUMBER.value: page_num + 1,
+                    LectureSchema.PAGE_TEXT_CONTENT.value: page_content,
+                    LectureSchema.PAGE_IMAGE_DESCRIPTION.value: "",
+                    LectureSchema.PAGE_BASE64.value: "",
+                }
+                data.append(page_data)
         return data
 
     def delete_lecture_unit(self, lecture_id, lecture_unit_id):
@@ -175,7 +190,7 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
                 where=wvc.query.Filter.by_property(
                     LectureSchema.LECTURE_ID.value
                 ).equal(lecture_id)
-                & wvc.query.Filter.by_property(
+                      & wvc.query.Filter.by_property(
                     LectureSchema.LECTURE_UNIT_ID.value
                 ).equal(lecture_unit_id)
             )
@@ -185,7 +200,7 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
             return False
 
     def interpret_image(
-        self, img_base64: str, last_page_content: str, name_of_lecture: str
+            self, img_base64: str, last_page_content: str, name_of_lecture: str
     ):
         """
         Interpret the image passed
