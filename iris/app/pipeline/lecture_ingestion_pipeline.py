@@ -172,12 +172,12 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
         """
         try:
             self.collection.data.delete_many(
-                where=wvc.query.Filter.by_property(LectureSchema.LECTURE_ID.value).equal(
-                    lecture_id
-                )
-                & wvc.query.Filter.by_property(LectureSchema.LECTURE_UNIT_ID.value).equal(
-                    lecture_unit_id
-                )
+                where=wvc.query.Filter.by_property(
+                    LectureSchema.LECTURE_ID.value
+                ).equal(lecture_id)
+                & wvc.query.Filter.by_property(
+                    LectureSchema.LECTURE_UNIT_ID.value
+                ).equal(lecture_unit_id)
             )
             return True
         except Exception as e:
