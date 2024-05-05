@@ -59,10 +59,10 @@ class PageData(TypedDict):
 class LectureIngestionPipeline(AbstractIngestion, Pipeline):
 
     def __init__(
-            self,
-            client: weaviate.WeaviateClient,
-            dto: IngestionPipelineExecutionDto,
-            callback: IngestionStatusCallback,
+        self,
+        client: weaviate.WeaviateClient,
+        dto: IngestionPipelineExecutionDto,
+        callback: IngestionStatusCallback,
     ):
         super().__init__()
         self.collection = init_lecture_schema(client)
@@ -119,7 +119,9 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
         """
         try:
             for lecture_unit in self.dto.lecture_units:
-                if (self.delete_lecture_unit(lecture_unit.lecture_id, lecture_unit.lecture_unit_id)):
+                if self.delete_lecture_unit(
+                    lecture_unit.lecture_id, lecture_unit.lecture_unit_id
+                ):
                     logger.info("Lecture deleted successfully")
                 else:
                     logger.error("Failed to delete lecture")
@@ -128,9 +130,9 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
             return False
 
     def chunk_data(
-            self,
-            lecture_path: str,
-            lecture_unit_dto: LectureUnitDTO = None,
+        self,
+        lecture_path: str,
+        lecture_unit_dto: LectureUnitDTO = None,
     ):
         """
         Chunk the data from the lecture into smaller pieces
@@ -194,7 +196,7 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
                 where=wvc.query.Filter.by_property(
                     LectureSchema.LECTURE_ID.value
                 ).equal(lecture_id)
-                      & wvc.query.Filter.by_property(
+                & wvc.query.Filter.by_property(
                     LectureSchema.LECTURE_UNIT_ID.value
                 ).equal(lecture_unit_id)
             )
@@ -204,7 +206,7 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
             return False
 
     def interpret_image(
-            self, img_base64: str, last_page_content: str, name_of_lecture: str
+        self, img_base64: str, last_page_content: str, name_of_lecture: str
     ):
         """
         Interpret the image passed
