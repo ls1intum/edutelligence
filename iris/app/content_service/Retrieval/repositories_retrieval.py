@@ -18,7 +18,12 @@ class RepositoryRetrieval(AbstractRetrieval):
     def __init__(self, client: weaviate.WeaviateClient):
         self.collection = init_repository_schema(client)
 
-    def retrieve(self, user_message: str,  result_limit: int, repository_id: int = None,) -> List[str]:
+    def retrieve(
+        self,
+        user_message: str,
+        result_limit: int,
+        repository_id: int = None,
+    ) -> List[str]:
         response = self.collection.query.near_text(
             near_text=user_message,
             filters=(
