@@ -46,9 +46,7 @@ def generate_images(
                 image_response.raise_for_status()
                 base64_data = base64.b64encode(image_response.content).decode("utf-8")
             except requests.RequestException as e:
-                import logging
-
-                logging.error(f"Failed to download or encode image: {e}")
+                print(f"Failed to download or encode image: {e}")
                 continue
 
         iris_images.append(

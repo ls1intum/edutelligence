@@ -16,11 +16,11 @@ class LectureSchema(Enum):
     COURSE_ID = "course_id"
     LECTURE_ID = "lecture_id"
     LECTURE_NAME = "lecture_name"
-    LECTURE_UNIT_ID = "lecture_unit_id"  # The attachment unit ID in Artemis
+    LECTURE_UNIT_ID = "lecture_unit_id"
     LECTURE_UNIT_NAME = "lecture_unit_name"
-    PAGE_TEXT_CONTENT = "page_text_content"  # The only property which will be embedded
-    PAGE_IMAGE_DESCRIPTION = "page_image_explanation"  # The description of the slide if the slide contains an image
-    PAGE_BASE64 = "page_base64"  # The base64 encoded image of the slide if the slide contains an image
+    PAGE_TEXT_CONTENT = "page_text_content"
+    PAGE_IMAGE_DESCRIPTION = "page_image_explanation"
+    PAGE_BASE64 = "page_base64"
     PAGE_NUMBER = "page_number"
 
 
@@ -33,12 +33,9 @@ def init_lecture_schema(client: WeaviateClient) -> Collection:
     return client.collections.create(
         name=LectureSchema.COLLECTION_NAME.value,
         vectorizer_config=wvc.config.Configure.Vectorizer.none(),
-        # We do not want to vectorize the text automatically
-        # HNSW is preferred over FLAT for large amounts of vector_database, which is the case here
         vector_index_config=wvc.config.Configure.VectorIndex.hnsw(
-            distance_metric=wvc.config.VectorDistances.COSINE  # select preferred distance metric
+            distance_metric=wvc.config.VectorDistances.COSINE
         ),
-        # The properties are like the columns of a table in a relational database
         properties=[
             wvc.config.Property(
                 name=LectureSchema.COURSE_ID.value,

@@ -3,13 +3,5 @@ from typing import Optional
 
 
 class ImageMessageContentDTO(BaseModel):
-    base64: str = Field(..., alias="base64")  # List of base64-encoded strings
-    prompt: Optional[str] = Field(default=None, alias="prompt")
-
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "prompt": "Example prompt",
-                "base64": ["base64EncodedString==", "anotherBase64EncodedString=="],
-            }
-        }
+    base64: str = Field(..., alias="base64")
+    prompt: Optional[str]

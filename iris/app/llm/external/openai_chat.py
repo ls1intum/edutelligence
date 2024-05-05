@@ -3,7 +3,8 @@ from typing import Literal, Any
 
 from openai import OpenAI
 from openai.lib.azure import AzureOpenAI
-from openai.types.chat import ChatCompletionMessageParam, ChatCompletionMessage
+from openai.types.chat import ChatCompletionMessage, ChatCompletionMessageParam
+from openai.types.chat.completion_create_params import ResponseFormat
 
 from ...common.message_converters import map_str_to_role, map_role_to_str
 from app.domain.data.text_message_content_dto import TextMessageContentDTO
@@ -22,32 +23,37 @@ def convert_to_open_ai_messages(
     """
     openai_messages = []
     for message in messages:
-        match message.contents[0]:
-            case ImageMessageContentDTO():
-                content = [{"type": "text", "text": message.contents[0].prompt}]
-                for image_base64 in message.contents[0].base64:
-                    content.append(
+        openai_content = []
+        for content in message.contents:
+            match content:
+                case ImageMessageContentDTO():
+                    openai_content.append(
                         {
                             "type": "image_url",
                             "image_url": {
-                                "url": f"data:image/jpeg;base64,{image_base64}",
+                                "url": f"data:image/jpeg;base64,{content.base64}",
                                 "detail": "high",
                             },
                         }
                     )
-            case TextMessageContentDTO():
-                content = [{"type": "text", "text": message.contents[0].text_content}]
-            case JsonMessageContentDTO():
-                content = [
-                    {
-                        "type": "json_object",
-                        "json_object": message.contents[0].json_content,
-                    }
-                ]
-            case _:
-                content = [{"type": "text", "text": ""}]
+                case TextMessageContentDTO():
+                    openai_content.append(
+                        {"type": "text", "text": content.text_content}
+                    )
+                case JsonMessageContentDTO():
+                    openai_content.append(
+                        {
+                            "type": "json_object",
+                            "json_object": content.json_content,
+                        }
+                    )
+                case _:
+                    pass
 
-        openai_message = {"role": map_role_to_str(message.sender), "content": content}
+        openai_message = {
+            "role": map_role_to_str(message.sender),
+            "content": openai_content,
+        }
         openai_messages.append(openai_message)
     return openai_messages
 
@@ -71,11 +77,15 @@ class OpenAIChatModel(ChatModel):
     def chat(
         self, messages: list[PyrisMessage], arguments: CompletionArguments
     ) -> PyrisMessage:
+        # noinspection PyTypeChecker
         response = self._client.chat.completions.create(
             model=self.model,
             messages=convert_to_open_ai_messages(messages),
             temperature=arguments.temperature,
             max_tokens=arguments.max_tokens,
+            response_format=ResponseFormat(
+                type=("json_object" if arguments.response_format == "JSON" else "text")
+            ),
         )
         return convert_to_iris_message(response.choices[0].message)
 
