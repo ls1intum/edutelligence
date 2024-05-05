@@ -4,8 +4,8 @@ from typing import List
 import weaviate
 import weaviate.classes as wvc
 
+from app.content_service.Retrieval.abstract_retrieval import AbstractRetrieval
 from app.vector_database.lecture_schema import init_lecture_schema, LectureSchema
-from ..Retrieval.abstract_retrieval import AbstractRetrieval
 
 
 class LectureRetrieval(AbstractRetrieval, ABC):
@@ -20,19 +20,26 @@ class LectureRetrieval(AbstractRetrieval, ABC):
         self,
         user_message: str,
         hybrid_factor: float,
+        result_limit: int,
         lecture_id: int = None,
-        embedding_vector: [float] = None,
-    ) -> List[dict]:
+        message_vector: [float] = None,
+    ) -> List[str]:
         response = self.collection.query.hybrid(
             query=user_message,
-            limit=3,
             filters=(
-                wvc.query.Filter.by_property(LectureSchema.LECTURE_ID).equal(lecture_id)
+                wvc.query.Filter.by_property(LectureSchema.LECTURE_ID.value).equal(
+                    lecture_id
+                )
                 if lecture_id
                 else None
             ),
             alpha=hybrid_factor,
-            vector=embedding_vector,
+            vector=message_vector,
+            return_properties=[
+                LectureSchema.PAGE_TEXT_CONTENT.value,
+                LectureSchema.PAGE_IMAGE_DESCRIPTION.value,
+                LectureSchema.COURSE_NAME.value,
+            ],
+            limit=result_limit,
         )
-        relevant_chunks = [obj.properties for obj in response.objects]
-        return relevant_chunks
+        return response

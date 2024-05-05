@@ -89,9 +89,9 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
             self.callback.in_progress("Ingesting lecture chunks into databse")
             for index, chunk in enumerate(chunks):
                 embed_chunk = self.llm_embedding.embed(
-                    chunk[LectureSchema.PAGE_TEXT_CONTENT]
+                    chunk[LectureSchema.PAGE_TEXT_CONTENT.value]
                     + "\n"
-                    + chunk[LectureSchema.PAGE_IMAGE_DESCRIPTION]
+                    + chunk[LectureSchema.PAGE_IMAGE_DESCRIPTION.value]
                 )
                 batch.add_object(properties=chunk, vector=embed_chunk)
 
@@ -133,17 +133,17 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
                 page_content = page.get_text()
                 data.append(
                     {
-                        LectureSchema.LECTURE_ID: lecture_unit_dto.lecture_id,
-                        LectureSchema.LECTURE_NAME: lecture_unit_dto.lecture_name,
-                        LectureSchema.LECTURE_UNIT_ID: lecture_unit_dto.lecture_unit_id,
-                        LectureSchema.LECTURE_UNIT_NAME: lecture_unit_dto.lecture_unit_name,
-                        LectureSchema.COURSE_ID: lecture_unit_dto.course_id,
-                        LectureSchema.COURSE_NAME: lecture_unit_dto.course_name,
-                        LectureSchema.COURSE_DESCRIPTION: lecture_unit_dto.course_description,
-                        LectureSchema.PAGE_NUMBER: page_num + 1,
-                        LectureSchema.PAGE_TEXT_CONTENT: page_content,
-                        LectureSchema.PAGE_IMAGE_DESCRIPTION: image_interpretation,
-                        LectureSchema.PAGE_BASE64: img_base64,
+                        LectureSchema.LECTURE_ID.value: lecture_unit_dto.lecture_id,
+                        LectureSchema.LECTURE_NAME.value: lecture_unit_dto.lecture_name,
+                        LectureSchema.LECTURE_UNIT_ID.value: lecture_unit_dto.lecture_unit_id,
+                        LectureSchema.LECTURE_UNIT_NAME.value: lecture_unit_dto.lecture_unit_name,
+                        LectureSchema.COURSE_ID.value: lecture_unit_dto.course_id,
+                        LectureSchema.COURSE_NAME.value: lecture_unit_dto.course_name,
+                        LectureSchema.COURSE_DESCRIPTION.value: lecture_unit_dto.course_description,
+                        LectureSchema.PAGE_NUMBER.value: page_num + 1,
+                        LectureSchema.PAGE_TEXT_CONTENT.value: page_content,
+                        LectureSchema.PAGE_IMAGE_DESCRIPTION.value: image_interpretation,
+                        LectureSchema.PAGE_BASE64.value: img_base64,
                     }
                 )
 
@@ -151,17 +151,17 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
                 page_content = page.get_text()
                 data.append(
                     {
-                        LectureSchema.LECTURE_ID: lecture_unit_dto.lecture_id,
-                        LectureSchema.LECTURE_NAME: lecture_unit_dto.lecture_name,
-                        LectureSchema.LECTURE_UNIT_ID: lecture_unit_dto.lecture_unit_id,
-                        LectureSchema.LECTURE_UNIT_NAME: lecture_unit_dto.lecture_unit_name,
-                        LectureSchema.COURSE_ID: lecture_unit_dto.course_id,
-                        LectureSchema.COURSE_NAME: lecture_unit_dto.course_name,
-                        LectureSchema.COURSE_DESCRIPTION: lecture_unit_dto.course_description,
-                        LectureSchema.PAGE_NUMBER: page_num + 1,
-                        LectureSchema.PAGE_TEXT_CONTENT: page_content,
-                        LectureSchema.PAGE_IMAGE_DESCRIPTION: "",
-                        LectureSchema.PAGE_BASE64: "",
+                        LectureSchema.LECTURE_ID.value: lecture_unit_dto.lecture_id,
+                        LectureSchema.LECTURE_NAME.value: lecture_unit_dto.lecture_name,
+                        LectureSchema.LECTURE_UNIT_ID.value: lecture_unit_dto.lecture_unit_id,
+                        LectureSchema.LECTURE_UNIT_NAME.value: lecture_unit_dto.lecture_unit_name,
+                        LectureSchema.COURSE_ID.value: lecture_unit_dto.course_id,
+                        LectureSchema.COURSE_NAME.value: lecture_unit_dto.course_name,
+                        LectureSchema.COURSE_DESCRIPTION.value: lecture_unit_dto.course_description,
+                        LectureSchema.PAGE_NUMBER.value: page_num + 1,
+                        LectureSchema.PAGE_TEXT_CONTENT.value: page_content,
+                        LectureSchema.PAGE_IMAGE_DESCRIPTION.value: "",
+                        LectureSchema.PAGE_BASE64.value: "",
                     }
                 )
         return data
@@ -172,10 +172,10 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
         """
         try:
             self.collection.data.delete_many(
-                where=wvc.query.Filter.by_property(LectureSchema.LECTURE_ID).equal(
+                where=wvc.query.Filter.by_property(LectureSchema.LECTURE_ID.value).equal(
                     lecture_id
                 )
-                & wvc.query.Filter.by_property(LectureSchema.LECTURE_UNIT_ID).equal(
+                & wvc.query.Filter.by_property(LectureSchema.LECTURE_UNIT_ID.value).equal(
                     lecture_unit_id
                 )
             )

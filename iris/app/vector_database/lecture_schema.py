@@ -1,9 +1,11 @@
+from enum import Enum
+
 import weaviate.classes as wvc
 from weaviate import WeaviateClient
 from weaviate.collections import Collection
 
 
-class LectureSchema:
+class LectureSchema(Enum):
     """
     Schema for the lecture slides
     """
@@ -26,10 +28,10 @@ def init_lecture_schema(client: WeaviateClient) -> Collection:
     """
     Initialize the schema for the lecture slides
     """
-    if client.collections.exists(LectureSchema.COLLECTION_NAME):
-        return client.collections.get(LectureSchema.COLLECTION_NAME)
+    if client.collections.exists(LectureSchema.COLLECTION_NAME.value):
+        return client.collections.get(LectureSchema.COLLECTION_NAME.value)
     return client.collections.create(
-        name=LectureSchema.COLLECTION_NAME,
+        name=LectureSchema.COLLECTION_NAME.value,
         vectorizer_config=wvc.config.Configure.Vectorizer.none(),
         # We do not want to vectorize the text automatically
         # HNSW is preferred over FLAT for large amounts of vector_database, which is the case here
@@ -39,57 +41,57 @@ def init_lecture_schema(client: WeaviateClient) -> Collection:
         # The properties are like the columns of a table in a relational database
         properties=[
             wvc.config.Property(
-                name=LectureSchema.COURSE_ID,
+                name=LectureSchema.COURSE_ID.value,
                 description="The ID of the course",
                 data_type=wvc.config.DataType.INT,
             ),
             wvc.config.Property(
-                name=LectureSchema.COURSE_NAME,
+                name=LectureSchema.COURSE_NAME.value,
                 description="The name of the course",
                 data_type=wvc.config.DataType.TEXT,
             ),
             wvc.config.Property(
-                name=LectureSchema.COURSE_DESCRIPTION,
+                name=LectureSchema.COURSE_DESCRIPTION.value,
                 description="The description of the COURSE",
                 data_type=wvc.config.DataType.TEXT,
             ),
             wvc.config.Property(
-                name=LectureSchema.LECTURE_ID,
+                name=LectureSchema.LECTURE_ID.value,
                 description="The ID of the lecture",
                 data_type=wvc.config.DataType.INT,
             ),
             wvc.config.Property(
-                name=LectureSchema.LECTURE_NAME,
+                name=LectureSchema.LECTURE_NAME.value,
                 description="The name of the lecture",
                 data_type=wvc.config.DataType.TEXT,
             ),
             wvc.config.Property(
-                name=LectureSchema.LECTURE_UNIT_ID,
+                name=LectureSchema.LECTURE_UNIT_ID.value,
                 description="The ID of the lecture unit",
                 data_type=wvc.config.DataType.INT,
             ),
             wvc.config.Property(
-                name=LectureSchema.LECTURE_UNIT_NAME,
+                name=LectureSchema.LECTURE_UNIT_NAME.value,
                 description="The name of the lecture unit",
                 data_type=wvc.config.DataType.TEXT,
             ),
             wvc.config.Property(
-                name=LectureSchema.PAGE_TEXT_CONTENT,
+                name=LectureSchema.PAGE_TEXT_CONTENT.value,
                 description="The original text content from the slide",
                 data_type=wvc.config.DataType.TEXT,
             ),
             wvc.config.Property(
-                name=LectureSchema.PAGE_IMAGE_DESCRIPTION,
+                name=LectureSchema.PAGE_IMAGE_DESCRIPTION.value,
                 description="The description of the slide if the slide contains an image",
-                data_type=wvc.config.DataType.TEXT,
+                data_type=wvc.config.DataType.TEXT.value,
             ),
             wvc.config.Property(
-                name=LectureSchema.PAGE_BASE64,
+                name=LectureSchema.PAGE_BASE64.value,
                 description="The base64 encoded image of the slide if the slide contains an image",
-                data_type=wvc.config.DataType.TEXT,
+                data_type=wvc.config.DataType.TEXT.value,
             ),
             wvc.config.Property(
-                name=LectureSchema.PAGE_NUMBER,
+                name=LectureSchema.PAGE_NUMBER.value,
                 description="The page number of the slide",
                 data_type=wvc.config.DataType.INT,
             ),
