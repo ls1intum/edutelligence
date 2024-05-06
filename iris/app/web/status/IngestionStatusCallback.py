@@ -39,4 +39,3 @@ class IngestionStatusCallback(StatusCallback):
         status = IngestionStatusUpdateDTO(stages=stages)
         stage = stages[current_stage_index]
         super().__init__(url, run_id, status, stage, current_stage_index)
-
