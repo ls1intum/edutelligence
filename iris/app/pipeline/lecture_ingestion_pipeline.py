@@ -8,12 +8,13 @@ import weaviate.classes as wvc
 from . import Pipeline
 from ..domain import IrisMessageRole, PyrisMessage
 from ..domain.data.image_message_content_dto import ImageMessageContentDTO
+
 from ..domain.data.lecture_unit_dto import LectureUnitDTO
 from app.domain.ingestion.ingestion_pipeline_execution_dto import (
     IngestionPipelineExecutionDto,
 )
 from ..vector_database.lecture_schema import init_lecture_schema, LectureSchema
-from ..content_service.Ingestion.abstract_ingestion import AbstractIngestion
+from ..ingestion.abstract_ingestion import AbstractIngestion
 from ..llm import BasicRequestHandler, CompletionArguments
 from ..web.status import IngestionStatusCallback
 from typing import TypedDict, Optional

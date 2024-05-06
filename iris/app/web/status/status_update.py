@@ -107,6 +107,9 @@ class StatusCallback(ABC):
         # Update the status after setting the stages to SKIPPED
         self.stage = self.status.stages[-1]
         self.on_status_update()
+        logger.error(
+            f"Error occurred in job {self.run_id} in stage {self.stage.name}: {message}"
+        )
 
     def skip(self, message: Optional[str] = None):
         """

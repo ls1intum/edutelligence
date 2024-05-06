@@ -4,8 +4,8 @@ from typing import List
 import weaviate
 import weaviate.classes as wvc
 
-from app.content_service.Retrieval.abstract_retrieval import AbstractRetrieval
-from app.vector_database.lecture_schema import init_lecture_schema, LectureSchema
+from app.retrieval.abstract_retrieval import AbstractRetrieval
+from app.vector_database.lectureschema import init_lecture_schema, LectureSchema
 
 
 class LectureRetrieval(AbstractRetrieval, ABC):

@@ -6,7 +6,10 @@ import yaml
 
 from ..common import Singleton
 from ..llm.capability import RequirementList
-from ..llm.capability.capability_checker import calculate_capability_scores
+from ..llm.capability.capability_checker import (
+    calculate_capability_scores,
+    capabilities_fulfill_requirements,
+)
 from ..llm.external import LanguageModel, AnyLLM
 
 
@@ -41,9 +44,14 @@ class LlmManager(metaclass=Singleton):
     def get_llms_sorted_by_capabilities_score(
         self, requirements: RequirementList, invert_cost: bool = False
     ):
+        valid_llms = [
+            llm
+            for llm in self.entries
+            if capabilities_fulfill_requirements(llm.capabilities, requirements)
+        ]
         """Get the llms sorted by their capability to requirement scores"""
         scores = calculate_capability_scores(
-            [llm.capabilities for llm in self.entries], requirements, invert_cost
+            [llm.capabilities for llm in valid_llms], requirements, invert_cost
         )
-        sorted_llms = sorted(zip(scores, self.entries), key=lambda pair: -pair[0])
+        sorted_llms = sorted(zip(scores, valid_llms), key=lambda pair: -pair[0])
         return [llm for _, llm in sorted_llms]

@@ -1,5 +1,4 @@
 import logging
-import os
 import weaviate
 from .lecture_schema import init_lecture_schema
 from .repository_schema import init_repository_schema
@@ -15,8 +14,10 @@ class VectorDatabase:
 
     def __init__(self):
         self.client = weaviate.connect_to_wcs(
-            cluster_url=os.getenv("WEAVIATE_CLUSTER_URL"),
-            auth_credentials=weaviate.auth.AuthApiKey(os.getenv("WEAVIATE_AUTH_KEY")),
+            cluster_url="https://pyrisingestiontest-qnzd09os.weaviate.network",
+            auth_credentials=weaviate.auth.AuthApiKey(
+                "981IRM6UfTTUj881jLStXDj4flEVMkP2NOj6"
+            ),
         )
         self.repositories = init_repository_schema(self.client)
         self.lectures = init_lecture_schema(self.client)
