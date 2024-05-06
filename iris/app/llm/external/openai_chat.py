@@ -83,9 +83,6 @@ class OpenAIChatModel(ChatModel):
             messages=convert_to_open_ai_messages(messages),
             temperature=arguments.temperature,
             max_tokens=arguments.max_tokens,
-            response_format=ResponseFormat(
-                type=("json_object" if arguments.response_format == "JSON" else "text")
-            ),
         )
         return convert_to_iris_message(response.choices[0].message)
 

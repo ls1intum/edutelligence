@@ -67,9 +67,9 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
         super().__init__()
         self.collection = init_lecture_schema(client)
         self.dto = dto
-        self.llm_vision = BasicRequestHandler("")
-        self.llm = BasicRequestHandler("")
-        self.llm_embedding = BasicRequestHandler("")
+        self.llm_vision = BasicRequestHandler("gptvision")
+        self.llm = BasicRequestHandler("gpt35")
+        self.llm_embedding = BasicRequestHandler("ada")
         self.callback = callback
 
     def __call__(self) -> bool:
@@ -83,12 +83,12 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
                 return True
             self.callback.in_progress("Chunking and interpreting lecture...")
             chunks = []
-            for i, lecture_unit in enumerate(self.dto.lecture_units):
-                pdf_path = save_pdf(lecture_unit.pdf_file_base64)
-                chunks = self.chunk_data(
-                    lecture_path=pdf_path, lecture_unit_dto=lecture_unit
-                )
-                cleanup_temporary_file(pdf_path)
+            #for i, lecture_unit in enumerate(self.dto.lecture_units):
+            #    pdf_path = save_pdf(lecture_unit.pdf_file_base64)
+            #    chunks = self.chunk_data(
+            #        lecture_path=pdf_path, lecture_unit_dto=lecture_unit
+            #    )
+            #    cleanup_temporary_file(pdf_path)
             self.callback.done("Lecture Chunking and interpretation Finished")
             self.callback.in_progress("Ingesting lecture chunks into database...")
             self.batch_update(chunks)
@@ -104,7 +104,6 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
         Batch update the chunks into the database
         """
         with self.collection.batch.dynamic() as batch:
-            self.callback.in_progress("Ingesting lecture chunks into databse")
             for index, chunk in enumerate(chunks):
                 embed_chunk = self.llm_embedding.embed(
                     chunk[LectureSchema.PAGE_TEXT_CONTENT.value]
@@ -218,7 +217,7 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
             f" {last_page_content}"
         )
         image = ImageMessageContentDTO(
-            base64=[img_base64], prompt=image_interpretation_prompt
+            base64=img_base64, prompt=image_interpretation_prompt
         )
         iris_message = PyrisMessage(sender=IrisMessageRole.SYSTEM, contents=[image])
         response = self.llm_vision.chat(
