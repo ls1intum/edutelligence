@@ -46,9 +46,13 @@ class FileSelectorPipeline(Pipeline):
             requirements=RequirementList(
                 gpt_version_equivalent=3.5,
                 context_length=4096,
+                vendor="OpenAI",
+                json_mode=True,
             )
         )
-        completion_args = CompletionArguments(temperature=0, max_tokens=500)
+        completion_args = CompletionArguments(
+            temperature=0, max_tokens=500, response_format="JSON"
+        )
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler, completion_args=completion_args
         )
