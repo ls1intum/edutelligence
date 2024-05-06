@@ -26,14 +26,16 @@ class OpenAIEmbeddingModel(EmbeddingModel):
                 )
                 return response.data[0].embedding
             except RateLimitError as e:
-                wait_time = initial_delay * (backoff_factor ** attempt)
+                wait_time = initial_delay * (backoff_factor**attempt)
                 logging.warning(f"Rate limit exceeded on attempt {attempt + 1}: {e}")
                 logging.info(f"Retrying in {wait_time} seconds...")
                 time.sleep(wait_time)
             except Exception as e:
                 logging.error(f"An unexpected error occurred while embedding text: {e}")
                 break
-        logging.error("Failed to get embedding after several attempts due to rate limit.")
+        logging.error(
+            "Failed to get embedding after several attempts due to rate limit."
+        )
         return []
 
 
