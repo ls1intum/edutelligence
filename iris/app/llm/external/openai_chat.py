@@ -84,8 +84,8 @@ class OpenAIChatModel(ChatModel):
                 messages=convert_to_open_ai_messages(messages),
                 temperature=arguments.temperature,
                 max_tokens=arguments.max_tokens,
-                response_format=ResponseFormat(type="json_object")
-                )
+                response_format=ResponseFormat(type="json_object"),
+            )
         else:
             response = self._client.chat.completions.create(
                 model=self.model,
