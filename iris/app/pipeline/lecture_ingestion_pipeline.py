@@ -153,22 +153,18 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
                 )
                 page_content = page.get_text()
                 page_data: PageData = {
-                    "lecture_id": lecture_unit_dto.lecture_id,
-                    "lecture_name": lecture_unit_dto.lecture_name,
-                    "lecture_unit_id": lecture_unit_dto.lecture_unit_id,
-                    "lecture_unit_name": lecture_unit_dto.lecture_unit_name,
-                    "course_id": lecture_unit_dto.course_id,
-                    "course_name": lecture_unit_dto.course_name,
-                    "course_description": lecture_unit_dto.course_description,
-                    "page_number": page_num + 1,
-                    "page_text_content": page_content,
-                    "page_image_description": (
-                        image_interpretation if image_interpretation else ""
-                    ),
-                    "page_base64": img_base64 if img_base64 else "",
+                    LectureSchema.LECTURE_ID.value: lecture_unit_dto.lecture_id,
+                    LectureSchema.LECTURE_NAME.value: lecture_unit_dto.lecture_name,
+                    LectureSchema.LECTURE_UNIT_ID.value: lecture_unit_dto.lecture_unit_id,
+                    LectureSchema.LECTURE_UNIT_NAME.value: lecture_unit_dto.lecture_unit_name,
+                    LectureSchema.COURSE_ID.value: lecture_unit_dto.course_id,
+                    LectureSchema.COURSE_NAME.value: lecture_unit_dto.course_name,
+                    LectureSchema.COURSE_DESCRIPTION.value: lecture_unit_dto.course_description,
+                    LectureSchema.PAGE_NUMBER.value: page_num + 1,
+                    LectureSchema.PAGE_TEXT_CONTENT.value: page_content,
+                    LectureSchema.PAGE_IMAGE_DESCRIPTION.value: (image_interpretation if image_interpretation else ""),
+                    LectureSchema.PAGE_BASE64.value: img_base64 if img_base64 else "",
                 }
-                data.append(page_data)
-
             else:
                 page_content = page.get_text()
                 page_data: PageData = {
@@ -184,7 +180,7 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
                     LectureSchema.PAGE_IMAGE_DESCRIPTION.value: "",
                     LectureSchema.PAGE_BASE64.value: "",
                 }
-                data.append(page_data)
+            data.append(page_data)
         return data
 
     def delete_lecture_unit(self, lecture_id, lecture_unit_id):
@@ -221,7 +217,11 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
             base64=img_base64, prompt=image_interpretation_prompt
         )
         iris_message = PyrisMessage(sender=IrisMessageRole.SYSTEM, contents=[image])
-        response = self.llm_vision.chat(
-            [iris_message], CompletionArguments(temperature=0.2, max_tokens=1000)
-        )
+        try:
+            response = self.llm_vision.chat(
+                [iris_message], CompletionArguments(temperature=0.2, max_tokens=1000)
+            )
+        except Exception as e:
+            logger.error(f"Error interpreting image: {e}")
+            return None
         return response.contents[0].text_content

@@ -13,7 +13,7 @@ class OpenAIEmbeddingModel(EmbeddingModel):
     _client: OpenAI
 
     def embed(self, text: str) -> list[float]:
-        retries = 5
+        retries = 10
         backoff_factor = 2
         initial_delay = 1
 
