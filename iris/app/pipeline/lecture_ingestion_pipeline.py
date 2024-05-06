@@ -162,7 +162,9 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
                     LectureSchema.COURSE_DESCRIPTION.value: lecture_unit_dto.course_description,
                     LectureSchema.PAGE_NUMBER.value: page_num + 1,
                     LectureSchema.PAGE_TEXT_CONTENT.value: page_content,
-                    LectureSchema.PAGE_IMAGE_DESCRIPTION.value: (image_interpretation if image_interpretation else ""),
+                    LectureSchema.PAGE_IMAGE_DESCRIPTION.value: (
+                        image_interpretation if image_interpretation else ""
+                    ),
                     LectureSchema.PAGE_BASE64.value: img_base64 if img_base64 else "",
                 }
             else:
