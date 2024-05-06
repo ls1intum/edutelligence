@@ -83,12 +83,12 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
                 return True
             self.callback.in_progress("Chunking and interpreting lecture...")
             chunks = []
-            #for i, lecture_unit in enumerate(self.dto.lecture_units):
-            #    pdf_path = save_pdf(lecture_unit.pdf_file_base64)
-            #    chunks = self.chunk_data(
-            #        lecture_path=pdf_path, lecture_unit_dto=lecture_unit
-            #    )
-            #    cleanup_temporary_file(pdf_path)
+            for i, lecture_unit in enumerate(self.dto.lecture_units):
+                pdf_path = save_pdf(lecture_unit.pdf_file_base64)
+                chunks = self.chunk_data(
+                    lecture_path=pdf_path, lecture_unit_dto=lecture_unit
+                )
+                cleanup_temporary_file(pdf_path)
             self.callback.done("Lecture Chunking and interpretation Finished")
             self.callback.in_progress("Ingesting lecture chunks into database...")
             self.batch_update(chunks)

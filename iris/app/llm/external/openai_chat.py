@@ -4,7 +4,6 @@ from typing import Literal, Any
 from openai import OpenAI
 from openai.lib.azure import AzureOpenAI
 from openai.types.chat import ChatCompletionMessage, ChatCompletionMessageParam
-from openai.types.chat.completion_create_params import ResponseFormat
 
 from ...common.message_converters import map_str_to_role, map_role_to_str
 from app.domain.data.text_message_content_dto import TextMessageContentDTO
