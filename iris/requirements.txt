@@ -9,5 +9,5 @@ pydantic==2.7.1
 PyMuPDF==1.23.22
 PyYAML==6.0.1
 requests~=2.31.0
-uvicorn==0.27.1
+uvicorn==0.29.0
 weaviate-client==4.5.4
