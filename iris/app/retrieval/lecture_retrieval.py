@@ -17,12 +17,12 @@ class LectureRetrieval(AbstractRetrieval, ABC):
         self.collection = init_lecture_schema(client)
 
     def retrieve(
-            self,
-            user_message: str,
-            hybrid_factor: float,
-            result_limit: int,
-            lecture_id: int = None,
-            message_vector: [float] = None,
+        self,
+        user_message: str,
+        hybrid_factor: float,
+        result_limit: int,
+        lecture_id: int = None,
+        message_vector: [float] = None,
     ) -> List[str]:
         response = self.collection.query.hybrid(
             query=user_message,
