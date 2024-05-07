@@ -3,7 +3,7 @@ import time
 from datetime import datetime
 from typing import Literal, Any
 
-from openai import OpenAI, RateLimitError
+from openai import OpenAI
 from openai.lib.azure import AzureOpenAI
 from openai.types.chat import ChatCompletionMessage, ChatCompletionMessageParam
 from openai.types.chat.completion_create_params import ResponseFormat
@@ -102,14 +102,11 @@ class OpenAIChatModel(ChatModel):
                         max_tokens=arguments.max_tokens,
                     )
                 return convert_to_iris_message(response.choices[0].message)
-            except RateLimitError as e:
+            except Exception as e:
                 wait_time = initial_delay * (backoff_factor**attempt)
-                logging.warning(f"Rate limit exceeded on attempt {attempt + 1}: {e}")
+                logging.warning(f"Exception on attempt {attempt + 1}: {e}")
                 logging.info(f"Retrying in {wait_time} seconds...")
                 time.sleep(wait_time)
-            except Exception as e:
-                logging.error(f"An unexpected error occurred while embedding text: {e}")
-                break
         logging.error(
             "Failed to interpret image after several attempts due to rate limit."
         )

@@ -1,6 +1,6 @@
 import logging
 from typing import Literal, Any
-from openai import OpenAI, RateLimitError
+from openai import OpenAI
 from openai.lib.azure import AzureOpenAI
 
 from ...llm.external.model import EmbeddingModel
@@ -25,14 +25,11 @@ class OpenAIEmbeddingModel(EmbeddingModel):
                     encoding_format="float",
                 )
                 return response.data[0].embedding
-            except RateLimitError as e:
+            except Exception as e:
                 wait_time = initial_delay * (backoff_factor**attempt)
                 logging.warning(f"Rate limit exceeded on attempt {attempt + 1}: {e}")
                 logging.info(f"Retrying in {wait_time} seconds...")
                 time.sleep(wait_time)
-            except Exception as e:
-                logging.error(f"An unexpected error occurred while embedding text: {e}")
-                break
         logging.error(
             "Failed to get embedding after several attempts due to rate limit."
         )

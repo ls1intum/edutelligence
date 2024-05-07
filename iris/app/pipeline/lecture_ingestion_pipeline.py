@@ -1,6 +1,7 @@
 import base64
 import os
 import tempfile
+import threading
 from asyncio.log import logger
 import fitz
 from weaviate import WeaviateClient
@@ -18,6 +19,8 @@ from ..ingestion.abstract_ingestion import AbstractIngestion
 from ..llm import BasicRequestHandler, CompletionArguments
 from ..web.status import IngestionStatusCallback
 from typing import TypedDict, Optional
+
+batch_update_lock = threading.Lock()
 
 
 def cleanup_temporary_file(file_path):
@@ -79,6 +82,7 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
             self.delete_old_lectures()
             self.callback.done("Old slides removed")
             if not self.dto.lecture_units[0].to_update:
+                self.batch_update([])
                 self.callback.skip("Lecture Chunking and interpretation Skipped")
                 self.callback.skip("No new slides to update")
                 return True
@@ -103,15 +107,25 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
     def batch_update(self, chunks):
         """
         Batch update the chunks into the database
+        This method is thread-safe and can only be executed by one thread at a time.
+        Weaviate limitation.
         """
-        with self.collection.batch.dynamic() as batch:
-            for index, chunk in enumerate(chunks):
-                embed_chunk = self.llm_embedding.embed(
-                    chunk[LectureSchema.PAGE_TEXT_CONTENT.value]
-                    + "\n"
-                    + chunk[LectureSchema.PAGE_IMAGE_DESCRIPTION.value]
-                )
-                batch.add_object(properties=chunk, vector=embed_chunk)
+        global batch_update_lock
+        with batch_update_lock:
+            with self.collection.batch.rate_limit(requests_per_minute=600) as batch:
+                try:
+                    for index, chunk in enumerate(chunks):
+                        embed_chunk = self.llm_embedding.embed(
+                            chunk[LectureSchema.PAGE_TEXT_CONTENT.value]
+                            + "\n"
+                            + chunk[LectureSchema.PAGE_IMAGE_DESCRIPTION.value]
+                        )
+                        batch.add_object(properties=chunk, vector=embed_chunk)
+                except Exception as e:
+                    logger.error(f"Error updating lecture unit: {e}")
+                    self.callback.error(
+                        f"Failed to ingest lectures into the database: {e}"
+                    )
 
     def delete_old_lectures(self):
         """
@@ -139,49 +153,33 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
         """
         doc = fitz.open(lecture_path)
         data = []
-        page_content = ""
         for page_num in range(doc.page_count):
             page = doc.load_page(page_num)
+            page_content = page.get_text()
+            image_interpretation = ""
+            img_base64 = ""
             if page.get_images(full=True):
                 pix = page.get_pixmap()
-                img_bytes = pix.tobytes("png")
+                img_bytes = pix.tobytes("JPEG")
                 img_base64 = base64.b64encode(img_bytes).decode("utf-8")
                 image_interpretation = self.interpret_image(
                     img_base64,
                     page_content,
                     lecture_unit_dto.lecture_name,
                 )
-                page_content = page.get_text()
-                page_data: PageData = {
-                    LectureSchema.LECTURE_ID.value: lecture_unit_dto.lecture_id,
-                    LectureSchema.LECTURE_NAME.value: lecture_unit_dto.lecture_name,
-                    LectureSchema.LECTURE_UNIT_ID.value: lecture_unit_dto.lecture_unit_id,
-                    LectureSchema.LECTURE_UNIT_NAME.value: lecture_unit_dto.lecture_unit_name,
-                    LectureSchema.COURSE_ID.value: lecture_unit_dto.course_id,
-                    LectureSchema.COURSE_NAME.value: lecture_unit_dto.course_name,
-                    LectureSchema.COURSE_DESCRIPTION.value: lecture_unit_dto.course_description,
-                    LectureSchema.PAGE_NUMBER.value: page_num + 1,
-                    LectureSchema.PAGE_TEXT_CONTENT.value: page_content,
-                    LectureSchema.PAGE_IMAGE_DESCRIPTION.value: (
-                        image_interpretation if image_interpretation else ""
-                    ),
-                    LectureSchema.PAGE_BASE64.value: img_base64 if img_base64 else "",
-                }
-            else:
-                page_content = page.get_text()
-                page_data: PageData = {
-                    LectureSchema.LECTURE_ID.value: lecture_unit_dto.lecture_id,
-                    LectureSchema.LECTURE_NAME.value: lecture_unit_dto.lecture_name,
-                    LectureSchema.LECTURE_UNIT_ID.value: lecture_unit_dto.lecture_unit_id,
-                    LectureSchema.LECTURE_UNIT_NAME.value: lecture_unit_dto.lecture_unit_name,
-                    LectureSchema.COURSE_ID.value: lecture_unit_dto.course_id,
-                    LectureSchema.COURSE_NAME.value: lecture_unit_dto.course_name,
-                    LectureSchema.COURSE_DESCRIPTION.value: lecture_unit_dto.course_description,
-                    LectureSchema.PAGE_NUMBER.value: page_num + 1,
-                    LectureSchema.PAGE_TEXT_CONTENT.value: page_content,
-                    LectureSchema.PAGE_IMAGE_DESCRIPTION.value: "",
-                    LectureSchema.PAGE_BASE64.value: "",
-                }
+            page_data: PageData = {
+                LectureSchema.LECTURE_ID.value: lecture_unit_dto.lecture_id,
+                LectureSchema.LECTURE_NAME.value: lecture_unit_dto.lecture_name,
+                LectureSchema.LECTURE_UNIT_ID.value: lecture_unit_dto.lecture_unit_id,
+                LectureSchema.LECTURE_UNIT_NAME.value: lecture_unit_dto.lecture_unit_name,
+                LectureSchema.COURSE_ID.value: lecture_unit_dto.course_id,
+                LectureSchema.COURSE_NAME.value: lecture_unit_dto.course_name,
+                LectureSchema.COURSE_DESCRIPTION.value: lecture_unit_dto.course_description,
+                LectureSchema.PAGE_NUMBER.value: page_num + 1,
+                LectureSchema.PAGE_TEXT_CONTENT.value: page_content,
+                LectureSchema.PAGE_IMAGE_DESCRIPTION.value: image_interpretation,
+                LectureSchema.PAGE_BASE64.value: img_base64,
+            }
             data.append(page_data)
         return data
 
@@ -211,9 +209,10 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
         """
         image_interpretation_prompt = (
             f"This page is part of the {name_of_lecture} lecture, describe and explain it in no more"
-            f" than 500 tokens, respond only with the explanation nothing more, "
+            f" than 500 tokens, respond only with the explanation nothing more,"
             f"Here is the content of the page before the one you need to interpret: "
             f" {last_page_content}"
+            f"If there is no image or you can't interpret it, respond with 'no image'."
         )
         image = ImageMessageContentDTO(
             base64=img_base64, prompt=image_interpretation_prompt

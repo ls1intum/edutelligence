@@ -1,8 +1,10 @@
 import logging
+import os
+
 import weaviate
 from .lecture_schema import init_lecture_schema
 from .repository_schema import init_repository_schema
-import weaviate.classes as wvc
+from weaviate.classes.query import Filter
 
 logger = logging.getLogger(__name__)
 
@@ -14,10 +16,8 @@ class VectorDatabase:
 
     def __init__(self):
         self.client = weaviate.connect_to_wcs(
-            cluster_url="https://pyrisingestiontest-qnzd09os.weaviate.network",
-            auth_credentials=weaviate.auth.AuthApiKey(
-                "981IRM6UfTTUj881jLStXDj4flEVMkP2NOj6"
-            ),
+            cluster_url=os.getenv("WEAVIATE_CLUSTER_URL"),
+            auth_credentials=weaviate.auth.AuthApiKey(os.getenv("WEAVIATE_API_KEY")),
         )
         self.repositories = init_repository_schema(self.client)
         self.lectures = init_lecture_schema(self.client)
@@ -41,7 +41,7 @@ class VectorDatabase:
         """
         collection = self.client.collections.get(collection_name)
         collection.data.delete_many(
-            where=wvc.query.Filter.by_property(property_name).equal(object_property)
+            where=Filter.by_property(property_name).equal(object_property)
         )
 
     def get_client(self):
