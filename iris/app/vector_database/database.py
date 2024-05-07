@@ -1,8 +1,8 @@
 import logging
 import os
 import weaviate
-from lecture_schema import init_lecture_schema
-from repository_schema import init_repository_schema
+from .lecture_schema import init_lecture_schema
+from .repository_schema import init_repository_schema
 import weaviate.classes as wvc
 
 logger = logging.getLogger(__name__)
