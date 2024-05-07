@@ -1,8 +1,8 @@
 from enum import Enum
-
-import weaviate.classes as wvc
+from weaviate.classes.config import Property
 from weaviate import WeaviateClient
 from weaviate.collections import Collection
+from weaviate.collections.classes.config import Configure, VectorDistances, DataType
 
 
 class RepositorySchema(Enum):
@@ -26,35 +26,35 @@ def init_repository_schema(client: WeaviateClient) -> Collection:
         return client.collections.get(RepositorySchema.COLLECTION_NAME.value)
     return client.collections.create(
         name=RepositorySchema.COLLECTION_NAME.value,
-        vectorizer_config=wvc.config.Configure.Vectorizer.none(),
-        vector_index_config=wvc.config.Configure.VectorIndex.hnsw(
-            distance_metric=wvc.config.VectorDistances.COSINE
+        vectorizer_config=Configure.Vectorizer.none(),
+        vector_index_config=Configure.VectorIndex.hnsw(
+            distance_metric=VectorDistances.COSINE
         ),
         properties=[
-            wvc.config.Property(
+            Property(
                 name=RepositorySchema.CONTENT.value,
                 description="The content of this chunk of code",
-                data_type=wvc.config.DataType.TEXT,
+                data_type=DataType.TEXT,
             ),
-            wvc.config.Property(
+            Property(
                 name=RepositorySchema.COURSE_ID.value,
                 description="The ID of the course",
-                data_type=wvc.config.DataType.INT,
+                data_type=DataType.INT,
             ),
-            wvc.config.Property(
+            Property(
                 name=RepositorySchema.EXERCISE_ID.value,
                 description="The ID of the exercise",
-                data_type=wvc.config.DataType.INT,
+                data_type=DataType.INT,
             ),
-            wvc.config.Property(
+            Property(
                 name=RepositorySchema.REPOSITORY_ID.value,
                 description="The ID of the repository",
-                data_type=wvc.config.DataType.INT,
+                data_type=DataType.INT,
             ),
-            wvc.config.Property(
+            Property(
                 name=RepositorySchema.FILEPATH.value,
                 description="The filepath of the code",
-                data_type=wvc.config.DataType.TEXT,
+                data_type=DataType.TEXT,
             ),
         ],
     )

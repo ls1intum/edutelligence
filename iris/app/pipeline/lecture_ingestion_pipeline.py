@@ -3,8 +3,8 @@ import os
 import tempfile
 from asyncio.log import logger
 import fitz
-import weaviate
-import weaviate.classes as wvc
+from weaviate import WeaviateClient
+from weaviate.classes.query import Filter
 from . import Pipeline
 from ..domain import IrisMessageRole, PyrisMessage
 from ..domain.data.image_message_content_dto import ImageMessageContentDTO
@@ -61,7 +61,7 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
 
     def __init__(
         self,
-        client: weaviate.WeaviateClient,
+        client: WeaviateClient,
         dto: IngestionPipelineExecutionDto,
         callback: IngestionStatusCallback,
     ):
@@ -191,12 +191,12 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
         """
         try:
             self.collection.data.delete_many(
-                where=wvc.query.Filter.by_property(
-                    LectureSchema.LECTURE_ID.value
-                ).equal(lecture_id)
-                & wvc.query.Filter.by_property(
-                    LectureSchema.LECTURE_UNIT_ID.value
-                ).equal(lecture_unit_id)
+                where=Filter.by_property(LectureSchema.LECTURE_ID.value).equal(
+                    lecture_id
+                )
+                & Filter.by_property(LectureSchema.LECTURE_UNIT_ID.value).equal(
+                    lecture_unit_id
+                )
             )
             return True
         except Exception as e:

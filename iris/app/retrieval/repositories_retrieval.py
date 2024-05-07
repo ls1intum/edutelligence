@@ -1,7 +1,7 @@
 from typing import List
 
-import weaviate
-import weaviate.classes as wvc
+from weaviate import WeaviateClient
+from weaviate.classes.query import Filter
 
 from app.retrieval.abstract_retrieval import AbstractRetrieval
 from app.vector_database.repository_schema import (
@@ -15,7 +15,7 @@ class RepositoryRetrieval(AbstractRetrieval):
     Class for Retrieving repository code for from the vector database.
     """
 
-    def __init__(self, client: weaviate.WeaviateClient):
+    def __init__(self, client: WeaviateClient):
         self.collection = init_repository_schema(client)
 
     def retrieve(
@@ -27,9 +27,9 @@ class RepositoryRetrieval(AbstractRetrieval):
         response = self.collection.query.near_text(
             near_text=user_message,
             filters=(
-                wvc.query.Filter.by_property(
-                    RepositorySchema.REPOSITORY_ID.value
-                ).equal(repository_id)
+                Filter.by_property(RepositorySchema.REPOSITORY_ID.value).equal(
+                    repository_id
+                )
                 if repository_id
                 else None
             ),
