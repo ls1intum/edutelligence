@@ -1,7 +1,7 @@
 import logging
 import os
 import weaviate
-from lectureschema import init_lecture_schema
+from lecture_schema import init_lecture_schema
 from repository_schema import init_repository_schema
 import weaviate.classes as wvc
 
