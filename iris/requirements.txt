@@ -6,6 +6,8 @@ ollama==0.1.9
 openai==1.25.2
 pre-commit==3.7.0
 pydantic==2.7.1
+PyMuPDF==1.23.22
 PyYAML==6.0.1
-uvicorn==0.29.0
 requests~=2.31.0
+uvicorn==0.29.0
+weaviate-client==4.5.4
