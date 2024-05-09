@@ -10,9 +10,10 @@ from langchain_core.prompts import (
 )
 from langchain_core.runnables import Runnable
 
+from ..shared.reranker_pipeline import RerankerPipeline
 from ...common import convert_iris_message_to_langchain_message
 from ...domain import PyrisMessage
-from ...llm import CapabilityRequestHandler, RequirementList
+from ...llm import CapabilityRequestHandler, RequirementList, BasicRequestHandler
 from ...domain.data.build_log_entry import BuildLogEntryDTO
 from ...domain.data.feedback_dto import FeedbackDTO
 from ..prompts.iris_tutor_chat_prompts import (
@@ -23,6 +24,9 @@ from ..prompts.iris_tutor_chat_prompts import (
 )
 from ...domain import TutorChatPipelineExecutionDTO
 from ...domain.data.submission_dto import SubmissionDTO
+from ...retrieval.lecture_retrieval import LectureRetrieval
+from ...vector_database.database import VectorDatabase
+from ...vector_database.lecture_schema import LectureSchema
 from ...web.status.status_update import TutorChatStatusCallback
 from .file_selector_pipeline import FileSelectorPipeline
 from ...llm import CompletionArguments
@@ -57,8 +61,11 @@ class TutorChatPipeline(Pipeline):
             request_handler=request_handler, completion_args=completion_args
         )
         self.callback = callback
+        self.db = VectorDatabase()
+        self.retriever = LectureRetrieval(self.db.client)
 
         # Create the pipelines
+        self.reranker_pipeline = RerankerPipeline()
         self.file_selector_pipeline = FileSelectorPipeline()
         self.pipeline = self.llm | StrOutputParser()
 
@@ -71,8 +78,8 @@ class TutorChatPipeline(Pipeline):
     def __call__(self, dto: TutorChatPipelineExecutionDTO, **kwargs):
         """
         Runs the pipeline
-            :param dto: The pipeline execution data transfer object
-            :param kwargs: The keyword arguments
+        :param dto:  execution data transfer object
+        :param kwargs: The keyword arguments
         """
 
         # Set up the initial prompt
@@ -83,7 +90,7 @@ class TutorChatPipeline(Pipeline):
             ]
         )
         logger.info("Running tutor chat pipeline...")
-        history: List[PyrisMessage] = dto.chat_history[:-1]
+        # history: List[PyrisMessage] = dto.chat_history[:-1]
         query: PyrisMessage = dto.chat_history[-1]
 
         submission: SubmissionDTO = dto.submission
@@ -100,7 +107,20 @@ class TutorChatPipeline(Pipeline):
         programming_language = dto.exercise.programming_language.lower()
 
         # Add the chat history and user question to the prompt
-        self._add_conversation_to_prompt(history, query)
+        # self._add_conversation_to_prompt(history, query)
+        retrieved_lecture_chunks = self.retriever.retrieve(
+            query.contents[0].text_content,
+            hybrid_factor=1,
+            result_limit=10,
+            student_query=query.contents[0].text_content,
+        )
+        selected_chunks = self.reranker_pipeline(paragraphs=retrieved_lecture_chunks)
+        self.callback.done("Looked up files in the repository")
+
+        self.prompt += SystemMessagePromptTemplate.from_template(
+            "Next you will find relevant lecture content to answer the student's question:"
+        )
+        self._add_relevant_chunks_to_prompt(selected_chunks)
 
         self.callback.in_progress("Looking up files in the repository...")
         # Create the file selection prompt based on the current prompt
@@ -149,28 +169,6 @@ class TutorChatPipeline(Pipeline):
         except Exception as e:
             print(e)
             self.callback.error(f"Failed to generate response: {e}")
-
-    def _add_conversation_to_prompt(
-        self,
-        chat_history: List[PyrisMessage],
-        user_question: PyrisMessage,
-    ):
-        """
-        Adds the chat history and user question to the prompt
-            :param chat_history: The chat history
-            :param user_question: The user question
-            :return: The prompt with the chat history
-        """
-        if chat_history is not None and len(chat_history) > 0:
-            chat_history_messages = [
-                convert_iris_message_to_langchain_message(message)
-                for message in chat_history
-            ]
-            self.prompt += chat_history_messages
-            self.prompt += SystemMessagePromptTemplate.from_template(
-                "Now, consider the student's newest and latest input:"
-            )
-        self.prompt += convert_iris_message_to_langchain_message(user_question)
 
     def _add_student_repository_to_prompt(
         self, student_repository: Dict[str, str], selected_files: List[str]
@@ -252,3 +250,38 @@ class TutorChatPipeline(Pipeline):
             '{{"selected_files": [<file1>, <file2>, ...]}}'
         )
         return file_selection_prompt
+
+    def _add_relevant_chunks_to_prompt(self, retrieved_lecture_chunks: List[str]):
+        """
+        Adds the relevant chunks of the lecture to the prompt
+        :param retrieved_lecture_chunks: The retrieved lecture chunks
+        """
+        # Iterate over the chunks to create formatted messages for each
+        for i, chunk in enumerate(retrieved_lecture_chunks):
+            #    text_content_msg = f" {chunk.get(LectureSchema.PAGE_TEXT_CONTENT)}" + "\n" \
+            #  + f" {chunk.get(LectureSchema.PAGE_IMAGE_DESCRIPTION)}"
+            #    text_content_msg = text_content_msg.replace("{", "{{").replace("}", "}}")
+            text_content_msg = chunk.replace("{", "{{").replace("}", "}}")
+            self.prompt += SystemMessagePromptTemplate.from_template(text_content_msg)
+
+    def _add_conversation_to_prompt(
+        self,
+        chat_history: List[PyrisMessage],
+        user_question: PyrisMessage,
+    ):
+        """
+        Adds the chat history and user question to the prompt
+            :param chat_history: The chat history
+            :param user_question: The user question
+            :return: The prompt with the chat history
+        """
+        if chat_history is not None and len(chat_history) > 0:
+            chat_history_messages = [
+                convert_iris_message_to_langchain_message(message)
+                for message in chat_history
+            ]
+            self.prompt += chat_history_messages
+            self.prompt += SystemMessagePromptTemplate.from_template(
+                "Now, consider the student's newest and latest input:"
+            )
+        self.prompt += convert_iris_message_to_langchain_message(user_question)
