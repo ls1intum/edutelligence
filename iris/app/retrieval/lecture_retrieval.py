@@ -1,4 +1,3 @@
-from abc import ABC
 from typing import List
 
 from weaviate import WeaviateClient
@@ -17,7 +16,8 @@ def merge_retrieved_chunks(
 ) -> List[dict]:
     """
     Merge the retrieved chunks from the basic and hyde retrieval methods. This function ensures that for any
-    duplicate IDs, the properties from hyde_retrieved_lecture_chunks will overwrite those from basic_retrieved_lecture_chunks.
+    duplicate IDs, the properties from hyde_retrieved_lecture_chunks will overwrite those from
+    basic_retrieved_lecture_chunks.
     """
     merged_chunks = {}
     for chunk in basic_retrieved_lecture_chunks:
@@ -29,7 +29,7 @@ def merge_retrieved_chunks(
     return [properties for uuid, properties in merged_chunks.items()]
 
 
-class LectureRetrieval(AbstractRetrieval, ABC):
+class LectureRetrieval(AbstractRetrieval):
     """
     Class for retrieving lecture data from the database.
     """
@@ -43,10 +43,12 @@ class LectureRetrieval(AbstractRetrieval, ABC):
     def retrieval_pipeline(
         self,
         student_query: str,
-        hybrid_factor: float,
         result_limit: int,
         course_id: int = None,
     ) -> List[dict]:
+        """
+        Retrieve lecture data from the database.
+        """
         # This part is commented until the next ingestion, because there is no course_language field in the data now
         course_language = "English"
         #    self.collection.query.fetch_objects(
@@ -61,8 +63,10 @@ class LectureRetrieval(AbstractRetrieval, ABC):
             if student_query
             else None
         )
-        response = self.search_in_db(translated_student_query, 0.5, 10, course_id)
-        response_hyde = self.search_in_db(generated_query, 0.5, 10, course_id)
+        response = self.search_in_db(
+            translated_student_query, 0.5, result_limit, course_id
+        )
+        response_hyde = self.search_in_db(generated_query, 0.5, result_limit, course_id)
 
         basic_retrieved_lecture_chunks: list[dict[str, dict]] = [
             {"id": obj.uuid.int, "properties": obj.properties}

@@ -1,11 +1,10 @@
-from typing import List, Optional
+from typing import Optional
+from abc import ABC
 
 import requests
-from abc import ABC, abstractmethod
 
 from ...domain.status.stage_state_dto import StageStateEnum
 from ...domain.status.stage_dto import StageDTO
-from ...domain.tutor_chat.tutor_chat_status_update_dto import TutorChatStatusUpdateDTO
 from ...domain.status.status_update_dto import StatusUpdateDTO
 import logging
 
@@ -13,6 +12,10 @@ logger = logging.getLogger(__name__)
 
 
 class StatusCallback(ABC):
+    """
+    A callback class for sending status updates to the Artemis API.
+    """
+
     url: str
     run_id: str
     status: StatusUpdateDTO
@@ -32,30 +35,6 @@ class StatusCallback(ABC):
         self.status = status
         self.stage = stage
         self.current_stage_index = current_stage_index
-
-    @abstractmethod
-    def on_status_update(self):
-        pass
-
-
-class TutorChatStatusCallback(StatusCallback):
-    def __init__(
-        self, run_id: str, base_url: str, initial_stages: List[StageDTO] = None
-    ):
-        url = f"{base_url}/api/public/pyris/pipelines/tutor-chat/runs/{run_id}/status"
-        current_stage_index = len(initial_stages) if initial_stages else 0
-        stages = initial_stages or []
-        stages += [
-            StageDTO(weight=30, state=StageStateEnum.NOT_STARTED, name="File Lookup"),
-            StageDTO(
-                weight=70,
-                state=StageStateEnum.NOT_STARTED,
-                name="Response Generation",
-            ),
-        ]
-        status = TutorChatStatusUpdateDTO(stages=stages)
-        stage = stages[current_stage_index]
-        super().__init__(url, run_id, status, stage, current_stage_index)
 
     def on_status_update(self):
         """Send a status update to the Artemis API."""
@@ -142,4 +121,4 @@ class TutorChatStatusCallback(StatusCallback):
         next_stage = self.get_next_stage()
         if next_stage is not None:
             self.stage = next_stage
-            self.on_status_update()
+        self.on_status_update()

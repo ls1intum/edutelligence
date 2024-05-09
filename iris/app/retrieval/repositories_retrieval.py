@@ -24,6 +24,9 @@ class RepositoryRetrieval(AbstractRetrieval):
         result_limit: int,
         repository_id: int = None,
     ) -> List[str]:
+        """
+        Retrieve repository code from the database.
+        """
         response = self.collection.query.near_text(
             near_text=user_message,
             filters=(
