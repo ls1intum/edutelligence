@@ -1,5 +1,5 @@
 import logging
-from typing import List, Dict
+from typing import List
 
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import (
@@ -37,12 +37,11 @@ def lecture_initial_prompt():
     """
     Returns the initial prompt for the lecture chat
     """
-    return """You're Iris, the AI programming tutor integrated into Artemis, the online learning platform of the 
-    Technical University of Munich (TUM). You are a guide and an educator. Your main goal is to help students with
-    lecture content, like explaining complex theories or conepts based on the lecture content provided to you.
-    If the context provided to you is not enough to formulate an answer to the student question
-    you can simply ask the student to elaborate more on his question.
-    """
+    return """You're Iris, the AI programming tutor integrated into Artemis, the online learning platform of the
+     Technical University of Munich (TUM). You are a guide and an educator. Your main goal is to help students with
+     lecture content, like explaining complex theories or conepts based on the lecture content provided to you. If the
+     context provided to you is not enough to formulate an answer to the student question you can simply ask the
+     student to elaborate more on his question."""
 
 
 class LectureChatPipeline(Pipeline):
