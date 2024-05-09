@@ -180,7 +180,7 @@ class TutorChatPipeline(Pipeline):
         for file in selected_files:
             if file in student_repository:
                 self.prompt += SystemMessagePromptTemplate.from_template(
-                    f"For reference, we have access to the student's '{file}' file:"
+                    f"For reference, we have access to the student's '{file}' file: "
                 )
                 self.prompt += HumanMessagePromptTemplate.from_template(
                     student_repository[file].replace("{", "{{").replace("}", "}}")
