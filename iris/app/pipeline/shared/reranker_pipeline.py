@@ -36,7 +36,8 @@ class RerankerPipeline(Pipeline):
             completion_args=CompletionArguments(temperature=0, max_tokens=4000),
         )
         dirname = os.path.dirname(__file__)
-        with open(os.path.join(dirname, "../prompts/reranker_prompt.txt"), "r") as file:
+        prompt_file_path = os.path.join(dirname, "..", "prompts", "reranker_prompt.txt")
+        with open(prompt_file_path, "r") as file:
             logger.info("Loading reranker prompt...")
             prompt_str = file.read()
 
