@@ -18,7 +18,7 @@ class RepositoryRetrieval(AbstractRetrieval):
     def __init__(self, client: WeaviateClient):
         self.collection = init_repository_schema(client)
 
-    def retrieve(
+    def retrieval_pipeline(
         self,
         user_message: str,
         result_limit: int,
