@@ -4,7 +4,8 @@ from threading import Thread
 
 from fastapi import APIRouter, status, Response, Depends
 from app.domain import (
-    TutorChatPipelineExecutionDTO, LectureChatPipelineExecutionDTO,
+    TutorChatPipelineExecutionDTO,
+    LectureChatPipelineExecutionDTO,
 )
 from app.pipeline.chat.lecture_chat_pipeline import LectureChatPipeline
 from app.pipeline.chat.tutor_chat_pipeline import TutorChatPipeline

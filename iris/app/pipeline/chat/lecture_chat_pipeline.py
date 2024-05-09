@@ -110,8 +110,7 @@ class LectureChatPipeline(Pipeline):
         self.callback.done("Lecture content retrieved successfully")
         self.callback.in_progress("generating response...")
 
-        prompt_val = self.prompt.format_messages(
-        )
+        prompt_val = self.prompt.format_messages()
         self.prompt = ChatPromptTemplate.from_messages(prompt_val)
         try:
             response = (self.prompt | self.pipeline).invoke({})
@@ -122,9 +121,9 @@ class LectureChatPipeline(Pipeline):
             self.callback.error(f"Failed to generate response: {e}")
 
     def _add_conversation_to_prompt(
-            self,
-            chat_history: List[PyrisMessage],
-            user_question: PyrisMessage,
+        self,
+        chat_history: List[PyrisMessage],
+        user_question: PyrisMessage,
     ):
         """
         Adds the chat history and user question to the prompt
@@ -149,6 +148,8 @@ class LectureChatPipeline(Pipeline):
         :param retrieved_lecture_chunks: The retrieved lecture chunks
         """
         for i, chunk in enumerate(retrieved_lecture_chunks):
-            text_content_msg = f" \n {chunk.get(LectureSchema.PAGE_TEXT_CONTENT.value)} \n"
+            text_content_msg = (
+                f" \n {chunk.get(LectureSchema.PAGE_TEXT_CONTENT.value)} \n"
+            )
             text_content_msg = text_content_msg.replace("{", "{{").replace("}", "}}")
             self.prompt += SystemMessagePromptTemplate.from_template(text_content_msg)

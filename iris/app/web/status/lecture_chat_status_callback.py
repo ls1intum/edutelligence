@@ -21,7 +21,11 @@ class LectureChatStatusCallback(StatusCallback):
         current_stage_index = len(initial_stages) if initial_stages else 0
         stages = initial_stages or []
         stages += [
-            StageDTO(weight=50, state=StageStateEnum.NOT_STARTED, name="Lecture content retrieval"),
+            StageDTO(
+                weight=50,
+                state=StageStateEnum.NOT_STARTED,
+                name="Lecture content retrieval",
+            ),
             StageDTO(
                 weight=50,
                 state=StageStateEnum.NOT_STARTED,
