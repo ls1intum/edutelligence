@@ -4,6 +4,8 @@ import tempfile
 import threading
 from asyncio.log import logger
 import fitz
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.prompts import ChatPromptTemplate
 from weaviate import WeaviateClient
 from weaviate.classes.query import Filter
 from . import Pipeline
@@ -14,9 +16,11 @@ from ..domain.data.lecture_unit_dto import LectureUnitDTO
 from app.domain.ingestion.ingestion_pipeline_execution_dto import (
     IngestionPipelineExecutionDto,
 )
+from ..domain.data.text_message_content_dto import TextMessageContentDTO
+from ..llm.langchain import IrisLangchainChatModel
 from ..vector_database.lecture_schema import init_lecture_schema, LectureSchema
 from ..ingestion.abstract_ingestion import AbstractIngestion
-from ..llm import BasicRequestHandler, CompletionArguments
+from ..llm import BasicRequestHandler, CompletionArguments, CapabilityRequestHandler, RequirementList
 from ..web.status import IngestionStatusCallback
 from typing import TypedDict, Optional
 
@@ -63,18 +67,29 @@ class PageData(TypedDict):
 class LectureIngestionPipeline(AbstractIngestion, Pipeline):
 
     def __init__(
-        self,
-        client: WeaviateClient,
-        dto: IngestionPipelineExecutionDto,
-        callback: IngestionStatusCallback,
+            self,
+            client: WeaviateClient,
+            dto: IngestionPipelineExecutionDto,
+            callback: IngestionStatusCallback,
     ):
         super().__init__()
         self.collection = init_lecture_schema(client)
         self.dto = dto
-        self.llm_vision = BasicRequestHandler("gptvision")
-        self.llm = BasicRequestHandler("gpt35")
-        self.llm_embedding = BasicRequestHandler("ada")
+        self.llm_vision = BasicRequestHandler("azure-gpt-4-vision")
+        self.llm_embedding = BasicRequestHandler("embedding-small")
         self.callback = callback
+        request_handler = CapabilityRequestHandler(
+            requirements=RequirementList(
+                gpt_version_equivalent=3.5,
+                context_length=16385,
+                privacy_compliance=True,
+            )
+        )
+        completion_args = CompletionArguments(temperature=0.2, max_tokens=2000)
+        self.llm = IrisLangchainChatModel(
+            request_handler=request_handler, completion_args=completion_args
+        )
+        self.pipeline = self.llm | StrOutputParser()
 
     def __call__(self) -> bool:
         try:
@@ -117,8 +132,6 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
                     for index, chunk in enumerate(chunks):
                         embed_chunk = self.llm_embedding.embed(
                             chunk[LectureSchema.PAGE_TEXT_CONTENT.value]
-                            + "\n"
-                            + chunk[LectureSchema.PAGE_IMAGE_DESCRIPTION.value]
                         )
                         batch.add_object(properties=chunk, vector=embed_chunk)
                 except Exception as e:
@@ -127,36 +140,21 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
                         f"Failed to ingest lectures into the database: {e}"
                     )
 
-    def delete_old_lectures(self):
-        """
-        Delete the lecture unit from the database
-        """
-        try:
-            for lecture_unit in self.dto.lecture_units:
-                if self.delete_lecture_unit(
-                    lecture_unit.lecture_id, lecture_unit.lecture_unit_id
-                ):
-                    logger.info("Lecture deleted successfully")
-                else:
-                    logger.error("Failed to delete lecture")
-        except Exception as e:
-            logger.error(f"Error deleting lecture unit: {e}")
-            return False
-
     def chunk_data(
-        self,
-        lecture_path: str,
-        lecture_unit_dto: LectureUnitDTO = None,
+            self,
+            lecture_path: str,
+            lecture_unit_dto: LectureUnitDTO = None,
     ):
         """
         Chunk the data from the lecture into smaller pieces
         """
         doc = fitz.open(lecture_path)
+        course_language = self.get_course_language(doc.load_page(5))
         data = []
+        last_page_content = ""
         for page_num in range(doc.page_count):
             page = doc.load_page(page_num)
             page_content = page.get_text()
-            image_interpretation = ""
             img_base64 = ""
             if page.get_images(full=True):
                 pix = page.get_pixmap()
@@ -164,9 +162,11 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
                 img_base64 = base64.b64encode(img_bytes).decode("utf-8")
                 image_interpretation = self.interpret_image(
                     img_base64,
+                    last_page_content,
                     page_content,
                     lecture_unit_dto.lecture_name,
                 )
+                page_content = self.merge_page_content_and_image_interpretation(page_content, image_interpretation)
             page_data: PageData = {
                 LectureSchema.LECTURE_ID.value: lecture_unit_dto.lecture_id,
                 LectureSchema.LECTURE_NAME.value: lecture_unit_dto.lecture_name,
@@ -175,13 +175,94 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
                 LectureSchema.COURSE_ID.value: lecture_unit_dto.course_id,
                 LectureSchema.COURSE_NAME.value: lecture_unit_dto.course_name,
                 LectureSchema.COURSE_DESCRIPTION.value: lecture_unit_dto.course_description,
+                LectureSchema.COURSE_LANGUAGE.value: course_language,
                 LectureSchema.PAGE_NUMBER.value: page_num + 1,
                 LectureSchema.PAGE_TEXT_CONTENT.value: page_content,
-                LectureSchema.PAGE_IMAGE_DESCRIPTION.value: image_interpretation,
                 LectureSchema.PAGE_BASE64.value: img_base64,
             }
+            last_page_content = page_content
             data.append(page_data)
         return data
+
+    def interpret_image(
+            self, img_base64: str, last_page_content: str, page_content: str, name_of_lecture: str
+    ):
+        """
+        Interpret the image passed
+        """
+        image_interpretation_prompt = (
+            f"This page is part of the {name_of_lecture} lecture, describe and explain it in no more"
+            f"than 300 tokens, respond only with the explanation nothing more, "
+            f"Here is the content of the previous slide, it's content is most likely related to the slide you need to interpret: \n"
+            f" {last_page_content}"
+            f"Intepret the image below based on the provided context and the content of the previous slide.\n"
+        )
+        image = ImageMessageContentDTO(
+            base64=img_base64, prompt=image_interpretation_prompt
+        )
+        iris_message = PyrisMessage(sender=IrisMessageRole.SYSTEM, contents=[image])
+        try:
+            response = self.llm_vision.chat(
+                [iris_message], CompletionArguments(temperature=0.2, max_tokens=500)
+            )
+        except Exception as e:
+            logger.error(f"Error interpreting image: {e}")
+            return None
+        return response.contents[0].text_content
+
+    def merge_page_content_and_image_interpretation(self, page_content: str, image_interpretation: str):
+        """
+        Merge the text and image together
+        """
+        dirname = os.path.dirname(__file__)
+        prompt_file_path = os.path.join(dirname, ".", "prompts", "ingestion_prompt.txt")
+        with open(prompt_file_path, "r") as file:
+            logger.info("Loading ingestion prompt...")
+            prompt_str = file.read()
+        prompt = ChatPromptTemplate.from_messages(
+            [
+                ("system", prompt_str),
+            ]
+        )
+        prompt_val = prompt.format_messages(
+            page_content=page_content,
+            image_interpretation=image_interpretation,
+        )
+        prompt = ChatPromptTemplate.from_messages(prompt_val)
+        return (prompt | self.pipeline).invoke({})
+
+    def get_course_language(self, page_content: str) -> str:
+        """
+        Translate the student query to the course language. For better retrieval.
+        """
+        prompt = (
+            f"You will be provided a chunk of text, respond with the language of the text. Do not respond with "
+            f"anything else than the language.\nHere is the text: \n{page_content}"
+        )
+        iris_message = PyrisMessage(
+            sender=IrisMessageRole.SYSTEM,
+            contents=[TextMessageContentDTO(text_content=prompt)],
+        )
+        response = self.llm_vision.chat(
+            [iris_message], CompletionArguments(temperature=0.2, max_tokens=50)
+        )
+        return response.contents[0].text_content
+
+    def delete_old_lectures(self):
+        """
+        Delete the lecture unit from the database
+        """
+        try:
+            for lecture_unit in self.dto.lecture_units:
+                if self.delete_lecture_unit(
+                        lecture_unit.lecture_id, lecture_unit.lecture_unit_id
+                ):
+                    logger.info("Lecture deleted successfully")
+                else:
+                    logger.error("Failed to delete lecture")
+        except Exception as e:
+            logger.error(f"Error deleting lecture unit: {e}")
+            return False
 
     def delete_lecture_unit(self, lecture_id, lecture_unit_id):
         """
@@ -192,7 +273,7 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
                 where=Filter.by_property(LectureSchema.LECTURE_ID.value).equal(
                     lecture_id
                 )
-                & Filter.by_property(LectureSchema.LECTURE_UNIT_ID.value).equal(
+                      & Filter.by_property(LectureSchema.LECTURE_UNIT_ID.value).equal(
                     lecture_unit_id
                 )
             )
@@ -200,29 +281,3 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
         except Exception as e:
             print(f"Error deleting lecture unit: {e}")
             return False
-
-    def interpret_image(
-        self, img_base64: str, last_page_content: str, name_of_lecture: str
-    ):
-        """
-        Interpret the image passed
-        """
-        image_interpretation_prompt = (
-            f"This page is part of the {name_of_lecture} lecture, describe and explain it in no more"
-            f" than 500 tokens, respond only with the explanation nothing more,"
-            f"Here is the content of the page before the one you need to interpret: "
-            f" {last_page_content}"
-            f"If there is no image or you can't interpret it, respond with 'no image'."
-        )
-        image = ImageMessageContentDTO(
-            base64=img_base64, prompt=image_interpretation_prompt
-        )
-        iris_message = PyrisMessage(sender=IrisMessageRole.SYSTEM, contents=[image])
-        try:
-            response = self.llm_vision.chat(
-                [iris_message], CompletionArguments(temperature=0.2, max_tokens=1000)
-            )
-        except Exception as e:
-            logger.error(f"Error interpreting image: {e}")
-            return None
-        return response.contents[0].text_content

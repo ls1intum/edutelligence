@@ -14,6 +14,7 @@ class LectureSchema(Enum):
     COLLECTION_NAME = "LectureSlides"
     COURSE_NAME = "course_name"
     COURSE_DESCRIPTION = "course_description"
+    COURSE_LANGUAGE = "course_language"
     COURSE_ID = "course_id"
     LECTURE_ID = "lecture_id"
     LECTURE_NAME = "lecture_name"
