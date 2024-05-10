@@ -20,7 +20,12 @@ from ..domain.data.text_message_content_dto import TextMessageContentDTO
 from ..llm.langchain import IrisLangchainChatModel
 from ..vector_database.lecture_schema import init_lecture_schema, LectureSchema
 from ..ingestion.abstract_ingestion import AbstractIngestion
-from ..llm import BasicRequestHandler, CompletionArguments, CapabilityRequestHandler, RequirementList
+from ..llm import (
+    BasicRequestHandler,
+    CompletionArguments,
+    CapabilityRequestHandler,
+    RequirementList,
+)
 from ..web.status import IngestionStatusCallback
 from typing import TypedDict, Optional
 
@@ -67,10 +72,10 @@ class PageData(TypedDict):
 class LectureIngestionPipeline(AbstractIngestion, Pipeline):
 
     def __init__(
-            self,
-            client: WeaviateClient,
-            dto: IngestionPipelineExecutionDto,
-            callback: IngestionStatusCallback,
+        self,
+        client: WeaviateClient,
+        dto: IngestionPipelineExecutionDto,
+        callback: IngestionStatusCallback,
     ):
         super().__init__()
         self.collection = init_lecture_schema(client)
@@ -141,9 +146,9 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
                     )
 
     def chunk_data(
-            self,
-            lecture_path: str,
-            lecture_unit_dto: LectureUnitDTO = None,
+        self,
+        lecture_path: str,
+        lecture_unit_dto: LectureUnitDTO = None,
     ):
         """
         Chunk the data from the lecture into smaller pieces
@@ -166,7 +171,9 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
                     page_content,
                     lecture_unit_dto.lecture_name,
                 )
-                page_content = self.merge_page_content_and_image_interpretation(page_content, image_interpretation)
+                page_content = self.merge_page_content_and_image_interpretation(
+                    page_content, image_interpretation
+                )
             page_data: PageData = {
                 LectureSchema.LECTURE_ID.value: lecture_unit_dto.lecture_id,
                 LectureSchema.LECTURE_NAME.value: lecture_unit_dto.lecture_name,
@@ -185,7 +192,11 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
         return data
 
     def interpret_image(
-            self, img_base64: str, last_page_content: str, page_content: str, name_of_lecture: str
+        self,
+        img_base64: str,
+        last_page_content: str,
+        page_content: str,
+        name_of_lecture: str,
     ):
         """
         Interpret the image passed
@@ -210,7 +221,9 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
             return None
         return response.contents[0].text_content
 
-    def merge_page_content_and_image_interpretation(self, page_content: str, image_interpretation: str):
+    def merge_page_content_and_image_interpretation(
+        self, page_content: str, image_interpretation: str
+    ):
         """
         Merge the text and image together
         """
@@ -255,7 +268,7 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
         try:
             for lecture_unit in self.dto.lecture_units:
                 if self.delete_lecture_unit(
-                        lecture_unit.lecture_id, lecture_unit.lecture_unit_id
+                    lecture_unit.lecture_id, lecture_unit.lecture_unit_id
                 ):
                     logger.info("Lecture deleted successfully")
                 else:
@@ -273,7 +286,7 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
                 where=Filter.by_property(LectureSchema.LECTURE_ID.value).equal(
                     lecture_id
                 )
-                      & Filter.by_property(LectureSchema.LECTURE_UNIT_ID.value).equal(
+                & Filter.by_property(LectureSchema.LECTURE_UNIT_ID.value).equal(
                     lecture_unit_id
                 )
             )
