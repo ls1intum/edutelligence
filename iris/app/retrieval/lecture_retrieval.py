@@ -57,17 +57,20 @@ class LectureRetrieval(AbstractRetrieval):
         #    limit=1,
         #    return_properties=[LectureSchema.COURSE_LANGUAGE.value]
         # )
-        rewritten_query = self.rewrite_student_query(chat_history,
-                                                     student_query,
-                                                     course_language,
-                                                     )
-
-        hypothetical_answer_query = self.rewrite_elaborated_query(rewritten_query, course_language, course_name)
-
-        response = self.search_in_db(
-            rewritten_query, 0.5, result_limit, course_id
+        rewritten_query = self.rewrite_student_query(
+            chat_history,
+            student_query,
+            course_language,
         )
-        response_hyde = self.search_in_db(hypothetical_answer_query, 0.5, result_limit, course_id)
+
+        hypothetical_answer_query = self.rewrite_elaborated_query(
+            rewritten_query, course_language, course_name
+        )
+
+        response = self.search_in_db(rewritten_query, 0.5, result_limit, course_id)
+        response_hyde = self.search_in_db(
+            hypothetical_answer_query, 0.5, result_limit, course_id
+        )
 
         basic_retrieved_lecture_chunks: list[dict[str, dict]] = [
             {"id": obj.uuid.int, "properties": obj.properties}
@@ -93,22 +96,26 @@ class LectureRetrieval(AbstractRetrieval):
         Rewrite the student query to generate fitting lecture content and embed it.
         To extract more relevant content from the vector database.
         """
-        text_chat_history = [chat_history[-idx-1].contents[0].text_content for idx in range(10)][::-1]
+        text_chat_history = [
+                                chat_history[-idx - 1].contents[0].text_content for idx in range(10)
+                            ][::-1]
 
         num_messages = len(text_chat_history)
         messages_formatted = "\n".join(f" {msg}" for msg in text_chat_history)
         prompt = f"""
-                You are serving as an AI assistant on the Artemis Learning Platform at the Technical University of Munich.
+                You are serving as an AI assistant on the Artemis Learning Platform at
+                 the Technical University of Munich.
                 Here are the last {num_messages} student messages in the chat history:
                     {messages_formatted}
                 The student has sent the following message:
                     {student_query}.
-                If there is a reference to a previous message, please rewrite the query by removing any reference to previous messages and replacing them with the details needed.
+                If there is a reference to a previous message,
+                please rewrite the query by removing any reference to previous messages
+                 and replacing them with the details needed.
                 Ensure the context and semantic meaning are preserved.
-                Translate the rewritten message into {course_language} 
-                if it's not already in {course_language}.
-                ANSWER ONLY WITH THE REWRITTEN MESSAGE. DO NOT ADD ANY ADDITIONAL INFORMATION.
-                
+                Translate the rewritten message into {course_language}
+                 if it's not already in {course_language}.
+                 ANSWER ONLY WITH THE REWRITTEN MESSAGE. DO NOT ADD ANY ADDITIONAL INFORMATION.
                 Here is an example how you should rewrite the message:
                     EXAMPLE 1:
                     message 1: Here are the last 1 student messages in the chat history:
@@ -126,17 +133,16 @@ class LectureRetrieval(AbstractRetrieval):
         )
         return response.contents[0].text_content
 
-    def rewrite_elaborated_query(self, student_query: str, course_language: str, course_name: str
-                                 ) -> str:
+    def rewrite_elaborated_query(
+            self, student_query: str, course_language: str, course_name: str
+    ) -> str:
         """
         Translate the student query to the course language. For better retrieval.
         """
-        prompt = (
-            f"""You are an AI assistant operating on the Artemis Learning Platform at the Technical University of 
-            Munich. A student has sent a query regarding the lecture {course_name}. The query is: '{student_query}'. 
-            Please provide a response in {course_language}. Craft your response to closely reflect the style and 
-            content of university lecture materials."""
-        )
+        prompt = f"""You are an AI assistant operating on the Artemis Learning Platform at the Technical University of
+             Munich. A student has sent a query regarding the lecture {course_name}. The query is: '{student_query}'.
+             Please provide a response in {course_language}. Craft your response to closely reflect the style and
+             content of university lecture materials."""
 
         iris_message = PyrisMessage(
             sender=IrisMessageRole.SYSTEM,

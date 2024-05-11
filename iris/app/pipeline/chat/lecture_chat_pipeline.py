@@ -37,12 +37,12 @@ def lecture_initial_prompt():
     """
     Returns the initial prompt for the lecture chat
     """
-    return """You're Iris, the AI programming tutor integrated into Artemis, the online learning platform of the 
-    Technical University of Munich (TUM). You are a guide and an educator. Your main goal is to answer the student's 
-    questions about the lectures. To answer them the best way, relevant lecture content is provided to you with the 
-    student's question. If the context provided to you is not enough to formulate an answer to the student question 
-    you can simply ask the student to elaborate more on his question. Use only the parts of the context provided for 
-    you that is relevant to the student's question. """
+    return """You're Iris, the AI programming tutor integrated into Artemis, the online learning platform of the
+     Technical University of Munich (TUM). You are a guide and an educator. Your main goal is to answer the student's
+     questions about the lectures. To answer them the best way, relevant lecture content is provided to you with the
+     student's question. If the context provided to you is not enough to formulate an answer to the student question
+     you can simply ask the student to elaborate more on his question. Use only the parts of the context provided for
+     you that is relevant to the student's question. """
 
 
 class LectureChatPipeline(Pipeline):
@@ -102,7 +102,7 @@ class LectureChatPipeline(Pipeline):
             chat_history=history,
             student_query=query.contents[0].text_content,
             result_limit=10,
-            course_name=dto.course.name
+            course_name=dto.course.name,
         )
 
         self._add_relevant_chunks_to_prompt(retrieved_lecture_chunks)
