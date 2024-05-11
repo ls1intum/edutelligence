@@ -12,7 +12,7 @@ from app.vector_database.lecture_schema import init_lecture_schema, LectureSchem
 
 
 def merge_retrieved_chunks(
-    basic_retrieved_lecture_chunks, hyde_retrieved_lecture_chunks
+        basic_retrieved_lecture_chunks, hyde_retrieved_lecture_chunks
 ) -> List[dict]:
     """
     Merge the retrieved chunks from the basic and hyde retrieval methods. This function ensures that for any
@@ -41,10 +41,12 @@ class LectureRetrieval(AbstractRetrieval):
         self.reranker_pipeline = RerankerPipeline()
 
     def retrieval_pipeline(
-        self,
-        student_query: str,
-        result_limit: int,
-        course_id: int = None,
+            self,
+            chat_history: list[PyrisMessage],
+            student_query: str,
+            result_limit: int,
+            course_name: str = None,
+            course_id: int = None,
     ) -> List[dict]:
         """
         Retrieve lecture data from the database.
@@ -55,18 +57,17 @@ class LectureRetrieval(AbstractRetrieval):
         #    limit=1,
         #    return_properties=[LectureSchema.COURSE_LANGUAGE.value]
         # )
-        translated_student_query = self.translate(student_query, course_language)
-        generated_query = (
-            self.rewrite_student_query(
-                student_query, course_language, LectureSchema.COURSE_NAME.value
-            )
-            if student_query
-            else None
-        )
+        rewritten_query = self.rewrite_student_query(chat_history,
+                                                     student_query,
+                                                     course_language,
+                                                     )
+
+        hypothetical_answer_query = self.rewrite_elaborated_query(rewritten_query, course_language, course_name)
+
         response = self.search_in_db(
-            translated_student_query, 0.5, result_limit, course_id
+            rewritten_query, 0.5, result_limit, course_id
         )
-        response_hyde = self.search_in_db(generated_query, 0.5, result_limit, course_id)
+        response_hyde = self.search_in_db(hypothetical_answer_query, 0.5, result_limit, course_id)
 
         basic_retrieved_lecture_chunks: list[dict[str, dict]] = [
             {"id": obj.uuid.int, "properties": obj.properties}
@@ -86,18 +87,36 @@ class LectureRetrieval(AbstractRetrieval):
         return [merged_chunks[int(i)] for i in selected_chunks_index]
 
     def rewrite_student_query(
-        self, student_query: str, language: str, course_name: str
+            self, chat_history: list[PyrisMessage], student_query: str, course_language: str
     ) -> str:
         """
         Rewrite the student query to generate fitting lecture content and embed it.
         To extract more relevant content from the vector database.
         """
-        prompt = (
-            f"You are an AI assistant operating on the Artemis Learning Platform at the Technical University of "
-            f"Munich. A student has sent a query regarding the lecture {course_name}. The query is: '{student_query}'. "
-            f"Please provide a response in {language}. Craft your response to closely reflect the style and content of "
-            f"university lecture materials."
-        )
+        text_chat_history = [chat_history[-idx-1].contents[0].text_content for idx in range(10)][::-1]
+
+        num_messages = len(text_chat_history)
+        messages_formatted = "\n".join(f" {msg}" for msg in text_chat_history)
+        prompt = f"""
+                You are serving as an AI assistant on the Artemis Learning Platform at the Technical University of Munich.
+                Here are the last {num_messages} student messages in the chat history:
+                    {messages_formatted}
+                The student has sent the following message:
+                    {student_query}.
+                If there is a reference to a previous message, please rewrite the query by removing any reference to previous messages and replacing them with the details needed.
+                Ensure the context and semantic meaning are preserved.
+                Translate the rewritten message into {course_language} 
+                if it's not already in {course_language}.
+                ANSWER ONLY WITH THE REWRITTEN MESSAGE. DO NOT ADD ANY ADDITIONAL INFORMATION.
+                
+                Here is an example how you should rewrite the message:
+                    EXAMPLE 1:
+                    message 1: Here are the last 1 student messages in the chat history:
+                    message 2: Can you explain me the tower of hanoi slides step by step
+                    current message: Can you explain me it's code
+                Response:
+                        Can you explain the code of the tower of hanoi.
+                """
         iris_message = PyrisMessage(
             sender=IrisMessageRole.SYSTEM,
             contents=[TextMessageContentDTO(text_content=prompt)],
@@ -107,16 +126,18 @@ class LectureRetrieval(AbstractRetrieval):
         )
         return response.contents[0].text_content
 
-    def translate(self, student_query: str, course_language: str) -> str:
+    def rewrite_elaborated_query(self, student_query: str, course_language: str, course_name: str
+                                 ) -> str:
         """
         Translate the student query to the course language. For better retrieval.
         """
         prompt = (
-            f"You are serving as an AI assistant on the Artemis Learning Platform at the Technical University of "
-            f"Munich. A student has sent the following message: {student_query}. Please translate this message into "
-            f"{course_language}, ensuring that the context and semantic meaning are preserved. If the message is "
-            f"already in {course_language}, please correct any language errors to improve its clarity and accuracy."
+            f"""You are an AI assistant operating on the Artemis Learning Platform at the Technical University of 
+            Munich. A student has sent a query regarding the lecture {course_name}. The query is: '{student_query}'. 
+            Please provide a response in {course_language}. Craft your response to closely reflect the style and 
+            content of university lecture materials."""
         )
+
         iris_message = PyrisMessage(
             sender=IrisMessageRole.SYSTEM,
             contents=[TextMessageContentDTO(text_content=prompt)],
@@ -127,7 +148,7 @@ class LectureRetrieval(AbstractRetrieval):
         return response.contents[0].text_content
 
     def search_in_db(
-        self, query: str, hybrid_factor: float, result_limit: int, course_id: int = None
+            self, query: str, hybrid_factor: float, result_limit: int, course_id: int = None
     ):
         """
         Search the query in the database and return the results.

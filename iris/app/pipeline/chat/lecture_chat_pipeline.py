@@ -37,11 +37,12 @@ def lecture_initial_prompt():
     """
     Returns the initial prompt for the lecture chat
     """
-    return """You're Iris, the AI programming tutor integrated into Artemis, the online learning platform of the
-     Technical University of Munich (TUM). You are a guide and an educator. Your main goal is to help students with
-     lecture content, like explaining complex theories or conepts based on the lecture content provided to you. If the
-     context provided to you is not enough to formulate an answer to the student question you can simply ask the
-     student to elaborate more on his question."""
+    return """You're Iris, the AI programming tutor integrated into Artemis, the online learning platform of the 
+    Technical University of Munich (TUM). You are a guide and an educator. Your main goal is to answer the student's 
+    questions about the lectures. To answer them the best way, relevant lecture content is provided to you with the 
+    student's question. If the context provided to you is not enough to formulate an answer to the student question 
+    you can simply ask the student to elaborate more on his question. Use only the parts of the context provided for 
+    you that is relevant to the student's question. """
 
 
 class LectureChatPipeline(Pipeline):
@@ -84,7 +85,6 @@ class LectureChatPipeline(Pipeline):
         :param kwargs: The keyword arguments
         """
 
-        # Set up the initial prompt
         self.prompt = ChatPromptTemplate.from_messages(
             [
                 ("system", lecture_initial_prompt()),
@@ -95,13 +95,14 @@ class LectureChatPipeline(Pipeline):
         history: List[PyrisMessage] = dto.chat_history[:-1]
         query: PyrisMessage = dto.chat_history[-1]
 
-        # Add the chat history and user question to the prompt
         self._add_conversation_to_prompt(history, query)
         self.callback.in_progress("Looking up relecant lecture content...")
 
         retrieved_lecture_chunks = self.retriever.retrieval_pipeline(
+            chat_history=history,
             student_query=query.contents[0].text_content,
             result_limit=10,
+            course_name=dto.course.name
         )
 
         self._add_relevant_chunks_to_prompt(retrieved_lecture_chunks)
@@ -146,9 +147,15 @@ class LectureChatPipeline(Pipeline):
         Adds the relevant chunks of the lecture to the prompt
         :param retrieved_lecture_chunks: The retrieved lecture chunks
         """
+        self.prompt += SystemMessagePromptTemplate.from_template(
+            "Next you will find the relevant lecture content:\n"
+        )
         for i, chunk in enumerate(retrieved_lecture_chunks):
             text_content_msg = (
                 f" \n {chunk.get(LectureSchema.PAGE_TEXT_CONTENT.value)} \n"
             )
             text_content_msg = text_content_msg.replace("{", "{{").replace("}", "}}")
             self.prompt += SystemMessagePromptTemplate.from_template(text_content_msg)
+        self.prompt += SystemMessagePromptTemplate.from_template(
+            "USE ONLY THE CONTENT YOU NEED TO ANSWER THE QUESTION:\n"
+        )

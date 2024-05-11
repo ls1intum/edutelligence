@@ -28,7 +28,7 @@ class RerankerPipeline(Pipeline):
         request_handler = CapabilityRequestHandler(
             requirements=RequirementList(
                 gpt_version_equivalent=3.5,
-                context_length=4096,
+                context_length=16385,
             )
         )
         self.llm = IrisLangchainChatModel(
@@ -72,8 +72,6 @@ class RerankerPipeline(Pipeline):
         """
         data = {
             f"paragraph_{i}": paragraphs[i].get(LectureSchema.PAGE_TEXT_CONTENT.value)
-            + "\n"
-            + paragraphs[i].get(LectureSchema.PAGE_IMAGE_DESCRIPTION.value)
             for i in range(len(paragraphs))
         }
         data["question"] = query
