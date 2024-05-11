@@ -1,14 +1,21 @@
 import logging
+import os
+import threading
 from typing import List, Dict
 
-from langchain_core.output_parsers import StrOutputParser
+from langchain_core.output_parsers import StrOutputParser, PydanticOutputParser
 from langchain_core.prompts import (
     ChatPromptTemplate,
     SystemMessagePromptTemplate,
     HumanMessagePromptTemplate,
     AIMessagePromptTemplate,
+    PromptTemplate,
 )
 from langchain_core.runnables import Runnable
+
+from .lecture_chat_pipeline import LectureChatPipeline
+from .output_models.output_models.selected_paragraphs import SelectedParagraphs
+from ..shared.reranker_pipeline import RerankerPipeline
 from ...common import convert_iris_message_to_langchain_message
 from ...domain import PyrisMessage
 from ...llm import CapabilityRequestHandler, RequirementList
@@ -20,8 +27,10 @@ from ..prompts.iris_tutor_chat_prompts import (
     final_system_prompt,
     guide_system_prompt,
 )
-from ...domain import TutorChatPipelineExecutionDTO
+from ...domain import TutorChatPipelineExecutionDTO, LectureChatPipelineExecutionDTO
 from ...domain.data.submission_dto import SubmissionDTO
+from ...retrieval.lecture_retrieval import LectureRetrieval
+from ...vector_database.database import VectorDatabase
 from ...web.status.tutor_chat_status_callback import TutorChatStatusCallback
 from .file_selector_pipeline import FileSelectorPipeline
 from ...llm import CompletionArguments
@@ -58,6 +67,9 @@ class TutorChatPipeline(Pipeline):
         self.callback = callback
 
         # Create the pipelines
+        self.db = VectorDatabase()
+        self.retriever = LectureRetrieval(self.db.client)
+        self.reranker_pipeline = RerankerPipeline()
         self.file_selector_pipeline = FileSelectorPipeline()
         self.pipeline = self.llm | StrOutputParser()
 
@@ -73,8 +85,73 @@ class TutorChatPipeline(Pipeline):
         :param dto:  execution data transfer object
         :param kwargs: The keyword arguments
         """
+        execution_dto = LectureChatPipelineExecutionDTO(
+            settings=dto.settings, course=dto.course, chatHistory=dto.chat_history
+        )
+        lecture_chat_thread = threading.Thread(
+            target=self._run_lecture_chat_pipeline(execution_dto), args=(dto,)
+        )
+        tutor_chat_thread = threading.Thread(
+            target=self._run_tutor_chat_pipeline(dto), args=(dto,)
+        )
+        lecture_chat_thread.start()
+        tutor_chat_thread.start()
 
-        # Set up the initial prompt
+        try:
+            response = self.choose_best_response(
+                [self.tutor_chat_response, self.lecture_chat_response],
+                dto.chat_history[-1].contents[0].text_content,
+                dto.chat_history,
+            )
+            logger.info(f"Response from tutor chat pipeline: {response}")
+            self.callback.done("Generated response", final_result=response)
+        except Exception as e:
+            print(e)
+            self.callback.error(f"Failed to generate response: {e}")
+
+    def choose_best_response(
+        self, paragraphs: list[str], query: str, chat_history: List[PyrisMessage]
+    ):
+        """
+        Chooses the best response from the reranker pipeline
+        :param paragraphs: The paragraphs
+        :param query: The query
+        :return: The best response
+        """
+        dirname = os.path.dirname(__file__)
+        prompt_file_path = os.path.join(
+            dirname, "..", "prompts", "choose_response_prompt.txt"
+        )
+        with open(prompt_file_path, "r") as file:
+            logger.info("Loading reranker prompt...")
+            prompt_str = file.read()
+
+        output_parser = PydanticOutputParser(pydantic_object=SelectedParagraphs)
+        choose_response_prompt = PromptTemplate(
+            template=prompt_str,
+            input_variables=["question", "paragraph_0", "paragraph_1", "chat_history"],
+            partial_variables={
+                "format_instructions": output_parser.get_format_instructions()
+            },
+        )
+        response = self.reranker_pipeline(
+            paragraphs=paragraphs,
+            query=query,
+            prompt=choose_response_prompt,
+            chat_history=chat_history,
+        )
+        return paragraphs[int(response[0])]
+
+    def _run_lecture_chat_pipeline(self, dto: LectureChatPipelineExecutionDTO):
+        pipeline = LectureChatPipeline()
+        self.lecture_chat_response = pipeline(dto=dto)
+
+    def _run_tutor_chat_pipeline(self, dto: TutorChatPipelineExecutionDTO):
+        """
+        Runs the pipeline
+        :param dto:  execution data transfer object
+        :param kwargs: The keyword arguments
+        """
         self.prompt = ChatPromptTemplate.from_messages(
             [
                 ("system", iris_initial_system_prompt),
@@ -142,12 +219,10 @@ class TutorChatPipeline(Pipeline):
             self.prompt += SystemMessagePromptTemplate.from_template(
                 guide_system_prompt
             )
-            response = (self.prompt | self.pipeline).invoke({})
-            logger.info(f"Response from tutor chat pipeline: {response}")
-            self.callback.done("Generated response", final_result=response)
+            self.tutor_chat_response = (self.prompt | self.pipeline).invoke({})
         except Exception as e:
-            print(e)
-            self.callback.error(f"Failed to generate response: {e}")
+            self.callback.error(f"Failed to look up files in the repository: {e}")
+            return "Failed to generate response"
 
     def _add_conversation_to_prompt(
         self,

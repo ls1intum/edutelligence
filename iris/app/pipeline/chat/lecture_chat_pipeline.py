@@ -14,8 +14,7 @@ from ...domain import LectureChatPipelineExecutionDTO
 from ...retrieval.lecture_retrieval import LectureRetrieval
 from ...vector_database.database import VectorDatabase
 from ...vector_database.lecture_schema import LectureSchema
-from ...web.status.lecture_chat_status_callback import LectureChatStatusCallback
-from .file_selector_pipeline import FileSelectorPipeline
+
 from ...llm import CompletionArguments
 from ...llm.langchain import IrisLangchainChatModel
 
@@ -48,11 +47,9 @@ def lecture_initial_prompt():
 class LectureChatPipeline(Pipeline):
     llm: IrisLangchainChatModel
     pipeline: Runnable
-    callback: LectureChatStatusCallback
-    file_selector_pipeline: FileSelectorPipeline
     prompt: ChatPromptTemplate
 
-    def __init__(self, callback: LectureChatStatusCallback):
+    def __init__(self):
         super().__init__(implementation_id="tutor_chat_pipeline")
         # Set the langchain chat model
         request_handler = CapabilityRequestHandler(
@@ -66,7 +63,6 @@ class LectureChatPipeline(Pipeline):
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler, completion_args=completion_args
         )
-        self.callback = callback
         # Create the pipelines
         self.db = VectorDatabase()
         self.retriever = LectureRetrieval(self.db.client)
@@ -96,7 +92,6 @@ class LectureChatPipeline(Pipeline):
         query: PyrisMessage = dto.chat_history[-1]
 
         self._add_conversation_to_prompt(history, query)
-        self.callback.in_progress("Looking up relecant lecture content...")
 
         retrieved_lecture_chunks = self.retriever.retrieval_pipeline(
             chat_history=history,
@@ -106,19 +101,14 @@ class LectureChatPipeline(Pipeline):
         )
 
         self._add_relevant_chunks_to_prompt(retrieved_lecture_chunks)
-
-        self.callback.done("Lecture content retrieved successfully")
-        self.callback.in_progress("generating response...")
-
         prompt_val = self.prompt.format_messages()
         self.prompt = ChatPromptTemplate.from_messages(prompt_val)
         try:
             response = (self.prompt | self.pipeline).invoke({})
             logger.info(f"Response from tutor chat pipeline: {response}")
-            self.callback.done("Generated response", final_result=response)
+            return response
         except Exception as e:
             print(e)
-            self.callback.error(f"Failed to generate response: {e}")
 
     def _add_conversation_to_prompt(
         self,

@@ -9,7 +9,6 @@ from app.domain import (
 )
 from app.pipeline.chat.lecture_chat_pipeline import LectureChatPipeline
 from app.pipeline.chat.tutor_chat_pipeline import TutorChatPipeline
-from app.web.status.lecture_chat_status_callback import LectureChatStatusCallback
 from app.web.status.tutor_chat_status_callback import TutorChatStatusCallback
 from app.dependencies import TokenValidator
 
@@ -34,17 +33,12 @@ def run_tutor_chat_pipeline_worker(dto):
         logger.error(traceback.format_exc())
 
 
-def run_lecture_chat_pipeline_worker(dto):
+def run_lecture_chat_pipeline_worker(dto: LectureChatPipelineExecutionDTO):
     """
     Run the lecture chat pipeline with the given DTO.
     """
     try:
-        callback = LectureChatStatusCallback(
-            run_id=dto.settings.authentication_token,
-            base_url=dto.settings.artemis_base_url,
-            initial_stages=dto.initial_stages,
-        )
-        pipeline = LectureChatPipeline(callback=callback)
+        pipeline = LectureChatPipeline()
         pipeline(dto=dto)
     except Exception as e:
         logger.error(f"Error running tutor chat pipeline: {e}")

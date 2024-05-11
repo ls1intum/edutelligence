@@ -51,12 +51,13 @@ class LectureRetrieval(AbstractRetrieval):
         """
         Retrieve lecture data from the database.
         """
-        # This part is commented until the next ingestion, because there is no course_language field in the data now
-        course_language = "English"
-        #    self.collection.query.fetch_objects(
-        #    limit=1,
-        #    return_properties=[LectureSchema.COURSE_LANGUAGE.value]
-        # )
+        course_language = (
+            self.collection.query.fetch_objects(
+                limit=1, return_properties=[LectureSchema.COURSE_LANGUAGE.value]
+            )
+            .objects[0]
+            .properties.get(LectureSchema.COURSE_LANGUAGE.value)
+        )
         rewritten_query = self.rewrite_student_query(
             chat_history,
             student_query,
@@ -85,7 +86,7 @@ class LectureRetrieval(AbstractRetrieval):
         )
 
         selected_chunks_index = self.reranker_pipeline(
-            paragraphs=merged_chunks, query=student_query
+            paragraphs=merged_chunks, query=student_query, chat_history=chat_history
         )
         return [merged_chunks[int(i)] for i in selected_chunks_index]
 
@@ -97,9 +98,11 @@ class LectureRetrieval(AbstractRetrieval):
         To extract more relevant content from the vector database.
         """
         text_chat_history = [
-            chat_history[-idx - 1].contents[0].text_content for idx in range(10)
-        ][::-1]
-
+            chat_history[-i - 1].contents[0].text_content
+            for i in range(min(10, len(chat_history)))  # Ensure no out-of-bounds error
+        ][
+            ::-1
+        ]  # Reverse to get the messages in chronological order of their appearance
         num_messages = len(text_chat_history)
         messages_formatted = "\n".join(f" {msg}" for msg in text_chat_history)
         prompt = f"""
