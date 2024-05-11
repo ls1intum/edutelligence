@@ -12,7 +12,7 @@ from app.vector_database.lecture_schema import init_lecture_schema, LectureSchem
 
 
 def merge_retrieved_chunks(
-        basic_retrieved_lecture_chunks, hyde_retrieved_lecture_chunks
+    basic_retrieved_lecture_chunks, hyde_retrieved_lecture_chunks
 ) -> List[dict]:
     """
     Merge the retrieved chunks from the basic and hyde retrieval methods. This function ensures that for any
@@ -41,12 +41,12 @@ class LectureRetrieval(AbstractRetrieval):
         self.reranker_pipeline = RerankerPipeline()
 
     def retrieval_pipeline(
-            self,
-            chat_history: list[PyrisMessage],
-            student_query: str,
-            result_limit: int,
-            course_name: str = None,
-            course_id: int = None,
+        self,
+        chat_history: list[PyrisMessage],
+        student_query: str,
+        result_limit: int,
+        course_name: str = None,
+        course_id: int = None,
     ) -> List[dict]:
         """
         Retrieve lecture data from the database.
@@ -90,15 +90,15 @@ class LectureRetrieval(AbstractRetrieval):
         return [merged_chunks[int(i)] for i in selected_chunks_index]
 
     def rewrite_student_query(
-            self, chat_history: list[PyrisMessage], student_query: str, course_language: str
+        self, chat_history: list[PyrisMessage], student_query: str, course_language: str
     ) -> str:
         """
         Rewrite the student query to generate fitting lecture content and embed it.
         To extract more relevant content from the vector database.
         """
         text_chat_history = [
-                                chat_history[-idx - 1].contents[0].text_content for idx in range(10)
-                            ][::-1]
+            chat_history[-idx - 1].contents[0].text_content for idx in range(10)
+        ][::-1]
 
         num_messages = len(text_chat_history)
         messages_formatted = "\n".join(f" {msg}" for msg in text_chat_history)
@@ -134,7 +134,7 @@ class LectureRetrieval(AbstractRetrieval):
         return response.contents[0].text_content
 
     def rewrite_elaborated_query(
-            self, student_query: str, course_language: str, course_name: str
+        self, student_query: str, course_language: str, course_name: str
     ) -> str:
         """
         Translate the student query to the course language. For better retrieval.
@@ -154,7 +154,7 @@ class LectureRetrieval(AbstractRetrieval):
         return response.contents[0].text_content
 
     def search_in_db(
-            self, query: str, hybrid_factor: float, result_limit: int, course_id: int = None
+        self, query: str, hybrid_factor: float, result_limit: int, course_id: int = None
     ):
         """
         Search the query in the database and return the results.
