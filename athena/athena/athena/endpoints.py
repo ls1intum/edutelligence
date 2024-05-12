@@ -311,7 +311,7 @@ def feedback_provider(func: Union[
     async def wrapper(
             exercise: exercise_type,
             submission: submission_type,
-            is_graded: is_graded_type = Body(False),
+            is_graded: is_graded_type = Body(True),
             module_config: module_config_type = Depends(get_dynamic_module_config_factory(module_config_type))):
 
         # Retrieve existing metadata for the exercise, submission and feedback
