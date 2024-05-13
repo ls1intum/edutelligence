@@ -58,7 +58,6 @@ course_system_prompt = """
 These are the details about the course:
 - Course name: {course_name}
 - Course description: {course_description}
-- Course language: {course_language}
 - Default programming language: {programming_language}
 - Course start date: {course_start_date}
 - Course end date: {course_end_date}

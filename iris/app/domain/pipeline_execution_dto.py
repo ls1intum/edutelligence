@@ -7,7 +7,4 @@ from app.domain.status.stage_dto import StageDTO
 
 
 class PipelineExecutionDTO(BaseModel):
-    settings: PipelineExecutionSettingsDTO
-    initial_stages: Optional[List[StageDTO]] = Field(
-        default=None, alias="initialStages"
-    )
+    pass

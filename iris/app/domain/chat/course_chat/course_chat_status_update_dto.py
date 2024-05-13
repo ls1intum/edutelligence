@@ -1,6 +1,6 @@
 from typing import Optional
 
-from ...domain.status.status_update_dto import StatusUpdateDTO
+from app.domain.status.status_update_dto import StatusUpdateDTO
 
 
 class CourseChatStatusUpdateDTO(StatusUpdateDTO):

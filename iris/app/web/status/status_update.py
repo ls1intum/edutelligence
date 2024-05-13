@@ -3,12 +3,12 @@ from typing import List, Optional
 import requests
 from abc import ABC
 
-from ...domain.course_chat.course_chat_status_update_dto import (
+from ...domain.chat.course_chat.course_chat_status_update_dto import (
     CourseChatStatusUpdateDTO,
 )
 from ...domain.status.stage_state_dto import StageStateEnum
 from ...domain.status.stage_dto import StageDTO
-from ...domain.tutor_chat.tutor_chat_status_update_dto import TutorChatStatusUpdateDTO
+from ...domain.chat.tutor_chat.tutor_chat_status_update_dto import TutorChatStatusUpdateDTO
 from ...domain.status.status_update_dto import StatusUpdateDTO
 import logging
 

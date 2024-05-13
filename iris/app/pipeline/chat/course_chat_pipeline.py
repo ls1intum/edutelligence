@@ -1,5 +1,6 @@
 import logging
-from typing import List
+from datetime import datetime
+from typing import List, Optional
 
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import (
@@ -79,41 +80,39 @@ class CourseChatPipeline(Pipeline):
             ]
         )
         logger.info("Running course chat pipeline...")
-        history: List[PyrisMessage] = dto.chat_history[:-1]
-        query: PyrisMessage = dto.chat_history[-1]
-        name: str = dto.course.course_name
-        description: str = dto.course.course_description
-        language: str = dto.course.language
-        programming_language: str = dto.course.get_default_programming_language()
-        start_date: str = dto.course.get_start_date()
-        end_date: str = dto.course.get_end_date()
+        history: List[PyrisMessage] = dto.base.chat_history[:-1]
+        query: PyrisMessage = dto.base.chat_history[-1]
+        name: str = dto.course.name
+        description: str = dto.course.description
+        programming_language: str = dto.course.default_programming_language
+        start_date: str = datetime_to_string(dto.course.start_time)
+        end_date: str = datetime_to_string(dto.course.end_time)
 
         # Add the conversation to the prompt
         self._add_conversation_to_prompt(history, query)
 
-        self.callback.in_progress("Generating response...")
+        self.callback.in_progress()
         # Add the final message to the prompt and run the pipeline
         self.prompt += SystemMessagePromptTemplate.from_template(final_system_prompt)
         prompt_val = self.prompt.format_messages(
             course_name=name,
             course_description=description,
-            course_language=language,
             programming_language=programming_language,
-            start_date=start_date,
-            end_date=end_date,
+            course_start_date=start_date,
+            course_end_date=end_date,
         )
         self.prompt = ChatPromptTemplate.from_messages(prompt_val)
         try:
             response_draft = (self.prompt | self.pipeline).invoke({})
+            print("THE RESPONSE DRAFT IS: ", response_draft)
             self.prompt += AIMessagePromptTemplate.from_template(f"{response_draft}")
             self.prompt += SystemMessagePromptTemplate.from_template(
                 guide_system_prompt
             )
             response = (self.prompt | self.pipeline).invoke({})
             logger.info(f"Response from tutor chat pipeline: {response}")
-            self.callback.done("Generated response", final_result=response)
+            self.callback.done(None, final_result=response)
         except Exception as e:
-            print(e)
             self.callback.error(f"Failed to generate response: {e}")
 
     def _add_conversation_to_prompt(
@@ -137,3 +136,10 @@ class CourseChatPipeline(Pipeline):
                 "Now, consider the student's newest and latest input:"
             )
         self.prompt += convert_iris_message_to_langchain_message(user_question)
+
+
+def datetime_to_string(dt: Optional[datetime]) -> str:
+    if dt is None:
+        return "No date provided"
+    else:
+        return dt.strftime("%Y-%m-%d %H:%M:%S")

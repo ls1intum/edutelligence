@@ -30,7 +30,8 @@ from ...llm.langchain import IrisLangchainChatModel
 
 from ..pipeline import Pipeline
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
 
 
 class TutorChatPipeline(Pipeline):
@@ -83,8 +84,8 @@ class TutorChatPipeline(Pipeline):
             ]
         )
         logger.info("Running tutor chat pipeline...")
-        history: List[PyrisMessage] = dto.chat_history[:-1]
-        query: PyrisMessage = dto.chat_history[-1]
+        history: List[PyrisMessage] = dto.base.chat_history[:-1]
+        query: PyrisMessage = dto.base.chat_history[-1]
 
         submission: SubmissionDTO = dto.submission
         build_logs: List[BuildLogEntryDTO] = []
@@ -102,7 +103,7 @@ class TutorChatPipeline(Pipeline):
         # Add the chat history and user question to the prompt
         self._add_conversation_to_prompt(history, query)
 
-        self.callback.in_progress("Looking up files in the repository...")
+        self.callback.in_progress()
         # Create the file selection prompt based on the current prompt
         file_selection_prompt = self._generate_file_selection_prompt()
         selected_files = []
@@ -113,7 +114,7 @@ class TutorChatPipeline(Pipeline):
                     repository=repository,
                     prompt=file_selection_prompt,
                 )
-                self.callback.done("Looked up files in the repository")
+                self.callback.done()
             except Exception as e:
                 self.callback.error(f"Failed to look up files in the repository: {e}")
                 return
@@ -127,7 +128,7 @@ class TutorChatPipeline(Pipeline):
             selected_files,
         )
 
-        self.callback.in_progress("Generating response...")
+        self.callback.in_progress()
 
         # Add the final message to the prompt and run the pipeline
         self.prompt += SystemMessagePromptTemplate.from_template(final_system_prompt)
@@ -144,8 +145,7 @@ class TutorChatPipeline(Pipeline):
                 guide_system_prompt
             )
             response = (self.prompt | self.pipeline).invoke({})
-            logger.info(f"Response from tutor chat pipeline: {response}")
-            self.callback.done("Generated response", final_result=response)
+            self.callback.done(None, final_result=response)
         except Exception as e:
             print(e)
             self.callback.error(f"Failed to generate response: {e}")

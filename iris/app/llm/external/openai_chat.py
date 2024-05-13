@@ -77,6 +77,7 @@ class OpenAIChatModel(ChatModel):
     def chat(
         self, messages: list[PyrisMessage], arguments: CompletionArguments
     ) -> PyrisMessage:
+        print("Sending messages to OpenAI", messages)
         # noinspection PyTypeChecker
         response = self._client.chat.completions.create(
             model=self.model,
@@ -87,6 +88,7 @@ class OpenAIChatModel(ChatModel):
                 type=("json_object" if arguments.response_format == "JSON" else "text")
             ),
         )
+        print(response)
         return convert_to_iris_message(response.choices[0].message)
 
 
