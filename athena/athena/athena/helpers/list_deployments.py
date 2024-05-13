@@ -5,7 +5,7 @@ from pathlib import Path
 
 from pydantic import AnyHttpUrl
 
-from ..schemas.deployment import Deployment
+from .deployment import Deployment
 
 
 def list_deployments() -> List[Deployment]:
