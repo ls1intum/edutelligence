@@ -1,15 +1,12 @@
-# app/domain/data/metrics/lecture_unit_information_dto.py
-
+from typing import Optional, Type
 from pydantic import BaseModel, Field
 from datetime import datetime
-from typing import Type, Optional
-
 
 class LectureUnitInformationDTO(BaseModel):
-    id: int
-    name: str
+    id: Optional[int] = None
+    name: Optional[str] = None
     release_date: Optional[datetime] = Field(None, alias="releaseDate")
-    type: Type
+    type: Optional[Type] = None
 
     class Config:
         allow_population_by_field_name = True

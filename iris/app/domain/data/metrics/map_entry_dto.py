@@ -1,8 +1,7 @@
-# app/domain/data/metrics/map_entry_dto.py
-
+from typing import Optional
 from pydantic import BaseModel
 
 
 class MapEntryDTO(BaseModel):
-    key: int
-    value: int
+    key: Optional[int] = None
+    value: Optional[int] = None
