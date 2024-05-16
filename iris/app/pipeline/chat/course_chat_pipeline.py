@@ -135,8 +135,9 @@ class CourseChatPipeline(Pipeline):
             submissions of all students in the exercise.
             - latest_submission_of_student: The relative time of the latest submission of the student.
             """
+            print(dto.metrics)
             if not dto.metrics or not dto.metrics.exercise_metrics:
-                return "No data available! Do not requery."
+                return "No data available!! Do not requery."
             metrics = dto.metrics.exercise_metrics
             if metrics.score and exercise_id in metrics.score:
                 return {
