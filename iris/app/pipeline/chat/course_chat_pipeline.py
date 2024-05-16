@@ -197,7 +197,7 @@ class CourseChatPipeline(Pipeline):
 
             self.callback.done(None, final_result=out["output"])
         except Exception as e:
-            logger.error(f"An error occurred while running the course chat pipeline: {e}")
+            logger.error(f"An error occurred while running the course chat pipeline", exc_info=e)
             self.callback.error("An error occurred while running the course chat pipeline.")
 
 
