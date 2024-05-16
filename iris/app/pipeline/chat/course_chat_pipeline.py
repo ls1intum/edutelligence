@@ -98,11 +98,12 @@ class CourseChatPipeline(Pipeline):
                     dto.course.name if dto.course else "No course provided"
                 ),
                 "course_description": (
-                    dto.course.description if dto.course else "No course provided"
+                    dto.course.description if dto.course and dto.course.description
+                    else "No course description provided"
                 ),
                 "programming_language": (
                     dto.course.default_programming_language
-                    if dto.course
+                    if dto.course and dto.course.default_programming_language
                     else "No course provided"
                 ),
                 "course_start_date": (
@@ -137,7 +138,7 @@ class CourseChatPipeline(Pipeline):
             if not dto.metrics or not dto.metrics.exercise_metrics:
                 return "No data available! Do not requery."
             metrics = dto.metrics.exercise_metrics
-            if exercise_id in metrics.score:
+            if metrics.score and exercise_id in metrics.score:
                 return {
                     "global_average_score": metrics.average_score[exercise_id],
                     "score_of_student": metrics.score[exercise_id],
