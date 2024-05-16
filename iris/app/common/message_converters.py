@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Literal
 
-from langchain_core.messages import BaseMessage
+from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, SystemMessage
 
 from app.domain.data.text_message_content_dto import TextMessageContentDTO
 from app.domain.pyris_message import PyrisMessage, IrisMessageRole
@@ -10,23 +10,21 @@ from app.domain.pyris_message import PyrisMessage, IrisMessageRole
 def convert_iris_message_to_langchain_message(
     iris_message: PyrisMessage,
 ) -> BaseMessage:
-    match iris_message.sender:
-        case IrisMessageRole.USER:
-            role = "human"
-        case IrisMessageRole.ASSISTANT:
-            role = "ai"
-        case IrisMessageRole.SYSTEM:
-            role = "system"
-        case _:
-            raise ValueError(f"Unknown message role: {iris_message.sender}")
     if len(iris_message.contents) == 0:
         raise ValueError("IrisMessage contents must not be empty")
     message = iris_message.contents[0]
     # Check if the message is of type TextMessageContentDTO
     if not isinstance(message, TextMessageContentDTO):
         raise ValueError("Message must be of type TextMessageContentDTO")
-    return BaseMessage(content=message.text_content, type=role)
-
+    match iris_message.sender:
+        case IrisMessageRole.USER:
+            return HumanMessage(content=message.text_content)
+        case IrisMessageRole.ASSISTANT:
+            return AIMessage(content=message.text_content)
+        case IrisMessageRole.SYSTEM:
+            return SystemMessage(content=message.text_content)
+        case _:
+            raise ValueError(f"Unknown message role: {iris_message.sender}")
 
 def convert_langchain_message_to_iris_message(
     base_message: BaseMessage,
