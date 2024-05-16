@@ -80,13 +80,13 @@ class CourseChatPipeline(Pipeline):
             ]
         )
         logger.info("Running course chat pipeline...")
-        history: List[PyrisMessage] = dto.base.chat_history[:-1]
-        query: PyrisMessage = dto.base.chat_history[-1]
-        name: str = dto.course.name
-        description: str = dto.course.description
-        programming_language: str = dto.course.default_programming_language
-        start_date: str = datetime_to_string(dto.course.start_time)
-        end_date: str = datetime_to_string(dto.course.end_time)
+        history: List[PyrisMessage] = dto.base.chat_history[:-1] or []
+        query: PyrisMessage = dto.base.chat_history[-1] if dto.base.chat_history else None
+        name: str = dto.course.name or "No name provided"
+        description: str = dto.course.description or "No description provided"
+        programming_language: str = dto.course.default_programming_language or "No programming language provided"
+        start_date: str = datetime_to_string(dto.course.start_time) if dto.course.start_time else "No start date provided"
+        end_date: str = datetime_to_string(dto.course.end_time) if dto.course.end_time else "No end date provided"
 
         # Add the conversation to the prompt
         self._add_conversation_to_prompt(history, query)

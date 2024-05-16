@@ -8,13 +8,13 @@ from app.domain.data.competency_dto import CompetencyTaxonomy
 
 
 class CompetencyInformationDTO(BaseModel):
-    id: int
-    title: str
-    description: str
-    taxonomy: CompetencyTaxonomy  # Assuming CompetencyTaxonomy is an enum or string
+    id: Optional[int] = None
+    title: Optional[str] = None
+    description: Optional[str] = None
+    taxonomy: Optional[CompetencyTaxonomy] = None
     soft_due_date: Optional[datetime] = Field(None, alias="softDueDate")
-    optional: bool
-    mastery_threshold: int = Field(alias="masteryThreshold")
+    optional: Optional[bool] = None
+    mastery_threshold: Optional[int] = Field(None, alias="masteryThreshold")
 
     class Config:
         allow_population_by_field_name = True
