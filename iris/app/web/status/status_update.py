@@ -68,6 +68,9 @@ class StatusCallback(ABC):
             self.stage.state = StageStateEnum.IN_PROGRESS
             self.stage.message = message
             self.on_status_update()
+        elif self.stage.state == StageStateEnum.IN_PROGRESS:
+            self.stage.message = message
+            self.on_status_update()
         else:
             raise ValueError("Invalid state transition")
 
@@ -133,9 +136,9 @@ class CourseChatStatusCallback(StatusCallback):
         stages = initial_stages or []
         stages += [
             StageDTO(
-                weight=100,
+                weight=40,
                 state=StageStateEnum.NOT_STARTED,
-                name="Response Generation",
+                name="Thinking",
             ),
         ]
         status = CourseChatStatusUpdateDTO(stages=stages)

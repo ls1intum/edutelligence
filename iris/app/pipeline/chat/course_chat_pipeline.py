@@ -187,17 +187,29 @@ class CourseChatPipeline(Pipeline):
                 agent=agent, tools=tools, verbose=True, max_iterations=3
             )
 
-            out = agent_executor.invoke(
-                {
-                    "input": (
-                        "Latest student message: " + query.contents[0].text_content
-                        if query
-                        else ""
-                    )
-                }
-            )
+            params = {
+                "input": (
+                    "Latest student message: " + query.contents[0].text_content
+                    if query
+                    else ""
+                )
+            }
+            out = None
+            for step in agent_executor.iter(params):
+                print("STEP:", step)
+                if output := step.get("intermediate_step"):
+                    action, value = output[0]
+                    if action.tool == "get_student_metrics":
+                        self.callback.in_progress("Checking your statistics ...")
+                    elif action.tool == "get_exercise_list":
+                        self.callback.in_progress("Reading exercise list ...")
+                    elif action.tool == "get_course_details":
+                        self.callback.in_progress("Reading course details ...")
+                elif step['output']:
+                    out = step['output']
 
-            self.callback.done(None, final_result=out["output"])
+            print(out)
+            self.callback.done(None, final_result=out)
         except Exception as e:
             logger.error(f"An error occurred while running the course chat pipeline", exc_info=e)
             self.callback.error("An error occurred while running the course chat pipeline.")
