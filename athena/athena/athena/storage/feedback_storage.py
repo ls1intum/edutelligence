@@ -1,5 +1,6 @@
 from typing import Iterable, Union, Type, Optional, List
 
+from athena.contextvars import get_artemis_url
 from athena.database import get_db
 from athena.schemas import Feedback
 

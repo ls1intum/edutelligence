@@ -1,12 +1,16 @@
 import importlib
 
 from pydantic import BaseModel
-from sqlalchemy import Column, String
+from sqlalchemy import Column, String, UniqueConstraint
 
 
 class Model:
 
-    artemis_url = Column(String, primary_key=True, index=True, nullable=False)
+    artemis_url = Column(String, index=True, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint('id', 'artemis_url', name='uix_id_artemis_url'),
+    )
 
     @classmethod
     def get_schema_class(cls) -> BaseModel:
