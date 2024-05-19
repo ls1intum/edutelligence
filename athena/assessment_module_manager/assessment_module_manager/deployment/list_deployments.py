@@ -1,9 +1,7 @@
 import configparser
 
-from typing import List, cast
+from typing import List
 from pathlib import Path
-
-from pydantic import AnyHttpUrl
 
 from .deployment import Deployment
 
@@ -15,8 +13,7 @@ def list_deployments() -> List[Deployment]:
     return [
         Deployment(
             name=deployment,
-            url=cast(AnyHttpUrl, deployments_config[deployment]["url"]),
-            artemis_id=deployments_config[deployment]["artemis_id"]
+            url=deployments_config[deployment]["url"]
         )
         for deployment in deployments_config.sections()
     ]
