@@ -1,9 +1,13 @@
 import importlib
 
 from pydantic import BaseModel
+from sqlalchemy import Column, String
 
 
 class Model:
+
+    artemis_url = Column(String, primary_key=True, index=True, nullable=False)
+
     @classmethod
     def get_schema_class(cls) -> BaseModel:
         # The schema class has the same name as myself, but without the "DB" prefix.
