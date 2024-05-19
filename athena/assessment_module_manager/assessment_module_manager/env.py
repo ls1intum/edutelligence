@@ -27,4 +27,3 @@ for deployment in list_deployments():
         raise ValueError(f"Missing secret for Artemis deployment {deployment.name}. "
                          f"Set the {deployment.name.upper()}_SECRET environment variable.")
     DEPLOYMENT_SECRETS[deployment.url] = secret
-

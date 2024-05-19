@@ -6,7 +6,7 @@ from athena.schemas import Submission
 
 
 def count_stored_submissions(
-        submission_cls: Type[Submission], exercise_id: int, artemis_url: str = None
+        submission_cls: Type[Submission], exercise_id: int, artemis_url: Optional[str] = None
 ) -> int:
     """Returns the number of submissions for the given exercise."""
 
@@ -21,7 +21,7 @@ def count_stored_submissions(
 
 def get_stored_submissions(
         submission_cls: Type[Submission], exercise_id: int, only_ids: Union[List[int], None] = None,
-        artemis_url: str = None
+        artemis_url: Optional[str] = None
 ) -> Iterable[Submission]:
     """
     Returns a list of submissions for the given exercise and submission ids.
@@ -39,7 +39,7 @@ def get_stored_submissions(
         return (s.to_schema() for s in query.all())
 
 
-def get_stored_submission_meta(submission: Submission, artemis_url: str = None) -> Optional[dict]:
+def get_stored_submission_meta(submission: Submission, artemis_url: Optional[str] = None) -> Optional[dict]:
     """Returns the stored metadata associated with the submission."""
 
     if artemis_url is None:
@@ -47,11 +47,11 @@ def get_stored_submission_meta(submission: Submission, artemis_url: str = None) 
 
     db_submission_cls = submission.__class__.get_model_class()
     with get_db() as db:
-        return db.query(db_submission_cls.meta).filter_by(id=submission.id,
-                                                          artemis_url=artemis_url).scalar()  # type: ignore
+        return db.query(db_submission_cls.meta).filter_by(id=submission.id,  # type: ignore
+                                                          artemis_url=artemis_url).scalar()
 
 
-def store_submissions(submissions: List[Submission], artemis_url: str = None):
+def store_submissions(submissions: List[Submission], artemis_url: Optional[str] = None):
     """Stores the given submissions, all at once."""
 
     if artemis_url is None:
@@ -65,6 +65,6 @@ def store_submissions(submissions: List[Submission], artemis_url: str = None):
         db.commit()
 
 
-def store_submission(submission: Submission, artemis_url: str = None):
+def store_submission(submission: Submission, artemis_url: Optional[str] = None):
     """Stores the given submission."""
     store_submissions([submission], artemis_url)

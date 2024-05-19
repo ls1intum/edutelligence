@@ -6,7 +6,7 @@ from athena.schemas import Feedback
 
 
 def get_stored_feedback(
-        feedback_cls: Type[Feedback], exercise_id: int, submission_id: Union[int, None], artemis_url: str = None
+        feedback_cls: Type[Feedback], exercise_id: int, submission_id: Union[int, None], artemis_url: Optional[str] = None
 ) -> Iterable[Feedback]:
     """
     Returns a list of feedbacks for the given exercise in the given submission.
@@ -24,7 +24,7 @@ def get_stored_feedback(
         return (f.to_schema() for f in query.all())
 
 
-def get_stored_feedback_meta(feedback: Feedback, artemis_url: str = None) -> Optional[dict]:
+def get_stored_feedback_meta(feedback: Feedback, artemis_url: Optional[str] = None) -> Optional[dict]:
     """Returns the stored metadata associated with the feedback."""
 
     if artemis_url is None:
@@ -32,11 +32,11 @@ def get_stored_feedback_meta(feedback: Feedback, artemis_url: str = None) -> Opt
 
     db_feedback_cls = feedback.__class__.get_model_class()
     with get_db() as db:
-        return db.query(db_feedback_cls.meta).filter_by(id=feedback.id,
-                                                        artemis_url=artemis_url).scalar()  # type: ignore
+        return db.query(db_feedback_cls.meta).filter_by(id=feedback.id,  # type: ignore
+                                                        artemis_url=artemis_url).scalar()
 
 
-def store_feedback(feedback: Feedback, is_lms_id=False, artemis_url: str = None) -> Feedback:
+def store_feedback(feedback: Feedback, is_lms_id=False, artemis_url: Optional[str] = None) -> Feedback:
     """Stores the given LMS feedback.
 
     Args:
@@ -55,8 +55,8 @@ def store_feedback(feedback: Feedback, is_lms_id=False, artemis_url: str = None)
         lms_id = None
         if is_lms_id:
             lms_id = feedback.id
-            internal_id = db.query(db_feedback_cls.id).filter_by(lms_id=lms_id,
-                                                                 artemis_url=artemis_url).scalar()  # type: ignore
+            internal_id = db.query(db_feedback_cls.id).filter_by(lms_id=lms_id,  # type: ignore
+                                                                 artemis_url=artemis_url).scalar()
             feedback.id = internal_id
 
         stored_feedback_model = db.merge(feedback.to_model(lms_id=lms_id))
@@ -65,7 +65,7 @@ def store_feedback(feedback: Feedback, is_lms_id=False, artemis_url: str = None)
 
 
 def get_stored_feedback_suggestions(
-        feedback_cls: Type[Feedback], exercise_id: int, submission_id: int, artemis_url: str = None
+        feedback_cls: Type[Feedback], exercise_id: int, submission_id: int, artemis_url: Optional[str] = None
 ) -> Iterable[Feedback]:
     """Returns a list of feedback suggestions for the given exercise in the given submission."""
 
@@ -81,7 +81,7 @@ def get_stored_feedback_suggestions(
         return (f.to_schema() for f in query.all())
 
 
-def store_feedback_suggestions(feedbacks: List[Feedback], artemis_url: str = None) -> List[Feedback]:
+def store_feedback_suggestions(feedbacks: List[Feedback], artemis_url: Optional[str] = None) -> List[Feedback]:
     """Stores the given feedbacks as a suggestions.
 
     Returns:
@@ -103,6 +103,6 @@ def store_feedback_suggestions(feedbacks: List[Feedback], artemis_url: str = Non
     return stored_feedbacks
 
 
-def store_feedback_suggestion(feedback: Feedback, artemis_url: str = None):
+def store_feedback_suggestion(feedback: Feedback, artemis_url: Optional[str] = None):
     """Stores the given feedback as a suggestion."""
     store_feedback_suggestions([feedback], artemis_url)

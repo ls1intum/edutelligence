@@ -5,7 +5,7 @@ from athena.database import get_db
 from athena.schemas import Exercise
 
 
-def get_stored_exercises(exercise_cls: Type[Exercise], artemis_url: str = None, only_ids: Optional[List[int]] = None) -> \
+def get_stored_exercises(exercise_cls: Type[Exercise], artemis_url: Optional[str] = None, only_ids: Optional[List[int]] = None) -> \
 Iterable[Exercise]:
     """
     Returns a list of exercises for the given exercise type and exercise ids.
@@ -24,7 +24,7 @@ Iterable[Exercise]:
         return (e.to_schema() for e in query.all())
 
 
-def get_stored_exercise_meta(exercise: Exercise, artemis_url: str = None, ) -> Optional[dict]:
+def get_stored_exercise_meta(exercise: Exercise, artemis_url: Optional[str] = None, ) -> Optional[dict]:
     """Returns the stored metadata associated with the exercise."""
 
     if artemis_url is None:
@@ -36,7 +36,7 @@ def get_stored_exercise_meta(exercise: Exercise, artemis_url: str = None, ) -> O
                                                         artemis_url=artemis_url).scalar()  # type: ignore
 
 
-def store_exercises(exercises: List[Exercise], artemis_url: str = None):
+def store_exercises(exercises: List[Exercise], artemis_url: Optional[str] = None):
     """Stores the given exercises, all at once."""
 
     if artemis_url is None:
@@ -50,6 +50,6 @@ def store_exercises(exercises: List[Exercise], artemis_url: str = None):
         db.commit()
 
 
-def store_exercise(exercise: Exercise, artemis_url: str = None):
+def store_exercise(exercise: Exercise, artemis_url: Optional[str] = None):
     """Stores the given exercise."""
     store_exercises([exercise], artemis_url)
