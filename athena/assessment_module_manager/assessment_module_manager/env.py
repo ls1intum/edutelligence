@@ -23,5 +23,6 @@ for deployment in list_deployments():
                        "Set the ARTEMIS_%s_SECRET environment variable to secure the communication "
                        "between the LMS and the assessment module manager.",
                        deployment.name, deployment.name.upper())
-    secret = "abcdef12345"  # noqa: This secret is only used for development setups for simplicity
+    if secret is None and not PRODUCTION:
+        secret = "abcdef12345"  # noqa: This secret is only used for development setups for simplicity
     DEPLOYMENT_SECRETS[deployment.url] = secret

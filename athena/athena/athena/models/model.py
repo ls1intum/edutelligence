@@ -9,7 +9,7 @@ class Model:
     artemis_url = Column(String, index=True, nullable=False)
 
     __table_args__ = (
-        UniqueConstraint('id', 'artemis_url', name='uix_id_artemis_url'),
+        UniqueConstraint('id', 'artemis_url'),
     )
 
     @classmethod
