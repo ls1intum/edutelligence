@@ -26,9 +26,6 @@ from module_programming_llm.helpers.utils import (
 
 
 class FeedbackModel(BaseModel):
-    title: str = Field(
-        description="Very short title, i.e. feedback category", example="Logic Error"
-    )
     description: str = Field(description="Feedback description")
     line_start: Optional[int] = Field(
         description="Referenced line number start, or empty if unreferenced"
@@ -50,12 +47,25 @@ class ImprovementModel(BaseModel):
         title = "Improvement"
 
 
+# for Athena database only
+def generate_feedback_text(model: FeedbackModel, file: str):
+    if model.line_start is not None:
+        if model.line_end is not None and model.line_start != model.line_end:
+            feedback_text = f"File {file} at lines {model.line_start}-{model.line_end}"
+        else:
+            feedback_text = f"File {file} at line {model.line_start}"
+    else:
+        feedback_text = f"File {file}"
+
+    return feedback_text
+
+
 # pylint: disable=too-many-locals
 async def generate_suggestions_by_file(
-    exercise: Exercise,
-    submission: Submission,
-    config: NonGradedBasicApproachConfig,
-    debug: bool,
+        exercise: Exercise,
+        submission: Submission,
+        config: NonGradedBasicApproachConfig,
+        debug: bool,
 ) -> List[Feedback]:
     model = config.model.get_model()  # type: ignore[attr-defined]
 
@@ -84,7 +94,7 @@ async def generate_suggestions_by_file(
     changed_files = load_files_from_repo(
         submission_repo,
         file_filter=lambda file_path: file_path
-        in changed_files_from_template_to_submission,
+                                      in changed_files_from_template_to_submission,
     )
 
     # Get solution summary by file (if necessary)
@@ -97,7 +107,6 @@ async def generate_suggestions_by_file(
     )
     summary_string = solution_summary.describe_solution_summary() if solution_summary is not None else ""
 
-
     # Get split problem statement by file (if necessary)
     split_problem_statement = await split_problem_statement_by_file(
         exercise=exercise,
@@ -109,8 +118,8 @@ async def generate_suggestions_by_file(
 
     problem_statement_tokens = num_tokens_from_string(exercise.problem_statement or "")
     is_short_problem_statement = (
-        problem_statement_tokens
-        <= config.split_problem_statement_by_file_prompt.tokens_before_split
+            problem_statement_tokens
+            <= config.split_problem_statement_by_file_prompt.tokens_before_split
     )
     file_problem_statements = (
         {
@@ -205,7 +214,7 @@ async def generate_suggestions_by_file(
             ]
 
         while (
-            len(filtered_prompt_inputs) < config.max_number_of_files and prompt_inputs
+                len(filtered_prompt_inputs) < config.max_number_of_files and prompt_inputs
         ):
             filtered_prompt_inputs.append(prompt_inputs.pop(0))
         prompt_inputs = filtered_prompt_inputs
@@ -252,7 +261,7 @@ async def generate_suggestions_by_file(
                 Feedback(
                     exercise_id=exercise.id,
                     submission_id=submission.id,
-                    title=feedback.title,
+                    title=generate_feedback_text(feedback, file_path),
                     description=feedback.description,
                     file_path=file_path,
                     line_start=feedback.line_start,
