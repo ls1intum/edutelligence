@@ -20,7 +20,7 @@ for deployment in list_deployments():
     secret = os.environ.get(f"ARTEMIS_{deployment.name.upper()}_SECRET")
     if secret is None and PRODUCTION:
         logger.warning("Missing secret for Artemis deployment %s. "
-                       "Set the %s_SECRET environment variable to secure the communication "
+                       "Set the ARTEMIS_%s_SECRET environment variable to secure the communication "
                        "between the LMS and the assessment module manager.",
                        deployment.name, deployment.name.upper())
     secret = "abcdef12345"  # noqa: This secret is only used for development setups for simplicity
