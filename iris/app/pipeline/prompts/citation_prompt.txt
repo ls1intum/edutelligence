@@ -1,0 +1,19 @@
+
+In the paragraphs below you are provided with an answer to a question. Underneath the answer you will find the paragraphs that the answer was based on.
+Add citations of the paragraphs to the answer. Cite the paragraphs in brackets after the sentence where the information is used in the answer.
+Add an appendix like where you list each source with its corresponding number and provide the Lecture Title,as well as the page number in this format "[1] Lecture title, page number".
+Do not Include the Actual paragraphs in the appendix. Only the citations.
+Here is an example how to rewrite the answer with citations:
+"
+Lorem ipsum dolor sit amet, consectetur adipiscing elit.[1] Ded do eiusmod tempor incididunt ut labore et dolore magna aliqua.[2]
+
+[1] Lecture 1, page 2.
+[2] Lecture 2, page 5.
+"
+
+
+Here are the answer and the paragraphs:
+
+Answer without citations:
+{Answer}
+
