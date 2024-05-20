@@ -1,6 +1,5 @@
-from typing import Optional, Type, TypeVar, List, Any, Dict
+from typing import Optional, Type, TypeVar, List
 
-from langchain.callbacks.tracers import langchain
 from langchain_core.output_parsers.openai_functions import JsonOutputFunctionsParser
 from langchain_core.utils.function_calling import convert_to_openai_function
 from pydantic import BaseModel, ValidationError
@@ -140,8 +139,6 @@ async def predict_and_parse(
         Optional[T]: Parsed output, or None if it could not be parsed
     """
 
-    langchain.debug = True
-
     experiment = get_experiment_environment()
 
     tags = tags or []
@@ -184,5 +181,3 @@ async def predict_and_parse(
     except (OutputParserException, ValidationError) as e:
         logger.error("Exception type: %s, Message: %s", type(e).__name__, e)
         return None
-
-    # todo debug settings
