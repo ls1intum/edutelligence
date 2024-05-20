@@ -5,7 +5,7 @@ from pydantic import BaseModel, ValidationError
 import tiktoken
 
 from langchain.chains import LLMChain
-from langchain.chat_models import ChatOpenAI
+from langchain_community.chat_models import ChatOpenAI
 from langchain.base_language import BaseLanguageModel
 from langchain.prompts import (
     ChatPromptTemplate,

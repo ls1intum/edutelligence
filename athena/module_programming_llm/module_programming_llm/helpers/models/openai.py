@@ -5,8 +5,8 @@ from pydantic import Field, validator, PositiveInt
 from enum import Enum
 
 import openai
-from langchain.chat_models import AzureChatOpenAI, ChatOpenAI
-from langchain.llms import AzureOpenAI, OpenAI
+from langchain_community.chat_models import AzureChatOpenAI, ChatOpenAI
+from langchain_community.llms import AzureOpenAI, OpenAI
 from langchain.llms.openai import BaseOpenAI
 from langchain.base_language import BaseLanguageModel
 
