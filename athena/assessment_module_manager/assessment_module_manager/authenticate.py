@@ -13,11 +13,13 @@ api_key_artemis_url_header = APIKeyHeader(name='X-Server-URL', auto_error=False)
 
 
 def verify_artemis_athena_key(artemis_url: str, secret: str):
+    logger.info("Received a request from: %s", artemis_url)
     if artemis_url is None:
         raise HTTPException(status_code=401, detail="Invalid Artemis Server Url.")
         # cannot proceed even for local development
         # database entries cannot be set uniquely
 
+    logger.info("Key found: ", artemis_url in env.DEPLOYMENT_SECRETS)
     if artemis_url not in env.DEPLOYMENT_SECRETS or secret != env.DEPLOYMENT_SECRETS[artemis_url]:
         if env.PRODUCTION:
             raise HTTPException(status_code=401, detail="Invalid API secret.")
