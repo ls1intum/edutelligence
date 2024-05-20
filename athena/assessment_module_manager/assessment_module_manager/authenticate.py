@@ -19,7 +19,7 @@ def verify_artemis_athena_key(artemis_url: str, secret: str):
         # cannot proceed even for local development
         # database entries cannot be set uniquely
 
-    logger.info("Key found: ", artemis_url in env.DEPLOYMENT_SECRETS)
+    logger.info("Key 1 %s key 2 %s", secret, env.DEPLOYMENT_SECRETS[artemis_url])
     if artemis_url not in env.DEPLOYMENT_SECRETS or secret != env.DEPLOYMENT_SECRETS[artemis_url]:
         if env.PRODUCTION:
             raise HTTPException(status_code=401, detail="Invalid API secret.")
