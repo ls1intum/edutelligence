@@ -72,7 +72,7 @@ class StatusCallback(ABC):
             self.stage.message = message
             self.on_status_update()
         else:
-            raise ValueError("Invalid state transition")
+            raise ValueError("Invalid state transition to in_progress. current state is ", self.stage.state)
 
     def done(self, message: Optional[str] = None, final_result: Optional[str] = None):
         """
@@ -90,7 +90,7 @@ class StatusCallback(ABC):
                 self.status.result = final_result
             self.on_status_update()
         else:
-            raise ValueError("Invalid state transition")
+            raise ValueError("Invalid state transition to done. current state is ", self.stage.state)
 
     def error(self, message: str):
         """

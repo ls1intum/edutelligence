@@ -1,4 +1,5 @@
 import logging
+import traceback
 from datetime import datetime
 from typing import List, Optional, Union
 
@@ -119,9 +120,9 @@ class CourseChatPipeline(Pipeline):
             }
 
         @tool
-        def get_student_metrics(exercise_id: int) -> Union[dict, str]:
+        def get_student_exercise_metrics(exercise_id: int) -> Union[dict, str]:
             """
-            Get the student metrics for the given exercise.
+            Get the student exercise metrics for the given exercise.
             Important: You have to pass the correct exercise id here. If you don't know it,
             check out the exercise list first and look up the id of the exercise you are interested in.
 
@@ -153,7 +154,26 @@ class CourseChatPipeline(Pipeline):
             else:
                 return "No data available! Do not requery."
 
-        self.callback.in_progress()
+        @tool
+        def get_competency_list() -> list:
+            """
+            Get the list of competencies in the course.
+            Exercises might be associated with competencies. A competency is a skill or knowledge that a student
+            should have after completing the course, and instructors may add lectures and exercises to these competencies.
+            You can use this if the students asks you about a competency, or if you want to provide additional context
+            regarding their progress overall or in a specific area.
+            A competency has the following attributes: name, description, taxonomy, soft due date, optional, and mastery threshold.
+            The response may include metrics for each competency, such as progress and confidence.
+            """
+            if not dto.metrics or not dto.metrics.competency_metrics:
+                return dto.course.competencies
+            competency_metrics = dto.metrics.competency_metrics
+            return [{
+                "info": competency_metrics.competency_information[comp],
+                "exercise_ids": competency_metrics.exercises[comp],
+                "progress": competency_metrics.progress[comp],
+                "confidence": competency_metrics.confidence[comp]
+            } for comp in competency_metrics.competency_information]
 
         try:
             # Set up the initial prompt
@@ -179,7 +199,7 @@ class CourseChatPipeline(Pipeline):
                 ]
             )
 
-            tools = [get_course_details, get_exercise_list, get_student_metrics]
+            tools = [get_course_details, get_exercise_list, get_student_exercise_metrics, get_competency_list]
             agent = create_structured_chat_agent(
                 llm=self.llm, tools=tools, prompt=self.prompt
             )
@@ -189,12 +209,13 @@ class CourseChatPipeline(Pipeline):
 
             params = {
                 "input": (
-                    "Latest student message: " + query.contents[0].text_content
+                    query.contents[0].text_content
                     if query
                     else ""
                 )
             }
             out = None
+            self.callback.in_progress()
             for step in agent_executor.iter(params):
                 print("STEP:", step)
                 if output := step.get("intermediate_step"):
@@ -205,6 +226,8 @@ class CourseChatPipeline(Pipeline):
                         self.callback.in_progress("Reading exercise list ...")
                     elif action.tool == "get_course_details":
                         self.callback.in_progress("Reading course details ...")
+                    elif action.tool == "get_competency_list":
+                        self.callback.in_progress("Reading competency list ...")
                 elif step['output']:
                     out = step['output']
 
@@ -212,6 +235,7 @@ class CourseChatPipeline(Pipeline):
             self.callback.done(None, final_result=out)
         except Exception as e:
             logger.error(f"An error occurred while running the course chat pipeline", exc_info=e)
+            traceback.print_exc()
             self.callback.error("An error occurred while running the course chat pipeline.")
 
 
