@@ -7,7 +7,7 @@ from ...domain.data.build_log_entry import BuildLogEntryDTO
 from ...domain.data.result_dto import ResultDTO
 
 
-class SubmissionDTO(BaseModel):
+class ProgrammingSubmissionDTO(BaseModel):
     id: int
     date: Optional[datetime] = None
     repository: Dict[str, str]

@@ -1,8 +1,11 @@
 from datetime import datetime
 from enum import Enum
-from typing import Optional
+from typing import Optional, List
 
 from pydantic import BaseModel, Field
+
+from app.domain.data.simple_submission_dto import SimpleSubmissionDTO
+
 
 class ExerciseType(str, Enum):
     PROGRAMMING = "PROGRAMMING"
@@ -28,7 +31,7 @@ class IncludedInOverallScore(str, Enum):
     NOT_INCLUDED = "NOT_INCLUDED"
 
 
-class ExerciseDTO(BaseModel):
+class ExerciseWithSubmissionsDTO(BaseModel):
     id: int = Field(alias="id")
     title: str = Field(alias="title")
     type: ExerciseType = Field(alias="type")
@@ -40,3 +43,4 @@ class ExerciseDTO(BaseModel):
     due_date: Optional[datetime] = Field(alias="dueDate")
     inclusion_mode: Optional[IncludedInOverallScore] = Field(alias="inclusionMode")
     presentation_score_enabled: Optional[bool] = Field(alias="presentationScoreEnabled")
+    submissions: List[SimpleSubmissionDTO] = Field(default=[])

@@ -3,6 +3,7 @@ import traceback
 from datetime import datetime
 from typing import List, Optional, Union
 
+import pytz
 from langchain.agents import create_structured_chat_agent, AgentExecutor
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import (
@@ -16,13 +17,11 @@ from langchain_core.tools import tool
 
 from ...common import convert_iris_message_to_langchain_message
 from ...domain import PyrisMessage
-from ...domain.data.exercise_dto import ExerciseDTO
+from ...domain.data.exercise_with_submissions_dto import ExerciseWithSubmissionsDTO
 from ...llm import CapabilityRequestHandler, RequirementList
 from ..prompts.iris_course_chat_prompts import (
     iris_initial_system_prompt,
     begin_agent_prompt,
-    final_system_prompt,
-    guide_system_prompt,
 )
 from ...domain import CourseChatPipelineExecutionDTO
 from ...web.status.status_update import (
@@ -80,11 +79,12 @@ class CourseChatPipeline(Pipeline):
 
         # Define tools
         @tool
-        def get_exercise_list() -> list[ExerciseDTO]:
+        def get_exercise_list() -> list[ExerciseWithSubmissionsDTO]:
             """
             Get the list of exercises in the course.
             Use this if the student asks you about an exercise by name, and you don't know the details, such as the ID
-            or the schedule.
+            or the schedule. Note: The exercise contains a list of submissions (timestamp and score) of this student so you
+            can provide additional context regarding their progress and tendencies over time.
             """
             return dto.course.exercises
 
@@ -125,12 +125,9 @@ class CourseChatPipeline(Pipeline):
             Get the student exercise metrics for the given exercise.
             Important: You have to pass the correct exercise id here. If you don't know it,
             check out the exercise list first and look up the id of the exercise you are interested in.
-
             UNDER NO CIRCUMSTANCES GUESS THE ID, such as 12345. Always use the correct id.
-
             The following metrics are returned:
-            -
-            global_average_score: The average score of all students in the exercise.
+            - global_average_score: The average score of all students in the exercise.
             - score_of_student: The score of the student.
             - global_average_latest_submission: The average relative time of the latest
             submissions of all students in the exercise.
@@ -179,7 +176,7 @@ class CourseChatPipeline(Pipeline):
             # Set up the initial prompt
             self.prompt = ChatPromptTemplate.from_messages(
                 [
-                    ("system", iris_initial_system_prompt),
+                    ("system", iris_initial_system_prompt.replace("{current_date}", datetime.now(tz=pytz.UTC).strftime("%Y-%m-%d %H:%M:%S"))),
                 ]
             )
             logger.info("Running course chat pipeline...")
@@ -204,7 +201,7 @@ class CourseChatPipeline(Pipeline):
                 llm=self.llm, tools=tools, prompt=self.prompt
             )
             agent_executor = AgentExecutor(
-                agent=agent, tools=tools, verbose=True, max_iterations=3
+                agent=agent, tools=tools, verbose=True, max_iterations=6
             )
 
             params = {

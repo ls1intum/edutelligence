@@ -22,7 +22,7 @@ from ..prompts.iris_tutor_chat_prompts import (
     guide_system_prompt,
 )
 from ...domain import TutorChatPipelineExecutionDTO
-from ...domain.data.submission_dto import SubmissionDTO
+from ...domain.data.programming_submission_dto import ProgrammingSubmissionDTO
 from ...web.status.status_update import TutorChatStatusCallback
 from .file_selector_pipeline import FileSelectorPipeline
 from ...llm import CompletionArguments
@@ -87,7 +87,7 @@ class TutorChatPipeline(Pipeline):
         history: List[PyrisMessage] = dto.base.chat_history[:-1]
         query: PyrisMessage = dto.base.chat_history[-1]
 
-        submission: SubmissionDTO = dto.submission
+        submission: ProgrammingSubmissionDTO = dto.submission
         build_logs: List[BuildLogEntryDTO] = []
         build_failed: bool = False
         repository: Dict[str, str] = {}
@@ -190,7 +190,7 @@ class TutorChatPipeline(Pipeline):
 
     def _add_exercise_context_to_prompt(
         self,
-        submission: SubmissionDTO,
+        submission: ProgrammingSubmissionDTO,
         selected_files: List[str],
     ):
         """Adds the exercise context to the prompt

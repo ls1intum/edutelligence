@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field
 
 from app.domain.data.competency_dto import CompetencyDTO
 from app.domain.data.exam_dto import ExamDTO
-from app.domain.data.exercise_dto import ExerciseDTO
+from app.domain.data.exercise_with_submissions_dto import ExerciseWithSubmissionsDTO
 from app.domain.data.programming_exercise_dto import ProgrammingLanguage
 
 
@@ -21,6 +21,6 @@ class ExtendedCourseDTO(BaseModel):
     max_request_more_feedback_time_days: Optional[int] = Field(alias="maxRequestMoreFeedbackTimeDays")
     max_points: Optional[int] = Field(alias="maxPoints")
     presentation_score: Optional[int] = Field(alias="presentationScore")
-    exercises: List[ExerciseDTO] = Field(alias="exercises", default=[])
+    exercises: List[ExerciseWithSubmissionsDTO] = Field(alias="exercises", default=[])
     exams: List[ExamDTO] = Field(alias="exams", default=[])
     competencies: List[CompetencyDTO] = Field(alias="competencies", default=[])
