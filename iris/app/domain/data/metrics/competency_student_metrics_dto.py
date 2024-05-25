@@ -9,6 +9,7 @@ class CompetencyStudentMetricsDTO(BaseModel):
     lecture_units: Optional[Dict[int, Set[int]]] = Field(None, alias="lectureUnits")
     progress: Optional[Dict[int, float]] = None
     confidence: Optional[Dict[int, float]] = None
+    jol_values: Optional[Dict[int, int]] = Field(None, alias="jolValues")
 
     class Config:
         populate_by_name = True

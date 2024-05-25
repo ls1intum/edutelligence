@@ -160,16 +160,21 @@ class CourseChatPipeline(Pipeline):
             You can use this if the students asks you about a competency, or if you want to provide additional context
             regarding their progress overall or in a specific area.
             A competency has the following attributes: name, description, taxonomy, soft due date, optional, and mastery threshold.
-            The response may include metrics for each competency, such as progress and confidence.
+            The response may include metrics for each competency, such as progress and confidence (0%-100% in 0-1). These are system-generated.
+            The judgment of learning (JOL) values indicate the self-reported confidence by the student (0-5, 5 star).
             """
             if not dto.metrics or not dto.metrics.competency_metrics:
                 return dto.course.competencies
             competency_metrics = dto.metrics.competency_metrics
+            weight = 2.0 / 3.0
             return [{
                 "info": competency_metrics.competency_information[comp],
                 "exercise_ids": competency_metrics.exercises[comp],
                 "progress": competency_metrics.progress[comp],
-                "confidence": competency_metrics.confidence[comp]
+                "confidence": competency_metrics.confidence[comp],
+                "mastery": ((1 - weight) * competency_metrics.progress.get(comp, 0)
+                            + weight * competency_metrics.confidence.get(comp, 0)),
+                "judgment_of_learning": competency_metrics.jol_values[comp],
             } for comp in competency_metrics.competency_information]
 
         try:
@@ -178,7 +183,9 @@ class CourseChatPipeline(Pipeline):
             query: Optional[PyrisMessage] = (dto.base.chat_history[-1] if dto.base.chat_history else None)
 
             # Set up the initial prompt
-            initial_prompt_with_date = iris_initial_system_prompt.replace("{current_date}", datetime.now(tz=pytz.UTC).strftime("%Y-%m-%d %H:%M:%S"))
+            initial_prompt_with_date = iris_initial_system_prompt.replace("{current_date}",
+                                                                          datetime.now(tz=pytz.UTC).strftime(
+                                                                              "%Y-%m-%d %H:%M:%S"))
             if query is not None:
                 # Add the conversation to the prompt
                 chat_history_messages = [convert_iris_message_to_langchain_message(message) for message in history]
