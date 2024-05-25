@@ -7,7 +7,7 @@ from app.domain.data.programming_exercise_dto import ProgrammingExerciseDTO
 from app.domain.data.programming_submission_dto import ProgrammingSubmissionDTO
 
 
-class TutorChatPipelineExecutionDTO(ChatPipelineExecutionDTO):
+class ExerciseChatPipelineExecutionDTO(ChatPipelineExecutionDTO):
     submission: Optional[ProgrammingSubmissionDTO] = None
     exercise: ProgrammingExerciseDTO
     course: CourseDTO

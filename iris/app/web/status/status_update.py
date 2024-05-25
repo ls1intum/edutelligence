@@ -8,7 +8,7 @@ from ...domain.chat.course_chat.course_chat_status_update_dto import (
 )
 from ...domain.status.stage_state_dto import StageStateEnum
 from ...domain.status.stage_dto import StageDTO
-from ...domain.chat.tutor_chat.tutor_chat_status_update_dto import TutorChatStatusUpdateDTO
+from ...domain.chat.exercise_chat.exercise_chat_status_update_dto import ExerciseChatStatusUpdateDTO
 from ...domain.status.status_update_dto import StatusUpdateDTO
 import logging
 
@@ -146,11 +146,11 @@ class CourseChatStatusCallback(StatusCallback):
         super().__init__(url, run_id, status, stage, current_stage_index)
 
 
-class TutorChatStatusCallback(StatusCallback):
+class ExerciseChatStatusCallback(StatusCallback):
     def __init__(
         self, run_id: str, base_url: str, initial_stages: List[StageDTO] = None
     ):
-        url = f"{base_url}/api/public/pyris/pipelines/tutor-chat/runs/{run_id}/status"
+        url = f"{base_url}/api/public/pyris/pipelines/exercise-chat/runs/{run_id}/status"
         current_stage_index = len(initial_stages) if initial_stages else 0
         stages = initial_stages or []
         stages += [
@@ -161,6 +161,6 @@ class TutorChatStatusCallback(StatusCallback):
                 name="Response Generation",
             ),
         ]
-        status = TutorChatStatusUpdateDTO(stages=stages)
+        status = ExerciseChatStatusUpdateDTO(stages=stages)
         stage = stages[current_stage_index]
         super().__init__(url, run_id, status, stage, current_stage_index)

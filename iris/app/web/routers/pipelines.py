@@ -8,45 +8,45 @@ from fastapi.exceptions import RequestValidationError
 from starlette.responses import JSONResponse
 
 from app.domain import (
-    TutorChatPipelineExecutionDTO, CourseChatPipelineExecutionDTO,
+    ExerciseChatPipelineExecutionDTO, CourseChatPipelineExecutionDTO,
 )
 from app.pipeline.chat.course_chat_pipeline import CourseChatPipeline
-from app.pipeline.chat.tutor_chat_pipeline import TutorChatPipeline
-from app.web.status.status_update import TutorChatStatusCallback, CourseChatStatusCallback
+from app.pipeline.chat.exercise_chat_pipeline import ExerciseChatPipeline
+from app.web.status.status_update import ExerciseChatStatusCallback, CourseChatStatusCallback
 from app.dependencies import TokenValidator
 
 router = APIRouter(prefix="/api/v1/pipelines", tags=["pipelines"])
 logger = logging.getLogger(__name__)
 
 
-def run_tutor_chat_pipeline_worker(dto: TutorChatPipelineExecutionDTO):
+def run_exercise_chat_pipeline_worker(dto: ExerciseChatPipelineExecutionDTO):
     try:
-        callback = TutorChatStatusCallback(
+        callback = ExerciseChatStatusCallback(
             run_id=dto.base.settings.authentication_token,
             base_url=dto.base.settings.artemis_base_url,
             initial_stages=dto.base.initial_stages,
         )
-        pipeline = TutorChatPipeline(callback=callback)
+        pipeline = ExerciseChatPipeline(callback=callback)
     except Exception as e:
-        logger.error(f"Error preparing tutor chat pipeline: {e}")
+        logger.error(f"Error preparing exercise chat pipeline: {e}")
         logger.error(traceback.format_exc())
         return
 
     try:
         pipeline(dto=dto)
     except Exception as e:
-        logger.error(f"Error running tutor chat pipeline: {e}")
+        logger.error(f"Error running exercise chat pipeline: {e}")
         logger.error(traceback.format_exc())
         callback.error('Fatal error.')
 
 
 @router.post(
-    "/tutor-chat/{variant}/run",
+    "/exercise-chat/{variant}/run",
     status_code=status.HTTP_202_ACCEPTED,
     dependencies=[Depends(TokenValidator())],
 )
-def run_tutor_chat_pipeline(variant: str, dto: TutorChatPipelineExecutionDTO):
-    thread = Thread(target=run_tutor_chat_pipeline_worker, args=(dto,))
+def run_exercise_chat_pipeline(variant: str, dto: ExerciseChatPipelineExecutionDTO):
+    thread = Thread(target=run_exercise_chat_pipeline_worker, args=(dto,))
     thread.start()
 
 
@@ -59,14 +59,14 @@ def run_course_chat_pipeline_worker(dto):
         )
         pipeline = CourseChatPipeline(callback=callback)
     except Exception as e:
-        logger.error(f"Error preparing tutor chat pipeline: {e}")
+        logger.error(f"Error preparing exercise chat pipeline: {e}")
         logger.error(traceback.format_exc())
         return
 
     try:
         pipeline(dto=dto)
     except Exception as e:
-        logger.error(f"Error running tutor chat pipeline: {e}")
+        logger.error(f"Error running exercise chat pipeline: {e}")
         logger.error(traceback.format_exc())
         callback.error('Fatal error.')
 

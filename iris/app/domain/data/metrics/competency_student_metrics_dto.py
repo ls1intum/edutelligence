@@ -11,4 +11,4 @@ class CompetencyStudentMetricsDTO(BaseModel):
     confidence: Optional[Dict[int, float]] = None
 
     class Config:
-        allow_population_by_field_name = True
+        populate_by_name = True

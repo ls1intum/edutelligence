@@ -15,15 +15,15 @@ from ...domain import PyrisMessage
 from ...llm import CapabilityRequestHandler, RequirementList
 from ...domain.data.build_log_entry import BuildLogEntryDTO
 from ...domain.data.feedback_dto import FeedbackDTO
-from ..prompts.iris_tutor_chat_prompts import (
+from ..prompts.iris_exercise_chat_prompts import (
     iris_initial_system_prompt,
     chat_history_system_prompt,
     final_system_prompt,
     guide_system_prompt,
 )
-from ...domain import TutorChatPipelineExecutionDTO
+from ...domain import ExerciseChatPipelineExecutionDTO
 from ...domain.data.programming_submission_dto import ProgrammingSubmissionDTO
-from ...web.status.status_update import TutorChatStatusCallback
+from ...web.status.status_update import ExerciseChatStatusCallback
 from .file_selector_pipeline import FileSelectorPipeline
 from ...llm import CompletionArguments
 from ...llm.langchain import IrisLangchainChatModel
@@ -34,17 +34,17 @@ logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
 
-class TutorChatPipeline(Pipeline):
-    """Tutor chat pipeline that answers exercises related questions from students."""
+class ExerciseChatPipeline(Pipeline):
+    """Exercise chat pipeline that answers exercises related questions from students."""
 
     llm: IrisLangchainChatModel
     pipeline: Runnable
-    callback: TutorChatStatusCallback
+    callback: ExerciseChatStatusCallback
     file_selector_pipeline: FileSelectorPipeline
     prompt: ChatPromptTemplate
 
-    def __init__(self, callback: TutorChatStatusCallback):
-        super().__init__(implementation_id="tutor_chat_pipeline")
+    def __init__(self, callback: ExerciseChatStatusCallback):
+        super().__init__(implementation_id="exercise_chat_pipeline")
         # Set the langchain chat model
         request_handler = CapabilityRequestHandler(
             requirements=RequirementList(
@@ -69,7 +69,7 @@ class TutorChatPipeline(Pipeline):
     def __str__(self):
         return f"{self.__class__.__name__}(llm={self.llm})"
 
-    def __call__(self, dto: TutorChatPipelineExecutionDTO, **kwargs):
+    def __call__(self, dto: ExerciseChatPipelineExecutionDTO, **kwargs):
         """
         Runs the pipeline
             :param dto: The pipeline execution data transfer object
@@ -83,7 +83,7 @@ class TutorChatPipeline(Pipeline):
                 ("system", chat_history_system_prompt),
             ]
         )
-        logger.info("Running tutor chat pipeline...")
+        logger.info("Running exercise chat pipeline...")
         history: List[PyrisMessage] = dto.base.chat_history[:-1]
         query: PyrisMessage = dto.base.chat_history[-1]
 

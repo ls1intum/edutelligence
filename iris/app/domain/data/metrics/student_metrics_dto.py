@@ -12,4 +12,4 @@ class StudentMetricsDTO(BaseModel):
     competency_metrics: Optional[CompetencyStudentMetricsDTO] = Field(None, alias="competencyMetrics")
 
     class Config:
-        allow_population_by_field_name = True
+        populate_by_name = True
