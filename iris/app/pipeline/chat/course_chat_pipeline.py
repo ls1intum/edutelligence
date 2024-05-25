@@ -21,7 +21,7 @@ from ...domain.data.exercise_with_submissions_dto import ExerciseWithSubmissions
 from ...llm import CapabilityRequestHandler, RequirementList
 from ..prompts.iris_course_chat_prompts import (
     iris_initial_system_prompt,
-    begin_agent_prompt,
+    begin_agent_prompt, chat_history_exists_prompt, no_chat_history_prompt, format_reminder_prompt,
 )
 from ...domain import CourseChatPipelineExecutionDTO
 from ...web.status.status_update import (
@@ -173,28 +173,29 @@ class CourseChatPipeline(Pipeline):
             } for comp in competency_metrics.competency_information]
 
         try:
-            # Set up the initial prompt
-            self.prompt = ChatPromptTemplate.from_messages(
-                [
-                    ("system", iris_initial_system_prompt.replace("{current_date}", datetime.now(tz=pytz.UTC).strftime("%Y-%m-%d %H:%M:%S"))),
-                ]
-            )
             logger.info("Running course chat pipeline...")
-            history: List[PyrisMessage] = dto.base.chat_history[:-1] or []
-            query: PyrisMessage = (
-                dto.base.chat_history[-1] if dto.base.chat_history else None
-            )
+            history: List[PyrisMessage] = dto.base.chat_history or []
+            query: Optional[PyrisMessage] = (dto.base.chat_history[-1] if dto.base.chat_history else None)
 
-            # Add the conversation to the prompt
-            chat_history_messages = [
-                convert_iris_message_to_langchain_message(message) for message in history
-            ]
-            self.prompt += ChatPromptTemplate.from_messages(chat_history_messages)
-            self.prompt += ChatPromptTemplate.from_messages(
-                [
-                    ("system", begin_agent_prompt),
-                ]
-            )
+            # Set up the initial prompt
+            initial_prompt_with_date = iris_initial_system_prompt.replace("{current_date}", datetime.now(tz=pytz.UTC).strftime("%Y-%m-%d %H:%M:%S"))
+            if query is not None:
+                # Add the conversation to the prompt
+                chat_history_messages = [convert_iris_message_to_langchain_message(message) for message in history]
+                self.prompt = ChatPromptTemplate.from_messages(
+                    [
+                        ("system", initial_prompt_with_date + "\n" + chat_history_exists_prompt),
+                        *chat_history_messages,
+                        ("system", begin_agent_prompt + format_reminder_prompt),
+                    ]
+                )
+            else:
+                self.prompt = ChatPromptTemplate.from_messages(
+                    [
+                        ("system", initial_prompt_with_date + "\n" +
+                         no_chat_history_prompt + "\n" + format_reminder_prompt),
+                    ]
+                )
 
             tools = [get_course_details, get_exercise_list, get_student_exercise_metrics, get_competency_list]
             agent = create_structured_chat_agent(
