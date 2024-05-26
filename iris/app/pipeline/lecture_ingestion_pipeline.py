@@ -226,7 +226,9 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
         Merge the text and image together
         """
         dirname = os.path.dirname(__file__)
-        prompt_file_path = os.path.join(dirname, ".", "prompts", "lecture_ingestion_prompt.txt")
+        prompt_file_path = os.path.join(
+            dirname, ".", "prompts", "lecture_ingestion_prompt.txt"
+        )
         with open(prompt_file_path, "r") as file:
             logger.info("Loading ingestion prompt...")
             lecture_ingestion_prompt = file.read()
