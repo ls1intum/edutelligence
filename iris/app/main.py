@@ -4,6 +4,7 @@ from fastapi import FastAPI
 from starlette.background import BackgroundTask
 from starlette.responses import Response
 
+from app.config import settings
 from app.web.routers.health import router as health_router
 from app.web.routers.pipelines import router as pipelines_router
 from app.web.routers.webhooks import router as webhooks_router
@@ -12,6 +13,8 @@ import logging
 from fastapi import FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+
+settings.set_env_vars()
 
 app = FastAPI(default_response_class=ORJSONResponse)
 
