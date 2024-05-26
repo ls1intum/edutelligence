@@ -31,6 +31,7 @@ from ...domain import TutorChatPipelineExecutionDTO, LectureChatPipelineExecutio
 from ...domain.data.submission_dto import SubmissionDTO
 from ...retrieval.lecture_retrieval import LectureRetrieval
 from ...vector_database.database import VectorDatabase
+from ...vector_database.lecture_schema import LectureSchema
 from ...web.status.tutor_chat_status_callback import TutorChatStatusCallback
 from .file_selector_pipeline import FileSelectorPipeline
 from ...llm import CompletionArguments
@@ -134,13 +135,18 @@ class TutorChatPipeline(Pipeline):
                 "format_instructions": output_parser.get_format_instructions()
             },
         )
-        response = self.reranker_pipeline(
+        paragraph_index = self.reranker_pipeline(
             paragraphs=paragraphs,
             query=query,
             prompt=choose_response_prompt,
             chat_history=chat_history,
-        )
-        return paragraphs[int(response[0])]
+        )[0]
+        try:
+            chosen_paragraph = paragraphs[int(paragraph_index)]
+        except Exception as e:
+            chosen_paragraph = paragraphs[0]
+            logger.error(f"Failed to choose best response: {e}")
+        return chosen_paragraph
 
     def _run_lecture_chat_pipeline(self, dto: LectureChatPipelineExecutionDTO):
         pipeline = LectureChatPipeline()
@@ -202,6 +208,16 @@ class TutorChatPipeline(Pipeline):
             submission,
             selected_files,
         )
+
+        retrieved_lecture_chunks = self.retriever(
+            chat_history=history,
+            student_query=query.contents[0].text_content,
+            result_limit=10,
+            course_name=dto.course.name,
+            problem_statement=problem_statement,
+            exercise_title=exercise_title,
+        )
+        self._add_relevant_chunks_to_prompt(retrieved_lecture_chunks)
 
         self.callback.in_progress("Generating response...")
 
@@ -326,3 +342,21 @@ class TutorChatPipeline(Pipeline):
             '{{"selected_files": [<file1>, <file2>, ...]}}'
         )
         return file_selection_prompt
+
+    def _add_relevant_chunks_to_prompt(self, retrieved_lecture_chunks: List[dict]):
+        """
+        Adds the relevant chunks of the lecture to the prompt
+        :param retrieved_lecture_chunks: The retrieved lecture chunks
+        """
+        self.prompt += SystemMessagePromptTemplate.from_template(
+            "Next you will find the potentially relevant lecture content to answer the student message:\n"
+        )
+        for i, chunk in enumerate(retrieved_lecture_chunks):
+            text_content_msg = (
+                f" \n {chunk.get(LectureSchema.PAGE_TEXT_CONTENT.value)} \n"
+            )
+            text_content_msg = text_content_msg.replace("{", "{{").replace("}", "}}")
+            self.prompt += SystemMessagePromptTemplate.from_template(text_content_msg)
+        self.prompt += SystemMessagePromptTemplate.from_template(
+            "USE ONLY THE CONTENT YOU NEED TO ANSWER THE QUESTION:\n"
+        )

@@ -29,7 +29,7 @@ def chat_history_system_prompt():
     """
     return """This is the chat history of your conversation with the student so far. Read it so you
     know what already happened, but never re-use any message you already wrote. Instead, always write new and original
-    responses. The student can reference something from the messages you've already written, keep that in mind."""
+    responses. The student can reference the messages you've already written."""
 
 
 def lecture_initial_prompt():
@@ -74,11 +74,10 @@ class LectureChatPipeline(Pipeline):
     def __str__(self):
         return f"{self.__class__.__name__}(llm={self.llm})"
 
-    def __call__(self, dto: LectureChatPipelineExecutionDTO, **kwargs):
+    def __call__(self, dto: LectureChatPipelineExecutionDTO):
         """
         Runs the pipeline
         :param dto:  execution data transfer object
-        :param kwargs: The keyword arguments
         """
 
         self.prompt = ChatPromptTemplate.from_messages(
@@ -93,7 +92,7 @@ class LectureChatPipeline(Pipeline):
 
         self._add_conversation_to_prompt(history, query)
 
-        retrieved_lecture_chunks = self.retriever.retrieval_pipeline(
+        retrieved_lecture_chunks = self.retriever(
             chat_history=history,
             student_query=query.contents[0].text_content,
             result_limit=10,
@@ -108,7 +107,7 @@ class LectureChatPipeline(Pipeline):
             logger.info(f"Response from tutor chat pipeline: {response}")
             return response
         except Exception as e:
-            print(e)
+            raise e
 
     def _add_conversation_to_prompt(
         self,
