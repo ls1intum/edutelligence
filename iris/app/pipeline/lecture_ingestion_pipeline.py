@@ -257,7 +257,7 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
             sender=IrisMessageRole.SYSTEM,
             contents=[TextMessageContentDTO(text_content=prompt)],
         )
-        response = self.llm_vision.chat(
+        response = self.llm.chat(
             [iris_message], CompletionArguments(temperature=0.2, max_tokens=50)
         )
         return response.contents[0].text_content
