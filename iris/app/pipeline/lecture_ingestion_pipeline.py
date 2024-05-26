@@ -200,7 +200,7 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
         """
         image_interpretation_prompt = TextMessageContentDTO(
             text_content=
-            f"This page is part of the {name_of_lecture} lecture, describe and explain it in no more"
+            f"This page is part of the {name_of_lecture} lecture, describe and explain it in no more "
             f"than 300 tokens, respond only with the explanation nothing more, "
             f"Here is the content of the previous slide,"
             f" it's content is most likely related to the slide you need to interpret: \n"
