@@ -88,8 +88,8 @@ class LectureChatPipeline(Pipeline):
             ]
         )
         logger.info("Running lecture chat pipeline...")
-        history: List[PyrisMessage] = dto.chat_history[:-1]
-        query: PyrisMessage = dto.chat_history[-1]
+        history: List[PyrisMessage] = dto.base.chat_history[:-1]
+        query: PyrisMessage = dto.base.chat_history[-1]
 
         self._add_conversation_to_prompt(history, query)
 

@@ -88,24 +88,24 @@ class ExerciseChatPipeline(Pipeline):
         :param kwargs: The keyword arguments
         """
         execution_dto = LectureChatPipelineExecutionDTO(
-            settings=dto.settings, course=dto.course, chatHistory=dto.chat_history
+            base=dto.base, course=dto.course
         )
         lecture_chat_thread = threading.Thread(
             target=self._run_lecture_chat_pipeline(execution_dto), args=(dto,)
         )
-        tutor_chat_thread = threading.Thread(
-            target=self._run_tutor_chat_pipeline(dto), args=(dto,)
+        exercise_chat_thread = threading.Thread(
+            target=self._run_exercise_chat_pipeline(dto), args=(dto,)
         )
         lecture_chat_thread.start()
-        tutor_chat_thread.start()
+        exercise_chat_thread.start()
 
         try:
             response = self.choose_best_response(
-                [self.tutor_chat_response, self.lecture_chat_response],
-                dto.chat_history[-1].contents[0].text_content,
-                dto.chat_history,
+                [self.exercise_chat_response, self.lecture_chat_response],
+                dto.base.chat_history[-1].contents[0].text_content,
+                dto.base.chat_history,
             )
-            logger.info(f"Response from tutor chat pipeline: {response}")
+            logger.info(f"Response from exercise chat pipeline: {response}")
             self.callback.done("Generated response", final_result=response)
         except Exception as e:
             print(e)
@@ -153,7 +153,7 @@ class ExerciseChatPipeline(Pipeline):
         pipeline = LectureChatPipeline()
         self.lecture_chat_response = pipeline(dto=dto)
 
-    def _run_tutor_chat_pipeline(self, dto: TutorChatPipelineExecutionDTO):
+    def _run_exercise_chat_pipeline(self, dto: ExerciseChatPipelineExecutionDTO):
         """
         Runs the pipeline
         :param dto:  execution data transfer object
@@ -236,8 +236,7 @@ class ExerciseChatPipeline(Pipeline):
             self.prompt += SystemMessagePromptTemplate.from_template(
                 guide_system_prompt
             )
-            response = (self.prompt | self.pipeline).invoke({})
-            self.callback.done(None, final_result=response)
+            self.exercise_chat_response = (self.prompt | self.pipeline).invoke({})
         except Exception as e:
             self.callback.error(f"Failed to look up files in the repository: {e}")
             return "Failed to generate response"

@@ -3,7 +3,7 @@ from typing import List
 from .status_update import StatusCallback
 from ...domain.status.stage_state_dto import StageStateEnum
 from ...domain.status.stage_dto import StageDTO
-from ...domain.tutor_chat.tutor_chat_status_update_dto import TutorChatStatusUpdateDTO
+from ...domain.exercise_chat.exercise_chat_status_update_dto import TutorChatStatusUpdateDTO
 import logging
 
 logger = logging.getLogger(__name__)

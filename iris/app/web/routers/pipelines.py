@@ -62,9 +62,6 @@ def run_lecture_chat_pipeline_worker(dto: LectureChatPipelineExecutionDTO):
     status_code=status.HTTP_202_ACCEPTED,
     dependencies=[Depends(TokenValidator())],
 )
-    """
-    Run the tutor chat pipeline with the given DTO.
-    """
 def run_exercise_chat_pipeline(variant: str, dto: ExerciseChatPipelineExecutionDTO):
     thread = Thread(target=run_exercise_chat_pipeline_worker, args=(dto,))
     thread.start()
