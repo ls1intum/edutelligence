@@ -153,7 +153,7 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
         Chunk the data from the lecture into smaller pieces
         """
         doc = fitz.open(lecture_path)
-        course_language = self.get_course_language(doc.load_page(5))
+        course_language = self.get_course_language(doc.load_page(min(5, doc.page_count-1)).get_text())
         data = []
         last_page_content = ""
         for page_num in range(doc.page_count):
@@ -257,8 +257,8 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
             sender=IrisMessageRole.SYSTEM,
             contents=[TextMessageContentDTO(text_content=prompt)],
         )
-        response = self.llm.chat(
-            [iris_message], CompletionArguments(temperature=0.2, max_tokens=50)
+        response = self.llm_vision.chat(
+            [iris_message], CompletionArguments(temperature=0.2, max_tokens=500)
         )
         return response.contents[0].text_content
 

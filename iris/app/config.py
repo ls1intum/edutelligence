@@ -10,6 +10,7 @@ class APIKeyConfig(BaseModel):
 
 class Settings(BaseModel):
     api_keys: list[APIKeyConfig]
+    env_vars: dict[str, str]
 
     @classmethod
     def get_settings(cls):
@@ -31,6 +32,11 @@ class Settings(BaseModel):
             ) from e
         except yaml.YAMLError as e:
             raise yaml.YAMLError(f"Error parsing YAML file at {file_path}.") from e
+
+    def set_env_vars(self):
+        """Set environment variables from the settings."""
+        for key, value in self.env_vars.items():
+            os.environ[key] = value
 
 
 settings = Settings.get_settings()
