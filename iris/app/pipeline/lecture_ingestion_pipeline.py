@@ -198,7 +198,8 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
         """
         Interpret the image passed
         """
-        image_interpretation_prompt = (
+        image_interpretation_prompt = TextMessageContentDTO(
+            text_content=
             f"This page is part of the {name_of_lecture} lecture, describe and explain it in no more"
             f"than 300 tokens, respond only with the explanation nothing more, "
             f"Here is the content of the previous slide,"
@@ -207,9 +208,9 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
             f"Intepret the image below based on the provided context and the content of the previous slide.\n"
         )
         image = ImageMessageContentDTO(
-            base64=img_base64, prompt=image_interpretation_prompt
+            base64=img_base64
         )
-        iris_message = PyrisMessage(sender=IrisMessageRole.SYSTEM, contents=[image])
+        iris_message = PyrisMessage(sender=IrisMessageRole.SYSTEM, contents=[image_interpretation_prompt, image])
         try:
             response = self.llm_vision.chat(
                 [iris_message], CompletionArguments(temperature=0.2, max_tokens=500)
