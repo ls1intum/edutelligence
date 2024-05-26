@@ -71,7 +71,6 @@ class LectureChatPipeline(Pipeline):
         self.pipeline = self.llm | StrOutputParser()
         self.citation_pipeline = CitationPipeline()
 
-
     def __repr__(self):
         return f"{self.__class__.__name__}(llm={self.llm})"
 
