@@ -164,7 +164,7 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
             img_base64 = ""
             if page.get_images(full=True):
                 page_snapshot = page.get_pixmap()
-                img_bytes = page_snapshot.tobytes("JPEG")
+                img_bytes = page_snapshot.tobytes("png")
                 img_base64 = base64.b64encode(img_bytes).decode("utf-8")
                 image_interpretation = self.interpret_image(
                     img_base64,
