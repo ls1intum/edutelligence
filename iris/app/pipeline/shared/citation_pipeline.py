@@ -93,4 +93,4 @@ class CitationPipeline(Pipeline):
             return response
         except Exception as e:
             logger.error("citation pipeline failed", e)
-            return []
+            raise e
