@@ -110,7 +110,7 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
             for i, lecture_unit in enumerate(self.dto.lecture_units):
                 pdf_path = save_pdf(lecture_unit.pdf_file_base64)
                 chunks = self.chunk_data(
-                    lecture_path=pdf_path, lecture_unit_dto=lecture_unit
+                    lecture_pdf=pdf_path, lecture_unit_dto=lecture_unit
                 )
                 cleanup_temporary_file(pdf_path)
             self.callback.done("Lecture Chunking and interpretation Finished")
@@ -146,14 +146,16 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
 
     def chunk_data(
         self,
-        lecture_path: str,
+        lecture_pdf: str,
         lecture_unit_dto: LectureUnitDTO = None,
     ):
         """
         Chunk the data from the lecture into smaller pieces
         """
-        doc = fitz.open(lecture_path)
-        course_language = self.get_course_language(doc.load_page(min(5, doc.page_count-1)).get_text())
+        doc = fitz.open(lecture_pdf)
+        course_language = self.get_course_language(
+            doc.load_page(min(5, doc.page_count - 1)).get_text()
+        )
         data = []
         last_page_content = ""
         for page_num in range(doc.page_count):
@@ -161,8 +163,8 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
             page_content = page.get_text()
             img_base64 = ""
             if page.get_images(full=True):
-                pix = page.get_pixmap()
-                img_bytes = pix.tobytes("JPEG")
+                page_snapshot = page.get_pixmap()
+                img_bytes = page_snapshot.tobytes("JPEG")
                 img_base64 = base64.b64encode(img_bytes).decode("utf-8")
                 image_interpretation = self.interpret_image(
                     img_base64,
@@ -199,18 +201,17 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
         Interpret the image passed
         """
         image_interpretation_prompt = TextMessageContentDTO(
-            text_content=
-            f"This page is part of the {name_of_lecture} lecture, describe and explain it in no more "
+            text_content=f"This page is part of the {name_of_lecture} lecture, describe and explain it in no more "
             f"than 300 tokens, respond only with the explanation nothing more, "
             f"Here is the content of the previous slide,"
             f" it's content is most likely related to the slide you need to interpret: \n"
             f" {last_page_content}"
             f"Intepret the image below based on the provided context and the content of the previous slide.\n"
         )
-        image = ImageMessageContentDTO(
-            base64=img_base64
+        image = ImageMessageContentDTO(base64=img_base64)
+        iris_message = PyrisMessage(
+            sender=IrisMessageRole.SYSTEM, contents=[image_interpretation_prompt, image]
         )
-        iris_message = PyrisMessage(sender=IrisMessageRole.SYSTEM, contents=[image_interpretation_prompt, image])
         try:
             response = self.llm_vision.chat(
                 [iris_message], CompletionArguments(temperature=0.2, max_tokens=500)

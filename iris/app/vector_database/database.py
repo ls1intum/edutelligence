@@ -17,7 +17,9 @@ class VectorDatabase:
     def __init__(self):
         self.client = weaviate.connect_to_wcs(
             cluster_url="https://lastingestion-bismw0p9.weaviate.network",
-            auth_credentials=weaviate.auth.AuthApiKey("EbqYSqTPh0yyT4W6cA8voW3FYZrYlk3U4ADQ"),
+            auth_credentials=weaviate.auth.AuthApiKey(
+                "EbqYSqTPh0yyT4W6cA8voW3FYZrYlk3U4ADQ"
+            ),
         )
         self.repositories = init_repository_schema(self.client)
         self.lectures = init_lecture_schema(self.client)
