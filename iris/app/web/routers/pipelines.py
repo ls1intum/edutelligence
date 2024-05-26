@@ -8,8 +8,13 @@ from fastapi.exceptions import RequestValidationError
 from starlette.responses import JSONResponse
 
 from app.domain import (
+    ExerciseChatPipelineExecutionDTO, 
+    CourseChatPipelineExecutionDTO,
+    LectureChatPipelineExecutionDTO,
     ExerciseChatPipelineExecutionDTO, CourseChatPipelineExecutionDTO,
 )
+from app.pipeline.chat.lecture_chat_pipeline import LectureChatPipeline
+from app.web.status.status_update import ExerciseChatStatusCallback, CourseChatStatusCallback
 from app.pipeline.chat.course_chat_pipeline import CourseChatPipeline
 from app.pipeline.chat.exercise_chat_pipeline import ExerciseChatPipeline
 from app.web.status.status_update import ExerciseChatStatusCallback, CourseChatStatusCallback
@@ -40,11 +45,26 @@ def run_exercise_chat_pipeline_worker(dto: ExerciseChatPipelineExecutionDTO):
         callback.error('Fatal error.')
 
 
+def run_lecture_chat_pipeline_worker(dto: LectureChatPipelineExecutionDTO):
+    """
+    Run the lecture chat pipeline with the given DTO.
+    """
+    try:
+        pipeline = LectureChatPipeline()
+        pipeline(dto=dto)
+    except Exception as e:
+        logger.error(f"Error running tutor chat pipeline: {e}")
+        logger.error(traceback.format_exc())
+
+
 @router.post(
     "/exercise-chat/{variant}/run",
     status_code=status.HTTP_202_ACCEPTED,
     dependencies=[Depends(TokenValidator())],
 )
+    """
+    Run the tutor chat pipeline with the given DTO.
+    """
 def run_exercise_chat_pipeline(variant: str, dto: ExerciseChatPipelineExecutionDTO):
     thread = Thread(target=run_exercise_chat_pipeline_worker, args=(dto,))
     thread.start()
@@ -84,4 +104,7 @@ def run_course_chat_pipeline(variant: str, dto: CourseChatPipelineExecutionDTO):
 
 @router.get("/{feature}")
 def get_pipeline(feature: str):
+    """
+    Get the pipeline for the given feature.
+    """
     return Response(status_code=status.HTTP_501_NOT_IMPLEMENTED)

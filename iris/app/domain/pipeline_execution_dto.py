@@ -8,3 +8,6 @@ from app.domain.status.stage_dto import StageDTO
 
 class PipelineExecutionDTO(BaseModel):
     pass
+
+    class Config:
+        populate_by_name = True

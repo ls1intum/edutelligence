@@ -1,0 +1,24 @@
+Two paragraphs are shown below. Each paragraph has a number next to it. A question is also provided.
+Respond with the numbers of the paragraph that respond precisely and cover the full scope of the question.
+To understand the full scope of the question, take into consideration the Chat History as it the necessary context for the question.
+ The relevance score is a number from 1 to 10 based on how relevant the paragraphs are to answer the question.
+Without any comment, return the result in the following JSON format, it is important to avoid giving
+unnecessary information, only the number of the paragraph that is most relevant and better suited for the question.
+{{"selected_paragraphs": [<number>]}}
+If the question is asking for code, return {{"selected_paragraphs": [0]}}
+Do not by any means return a the number of the response that has written programming code in it.
+If there is no suitable answer return {{"selected_paragraphs": [0]}}
+If the answer or the question is out the education context return {{"selected_paragraphs": [0]}}
+
+Paragraph 0:
+{paragraph_0}
+
+Paragraph 1:
+{paragraph_1}
+
+Question: {question}
+
+Chat History:{chat_history}
+
+
+DO NOT RETURN THE RESPONSE THAT HAS CODE IN IT.
