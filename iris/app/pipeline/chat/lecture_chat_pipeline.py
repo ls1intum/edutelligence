@@ -50,7 +50,7 @@ class LectureChatPipeline(Pipeline):
     prompt: ChatPromptTemplate
 
     def __init__(self):
-        super().__init__(implementation_id="tutor_chat_pipeline")
+        super().__init__(implementation_id="lecture_chat_pipeline")
         # Set the langchain chat model
         request_handler = CapabilityRequestHandler(
             requirements=RequirementList(
@@ -86,7 +86,7 @@ class LectureChatPipeline(Pipeline):
                 ("system", chat_history_system_prompt()),
             ]
         )
-        logger.info("Running tutor chat pipeline...")
+        logger.info("Running lecture chat pipeline...")
         history: List[PyrisMessage] = dto.chat_history[:-1]
         query: PyrisMessage = dto.chat_history[-1]
 
@@ -104,7 +104,7 @@ class LectureChatPipeline(Pipeline):
         self.prompt = ChatPromptTemplate.from_messages(prompt_val)
         try:
             response = (self.prompt | self.pipeline).invoke({})
-            logger.info(f"Response from tutor chat pipeline: {response}")
+            logger.info(f"Response from lecture chat pipeline: {response}")
             return response
         except Exception as e:
             raise e
