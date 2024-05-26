@@ -81,6 +81,7 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
         self.collection = init_lecture_schema(client)
         self.dto = dto
         self.llm_vision = BasicRequestHandler("azure-gpt-4-vision")
+        self.llm_chat = BasicRequestHandler("azure-gpt-35-turbo")
         self.llm_embedding = BasicRequestHandler("embedding-small")
         self.callback = callback
         request_handler = CapabilityRequestHandler(
@@ -258,7 +259,7 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
             sender=IrisMessageRole.SYSTEM,
             contents=[TextMessageContentDTO(text_content=prompt)],
         )
-        response = self.llm_vision.chat(
+        response = self.llm_chat.chat(
             [iris_message], CompletionArguments(temperature=0.2, max_tokens=500)
         )
         return response.contents[0].text_content
