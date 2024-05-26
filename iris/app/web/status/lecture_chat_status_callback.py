@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 class LectureChatStatusCallback(StatusCallback):
     """
-    Callback class for updating the status of a Tutor Chat pipeline run.
+    Callback class for updating the status of a Lecture Chat pipeline run.
     """
 
     def __init__(

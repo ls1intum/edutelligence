@@ -7,8 +7,6 @@ from langchain_core.prompts import (
     SystemMessagePromptTemplate,
 )
 from langchain_core.runnables import Runnable
-
-from ..shared.citation_pipeline import CitationPipeline
 from ...common import convert_iris_message_to_langchain_message
 from ...domain import PyrisMessage
 from ...llm import CapabilityRequestHandler, RequirementList
@@ -31,7 +29,7 @@ def chat_history_system_prompt():
     """
     return """This is the chat history of your conversation with the student so far. Read it so you
     know what already happened, but never re-use any message you already wrote. Instead, always write new and original
-    responses. The student can reference something from the messages you've already written, keep that in mind."""
+    responses. The student can reference the messages you've already written."""
 
 
 def lecture_initial_prompt():
@@ -52,7 +50,7 @@ class LectureChatPipeline(Pipeline):
     prompt: ChatPromptTemplate
 
     def __init__(self):
-        super().__init__(implementation_id="tutor_chat_pipeline")
+        super().__init__(implementation_id="lecture_chat_pipeline")
         # Set the langchain chat model
         request_handler = CapabilityRequestHandler(
             requirements=RequirementList(
@@ -69,7 +67,6 @@ class LectureChatPipeline(Pipeline):
         self.db = VectorDatabase()
         self.retriever = LectureRetrieval(self.db.client)
         self.pipeline = self.llm | StrOutputParser()
-        self.citation_pipeline = CitationPipeline()
 
     def __repr__(self):
         return f"{self.__class__.__name__}(llm={self.llm})"
@@ -77,11 +74,10 @@ class LectureChatPipeline(Pipeline):
     def __str__(self):
         return f"{self.__class__.__name__}(llm={self.llm})"
 
-    def __call__(self, dto: LectureChatPipelineExecutionDTO, **kwargs):
+    def __call__(self, dto: LectureChatPipelineExecutionDTO):
         """
         Runs the pipeline
         :param dto:  execution data transfer object
-        :param kwargs: The keyword arguments
         """
 
         self.prompt = ChatPromptTemplate.from_messages(
@@ -90,13 +86,13 @@ class LectureChatPipeline(Pipeline):
                 ("system", chat_history_system_prompt()),
             ]
         )
-        logger.info("Running tutor chat pipeline...")
+        logger.info("Running lecture chat pipeline...")
         history: List[PyrisMessage] = dto.chat_history[:-1]
         query: PyrisMessage = dto.chat_history[-1]
 
         self._add_conversation_to_prompt(history, query)
 
-        retrieved_lecture_chunks = self.retriever.retrieval_pipeline(
+        retrieved_lecture_chunks = self.retriever(
             chat_history=history,
             student_query=query.contents[0].text_content,
             result_limit=10,
@@ -108,14 +104,10 @@ class LectureChatPipeline(Pipeline):
         self.prompt = ChatPromptTemplate.from_messages(prompt_val)
         try:
             response = (self.prompt | self.pipeline).invoke({})
-            response_with_citation = self.citation_pipeline(
-                retrieved_lecture_chunks, response
-            )
-            print(response_with_citation)
-            logger.info(f"Response from tutor chat pipeline: {response_with_citation}")
-            return response_with_citation
+            logger.info(f"Response from lecture chat pipeline: {response}")
+            return response
         except Exception as e:
-            print(e)
+            raise e
 
     def _add_conversation_to_prompt(
         self,
