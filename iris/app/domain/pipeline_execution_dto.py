@@ -11,3 +11,6 @@ class PipelineExecutionDTO(BaseModel):
     initial_stages: Optional[List[StageDTO]] = Field(
         default=None, alias="initialStages"
     )
+
+    class Config:
+        populate_by_name = True

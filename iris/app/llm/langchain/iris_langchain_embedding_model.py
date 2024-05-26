@@ -1,7 +1,5 @@
 from typing import List, Any
-
 from langchain_core.embeddings import Embeddings
-
 from ...llm import RequestHandler
 
 
