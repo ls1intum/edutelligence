@@ -102,7 +102,6 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
             self.delete_old_lectures()
             self.callback.done("Old slides removed")
             if not self.dto.lecture_units[0].to_update:
-                self.batch_update([])
                 self.callback.skip("Lecture Chunking and interpretation Skipped")
                 self.callback.skip("No new slides to update")
                 return True
@@ -168,7 +167,6 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
                 image_interpretation = self.interpret_image(
                     img_base64,
                     last_page_content,
-                    page_content,
                     lecture_unit_dto.lecture_name,
                 )
                 page_content = self.merge_page_content_and_image_interpretation(
@@ -195,7 +193,6 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
         self,
         img_base64: str,
         last_page_content: str,
-        page_content: str,
         name_of_lecture: str,
     ):
         """
@@ -204,7 +201,8 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
         image_interpretation_prompt = (
             f"This page is part of the {name_of_lecture} lecture, describe and explain it in no more"
             f"than 300 tokens, respond only with the explanation nothing more, "
-            f"Here is the content of the previous slide, it's content is most likely related to the slide you need to interpret: \n"
+            f"Here is the content of the previous slide,"
+            f" it's content is most likely related to the slide you need to interpret: \n"
             f" {last_page_content}"
             f"Intepret the image below based on the provided context and the content of the previous slide.\n"
         )
@@ -228,13 +226,13 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
         Merge the text and image together
         """
         dirname = os.path.dirname(__file__)
-        prompt_file_path = os.path.join(dirname, ".", "prompts", "ingestion_prompt.txt")
+        prompt_file_path = os.path.join(dirname, ".", "prompts", "lecture_ingestion_prompt.txt")
         with open(prompt_file_path, "r") as file:
             logger.info("Loading ingestion prompt...")
-            prompt_str = file.read()
+            lecture_ingestion_prompt = file.read()
         prompt = ChatPromptTemplate.from_messages(
             [
-                ("system", prompt_str),
+                ("system", lecture_ingestion_prompt),
             ]
         )
         prompt_val = prompt.format_messages(
