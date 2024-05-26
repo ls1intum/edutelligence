@@ -106,14 +106,13 @@ class LectureRetrieval(Pipeline):
         """
         Retrieve lecture data from the database.
         """
-        course_language = "english"
-        # (
-        # self.collection.query.fetch_objects(
-        #    limit=1, return_properties=[LectureSchema.COURSE_LANGUAGE.value]
-        # )
-        # .objects[0]
-        # .properties.get(LectureSchema.COURSE_LANGUAGE.value)
-        # )
+        course_language = (
+            self.collection.query.fetch_objects(
+                limit=1, return_properties=[LectureSchema.COURSE_LANGUAGE.value]
+            )
+            .objects[0]
+            .properties.get(LectureSchema.COURSE_LANGUAGE.value)
+        )
         if problem_statement:
             rewritten_query = self.rewrite_student_query_with_exercise_context(
                 chat_history,
