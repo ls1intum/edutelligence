@@ -5,8 +5,11 @@ from typing import Dict, Optional, List
 from langchain.output_parsers import PydanticOutputParser
 from langchain_core.prompts import PromptTemplate, ChatPromptTemplate
 from langchain_core.runnables import Runnable
+from langsmith import traceable
 from pydantic import BaseModel
 
+from ...domain import PyrisMessage
+from ...domain.data.feedback_dto import FeedbackDTO
 from ...llm import CapabilityRequestHandler, RequirementList
 from ...llm import CompletionArguments
 from ...llm.langchain import IrisLangchainChatModel
@@ -68,7 +71,7 @@ class FileSelectorPipeline(Pipeline):
         # Create the prompt
         self.default_prompt = PromptTemplate(
             template=prompt_str,
-            input_variables=["file_names", "feedbacks"],
+            input_variables=["file_names", "feedbacks", "chat_history", "question"],
             partial_variables={
                 "format_instructions": self.output_parser.get_format_instructions()
             },
@@ -77,10 +80,13 @@ class FileSelectorPipeline(Pipeline):
         # Create the pipeline
         self.pipeline = self.llm | self.output_parser
 
+    @traceable(name="File Selector Pipeline")
     def __call__(
         self,
         repository: Dict[str, str],
-        prompt: Optional[ChatPromptTemplate] = None,
+        chat_history: List[PyrisMessage],
+        question: PyrisMessage,
+        feedbacks: List[FeedbackDTO],
         **kwargs,
     ) -> List[str]:
         """
@@ -89,13 +95,19 @@ class FileSelectorPipeline(Pipeline):
             :return: Selected file content
         """
         logger.info("Running file selector pipeline...")
-        if prompt is None:
-            prompt = self.default_prompt
 
         file_list = "\n".join(repository.keys())
-        response = (prompt | self.pipeline).invoke(
+        feedback_list = "\n".join(["Case: {}. Credits: {}. Info: {}".format(
+            feedback.test_case_name,
+            feedback.credits, feedback.text)
+            for feedback in feedbacks]) if feedbacks else "No feedbacks."
+        chat_history_list = "\n".join([str(message) for message in chat_history])
+        response = (self.default_prompt | self.pipeline).with_config({"run_name": "File Selector Prompt"}).invoke(
             {
-                "files": file_list,
+                "file_names": file_list,
+                "feedbacks": feedback_list,
+                "chat_history": chat_history_list,
+                "question": str(question),
             }
         )
         return response.selected_files

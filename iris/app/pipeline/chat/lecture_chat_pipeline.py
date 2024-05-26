@@ -7,6 +7,7 @@ from langchain_core.prompts import (
     SystemMessagePromptTemplate,
 )
 from langchain_core.runnables import Runnable
+from langsmith import traceable
 
 from ...common import convert_iris_message_to_langchain_message
 from ...domain import PyrisMessage
@@ -75,6 +76,7 @@ class LectureChatPipeline(Pipeline):
     def __str__(self):
         return f"{self.__class__.__name__}(llm={self.llm})"
 
+    @traceable(name="Lecture Chat Pipeline")
     def __call__(self, dto: LectureChatPipelineExecutionDTO):
         """
         Runs the pipeline
@@ -104,7 +106,7 @@ class LectureChatPipeline(Pipeline):
         prompt_val = self.prompt.format_messages()
         self.prompt = ChatPromptTemplate.from_messages(prompt_val)
         try:
-            response = (self.prompt | self.pipeline).invoke({})
+            response = (self.prompt | self.pipeline).with_config({"run_name": "Lecture Chat Prompt"}).invoke({})
             logger.info(f"Response from lecture chat pipeline: {response}")
             return response
         except Exception as e:

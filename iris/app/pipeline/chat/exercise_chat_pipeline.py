@@ -12,6 +12,7 @@ from langchain_core.prompts import (
     PromptTemplate,
 )
 from langchain_core.runnables import Runnable
+from langsmith import traceable
 
 from .lecture_chat_pipeline import LectureChatPipeline
 from .output_models.output_models.selected_paragraphs import SelectedParagraphs
@@ -81,6 +82,7 @@ class ExerciseChatPipeline(Pipeline):
     def __str__(self):
         return f"{self.__class__.__name__}(llm={self.llm})"
 
+    @traceable(name="Exercise + Lecture Chat Combined Pipeline")
     def __call__(self, dto: ExerciseChatPipelineExecutionDTO, **kwargs):
         """
         Runs the pipeline
@@ -111,6 +113,7 @@ class ExerciseChatPipeline(Pipeline):
             print(e)
             self.callback.error(f"Failed to generate response: {e}")
 
+    @traceable(name="Choose Best Response")
     def choose_best_response(
         self, paragraphs: list[str], query: str, chat_history: List[PyrisMessage]
     ):
@@ -153,6 +156,7 @@ class ExerciseChatPipeline(Pipeline):
         pipeline = LectureChatPipeline()
         self.lecture_chat_response = pipeline(dto=dto)
 
+    @traceable(name="Exercise Chat Pipeline")
     def _run_exercise_chat_pipeline(self, dto: ExerciseChatPipelineExecutionDTO):
         """
         Runs the pipeline
@@ -186,15 +190,15 @@ class ExerciseChatPipeline(Pipeline):
         self._add_conversation_to_prompt(history, query)
 
         self.callback.in_progress()
-        # Create the file selection prompt based on the current prompt
-        file_selection_prompt = self._generate_file_selection_prompt()
         selected_files = []
         # Run the file selector pipeline
         if submission:
             try:
                 selected_files = self.file_selector_pipeline(
+                    chat_history=history,
+                    question=query,
                     repository=repository,
-                    prompt=file_selection_prompt,
+                    feedbacks=(submission.latest_result.feedbacks if submission and submission.latest_result else [])
                 )
                 self.callback.done()
             except Exception as e:
@@ -231,12 +235,12 @@ class ExerciseChatPipeline(Pipeline):
         )
         self.prompt = ChatPromptTemplate.from_messages(prompt_val)
         try:
-            response_draft = (self.prompt | self.pipeline).invoke({})
+            response_draft = (self.prompt | self.pipeline).with_config({"run_name": "Response Drafting"}).invoke({})
             self.prompt += AIMessagePromptTemplate.from_template(f"{response_draft}")
             self.prompt += SystemMessagePromptTemplate.from_template(
                 guide_system_prompt
             )
-            self.exercise_chat_response = (self.prompt | self.pipeline).invoke({})
+            self.exercise_chat_response = (self.prompt | self.pipeline).with_config({"run_name": "Response Refining"}).invoke({})
         except Exception as e:
             self.callback.error(f"Failed to look up files in the repository: {e}")
             return "Failed to generate response"
@@ -322,42 +326,26 @@ class ExerciseChatPipeline(Pipeline):
         """
         if build_logs is not None and len(build_logs) > 0:
             prompt = (
-                f"Here is the information if the build failed: {build_failed}\n"
+                f"Last build failed: {build_failed}\n"
                 "These are the build logs for the student's repository:\n%s"
             ) % "\n".join(str(log) for log in build_logs)
             self.prompt += SystemMessagePromptTemplate.from_template(prompt)
-
-    def _generate_file_selection_prompt(self) -> ChatPromptTemplate:
-        """Generates the file selection prompt"""
-        file_selection_prompt = self.prompt
-
-        file_selection_prompt += SystemMessagePromptTemplate.from_template(
-            "Based on the chat history, you can now request access to more contextual information. This is the "
-            "student's submitted code repository and the corresponding build information. You can reference a file by "
-            "its path to view it."
-            "Given are the paths of all files in the assignment repository:\n{files}\n"
-            "Is a file referenced by the student or does it have to be checked before answering?"
-            "Without any comment, return the result in the following JSON format, it's important to avoid giving "
-            "unnecessary information, only name a file if it's really necessary for answering the student's question "
-            "and is listed above, otherwise leave the array empty."
-            '{{"selected_files": [<file1>, <file2>, ...]}}'
-        )
-        return file_selection_prompt
 
     def _add_relevant_chunks_to_prompt(self, retrieved_lecture_chunks: List[dict]):
         """
         Adds the relevant chunks of the lecture to the prompt
         :param retrieved_lecture_chunks: The retrieved lecture chunks
         """
-        self.prompt += SystemMessagePromptTemplate.from_template(
-            "Next you will find the potentially relevant lecture content to answer the student message:\n"
-        )
+
+        concat_text_content = ""
         for i, chunk in enumerate(retrieved_lecture_chunks):
             text_content_msg = (
                 f" \n {chunk.get(LectureSchema.PAGE_TEXT_CONTENT.value)} \n"
             )
             text_content_msg = text_content_msg.replace("{", "{{").replace("}", "}}")
-            self.prompt += SystemMessagePromptTemplate.from_template(text_content_msg)
+            concat_text_content += text_content_msg
         self.prompt += SystemMessagePromptTemplate.from_template(
-            "USE ONLY THE CONTENT YOU NEED TO ANSWER THE QUESTION:\n"
+            "Next you will find the potentially relevant lecture content to answer the student message:\n"
+            + concat_text_content
+            + "\nNote: Use only the content you need to answer the question."
         )

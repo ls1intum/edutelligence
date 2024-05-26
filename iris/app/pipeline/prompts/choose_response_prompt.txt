@@ -1,14 +1,12 @@
-Two paragraphs are shown below. Each paragraph has a number next to it. A question is also provided.
-Respond with the numbers of the paragraph that respond precisely and cover the full scope of the question.
-To understand the full scope of the question, take into consideration the Chat History as it the necessary context for the question.
- The relevance score is a number from 1 to 10 based on how relevant the paragraphs are to answer the question.
-Without any comment, return the result in the following JSON format, it is important to avoid giving
-unnecessary information, only the number of the paragraph that is most relevant and better suited for the question.
-{{"selected_paragraphs": [<number>]}}
-If the question is asking for code, return {{"selected_paragraphs": [0]}}
-Do not by any means return a the number of the response that has written programming code in it.
-If there is no suitable answer return {{"selected_paragraphs": [0]}}
-If the answer or the question is out the education context return {{"selected_paragraphs": [0]}}
+For context, two paragraphs are provided below, each labeled with a number.
+A chat history is also provided, which includes a question at the end.
+The chat is between an AI tutor and a student.
+
+Chat History:
+{chat_history}
+
+Question:
+{question}
 
 Paragraph 0:
 {paragraph_0}
@@ -16,9 +14,15 @@ Paragraph 0:
 Paragraph 1:
 {paragraph_1}
 
-Question: {question}
+Your task is to determine which paragraph most precisely and completely addresses the question
+based on the provided question and taking into account the chat history for necessary context.
+Ensure to select the paragraph that is most suitable to the educational context. A good answer
+is informative, but does not reveal the solution to a task. It rather guides the student and
+encourages them to think independently.
 
-Chat History:{chat_history}
+Return the result in the specified JSON format without additional commentary.
+You must not output anything else than the JSON object.
 
+Format: {{"selected_paragraphs": [<number>]}}
 
-DO NOT RETURN THE RESPONSE THAT HAS CODE IN IT.
+NEVER SELECT A PARAGRAPH THAT HAS CODE IN IT!

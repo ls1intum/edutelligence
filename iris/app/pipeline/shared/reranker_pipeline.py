@@ -5,6 +5,7 @@ from typing import Optional, List, Union
 from langchain_core.output_parsers import PydanticOutputParser
 from langchain_core.prompts import ChatPromptTemplate, PromptTemplate
 from langchain_core.runnables import Runnable
+from langsmith import traceable
 
 from app.domain import PyrisMessage
 from app.llm import CapabilityRequestHandler, RequirementList, CompletionArguments
@@ -72,6 +73,7 @@ class RerankerPipeline(Pipeline):
     def __str__(self):
         return f"{self.__class__.__name__}(llm={self.llm})"
 
+    @traceable(name="Reranker Pipeline")
     def __call__(
         self,
         paragraphs: Union[List[dict], List[str]],
@@ -113,5 +115,5 @@ class RerankerPipeline(Pipeline):
         if prompt is None:
             prompt = self.default_prompt
 
-        response = (prompt | self.pipeline).invoke(data)
+        response = (prompt | self.pipeline).with_config({"run_name": "Reranker Prompt"}).invoke(data)
         return response.selected_paragraphs

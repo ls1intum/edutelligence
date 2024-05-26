@@ -1,6 +1,7 @@
 from asyncio.log import logger
 from typing import List
 
+from langsmith import traceable
 from weaviate import WeaviateClient
 from weaviate.classes.query import Filter
 
@@ -97,6 +98,7 @@ class LectureRetrieval(Pipeline):
         self.collection = init_lecture_schema(client)
         self.reranker_pipeline = RerankerPipeline()
 
+    @traceable(run_type='chain', name='Lecture Retrieval Pipeline')
     def __call__(
         self,
         chat_history: list[PyrisMessage],
@@ -147,6 +149,7 @@ class LectureRetrieval(Pipeline):
         )
         return [merged_chunks[int(i)] for i in selected_chunks_index]
 
+    @traceable(run_type='prompt', name='Rewrite Student Query')
     def rewrite_student_query(
         self,
         chat_history: list[PyrisMessage],
@@ -174,12 +177,13 @@ class LectureRetrieval(Pipeline):
         )
         prompt = ChatPromptTemplate.from_messages(prompt_val)
         try:
-            response = (prompt | self.pipeline).invoke({})
+            response = (prompt | self.pipeline).with_config({"run_name": "Rewrite Prompt"}).invoke({})
             logger.info(f"Response from tutor chat pipeline: {response}")
             return response
         except Exception as e:
             raise e
 
+    @traceable(run_type='prompt', name='Rewrite Student Query with Exercise Context')
     def rewrite_student_query_with_exercise_context(
         self,
         chat_history: list[PyrisMessage],
@@ -211,12 +215,13 @@ class LectureRetrieval(Pipeline):
         )
         prompt = ChatPromptTemplate.from_messages(prompt_val)
         try:
-            response = (prompt | self.pipeline).invoke({})
+            response = (prompt | self.pipeline).with_config({"run_name": "Rewrite Prompt"}).invoke({})
             logger.info(f"Response from tutor chat pipeline: {response}")
             return response
         except Exception as e:
             raise e
 
+    @traceable(run_type='prompt', name='Rewrite Elaborated Query')
     def rewrite_elaborated_query(
         self,
         chat_history: list[PyrisMessage],
@@ -245,12 +250,13 @@ class LectureRetrieval(Pipeline):
         )
         prompt = ChatPromptTemplate.from_messages(prompt_val)
         try:
-            response = (prompt | self.pipeline).invoke({})
+            response = (prompt | self.pipeline).with_config({"run_name": "Rewrite Prompt"}).invoke({})
             logger.info(f"Response from tutor chat pipeline: {response}")
             return response
         except Exception as e:
             raise e
 
+    @traceable(run_type='prompt', name='Rewrite Elaborated Query with Exercise Context')
     def rewrite_elaborated_query_with_exercise_context(
         self,
         chat_history: list[PyrisMessage],
@@ -283,12 +289,13 @@ class LectureRetrieval(Pipeline):
         )
         prompt = ChatPromptTemplate.from_messages(prompt_val)
         try:
-            response = (prompt | self.pipeline).invoke({})
+            response = (prompt | self.pipeline).with_config({"run_name": "Rewrite Prompt"}).invoke({})
             logger.info(f"Response from tutor chat pipeline: {response}")
             return response
         except Exception as e:
             raise e
 
+    @traceable(run_type='retriever', name='Search in DB')
     def search_in_db(
         self, query: str, hybrid_factor: float, result_limit: int, course_id: int = None
     ):
