@@ -1,14 +1,15 @@
 from datetime import datetime
+from typing import Optional
 
 from pydantic import BaseModel, Field
 
 
 class ExamDTO(BaseModel):
     id: int = Field(alias="id")
-    title: str = Field(alias="title")
-    is_text_exam: bool = Field(alias="isTextExam")
-    start_date: datetime = Field(alias="startDate")
-    end_date: datetime = Field(alias="endDate")
-    publish_results_date: datetime = Field(alias="publishResultsDate")
-    exam_student_review_start: datetime = Field(alias="examStudentReviewStart")
-    exam_student_review_end: datetime = Field(alias="examStudentReviewEnd")
+    title: Optional[str] = Field(alias="title", default=None)
+    is_text_exam: bool = Field(alias="isTextExam", default=False)
+    start_date: Optional[datetime] = Field(alias="startDate", default=None)
+    end_date: Optional[datetime] = Field(alias="endDate", default=None)
+    publish_results_date: Optional[datetime] = Field(alias="publishResultsDate", default=None)
+    exam_student_review_start: Optional[datetime] = Field(alias="examStudentReviewStart", default=None)
+    exam_student_review_end: Optional[datetime] = Field(alias="examStudentReviewEnd", default=None)

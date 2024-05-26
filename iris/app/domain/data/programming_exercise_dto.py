@@ -21,10 +21,10 @@ class ProgrammingLanguage(str, Enum):
 class ProgrammingExerciseDTO(BaseModel):
     id: int
     name: str
-    programming_language: Optional[str] = Field(alias="programmingLanguage")
-    template_repository: Dict[str, str] = Field(alias="templateRepository")
-    solution_repository: Dict[str, str] = Field(alias="solutionRepository")
-    test_repository: Dict[str, str] = Field(alias="testRepository")
-    problem_statement: str = Field(alias="problemStatement")
+    programming_language: Optional[str] = Field(alias="programmingLanguage", default=None)
+    template_repository: Dict[str, str] = Field(alias="templateRepository", default={})
+    solution_repository: Dict[str, str] = Field(alias="solutionRepository", default={})
+    test_repository: Dict[str, str] = Field(alias="testRepository", default={})
+    problem_statement: str = Field(alias="problemStatement", default=None)
     start_date: Optional[datetime] = Field(alias="startDate", default=None)
     end_date: Optional[datetime] = Field(alias="endDate", default=None)

@@ -5,5 +5,5 @@ from pydantic import BaseModel
 
 class CourseDTO(BaseModel):
     id: int
-    name: Optional[str] = None
-    description: Optional[str] = None
+    name: Optional[str]
+    description: Optional[str]
