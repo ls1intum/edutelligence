@@ -41,7 +41,7 @@ def run_lecture_update_pipeline_worker(dto: IngestionPipelineExecutionDto):
 
 
 @router.post(
-    "/lectures",
+    "/lectures/fullIngestion",
     status_code=status.HTTP_202_ACCEPTED,
     dependencies=[Depends(TokenValidator())],
 )

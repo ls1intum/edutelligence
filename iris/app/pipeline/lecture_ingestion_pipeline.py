@@ -81,7 +81,7 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
         self.collection = init_lecture_schema(client)
         self.dto = dto
         self.llm_vision = BasicRequestHandler("azure-gpt-4-vision")
-        self.llm_chat = BasicRequestHandler("azure-gpt-35-turbo")
+        self.llm_chat = BasicRequestHandler("azure-gpt-35-turbo")# TODO change use langain model
         self.llm_embedding = BasicRequestHandler("embedding-small")
         self.callback = callback
         request_handler = CapabilityRequestHandler(
@@ -102,6 +102,8 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
             self.callback.in_progress("Deleting old slides from database...")
             self.delete_old_lectures()
             self.callback.done("Old slides removed")
+            #Here we check if the operation is for updating or for deleting,
+            # we only check the first file because all the files will have the same operation
             if not self.dto.lecture_units[0].to_update:
                 self.callback.skip("Lecture Chunking and interpretation Skipped")
                 self.callback.skip("No new slides to update")
@@ -260,7 +262,7 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
             contents=[TextMessageContentDTO(text_content=prompt)],
         )
         response = self.llm_chat.chat(
-            [iris_message], CompletionArguments(temperature=0.2, max_tokens=500)
+            [iris_message], CompletionArguments(temperature=0, max_tokens=20)
         )
         return response.contents[0].text_content
 
