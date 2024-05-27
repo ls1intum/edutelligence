@@ -1,5 +1,3 @@
-# app/domain/data/metrics/competency_information_dto.py
-
 from pydantic import BaseModel, Field
 from typing import Optional
 from datetime import datetime
