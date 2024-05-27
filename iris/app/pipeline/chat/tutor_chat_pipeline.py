@@ -107,7 +107,6 @@ class TutorChatPipeline(Pipeline):
             logger.info(f"Response from tutor chat pipeline: {response}")
             self.callback.done("Generated response", final_result=response)
         except Exception as e:
-            print(e)
             self.callback.error(f"Failed to generate response: {e}")
 
     def choose_best_response(
