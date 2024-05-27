@@ -1,0 +1,41 @@
+---
+services:
+  weaviate:
+    command:
+    - --host
+    - 0.0.0.0
+    - --port
+    - '8000'
+    - --scheme
+    - http
+    image: cr.weaviate.io/semitechnologies/weaviate:1.25.1
+    ports:
+    - 8000:8000
+    - 50051:50051
+    volumes:
+    - weaviate_data:/var/lib/weaviate
+    restart: on-failure:0
+    environment:
+      QUERY_DEFAULTS_LIMIT: 25
+      AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: 'true'
+      #Change this with the right path
+      PERSISTENCE_DATA_PATH: '/var/lib/weaviate'
+      DEFAULT_VECTORIZER_MODULE: 'none'
+      ENABLE_MODULES: ''
+      CLUSTER_HOSTNAME: 'pyris'
+      LIMIT_RESOURCES: 'true'
+      DISK_USE_WARNING_PERCENTAGE: '80'
+      vectorCacheMaxObjects: '1000000'
+      #GOMAXPROCS: you can set the number of threads that can be used by Weaviate
+volumes:
+  weaviate_data:
+...
+
+#1536 dimensions * 4 bytes/dimension = 6144 bytes/vector
+#1,000,000 vectors * 6144 bytes/vector = 6,144,000,000 bytes
+#6,144,000,000 bytes = 6,144 Gigabytes
+#To be safe 6.144*2 = 12.288 GB
+#1,000,000 vectors * 64 connections/vector * 8 bytes/connection = 512,000,000 bytes = 0.512 GB
+#12.288 + 0.512 = 12.8 GB
+#To be safe 12.8*2 = 25.6 GB
+#The ITP lecture would take 1,735,680 * 8 = 13,845,440 bytes = 13.84544 MB of space
