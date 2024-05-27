@@ -4,8 +4,7 @@ from app.domain.data.metrics.lecture_unit_information_dto import LectureUnitInfo
 
 
 class LectureUnitStudentMetricsDTO(BaseModel):
-    lecture_unit_information: Optional[Dict[int, LectureUnitInformationDTO]] = Field(None,
-                                                                                     alias="lectureUnitInformation")
+    lecture_unit_information: Dict[int, LectureUnitInformationDTO] = Field({}, alias="lectureUnitInformation")
     completed: Optional[Set[int]] = None
 
     class Config:
