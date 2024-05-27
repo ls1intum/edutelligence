@@ -22,7 +22,7 @@ def main():
         uvicorn.run("assessment_module_manager.__main__:app", host="0.0.0.0", port=5000)
     else:
         logger.warning("Running in DEVELOPMENT mode")
-        uvicorn.run("assessment_module_manager.__main__:app", host="127.0.0.1", port=5000, reload=True)
+        uvicorn.run("assessment_module_manager.__main__:app", host="0.0.0.0", port=5000, reload=True)
 
 
 # Add things to __all__ just to mark them as important to import
