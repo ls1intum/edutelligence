@@ -12,6 +12,7 @@ class ExerciseType(str, Enum):
     QUIZ = "QUIZ"
     MODELING = "MODELING"
     TEXT = "TEXT"
+    FILE_UPLOAD = "FILE_UPLOAD"
 
 
 class ExerciseMode(str, Enum):
