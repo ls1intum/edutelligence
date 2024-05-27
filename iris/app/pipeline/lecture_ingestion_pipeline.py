@@ -36,7 +36,10 @@ def cleanup_temporary_file(file_path):
     """
     Cleanup the temporary file
     """
-    os.remove(file_path)
+    try:
+        os.remove(file_path)
+    except OSError as e:
+        logger.error(f"Failed to remove temporary file {file_path}: {e}")
 
 
 def save_pdf(pdf_file_base64):
@@ -47,7 +50,11 @@ def save_pdf(pdf_file_base64):
     fd, temp_pdf_file_path = tempfile.mkstemp(suffix=".pdf")
     os.close(fd)
     with open(temp_pdf_file_path, "wb") as temp_pdf_file:
-        temp_pdf_file.write(binary_data)
+        try:
+            temp_pdf_file.write(binary_data)
+        except Exception as e:
+            logger.error(f"Failed to write to temporary PDF file {temp_pdf_file_path}: {e}")
+            raise
     return temp_pdf_file_path
 
 
