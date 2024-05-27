@@ -30,12 +30,3 @@ services:
 volumes:
   weaviate_data:
 ...
-
-#1536 dimensions * 4 bytes/dimension = 6144 bytes/vector
-#1,000,000 vectors * 6144 bytes/vector = 6,144,000,000 bytes
-#6,144,000,000 bytes = 6,144 Gigabytes
-#To be safe 6.144*2 = 12.288 GB
-#1,000,000 vectors * 64 connections/vector * 8 bytes/connection = 512,000,000 bytes = 0.512 GB
-#12.288 + 0.512 = 12.8 GB
-#To be safe 12.8*2 = 25.6 GB
-#The ITP lecture would take 1,735,680 * 8 = 13,845,440 bytes = 13.84544 MB of space
