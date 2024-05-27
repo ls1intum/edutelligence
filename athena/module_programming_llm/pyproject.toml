@@ -9,7 +9,7 @@ license = "MIT"
 python = "3.11.*"
 athena = {path = "../athena", develop = true}
 openai = "^0.27.8"
-langchain = "^0.0.334"
+langchain = "^0.1.11"
 gitpython = "^3.1.41"
 tiktoken = "^0.4.0"
 promptlayer = "^0.1.85"
