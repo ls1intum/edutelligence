@@ -53,7 +53,9 @@ def save_pdf(pdf_file_base64):
         try:
             temp_pdf_file.write(binary_data)
         except Exception as e:
-            logger.error(f"Failed to write to temporary PDF file {temp_pdf_file_path}: {e}")
+            logger.error(
+                f"Failed to write to temporary PDF file {temp_pdf_file_path}: {e}"
+            )
             raise
     return temp_pdf_file_path
 
@@ -88,7 +90,9 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
         self.collection = init_lecture_schema(client)
         self.dto = dto
         self.llm_vision = BasicRequestHandler("azure-gpt-4-vision")
-        self.llm_chat = BasicRequestHandler("azure-gpt-35-turbo")# TODO change use langain model
+        self.llm_chat = BasicRequestHandler(
+            "azure-gpt-35-turbo"
+        )  # TODO change use langain model
         self.llm_embedding = BasicRequestHandler("embedding-small")
         self.callback = callback
         request_handler = CapabilityRequestHandler(
@@ -109,7 +113,7 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
             self.callback.in_progress("Deleting old slides from database...")
             self.delete_old_lectures()
             self.callback.done("Old slides removed")
-            #Here we check if the operation is for updating or for deleting,
+            # Here we check if the operation is for updating or for deleting,
             # we only check the first file because all the files will have the same operation
             if not self.dto.lecture_units[0].to_update:
                 self.callback.skip("Lecture Chunking and interpretation Skipped")
@@ -239,7 +243,7 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
         """
         dirname = os.path.dirname(__file__)
         prompt_file_path = os.path.join(
-            dirname, ".", "prompts", "lecture_ingestion_prompt.txt"
+            dirname, ".", "prompts", "content_image_interpretation_merge_prompt.txt"
         )
         with open(prompt_file_path, "r") as file:
             logger.info("Loading ingestion prompt...")
