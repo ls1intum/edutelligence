@@ -24,6 +24,9 @@ from ..prompts.iris_course_chat_prompts import (
     begin_agent_prompt, chat_history_exists_prompt, no_chat_history_prompt, format_reminder_prompt,
 )
 from ...domain import CourseChatPipelineExecutionDTO
+from ...retrieval.lecture_retrieval import LectureRetrieval
+from ...vector_database.database import VectorDatabase
+from ...vector_database.lecture_schema import LectureSchema
 from ...web.status.status_update import (
     CourseChatStatusCallback,
 )
@@ -60,6 +63,8 @@ class CourseChatPipeline(Pipeline):
             request_handler=request_handler, completion_args=completion_args
         )
         self.callback = callback
+        self.db = VectorDatabase()
+        self.retriever = LectureRetrieval(self.db.client)
 
         # Create the pipeline
         self.pipeline = self.llm | StrOutputParser()
@@ -177,6 +182,35 @@ class CourseChatPipeline(Pipeline):
                 "judgment_of_learning": competency_metrics.jol_values[comp],
             } for comp in competency_metrics.competency_information]
 
+        @tool
+        def ask_lecture_helper(prompt: str) -> str:
+            """
+            You have access to the lecture helper. It is an internal tool, just for you, our AI, to help you
+            gain knowledge from the course slides. Internally, it will take your prompt, search a vector database (RAG)
+            and return the most relevant paragraphs from the interpreted course slides. They will also include references
+            aka the slide number and the lecture number so you can tell the student where to find more info.
+            The prompt can just be something you want to know, and the lecture helper will try to find the most relevant
+            information for you. Ask in natural language.
+            Use this tool if you need to look up information in the course slides to answer the message.
+            Under no circumstances use this tool twice.
+            """
+            retrieved_lecture_chunks = self.retriever(
+                chat_history=history,
+                student_query=prompt,
+                result_limit=3,
+                course_name=dto.course.name
+            )
+            concat_text_content = ""
+            for i, chunk in enumerate(retrieved_lecture_chunks):
+                text_content_msg = (
+                    f" \n Content: {chunk.get(LectureSchema.PAGE_TEXT_CONTENT.value)}\n"
+                    f" \n Slide number: {chunk.get(LectureSchema.PAGE_NUMBER.value)}\n"
+                    f" \n Lecture name: {chunk.get(LectureSchema.LECTURE_NAME.value)}\n"
+                )
+                text_content_msg = text_content_msg.replace("{", "{{").replace("}", "}}")
+                concat_text_content += text_content_msg
+            return concat_text_content
+
         try:
             logger.info("Running course chat pipeline...")
             history: List[PyrisMessage] = dto.base.chat_history or []
@@ -204,12 +238,12 @@ class CourseChatPipeline(Pipeline):
                     ]
                 )
 
-            tools = [get_course_details, get_exercise_list, get_student_exercise_metrics, get_competency_list]
+            tools = [get_course_details, get_exercise_list, get_student_exercise_metrics, get_competency_list, ask_lecture_helper]
             agent = create_structured_chat_agent(
                 llm=self.llm, tools=tools, prompt=self.prompt
             )
             agent_executor = AgentExecutor(
-                agent=agent, tools=tools, verbose=True, max_iterations=6
+                agent=agent, tools=tools, verbose=True, max_iterations=10
             )
 
             params = {
@@ -233,6 +267,8 @@ class CourseChatPipeline(Pipeline):
                         self.callback.in_progress("Reading course details ...")
                     elif action.tool == "get_competency_list":
                         self.callback.in_progress("Reading competency list ...")
+                    elif action.tool == "ask_lecture_helper":
+                        self.callback.in_progress("Searching course slides ...")
                 elif step['output']:
                     out = step['output']
 

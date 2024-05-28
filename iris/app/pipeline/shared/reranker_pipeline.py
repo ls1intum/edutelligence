@@ -90,6 +90,9 @@ class RerankerPipeline(Pipeline):
         """
         # Determine if paragraphs are a list of dicts or strings and prepare data accordingly
         if paragraphs and isinstance(paragraphs[0], dict):
+            # fill paragraphs with empty strings if the length is less than 10
+            for i in range(len(paragraphs), 10):
+                paragraphs.append({})
             data = {
                 f"paragraph_{i}": paragraph.get(
                     LectureSchema.PAGE_TEXT_CONTENT.value, ""
@@ -97,6 +100,8 @@ class RerankerPipeline(Pipeline):
                 for i, paragraph in enumerate(paragraphs)
             }
         elif paragraphs and isinstance(paragraphs[0], str):
+            for i in range(len(paragraphs), 10):
+                paragraphs.append("")
             data = {
                 f"paragraph_{i}": paragraph for i, paragraph in enumerate(paragraphs)
             }
