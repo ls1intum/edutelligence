@@ -213,8 +213,8 @@ class CourseChatPipeline(Pipeline):
 
         try:
             logger.info("Running course chat pipeline...")
-            history: List[PyrisMessage] = dto.base.chat_history or []
-            query: Optional[PyrisMessage] = (dto.base.chat_history[-1] if dto.base.chat_history else None)
+            history: List[PyrisMessage] = dto.chat_history or []
+            query: Optional[PyrisMessage] = (dto.chat_history[-1] if dto.chat_history else None)
 
             # Set up the initial prompt
             initial_prompt_with_date = iris_initial_system_prompt.replace("{current_date}",

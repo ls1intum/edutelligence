@@ -27,9 +27,9 @@ logger = logging.getLogger(__name__)
 def run_exercise_chat_pipeline_worker(dto: ExerciseChatPipelineExecutionDTO):
     try:
         callback = ExerciseChatStatusCallback(
-            run_id=dto.base.settings.authentication_token,
-            base_url=dto.base.settings.artemis_base_url,
-            initial_stages=dto.base.initial_stages,
+            run_id=dto.settings.authentication_token,
+            base_url=dto.settings.artemis_base_url,
+            initial_stages=dto.initial_stages,
         )
         pipeline = ExerciseChatPipeline(callback=callback)
     except Exception as e:
@@ -58,7 +58,7 @@ def run_lecture_chat_pipeline_worker(dto: LectureChatPipelineExecutionDTO):
 
 
 @router.post(
-    "/exercise-chat/{variant}/run",
+    "/tutor-chat/{variant}/run",
     status_code=status.HTTP_202_ACCEPTED,
     dependencies=[Depends(TokenValidator())],
 )
@@ -70,9 +70,9 @@ def run_exercise_chat_pipeline(variant: str, dto: ExerciseChatPipelineExecutionD
 def run_course_chat_pipeline_worker(dto):
     try:
         callback = CourseChatStatusCallback(
-            run_id=dto.base.settings.authentication_token,
-            base_url=dto.base.settings.artemis_base_url,
-            initial_stages=dto.base.initial_stages,
+            run_id=dto.settings.authentication_token,
+            base_url=dto.settings.artemis_base_url,
+            initial_stages=dto.initial_stages,
         )
         pipeline = CourseChatPipeline(callback=callback)
     except Exception as e:

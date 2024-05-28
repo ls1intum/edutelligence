@@ -90,7 +90,8 @@ class ExerciseChatPipeline(Pipeline):
         :param kwargs: The keyword arguments
         """
         execution_dto = LectureChatPipelineExecutionDTO(
-            base=dto.base, course=dto.course
+            settings=dto.settings, course=dto.course, user=dto.user,  chat_history=dto.chat_history,
+            initial_stages=dto.initial_stages
         )
         lecture_chat_thread = threading.Thread(
             target=self._run_lecture_chat_pipeline(execution_dto), args=(dto,)
@@ -104,8 +105,8 @@ class ExerciseChatPipeline(Pipeline):
         try:
             response = self.choose_best_response(
                 [self.exercise_chat_response, self.lecture_chat_response],
-                dto.base.chat_history[-1].contents[0].text_content,
-                dto.base.chat_history,
+                dto.chat_history[-1].contents[0].text_content,
+                dto.chat_history,
             )
             logger.info(f"Response from exercise chat pipeline: {response}")
             self.callback.done("Generated response", final_result=response)
@@ -170,8 +171,8 @@ class ExerciseChatPipeline(Pipeline):
             ]
         )
         logger.info("Running exercise chat pipeline...")
-        history: List[PyrisMessage] = dto.base.chat_history[:-1]
-        query: PyrisMessage = dto.base.chat_history[-1]
+        history: List[PyrisMessage] = dto.chat_history[:-1]
+        query: PyrisMessage = dto.chat_history[-1]
 
         submission: ProgrammingSubmissionDTO = dto.submission
         build_logs: List[BuildLogEntryDTO] = []

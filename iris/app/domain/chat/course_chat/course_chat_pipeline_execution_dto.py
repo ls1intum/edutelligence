@@ -7,6 +7,5 @@ from ...data.metrics.student_metrics_dto import StudentMetricsDTO
 
 
 class CourseChatPipelineExecutionDTO(ChatPipelineExecutionDTO):
-    base: ChatPipelineExecutionBaseDataDTO
     course: ExtendedCourseDTO
     metrics: Optional[StudentMetricsDTO]

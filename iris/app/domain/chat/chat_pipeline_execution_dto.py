@@ -1,6 +1,16 @@
-from app.domain import PipelineExecutionDTO
-from app.domain.chat.chat_pipeline_execution_base_data_dto import ChatPipelineExecutionBaseDataDTO
+from typing import List, Optional
+
+from pydantic import Field
+
+from app.domain import PipelineExecutionDTO, PyrisMessage, PipelineExecutionSettingsDTO
+from app.domain.data.user_dto import UserDTO
+from app.domain.status.stage_dto import StageDTO
 
 
 class ChatPipelineExecutionDTO(PipelineExecutionDTO):
-    base: ChatPipelineExecutionBaseDataDTO
+    chat_history: List[PyrisMessage] = Field(alias="chatHistory", default=[])
+    user: Optional[UserDTO]
+    settings: Optional[PipelineExecutionSettingsDTO]
+    initial_stages: Optional[List[StageDTO]] = Field(
+        default=None, alias="initialStages"
+    )
