@@ -8,9 +8,9 @@ from weaviate.classes.query import Filter
 logger = logging.getLogger(__name__)
 
 # Read environment variables
-host = os.getenv('WEAVIATE_HOST', 'localhost')
-port = os.getenv('WEAVIATE_PORT', 8000)
-grpc_port = os.getenv('WEAVIATE_GRPC_PORT', 50051)
+host = os.getenv("WEAVIATE_HOST", "localhost")
+port = os.getenv("WEAVIATE_PORT", 8000)
+grpc_port = os.getenv("WEAVIATE_GRPC_PORT", 50051)
 
 
 class VectorDatabase:
@@ -19,7 +19,9 @@ class VectorDatabase:
     """
 
     def __init__(self):
-        self.client = weaviate.connect_to_local(host=host, port=port, grpc_port=grpc_port)
+        self.client = weaviate.connect_to_local(
+            host=host, port=port, grpc_port=grpc_port
+        )
         self.repositories = init_repository_schema(self.client)
         self.lectures = init_lecture_schema(self.client)
 
