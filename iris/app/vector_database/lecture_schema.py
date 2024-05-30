@@ -24,6 +24,7 @@ class LectureSchema(Enum):
     PAGE_IMAGE_DESCRIPTION = "page_image_explanation"
     PAGE_BASE64 = "page_base64"
     PAGE_NUMBER = "page_number"
+    BASE_URL = "base_url"
 
 
 def init_lecture_schema(client: WeaviateClient) -> Collection:
@@ -93,6 +94,11 @@ def init_lecture_schema(client: WeaviateClient) -> Collection:
                 name=LectureSchema.PAGE_NUMBER.value,
                 description="The page number of the slide",
                 data_type=DataType.INT,
+            ),
+            Property(
+                name=LectureSchema.BASE_URL.value,
+                description="The base url of the website where the lecture slides are hosted",
+                data_type=DataType.TEXT,
             ),
         ],
     )

@@ -290,18 +290,25 @@ class LectureRetrieval(Pipeline):
             raise e
 
     def search_in_db(
-        self, query: str, hybrid_factor: float, result_limit: int, course_id: int = None
+        self,
+        query: str,
+        hybrid_factor: float,
+        result_limit: int,
+        course_id: int = None,
+        base_url: str = None,
     ):
+        course_filter = Filter.by_property(LectureSchema.COURSE_ID.value).equal(
+            course_id
+        )
+        base_url_filter = Filter.by_property(LectureSchema.BASE_URL.value).equal(
+            base_url
+        )
         """
         Search the query in the database and return the results.
         """
         return self.collection.query.hybrid(
             query=query,
-            filters=(
-                Filter.by_property(LectureSchema.COURSE_ID.value).equal(course_id)
-                if course_id
-                else None
-            ),
+            filters=(course_filter & base_url_filter),
             alpha=hybrid_factor,
             vector=self.llm_embedding.embed(query),
             return_properties=[

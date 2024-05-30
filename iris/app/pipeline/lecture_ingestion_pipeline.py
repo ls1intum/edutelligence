@@ -196,6 +196,7 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
                 LectureSchema.COURSE_ID.value: lecture_unit_dto.course_id,
                 LectureSchema.COURSE_NAME.value: lecture_unit_dto.course_name,
                 LectureSchema.COURSE_DESCRIPTION.value: lecture_unit_dto.course_description,
+                LectureSchema.BASE_URL.value: lecture_unit_dto.base_url,
                 LectureSchema.COURSE_LANGUAGE.value: course_language,
                 LectureSchema.PAGE_NUMBER.value: page_num + 1,
                 LectureSchema.PAGE_TEXT_CONTENT.value: page_content,

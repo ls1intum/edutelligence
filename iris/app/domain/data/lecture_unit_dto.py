@@ -3,6 +3,7 @@ from pydantic import BaseModel, Field
 
 class LectureUnitDTO(BaseModel):
     to_update: bool = Field(alias="toUpdate")
+    base_url: str = Field(alias="artemisBaseUrl")
     pdf_file_base64: str = Field(alias="pdfFile")
     lecture_unit_id: int = Field(alias="lectureUnitId")
     lecture_unit_name: str = Field(alias="lectureUnitName")
