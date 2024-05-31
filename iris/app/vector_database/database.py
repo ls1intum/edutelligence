@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 
 # Read environment variables
 host = os.getenv("WEAVIATE_HOST", "localhost")
-port = os.getenv("WEAVIATE_PORT", 8000)
+port = os.getenv("WEAVIATE_PORT", 8001)
 grpc_port = os.getenv("WEAVIATE_GRPC_PORT", 50051)
 
 

@@ -14,7 +14,6 @@ services:
       - ../llm_config.local.yml:/config/llm_config.yml:ro
     networks:
       - pyris
-      -
   weaviate:
       extends:
         file: ./docker-compose.yml
