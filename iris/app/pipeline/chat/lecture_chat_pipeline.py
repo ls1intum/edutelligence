@@ -116,9 +116,9 @@ class LectureChatPipeline(Pipeline):
             raise e
 
     def _add_conversation_to_prompt(
-            self,
-            chat_history: List[PyrisMessage],
-            user_question: PyrisMessage,
+        self,
+        chat_history: List[PyrisMessage],
+        user_question: PyrisMessage,
     ):
         """
         Adds the chat history and user question to the prompt
