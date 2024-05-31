@@ -12,18 +12,19 @@ services:
       - "${WEAVIATE_PORT:-8001}:${WEAVIATE_PORT:-8001}"
       - "${WEAVIATE_GRPC_PORT:-50051}:${WEAVIATE_GRPC_PORT:-50051}"
     volumes:
-      - ${WEAVIATE_DATA_VOLUME}:${WEAVIATE_CONTAINER_PATH}
+    - ${WEAVIATE_DATA_VOLUME}
     restart: on-failure:3
     environment:
+      APPLICATION_YML_PATH: "/config/application.yml"
       QUERY_DEFAULTS_LIMIT: 25
       AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: 'true'
-      PERSISTENCE_DATA_PATH:  "${WEAVIATE_DATA_PATH:}"
+      PERSISTENCE_DATA_PATH:  "${WEAVIATE_DATA_PATH}"
       DEFAULT_VECTORIZER_MODULE: 'none'
       ENABLE_MODULES: ''
       CLUSTER_HOSTNAME: 'pyris'
-      LIMIT_RESOURCES: 'true'
-      DISK_USE_WARNING_PERCENTAGE: '80'
-      vectorCacheMaxObjects: '1000000'
+      LIMIT_RESOURCES: "${WEAVIATE_DATA_PATH}"
+      DISK_USE_WARNING_PERCENTAGE: "${DISK_USE_WARNING_PERCENTAGE}"
+      vectorCacheMaxObjects: "${VECTOR_CACHE_MAX_OBJECTS}"
       #GOMAXPROCS: you can set the number of threads that can be used by Weaviate
 volumes:
   weaviate_data:

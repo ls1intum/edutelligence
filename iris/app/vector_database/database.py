@@ -5,12 +5,23 @@ from .lecture_schema import init_lecture_schema
 from .repository_schema import init_repository_schema
 from weaviate.classes.query import Filter
 
-logger = logging.getLogger(__name__)
+import yaml
 
-# Read environment variables
-host = os.getenv("WEAVIATE_HOST", "localhost")
-port = os.getenv("WEAVIATE_PORT", 8001)
-grpc_port = os.getenv("WEAVIATE_GRPC_PORT", 50051)
+
+def load_config(file_path):
+    """
+    Load the configuration file
+    """
+    with open(file_path, "r") as file:
+        config = yaml.safe_load(file)
+    return config
+
+
+weaviate_config = load_config(os.environ.get("APPLICATION_YML_PATH"))
+env_vars = weaviate_config.get("env_vars", {})
+host = env_vars.get("WEAVIATE_HOST")
+port = env_vars.get("WEAVIATE_PORT")
+grpc_port = env_vars.get("WEAVIATE_GRPC_PORT")
 
 
 class VectorDatabase:
