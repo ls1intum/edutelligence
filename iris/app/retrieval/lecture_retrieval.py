@@ -306,7 +306,6 @@ class LectureRetrieval(Pipeline):
             vector=self.llm_embedding.embed(query),
             return_properties=[
                 LectureSchema.PAGE_TEXT_CONTENT.value,
-                LectureSchema.PAGE_IMAGE_DESCRIPTION.value,
                 LectureSchema.COURSE_NAME.value,
                 LectureSchema.LECTURE_NAME.value,
                 LectureSchema.PAGE_NUMBER.value,
