@@ -38,7 +38,7 @@ services:
 
   weaviate:
     extends:
-      file: ./docker-compose.yml
+      file: ./weaviate.yml
       service: weaviate
       environment:
         - WEAVIATE_PORT=${WEAVIATE_PORT:-8000}
@@ -49,9 +49,6 @@ services:
     expose:
       - ${WEAVIATE_PORT:-8000}
       - ${WEAVIATE_GRPC_PORT:-50051}
-
-  volumes:
-    weaviate_data:
 
 networks:
   pyris:

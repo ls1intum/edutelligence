@@ -16,7 +16,7 @@ services:
       - pyris
   weaviate:
       extends:
-        file: ./docker-compose.yml
+        file: ./weaviate.yml
         service: weaviate
       networks:
         - pyris
