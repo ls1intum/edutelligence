@@ -67,14 +67,14 @@ def run_exercise_chat_pipeline(variant: str, dto: ExerciseChatPipelineExecutionD
     thread.start()
 
 
-def run_course_chat_pipeline_worker(dto):
+def run_course_chat_pipeline_worker(dto, variant):
     try:
         callback = CourseChatStatusCallback(
             run_id=dto.settings.authentication_token,
             base_url=dto.settings.artemis_base_url,
             initial_stages=dto.initial_stages,
         )
-        pipeline = CourseChatPipeline(callback=callback)
+        pipeline = CourseChatPipeline(callback=callback, variant=variant)
     except Exception as e:
         logger.error(f"Error preparing exercise chat pipeline: {e}")
         logger.error(traceback.format_exc())
@@ -95,7 +95,7 @@ def run_course_chat_pipeline_worker(dto):
     dependencies=[Depends(TokenValidator())],
 )
 def run_course_chat_pipeline(variant: str, dto: CourseChatPipelineExecutionDTO):
-    thread = Thread(target=run_course_chat_pipeline_worker, args=(dto,))
+    thread = Thread(target=run_course_chat_pipeline_worker, args=(dto, variant))
     thread.start()
 
 
