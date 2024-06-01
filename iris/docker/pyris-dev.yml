@@ -18,12 +18,9 @@ services:
     extends:
       file: ./weaviate.yml
       service: weaviate
-    volumes:
-      - weaviate_data:./weaviate
     networks:
       - pyris
-volumes:
-    weaviate_data:
+
 networks:
   pyris:
     driver: "bridge"

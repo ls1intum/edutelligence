@@ -40,8 +40,6 @@ services:
     extends:
       file: ./weaviate.yml
       service: weaviate
-    volumes:
-        - "${WEAVIATE_DATA_PATH:-./weaviate}":/var/lib/weaviate
     networks:
       - pyris
     expose:

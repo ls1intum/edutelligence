@@ -8,7 +8,9 @@ from .repository_schema import init_repository_schema
 from weaviate.classes.query import Filter
 
 import yaml
+
 logger = logging.getLogger(__name__)
+
 
 def load_config(file_path):
     """
