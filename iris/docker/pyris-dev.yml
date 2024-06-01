@@ -15,16 +15,17 @@ services:
     networks:
       - pyris
   weaviate:
-      extends:
-        file: ./weaviate.yml
-        service: weaviate
-      networks:
-        - pyris
-
+    extends:
+      file: ./weaviate.yml
+      service: weaviate
+    volumes:
+      - weaviate_data:./weaviate
+    networks:
+      - pyris
 volumes:
-  weaviate_data:
-
+    weaviate_data:
 networks:
   pyris:
     driver: "bridge"
     name: pyris
+

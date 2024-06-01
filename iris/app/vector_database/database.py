@@ -1,12 +1,14 @@
 import os
 import logging
+from asyncio.log import logger
+
 import weaviate
 from .lecture_schema import init_lecture_schema
 from .repository_schema import init_repository_schema
 from weaviate.classes.query import Filter
 
 import yaml
-
+logger = logging.getLogger(__name__)
 
 def load_config(file_path):
     """
@@ -20,8 +22,8 @@ def load_config(file_path):
 weaviate_config = load_config(os.environ.get("APPLICATION_YML_PATH"))
 env_vars = weaviate_config.get("env_vars", {})
 host = env_vars.get("WEAVIATE_HOST")
-port = env_vars.get("WEAVIATE_PORT")
-grpc_port = env_vars.get("WEAVIATE_GRPC_PORT")
+port: int = env_vars.get("WEAVIATE_PORT")
+grpc_port: int = env_vars.get("WEAVIATE_GRPC_PORT")
 
 
 class VectorDatabase:

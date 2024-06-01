@@ -40,15 +40,13 @@ services:
     extends:
       file: ./weaviate.yml
       service: weaviate
-      environment:
-        - WEAVIATE_PORT=${WEAVIATE_PORT:-8000}
-        - WEAVIATE_GRPC_PORT=${WEAVIATE_GRPC_PORT:-50051}
-
+    volumes:
+        - "${WEAVIATE_DATA_PATH:-./weaviate}":/var/lib/weaviate
     networks:
       - pyris
     expose:
-      - ${WEAVIATE_PORT:-8000}
-      - ${WEAVIATE_GRPC_PORT:-50051}
+      - "${WEAVIATE_PORT:-8001}"
+      - "${WEAVIATE_GRPC_PORT:-50051}"
 
 networks:
   pyris:
