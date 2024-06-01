@@ -1,7 +1,5 @@
 import os
 import logging
-from asyncio.log import logger
-
 import weaviate
 from .lecture_schema import init_lecture_schema
 from .repository_schema import init_repository_schema
