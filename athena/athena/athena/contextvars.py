@@ -1,12 +1,12 @@
 import contextvars
 
-artemis_url_context_var: contextvars.ContextVar = contextvars.ContextVar('artemis_url')
+artemis_url_context_var: contextvars.ContextVar = contextvars.ContextVar('lms_url')
 repository_authorization_secret_context_var: contextvars.ContextVar = contextvars.ContextVar(
     'repository_authorization_secret')
 
 
-def set_artemis_url_context_var(artemis_url: str):
-    artemis_url_context_var.set(artemis_url)
+def set_artemis_url_context_var(lms_url: str):
+    artemis_url_context_var.set(lms_url)
 
 
 def get_artemis_url():
