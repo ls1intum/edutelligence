@@ -1,7 +1,7 @@
 from typing import Optional, Sequence
 from collections import defaultdict
 
-from pydantic import BaseModel, Field
+from langchain_core.pydantic_v1 import BaseModel, Field
 from langchain.prompts import ChatPromptTemplate
 
 from athena import emit_meta

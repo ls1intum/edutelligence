@@ -100,7 +100,6 @@ async def generate_suggestions_by_file(
     solution_summary = await generate_summary_by_file(
         exercise=exercise,
         submission=submission,
-        prompt=chat_prompt,
         config=config,
         debug=debug,
     )
@@ -110,7 +109,6 @@ async def generate_suggestions_by_file(
     split_problem_statement = await split_problem_statement_by_file(
         exercise=exercise,
         submission=submission,
-        prompt=chat_prompt,
         config=config,
         debug=debug,
     )
