@@ -29,4 +29,4 @@ class Exercise(Schema, ABC):
     meta: dict = Field({}, example={"internal_id": "5"})
 
     class Config:
-        from_attributes = True
+        orm_mode = True

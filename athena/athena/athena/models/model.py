@@ -24,10 +24,3 @@ class Model:
 
     def to_schema(self):
         return type(self).get_schema_class().from_orm(self)
-
-    @event.listens_for(mapper, 'before_insert')
-    @event.listens_for(mapper, 'before_update')
-    def receive_before_insert(mapper, connection, target):
-        for key, value in target.__dict__.items():
-            if isinstance(value, AnyUrl):
-                setattr(target, key, str(value))

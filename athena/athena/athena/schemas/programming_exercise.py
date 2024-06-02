@@ -10,7 +10,7 @@ from .exercise import Exercise
 class ProgrammingExercise(Exercise):
     """A programming exercise that can be solved by students, enhanced with metadata."""
 
-    type: ExerciseType = Field(ExerciseType.programming, Literal=True)
+    type: ExerciseType = Field(ExerciseType.programming, const=True)
 
     programming_language: str = Field(description="The programming language that is used for this exercise.", example="java")
     solution_repository_uri: AnyUrl = Field(description="URL to the solution git repository, which contains the "
