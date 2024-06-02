@@ -1,5 +1,5 @@
 import os
-from pydantic import Field, PositiveInt
+from langchain_core.pydantic_v1 import Field, PositiveInt
 from enum import Enum
 
 from langchain_community.llms import Replicate
@@ -65,7 +65,7 @@ if available_models:
     class ReplicateModelConfig(ModelConfig):
         """Replicate LLM configuration."""
 
-        model_name: ReplicateModel = Field(default=default_replicate_model,  # type: ignore
+        replicate_model_name: ReplicateModel = Field(default=default_replicate_model,  # type: ignore
                                            description="The name of the model to use.")
         max_new_tokens: PositiveInt = Field(1000, description="""\
 Maximum number of tokens to generate. A word is generally 2-3 tokens (minimum: 1)\
@@ -100,13 +100,13 @@ Gradually decrease penalty over this many tokens (minimum: 1)\
             Returns:
                 BaseLanguageModel: The model.
             """
-            model = available_models[self.model_name.value]
+            model = available_models[self.replicate_model_name.value]
             kwargs = model._lc_kwargs
 
             model_kwargs = {}
             for attr, value in self.dict().items():
                 # Skip model_name
-                if attr == "model_name":
+                if attr == "replicate_model_name":
                     continue
                 model_kwargs[attr] = value
 

@@ -1,7 +1,8 @@
 import importlib
 
-from pydantic import BaseModel
-from sqlalchemy import Column, String, UniqueConstraint
+from pydantic import BaseModel, AnyUrl
+from sqlalchemy import Column, String, UniqueConstraint, event
+from sqlalchemy.orm import mapper
 
 
 class Model:
@@ -23,3 +24,10 @@ class Model:
 
     def to_schema(self):
         return type(self).get_schema_class().from_orm(self)
+
+    @event.listens_for(mapper, 'before_insert')
+    @event.listens_for(mapper, 'before_update')
+    def receive_before_insert(mapper, connection, target):
+        for key, value in target.__dict__.items():
+            if isinstance(value, AnyUrl):
+                setattr(target, key, str(value))

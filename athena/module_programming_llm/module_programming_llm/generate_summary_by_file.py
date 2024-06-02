@@ -2,7 +2,7 @@ import asyncio
 import os
 from typing import Optional, List, Dict
 
-from pydantic import BaseModel, Field
+from langchain_core.pydantic_v1 import BaseModel, Field
 from langchain.prompts import ChatPromptTemplate
 
 from athena import emit_meta

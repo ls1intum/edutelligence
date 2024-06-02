@@ -2,10 +2,10 @@ from typing import Optional, Type, TypeVar, List
 
 from langchain_core.output_parsers.openai_functions import JsonOutputFunctionsParser
 from langchain_core.utils.function_calling import convert_to_openai_function
-from pydantic import BaseModel, ValidationError
+from langchain_openai.chat_models.base import BaseChatOpenAI
+from langchain_core.pydantic_v1 import BaseModel, ValidationError
 import tiktoken
 
-from langchain_community.chat_models import ChatOpenAI
 from langchain.base_language import BaseLanguageModel
 from langchain.prompts import (
     ChatPromptTemplate,
@@ -83,7 +83,7 @@ def supports_function_calling(model: BaseLanguageModel):
     Returns:
         boolean: True if the model supports function calling, False otherwise
     """
-    return isinstance(model, ChatOpenAI)
+    return isinstance(model, BaseChatOpenAI)
 
 
 def get_chat_prompt_with_formatting_instructions(

@@ -1,15 +1,15 @@
+import copy
 import os
 from contextlib import contextmanager
 from typing import Any, Callable, Dict, List
-from pydantic import Field, validator, PositiveInt
+from langchain_core.pydantic_v1 import Field, validator, PositiveInt
 from enum import Enum
 
 import openai
-from langchain_community.chat_models import ChatOpenAI
-from langchain_community.llms import AzureOpenAI, OpenAI
+from langchain_community.llms import OpenAI
 from langchain_community.llms.openai import BaseOpenAI
 from langchain.base_language import BaseLanguageModel
-from langchain_openai import AzureChatOpenAI
+from langchain_openai import AzureChatOpenAI, AzureOpenAI, ChatOpenAI
 
 from athena.logger import logger
 from .model_config import ModelConfig
@@ -157,14 +157,14 @@ def _get_available_deployments():
             for deployment in deployments:
                 if deployment.capabilities["chat_completion"]:
                     available_deployments["chat_completion"][deployment.id] = deployment
-                if deployment.capabilities["completion"]:
-                    available_deployments["completion"][deployment.id] = deployment
-                if deployment.capabilities["fine_tune"]:
-                    available_deployments["fine_tune"][deployment.id] = deployment
-                if deployment.capabilities["embeddings"]:
-                    available_deployments["embeddings"][deployment.id] = deployment
-                if deployment.capabilities["inference"]:
-                    available_deployments["inference"][deployment.id] = deployment
+                # if deployment.capabilities["completion"]:
+                #     available_deployments["completion"][deployment.id] = deployment
+                # if deployment.capabilities["fine_tune"]:
+                #     available_deployments["fine_tune"][deployment.id] = deployment
+                # if deployment.capabilities["embeddings"]:
+                #     available_deployments["embeddings"][deployment.id] = deployment
+                # if deployment.capabilities["inference"]:
+                #     available_deployments["inference"][deployment.id] = deployment
         if openai_available:
             models = openai.Model.list()
             for model in models:
@@ -212,7 +212,7 @@ def _get_available_models(available_deployments: Dict[str, Dict[str, Any]]):
             for deployment_name, deployment in available_deployments[model_type].items():
                 available_models[AZURE_OPENAI_PREFIX + deployment_name] = Model(
                     deployment_name=deployment_name,
-                    openai_api_base=azure_openai_api_base,
+                    azure_endpoint=azure_openai_api_base,
                     openai_api_version=azure_openai_api_version,
                     openai_api_key=azure_openai_api_key,
                     client="",
@@ -229,7 +229,7 @@ if available_models:
     logger.info("Available openai models: %s", ", ".join(available_models.keys()))
 
     OpenAIModel = Enum('OpenAIModel', {name: name for name in available_models})  # type: ignore
-    default_model_name = "gpt-3.5-turbo"
+    default_model_name = "gpt-35-turbo"
     if "LLM_DEFAULT_MODEL" in os.environ and os.environ["LLM_DEFAULT_MODEL"] in available_models:
         default_model_name = os.environ["LLM_DEFAULT_MODEL"]
     if default_model_name not in available_models:
@@ -242,7 +242,7 @@ if available_models:
 
         """OpenAI LLM configuration."""
 
-        model_name: OpenAIModel = Field(default=default_openai_model,  # type: ignore
+        openai_model_name: OpenAIModel = Field(default=default_openai_model,  # type: ignore
                                         description="The name of the model to use.")
         max_tokens: PositiveInt = Field(1000, description="""\
 The maximum number of [tokens](https://platform.openai.com/tokenizer) to generate in the chat completion.
@@ -294,14 +294,14 @@ decreasing the model's likelihood to repeat the same line verbatim.
             Returns:
                 BaseLanguageModel: The model.
             """
-            model = available_models[self.model_name.value]
-            kwargs = model._lc_kwargs
+            model = available_models[self.openai_model_name.value]
+            kwargs = model.__dict__
             secrets = {secret: getattr(model, secret) for secret in model.lc_secrets.keys()}
             kwargs.update(secrets)
 
             model_kwargs = kwargs.get("model_kwargs", {})
             for attr, value in self.dict().items():
-                if attr == "model_name":
+                if attr == "openai_model_name":
                     # Skip model_name
                     continue
                 if hasattr(model, attr):

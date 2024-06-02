@@ -18,7 +18,7 @@ def get_repository_zip(url: str, authorization_secret: Optional[str] = None) -> 
     the cache or by downloading it, and return a ZipFile object.
     Optional: Authorization secret for the API. If omitted, it will be auto-determined given the request session.
     """
-    url_hash = hashlib.md5(url.encode("utf-8")).hexdigest()
+    url_hash = hashlib.md5(str(url).encode("utf-8")).hexdigest()
     file_name = url_hash + ".zip"
     cache_file_path = cache_dir / file_name
 
@@ -27,7 +27,7 @@ def get_repository_zip(url: str, authorization_secret: Optional[str] = None) -> 
             if contextvars.repository_authorization_secret_context_var_empty():
                 raise ValueError("Authorization secret for the repository API is not set. Pass authorization_secret to this function or add the X-Repository-Authorization-Secret header to the request from the assessment module manager.")
             authorization_secret = contextvars.get_repository_authorization_secret_context_var()
-        with httpx.stream("GET", url, headers={ "Authorization": cast(str, authorization_secret) }) as response:
+        with httpx.stream("GET", str(url), headers={ "Authorization": cast(str, authorization_secret) }) as response:
             response.raise_for_status()
             with open(cache_file_path, "wb") as f:
                 for chunk in response.iter_bytes():
@@ -42,7 +42,7 @@ def get_repository(url: str, authorization_secret: Optional[str] = None) -> Repo
     downloading it, and return a Repo object.
     """
 
-    url_hash = hashlib.md5(url.encode("utf-8")).hexdigest()
+    url_hash = hashlib.md5(str(url).encode("utf-8")).hexdigest()
     dir_name = url_hash + ".git"
     cache_dir_path = cache_dir / dir_name
 
