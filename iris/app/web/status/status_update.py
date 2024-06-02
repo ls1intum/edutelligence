@@ -9,7 +9,9 @@ from ...domain.chat.course_chat.course_chat_status_update_dto import (
 )
 from ...domain.status.stage_state_dto import StageStateEnum
 from ...domain.status.stage_dto import StageDTO
-from ...domain.chat.exercise_chat.exercise_chat_status_update_dto import ExerciseChatStatusUpdateDTO
+from ...domain.chat.exercise_chat.exercise_chat_status_update_dto import (
+    ExerciseChatStatusUpdateDTO,
+)
 from ...domain.status.status_update_dto import StatusUpdateDTO
 import logging
 
@@ -44,6 +46,7 @@ class StatusCallback(ABC):
     def on_status_update(self):
         """Send a status update to the Artemis API."""
         try:
+            print(self.status.dict(by_alias=True))
             requests.post(
                 self.url,
                 headers={
@@ -77,9 +80,17 @@ class StatusCallback(ABC):
             self.stage.message = message
             self.on_status_update()
         else:
-            raise ValueError("Invalid state transition to in_progress. current state is ", self.stage.state)
+            raise ValueError(
+                "Invalid state transition to in_progress. current state is ",
+                self.stage.state,
+            )
 
-    def done(self, message: Optional[str] = None, final_result: Optional[str] = None):
+    def done(
+        self,
+        message: Optional[str] = None,
+        final_result: Optional[str] = None,
+        suggestions: Optional[List[str]] = None,
+    ):
         """
         Transition the current stage to DONE and update the status.
         If there is a next stage, set the current
@@ -93,9 +104,12 @@ class StatusCallback(ABC):
                 self.stage = next_stage
             else:
                 self.status.result = final_result
+                self.status.suggestions = suggestions
             self.on_status_update()
         else:
-            raise ValueError("Invalid state transition to done. current state is ", self.stage.state)
+            raise ValueError(
+                "Invalid state transition to done. current state is ", self.stage.state
+            )
 
     def error(self, message: str):
         """

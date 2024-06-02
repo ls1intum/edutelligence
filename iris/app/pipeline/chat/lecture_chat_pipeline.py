@@ -108,7 +108,11 @@ class LectureChatPipeline(Pipeline):
         prompt_val = self.prompt.format_messages()
         self.prompt = ChatPromptTemplate.from_messages(prompt_val)
         try:
-            response = (self.prompt | self.pipeline).with_config({"run_name": "Lecture Chat Prompt"}).invoke({})
+            response = (
+                (self.prompt | self.pipeline)
+                .with_config({"run_name": "Lecture Chat Prompt"})
+                .invoke({})
+            )
             response_with_citation = self.citation_pipeline(
                 retrieved_lecture_chunks, response
             )

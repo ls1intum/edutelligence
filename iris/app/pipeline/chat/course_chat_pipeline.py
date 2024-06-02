@@ -16,19 +16,31 @@ from langchain_core.prompts import (
 from langchain_core.runnables import Runnable
 from langchain_core.tools import tool
 
+from .course_chat_interaction_suggestion_pipeline import (
+    CourseInteractionSuggestionPipeline,
+)
 from ...common import convert_iris_message_to_langchain_message
 from ...domain import PyrisMessage
+from ...domain.chat.course_chat.course_chat_interaction_suggestion_dto import (
+    CourseChatInteractionSuggestionPipelineExecutionDTO,
+)
 from ...domain.data.exercise_with_submissions_dto import ExerciseWithSubmissionsDTO
 from ...llm import CapabilityRequestHandler, RequirementList
 from ..prompts.iris_course_chat_prompts import (
     tell_iris_initial_system_prompt,
-    tell_begin_agent_prompt, tell_chat_history_exists_prompt, tell_no_chat_history_prompt, tell_format_reminder_prompt,
-    tell_begin_agent_jol_prompt
+    tell_begin_agent_prompt,
+    tell_chat_history_exists_prompt,
+    tell_no_chat_history_prompt,
+    tell_format_reminder_prompt,
+    tell_begin_agent_jol_prompt,
 )
 from ..prompts.iris_course_chat_prompts_elicit import (
     elicit_iris_initial_system_prompt,
-    elicit_begin_agent_prompt, elicit_chat_history_exists_prompt, elicit_no_chat_history_prompt, elicit_format_reminder_prompt,
-    elicit_begin_agent_jol_prompt
+    elicit_begin_agent_prompt,
+    elicit_chat_history_exists_prompt,
+    elicit_no_chat_history_prompt,
+    elicit_format_reminder_prompt,
+    elicit_begin_agent_jol_prompt,
 )
 from ...domain import CourseChatPipelineExecutionDTO
 from ...retrieval.lecture_retrieval import LectureRetrieval
@@ -54,6 +66,7 @@ def get_mastery(progress, confidence):
     """
     weight = 2.0 / 3.0
     return (1 - weight) * progress + weight * confidence
+
 
 class CourseChatPipeline(Pipeline):
     """Course chat pipeline that answers course related questions from students."""
@@ -86,6 +99,7 @@ class CourseChatPipeline(Pipeline):
         self.callback = callback
         self.db = VectorDatabase()
         self.retriever = LectureRetrieval(self.db.client)
+        self.suggestion_pipeline = CourseInteractionSuggestionPipeline()
 
         # Create the pipeline
         self.pipeline = self.llm | StrOutputParser()
@@ -125,7 +139,8 @@ class CourseChatPipeline(Pipeline):
                     dto.course.name if dto.course else "No course provided"
                 ),
                 "course_description": (
-                    dto.course.description if dto.course and dto.course.description
+                    dto.course.description
+                    if dto.course and dto.course.description
                     else "No course description provided"
                 ),
                 "programming_language": (
@@ -194,15 +209,25 @@ class CourseChatPipeline(Pipeline):
                 return dto.course.competencies
             competency_metrics = dto.metrics.competency_metrics
             weight = 2.0 / 3.0
-            return [{
-                "info": competency_metrics.competency_information[comp],
-                "exercise_ids": competency_metrics.exercises[comp],
-                "progress": competency_metrics.progress[comp],
-                "confidence": competency_metrics.confidence[comp],
-                "mastery": ((1 - weight) * competency_metrics.progress.get(comp, 0)
-                            + weight * competency_metrics.confidence.get(comp, 0)),
-                "judgment_of_learning":  competency_metrics.jol_values[comp].json() if competency_metrics.jol_values and comp in competency_metrics.jol_values else None,
-            } for comp in competency_metrics.competency_information]
+            return [
+                {
+                    "info": competency_metrics.competency_information[comp],
+                    "exercise_ids": competency_metrics.exercises[comp],
+                    "progress": competency_metrics.progress[comp],
+                    "confidence": competency_metrics.confidence[comp],
+                    "mastery": (
+                        (1 - weight) * competency_metrics.progress.get(comp, 0)
+                        + weight * competency_metrics.confidence.get(comp, 0)
+                    ),
+                    "judgment_of_learning": (
+                        competency_metrics.jol_values[comp].json()
+                        if competency_metrics.jol_values
+                        and comp in competency_metrics.jol_values
+                        else None
+                    ),
+                }
+                for comp in competency_metrics.competency_information
+            ]
 
         @tool
         def ask_lecture_helper(prompt: str) -> str:
@@ -220,7 +245,7 @@ class CourseChatPipeline(Pipeline):
                 chat_history=history,
                 student_query=prompt,
                 result_limit=3,
-                course_name=dto.course.name
+                course_name=dto.course.name,
             )
             concat_text_content = ""
             for i, chunk in enumerate(retrieved_lecture_chunks):
@@ -229,7 +254,9 @@ class CourseChatPipeline(Pipeline):
                     f" \n Slide number: {chunk.get(LectureSchema.PAGE_NUMBER.value)}\n"
                     f" \n Lecture name: {chunk.get(LectureSchema.LECTURE_NAME.value)}\n"
                 )
-                text_content_msg = text_content_msg.replace("{", "{{").replace("}", "}}")
+                text_content_msg = text_content_msg.replace("{", "{{").replace(
+                    "}", "}}"
+                )
                 concat_text_content += text_content_msg
             return concat_text_content
 
@@ -251,33 +278,58 @@ class CourseChatPipeline(Pipeline):
         try:
             logger.info("Running course chat pipeline...")
             history: List[PyrisMessage] = dto.chat_history or []
-            query: Optional[PyrisMessage] = (dto.chat_history[-1] if dto.chat_history else None)
+            query: Optional[PyrisMessage] = (
+                dto.chat_history[-1] if dto.chat_history else None
+            )
 
             # Set up the initial prompt
-            initial_prompt_with_date = iris_initial_system_prompt.replace("{current_date}",
-                                                                          datetime.now(tz=pytz.UTC).strftime(
-                                                                              "%Y-%m-%d %H:%M:%S"))
+            initial_prompt_with_date = iris_initial_system_prompt.replace(
+                "{current_date}",
+                datetime.now(tz=pytz.UTC).strftime("%Y-%m-%d %H:%M:%S"),
+            )
 
             params = {}
             if self.variant == "jol":
-                comp = next((c for c in dto.course.competencies if c.id == dto.competency_jol.competency_id), None)
+                comp = next(
+                    (
+                        c
+                        for c in dto.course.competencies
+                        if c.id == dto.competency_jol.competency_id
+                    ),
+                    None,
+                )
                 agent_prompt = begin_agent_jol_prompt
                 params = {
-                    "jol": json.dumps({
-                        "value": dto.competency_jol.jol_value,
-                        "competency_mastery": get_mastery(dto.competency_jol.competency_progress, dto.competency_jol.competency_confidence),
-                    }),
+                    "jol": json.dumps(
+                        {
+                            "value": dto.competency_jol.jol_value,
+                            "competency_mastery": get_mastery(
+                                dto.competency_jol.competency_progress,
+                                dto.competency_jol.competency_confidence,
+                            ),
+                        }
+                    ),
                     "competency": comp.json(),
                 }
             else:
-                agent_prompt = begin_agent_prompt if query is not None else no_chat_history_prompt
+                agent_prompt = (
+                    begin_agent_prompt if query is not None else no_chat_history_prompt
+                )
 
             if query is not None:
                 # Add the conversation to the prompt
-                chat_history_messages = [convert_iris_message_to_langchain_message(message) for message in history]
+                chat_history_messages = [
+                    convert_iris_message_to_langchain_message(message)
+                    for message in history
+                ]
                 self.prompt = ChatPromptTemplate.from_messages(
                     [
-                        ("system", initial_prompt_with_date + "\n" + chat_history_exists_prompt),
+                        (
+                            "system",
+                            initial_prompt_with_date
+                            + "\n"
+                            + chat_history_exists_prompt,
+                        ),
                         *chat_history_messages,
                         ("system", agent_prompt + format_reminder_prompt),
                     ]
@@ -285,12 +337,24 @@ class CourseChatPipeline(Pipeline):
             else:
                 self.prompt = ChatPromptTemplate.from_messages(
                     [
-                        ("system", initial_prompt_with_date + "\n" +
-                         agent_prompt + "\n" + format_reminder_prompt),
+                        (
+                            "system",
+                            initial_prompt_with_date
+                            + "\n"
+                            + agent_prompt
+                            + "\n"
+                            + format_reminder_prompt,
+                        ),
                     ]
                 )
 
-            tools = [get_course_details, get_exercise_list, get_student_exercise_metrics, get_competency_list, ask_lecture_helper]
+            tools = [
+                get_course_details,
+                get_exercise_list,
+                get_student_exercise_metrics,
+                get_competency_list,
+                ask_lecture_helper,
+            ]
             agent = create_structured_chat_agent(
                 llm=self.llm, tools=tools, prompt=self.prompt
             )
@@ -314,15 +378,36 @@ class CourseChatPipeline(Pipeline):
                         self.callback.in_progress("Reading competency list ...")
                     elif action.tool == "ask_lecture_helper":
                         self.callback.in_progress("Searching course slides ...")
-                elif step['output']:
-                    out = step['output']
+                elif step["output"]:
+                    out = step["output"]
 
             print(out)
-            self.callback.done(None, final_result=out)
+            suggestions = None
+            try:
+                if out:
+                    suggestion_dto = (
+                        CourseChatInteractionSuggestionPipelineExecutionDTO(
+                            chat_history=history,
+                            last_message=out,
+                        )
+                    )
+                    suggestions = self.suggestion_pipeline(suggestion_dto)
+            except Exception as e:
+                logger.error(
+                    f"An error occurred while running the course chat interaction suggestion pipeline",
+                    exc_info=e,
+                )
+                traceback.print_exc()
+
+            self.callback.done(None, final_result=out, suggestions=suggestions)
         except Exception as e:
-            logger.error(f"An error occurred while running the course chat pipeline", exc_info=e)
+            logger.error(
+                f"An error occurred while running the course chat pipeline", exc_info=e
+            )
             traceback.print_exc()
-            self.callback.error("An error occurred while running the course chat pipeline.")
+            self.callback.error(
+                "An error occurred while running the course chat pipeline."
+            )
 
 
 def datetime_to_string(dt: Optional[datetime]) -> str:
