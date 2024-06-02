@@ -8,7 +8,8 @@ import GetConfigSchema from "@/components/view_mode/module_requests/get_config_s
 import SendSubmissions from "@/components/view_mode/module_requests/send_submissions";
 import SelectSubmission from "@/components/view_mode/module_requests/request_submission_selection";
 import SendFeedbacks from "@/components/view_mode/module_requests/send_feedbacks";
-import RequestFeedbackSuggestions from "@/components/view_mode/module_requests/request_feedback_suggestions";
+import RequestGradedFeedbackSuggestions from "@/components/view_mode/module_requests/request_graded_feedback_suggestions";
+import RequestNonGradedFeedbackSuggestions from "@/components/view_mode/module_requests/request_non_graded_feedback_suggestions";
 import RequestEvaluation from "@/components/view_mode/module_requests/request_evaluation";
 
 
@@ -35,7 +36,8 @@ export default function ModuleRequests() {
           <SendSubmissions />
           <SelectSubmission />
           <SendFeedbacks />
-          <RequestFeedbackSuggestions />
+          <RequestGradedFeedbackSuggestions />
+          <RequestNonGradedFeedbackSuggestions />
           <RequestEvaluation />
         </ModuleProvider>
       )}

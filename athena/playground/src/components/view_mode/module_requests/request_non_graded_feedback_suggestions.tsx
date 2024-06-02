@@ -15,7 +15,7 @@ import ExerciseDetail from "@/components/details/exercise_detail";
 import SubmissionDetail from "@/components/details/submission_detail";
 import Disclosure from "@/components/disclosure";
 
-export default function RequestFeedbackSuggestions() {
+export default function RequestNonGradedFeedbackSuggestions() {
   const { module } = useModule();
   const { dataMode } = useBaseInfo();
 
@@ -34,11 +34,11 @@ export default function RequestFeedbackSuggestions() {
     onError: (error) => {
       console.error(error);
       alert(
-        `Failed to request feedback suggestions from Athena: ${error.message}. Is the URL correct?`
+        `Failed to request non-graded feedback suggestions from Athena: ${error.message}. Is the URL correct?`
       );
     },
     onSuccess: () => {
-      alert(`Feedback suggestions requested successfully!`);
+      alert(`Non-graded feedback suggestions requested successfully!`);
     },
   });
 
@@ -58,7 +58,7 @@ export default function RequestFeedbackSuggestions() {
     return (
       submission && (
         <Disclosure
-          title="Submission with Feedback Suggestions"
+          title="Submission with Non-Graded Feedback Suggestions"
           openedInitially
           className={{ root: "ml-2" }}
         >
@@ -71,14 +71,12 @@ export default function RequestFeedbackSuggestions() {
   return (
     <div className="bg-white rounded-md p-4 mb-8">
       <h3 className="text-2xl font-bold mb-4">
-        Request Feedback Suggestions from Athena
+        Request Non-Graded Feedback Suggestions from Athena
       </h3>
       <p className="text-gray-500 mb-4">
-        Request a list of feedback suggestions from Athena for the selected
-        submission. The LMS would usually call this when a tutor starts grading
-        a submission. You should get a list of all submissions that are not
-        graded yet. The matching module for the exercise will receive the
-        request at the function annotated with <code>@feedback_provider</code>.
+        Request a list of non-graded feedback suggestions from Athena for the selected
+        submission. The LMS would usually call this when a student submitted a solution and wants to get non-graded learning suggestions.
+        The matching module for the exercise will receive the request at the function annotated with <code>@feedback_provider</code>.
       </p>
       <ExerciseSelect
         exerciseType={module.type}
@@ -121,6 +119,7 @@ export default function RequestFeedbackSuggestions() {
           mutate({
             exercise,
             submission,
+            is_graded: false
           });
         }}
         disabled={!exercise || !submission || isLoading}
@@ -128,7 +127,7 @@ export default function RequestFeedbackSuggestions() {
         {exercise && submission
           ? isLoading
             ? "Loading..."
-            : "Request feedback suggestions"
+            : "Request non-graded feedback suggestions"
           : exercise
           ? "Please select a submission"
           : "Please select an exercise"}
