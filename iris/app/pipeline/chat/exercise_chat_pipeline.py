@@ -45,7 +45,7 @@ logger.setLevel(logging.INFO)
 
 
 class ExerciseChatPipeline(Pipeline):
-    """Exercise chat pipeline that answers exercises related questions from students."""
+    """Exercise chat pipeline that answers exercises related questions from students. """
 
     llm: IrisLangchainChatModel
     pipeline: Runnable
