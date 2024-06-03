@@ -11,4 +11,4 @@ class LectureUnitDTO(BaseModel):
     lecture_name: str = Field(alias="lectureName")
     course_id: int = Field(alias="courseId")
     course_name: str = Field(alias="courseName")
-    course_description: str = Field(alias="courseDescription")
+    course_description: str = Field(default="", alias="courseDescription")
