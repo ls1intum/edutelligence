@@ -21,6 +21,7 @@ class LectureSchema(Enum):
     LECTURE_UNIT_ID = "lecture_unit_id"
     LECTURE_UNIT_NAME = "lecture_unit_name"
     PAGE_TEXT_CONTENT = "page_text_content"
+    PAGE_IMAGE_DESCRIPTION = "page_image_explanation"
     PAGE_BASE64 = "page_base64"
     PAGE_NUMBER = "page_number"
 
@@ -76,6 +77,11 @@ def init_lecture_schema(client: WeaviateClient) -> Collection:
             Property(
                 name=LectureSchema.PAGE_TEXT_CONTENT.value,
                 description="The original text content from the slide",
+                data_type=DataType.TEXT,
+            ),
+            Property(
+                name=LectureSchema.PAGE_IMAGE_DESCRIPTION.value,
+                description="The description of the slide if the slide contains an image",
                 data_type=DataType.TEXT,
             ),
             Property(
