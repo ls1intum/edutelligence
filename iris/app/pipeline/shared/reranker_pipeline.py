@@ -80,7 +80,6 @@ class RerankerPipeline(Pipeline):
         query: str,
         prompt: Optional[PromptTemplate] = None,
         chat_history: list[PyrisMessage] = None,
-        **kwargs,
     ) -> List[str]:
         """
         Runs the pipeline

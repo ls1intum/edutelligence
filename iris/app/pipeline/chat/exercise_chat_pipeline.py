@@ -83,7 +83,7 @@ class ExerciseChatPipeline(Pipeline):
         return f"{self.__class__.__name__}(llm={self.llm})"
 
     @traceable(name="Exercise + Lecture Chat Combined Pipeline")
-    def __call__(self, dto: ExerciseChatPipelineExecutionDTO, **kwargs):
+    def __call__(self, dto: ExerciseChatPipelineExecutionDTO):
         """
         Runs the pipeline
         :param dto:  execution data transfer object
