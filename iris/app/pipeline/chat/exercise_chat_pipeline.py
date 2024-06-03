@@ -70,9 +70,9 @@ class ExerciseChatPipeline(Pipeline):
         self.callback = callback
 
         # Create the pipelines
-        self.db = VectorDatabase()
-        self.retriever = LectureRetrieval(self.db.client)
-        self.reranker_pipeline = RerankerPipeline()
+        #self.db = VectorDatabase()
+        #self.retriever = LectureRetrieval(self.db.client)
+        #self.reranker_pipeline = RerankerPipeline()
         self.file_selector_pipeline = FileSelectorPipeline()
         self.pipeline = self.llm | StrOutputParser()
 
@@ -93,23 +93,24 @@ class ExerciseChatPipeline(Pipeline):
             settings=dto.settings, course=dto.course, user=dto.user,  chat_history=dto.chat_history,
             initial_stages=dto.initial_stages
         )
-        lecture_chat_thread = threading.Thread(
-            target=self._run_lecture_chat_pipeline(execution_dto), args=(dto,)
-        )
-        exercise_chat_thread = threading.Thread(
-            target=self._run_exercise_chat_pipeline(dto), args=(dto,)
-        )
-        lecture_chat_thread.start()
-        exercise_chat_thread.start()
+        #lecture_chat_thread = threading.Thread(
+        #    target=self._run_lecture_chat_pipeline(execution_dto), args=(dto,)
+        #)
+        #exercise_chat_thread = threading.Thread(
+        #    target=
+        #)
+        rsp = self._run_exercise_chat_pipeline(dto)
+        #lecture_chat_thread.start()
+        # exercise_chat_thread.start()
 
         try:
-            response = self.choose_best_response(
-                [self.exercise_chat_response, self.lecture_chat_response],
-                dto.chat_history[-1].contents[0].text_content,
-                dto.chat_history,
-            )
-            logger.info(f"Response from exercise chat pipeline: {response}")
-            self.callback.done("Generated response", final_result=response)
+            #response = self.choose_best_response(
+            #    [self.exercise_chat_response],
+            #    dto.chat_history[-1].contents[0].text_content,
+            #    dto.chat_history,
+            #)
+            #logger.info(f"Response from exercise chat pipeline: {response}")
+            self.callback.done("Generated response", final_result=self.exercise_chat_response)
         except Exception as e:
             print(e)
             self.callback.error(f"Failed to generate response: {e}")
@@ -215,15 +216,15 @@ class ExerciseChatPipeline(Pipeline):
             selected_files,
         )
 
-        retrieved_lecture_chunks = self.retriever(
-            chat_history=history,
-            student_query=query.contents[0].text_content,
-            result_limit=10,
-            course_name=dto.course.name,
-            problem_statement=problem_statement,
-            exercise_title=exercise_title,
-        )
-        self._add_relevant_chunks_to_prompt(retrieved_lecture_chunks)
+        # retrieved_lecture_chunks = self.retriever(
+        #     chat_history=history,
+        #     student_query=query.contents[0].text_content,
+        #     result_limit=10,
+        #     course_name=dto.course.name,
+        #     problem_statement=problem_statement,
+        #     exercise_title=exercise_title,
+        # )
+        # self._add_relevant_chunks_to_prompt(retrieved_lecture_chunks)
 
         self.callback.in_progress()
 
