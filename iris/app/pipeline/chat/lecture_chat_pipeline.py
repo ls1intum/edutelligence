@@ -8,7 +8,6 @@ from langchain_core.prompts import (
 )
 from langchain_core.runnables import Runnable
 
-from ..shared.citation_pipeline import CitationPipeline
 from ...common import convert_iris_message_to_langchain_message
 from ...domain import PyrisMessage
 from ...llm import CapabilityRequestHandler, RequirementList
@@ -69,7 +68,6 @@ class LectureChatPipeline(Pipeline):
         self.db = VectorDatabase()
         self.retriever = LectureRetrieval(self.db.client)
         self.pipeline = self.llm | StrOutputParser()
-        self.citation_pipeline = CitationPipeline()
 
     def __repr__(self):
         return f"{self.__class__.__name__}(llm={self.llm})"
@@ -107,11 +105,8 @@ class LectureChatPipeline(Pipeline):
         self.prompt = ChatPromptTemplate.from_messages(prompt_val)
         try:
             response = (self.prompt | self.pipeline).invoke({})
-            response_with_citation = self.citation_pipeline(
-                retrieved_lecture_chunks, response
-            )
             logger.info(f"Response from lecture chat pipeline: {response}")
-            return response_with_citation
+            return response
         except Exception as e:
             raise e
 
