@@ -1,4 +1,3 @@
-import os
 import logging
 import weaviate
 from .lecture_schema import init_lecture_schema
