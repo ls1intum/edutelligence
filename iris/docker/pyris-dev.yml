@@ -14,12 +14,16 @@ services:
       - ../llm_config.local.yml:/config/llm_config.yml:ro
     networks:
       - pyris
+
   weaviate:
     extends:
       file: ./weaviate.yml
       service: weaviate
     networks:
       - pyris
+    port:
+      - 8001:8001
+      - 50051:50051
 
 networks:
   pyris:

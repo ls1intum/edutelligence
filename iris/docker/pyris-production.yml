@@ -42,9 +42,6 @@ services:
       service: weaviate
     networks:
       - pyris
-    expose:
-      - "${WEAVIATE_PORT:-8001}"
-      - "${WEAVIATE_GRPC_PORT:-50051}"
 
 networks:
   pyris:

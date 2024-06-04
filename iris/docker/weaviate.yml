@@ -9,11 +9,11 @@ services:
     - --scheme
     - http
     image: cr.weaviate.io/semitechnologies/weaviate:1.25.1
-    ports:
-      - 8001:8001
-      - 50051:50051
+    expose:
+      - 8001
+      - 50051
     volumes:
-      - /var/weaviate:/var/lib/weaviate
+      - ${WEAVIATE_VOLUME_MOUNT:-./.docker-data/weaviate-data}:/var/lib/weaviate
     restart: on-failure:3
     env_file:
-      - ./weaviate/default.env  # Changed to a relative path
+      - ./weaviate/default.env
