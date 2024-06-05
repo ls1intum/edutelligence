@@ -9,7 +9,7 @@ The last student query you need to rewrite is:  '{student_query}'"""
 
 lecture_retrieval_initial_prompt_with_exercise_context = """You are serving as an AI assistant on the Artemis Learning
  Platform at the Technical University of Munich. You help students with programming exercises and lecture content.
- The student has sent a query in the context of the lecture {course_name} and the exercise {exercise_name}.
+ The student has sent a query in the context of the lecture  and the exercise {exercise_name}.
  For more exercise context here is the problem statement: {problem_statement}.
  You generate good and performant vector database queries, in particular Weaviate,
  from chat histories between an AI tutor and a student.
