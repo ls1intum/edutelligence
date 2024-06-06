@@ -2,13 +2,15 @@
 Entry point for the module_programming_ast module.
 """
 import random
-from typing import List, Any
+from typing import List, Any, cast
 from pydantic import BaseModel, Field
 
 from athena import app, config_schema_provider, submissions_consumer, submission_selector, feedback_consumer, feedback_provider, evaluation_provider, emit_meta
-from athena.programming import Exercise, Submission, Feedback
 from athena.logger import logger
 from athena.storage import store_exercise, store_submissions, store_feedback
+from athena.programming import Exercise, Submission, Feedback, get_stored_feedback_suggestions, count_stored_submissions
+from module_programming_ast.remove_overlapping import filter_overlapping_suggestions
+from module_programming_ast.remove_suspicious import filter_suspicious
 
 
 @config_schema_provider
@@ -73,71 +75,23 @@ def process_incoming_feedback(exercise: Exercise, submission: Submission, feedba
 def suggest_feedback(exercise: Exercise, submission: Submission, module_config: Configuration) -> List[Feedback]:
     logger.info("suggest_feedback: Suggestions for submission %d of exercise %d were requested", submission.id, exercise.id)
     # Do something with the submission and return a list of feedback
+    # ThemisML currently only works with Java
+    if exercise.programming_language.lower() != "java" or exercise.programming_language.lower() != "python":
+        logger.info("The AP-TED module currently only works with Java and Python. Returning no suggestions.")
+        return []
 
-    # Example use of module config
-    # If you are not using module_config for your module, you can remove it from the function signature
-    logger.info("Config: %s", module_config)
-    if module_config.debug:
-        emit_meta("costs", "100.00€")
-    
-    return [
-        # Referenced feedback, line 8-9 in BinarySearch.java
-        Feedback(
-            id=None,
-            exercise_id=exercise.id,
-            submission_id=submission.id,
-            title="This is a suggestion.",
-            description="There is something wrong here.",
-            credits=-1.0,
-            file_path="BinarySearch.java",
-            line_start=8,
-            line_end=9,
-            structured_grading_instruction_id=None,
-            meta={}
-        ),
-        # Referenced feedback, line 13-18 in BinarySearch.java
-        Feedback(
-            id=None,
-            exercise_id=exercise.id,
-            submission_id=submission.id,
-            title="This is a second suggestion.",
-            description="This is very good!",
-            credits=2.0,
-            file_path="BinarySearch.java",
-            line_start=13,
-            line_end=18,
-            structured_grading_instruction_id=None,
-            meta={}
-        ),
-        # Unreferenced feedback without file
-        Feedback(
-            id=None,
-            exercise_id=exercise.id,
-            submission_id=submission.id,
-            title="This is an unreferenced suggestion.",
-            description="General feedback without any reference to the submission.",
-            credits=0.0,
-            file_path=None,
-            line_start=None,
-            line_end=None,
-            structured_grading_instruction_id=None,
-            meta={}
-        ),
-        # Unreferenced feedback in BinarySearch.java
-        Feedback(
-            id=None,
-            exercise_id=exercise.id,
-            submission_id=submission.id,
-            title="This is an unreferenced suggestion in a file.",
-            description="General feedback with only the reference to a file (BinarySearch.java)",
-            credits=0.0,
-            file_path="BinarySearch.java",
-            line_start=None,
-            line_end=None,
-            structured_grading_instruction_id=None,
-            meta={}
-        )
-    ]
+    suggested_feedbacks = cast(List[Feedback], list(get_stored_feedback_suggestions(exercise.id, submission.id)))
+    logger.debug("Found %d feedback suggestions (unfiltered)", len(suggested_feedbacks))
+    suggested_feedbacks = filter_suspicious(suggested_feedbacks, count_stored_submissions(exercise.id))
+    logger.debug("Found %d feedback suggestions (removed suspicious suggestions)", len(suggested_feedbacks))
+    suggested_feedbacks = filter_overlapping_suggestions(suggested_feedbacks)
+    logger.debug("Found %d feedback suggestions (removed overlapping suggestions)", len(suggested_feedbacks))
+
+    logger.info("Suggesting %d filtered feedback suggestions", len(suggested_feedbacks))
+    logger.debug("Suggested Feedback suggestions: %s", suggested_feedbacks)
+
+    return suggested_feedbacks
+
 
 
 # Only if it makes sense for a module (Optional)
