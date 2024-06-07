@@ -3,6 +3,7 @@ import os
 from typing import Optional, List, Dict
 
 from langchain_core.pydantic_v1 import BaseModel, Field
+from langchain.prompts import ChatPromptTemplate
 
 from athena import emit_meta
 from athena.programming import Exercise, Submission
@@ -48,28 +49,27 @@ class SolutionSummary(BaseModel):
 async def generate_summary_by_file(
         exercise: Exercise,
         submission: Submission,
+        prompt: ChatPromptTemplate,
         config: BasicApproachConfig,
         debug: bool,
 ) -> Optional[SolutionSummary]:
-    """Generate summary for the submission file by file
+    """Generaty summary for the submission file by file
 
     Args:
         exercise (Exercise): Exercise to split the problem statement for (respecting the changed files)
         submission (Submission): Submission to split the problem statement for (respecting the changed files)
+        prompt (ChatPromptTemplate): Prompt template to check for problem_statement
         config (GradedBasicApproachConfig): Configuration
 
     Returns:
         Optional[SolutionSummary]: Summarization of the given submission, None if it is too short or too long
     """
 
-    model = config.model.get_model()  # type: ignore[attr-defined]
+    # Return None if submission_file not in the prompt
+    if "summary" not in prompt.input_variables:
+        return None
 
-    prompt = get_chat_prompt_with_formatting_instructions(
-        model=model,
-        system_message=config.generate_file_summary_prompt.system_message,
-        human_message=config.generate_file_summary_prompt.human_message,
-        pydantic_object=FileDescription,
-    )
+    model = config.model.get_model()  # type: ignore[attr-defined]
 
     template_repo = exercise.get_template_repository()
     submission_repo = submission.get_repository()
@@ -86,6 +86,12 @@ async def generate_summary_by_file(
     changed_files = load_files_from_repo(
         submission_repo,
         file_filter=lambda file_path: file_path in changed_files_from_template_to_submission,
+    )
+    chat_prompt = get_chat_prompt_with_formatting_instructions(
+        model=model,
+        system_message=config.generate_file_summary_prompt.system_message,
+        human_message=config.generate_file_summary_prompt.human_message,
+        pydantic_object=FileDescription,
     )
 
     prompt_inputs = []
@@ -104,7 +110,7 @@ async def generate_summary_by_file(
     valid_prompt_inputs = [
         prompt_input
         for prompt_input in prompt_inputs
-        if num_tokens_from_prompt(prompt, prompt_input) <= config.max_input_tokens
+        if num_tokens_from_prompt(chat_prompt, prompt_input) <= config.max_input_tokens
     ]
 
     # noinspection PyTypeChecker
@@ -112,7 +118,7 @@ async def generate_summary_by_file(
         *[
             predict_and_parse(
                 model=model,
-                chat_prompt=prompt,
+                chat_prompt=chat_prompt,
                 prompt_input=prompt_input,
                 pydantic_object=FileDescription,
                 tags=[
@@ -131,7 +137,7 @@ async def generate_summary_by_file(
             emit_meta(
                 "file_summary",
                 {
-                    "prompt": prompt.format(**prompt_input),
+                    "prompt": chat_prompt.format(**prompt_input),
                     "result": result.dict() if result is not None else None,
                     "file_path": prompt_input[
                         "file_path"
