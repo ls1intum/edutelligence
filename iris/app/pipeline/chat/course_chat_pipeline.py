@@ -31,6 +31,9 @@ from ..prompts.iris_course_chat_prompts_elicit import (
     elicit_begin_agent_jol_prompt
 )
 from ...domain import CourseChatPipelineExecutionDTO
+from ...retrieval.lecture_retrieval import LectureRetrieval
+from ...vector_database.database import VectorDatabase
+from ...vector_database.lecture_schema import LectureSchema
 
 from ...web.status.status_update import (
     CourseChatStatusCallback,
@@ -76,14 +79,14 @@ class CourseChatPipeline(Pipeline):
             )
         )
         completion_args = CompletionArguments(
-            temperature=0.2, max_tokens=2000, response_format="JSON"
+            temperature=0, max_tokens=2000, response_format="JSON"
         )
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler, completion_args=completion_args
         )
         self.callback = callback
-        #self.db = VectorDatabase()
-        #self.retriever = LectureRetrieval(self.db.client)
+        self.db = VectorDatabase()
+        self.retriever = LectureRetrieval(self.db.client)
 
         # Create the pipeline
         self.pipeline = self.llm | StrOutputParser()
@@ -101,16 +104,28 @@ class CourseChatPipeline(Pipeline):
             :param kwargs: The keyword arguments
         """
 
+        used_tools = []
         # Define tools
         @tool
-        def get_exercise_list() -> list[ExerciseWithSubmissionsDTO]:
+        def get_exercise_list() -> list[dict]:
             """
             Get the list of exercises in the course.
-            Use this if the student asks you about an exercise by name, and you don't know the details, such as the ID
-            or the schedule. Note: The exercise contains a list of submissions (timestamp and score) of this student so you
+            Use this if the student asks you about an exercise. Note: The exercise contains a list of submissions (timestamp and score) of this student so you
             can provide additional context regarding their progress and tendencies over time.
+            Also, ensure to use the provided current date and time and compare it to the start date and due date etc.
+            Do not recommend that the student should work on exercises with a past due date.
+            The submissions array tells you about the status of the student in this exercise: You see when the student submitted the exercise and what score they got.
+            A 100% score means the student solved the exercise correctly and completed it.
             """
-            return dto.course.exercises
+            used_tools.append("get_exercise_list")
+            current_time = datetime.now(tz=pytz.UTC)
+            exercises = []
+            for exercise in dto.course.exercises:
+                exercise_dict = exercise.dict()
+                exercise_dict["due_date_over"] = exercise.due_date < current_time if exercise.due_date else None
+                exercises.append(exercise_dict)
+            return exercises
+
 
         @tool
         def get_course_details() -> dict:
@@ -118,6 +133,7 @@ class CourseChatPipeline(Pipeline):
             Get the following course details: course name, course description, programming language, course start date,
             and course end date.
             """
+            used_tools.append("get_course_details")
             return {
                 "course_name": (
                     dto.course.name if dto.course else "No course provided"
@@ -188,50 +204,46 @@ class CourseChatPipeline(Pipeline):
             The judgment of learning (JOL) values indicate the self-reported confidence by the student (0-5, 5 star). The object
             describing it also indicates the system-computed confidence at the time when the student added their JoL assessment.
             """
+            used_tools.append("get_competency_list")
             if not dto.metrics or not dto.metrics.competency_metrics:
                 return dto.course.competencies
             competency_metrics = dto.metrics.competency_metrics
             weight = 2.0 / 3.0
             return [{
-                "info": competency_metrics.competency_information[comp],
-                "exercise_ids": competency_metrics.exercises[comp],
-                "progress": competency_metrics.progress[comp],
-                "confidence": competency_metrics.confidence[comp],
+                "info": competency_metrics.competency_information.get(comp, None),
+                "exercise_ids": competency_metrics.exercises.get(comp, []),
+                "progress": competency_metrics.progress.get(comp, 0),
+                "confidence": competency_metrics.confidence.get(comp, 0),
                 "mastery": ((1 - weight) * competency_metrics.progress.get(comp, 0)
                             + weight * competency_metrics.confidence.get(comp, 0)),
-                "judgment_of_learning":  competency_metrics.jol_values[comp].json() if competency_metrics.jol_values and comp in competency_metrics.jol_values else None,
+                "judgment_of_learning":  competency_metrics.jol_values.get[comp].json() if competency_metrics.jol_values and comp in competency_metrics.jol_values else None,
             } for comp in competency_metrics.competency_information]
 
         @tool
         def ask_lecture_helper(prompt: str) -> str:
             """
-            Do not use this it doesn't work
-            # You have access to the lecture helper. It is an internal tool, just for you, our AI, to help you
-            # gain knowledge from the course slides. Internally, it will take your prompt, search a vector database (RAG)
-            # and return the most relevant paragraphs from the interpreted course slides. They will also include references
-            # aka the slide number and the lecture number so you can tell the student where to find more info.
-            # The prompt can just be something you want to know, and the lecture helper will try to find the most relevant
-            # information for you. Ask in natural language.
-            # Use this tool if you need to look up information in the course slides to answer the message.
-            # Under no circumstances use this tool twice.
+            Use this tool to get knowledge from this courses lecture content.
+            The prompt should be clear and concise without any chatter and it should be in form of a question in
+            natural language.
+            Under no circumstances use this tool twice.
             """
-            return "No answer"
-            # retrieved_lecture_chunks = self.retriever(
-            #     chat_history=history,
-            #     student_query=prompt,
-            #     result_limit=3,
-            #     course_name=dto.course.name
-            # )
-            # concat_text_content = ""
-            # for i, chunk in enumerate(retrieved_lecture_chunks):
-            #     text_content_msg = (
-            #         f" \n Content: {chunk.get(LectureSchema.PAGE_TEXT_CONTENT.value)}\n"
-            #         f" \n Slide number: {chunk.get(LectureSchema.PAGE_NUMBER.value)}\n"
-            #         f" \n Lecture name: {chunk.get(LectureSchema.LECTURE_NAME.value)}\n"
-            #     )
-            #     text_content_msg = text_content_msg.replace("{", "{{").replace("}", "}}")
-            #     concat_text_content += text_content_msg
-            # return concat_text_content
+            used_tools.append("ask_lecture_helper")
+            retrieved_lecture_chunks = self.retriever(
+                chat_history=history,
+                student_query=prompt,
+                result_limit=3,
+                course_name=dto.course.name
+            )
+            concat_text_content = ""
+            for i, chunk in enumerate(retrieved_lecture_chunks):
+                text_content_msg = (
+                    f" \n Content: {chunk.get(LectureSchema.PAGE_TEXT_CONTENT.value)}\n"
+                    f" \n Slide number: {chunk.get(LectureSchema.PAGE_NUMBER.value)}\n"
+                    f" \n Lecture name: {chunk.get(LectureSchema.LECTURE_NAME.value)}\n"
+                )
+                text_content_msg = text_content_msg.replace("{", "{{").replace("}", "}}")
+                concat_text_content += text_content_msg
+            return concat_text_content
 
         if dto.user.id % 3 < 2 or True:
             iris_initial_system_prompt = tell_iris_initial_system_prompt
@@ -250,7 +262,7 @@ class CourseChatPipeline(Pipeline):
 
         try:
             logger.info("Running course chat pipeline...")
-            history: List[PyrisMessage] = dto.chat_history or []
+            history: List[PyrisMessage] = dto.chat_history[-5:] or []
             query: Optional[PyrisMessage] = (dto.chat_history[-1] if dto.chat_history else None)
 
             # Set up the initial prompt
@@ -271,15 +283,18 @@ class CourseChatPipeline(Pipeline):
                 }
             else:
                 agent_prompt = begin_agent_prompt if query is not None else no_chat_history_prompt
+                params = {
+                    "course_name": dto.course.name if dto.course else "<Unknown course name>",
+                }
 
             if query is not None:
                 # Add the conversation to the prompt
                 chat_history_messages = [convert_iris_message_to_langchain_message(message) for message in history]
                 self.prompt = ChatPromptTemplate.from_messages(
                     [
-                        ("system", initial_prompt_with_date + "\n" + chat_history_exists_prompt),
+                        ("system", initial_prompt_with_date + "\n" + chat_history_exists_prompt + "\n" + agent_prompt),
                         *chat_history_messages,
-                        ("system", agent_prompt + format_reminder_prompt),
+                        ("system", format_reminder_prompt)
                     ]
                 )
             else:
@@ -295,7 +310,7 @@ class CourseChatPipeline(Pipeline):
                 llm=self.llm, tools=tools, prompt=self.prompt
             )
             agent_executor = AgentExecutor(
-                agent=agent, tools=tools, verbose=True, max_iterations=10
+                agent=agent, tools=tools, verbose=True, max_iterations=5
             )
 
             out = None
