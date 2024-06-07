@@ -14,7 +14,7 @@ api_key_lms_url_header = APIKeyHeader(name='X-Server-URL', auto_error=False)
 
 def verify_lms_athena_key(lms_url: str, secret: str):
     if lms_url is None:
-        raise HTTPException(status_code=401, detail="Invalid LMS Server Url.")
+        raise HTTPException(status_code=401, detail="Invalid X-Server-URL.")
         # cannot proceed even for local development
         # database entries cannot be set uniquely
 
