@@ -31,10 +31,6 @@ from ..prompts.iris_course_chat_prompts_elicit import (
     elicit_begin_agent_jol_prompt
 )
 from ...domain import CourseChatPipelineExecutionDTO
-from ...retrieval.lecture_retrieval import LectureRetrieval
-from ...vector_database.database import VectorDatabase
-from ...vector_database.lecture_schema import LectureSchema
-
 from ...web.status.status_update import (
     CourseChatStatusCallback,
 )
@@ -85,8 +81,6 @@ class CourseChatPipeline(Pipeline):
             request_handler=request_handler, completion_args=completion_args
         )
         self.callback = callback
-        self.db = VectorDatabase()
-        self.retriever = LectureRetrieval(self.db.client)
 
         # Create the pipeline
         self.pipeline = self.llm | StrOutputParser()
@@ -219,32 +213,6 @@ class CourseChatPipeline(Pipeline):
                 "judgment_of_learning":  competency_metrics.jol_values.get[comp].json() if competency_metrics.jol_values and comp in competency_metrics.jol_values else None,
             } for comp in competency_metrics.competency_information]
 
-        @tool
-        def ask_lecture_helper(prompt: str) -> str:
-            """
-            Use this tool to get knowledge from this courses lecture content.
-            The prompt should be clear and concise without any chatter and it should be in form of a question in
-            natural language.
-            Under no circumstances use this tool twice.
-            """
-            used_tools.append("ask_lecture_helper")
-            retrieved_lecture_chunks = self.retriever(
-                chat_history=history,
-                student_query=prompt,
-                result_limit=3,
-                course_name=dto.course.name
-            )
-            concat_text_content = ""
-            for i, chunk in enumerate(retrieved_lecture_chunks):
-                text_content_msg = (
-                    f" \n Content: {chunk.get(LectureSchema.PAGE_TEXT_CONTENT.value)}\n"
-                    f" \n Slide number: {chunk.get(LectureSchema.PAGE_NUMBER.value)}\n"
-                    f" \n Lecture name: {chunk.get(LectureSchema.LECTURE_NAME.value)}\n"
-                )
-                text_content_msg = text_content_msg.replace("{", "{{").replace("}", "}}")
-                concat_text_content += text_content_msg
-            return concat_text_content
-
         if dto.user.id % 3 < 2 or True:
             iris_initial_system_prompt = tell_iris_initial_system_prompt
             begin_agent_prompt = tell_begin_agent_prompt
@@ -305,7 +273,7 @@ class CourseChatPipeline(Pipeline):
                     ]
                 )
 
-            tools = [get_course_details, get_exercise_list, get_student_exercise_metrics, get_competency_list, ask_lecture_helper]
+            tools = [get_course_details, get_exercise_list, get_student_exercise_metrics, get_competency_list]
             agent = create_structured_chat_agent(
                 llm=self.llm, tools=tools, prompt=self.prompt
             )
@@ -327,8 +295,6 @@ class CourseChatPipeline(Pipeline):
                         self.callback.in_progress("Reading course details ...")
                     elif action.tool == "get_competency_list":
                         self.callback.in_progress("Reading competency list ...")
-                    elif action.tool == "ask_lecture_helper":
-                        self.callback.in_progress("Searching course slides ...")
                 elif step['output']:
                     out = step['output']
 
