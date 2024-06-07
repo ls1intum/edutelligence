@@ -213,7 +213,7 @@ class CourseChatPipeline(Pipeline):
                 "judgment_of_learning":  competency_metrics.jol_values.get[comp].json() if competency_metrics.jol_values and comp in competency_metrics.jol_values else None,
             } for comp in competency_metrics.competency_information]
 
-        if dto.user.id % 3 < 2 or True:
+        if dto.user.id % 3 < 2:
             iris_initial_system_prompt = tell_iris_initial_system_prompt
             begin_agent_prompt = tell_begin_agent_prompt
             chat_history_exists_prompt = tell_chat_history_exists_prompt
