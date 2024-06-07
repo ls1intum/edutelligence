@@ -8,6 +8,7 @@ unnecessary information, only the number of the paragraph that is most relevant 
 If the question is asking for code, return {{"selected_paragraphs": [0]}}
 Do not by any means return a the number of the response that has written programming code in it.
 If there is no suitable answer return {{"selected_paragraphs": [0]}}
+If the question is a type of greeting like hello or hey return {{"selected_paragraphs": [0]}}
 If the answer or the question is out the education context return {{"selected_paragraphs": [0]}}
 
 Paragraph 0:

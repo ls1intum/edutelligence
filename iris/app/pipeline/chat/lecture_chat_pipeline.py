@@ -8,6 +8,7 @@ from langchain_core.prompts import (
 )
 from langchain_core.runnables import Runnable
 
+from ..shared.citation_pipeline import CitationPipeline
 from ...common import convert_iris_message_to_langchain_message
 from ...domain import PyrisMessage
 from ...llm import CapabilityRequestHandler, RequirementList
@@ -42,7 +43,8 @@ def lecture_initial_prompt():
      questions about the lectures. To answer them the best way, relevant lecture content is provided to you with the
      student's question. If the context provided to you is not enough to formulate an answer to the student question
      you can simply ask the student to elaborate more on his question. Use only the parts of the context provided for
-     you that is relevant to the student's question. """
+     you that is relevant to the student's question. If the user greets you greet him back, and ask him how you can help
+     """
 
 
 class LectureChatPipeline(Pipeline):
@@ -68,6 +70,7 @@ class LectureChatPipeline(Pipeline):
         self.db = VectorDatabase()
         self.retriever = LectureRetrieval(self.db.client)
         self.pipeline = self.llm | StrOutputParser()
+        self.citation_pipeline = CitationPipeline()
 
     def __repr__(self):
         return f"{self.__class__.__name__}(llm={self.llm})"
@@ -98,6 +101,8 @@ class LectureChatPipeline(Pipeline):
             student_query=query.contents[0].text_content,
             result_limit=10,
             course_name=dto.course.name,
+            course_id=dto.course.id,
+            base_url=dto.settings.artemis_base_url,
         )
 
         self._add_relevant_chunks_to_prompt(retrieved_lecture_chunks)
@@ -105,8 +110,11 @@ class LectureChatPipeline(Pipeline):
         self.prompt = ChatPromptTemplate.from_messages(prompt_val)
         try:
             response = (self.prompt | self.pipeline).invoke({})
+            response_with_citation = self.citation_pipeline(
+                retrieved_lecture_chunks, response
+            )
             logger.info(f"Response from lecture chat pipeline: {response}")
-            return response
+            return response_with_citation
         except Exception as e:
             raise e
 
