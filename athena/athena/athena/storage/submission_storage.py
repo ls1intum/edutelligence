@@ -1,6 +1,6 @@
 from typing import List, Iterable, Union, Type, Optional
 
-from athena.contextvars import get_artemis_url
+from athena.contextvars import get_lms_url
 from athena.database import get_db
 from athena.schemas import Submission
 
@@ -11,7 +11,7 @@ def count_stored_submissions(
     """Returns the number of submissions for the given exercise."""
 
     if lms_url is None:
-        lms_url = get_artemis_url()
+        lms_url = get_lms_url()
 
     db_submission_cls = submission_cls.get_model_class()
     with get_db() as db:
@@ -29,7 +29,7 @@ def get_stored_submissions(
     """
 
     if lms_url is None:
-        lms_url = get_artemis_url()
+        lms_url = get_lms_url()
 
     db_submission_cls = submission_cls.get_model_class()
     with get_db() as db:
@@ -43,7 +43,7 @@ def get_stored_submission_meta(submission: Submission, lms_url: Optional[str] = 
     """Returns the stored metadata associated with the submission."""
 
     if lms_url is None:
-        lms_url = get_artemis_url()
+        lms_url = get_lms_url()
 
     db_submission_cls = submission.__class__.get_model_class()
     with get_db() as db:
@@ -55,7 +55,7 @@ def store_submissions(submissions: List[Submission], lms_url: Optional[str] = No
     """Stores the given submissions, all at once."""
 
     if lms_url is None:
-        lms_url = get_artemis_url()
+        lms_url = get_lms_url()
 
     with get_db() as db:
         for s in submissions:

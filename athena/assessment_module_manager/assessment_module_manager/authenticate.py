@@ -9,19 +9,19 @@ from assessment_module_manager import env
 from athena.logger import logger
 
 api_key_auth_header = APIKeyHeader(name='Authorization', auto_error=False)
-api_key_artemis_url_header = APIKeyHeader(name='X-Server-URL', auto_error=False)
+api_key_lms_url_header = APIKeyHeader(name='X-Server-URL', auto_error=False)
 
 
-def verify_artemis_athena_key(lms_url: str, secret: str):
+def verify_lms_athena_key(lms_url: str, secret: str):
     if lms_url is None:
-        raise HTTPException(status_code=401, detail="Invalid Artemis Server Url.")
+        raise HTTPException(status_code=401, detail="Invalid LMS Server Url.")
         # cannot proceed even for local development
         # database entries cannot be set uniquely
 
     if lms_url not in env.DEPLOYMENT_SECRETS or secret != env.DEPLOYMENT_SECRETS[lms_url]:
         if env.PRODUCTION:
             raise HTTPException(status_code=401, detail="Invalid API secret.")
-        logger.warning("DEBUG MODE: Ignoring invalid Artemis Deployment secret.")
+        logger.warning("DEBUG MODE: Ignoring invalid LMS Deployment secret.")
 
 
 def authenticated(func: Callable) -> Callable:
@@ -36,9 +36,9 @@ def authenticated(func: Callable) -> Callable:
 
     @wraps(func)
     async def wrapper(*args, secret: str = Depends(api_key_auth_header),
-                      lms_url: str = Depends(api_key_artemis_url_header),
+                      lms_url: str = Depends(api_key_lms_url_header),
                       **kwargs):
-        verify_artemis_athena_key(lms_url, secret)  # this happens in scope of the ASM Module
+        verify_lms_athena_key(lms_url, secret)  # this happens in scope of the ASM Module
         if inspect.iscoroutinefunction(func):
             return await func(*args, **kwargs)
         return func(*args, **kwargs)
@@ -49,7 +49,7 @@ def authenticated(func: Callable) -> Callable:
     params.append(
         inspect.Parameter('secret', inspect.Parameter.POSITIONAL_OR_KEYWORD, default=Depends(api_key_auth_header)))
     params.append(inspect.Parameter('lms_url', inspect.Parameter.POSITIONAL_OR_KEYWORD,
-                                    default=Depends(api_key_artemis_url_header)))
+                                    default=Depends(api_key_lms_url_header)))
     new_sig = sig.replace(parameters=params)
     wrapper.__signature__ = new_sig  # type: ignore # https://github.com/python/mypy/issues/12472
 

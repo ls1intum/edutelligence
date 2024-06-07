@@ -48,7 +48,7 @@ async def request_to_module(module: Module, headers: dict, path: str, lms_url: s
         # we pass it to the module from here.
         headers['X-Repository-Authorization-Secret'] = env.DEPLOYMENT_SECRETS.get(lms_url, "")
         # for repository access
-        # should be the same as the Artemis key
+        # should be the same as the LMS key
 
     try:
         async with httpx.AsyncClient(base_url=module.url, timeout=600) as client:
