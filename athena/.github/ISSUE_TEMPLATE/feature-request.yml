@@ -1,0 +1,26 @@
+name: 🚀 Feature Request
+description: Something's missing in Athena? Suggest a new feature!
+labels: [feature]
+body:
+- type: markdown
+  attributes:
+    value: Thank you for taking the time to submit a feature request! Please describe your request in detail so that we can understand your ideas.
+- type: textarea
+  attributes:
+    label: Is your feature request related to a problem?
+    description: A clear and concise description of what the problem is.
+    placeholder: "For example: I'm always frustrated when [...] or I wish I could [...]."
+- type: textarea
+  attributes:
+    label: Describe the solution you'd like
+    description: Feel free to upload additional material such as mock-ups, diagrams, or sketches to support your idea.
+  validations:
+      required: true
+- type: textarea
+  attributes:
+    label: Describe the alternatives you've considered
+    description: A clear and concise description of any alternative solutions or features you've considered.
+- type: textarea
+  attributes:
+    label: Additional context
+    description: Add any additional context or screenshots here.
