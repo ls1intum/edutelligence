@@ -64,15 +64,15 @@ async def proxy_to_module(
     run_id = request.headers.get('X-Run-ID')
     if run_id:
         headers['X-Run-ID'] = run_id
-    artemis_server_url = request.headers.get('X-Server-URL')
-    if artemis_server_url:
-        headers['X-Server-URL'] = artemis_server_url
+    lms_server_url = request.headers.get('X-Server-URL')
+    if lms_server_url:
+        headers['X-Server-URL'] = lms_server_url
 
     resp = await request_to_module(
         module,
         headers,
         '/' + path,
-        artemis_server_url,
+        lms_server_url,
         data,
         method=request.method,
     )

@@ -17,10 +17,10 @@ for module in list_modules():
 
 DEPLOYMENT_SECRETS = {}
 for deployment in list_deployments():
-    secret = os.environ.get(f"ARTEMIS_{deployment.name.upper()}_SECRET")
+    secret = os.environ.get(f"LMS_{deployment.name.upper()}_SECRET")
     if secret is None and PRODUCTION:
-        logger.warning("Missing secret for Artemis deployment %s. "
-                       "Set the ARTEMIS_%s_SECRET environment variable to secure the communication "
+        logger.warning("Missing secret for LMS deployment %s. "
+                       "Set the LMS_%s_SECRET environment variable to secure the communication "
                        "between the LMS and the assessment module manager.",
                        deployment.name, deployment.name.upper())
     if secret is None and not PRODUCTION:

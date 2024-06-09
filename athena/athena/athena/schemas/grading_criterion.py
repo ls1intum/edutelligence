@@ -7,7 +7,7 @@ from .schema import Schema
 
 
 class StructuredGradingInstruction(Schema, ABC):
-    """Part of a grading criterion (called "GradingInstruction" in Artemis)."""
+    """Part of a grading criterion (called "GradingInstruction" in LMS)."""
 
     id: int = Field(example=1)
     credits: float = Field(description="The number of credits assigned for this feedback.", example=1.0)

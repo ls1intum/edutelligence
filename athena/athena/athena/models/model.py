@@ -7,10 +7,10 @@ from sqlalchemy.orm import mapper
 
 class Model:
 
-    artemis_url = Column(String, index=True, nullable=False)
+    lms_url = Column(String, index=True, nullable=False)
 
     __table_args__ = (
-        UniqueConstraint('id', 'artemis_url'),
+        UniqueConstraint('id', 'lms_url'),
     )
 
     @classmethod
