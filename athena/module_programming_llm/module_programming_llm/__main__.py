@@ -1,6 +1,8 @@
+import os
 from typing import List
 
 import tiktoken
+from langchain.globals import set_debug, set_verbose
 
 from athena import (
     app,
@@ -55,3 +57,8 @@ if __name__ == "__main__":
     # Preload for token estimation later
     tiktoken.get_encoding("cl100k_base")
     app.start()
+
+    enable_debug = os.getenv("ENABLE_DEBUGGING_INFO", False)
+    if enable_debug:
+        set_debug(True)
+        set_verbose(True)

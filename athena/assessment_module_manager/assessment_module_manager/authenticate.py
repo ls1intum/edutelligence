@@ -5,20 +5,23 @@ from typing import Callable
 from fastapi import HTTPException, Depends
 from fastapi.security import APIKeyHeader
 
-from athena import env
-from athena.contextvars import set_artemis_url_context_var
+from assessment_module_manager import env
 from athena.logger import logger
 
 api_key_auth_header = APIKeyHeader(name='Authorization', auto_error=False)
 api_key_artemis_url_header = APIKeyHeader(name='X-Server-URL', auto_error=False)
 
 
+def verify_artemis_athena_key(artemis_url: str, secret: str):
+    if artemis_url is None:
+        raise HTTPException(status_code=401, detail="Invalid Artemis Server Url.")
+        # cannot proceed even for local development
+        # database entries cannot be set uniquely
 
-def verify_inter_module_secret_key(secret: str):
-    if secret != env.ASSESSMENT_MODULE_MANAGER_TO_ATHENA_MODULE_SECRET:
+    if artemis_url not in env.DEPLOYMENT_SECRETS or secret != env.DEPLOYMENT_SECRETS[artemis_url]:
         if env.PRODUCTION:
             raise HTTPException(status_code=401, detail="Invalid API secret.")
-        logger.warning("DEBUG MODE: Ignoring invalid API secret.")
+        logger.warning("DEBUG MODE: Ignoring invalid Artemis Deployment secret.")
 
 
 def authenticated(func: Callable) -> Callable:
@@ -35,8 +38,7 @@ def authenticated(func: Callable) -> Callable:
     async def wrapper(*args, secret: str = Depends(api_key_auth_header),
                       artemis_url: str = Depends(api_key_artemis_url_header),
                       **kwargs):
-        verify_inter_module_secret_key(secret)  # this happens after the ASM Module reissued the request
-        set_artemis_url_context_var(artemis_url)
+        verify_artemis_athena_key(artemis_url, secret)  # this happens in scope of the ASM Module
         if inspect.iscoroutinefunction(func):
             return await func(*args, **kwargs)
         return func(*args, **kwargs)

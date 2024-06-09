@@ -1,24 +1,20 @@
-from typing import Optional, Type, TypeVar, List, Any, Dict
+from typing import Optional, Type, TypeVar, List
 
-from langchain.callbacks.tracers import langchain
-from pydantic import BaseModel, ValidationError
+from langchain_core.output_parsers.openai_functions import JsonOutputFunctionsParser
+from langchain_core.utils.function_calling import convert_to_openai_function
+from langchain_openai.chat_models.base import BaseChatOpenAI
+from langchain_core.pydantic_v1 import BaseModel, ValidationError
 import tiktoken
 
-from langchain.chains import LLMChain
-from langchain.chat_models import ChatOpenAI
 from langchain.base_language import BaseLanguageModel
 from langchain.prompts import (
     ChatPromptTemplate,
     SystemMessagePromptTemplate,
     HumanMessagePromptTemplate,
 )
-from langchain.chains.openai_functions import create_structured_output_chain
 from langchain.output_parsers import PydanticOutputParser
 from langchain.schema import (
-    OutputParserException,
-    BaseLLMOutputParser,
-    Generation,
-    LLMResult,
+    OutputParserException
 )
 
 from athena import emit_meta, get_experiment_environment
@@ -87,15 +83,15 @@ def supports_function_calling(model: BaseLanguageModel):
     Returns:
         boolean: True if the model supports function calling, False otherwise
     """
-    return False  # isinstance(model, ChatOpenAI) TODO: find out how to make function calling work again
+    return isinstance(model, BaseChatOpenAI)
 
 
 def get_chat_prompt_with_formatting_instructions(
-            model: BaseLanguageModel,
-            system_message: str,
-            human_message: str,
-            pydantic_object: Type[T]
-        ) -> ChatPromptTemplate:
+        model: BaseLanguageModel,
+        system_message: str,
+        human_message: str,
+        pydantic_object: Type[T]
+) -> ChatPromptTemplate:
     """Returns a ChatPromptTemplate with formatting instructions (if necessary)
 
     Note: Does nothing if the model supports function calling
@@ -118,7 +114,8 @@ def get_chat_prompt_with_formatting_instructions(
     system_message_prompt = SystemMessagePromptTemplate.from_template(system_message + "\n{format_instructions}")
     system_message_prompt.prompt.partial_variables = {"format_instructions": output_parser.get_format_instructions()}
     system_message_prompt.prompt.input_variables.remove("format_instructions")
-    human_message_prompt = HumanMessagePromptTemplate.from_template(human_message + "\n\nJSON response following the provided schema:")
+    human_message_prompt = HumanMessagePromptTemplate.from_template(
+        human_message + "\n\nJSON response following the provided schema:")
     return ChatPromptTemplate.from_messages([system_message_prompt, human_message_prompt])
 
 
@@ -128,7 +125,7 @@ async def predict_and_parse(
         prompt_input: dict,
         pydantic_object: Type[T],
         tags: Optional[List[str]]
-    ) -> Optional[T]:
+) -> Optional[T]:
     """Predicts an LLM completion using the model and parses the output using the provided Pydantic model
 
     Args:
@@ -141,7 +138,6 @@ async def predict_and_parse(
     Returns:
         Optional[T]: Parsed output, or None if it could not be parsed
     """
-    langchain.debug = True
 
     experiment = get_experiment_environment()
 
@@ -153,22 +149,35 @@ async def predict_and_parse(
     if experiment.run_id is not None:
         tags.append(f"run-{experiment.run_id}")
 
+    chat_prompt.tags = tags
+
     if supports_function_calling(model):
-        chain = create_structured_output_chain(pydantic_object, llm=model, prompt=chat_prompt, tags=tags)
-        chain.verbose = True
+        openai_functions = [convert_to_openai_function(pydantic_object)]
+
+        runnable = chat_prompt | model.bind(functions=openai_functions).with_retry(
+            retry_if_exception_type=(ValueError, OutputParserException),
+            wait_exponential_jitter=True,
+            stop_after_attempt=3,
+        ) | JsonOutputFunctionsParser()
+
         try:
-            return await chain.arun(**prompt_input)
+            output_dict = await runnable.ainvoke(prompt_input)
+            return pydantic_object.parse_obj(output_dict)
         except (OutputParserException, ValidationError) as e:
             logger.error("Exception type: %s, Message: %s", type(e).__name__, e)
             return None
 
     output_parser = PydanticOutputParser(pydantic_object=pydantic_object)
-    chain = LLMChain(llm=model, prompt=chat_prompt, output_parser=output_parser, tags=tags)
+
+    runnable = chat_prompt | model.with_retry(
+        retry_if_exception_type=(ValueError, OutputParserException),
+        wait_exponential_jitter=True,
+        stop_after_attempt=3,
+    ) | output_parser
+
     try:
-        return await chain.arun(**prompt_input)
+        output_dict = await runnable.ainvoke(prompt_input)
+        return pydantic_object.parse_obj(output_dict)
     except (OutputParserException, ValidationError) as e:
         logger.error("Exception type: %s, Message: %s", type(e).__name__, e)
-        # In the future, we should probably have some recovery mechanism here (i.e. fix the output with another prompt)
         return None
-
-    # todo debug settings

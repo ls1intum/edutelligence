@@ -1,7 +1,7 @@
 from typing import List, Optional, Sequence
 import os
 import asyncio
-from pydantic import BaseModel, Field
+from langchain_core.pydantic_v1 import BaseModel, Field
 
 from athena import emit_meta
 from athena.programming import Exercise, Submission, Feedback

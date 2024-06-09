@@ -25,7 +25,7 @@ No need to mention anything that is not explicitly in the template->submission d
 
 In git diff, lines marked with '-' were removed and with '+' were added by the student.
 
-# The student will be reading your response, use you instead of them\
+The student will be reading your response, use you instead of them\
 """
 
 

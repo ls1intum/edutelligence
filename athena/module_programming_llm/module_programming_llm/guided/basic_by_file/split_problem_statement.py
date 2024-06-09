@@ -1,8 +1,7 @@
 from typing import Optional, Sequence
 from collections import defaultdict
 
-from pydantic import BaseModel, Field
-from langchain.prompts import ChatPromptTemplate
+from langchain_core.pydantic_v1 import BaseModel, Field
 
 from athena import emit_meta
 from athena.programming import Exercise, Submission
@@ -32,7 +31,6 @@ class SplitProblemStatement(BaseModel):
 async def generate_split_problem_statement_by_file(
         exercise: Exercise,
         submission: Submission,
-        prompt: ChatPromptTemplate,
         config: GuidedBasicByFileConfig,
         debug: bool
     ) -> Optional[SplitProblemStatement]:
@@ -41,12 +39,20 @@ async def generate_split_problem_statement_by_file(
     Args:
         exercise (Exercise): Exercise to split the problem statement for (respecting the changed files)
         submission (Submission): Submission to split the problem statement for (respecting the changed files)
-        prompt (ChatPromptTemplate): Prompt template to check for problem_statement
         config (GradedBasicApproachConfig): Configuration
 
     Returns:
         Optional[SplitProblemStatement]: Split problem statement, None if it is too short or too long
     """
+
+    model = config.model.get_model()  # type: ignore[attr-defined]
+
+    prompt = get_chat_prompt_with_formatting_instructions(
+        model=model,
+        system_message=config.split_problem_statement_prompt.system_message,
+        human_message=config.split_problem_statement_prompt.human_message,
+        pydantic_object=SplitProblemStatement
+    )
 
     # Return None if the problem statement is too short
     if num_tokens_from_string(exercise.problem_statement or "") <= config.split_problem_statement_prompt.tokens_before_split:
@@ -55,8 +61,6 @@ async def generate_split_problem_statement_by_file(
     # Return None if the problem statement not in the prompt
     if "problem_statement" not in prompt.input_variables:
         return None
-
-    model = config.model.get_model()  # type: ignore[attr-defined]
 
     template_repo = exercise.get_template_repository()
     submission_repo = submission.get_repository()
@@ -93,12 +97,12 @@ async def generate_split_problem_statement_by_file(
         )
 
     # Return None if the prompt is too long
-    if num_tokens_from_prompt(chat_prompt, prompt_input) > config.max_input_tokens:
+    if num_tokens_from_prompt(prompt, prompt_input) > config.max_input_tokens:
         return None
 
     split_problem_statement = await predict_and_parse(
         model=model,
-        chat_prompt=chat_prompt,
+        chat_prompt=prompt,
         prompt_input=prompt_input,
         pydantic_object=SplitProblemStatement,
         tags=[
@@ -110,7 +114,7 @@ async def generate_split_problem_statement_by_file(
 
     if debug:
         emit_meta("file_problem_statements", {
-            "prompt": chat_prompt.format(**prompt_input),
+            "prompt": prompt.format(**prompt_input),
             "result": split_problem_statement.dict() if split_problem_statement is not None else None
         })
 

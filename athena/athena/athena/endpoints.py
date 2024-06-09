@@ -156,7 +156,7 @@ def submission_selector(func: Union[
         class Config:
             # Allow camelCase field names in the API (converted to snake_case)
             alias_generator = to_camel
-            allow_population_by_field_name = True
+            populate_by_name = True
 
     @app.post("/select_submission", responses=module_responses)
     @authenticated
@@ -311,7 +311,7 @@ def feedback_provider(func: Union[
     async def wrapper(
             exercise: exercise_type,
             submission: submission_type,
-            is_graded: is_graded_type = Body(False),
+            isGraded: is_graded_type = Body(True, alias="isGraded"),
             module_config: module_config_type = Depends(get_dynamic_module_config_factory(module_config_type))):
 
         # Retrieve existing metadata for the exercise, submission and feedback
@@ -326,7 +326,7 @@ def feedback_provider(func: Union[
             kwargs["module_config"] = module_config
 
         if "is_graded" in inspect.signature(func).parameters:
-            kwargs["is_graded"] = is_graded
+            kwargs["is_graded"] = isGraded
 
         # Call the actual provider
         if inspect.iscoroutinefunction(func):

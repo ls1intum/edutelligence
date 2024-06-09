@@ -2,7 +2,7 @@ from typing import Dict, Any, Optional
 from fastapi import Body, HTTPException, Request
 from starlette.responses import JSONResponse
 
-from athena.authenticate import authenticated
+from assessment_module_manager.authenticate import authenticated
 from athena.schemas import ExerciseType
 from assessment_module_manager.app import app
 from assessment_module_manager.module import ModuleResponse, find_module_by_name, request_to_module
@@ -64,11 +64,15 @@ async def proxy_to_module(
     run_id = request.headers.get('X-Run-ID')
     if run_id:
         headers['X-Run-ID'] = run_id
+    artemis_server_url = request.headers.get('X-Server-URL')
+    if artemis_server_url:
+        headers['X-Server-URL'] = artemis_server_url
 
     resp = await request_to_module(
         module,
         headers,
         '/' + path,
+        artemis_server_url,
         data,
         method=request.method,
     )

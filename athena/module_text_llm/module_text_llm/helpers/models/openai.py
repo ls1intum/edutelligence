@@ -82,8 +82,7 @@ def _use_azure_credentials():
     openai.api_type = "azure"
     openai.api_key = os.environ.get("LLM_AZURE_OPENAI_API_KEY")
     openai.api_base = os.environ.get("LLM_AZURE_OPENAI_API_BASE")
-    # os.environ.get("LLM_AZURE_OPENAI_API_VERSION")
-    openai.api_version = "2023-03-15-preview"
+    openai.api_version = os.environ.get("LLM_AZURE_OPENAI_API_VERSION")
 
 
 def _use_openai_credentials():
