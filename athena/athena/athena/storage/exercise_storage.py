@@ -1,6 +1,6 @@
 from typing import List, Iterable, Optional, Type
 
-from athena.contextvars import get_artemis_url
+from athena.contextvars import get_lms_url
 from athena.database import get_db
 from athena.schemas import Exercise
 
@@ -13,7 +13,7 @@ Iterable[Exercise]:
     """
 
     if lms_url is None:
-        lms_url = get_artemis_url()
+        lms_url = get_lms_url()
 
     db_exercise_cls = exercise_cls.get_model_class()
     with get_db() as db:
@@ -28,7 +28,7 @@ def get_stored_exercise_meta(exercise: Exercise, lms_url: Optional[str] = None, 
     """Returns the stored metadata associated with the exercise."""
 
     if lms_url is None:
-        lms_url = get_artemis_url()
+        lms_url = get_lms_url()
 
     db_exercise_cls: Type[Exercise] = exercise.__class__.get_model_class()
     with get_db() as db:
@@ -40,7 +40,7 @@ def store_exercises(exercises: List[Exercise], lms_url: Optional[str] = None):
     """Stores the given exercises, all at once."""
 
     if lms_url is None:
-        lms_url = get_artemis_url()
+        lms_url = get_lms_url()
 
     with get_db() as db:
         for e in exercises:

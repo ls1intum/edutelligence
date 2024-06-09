@@ -1,6 +1,6 @@
 from typing import Iterable, Union, Type, Optional, List
 
-from athena.contextvars import get_artemis_url
+from athena.contextvars import get_lms_url
 from athena.database import get_db
 from athena.schemas import Feedback
 
@@ -14,7 +14,7 @@ def get_stored_feedback(
     """
 
     if lms_url is None:
-        lms_url = get_artemis_url()
+        lms_url = get_lms_url()
 
     db_feedback_cls = feedback_cls.get_model_class()
     with get_db() as db:
@@ -28,7 +28,7 @@ def get_stored_feedback_meta(feedback: Feedback, lms_url: Optional[str] = None) 
     """Returns the stored metadata associated with the feedback."""
 
     if lms_url is None:
-        lms_url = get_artemis_url()
+        lms_url = get_lms_url()
 
     db_feedback_cls = feedback.__class__.get_model_class()
     with get_db() as db:
@@ -42,13 +42,13 @@ def store_feedback(feedback: Feedback, is_lms_id=False, lms_url: Optional[str] =
     Args:
         feedback (Feedback): The feedback to store.
         is_lms_id (bool, optional): Whether the feedback's ID is an LMS ID. Defaults to False.
-        lms_url (str, optional): The URL of the Artemis instance that issued the query
+        lms_url (str, optional): The URL of the LMS instance that issued the query
     Returns:
         Feedback: The stored feedback with its internal ID assigned.
     """
 
     if lms_url is None:
-        lms_url = get_artemis_url()
+        lms_url = get_lms_url()
 
     db_feedback_cls = feedback.__class__.get_model_class()
     with get_db() as db:
@@ -70,7 +70,7 @@ def get_stored_feedback_suggestions(
     """Returns a list of feedback suggestions for the given exercise in the given submission."""
 
     if lms_url is None:
-        lms_url = get_artemis_url()
+        lms_url = get_lms_url()
 
     db_feedback_cls = feedback_cls.get_model_class()
     with get_db() as db:
@@ -89,7 +89,7 @@ def store_feedback_suggestions(feedbacks: List[Feedback], lms_url: Optional[str]
     """
 
     if lms_url is None:
-        lms_url = get_artemis_url()
+        lms_url = get_lms_url()
 
     stored_feedbacks: List[Feedback] = []
     with get_db() as db:
