@@ -29,6 +29,7 @@ COPY . ./
 RUN mv ./modules.docker.ini ./modules.ini
 
 # Use deployments configuration file for docker
+RUN rm ./deployments.ini
 RUN mv ./deployments.docker.ini ./deployments.ini
 
 # poetry scripts don't work here
