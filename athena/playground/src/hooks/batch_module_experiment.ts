@@ -17,7 +17,7 @@ export type ExperimentStep =
   | "notStarted"
   | "sendingSubmissions"
   | "sendingTrainingFeedbacks"
-  | "generatingFeedbackSuggestions"
+  | "generatingGradedFeedbackSuggestions"
   | "finished";
 
 export type BatchModuleExperimentState = {
@@ -185,7 +185,7 @@ export default function useBatchModuleExperiment(experiment: Experiment, moduleC
   const continueAfterTraining = (data.step === "sendingTrainingFeedbacks" && data.sentTrainingSubmissions.length === experiment.trainingSubmissions?.length) ? (() => {
     setData((prevState) => ({
       ...prevState,
-      step: "generatingFeedbackSuggestions",
+      step: "generatingGradedFeedbackSuggestions",
     }));
   }) : undefined;
 
@@ -244,7 +244,7 @@ export default function useBatchModuleExperiment(experiment: Experiment, moduleC
       console.log("No training submissions, skipping");
       setData((prevState) => ({
         ...prevState,
-        step: "generatingFeedbackSuggestions",
+        step: "generatingGradedFeedbackSuggestions",
       }));
       return;
     }
@@ -297,8 +297,8 @@ export default function useBatchModuleExperiment(experiment: Experiment, moduleC
   };
 
   // 3. Generate feedback suggestions
-  const stepGenerateFeedbackSuggestions = async () => {
-    setProcessingStep("generatingFeedbackSuggestions");
+  const stepGenerateGradedFeedbackSuggestions = async () => {
+    setProcessingStep("generatingGradedFeedbackSuggestions");
     console.log("Generating feedback suggestions...");
 
     let remainingSubmissions = experiment.evaluationSubmissions.filter(
@@ -350,13 +350,14 @@ export default function useBatchModuleExperiment(experiment: Experiment, moduleC
       ];
 
       console.log(
-        `${infoPrefix} - Requesting feedback suggestions for submission ${submission.id}...`
+        `${infoPrefix} - Requesting graded feedback suggestions for submission ${submission.id}...`
       );
 
       try {
         const response = await requestFeedbackSuggestions.mutateAsync({
           exercise: experiment.exercise,
           submission,
+          is_graded: true
         });
         if (!isMounted.current) {
           return;
@@ -471,10 +472,10 @@ export default function useBatchModuleExperiment(experiment: Experiment, moduleC
     ) {
       stepSendTrainingFeedbacks();
     } else if (
-      data.step === "generatingFeedbackSuggestions" &&
-      processingStep !== "generatingFeedbackSuggestions"
+      data.step === "generatingGradedFeedbackSuggestions" &&
+      processingStep !== "generatingGradedFeedbackSuggestions"
     ) {
-      stepGenerateFeedbackSuggestions();
+      stepGenerateGradedFeedbackSuggestions();
     } 
     // Automatic evaluation is triggered manually
   }, [data.step]);
