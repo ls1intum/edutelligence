@@ -6,13 +6,10 @@ from pydantic import BaseModel, Field
 from athena import emit_meta
 from athena.programming import Exercise, Submission, Feedback
 
-from module_programming_llm.config import GradedBasicApproachConfig
-from module_programming_llm.split_grading_instructions_by_file import (
-    split_grading_instructions_by_file,
-)
-from module_programming_llm.split_problem_statement_by_file import (
-    split_problem_statement_by_file,
-)
+from .config import GradedBasicByFileConfig
+from .split_grading_instructions import generate_split_grading_instructions_by_file
+from .split_problem_statement import generate_split_problem_statement_by_file
+
 from module_programming_llm.helpers.llm_utils import (
     check_prompt_length_and_omit_features_if_necessary,
     get_chat_prompt_with_formatting_instructions,
@@ -57,31 +54,31 @@ class AssessmentModel(BaseModel):
 
 
 # pylint: disable=too-many-locals
-async def generate_suggestions_by_file(
+async def generate_graded_basic_by_file_suggestions(
     exercise: Exercise,
     submission: Submission,
-    config: GradedBasicApproachConfig,
+    config: GradedBasicByFileConfig,
     debug: bool,
 ) -> List[Feedback]:
     model = config.model.get_model()  # type: ignore[attr-defined]
 
     chat_prompt = get_chat_prompt_with_formatting_instructions(
         model=model,
-        system_message=config.generate_suggestions_by_file_prompt.system_message,
-        human_message=config.generate_suggestions_by_file_prompt.human_message,
+        system_message=config.generate_prompt.system_message,
+        human_message=config.generate_prompt.file_message,
         pydantic_object=AssessmentModel,
     )
 
     # Get split problem statement and grading instructions by file (if necessary)
     split_problem_statement, split_grading_instructions = await asyncio.gather(
-        split_problem_statement_by_file(
+        generate_split_problem_statement_by_file(
             exercise=exercise,
             submission=submission,
             prompt=chat_prompt,
             config=config,
             debug=debug,
         ),
-        split_grading_instructions_by_file(
+        generate_split_grading_instructions_by_file(
             exercise=exercise,
             submission=submission,
             prompt=chat_prompt,
@@ -93,7 +90,7 @@ async def generate_suggestions_by_file(
     problem_statement_tokens = num_tokens_from_string(exercise.problem_statement or "")
     is_short_problem_statement = (
         problem_statement_tokens
-        <= config.split_problem_statement_by_file_prompt.tokens_before_split
+        <= config.split_problem_statement_prompt.tokens_before_split
     )
     file_problem_statements = (
         {
@@ -106,7 +103,7 @@ async def generate_suggestions_by_file(
 
     is_short_grading_instructions = (
         num_tokens_from_string(exercise.grading_instructions)
-        <= config.split_grading_instructions_by_file_prompt.tokens_before_split
+        <= config.split_grading_instructions_prompt.tokens_before_split
         if exercise.grading_instructions is not None
         else True
     )
@@ -310,6 +307,7 @@ async def generate_suggestions_by_file(
             )
             feedbacks.append(
                 Feedback(
+                    id=None,
                     exercise_id=exercise.id,
                     submission_id=submission.id,
                     title=feedback.title,

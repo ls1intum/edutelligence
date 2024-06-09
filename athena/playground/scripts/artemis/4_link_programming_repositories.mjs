@@ -32,23 +32,23 @@ for (let exercise of exercises) {
 
   if (!fs.existsSync(path.join(exercisePath, "solution"))) {
     console.log(`Exercise ${exercise.id} has no solution at ${exercisePath}/solution`);
-    exercise.solution_repository_url = null;
+    exercise.solution_repository_uri = null;
   } else {
-    exercise.solution_repository_url = `{{exerciseDataUrl}}/solution.zip`;
+    exercise.solution_repository_uri = `{{exerciseDataUri}}/solution.zip`;
   }
 
   if (!fs.existsSync(path.join(exercisePath, "template"))) {
     console.log(`Exercise ${exercise.id} has no template at ${exercisePath}/template`);
-    exercise.template_repository_url = null;
+    exercise.template_repository_uri = null;
   } else {
-    exercise.template_repository_url = `{{exerciseDataUrl}}/template.zip`;
+    exercise.template_repository_uri = `{{exerciseDataUri}}/template.zip`;
   }
 
   if (!fs.existsSync(path.join(exercisePath, "tests"))) {
     console.log(`Exercise ${exercise.id} has no tests at ${exercisePath}/tests`);
-    exercise.tests_repository_url = null;
+    exercise.tests_repository_uri = null;
   } else {
-    exercise.tests_repository_url = `{{exerciseDataUrl}}/tests.zip`;
+    exercise.tests_repository_uri = `{{exerciseDataUri}}/tests.zip`;
   }
 
   const submissionsPath = path.join(exercisePath, "submissions");
@@ -56,9 +56,9 @@ for (let exercise of exercises) {
     const submissionPath = path.join(submissionsPath, `${submission.id}`);
     if (!fs.existsSync(submissionPath)) {
       console.log(`Submission ${submission.id} has no directory at ${submissionPath}`);
-      submission.repository_url = null;
+      submission.repository_uri = null;
     } else {
-      submission.repository_url = `{{exerciseDataUrl}}/submissions/${submission.id}.zip`;
+      submission.repository_uri = `{{exerciseDataUri}}/submissions/${submission.id}.zip`;
     }
     return submission;
   });

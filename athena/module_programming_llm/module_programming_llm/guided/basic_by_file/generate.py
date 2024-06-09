@@ -6,11 +6,10 @@ from pydantic import BaseModel, Field
 from athena import emit_meta
 from athena.programming import Exercise, Submission, Feedback
 
-from module_programming_llm.config import NonGradedBasicApproachConfig
-from module_programming_llm.generate_summary_by_file import generate_summary_by_file
-from module_programming_llm.split_problem_statement_by_file import (
-    split_problem_statement_by_file,
-)
+from .config import GuidedBasicByFileConfig
+from .summarize_submission import generate_summarize_submission
+from .split_problem_statement import generate_split_problem_statement_by_file
+
 from module_programming_llm.helpers.llm_utils import (
     check_prompt_length_and_omit_features_if_necessary,
     get_chat_prompt_with_formatting_instructions,
@@ -51,18 +50,18 @@ class ImprovementModel(BaseModel):
 
 
 # pylint: disable=too-many-locals
-async def generate_suggestions_by_file(
+async def generate_guided_basic_by_file_suggestions(
     exercise: Exercise,
     submission: Submission,
-    config: NonGradedBasicApproachConfig,
+    config: GuidedBasicByFileConfig,
     debug: bool,
 ) -> List[Feedback]:
     model = config.model.get_model()  # type: ignore[attr-defined]
 
     chat_prompt = get_chat_prompt_with_formatting_instructions(
         model=model,
-        system_message=config.generate_suggestions_by_file_prompt.system_message,
-        human_message=config.generate_suggestions_by_file_prompt.human_message,
+        system_message=config.generate_prompt.system_message,
+        human_message=config.generate_prompt.human_message,
         pydantic_object=ImprovementModel,
     )
 
@@ -88,7 +87,7 @@ async def generate_suggestions_by_file(
     )
 
     # Get solution summary by file (if necessary)
-    solution_summary = await generate_summary_by_file(
+    solution_summary = await generate_summarize_submission(
         exercise=exercise,
         submission=submission,
         prompt=chat_prompt,
@@ -99,7 +98,7 @@ async def generate_suggestions_by_file(
 
 
     # Get split problem statement by file (if necessary)
-    split_problem_statement = await split_problem_statement_by_file(
+    split_problem_statement = await generate_split_problem_statement_by_file(
         exercise=exercise,
         submission=submission,
         prompt=chat_prompt,
@@ -110,7 +109,7 @@ async def generate_suggestions_by_file(
     problem_statement_tokens = num_tokens_from_string(exercise.problem_statement or "")
     is_short_problem_statement = (
         problem_statement_tokens
-        <= config.split_problem_statement_by_file_prompt.tokens_before_split
+        <= config.split_problem_statement_prompt.tokens_before_split
     )
     file_problem_statements = (
         {
@@ -250,6 +249,7 @@ async def generate_suggestions_by_file(
         for feedback in result.feedbacks:
             feedbacks.append(
                 Feedback(
+                    id=None,
                     exercise_id=exercise.id,
                     submission_id=submission.id,
                     title=feedback.title,
@@ -258,6 +258,8 @@ async def generate_suggestions_by_file(
                     line_start=feedback.line_start,
                     line_end=feedback.line_end,
                     is_graded=False,
+                    credits=0,
+                    structured_grading_instruction_id=None,
                     meta={},
                 )
             )

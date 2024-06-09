@@ -8,7 +8,7 @@ from langchain.prompts import ChatPromptTemplate
 from athena import emit_meta
 from athena.programming import Exercise, Submission
 
-from module_programming_llm.config import GradedBasicApproachConfig, BasicApproachConfig
+from .config import GuidedBasicByFileConfig
 from module_programming_llm.helpers.llm_utils import (
     get_chat_prompt_with_formatting_instructions,
     num_tokens_from_prompt,
@@ -46,11 +46,11 @@ class SolutionSummary(BaseModel):
 
 
 # pylint: disable=too-many-locals
-async def generate_summary_by_file(
+async def generate_summarize_submission(
         exercise: Exercise,
         submission: Submission,
         prompt: ChatPromptTemplate,
-        config: BasicApproachConfig,
+        config: GuidedBasicByFileConfig,
         debug: bool,
 ) -> Optional[SolutionSummary]:
     """Generaty summary for the submission file by file
@@ -89,8 +89,8 @@ async def generate_summary_by_file(
     )
     chat_prompt = get_chat_prompt_with_formatting_instructions(
         model=model,
-        system_message=config.generate_file_summary_prompt.system_message,
-        human_message=config.generate_file_summary_prompt.human_message,
+        system_message=config.summarize_submission_prompt.system_message,
+        human_message=config.summarize_submission_prompt.human_message,
         pydantic_object=FileDescription,
     )
 

@@ -13,12 +13,9 @@ from athena.programming import Exercise, Submission, Feedback
 from athena.logger import logger
 from module_programming_llm.config import Configuration
 
-from module_programming_llm.generate_graded_suggestions_by_file import (
-    generate_suggestions_by_file as generate_graded_suggestions_by_file,
-)
-from module_programming_llm.generate_non_graded_suggestions_by_file import (
-    generate_suggestions_by_file as generate_non_graded_suggestions_by_file,
-)
+from module_programming_llm.graded.basic_by_file.generate import generate_graded_basic_by_file_suggestions
+from module_programming_llm.guided.basic_by_file.generate import generate_guided_basic_by_file_suggestions
+from module_programming_llm.guided.one_shot.generate import generate_guided_one_shot_suggestions
 
 
 @submissions_consumer
@@ -42,10 +39,15 @@ async def suggest_feedback(exercise: Exercise, submission: Submission, is_graded
     logger.info("suggest_feedback: %s suggestions for submission %d of exercise %d were requested",
                 "Graded" if is_graded else "Non-graded", submission.id, exercise.id)
     if is_graded:
-        return await generate_graded_suggestions_by_file(exercise, submission, module_config.graded_approach,
-                                                         module_config.debug)
-    return await generate_non_graded_suggestions_by_file(exercise, submission, module_config.non_graded_approach,
-                                                             module_config.debug)
+        if module_config.graded_basic_by_file:
+            return await generate_graded_basic_by_file_suggestions(exercise, submission, module_config.graded_basic_by_file, module_config.debug)
+    else:
+        # if module_config.guided_basic_by_file:
+        #     return await generate_guided_basic_by_file_suggestions(exercise, submission, module_config.guided_basic_by_file, module_config.debug)
+        if module_config.guided_one_shot:
+            return await generate_guided_one_shot_suggestions(exercise, submission, module_config.guided_one_shot, module_config.debug)
+    
+    return []
 
 
 

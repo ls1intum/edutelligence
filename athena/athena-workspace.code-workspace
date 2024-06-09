@@ -28,13 +28,18 @@
 			"path": "module_programming_themisml"
 		},
 		{
-            "path": "module_programming_ast"
+      "path": "module_programming_ast"
 		},
+		{
 			"path": "module_programming_code_embedding"
 		},
 	],
 	"settings": {
-		"python.linting.prospectorEnabled": true,
-		"python.linting.mypyEnabled": true
+		"python.pythonPath": "./.venv/bin/python",
+    "python.linting.enabled": true,
+    "python.linting.prospectorEnabled": true,
+    "python.linting.mypyEnabled": true,
+    "python.analysis.typeCheckingMode": "basic",
+    "python.terminal.activateEnvironment": true
 	}
 }

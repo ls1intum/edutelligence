@@ -30,7 +30,7 @@ export default function ProgrammingSubmissionDetail({
       <CodeEditor
         key={identifier ? `${identifier}-${submission.id}` : submission.id}
         identifier={identifier}
-        repositoryUrl={submission.repository_url}
+        repositoryUrl={submission.repository_uri}
         feedbacks={feedbacks}
         onFeedbacksChange={onFeedbacksChange}
         createNewFeedback={() => createNewFeedback(submission)}

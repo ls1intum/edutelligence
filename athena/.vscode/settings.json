@@ -2,4 +2,5 @@
     "python.linting.enabled": true,
     "python.linting.prospectorEnabled": true,
     "python.analysis.typeCheckingMode": "basic",
+    "python.terminal.activateEnvironment": true
 }

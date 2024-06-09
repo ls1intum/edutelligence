@@ -1,3 +1,6 @@
+from pydantic import BaseModel, Field
+
+
 system_message = """\
 You are a very experienced software engineer.
 
@@ -19,10 +22,21 @@ Adhere to schema to correctly encapsulate 'Explanation' only into the response. 
 It is absolutely unacceptable to include any free text that is not part of schema or any format violating response.
 """
 
+
 human_message = """\
-Path: {file_path}
+File path: {file_path}
 File:
 \"\"\"
 {submission_file}
 \"\"\"
 """
+
+
+class FileSummaryPrompt(BaseModel):
+    """Generates concise summaries of submission files, facilitating a quicker review and understanding of the content for AI processing."""
+
+    system_message: str = Field(default=system_message,
+                                description="Message for priming AI behavior and instructing it what to do.")
+    human_message: str = Field(default=human_message,
+                               description="Message from a human. The input on which the AI is supposed to act.")
+

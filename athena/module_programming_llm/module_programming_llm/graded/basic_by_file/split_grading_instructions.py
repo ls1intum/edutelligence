@@ -7,7 +7,7 @@ from langchain.prompts import ChatPromptTemplate
 from athena import emit_meta
 from athena.programming import Exercise, Submission
 
-from module_programming_llm.config import GradedBasicApproachConfig
+from .config import GradedBasicByFileConfig
 from module_programming_llm.helpers.llm_utils import (
     get_chat_prompt_with_formatting_instructions,
     num_tokens_from_string,
@@ -28,11 +28,11 @@ class SplitGradingInstructions(BaseModel):
 
 
 # pylint: disable=too-many-locals
-async def split_grading_instructions_by_file(
+async def generate_split_grading_instructions_by_file(
         exercise: Exercise,
         submission: Submission,
         prompt: ChatPromptTemplate,
-        config: GradedBasicApproachConfig,
+        config: GradedBasicByFileConfig,
         debug: bool
     ) -> Optional[SplitGradingInstructions]:
     """Split the general grading instructions by file
@@ -52,7 +52,7 @@ async def split_grading_instructions_by_file(
     # Return None if the grading instructions are too short
     if (grading_instructions is None
             or num_tokens_from_string(
-                grading_instructions) <= config.split_grading_instructions_by_file_prompt.tokens_before_split):
+                grading_instructions) <= config.split_grading_instructions_prompt.tokens_before_split):
         return None
 
     # Return None if the grading instructions are not in the prompt
@@ -75,8 +75,8 @@ async def split_grading_instructions_by_file(
 
     chat_prompt = get_chat_prompt_with_formatting_instructions(
         model=model,
-        system_message=config.split_grading_instructions_by_file_prompt.system_message,
-        human_message=config.split_grading_instructions_by_file_prompt.human_message,
+        system_message=config.split_grading_instructions_prompt.system_message,
+        human_message=config.split_grading_instructions_prompt.grading_instructions_message,
         pydantic_object=SplitGradingInstructions,
     )
 

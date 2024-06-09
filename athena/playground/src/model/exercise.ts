@@ -38,9 +38,9 @@ export type TextExercise = ExerciseBase & {
 export type ProgrammingExercise = ExerciseBase & {
   type: "programming";
   programming_language: string;
-  solution_repository_url: string;
-  template_repository_url: string;
-  tests_repository_url: string;
+  solution_repository_uri: string;
+  template_repository_uri: string;
+  tests_repository_uri: string;
 };
 
 export type ModelingExercise = ExerciseBase & {

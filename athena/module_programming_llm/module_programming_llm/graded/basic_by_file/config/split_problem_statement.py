@@ -1,3 +1,6 @@
+from pydantic import BaseModel, Field
+
+
 system_message = """\
 You are an AI tutor for programming assessment at a prestigious university.
 
@@ -7,6 +10,7 @@ Make it as easy as possible for the tutor to grade the assignment when looking a
 Some parts of the problem statement may be relevant for multiple files.
 For the file keys, include the full path.
 """
+
 
 human_message = """\
 Problem statement:
@@ -20,3 +24,14 @@ Changed files from template to student submission (Pick from this list, very imp
 
 Problem statement by file:
 """
+
+
+class SplitProblemStatementPrompt(BaseModel):
+    """Features available: **{problem_statement}**, **{changed_files_from_template_to_solution}**, **{changed_files_from_template_to_submission}**"""
+
+    system_message: str = Field(default=system_message,
+                                description="Message for priming AI behavior and instructing it what to do.")
+    human_message: str = Field(default=human_message,
+                               description="Message for priming AI behavior and instructing it what to do.")
+    tokens_before_split: int = Field(default=250,
+                                     description="Split the problem statement into file-based ones after this number of tokens.")
