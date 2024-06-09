@@ -36,13 +36,13 @@ jobs:
     env:
       DOCKER_TAG: ${{ inputs.docker-tag }}
       BRANCH_NAME: ${{ inputs.branch-name }}
-      DEPLOYMENT_USER: ${{ vars.DEPLOYMENT_USER || 'ga92nur' }} # TODO: remove default value and add environment variable
+      DEPLOYMENT_USER: ${{ vars.DEPLOYMENT_USER || 'ge32yam' }} # TODO: remove default value and add environment variable
       DEPLOYMENT_HOST: ${{ vars.DEPLOYMENT_HOST || 'athenetest1-03.ase.cit.tum.de' }} # TODO: remove default value and add environment variable
       DEPLOYMENT_FOLDER: ${{ vars.DEPLOYMENT_FOLDER || '/srv/athena' }} # TODO: remove default value and add environment variable
       DEPLOYMENT_HOST_PUBLIC_KEYS: ${{ vars.DEPLOYMENT_HOST_PUBLIC_KEYS || 'athenetest1-03.ase.cit.tum.de ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBDjL4fx0eOUeGJBadxwfu2tg0xBt1/Stki3hgI1khH4GIepznd3Y+rihFq0canku+TlXAY81AKsSAIkEr0aCe/Q=' }} # TODO: remove default value and add environment variable
       GATEWAY_USER: "jump"
       GATEWAY_HOST: "gateway.artemis.in.tum.de:2010"
-      GATEWAY_HOST_PUBLIC_KEY: "[gateway.artemis.in.tum.de]:2010 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICK3EUhNVNwMBCbQExpk8231NUHLYpsUN3a5B431Ynf0"
+      GATEWAY_HOST_PUBLIC_KEY: "[gateway.artemis.in.tum.de]:2010 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKtTLiKRILjKZ+Qg4ReWKsG7mLDXkzHfeY5nalSQUNQ4"
 
     steps:
       # Download athena-server-cli from GH without cloning the Repo
