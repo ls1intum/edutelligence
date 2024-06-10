@@ -1,3 +1,5 @@
+import logging
+import time
 from datetime import datetime
 from typing import Literal, Any
 
@@ -77,19 +79,37 @@ class OpenAIChatModel(ChatModel):
     def chat(
         self, messages: list[PyrisMessage], arguments: CompletionArguments
     ) -> PyrisMessage:
-        print("Sending messages to OpenAI", messages)
         # noinspection PyTypeChecker
-        response = self._client.chat.completions.create(
-            model=self.model,
-            messages=convert_to_open_ai_messages(messages),
-            temperature=arguments.temperature,
-            max_tokens=arguments.max_tokens,
-            response_format=ResponseFormat(
-                type=("json_object" if arguments.response_format == "JSON" else "text")
-            ),
+        retries = 10
+        backoff_factor = 2
+        initial_delay = 1
+
+        for attempt in range(retries):
+            try:
+                if arguments.response_format == "JSON":
+                    response = self._client.chat.completions.create(
+                        model=self.model,
+                        messages=convert_to_open_ai_messages(messages),
+                        temperature=arguments.temperature,
+                        max_tokens=arguments.max_tokens,
+                        response_format=ResponseFormat(type="json_object"),
+                    )
+                else:
+                    response = self._client.chat.completions.create(
+                        model=self.model,
+                        messages=convert_to_open_ai_messages(messages),
+                        temperature=arguments.temperature,
+                        max_tokens=arguments.max_tokens,
+                    )
+                return convert_to_iris_message(response.choices[0].message)
+            except Exception as e:
+                wait_time = initial_delay * (backoff_factor**attempt)
+                logging.warning(f"Exception on attempt {attempt + 1}: {e}")
+                logging.info(f"Retrying in {wait_time} seconds...")
+                time.sleep(wait_time)
+        logging.error(
+            "Failed to interpret image after several attempts due to rate limit."
         )
-        print(response)
-        return convert_to_iris_message(response.choices[0].message)
 
 
 class DirectOpenAIChatModel(OpenAIChatModel):
