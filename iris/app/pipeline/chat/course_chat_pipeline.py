@@ -173,7 +173,7 @@ class CourseChatPipeline(Pipeline):
             if not dto.metrics or not dto.metrics.exercise_metrics:
                 return "No data available!! Do not requery."
             metrics = dto.metrics.exercise_metrics
-            if metrics.score and any(exercise_id in metrics.average_score for exercise_id in exercise_ids):
+            if metrics.average_score and any(exercise_id in metrics.average_score for exercise_id in exercise_ids):
                 return {
                     exercise_id: {
                         "global_average_score": metrics.average_score[exercise_id],
