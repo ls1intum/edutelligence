@@ -168,7 +168,7 @@ class ExerciseChatPipeline(Pipeline):
             guide_response = (self.prompt | self.pipeline).with_config({"run_name": "Response Refining"}).invoke({})
 
             if "!ok!" in guide_response:
-                print("Response is ok and not rewritten.")
+                print("Response is ok and not rewritten!!!")
                 self.exercise_chat_response = response_draft
             else:
                 print("Response is rewritten.")
