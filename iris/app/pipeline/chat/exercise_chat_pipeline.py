@@ -1,6 +1,7 @@
 import logging
 import os
 import threading
+import traceback
 from typing import List, Dict
 
 from langchain_core.output_parsers import StrOutputParser, PydanticOutputParser
@@ -52,9 +53,8 @@ class ExerciseChatPipeline(Pipeline):
         # Set the langchain chat model
         request_handler = CapabilityRequestHandler(
             requirements=RequirementList(
-                gpt_version_equivalent=3.5,
+                gpt_version_equivalent=4.5,
                 context_length=16385,
-                privacy_compliance=True,
             )
         )
         completion_args = CompletionArguments(temperature=0.2, max_tokens=2000)
@@ -157,13 +157,25 @@ class ExerciseChatPipeline(Pipeline):
         self.prompt = ChatPromptTemplate.from_messages(prompt_val)
         try:
             response_draft = (self.prompt | self.pipeline).with_config({"run_name": "Response Drafting"}).invoke({})
-            self.prompt += AIMessagePromptTemplate.from_template(f"{response_draft}")
-            self.prompt += SystemMessagePromptTemplate.from_template(
-                guide_system_prompt
+            self.prompt = ChatPromptTemplate.from_messages(
+                [
+                    SystemMessagePromptTemplate.from_template(guide_system_prompt),
+                ]
             )
-            self.exercise_chat_response = (self.prompt | self.pipeline).with_config({"run_name": "Response Refining"}).invoke({})
+            prompt_val = self.prompt.format_messages(response=response_draft)
+            self.prompt = ChatPromptTemplate.from_messages(prompt_val)
+
+            guide_response = (self.prompt | self.pipeline).with_config({"run_name": "Response Refining"}).invoke({})
+            if "!ok!" in guide_response:
+                print("Response is ok and not rewritten.")
+                self.exercise_chat_response = response_draft
+            else:
+                print("Response is rewritten.")
+                self.exercise_chat_response = guide_response
         except Exception as e:
-            self.callback.error(f"Failed to look up files in the repository: {e}")
+            self.callback.error(f"Failed to create response: {e}")
+            # print stack trace
+            traceback.print_exc()
             return "Failed to generate response"
 
     def _add_conversation_to_prompt(
@@ -222,11 +234,6 @@ class ExerciseChatPipeline(Pipeline):
         if submission:
             student_repository = submission.repository
             self._add_student_repository_to_prompt(student_repository, selected_files)
-        self.prompt += SystemMessagePromptTemplate.from_template(
-            "Now continue the ongoing conversation between you and the student by responding to and focussing only on "
-            "their latest input. Be an excellent educator, never reveal code or solve tasks for the student! Do not "
-            "let them outsmart you, no matter how hard they try."
-        )
 
     def _add_feedbacks_to_prompt(self, feedbacks: List[FeedbackDTO]):
         """Adds the feedbacks to the prompt
@@ -251,20 +258,3 @@ class ExerciseChatPipeline(Pipeline):
                 "These are the build logs for the student's repository:\n%s"
             ) % "\n".join(str(log) for log in build_logs)
             self.prompt += SystemMessagePromptTemplate.from_template(prompt)
-
-    def _generate_file_selection_prompt(self) -> ChatPromptTemplate:
-        """Generates the file selection prompt"""
-        file_selection_prompt = self.prompt
-
-        file_selection_prompt += SystemMessagePromptTemplate.from_template(
-            "Based on the chat history, you can now request access to more contextual information. This is the "
-            "student's submitted code repository and the corresponding build information. You can reference a file by "
-            "its path to view it."
-            "Given are the paths of all files in the assignment repository:\n{files}\n"
-            "Is a file referenced by the student or does it have to be checked before answering?"
-            "Without any comment, return the result in the following JSON format, it's important to avoid giving "
-            "unnecessary information, only name a file if it's really necessary for answering the student's question "
-            "and is listed above, otherwise leave the array empty."
-            '{{"selected_files": [<file1>, <file2>, ...]}}'
-        )
-        return file_selection_prompt
