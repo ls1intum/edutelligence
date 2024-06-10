@@ -1,6 +1,7 @@
 import json
 import logging
 import traceback
+import typing
 from datetime import datetime
 from typing import List, Optional, Union
 
@@ -154,12 +155,13 @@ class CourseChatPipeline(Pipeline):
             }
 
         @tool
-        def get_student_exercise_metrics(exercise_id: int) -> Union[dict, str]:
+        def get_student_exercise_metrics(exercise_ids: typing.List[int]) -> Union[dict[int, dict], str]:
             """
-            Get the student exercise metrics for the given exercise.
-            Important: You have to pass the correct exercise id here. If you don't know it,
+            Get the student exercise metrics for the given exercises.
+            Important: You have to pass the correct exercise ids here. If you don't know it,
             check out the exercise list first and look up the id of the exercise you are interested in.
-            UNDER NO CIRCUMSTANCES GUESS THE ID, such as 12345. Always use the correct id.
+            UNDER NO CIRCUMSTANCES GUESS THE ID, such as 12345. Always use the correct ids.
+            You must pass an array of IDs. It can be more than one.
             The following metrics are returned:
             - global_average_score: The average score of all students in the exercise.
             - score_of_student: The score of the student.
@@ -171,16 +173,15 @@ class CourseChatPipeline(Pipeline):
             if not dto.metrics or not dto.metrics.exercise_metrics:
                 return "No data available!! Do not requery."
             metrics = dto.metrics.exercise_metrics
-            if metrics.score and exercise_id in metrics.score:
+            if metrics.score and any(exercise_id in metrics.score for exercise_id in exercise_ids):
                 return {
-                    "global_average_score": metrics.average_score[exercise_id],
-                    "score_of_student": metrics.score[exercise_id],
-                    "global_average_latest_submission": metrics.average_latest_submission[
-                        exercise_id
-                    ],
-                    "latest_submission_of_student": metrics.latest_submission[
-                        exercise_id
-                    ],
+                    exercise_id: {
+                        "global_average_score": metrics.average_score[exercise_id],
+                        "score_of_student": metrics.score.get(exercise_id, None),
+                        "global_average_latest_submission": metrics.average_latest_submission.get(exercise_id, None),
+                        "latest_submission_of_student": metrics.latest_submission.get(exercise_id, None),
+                    }
+                    for exercise_id in exercise_ids if exercise_id in metrics.average_score
                 }
             else:
                 return "No data available! Do not requery."
