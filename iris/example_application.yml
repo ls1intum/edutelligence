@@ -4,6 +4,6 @@ api_keys:
 weaviate:
   host: "localhost"
   port: "8001"
-  grpc-port: "50051"
+  grpc_port: "50051"
 
 env_vars:
