@@ -86,19 +86,18 @@ class TutorChatPipeline(Pipeline):
         :param dto:  execution data transfer object
         :param kwargs: The keyword arguments
         """
-        execution_dto = LectureChatPipelineExecutionDTO(
-            settings=dto.settings, course=dto.course, chatHistory=dto.chat_history
-        )
-        lecture_chat_thread = threading.Thread(
-            target=self._run_lecture_chat_pipeline(execution_dto), args=(dto,)
-        )
-        tutor_chat_thread = threading.Thread(
-            target=self._run_tutor_chat_pipeline(dto), args=(dto,)
-        )
-        lecture_chat_thread.start()
-        tutor_chat_thread.start()
-
         try:
+            execution_dto = LectureChatPipelineExecutionDTO(
+                settings=dto.settings, course=dto.course, chatHistory=dto.chat_history
+            )
+            lecture_chat_thread = threading.Thread(
+                target=self._run_lecture_chat_pipeline(execution_dto), args=(dto,)
+            )
+            tutor_chat_thread = threading.Thread(
+                target=self._run_tutor_chat_pipeline(dto), args=(dto,)
+            )
+            lecture_chat_thread.start()
+            tutor_chat_thread.start()
             response = self.choose_best_response(
                 [self.tutor_chat_response, self.lecture_chat_response],
                 dto.chat_history[-1].contents[0].text_content,
@@ -215,6 +214,8 @@ class TutorChatPipeline(Pipeline):
             course_name=dto.course.name,
             problem_statement=problem_statement,
             exercise_title=exercise_title,
+            course_id=dto.course.id,
+            base_url=dto.settings.artemis_base_url,
         )
         self._add_relevant_chunks_to_prompt(retrieved_lecture_chunks)
 

@@ -6,6 +6,7 @@ from asyncio.log import logger
 import fitz
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
+from unstructured.cleaners.core import clean
 from weaviate import WeaviateClient
 from weaviate.classes.query import Filter
 from . import Pipeline
@@ -28,6 +29,8 @@ from ..llm import (
 )
 from ..web.status import IngestionStatusCallback
 from typing import TypedDict, Optional
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+
 
 batch_update_lock = threading.Lock()
 
@@ -123,8 +126,8 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
             chunks = []
             for i, lecture_unit in enumerate(self.dto.lecture_units):
                 pdf_path = save_pdf(lecture_unit.pdf_file_base64)
-                chunks = self.chunk_data(
-                    lecture_pdf=pdf_path, lecture_unit_dto=lecture_unit
+                chunks.extend(
+                    self.chunk_data(lecture_pdf=pdf_path, lecture_unit_dto=lecture_unit)
                 )
                 cleanup_temporary_file(pdf_path)
             self.callback.done("Lecture Chunking and interpretation Finished")
@@ -171,38 +174,27 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
             doc.load_page(min(5, doc.page_count - 1)).get_text()
         )
         data = []
-        last_page_content = ""
+        text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=1024, chunk_overlap=102
+        )
         for page_num in range(doc.page_count):
             page = doc.load_page(page_num)
-            page_content = page.get_text()
-            img_base64 = ""
-            if page.get_images(full=True):
-                page_snapshot = page.get_pixmap()
-                img_bytes = page_snapshot.tobytes("png")
-                img_base64 = base64.b64encode(img_bytes).decode("utf-8")
-                image_interpretation = self.interpret_image(
-                    img_base64,
-                    last_page_content,
-                    lecture_unit_dto.lecture_name,
-                )
-                page_content = self.merge_page_content_and_image_interpretation(
-                    page_content, image_interpretation
-                )
-            page_data: PageData = {
-                LectureSchema.LECTURE_ID.value: lecture_unit_dto.lecture_id,
-                LectureSchema.LECTURE_NAME.value: lecture_unit_dto.lecture_name,
-                LectureSchema.LECTURE_UNIT_ID.value: lecture_unit_dto.lecture_unit_id,
-                LectureSchema.LECTURE_UNIT_NAME.value: lecture_unit_dto.lecture_unit_name,
-                LectureSchema.COURSE_ID.value: lecture_unit_dto.course_id,
-                LectureSchema.COURSE_NAME.value: lecture_unit_dto.course_name,
-                LectureSchema.COURSE_DESCRIPTION.value: lecture_unit_dto.course_description,
-                LectureSchema.COURSE_LANGUAGE.value: course_language,
-                LectureSchema.PAGE_NUMBER.value: page_num + 1,
-                LectureSchema.PAGE_TEXT_CONTENT.value: page_content,
-                LectureSchema.PAGE_BASE64.value: img_base64,
-            }
-            last_page_content = page_content
-            data.append(page_data)
+            page_text = text_splitter.create_documents([page.get_text()])
+            for content in page_text:
+                page_data: PageData = {
+                    LectureSchema.LECTURE_ID.value: lecture_unit_dto.lecture_id,
+                    LectureSchema.LECTURE_NAME.value: lecture_unit_dto.lecture_name,
+                    LectureSchema.LECTURE_UNIT_ID.value: lecture_unit_dto.lecture_unit_id,
+                    LectureSchema.LECTURE_UNIT_NAME.value: lecture_unit_dto.lecture_unit_name,
+                    LectureSchema.COURSE_ID.value: lecture_unit_dto.course_id,
+                    LectureSchema.COURSE_NAME.value: lecture_unit_dto.course_name,
+                    LectureSchema.COURSE_DESCRIPTION.value: lecture_unit_dto.course_description,
+                    LectureSchema.BASE_URL.value: lecture_unit_dto.base_url,
+                    LectureSchema.COURSE_LANGUAGE.value: course_language,
+                    LectureSchema.PAGE_NUMBER.value: page_num + 1,
+                    LectureSchema.PAGE_TEXT_CONTENT.value: content.page_content,
+                }
+                data.append(page_data)
         return data
 
     def interpret_image(
@@ -221,6 +213,7 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
             f" it's content is most likely related to the slide you need to interpret: \n"
             f" {last_page_content}"
             f"Intepret the image below based on the provided context and the content of the previous slide.\n"
+            f"if no image is present or the image is not clear, respond with a blank message. \n"
         )
         image = ImageMessageContentDTO(base64=img_base64)
         iris_message = PyrisMessage(
@@ -258,7 +251,9 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
             image_interpretation=image_interpretation,
         )
         prompt = ChatPromptTemplate.from_messages(prompt_val)
-        return (prompt | self.pipeline).invoke({})
+        return clean(
+            (prompt | self.pipeline).invoke({}), bullets=True, extra_whitespace=True
+        )
 
     def get_course_language(self, page_content: str) -> str:
         """
@@ -284,7 +279,9 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
         try:
             for lecture_unit in self.dto.lecture_units:
                 if self.delete_lecture_unit(
-                    lecture_unit.lecture_id, lecture_unit.lecture_unit_id
+                    lecture_unit.lecture_id,
+                    lecture_unit.lecture_unit_id,
+                    lecture_unit.base_url,
                 ):
                     logger.info("Lecture deleted successfully")
                 else:
@@ -293,7 +290,7 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
             logger.error(f"Error deleting lecture unit: {e}")
             return False
 
-    def delete_lecture_unit(self, lecture_id, lecture_unit_id):
+    def delete_lecture_unit(self, lecture_id, lecture_unit_id, base_url):
         """
         Delete the lecture from the database
         """
@@ -305,6 +302,7 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
                 & Filter.by_property(LectureSchema.LECTURE_UNIT_ID.value).equal(
                     lecture_unit_id
                 )
+                & Filter.by_property(LectureSchema.BASE_URL.value).equal(base_url)
             )
             return True
         except Exception as e:
