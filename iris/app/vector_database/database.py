@@ -19,7 +19,6 @@ class VectorDatabase:
             port=settings.weaviate.port,
             grpc_port=settings.weaviate.grpc_port,
         )
-        self.repositories = init_repository_schema(self.client)
         self.lectures = init_lecture_schema(self.client)
 
     def __del__(self):

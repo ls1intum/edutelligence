@@ -21,7 +21,7 @@ services:
       service: weaviate
     networks:
       - pyris
-    port:
+    ports:
       - 8001:8001
       - 50051:50051
 
