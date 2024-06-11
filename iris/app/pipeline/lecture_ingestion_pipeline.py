@@ -126,8 +126,8 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
             chunks = []
             for i, lecture_unit in enumerate(self.dto.lecture_units):
                 pdf_path = save_pdf(lecture_unit.pdf_file_base64)
-                chunks = self.chunk_data(
-                    lecture_pdf=pdf_path, lecture_unit_dto=lecture_unit
+                chunks.extend(
+                    self.chunk_data(lecture_pdf=pdf_path, lecture_unit_dto=lecture_unit)
                 )
                 cleanup_temporary_file(pdf_path)
             self.callback.done("Lecture Chunking and interpretation Finished")
