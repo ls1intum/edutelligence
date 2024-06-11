@@ -1,7 +1,6 @@
 import logging
 import weaviate
 from .lecture_schema import init_lecture_schema
-from .repository_schema import init_repository_schema
 from weaviate.classes.query import Filter
 from app.config import settings
 
