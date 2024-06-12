@@ -13,3 +13,17 @@ class AbstractIngestion(ABC):
         Abstract method to chunk code files in the root directory.
         """
         pass
+
+    @abstractmethod
+    def ingest(self, path: str) -> bool:
+        """
+        Abstract method to ingest repositories into the database.
+        """
+        pass
+
+    @abstractmethod
+    def update(self, path: str):
+        """
+        Abstract method to update a repository in the database.
+        """
+        pass

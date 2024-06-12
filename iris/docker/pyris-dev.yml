@@ -15,18 +15,7 @@ services:
     networks:
       - pyris
 
-  weaviate:
-    extends:
-      file: ./weaviate.yml
-      service: weaviate
-    networks:
-      - pyris
-    port:
-      - 8001:8001
-      - 50051:50051
-
 networks:
   pyris:
     driver: "bridge"
     name: pyris
-

@@ -8,16 +8,9 @@ class APIKeyConfig(BaseModel):
     token: str
 
 
-class WeaviateSettings(BaseModel):
-    host: str
-    port: int
-    grpc_port: int
-
-
 class Settings(BaseModel):
     api_keys: list[APIKeyConfig]
     env_vars: dict[str, str]
-    weaviate: WeaviateSettings
 
     @classmethod
     def get_settings(cls):

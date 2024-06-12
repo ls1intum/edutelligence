@@ -1,8 +1,7 @@
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel
 from typing import Optional
 
 
 class ImageMessageContentDTO(BaseModel):
-    base64: str = Field(..., alias="pdfFile")
-    prompt: Optional[str] = None
-    model_config = ConfigDict(populate_by_name=True)
+    base64: str
+    prompt: Optional[str]

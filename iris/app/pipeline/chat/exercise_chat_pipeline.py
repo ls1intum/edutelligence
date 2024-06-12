@@ -85,6 +85,7 @@ class ExerciseChatPipeline(Pipeline):
             logger.info(f"Response from exercise chat pipeline: {self.exercise_chat_response}")
             self.callback.done("Generated response", final_result=self.exercise_chat_response)
         except Exception as e:
+            print(e)
             self.callback.error(f"Failed to generate response: {e}")
 
     def _run_exercise_chat_pipeline(self, dto: ExerciseChatPipelineExecutionDTO):
