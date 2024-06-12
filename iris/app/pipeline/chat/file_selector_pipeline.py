@@ -87,7 +87,6 @@ class FileSelectorPipeline(Pipeline):
         chat_history: List[PyrisMessage],
         question: PyrisMessage,
         feedbacks: List[FeedbackDTO],
-        **kwargs,
     ) -> List[str]:
         """
         Runs the pipeline
