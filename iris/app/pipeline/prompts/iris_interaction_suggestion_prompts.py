@@ -48,6 +48,7 @@ Respond with the following json blob:
   ],
 }}
 ```
+Generate EXACTLY two questions and keep the questions CONCISE.
 """
 
 iris_exercise_suggestion_initial_system_prompt = """
@@ -76,6 +77,7 @@ Respond with the following json blob:
     ],
 }}  
 ```
+Generate EXACTLY TWO questions.
 """
 
 iris_default_suggestion_initial_system_prompt = """
@@ -100,6 +102,7 @@ Respond with the following json blob:
     ],
 }}  
 ```
+Generate EXACTLY two questions and keep the questions CONCISE.
 """
 
 default_chat_history_exists_prompt = """
@@ -165,16 +168,20 @@ course_chat_begin_prompt = """
 Now, generate questions that a student might ask a human tutor to get insights into their learning progress and strategies.
 Remember, you only generate questions, not answers. These question should be framed,
 as if a student is asking a human tutor. The questions will later be used by the student to engage in a conversation with the tutor.
+Generate EXACTLY two questions and keep the questions CONCISE.
 """
 
 exercise_chat_begin_prompt = """
 Now, generate questions that a student might ask a human tutor to get help about their current programming exercise.
 Remember, you only generate questions, not answers. These question should be framed,
-as if a student is asking a human tutor. The questions will later be used by the student to engage in a conversation with the tutor.
+as if a student is asking a human tutor. The questions will later be used by the student to engage in a conversation 
+with the tutor about the exercise.
+Generate EXACTLY two questions.
 """
 
 default_chat_begin_prompt = """
 Now, generate questions that a student might ask a human tutor to engage in a conversation.
 Remember, you only generate questions, not answers. These question should be framed,
 as if a student is asking a human tutor. The questions will later be used by the student to engage in a conversation with the tutor.
+Generate EXACTLY two questions.
 """

@@ -53,20 +53,20 @@ class InteractionSuggestionPipeline(Pipeline):
     variant: str
 
     def __init__(self, variant: str = "default"):
-        super().__init__(implementation_id="course_interaction_suggestion_pipeline")
+        super().__init__(implementation_id="interaction_suggestion_pipeline")
 
         self.variant = variant
 
         # Set the langchain chat model
         request_handler = CapabilityRequestHandler(
             requirements=RequirementList(
-                gpt_version_equivalent=4.5,
+                gpt_version_equivalent=4,
                 context_length=16385,
                 json_mode=True,
             )
         )
         completion_args = CompletionArguments(
-            temperature=0.2, max_tokens=500, response_format="JSON"
+            temperature=0.6, max_tokens=2000, response_format="JSON"
         )
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler, completion_args=completion_args
@@ -157,7 +157,7 @@ class InteractionSuggestionPipeline(Pipeline):
                     ]
                 )
                 response: Questions = (self.prompt | self.pipeline).invoke({})
-                return response.questions
+                return response["questions"]
         except Exception as e:
             logger.error(
                 f"An error occurred while running the course chat pipeline", exc_info=e

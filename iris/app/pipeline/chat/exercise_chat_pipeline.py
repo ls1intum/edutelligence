@@ -15,8 +15,12 @@ from langchain_core.prompts import (
 from langchain_core.runnables import Runnable
 from langsmith import traceable
 
+from .interaction_suggestion_pipeline import InteractionSuggestionPipeline
 from ...common import convert_iris_message_to_langchain_message
 from ...domain import PyrisMessage
+from ...domain.chat.interaction_suggestion_dto import (
+    InteractionSuggestionPipelineExecutionDTO,
+)
 from ...llm import CapabilityRequestHandler, RequirementList
 from ...domain.data.build_log_entry import BuildLogEntryDTO
 from ...domain.data.feedback_dto import FeedbackDTO
@@ -40,12 +44,13 @@ logger.setLevel(logging.INFO)
 
 
 class ExerciseChatPipeline(Pipeline):
-    """Exercise chat pipeline that answers exercises related questions from students. """
+    """Exercise chat pipeline that answers exercises related questions from students."""
 
     llm: IrisLangchainChatModel
     pipeline: Runnable
     callback: ExerciseChatStatusCallback
     file_selector_pipeline: FileSelectorPipeline
+    suggestion_pipeline: InteractionSuggestionPipeline
     prompt: ChatPromptTemplate
 
     def __init__(self, callback: ExerciseChatStatusCallback):
@@ -66,6 +71,7 @@ class ExerciseChatPipeline(Pipeline):
         # Create the pipelines
         self.file_selector_pipeline = FileSelectorPipeline()
         self.pipeline = self.llm | StrOutputParser()
+        self.suggestion_pipeline = InteractionSuggestionPipeline(variant="exercise")
 
     def __repr__(self):
         return f"{self.__class__.__name__}(llm={self.llm})"
@@ -82,8 +88,14 @@ class ExerciseChatPipeline(Pipeline):
         """
         try:
             self._run_exercise_chat_pipeline(dto)
-            logger.info(f"Response from exercise chat pipeline: {self.exercise_chat_response}")
-            self.callback.done("Generated response", final_result=self.exercise_chat_response)
+            logger.info(
+                f"Response from exercise chat pipeline: {self.exercise_chat_response}"
+            )
+            self.callback.done(
+                "Generated response",
+                final_result=self.exercise_chat_response,
+                suggestions=self.suggestions,
+            )
         except Exception as e:
             print(e)
             self.callback.error(f"Failed to generate response: {e}")
@@ -129,7 +141,11 @@ class ExerciseChatPipeline(Pipeline):
                     chat_history=history,
                     question=query,
                     repository=repository,
-                    feedbacks=(submission.latest_result.feedbacks if submission and submission.latest_result else [])
+                    feedbacks=(
+                        submission.latest_result.feedbacks
+                        if submission and submission.latest_result
+                        else []
+                    ),
                 )
                 self.callback.done()
             except Exception as e:
@@ -156,7 +172,11 @@ class ExerciseChatPipeline(Pipeline):
         )
         self.prompt = ChatPromptTemplate.from_messages(prompt_val)
         try:
-            response_draft = (self.prompt | self.pipeline).with_config({"run_name": "Response Drafting"}).invoke({})
+            response_draft = (
+                (self.prompt | self.pipeline)
+                .with_config({"run_name": "Response Drafting"})
+                .invoke({})
+            )
             self.prompt = ChatPromptTemplate.from_messages(
                 [
                     SystemMessagePromptTemplate.from_template(guide_system_prompt),
@@ -165,7 +185,11 @@ class ExerciseChatPipeline(Pipeline):
             prompt_val = self.prompt.format_messages(response=response_draft)
             self.prompt = ChatPromptTemplate.from_messages(prompt_val)
 
-            guide_response = (self.prompt | self.pipeline).with_config({"run_name": "Response Refining"}).invoke({})
+            guide_response = (
+                (self.prompt | self.pipeline)
+                .with_config({"run_name": "Response Refining"})
+                .invoke({})
+            )
 
             if "!ok!" in guide_response:
                 print("Response is ok and not rewritten!!!")
@@ -173,6 +197,24 @@ class ExerciseChatPipeline(Pipeline):
             else:
                 print("Response is rewritten.")
                 self.exercise_chat_response = guide_response
+            self.suggestions = None
+            try:
+                if self.exercise_chat_response:
+                    suggestion_dto = InteractionSuggestionPipelineExecutionDTO(
+                        chat_history=history,
+                        last_message=self.exercise_chat_response,
+                    )
+                    suggestions = self.suggestion_pipeline(suggestion_dto)
+                    logger.info(
+                        f"Generated suggestions from interaction suggestion pipeline: {suggestions}"
+                    )
+                    self.suggestions = suggestions
+            except Exception as e:
+                logger.error(
+                    f"An error occurred while running the course chat interaction suggestion pipeline",
+                    exc_info=e,
+                )
+                traceback.print_exc()
         except Exception as e:
             self.callback.error(f"Failed to create response: {e}")
             # print stack trace

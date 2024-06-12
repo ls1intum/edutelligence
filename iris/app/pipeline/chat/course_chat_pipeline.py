@@ -80,7 +80,7 @@ class CourseChatPipeline(Pipeline):
         # Set the langchain chat model
         request_handler = CapabilityRequestHandler(
             requirements=RequirementList(
-                gpt_version_equivalent=4.5,
+                gpt_version_equivalent=4,
                 context_length=16385,
                 json_mode=True,
             )
