@@ -13,15 +13,23 @@ from pydantic.v1 import Field, BaseModel
 
 from ...common import convert_iris_message_to_langchain_message
 from ...domain import PyrisMessage
-from ...domain.chat.course_chat.course_chat_interaction_suggestion_dto import (
-    CourseChatInteractionSuggestionPipelineExecutionDTO,
+from app.domain.chat.interaction_suggestion_dto import (
+    InteractionSuggestionPipelineExecutionDTO,
 )
 from ...llm import CapabilityRequestHandler, RequirementList
 from ..prompts.iris_interaction_suggestion_prompts import (
-    begin_prompt,
-    iris_initial_system_prompt,
-    chat_history_exists_prompt,
-    no_chat_history_prompt,
+    course_chat_begin_prompt,
+    iris_course_suggestion_initial_system_prompt,
+    course_chat_history_exists_prompt,
+    no_course_chat_history_prompt,
+    iris_exercise_suggestion_initial_system_prompt,
+    exercise_chat_history_exists_prompt,
+    no_exercise_chat_history_prompt,
+    exercise_chat_begin_prompt,
+    iris_default_suggestion_initial_system_prompt,
+    default_chat_history_exists_prompt,
+    no_default_chat_history_prompt,
+    default_chat_begin_prompt,
 )
 
 from ...llm import CompletionArguments
@@ -36,7 +44,7 @@ class Questions(BaseModel):
     questions: List[str] = Field(description="questions that students may ask")
 
 
-class CourseInteractionSuggestionPipeline(Pipeline):
+class InteractionSuggestionPipeline(Pipeline):
     """Course chat pipeline that answers course related questions from students."""
 
     llm: IrisLangchainChatModel
@@ -58,7 +66,7 @@ class CourseInteractionSuggestionPipeline(Pipeline):
             )
         )
         completion_args = CompletionArguments(
-            temperature=0.2, max_tokens=2000, response_format="JSON"
+            temperature=0.2, max_tokens=500, response_format="JSON"
         )
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler, completion_args=completion_args
@@ -74,7 +82,7 @@ class CourseInteractionSuggestionPipeline(Pipeline):
         return f"{self.__class__.__name__}(llm={self.llm})"
 
     def __call__(
-        self, dto: CourseChatInteractionSuggestionPipelineExecutionDTO, **kwargs
+        self, dto: InteractionSuggestionPipelineExecutionDTO, **kwargs
     ) -> list[str]:
         """
         Runs the pipeline
@@ -82,10 +90,30 @@ class CourseInteractionSuggestionPipeline(Pipeline):
             :param kwargs: The keyword arguments
 
         """
+        iris_suggestion_initial_system_prompt = (
+            iris_default_suggestion_initial_system_prompt
+        )
+        chat_history_exists_prompt = default_chat_history_exists_prompt
+        no_chat_history_prompt = no_default_chat_history_prompt
+        chat_begin_prompt = default_chat_begin_prompt
+
+        if self.variant == "course":
+            iris_suggestion_initial_system_prompt = (
+                iris_course_suggestion_initial_system_prompt
+            )
+            chat_history_exists_prompt = course_chat_history_exists_prompt
+            no_chat_history_prompt = no_course_chat_history_prompt
+            chat_begin_prompt = course_chat_begin_prompt
+        elif self.variant == "exercise":
+            iris_suggestion_initial_system_prompt = (
+                iris_exercise_suggestion_initial_system_prompt
+            )
+            chat_history_exists_prompt = exercise_chat_history_exists_prompt
+            no_chat_history_prompt = no_exercise_chat_history_prompt
+            chat_begin_prompt = exercise_chat_begin_prompt
 
         try:
             logger.info("Running course interaction suggestion pipeline...")
-            last
 
             history: List[PyrisMessage] = dto.chat_history or []
             query: Optional[PyrisMessage] = (
@@ -107,12 +135,12 @@ class CourseInteractionSuggestionPipeline(Pipeline):
                     [
                         (
                             "system",
-                            iris_initial_system_prompt
+                            iris_suggestion_initial_system_prompt
                             + "\n"
                             + chat_history_exists_prompt,
                         ),
                         *chat_history_messages,
-                        ("system", begin_prompt),
+                        ("system", chat_begin_prompt),
                     ]
                 )
             else:
@@ -120,11 +148,11 @@ class CourseInteractionSuggestionPipeline(Pipeline):
                     [
                         (
                             "system",
-                            iris_initial_system_prompt
+                            iris_suggestion_initial_system_prompt
                             + "\n"
                             + no_chat_history_prompt
                             + "\n"
-                            + begin_prompt,
+                            + chat_begin_prompt,
                         ),
                     ]
                 )
