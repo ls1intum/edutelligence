@@ -1,16 +1,12 @@
 import logging
-import os
-import threading
 import traceback
 from typing import List, Dict
 
-from langchain_core.output_parsers import StrOutputParser, PydanticOutputParser
+from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import (
     ChatPromptTemplate,
     SystemMessagePromptTemplate,
     HumanMessagePromptTemplate,
-    AIMessagePromptTemplate,
-    PromptTemplate,
 )
 from langchain_core.runnables import Runnable
 from langsmith import traceable
@@ -211,7 +207,7 @@ class ExerciseChatPipeline(Pipeline):
                     self.suggestions = suggestions
             except Exception as e:
                 logger.error(
-                    f"An error occurred while running the course chat interaction suggestion pipeline",
+                    "An error occurred while running the course chat interaction suggestion pipeline",
                     exc_info=e,
                 )
                 traceback.print_exc()

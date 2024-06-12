@@ -1,5 +1,4 @@
 from typing import Optional, List
-from abc import ABC
 
 import requests
 from abc import ABC

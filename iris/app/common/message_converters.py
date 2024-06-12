@@ -26,6 +26,7 @@ def convert_iris_message_to_langchain_message(
         case _:
             raise ValueError(f"Unknown message role: {iris_message.sender}")
 
+
 def convert_langchain_message_to_iris_message(
     base_message: BaseMessage,
 ) -> PyrisMessage:

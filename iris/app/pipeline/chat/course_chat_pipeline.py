@@ -118,11 +118,13 @@ class CourseChatPipeline(Pipeline):
         def get_exercise_list() -> list[dict]:
             """
             Get the list of exercises in the course.
-            Use this if the student asks you about an exercise. Note: The exercise contains a list of submissions (timestamp and score) of this student so you
+            Use this if the student asks you about an exercise.
+            Note: The exercise contains a list of submissions (timestamp and score) of this student so you
             can provide additional context regarding their progress and tendencies over time.
             Also, ensure to use the provided current date and time and compare it to the start date and due date etc.
             Do not recommend that the student should work on exercises with a past due date.
-            The submissions array tells you about the status of the student in this exercise: You see when the student submitted the exercise and what score they got.
+            The submissions array tells you about the status of the student in this exercise:
+            You see when the student submitted the exercise and what score they got.
             A 100% score means the student solved the exercise correctly and completed it.
             """
             used_tools.append("get_exercise_list")
@@ -215,13 +217,17 @@ class CourseChatPipeline(Pipeline):
             """
             Get the list of competencies in the course.
             Exercises might be associated with competencies. A competency is a skill or knowledge that a student
-            should have after completing the course, and instructors may add lectures and exercises to these competencies.
+            should have after completing the course, and instructors may add lectures and exercises
+            to these competencies.
             You can use this if the students asks you about a competency, or if you want to provide additional context
             regarding their progress overall or in a specific area.
-            A competency has the following attributes: name, description, taxonomy, soft due date, optional, and mastery threshold.
-            The response may include metrics for each competency, such as progress and confidence (0%-100%). These are system-generated.
-            The judgment of learning (JOL) values indicate the self-reported confidence by the student (0-5, 5 star). The object
-            describing it also indicates the system-computed confidence at the time when the student added their JoL assessment.
+            A competency has the following attributes: name, description, taxonomy, soft due date, optional,
+            and mastery threshold.
+            The response may include metrics for each competency, such as progress and confidence (0%-100%).
+            These are system-generated.
+            The judgment of learning (JOL) values indicate the self-reported confidence by the student (0-5, 5 star).
+            The object describing it also indicates the system-computed confidence at the time when the student
+            added their JoL assessment.
             """
             used_tools.append("get_competency_list")
             if not dto.metrics or not dto.metrics.competency_metrics:
@@ -384,7 +390,7 @@ class CourseChatPipeline(Pipeline):
                     suggestions = self.suggestion_pipeline(suggestion_dto)
             except Exception as e:
                 logger.error(
-                    f"An error occurred while running the course chat interaction suggestion pipeline",
+                    "An error occurred while running the course chat interaction suggestion pipeline",
                     exc_info=e,
                 )
                 traceback.print_exc()
@@ -392,7 +398,7 @@ class CourseChatPipeline(Pipeline):
             self.callback.done(None, final_result=out, suggestions=suggestions)
         except Exception as e:
             logger.error(
-                f"An error occurred while running the course chat pipeline", exc_info=e
+                "An error occurred while running the course chat pipeline", exc_info=e
             )
             traceback.print_exc()
             self.callback.error(

@@ -3,7 +3,6 @@ from typing import Optional, List
 from pydantic import Field, BaseModel
 
 from app.domain import PyrisMessage
-from app.domain.data.user_dto import UserDTO
 
 
 class InteractionSuggestionPipelineExecutionDTO(BaseModel):

@@ -19,7 +19,5 @@ class CompetencyDTO(BaseModel):
     title: Optional[str] = None
     description: Optional[str] = None
     taxonomy: Optional[CompetencyTaxonomy] = None
-    soft_due_date: Optional[datetime] = Field(
-        default=None, alias="softDueDate"
-    )
+    soft_due_date: Optional[datetime] = Field(default=None, alias="softDueDate")
     optional: Optional[bool] = None

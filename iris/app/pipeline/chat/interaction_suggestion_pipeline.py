@@ -160,7 +160,7 @@ class InteractionSuggestionPipeline(Pipeline):
                 return response["questions"]
         except Exception as e:
             logger.error(
-                f"An error occurred while running the course chat pipeline", exc_info=e
+                "An error occurred while running the course chat pipeline", exc_info=e
             )
             traceback.print_exc()
             return []
