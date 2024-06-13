@@ -55,9 +55,9 @@ services:
     ports:
       - "5005:5005"
 
-  module_programming_ast:
-    hostname: module-programming-ast
-    build: ./module_programming_ast
+  module_programming_apted:
+    hostname: module-programming-apted
+    build: module_programming_apted
     depends_on:
       - athena
     ports:

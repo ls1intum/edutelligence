@@ -1,7 +1,7 @@
 [tool.poetry]
-name = "module_programming_ast"
+name = "module_programming_apted"
 version = "0.1.0"
-description = "Programming assessment AST module."
+description = "Programming assessment AP-TED module."
 authors = ["Marlon Bucciarelli <marlon.bucciarelli@tum.de>"]
 license = "MIT"
 

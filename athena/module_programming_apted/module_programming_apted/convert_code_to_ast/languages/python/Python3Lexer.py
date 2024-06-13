@@ -9,9 +9,9 @@ else:
 
 
 if "." in __name__:
-    from module_programming_ast.convert_code_to_ast.languages.python.Python3LexerBase import Python3LexerBase
+    from module_programming_apted.convert_code_to_ast.languages.python.Python3LexerBase import Python3LexerBase
 else:
-    from module_programming_ast.convert_code_to_ast.languages.python.Python3LexerBase import Python3LexerBase
+    from module_programming_apted.convert_code_to_ast.languages.python.Python3LexerBase import Python3LexerBase
 
 def serializedATN():
     return [

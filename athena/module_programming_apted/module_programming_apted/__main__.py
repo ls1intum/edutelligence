@@ -1,24 +1,24 @@
 """
-Entry point for the module_programming_ast module.
+Entry point for the module_programming_apted module.
 """
 import random
 from typing import List, Any, cast
 from pydantic import BaseModel, Field
-from module_programming_ast.convert_code_to_ast.get_feedback_methods import get_feedback_method
-from module_programming_ast.feedback_suggestions.feedback_suggestions import create_feedback_suggestions
+from module_programming_apted.convert_code_to_ast.get_feedback_methods import get_feedback_method
+from module_programming_apted.feedback_suggestions.feedback_suggestions import create_feedback_suggestions
 from athena import (app, config_schema_provider, submissions_consumer, submission_selector, feedback_consumer,
                     feedback_provider, evaluation_provider, emit_meta)
 from athena.logger import logger
 from athena.storage import store_exercise, store_submissions, store_feedback, store_feedback_suggestions
 from athena.programming import (Exercise, Submission, Feedback, get_stored_feedback_suggestions,
                                 count_stored_submissions, get_stored_submissions)
-from module_programming_ast.remove_overlapping import filter_overlapping_suggestions
-from module_programming_ast.remove_suspicious import filter_suspicious
+from module_programming_apted.remove_overlapping import filter_overlapping_suggestions
+from module_programming_apted.remove_suspicious import filter_suspicious
 
 
 @config_schema_provider
 class Configuration(BaseModel):
-    """Example configuration for the module_programming_ast module."""
+    """Example configuration for the module_programming_apted module."""
     debug: bool = Field(False, description="Whether the module is in **debug mode**. This is an example config option.")
 
 

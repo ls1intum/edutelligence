@@ -1,7 +1,7 @@
 from antlr4 import ParseTreeListener
 
-from module_programming_ast.convert_code_to_ast.languages.python.Python3Parser import Python3Parser
-from module_programming_ast.convert_code_to_ast.languages.python.Python3ParserListener import Python3ParserListener
+from module_programming_apted.convert_code_to_ast.languages.python.Python3Parser import Python3Parser
+from module_programming_apted.convert_code_to_ast.languages.python.Python3ParserListener import Python3ParserListener
 from dataclasses import dataclass
 
 

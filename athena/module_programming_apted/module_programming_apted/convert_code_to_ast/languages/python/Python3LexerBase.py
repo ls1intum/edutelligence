@@ -1,7 +1,7 @@
 from typing import TextIO
 from antlr4 import *
 from antlr4.Token import CommonToken
-from module_programming_ast.convert_code_to_ast.languages.python.Python3Parser import Python3Parser
+from module_programming_apted.convert_code_to_ast.languages.python.Python3Parser import Python3Parser
 
 import sys
 from typing import TextIO

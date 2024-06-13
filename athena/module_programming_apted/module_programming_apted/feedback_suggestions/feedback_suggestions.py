@@ -5,10 +5,10 @@ from athena.helpers.programming.feedback import format_feedback_title
 from athena.logger import logger
 from athena.programming import Feedback, Submission
 
-from module_programming_ast.convert_code_to_ast.extract_method_and_ast import parse
-from module_programming_ast.convert_code_to_ast.method_node import MethodNode
-from module_programming_ast.feedback_suggestions.ap_ted_computer import CodeSimilarityComputer
-from module_programming_ast.feedback_suggestions.batch import batched
+from module_programming_apted.convert_code_to_ast.extract_method_and_ast import parse
+from module_programming_apted.convert_code_to_ast.method_node import MethodNode
+from module_programming_apted.feedback_suggestions.ap_ted_computer import CodeSimilarityComputer
+from module_programming_apted.feedback_suggestions.batch import batched
 
 
 APTED_THRESHOLD = 10  # TODO Needs to be adapted

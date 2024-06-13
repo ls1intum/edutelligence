@@ -1,12 +1,12 @@
 from antlr4 import CommonTokenStream, InputStream
 from antlr4.tree.Tree import ParseTreeWalker
-from module_programming_ast.convert_code_to_ast.languages.python.Python3Lexer import Python3Lexer
-from module_programming_ast.convert_code_to_ast.languages.python.Python3Parser import Python3Parser
-from module_programming_ast.convert_code_to_ast.languages.java.JavaLexer import JavaLexer
-from module_programming_ast.convert_code_to_ast.languages.java.JavaParser import JavaParser
-from module_programming_ast.convert_code_to_ast.languages.python.Python3MethodParserListener import \
+from module_programming_apted.convert_code_to_ast.languages.python.Python3Lexer import Python3Lexer
+from module_programming_apted.convert_code_to_ast.languages.python.Python3Parser import Python3Parser
+from module_programming_apted.convert_code_to_ast.languages.java.JavaLexer import JavaLexer
+from module_programming_apted.convert_code_to_ast.languages.java.JavaParser import JavaParser
+from module_programming_apted.convert_code_to_ast.languages.python.Python3MethodParserListener import \
     MethodParserListener as PythonMethodParserListener
-from module_programming_ast.convert_code_to_ast.languages.java.JavaMethodParserListener import \
+from module_programming_apted.convert_code_to_ast.languages.java.JavaMethodParserListener import \
     MethodParserListener as JavaMethodParserListener
 
 # TODO: DO I need the to_ast method?
