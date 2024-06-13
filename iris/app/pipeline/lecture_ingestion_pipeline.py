@@ -136,6 +136,8 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
             self.callback.in_progress("Ingesting lecture chunks into database...")
             self.batch_update(chunks)
             self.callback.done("Lecture Ingestion Finished")
+            logger.info(f"Lecture ingestion pipeline finished Successfully for course "
+                        f"{self.dto.lecture_units[0].course_name}")
             return True
         except Exception as e:
             logger.error(f"Error updating lecture unit: {e}")
@@ -182,7 +184,7 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
         for page_num in range(doc.page_count):
             page = doc.load_page(page_num)
             page_text = page.get_text()
-            if page.get_images(full=True):
+            if page.get_images(full=False):
                 # more pixels thus more details and better quality
                 matrix = fitz.Matrix(20.0, 20.0)
                 pix = page.get_pixmap(matrix=matrix)
