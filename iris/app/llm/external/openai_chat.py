@@ -107,9 +107,7 @@ class OpenAIChatModel(ChatModel):
                 logging.warning(f"Exception on attempt {attempt + 1}: {e}")
                 logging.info(f"Retrying in {wait_time} seconds...")
                 time.sleep(wait_time)
-        logging.error(
-            "Failed to interpret image after several attempts."
-        )
+        logging.error("Failed to interpret image after several attempts.")
 
 
 class DirectOpenAIChatModel(OpenAIChatModel):
