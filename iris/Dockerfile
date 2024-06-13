@@ -1,5 +1,5 @@
 # Dockerfile to build a container image for a Python 3.12 FastAPI application
-FROM python:3.12-slim
+FROM python:3.12.3-slim
 
 # Set the working directory in the container
 WORKDIR /app
