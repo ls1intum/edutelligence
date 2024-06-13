@@ -136,8 +136,10 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
             self.callback.in_progress("Ingesting lecture chunks into database...")
             self.batch_update(chunks)
             self.callback.done("Lecture Ingestion Finished")
-            logger.info(f"Lecture ingestion pipeline finished Successfully for course "
-                        f"{self.dto.lecture_units[0].course_name}")
+            logger.info(
+                f"Lecture ingestion pipeline finished Successfully for course "
+                f"{self.dto.lecture_units[0].course_name}"
+            )
             return True
         except Exception as e:
             logger.error(f"Error updating lecture unit: {e}")
