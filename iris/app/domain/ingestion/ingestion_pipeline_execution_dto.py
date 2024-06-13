@@ -10,4 +10,3 @@ class IngestionPipelineExecutionDto(PipelineExecutionDTO):
     lecture_units: List[LectureUnitDTO] = Field(
         ..., alias="pyrisLectureUnitWebhookDTOS"
     )
-    full_ingestion_on: Optional[bool] = Field(alias="fullIngestionOn", default=False)
