@@ -16,7 +16,7 @@ from ...llm.external.model import ChatModel
 
 
 def convert_to_open_ai_messages(
-        messages: list[PyrisMessage],
+    messages: list[PyrisMessage],
 ) -> list[ChatCompletionMessageParam]:
     """
     Convert a list of PyrisMessage to a list of ChatCompletionMessageParam
@@ -75,7 +75,7 @@ class OpenAIChatModel(ChatModel):
     _client: OpenAI
 
     def chat(
-            self, messages: list[PyrisMessage], arguments: CompletionArguments
+        self, messages: list[PyrisMessage], arguments: CompletionArguments
     ) -> PyrisMessage:
         # noinspection PyTypeChecker
         if arguments.response_format == "JSON":

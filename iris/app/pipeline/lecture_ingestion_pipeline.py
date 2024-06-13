@@ -77,7 +77,7 @@ def create_page_data(page_num, page_splits, lecture_unit_dto, course_language):
             LectureSchema.BASE_URL.value: lecture_unit_dto.base_url,
             LectureSchema.COURSE_LANGUAGE.value: course_language,
             LectureSchema.PAGE_NUMBER.value: page_num + 1,
-            LectureSchema.PAGE_TEXT_CONTENT.value: page_split.page_content
+            LectureSchema.PAGE_TEXT_CONTENT.value: page_split.page_content,
         }
         for page_split in page_splits
     ]
@@ -86,10 +86,10 @@ def create_page_data(page_num, page_splits, lecture_unit_dto, course_language):
 class LectureIngestionPipeline(AbstractIngestion, Pipeline):
 
     def __init__(
-            self,
-            client: WeaviateClient,
-            dto: IngestionPipelineExecutionDto,
-            callback: IngestionStatusCallback,
+        self,
+        client: WeaviateClient,
+        dto: IngestionPipelineExecutionDto,
+        callback: IngestionStatusCallback,
     ):
         super().__init__()
         self.collection = init_lecture_schema(client)
@@ -164,9 +164,9 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
                     )
 
     def chunk_data(
-            self,
-            lecture_pdf: str,
-            lecture_unit_dto: LectureUnitDTO = None,
+        self,
+        lecture_pdf: str,
+        lecture_unit_dto: LectureUnitDTO = None,
     ):
         """
         Chunk the data from the lecture into smaller pieces
@@ -192,31 +192,35 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
                     img_base64,
                     page_text,
                     lecture_unit_dto.lecture_name,
-                    course_language
+                    course_language,
                 )
                 page_text = self.merge_page_content_and_image_interpretation(
                     page_text, image_interpretation
                 )
             page_splits = text_splitter.create_documents([page_text])
-            data.extend(create_page_data(page_num, page_splits, lecture_unit_dto, course_language))
+            data.extend(
+                create_page_data(
+                    page_num, page_splits, lecture_unit_dto, course_language
+                )
+            )
         return data
 
     def interpret_image(
-            self,
-            img_base64: str,
-            last_page_content: str,
-            name_of_lecture: str,
-            course_language: str
+        self,
+        img_base64: str,
+        last_page_content: str,
+        name_of_lecture: str,
+        course_language: str,
     ):
         """
         Interpret the image passed
         """
         image_interpretation_prompt = TextMessageContentDTO(
             text_content=f"This page is part of the {name_of_lecture} university lecture,"
-                         f" explain what is on the slide in an academic way,"
-                         f" respond only with the explanation in {course_language}."
-                         f" For more context here is the content of the previous slide: "
-                         f" {last_page_content}"
+            f" explain what is on the slide in an academic way,"
+            f" respond only with the explanation in {course_language}."
+            f" For more context here is the content of the previous slide: "
+            f" {last_page_content}"
         )
         image = ImageMessageContentDTO(base64=img_base64)
         iris_message = PyrisMessage(
@@ -232,7 +236,7 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
         return response.contents[0].text_content
 
     def merge_page_content_and_image_interpretation(
-            self, page_content: str, image_interpretation: str
+        self, page_content: str, image_interpretation: str
     ):
         """
         Merge the text and image together
@@ -282,10 +286,10 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
         try:
             for lecture_unit in self.dto.lecture_units:
                 if self.delete_lecture_unit(
-                        lecture_unit.course_id,
-                        lecture_unit.lecture_id,
-                        lecture_unit.lecture_unit_id,
-                        lecture_unit.base_url,
+                    lecture_unit.course_id,
+                    lecture_unit.lecture_id,
+                    lecture_unit.lecture_unit_id,
+                    lecture_unit.base_url,
                 ):
                     logger.info("Lecture deleted successfully")
                 else:
@@ -300,9 +304,12 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
         """
         try:
             self.collection.data.delete_many(
-                where=Filter.by_property(LectureSchema.BASE_URL.value).equal(base_url) & Filter.by_property(
-                    LectureSchema.COURSE_ID.value).equal(course_id) & Filter.by_property(LectureSchema.LECTURE_ID.value)
-                .equal(lecture_id) & Filter.by_property(LectureSchema.LECTURE_UNIT_ID.value).equal(lecture_unit_id)
+                where=Filter.by_property(LectureSchema.BASE_URL.value).equal(base_url)
+                & Filter.by_property(LectureSchema.COURSE_ID.value).equal(course_id)
+                & Filter.by_property(LectureSchema.LECTURE_ID.value).equal(lecture_id)
+                & Filter.by_property(LectureSchema.LECTURE_UNIT_ID.value).equal(
+                    lecture_unit_id
+                )
             )
             return True
         except Exception as e:
