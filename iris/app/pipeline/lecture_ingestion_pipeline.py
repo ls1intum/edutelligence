@@ -182,7 +182,7 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
         for page_num in range(doc.page_count):
             page = doc.load_page(page_num)
             page_text = page.get_text()
-            if page.get_images(full=True) and self.dto.full_ingestion_on:
+            if page.get_images(full=True):
                 # more pixels thus more details and better quality
                 matrix = fitz.Matrix(20.0, 20.0)
                 pix = page.get_pixmap(matrix=matrix)
