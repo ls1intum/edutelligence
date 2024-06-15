@@ -111,15 +111,8 @@ class LectureRetrieval(Pipeline):
         """
         Retrieve lecture data from the database.
         """
-        course_language = (
-            self.collection.query.fetch_objects(
-                limit=1, return_properties=[LectureSchema.COURSE_LANGUAGE.value]
-            )
-            .objects[0]
-            .properties.get(LectureSchema.COURSE_LANGUAGE.value)
-        )
+        course_language = self.fetch_course_language(course_id)
 
-        # Call the function to run the tasks
         response, response_hyde = self.run_parallel_rewrite_tasks(
             chat_history=chat_history,
             student_query=student_query,
@@ -427,3 +420,30 @@ class LectureRetrieval(Pipeline):
             response_hyde = response_hyde_future.result()
 
         return response, response_hyde
+
+    def fetch_course_language(self, course_id):
+        """
+        Fetch the language of the course based on the course ID.
+        If no specific language is set, it defaults to English.
+        """
+        course_language = "english"
+
+        if course_id:
+            # Fetch the first object that matches the course ID with the language property
+            result = self.collection.query.fetch_objects(
+                filters=Filter.by_property(LectureSchema.COURSE_ID.value).equal(
+                    course_id
+                ),
+                limit=1,  # We only need one object to check and retrieve the language
+                return_properties=[LectureSchema.COURSE_LANGUAGE.value],
+            )
+
+            # Check if the result has objects and retrieve the language
+            if result.objects:
+                fetched_language = result.objects[0].properties.get(
+                    LectureSchema.COURSE_LANGUAGE.value
+                )
+                if fetched_language:
+                    course_language = fetched_language
+
+        return course_language

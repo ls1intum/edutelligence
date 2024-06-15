@@ -12,6 +12,7 @@ from langchain_core.prompts import (
     PromptTemplate,
 )
 from langchain_core.runnables import Runnable
+from weaviate.collections.classes.filters import Filter
 
 from .lecture_chat_pipeline import LectureChatPipeline
 from .output_models.output_models.selected_paragraphs import SelectedParagraphs
@@ -87,16 +88,25 @@ class TutorChatPipeline(Pipeline):
         :param kwargs: The keyword arguments
         """
         try:
-            execution_dto = LectureChatPipelineExecutionDTO(
-                settings=dto.settings, course=dto.course, chatHistory=dto.chat_history
+            should_execute_lecture_pipeline = self.should_execute_lecture_pipeline(
+                dto.course.id
             )
-            lecture_chat_thread = threading.Thread(
-                target=self._run_lecture_chat_pipeline(execution_dto), args=(dto,)
-            )
+            self.lecture_chat_response = ""
+            if should_execute_lecture_pipeline:
+                execution_dto = LectureChatPipelineExecutionDTO(
+                    settings=dto.settings,
+                    course=dto.course,
+                    chatHistory=dto.chat_history,
+                )
+                lecture_chat_thread = threading.Thread(
+                    target=self._run_lecture_chat_pipeline(execution_dto), args=(dto,)
+                )
+                lecture_chat_thread.start()
+
             tutor_chat_thread = threading.Thread(
-                target=self._run_tutor_chat_pipeline(dto), args=(dto,)
+                target=self._run_tutor_chat_pipeline(dto),
+                args=(dto, should_execute_lecture_pipeline),
             )
-            lecture_chat_thread.start()
             tutor_chat_thread.start()
             response = self.choose_best_response(
                 [self.tutor_chat_response, self.lecture_chat_response],
@@ -150,7 +160,11 @@ class TutorChatPipeline(Pipeline):
         pipeline = LectureChatPipeline()
         self.lecture_chat_response = pipeline(dto=dto)
 
-    def _run_tutor_chat_pipeline(self, dto: TutorChatPipelineExecutionDTO):
+    def _run_tutor_chat_pipeline(
+        self,
+        dto: TutorChatPipelineExecutionDTO,
+        should_execute_lecture_pipeline: bool = False,
+    ):
         """
         Runs the pipeline
         :param dto:  execution data transfer object
@@ -206,18 +220,18 @@ class TutorChatPipeline(Pipeline):
             submission,
             selected_files,
         )
-
-        retrieved_lecture_chunks = self.retriever(
-            chat_history=history,
-            student_query=query.contents[0].text_content,
-            result_limit=10,
-            course_name=dto.course.name,
-            problem_statement=problem_statement,
-            exercise_title=exercise_title,
-            course_id=dto.course.id,
-            base_url=dto.settings.artemis_base_url,
-        )
-        self._add_relevant_chunks_to_prompt(retrieved_lecture_chunks)
+        if should_execute_lecture_pipeline:
+            retrieved_lecture_chunks = self.retriever(
+                chat_history=history,
+                student_query=query.contents[0].text_content,
+                result_limit=10,
+                course_name=dto.course.name,
+                problem_statement=problem_statement,
+                exercise_title=exercise_title,
+                course_id=dto.course.id,
+                base_url=dto.settings.artemis_base_url,
+            )
+            self._add_relevant_chunks_to_prompt(retrieved_lecture_chunks)
 
         self.callback.in_progress("Generating response...")
 
@@ -360,3 +374,21 @@ class TutorChatPipeline(Pipeline):
         self.prompt += SystemMessagePromptTemplate.from_template(
             "USE ONLY THE CONTENT YOU NEED TO ANSWER THE QUESTION:\n"
         )
+
+    def should_execute_lecture_pipeline(self, course_id: int) -> bool:
+        """
+        Checks if the lecture pipeline should be executed
+        :param course_id: The course ID
+        :return: True if the lecture pipeline should be executed
+        """
+        if course_id:
+            # Fetch the first object that matches the course ID with the language property
+            result = self.db.lectures.query.fetch_objects(
+                filters=Filter.by_property(LectureSchema.COURSE_ID.value).equal(
+                    course_id
+                ),
+                limit=1,
+                return_properties=[LectureSchema.COURSE_NAME.value],
+            )
+            return len(result.objects) > 0
+        return False
