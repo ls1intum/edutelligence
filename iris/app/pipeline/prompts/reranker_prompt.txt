@@ -1,7 +1,7 @@
 A list of paragraphs is shown below. Each paragraph has a number next to it. A question is also provided.
 Respond with the numbers of the paragraphs you should consult to answer the question, in order of relevance.
- The relevance score is a number from 1 to 10 based on how relevant the paragraphs are to answer the question.
- Do not include any paragraphs that are not relevant to the question.
+The relevance score is a number from 1 to 10 based on how relevant the paragraphs are to answer the question.
+Do not include any paragraphs that are not relevant to the question.
 Without any comment, return the result in the following JSON format, it is important to avoid giving
 unnecessary information, only the number of the paragraph if it's really necessary for answering the student's question
 otherwise leave the array empty.

@@ -30,11 +30,14 @@ class RerankerPipeline(Pipeline):
             requirements=RequirementList(
                 gpt_version_equivalent=3.5,
                 context_length=16385,
+                json_mode=True,
             )
         )
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler,
-            completion_args=CompletionArguments(temperature=0, max_tokens=4000),
+            completion_args=CompletionArguments(
+                temperature=0, max_tokens=4000, response_format="JSON"
+            ),
         )
         dirname = os.path.dirname(__file__)
         prompt_file_path = os.path.join(dirname, "..", "prompts", "reranker_prompt.txt")

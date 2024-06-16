@@ -82,6 +82,7 @@ class OllamaModel(
 
     def model_post_init(self, __context: Any) -> None:
         self._client = Client(host=self.host)  # TODO: Add authentication (httpx auth?)
+        self._client._client.base_url = self.host
 
     def complete(
         self,
