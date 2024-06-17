@@ -46,7 +46,7 @@ Here is the difference between the potential solution by the instructor and the 
 '''
 
 
-class GuidedOneShotPrompt(BaseModel):
+class GuidedZeroShotPrompt(BaseModel):
     """Prompt for the one-shot guided feedback generation approach."""
 
     system_message: str = Field(default=system_message,

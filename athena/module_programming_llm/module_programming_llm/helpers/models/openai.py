@@ -142,7 +142,7 @@ def _openai_client(use_azure_api: bool, is_preference: bool):
     yield
 
 
-def _get_available_deployments():
+def _get_available_deployments() -> Dict[str, Dict[str, Any]]:
     available_deployments: Dict[str, Dict[str, Any]] = {
         "chat_completion": {},
         "completion": {},

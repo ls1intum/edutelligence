@@ -5,7 +5,7 @@ from athena import config_schema_provider
 from module_programming_llm.graded.basic_by_file.config import GradedBasicByFileConfig
 
 from module_programming_llm.guided.basic_by_file.config import GuidedBasicByFileConfig
-from module_programming_llm.guided.one_shot.config import GuidedOneShotConfig
+from module_programming_llm.guided.zero_shot.config import GuidedZeroShotConfig
 
 
 @config_schema_provider
@@ -16,5 +16,5 @@ class Configuration(BaseModel):
     
     graded_basic_by_file: GradedBasicByFileConfig = Field(default=GradedBasicByFileConfig())
     
-    # GuidedBasicByFileConfig | GuidedOneShotConfig
-    guided_one_shot:  GuidedOneShotConfig = Field(default=GuidedOneShotConfig())
+    # GuidedBasicByFileConfig | GuidedZeroShotConfig
+    guided_zero_shot:  GuidedZeroShotConfig = Field(default=GuidedZeroShotConfig())

@@ -10,7 +10,7 @@ from langchain.prompts import (
 
 from athena.programming import Exercise, Submission, Feedback
 
-from .config import GuidedOneShotConfig
+from .config import GuidedZeroShotConfig
 
 from module_programming_llm.helpers.llm_utils import (
     num_tokens_from_string,
@@ -48,10 +48,10 @@ class GuidedFeedbackCompendiumModel(BaseModel):
 
 
 # pylint: disable=too-many-locals
-async def generate_guided_one_shot_suggestions(
+async def generate_guided_zero_shot_suggestions(
     exercise: Exercise,
     submission: Submission,
-    config: GuidedOneShotConfig,
+    config: GuidedZeroShotConfig,
     debug: bool,
 ) -> List[Feedback]:
     model = config.model.get_model()  # type: ignore[attr-defined]
