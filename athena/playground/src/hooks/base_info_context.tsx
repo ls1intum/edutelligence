@@ -17,7 +17,7 @@ type Action =
   | { type: 'SET_VIEW_MODE'; payload: ViewMode };
 
 function createInitialState(): BaseInfo {
-  let defaultUrl = "http://127.0.0.1:5000";
+  let defaultUrl = "http://127.0.0.1:5100";
   if (
     typeof window !== "undefined" &&
     window.location.hostname !== "localhost"
