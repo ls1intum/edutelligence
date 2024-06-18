@@ -181,7 +181,7 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
         )
         data = []
         text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=1024, chunk_overlap=102
+            chunk_size=512, chunk_overlap=102
         )
         for page_num in range(doc.page_count):
             page = doc.load_page(page_num)

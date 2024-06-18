@@ -62,7 +62,7 @@ class LectureChatPipeline(Pipeline):
                 privacy_compliance=True,
             )
         )
-        completion_args = CompletionArguments(temperature=0.2, max_tokens=2000)
+        completion_args = CompletionArguments(temperature=0, max_tokens=2000)
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler, completion_args=completion_args
         )

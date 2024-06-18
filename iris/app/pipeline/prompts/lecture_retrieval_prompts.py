@@ -30,7 +30,7 @@ rewrite_student_query_prompt = """This is the latest student message that you ne
 write_hypothetical_answer_prompt = """
  Please provide a response in {course_language}.
  Craft your response to closely reflect the style and content of university lecture materials.
-  Do not exceed 500 characters.
+  Do not exceed 300 words.
  Add keywords and phrases that are relevant to student intent.
  """
 
