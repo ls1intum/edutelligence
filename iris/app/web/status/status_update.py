@@ -50,6 +50,7 @@ class StatusCallback(ABC):
                     "Content-Type": "application/json",
                     "Authorization": f"Bearer {self.run_id}",
                 },
+                # FIXME: Deprecated. Replace dict with model_dump
                 json=self.status.dict(by_alias=True),
             ).raise_for_status()
         except requests.exceptions.RequestException as e:
