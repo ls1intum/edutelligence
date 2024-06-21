@@ -233,17 +233,6 @@ class ExerciseChatPipeline(Pipeline):
             )
             self._add_relevant_chunks_to_prompt(retrieved_lecture_chunks)
 
-        retrieved_lecture_chunks = self.retriever(
-            chat_history=history,
-            student_query=query.contents[0].text_content,
-            result_limit=10,
-            course_name=dto.course.name,
-            course_id=dto.course.id,
-            problem_statement=problem_statement,
-            exercise_title=exercise_title,
-        )
-        self._add_relevant_chunks_to_prompt(retrieved_lecture_chunks)
-
         self.callback.in_progress()
 
         # Add the final message to the prompt and run the pipeline

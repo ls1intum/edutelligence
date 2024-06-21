@@ -32,6 +32,7 @@ write_hypothetical_answer_prompt = """
  Craft your response to closely reflect the style and content of university lecture materials.
   Do not exceed 300 words.
  Add keywords and phrases that are relevant to student intent.
+ You should create a slide like response to the student query.
  """
 
 rewrite_student_query_prompt_with_exercise_context = """
