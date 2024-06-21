@@ -36,6 +36,13 @@ services:
     networks:
       - pyris
 
+  weaviate:
+    extends:
+      file: ./weaviate.yml
+      service: weaviate
+    networks:
+      - pyris
+
 networks:
   pyris:
     driver: "bridge"

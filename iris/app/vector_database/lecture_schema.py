@@ -21,9 +21,8 @@ class LectureSchema(Enum):
     LECTURE_UNIT_ID = "lecture_unit_id"
     LECTURE_UNIT_NAME = "lecture_unit_name"
     PAGE_TEXT_CONTENT = "page_text_content"
-    PAGE_IMAGE_DESCRIPTION = "page_image_explanation"
-    PAGE_BASE64 = "page_base64"
     PAGE_NUMBER = "page_number"
+    BASE_URL = "base_url"
 
 
 def init_lecture_schema(client: WeaviateClient) -> Collection:
@@ -43,21 +42,25 @@ def init_lecture_schema(client: WeaviateClient) -> Collection:
                 name=LectureSchema.COURSE_ID.value,
                 description="The ID of the course",
                 data_type=DataType.INT,
+                index_searchable=False,
             ),
             Property(
                 name=LectureSchema.COURSE_NAME.value,
                 description="The name of the course",
                 data_type=DataType.TEXT,
+                index_searchable=False,
             ),
             Property(
                 name=LectureSchema.COURSE_DESCRIPTION.value,
                 description="The description of the COURSE",
                 data_type=DataType.TEXT,
+                index_searchable=False,
             ),
             Property(
                 name=LectureSchema.LECTURE_ID.value,
                 description="The ID of the lecture",
                 data_type=DataType.INT,
+                index_searchable=False,
             ),
             Property(
                 name=LectureSchema.LECTURE_NAME.value,
@@ -68,6 +71,7 @@ def init_lecture_schema(client: WeaviateClient) -> Collection:
                 name=LectureSchema.LECTURE_UNIT_ID.value,
                 description="The ID of the lecture unit",
                 data_type=DataType.INT,
+                index_searchable=False,
             ),
             Property(
                 name=LectureSchema.LECTURE_UNIT_NAME.value,
@@ -78,21 +82,19 @@ def init_lecture_schema(client: WeaviateClient) -> Collection:
                 name=LectureSchema.PAGE_TEXT_CONTENT.value,
                 description="The original text content from the slide",
                 data_type=DataType.TEXT,
-            ),
-            Property(
-                name=LectureSchema.PAGE_IMAGE_DESCRIPTION.value,
-                description="The description of the slide if the slide contains an image",
-                data_type=DataType.TEXT,
-            ),
-            Property(
-                name=LectureSchema.PAGE_BASE64.value,
-                description="The base64 encoded image of the slide if the slide contains an image",
-                data_type=DataType.TEXT,
+                index_searchable=False,
             ),
             Property(
                 name=LectureSchema.PAGE_NUMBER.value,
                 description="The page number of the slide",
                 data_type=DataType.INT,
+                index_searchable=False,
+            ),
+            Property(
+                name=LectureSchema.BASE_URL.value,
+                description="The base url of the website where the lecture slides are hosted",
+                data_type=DataType.TEXT,
+                index_searchable=False,
             ),
         ],
     )

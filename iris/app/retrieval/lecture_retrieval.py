@@ -88,7 +88,7 @@ class LectureRetrieval(Pipeline):
                 privacy_compliance=True,
             )
         )
-        completion_args = CompletionArguments(temperature=0.2, max_tokens=2000)
+        completion_args = CompletionArguments(temperature=0, max_tokens=2000)
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler, completion_args=completion_args
         )
@@ -104,21 +104,15 @@ class LectureRetrieval(Pipeline):
         result_limit: int,
         course_name: str = None,
         course_id: int = None,
+        base_url: str = None,
         problem_statement: str = None,
         exercise_title: str = None,
     ) -> List[dict]:
         """
         Retrieve lecture data from the database.
         """
-        course_language = (
-            self.collection.query.fetch_objects(
-                limit=1, return_properties=[LectureSchema.COURSE_LANGUAGE.value]
-            )
-            .objects[0]
-            .properties.get(LectureSchema.COURSE_LANGUAGE.value)
-        )
+        course_language = self.fetch_course_language(course_id)
 
-        # Call the function to run the tasks
         response, response_hyde = self.run_parallel_rewrite_tasks(
             chat_history=chat_history,
             student_query=student_query,
@@ -126,6 +120,7 @@ class LectureRetrieval(Pipeline):
             course_language=course_language,
             course_name=course_name,
             course_id=course_id,
+            base_url=base_url,
             problem_statement=problem_statement,
             exercise_title=exercise_title,
         )
@@ -141,11 +136,12 @@ class LectureRetrieval(Pipeline):
         merged_chunks = merge_retrieved_chunks(
             basic_retrieved_lecture_chunks, hyde_retrieved_lecture_chunks
         )
-
-        selected_chunks_index = self.reranker_pipeline(
-            paragraphs=merged_chunks, query=student_query, chat_history=chat_history
-        )
-        return [merged_chunks[int(i)] for i in selected_chunks_index]
+        if len(merged_chunks) != 0:
+            selected_chunks_index = self.reranker_pipeline(
+                paragraphs=merged_chunks, query=student_query, chat_history=chat_history
+            )
+            return [merged_chunks[int(i)] for i in selected_chunks_index]
+        return []
 
     def rewrite_student_query(
         self,
@@ -290,29 +286,51 @@ class LectureRetrieval(Pipeline):
             raise e
 
     def search_in_db(
-        self, query: str, hybrid_factor: float, result_limit: int, course_id: int = None
+        self,
+        query: str,
+        hybrid_factor: float,
+        result_limit: int,
+        course_id: int = None,
+        base_url: str = None,
     ):
         """
-        Search the query in the database and return the results.
+        Search the database for the given query.
         """
-        return self.collection.query.hybrid(
+        # Initialize filter to None by default
+        filter_weaviate = None
+
+        # Check if course_id is provided
+        if course_id:
+            # Create a filter for course_id
+            filter_weaviate = Filter.by_property(LectureSchema.COURSE_ID.value).equal(
+                course_id
+            )
+
+            # Extend the filter based on the presence of base_url
+            if base_url:
+                filter_weaviate &= Filter.by_property(
+                    LectureSchema.BASE_URL.value
+                ).equal(base_url)
+            else:
+                filter_weaviate = Filter.by_property(
+                    LectureSchema.BASE_URL.value
+                ).equal(base_url)
+
+        return_value = self.collection.query.hybrid(
             query=query,
-            filters=(
-                Filter.by_property(LectureSchema.COURSE_ID.value).equal(course_id)
-                if course_id
-                else None
-            ),
             alpha=hybrid_factor,
             vector=self.llm_embedding.embed(query),
             return_properties=[
                 LectureSchema.PAGE_TEXT_CONTENT.value,
-                LectureSchema.PAGE_IMAGE_DESCRIPTION.value,
                 LectureSchema.COURSE_NAME.value,
                 LectureSchema.LECTURE_NAME.value,
                 LectureSchema.PAGE_NUMBER.value,
+                LectureSchema.COURSE_ID.value,
             ],
             limit=result_limit,
+            filters=filter_weaviate,
         )
+        return return_value
 
     def run_parallel_rewrite_tasks(
         self,
@@ -322,6 +340,7 @@ class LectureRetrieval(Pipeline):
         course_language: str,
         course_name: str = None,
         course_id: int = None,
+        base_url: str = None,
         problem_statement: str = None,
         exercise_title: str = None,
     ):
@@ -351,8 +370,10 @@ class LectureRetrieval(Pipeline):
                 )
 
                 # Get the results once both tasks are complete
-                rewritten_query = rewritten_query_future.result()
-                hypothetical_answer_query = hypothetical_answer_query_future.result()
+                rewritten_query: str = rewritten_query_future.result()
+                hypothetical_answer_query: str = (
+                    hypothetical_answer_query_future.result()
+                )
         else:
             with concurrent.futures.ThreadPoolExecutor() as executor:
                 # Schedule the rewrite tasks to run in parallel
@@ -378,10 +399,20 @@ class LectureRetrieval(Pipeline):
             # Execute the database search tasks
         with concurrent.futures.ThreadPoolExecutor() as executor:
             response_future = executor.submit(
-                self.search_in_db, rewritten_query, 1, result_limit, course_id
+                self.search_in_db,
+                query=rewritten_query,
+                hybrid_factor=0.7,
+                result_limit=result_limit,
+                course_id=course_id,
+                base_url=base_url,
             )
             response_hyde_future = executor.submit(
-                self.search_in_db, hypothetical_answer_query, 1, result_limit, course_id
+                self.search_in_db,
+                query=hypothetical_answer_query,
+                hybrid_factor=0.9,
+                result_limit=result_limit,
+                course_id=course_id,
+                base_url=base_url,
             )
 
             # Get the results once both tasks are complete
@@ -389,3 +420,30 @@ class LectureRetrieval(Pipeline):
             response_hyde = response_hyde_future.result()
 
         return response, response_hyde
+
+    def fetch_course_language(self, course_id):
+        """
+        Fetch the language of the course based on the course ID.
+        If no specific language is set, it defaults to English.
+        """
+        course_language = "english"
+
+        if course_id:
+            # Fetch the first object that matches the course ID with the language property
+            result = self.collection.query.fetch_objects(
+                filters=Filter.by_property(LectureSchema.COURSE_ID.value).equal(
+                    course_id
+                ),
+                limit=1,  # We only need one object to check and retrieve the language
+                return_properties=[LectureSchema.COURSE_LANGUAGE.value],
+            )
+
+            # Check if the result has objects and retrieve the language
+            if result.objects:
+                fetched_language = result.objects[0].properties.get(
+                    LectureSchema.COURSE_LANGUAGE.value
+                )
+                if fetched_language:
+                    course_language = fetched_language
+
+        return course_language

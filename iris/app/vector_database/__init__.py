@@ -1,0 +1,3 @@
+import app.vector_database.database
+import app.vector_database.lecture_schema
+import app.vector_database.repository_schema

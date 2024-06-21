@@ -4,6 +4,11 @@
 application.local.yml
 llm_config.local.yml
 
+######################
+# Docker
+######################
+/docker/.docker-data/artemis-data/*
+!/docker/.docker-data/artemis-data/.gitkeep
 
 ########################
 # Auto-generated rules #
