@@ -14,6 +14,7 @@ from langchain_core.prompts import (
 )
 from langchain_core.runnables import Runnable
 from langsmith import traceable
+from weaviate.collections.classes.filters import Filter
 
 from ...common import convert_iris_message_to_langchain_message
 from ...domain import PyrisMessage
@@ -81,14 +82,81 @@ class ExerciseChatPipeline(Pipeline):
         :param kwargs: The keyword arguments
         """
         try:
-            self._run_exercise_chat_pipeline(dto)
-            logger.info(f"Response from exercise chat pipeline: {self.exercise_chat_response}")
-            self.callback.done("Generated response", final_result=self.exercise_chat_response)
+            should_execute_lecture_pipeline = self.should_execute_lecture_pipeline(
+                dto.course.id
+            )
+            self.lecture_chat_response = ""
+            if should_execute_lecture_pipeline:
+                execution_dto = LectureChatPipelineExecutionDTO(
+                    settings=dto.settings,
+                    course=dto.course,
+                    chatHistory=dto.chat_history,
+                )
+                lecture_chat_thread = threading.Thread(
+                    target=self._run_lecture_chat_pipeline(execution_dto), args=(dto,)
+                )
+                lecture_chat_thread.start()
+
+            tutor_chat_thread = threading.Thread(
+                target=self._run_tutor_chat_pipeline(dto),
+                args=(dto, should_execute_lecture_pipeline),
+            )
+            tutor_chat_thread.start()
+            response = self.choose_best_response(
+                [self.tutor_chat_response, self.lecture_chat_response],
+                dto.chat_history[-1].contents[0].text_content,
+                dto.chat_history,
+            )
+            logger.info(f"Response from tutor chat pipeline: {response}")
+            self.callback.done("Generated response", final_result=response)
         except Exception as e:
-            print(e)
             self.callback.error(f"Failed to generate response: {e}")
 
     def _run_exercise_chat_pipeline(self, dto: ExerciseChatPipelineExecutionDTO):
+        """
+        Chooses the best response from the reranker pipeline
+        :param paragraphs: The paragraphs
+        :param query: The query
+        :return: The best response
+        """
+        dirname = os.path.dirname(__file__)
+        prompt_file_path = os.path.join(
+            dirname, "..", "prompts", "choose_response_prompt.txt"
+        )
+        with open(prompt_file_path, "r") as file:
+            logger.info("Loading reranker prompt...")
+            prompt_str = file.read()
+
+        output_parser = PydanticOutputParser(pydantic_object=SelectedParagraphs)
+        choose_response_prompt = PromptTemplate(
+            template=prompt_str,
+            input_variables=["question", "paragraph_0", "paragraph_1", "chat_history"],
+            partial_variables={
+                "format_instructions": output_parser.get_format_instructions()
+            },
+        )
+        paragraph_index = self.reranker_pipeline(
+            paragraphs=paragraphs,
+            query=query,
+            prompt=choose_response_prompt,
+            chat_history=chat_history,
+        )[0]
+        try:
+            chosen_paragraph = paragraphs[int(paragraph_index)]
+        except Exception as e:
+            chosen_paragraph = paragraphs[0]
+            logger.error(f"Failed to choose best response: {e}")
+        return chosen_paragraph
+
+    def _run_lecture_chat_pipeline(self, dto: LectureChatPipelineExecutionDTO):
+        pipeline = LectureChatPipeline()
+        self.lecture_chat_response = pipeline(dto=dto)
+
+    def _run_tutor_chat_pipeline(
+        self,
+        dto: TutorChatPipelineExecutionDTO,
+        should_execute_lecture_pipeline: bool = False,
+    ):
         """
         Runs the pipeline
         :param dto:  execution data transfer object
@@ -144,8 +212,29 @@ class ExerciseChatPipeline(Pipeline):
             submission,
             selected_files,
         )
+        if should_execute_lecture_pipeline:
+            retrieved_lecture_chunks = self.retriever(
+                chat_history=history,
+                student_query=query.contents[0].text_content,
+                result_limit=5,
+                course_name=dto.course.name,
+                problem_statement=problem_statement,
+                exercise_title=exercise_title,
+                course_id=dto.course.id,
+                base_url=dto.settings.artemis_base_url,
+            )
+            self._add_relevant_chunks_to_prompt(retrieved_lecture_chunks)
 
-        self.callback.in_progress()
+        retrieved_lecture_chunks = self.retriever(
+            chat_history=history,
+            student_query=query.contents[0].text_content,
+            result_limit=10,
+            course_name=dto.course.name,
+            course_id=dto.course.id,
+            problem_statement=problem_statement,
+            exercise_title=exercise_title,
+        )
+        self._add_relevant_chunks_to_prompt(retrieved_lecture_chunks)
 
         # Add the final message to the prompt and run the pipeline
         self.prompt += SystemMessagePromptTemplate.from_template(final_system_prompt)
@@ -259,3 +348,56 @@ class ExerciseChatPipeline(Pipeline):
                 "These are the build logs for the student's repository:\n%s"
             ) % "\n".join(str(log) for log in build_logs)
             self.prompt += SystemMessagePromptTemplate.from_template(prompt)
+
+    def _generate_file_selection_prompt(self) -> ChatPromptTemplate:
+        """Generates the file selection prompt"""
+        file_selection_prompt = self.prompt
+
+        file_selection_prompt += SystemMessagePromptTemplate.from_template(
+            "Based on the chat history, you can now request access to more contextual information. This is the "
+            "student's submitted code repository and the corresponding build information. You can reference a file by "
+            "its path to view it."
+            "Given are the paths of all files in the assignment repository:\n{files}\n"
+            "Is a file referenced by the student or does it have to be checked before answering?"
+            "Without any comment, return the result in the following JSON format, it's important to avoid giving "
+            "unnecessary information, only name a file if it's really necessary for answering the student's question "
+            "and is listed above, otherwise leave the array empty."
+            '{{"selected_files": [<file1>, <file2>, ...]}}'
+        )
+        return file_selection_prompt
+
+    def _add_relevant_chunks_to_prompt(self, retrieved_lecture_chunks: List[dict]):
+        """
+        Adds the relevant chunks of the lecture to the prompt
+        :param retrieved_lecture_chunks: The retrieved lecture chunks
+        """
+        self.prompt += SystemMessagePromptTemplate.from_template(
+            "Next you will find the potentially relevant lecture content to answer the student message:\n"
+        )
+        for i, chunk in enumerate(retrieved_lecture_chunks):
+            text_content_msg = (
+                f" \n {chunk.get(LectureSchema.PAGE_TEXT_CONTENT.value)} \n"
+            )
+            text_content_msg = text_content_msg.replace("{", "{{").replace("}", "}}")
+            self.prompt += SystemMessagePromptTemplate.from_template(text_content_msg)
+        self.prompt += SystemMessagePromptTemplate.from_template(
+            "USE ONLY THE CONTENT YOU NEED TO ANSWER THE QUESTION:\n"
+        )
+
+    def should_execute_lecture_pipeline(self, course_id: int) -> bool:
+        """
+        Checks if the lecture pipeline should be executed
+        :param course_id: The course ID
+        :return: True if the lecture pipeline should be executed
+        """
+        if course_id:
+            # Fetch the first object that matches the course ID with the language property
+            result = self.db.lectures.query.fetch_objects(
+                filters=Filter.by_property(LectureSchema.COURSE_ID.value).equal(
+                    course_id
+                ),
+                limit=1,
+                return_properties=[LectureSchema.COURSE_NAME.value],
+            )
+            return len(result.objects) > 0
+        return False
