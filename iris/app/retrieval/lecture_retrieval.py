@@ -143,6 +143,35 @@ class LectureRetrieval(Pipeline):
             return [merged_chunks[int(i)] for i in selected_chunks_index]
         return []
 
+    def basic_lecture_retrieval(
+        self,
+        chat_history: list[PyrisMessage],
+        student_query: str,
+        result_limit: int,
+        course_name: str = None,
+        course_id: int = None,
+        base_url: str = None,
+    ) -> list[dict[str, dict]]:
+        """
+        Basic retrieval for pipelines thaat need performance and fast answers.
+        """
+        rewritten_query = self.rewrite_student_query(
+            chat_history, student_query, "course_language", course_name
+        )
+        response = self.search_in_db(
+            query=rewritten_query,
+            hybrid_factor=0.9,
+            result_limit=result_limit,
+            course_id=course_id,
+            base_url=base_url,
+        )
+
+        basic_retrieved_lecture_chunks: list[dict[str, dict]] = [
+            {"id": obj.uuid.int, "properties": obj.properties}
+            for obj in response.objects
+        ]
+        return basic_retrieved_lecture_chunks
+
     def rewrite_student_query(
         self,
         chat_history: list[PyrisMessage],
