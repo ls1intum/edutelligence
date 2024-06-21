@@ -242,7 +242,7 @@ class LectureRetrieval(Pipeline):
         prompt = ChatPromptTemplate.from_messages(prompt_val)
         try:
             response = (prompt | self.pipeline).invoke({})
-            logger.info(f"Response from tutor chat pipeline: {response}")
+            logger.info(f"Response from lecture chat pipeline: {response}")
             return response
         except Exception as e:
             raise e
@@ -309,10 +309,6 @@ class LectureRetrieval(Pipeline):
             # Extend the filter based on the presence of base_url
             if base_url:
                 filter_weaviate &= Filter.by_property(
-                    LectureSchema.BASE_URL.value
-                ).equal(base_url)
-            else:
-                filter_weaviate = Filter.by_property(
                     LectureSchema.BASE_URL.value
                 ).equal(base_url)
 

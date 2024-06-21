@@ -29,6 +29,7 @@ rewrite_student_query_prompt = """This is the latest student message that you ne
 
 write_hypothetical_answer_prompt = """
  Please provide a response in {course_language}.
+ You should create a slide like response to the student query.
  Craft your response to closely reflect the style and content of university lecture materials.
   Do not exceed 300 words.
  Add keywords and phrases that are relevant to student intent.
@@ -47,5 +48,6 @@ This is the latest student message that you need to rewrite:
                """
 
 write_hypothetical_answer_with_exercise_context_prompt = """ Please provide a response in {course_language}.
+ You should create a slide like response to the student query.
  Craft your response to closely reflect the style and content of university lecture materials.
   Do not exceed 500 characters. Add keywords and phrases that are relevant to student intent."""

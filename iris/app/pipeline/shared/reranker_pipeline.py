@@ -104,7 +104,7 @@ class RerankerPipeline(Pipeline):
             )
         text_chat_history = [
             chat_history[-i - 1].contents[0].text_content
-            for i in range(min(10, len(chat_history)))  # Ensure no out-of-bounds error
+            for i in range(min(4, len(chat_history)))  # Ensure no out-of-bounds error
         ][
             ::-1
         ]  # Reverse to get the messages in chronological order of their appearance  data["question"] = query

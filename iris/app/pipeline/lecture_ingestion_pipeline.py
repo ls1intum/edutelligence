@@ -186,21 +186,6 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
         for page_num in range(doc.page_count):
             page = doc.load_page(page_num)
             page_text = page.get_text()
-            if page.get_images(full=False):
-                # more pixels thus more details and better quality
-                matrix = fitz.Matrix(20.0, 20.0)
-                pix = page.get_pixmap(matrix=matrix)
-                img_bytes = pix.tobytes("jpg")
-                img_base64 = base64.b64encode(img_bytes).decode("utf-8")
-                image_interpretation = self.interpret_image(
-                    img_base64,
-                    page_text,
-                    lecture_unit_dto.lecture_name,
-                    course_language,
-                )
-                page_text = self.merge_page_content_and_image_interpretation(
-                    page_text, image_interpretation
-                )
             page_splits = text_splitter.create_documents([page_text])
             data.extend(
                 create_page_data(
