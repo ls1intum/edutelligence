@@ -61,7 +61,7 @@ def save_pdf(pdf_file_base64):
     return temp_pdf_file_path
 
 
-def create_page_data(page_num, page_splits, lecture_unit_dto, course_language):
+def create_page_data(page_num, page_splits, lecture_unit_dto, course_language, base_url):
     """
     Create and return a list of dictionnaries to be ingested in the Vector Database.
     """
@@ -74,7 +74,7 @@ def create_page_data(page_num, page_splits, lecture_unit_dto, course_language):
             LectureSchema.COURSE_ID.value: lecture_unit_dto.course_id,
             LectureSchema.COURSE_NAME.value: lecture_unit_dto.course_name,
             LectureSchema.COURSE_DESCRIPTION.value: lecture_unit_dto.course_description,
-            LectureSchema.BASE_URL.value: lecture_unit_dto.base_url,
+            LectureSchema.BASE_URL.value: base_url,
             LectureSchema.COURSE_LANGUAGE.value: course_language,
             LectureSchema.PAGE_NUMBER.value: page_num + 1,
             LectureSchema.PAGE_TEXT_CONTENT.value: page_split.page_content,
@@ -129,7 +129,9 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
             for i, lecture_unit in enumerate(self.dto.lecture_units):
                 pdf_path = save_pdf(lecture_unit.pdf_file_base64)
                 chunks.extend(
-                    self.chunk_data(lecture_pdf=pdf_path, lecture_unit_dto=lecture_unit)
+                    self.chunk_data(lecture_pdf=pdf_path,
+                                    lecture_unit_dto=lecture_unit,
+                                    base_url=self.dto.settings.artemis_base_url)
                 )
                 cleanup_temporary_file(pdf_path)
             self.callback.done("Lecture Chunking and interpretation Finished")
@@ -171,6 +173,7 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
         self,
         lecture_pdf: str,
         lecture_unit_dto: LectureUnitDTO = None,
+        base_url: str = None,
     ):
         """
         Chunk the data from the lecture into smaller pieces
@@ -204,7 +207,7 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
             page_splits = text_splitter.create_documents([page_text])
             data.extend(
                 create_page_data(
-                    page_num, page_splits, lecture_unit_dto, course_language
+                    page_num, page_splits, lecture_unit_dto, course_language, base_url
                 )
             )
         return data
@@ -293,7 +296,7 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
                     lecture_unit.course_id,
                     lecture_unit.lecture_id,
                     lecture_unit.lecture_unit_id,
-                    lecture_unit.base_url,
+                    self.dto.settings.artemis_base_url
                 ):
                     logger.info("Lecture deleted successfully")
                 else:

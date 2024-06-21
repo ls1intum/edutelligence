@@ -19,7 +19,8 @@ semaphore = Semaphore(5)
 
 def run_lecture_update_pipeline_worker(dto: IngestionPipelineExecutionDto):
     """
-    Run the tutor chat pipeline in a separate thread"""
+    Run the exercise chat pipeline in a separate thread
+    """
     with semaphore:
         try:
             callback = IngestionStatusCallback(
@@ -47,7 +48,7 @@ def run_lecture_update_pipeline_worker(dto: IngestionPipelineExecutionDto):
 )
 def lecture_webhook(dto: IngestionPipelineExecutionDto):
     """
-    Webhook endpoint to trigger the tutor chat pipeline
+    Webhook endpoint to trigger the exercise chat pipeline
     """
     thread = Thread(target=run_lecture_update_pipeline_worker, args=(dto,))
     thread.start()

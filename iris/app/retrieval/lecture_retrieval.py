@@ -200,7 +200,7 @@ class LectureRetrieval(Pipeline):
         prompt = ChatPromptTemplate.from_messages(prompt_val)
         try:
             response = (prompt | self.pipeline).invoke({})
-            logger.info(f"Response from tutor chat pipeline: {response}")
+            logger.info(f"Response from exercise chat pipeline: {response}")
             return response
         except Exception as e:
             raise e
@@ -237,7 +237,7 @@ class LectureRetrieval(Pipeline):
         prompt = ChatPromptTemplate.from_messages(prompt_val)
         try:
             response = (prompt | self.pipeline).invoke({})
-            logger.info(f"Response from tutor chat pipeline: {response}")
+            logger.info(f"Response from exercise chat pipeline: {response}")
             return response
         except Exception as e:
             raise e
@@ -271,7 +271,7 @@ class LectureRetrieval(Pipeline):
         prompt = ChatPromptTemplate.from_messages(prompt_val)
         try:
             response = (prompt | self.pipeline).invoke({})
-            logger.info(f"Response from tutor chat pipeline: {response}")
+            logger.info(f"Response from exercise chat pipeline: {response}")
             return response
         except Exception as e:
             raise e
@@ -309,7 +309,7 @@ class LectureRetrieval(Pipeline):
         prompt = ChatPromptTemplate.from_messages(prompt_val)
         try:
             response = (prompt | self.pipeline).invoke({})
-            logger.info(f"Response from tutor chat pipeline: {response}")
+            logger.info(f"Response from exercise chat pipeline: {response}")
             return response
         except Exception as e:
             raise e
@@ -325,6 +325,7 @@ class LectureRetrieval(Pipeline):
         """
         Search the database for the given query.
         """
+        logger.info(f"Searching in the database for query: {query}")
         # Initialize filter to None by default
         filter_weaviate = None
 
@@ -340,15 +341,12 @@ class LectureRetrieval(Pipeline):
                 filter_weaviate &= Filter.by_property(
                     LectureSchema.BASE_URL.value
                 ).equal(base_url)
-            else:
-                filter_weaviate = Filter.by_property(
-                    LectureSchema.BASE_URL.value
-                ).equal(base_url)
 
+        vec = self.llm_embedding.embed(query)
         return_value = self.collection.query.hybrid(
             query=query,
             alpha=hybrid_factor,
-            vector=self.llm_embedding.embed(query),
+            vector=vec,
             return_properties=[
                 LectureSchema.PAGE_TEXT_CONTENT.value,
                 LectureSchema.COURSE_NAME.value,

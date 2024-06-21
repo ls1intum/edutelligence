@@ -104,7 +104,8 @@ class StatusCallback(ABC):
                 self.stage = next_stage
             else:
                 self.status.result = final_result
-                self.status.suggestions = suggestions
+                if (suggestions is not None) and (len(suggestions) > 0):
+                    self.status.suggestions = suggestions
             self.on_status_update()
         else:
             raise ValueError(
