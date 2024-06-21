@@ -7,6 +7,8 @@ on:
     - 'LICENSE'
     - '.github/**'
     - '!.github/workflows/build.yml'
+    - '!.github/workflows/deploy.yml'
+    - '!.github/workflows/deploy-test.yml'
   push:
     branches:
     - main
@@ -16,6 +18,7 @@ on:
     - 'LICENSE'
     - '.github/**'
     - '!.github/workflows/build.yml'
+    - '!.github/workflows/deploy.yml'
   release:
     types:
     - created
