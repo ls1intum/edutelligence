@@ -79,6 +79,7 @@ class OpenAIChatModel(ChatModel):
     def chat(
         self, messages: list[PyrisMessage], arguments: CompletionArguments
     ) -> PyrisMessage:
+        print("Sending messages to OpenAI", messages)
         # noinspection PyTypeChecker
         retries = 10
         backoff_factor = 2

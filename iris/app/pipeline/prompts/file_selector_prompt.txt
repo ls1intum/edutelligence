@@ -1,10 +1,19 @@
-User question: {question}
+Chat History:
+{chat_history}
 
-Here are the all files: {file_names}
+User question:
+{question}
 
-Feedbacks:
+Feedbacks (from automated tests):
 {feedbacks}
 
-Select the most relevant files from the file list for providing context based on the feedbacks and the user question.
+Here are the all files:
+{file_names}
+
+Your task is to select the files that an AI tutor needs to look at to answer the question.
+You can select multiple files. Avoid selecting files that are not relevant to the question.
+If the question is about a specific file, make sure to select that file.
+If the question does not require any file, you can return an empty list.
+Take the chat history and feedbacks into consideration when selecting the files.
 
 {format_instructions}

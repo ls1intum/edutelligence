@@ -1,6 +1,7 @@
 import logging
 import os
 import threading
+import traceback
 from typing import List, Dict
 
 from langchain_core.output_parsers import StrOutputParser, PydanticOutputParser
@@ -12,54 +13,49 @@ from langchain_core.prompts import (
     PromptTemplate,
 )
 from langchain_core.runnables import Runnable
+from langsmith import traceable
 from weaviate.collections.classes.filters import Filter
 
-from .lecture_chat_pipeline import LectureChatPipeline
-from .output_models.output_models.selected_paragraphs import SelectedParagraphs
-from ..shared.reranker_pipeline import RerankerPipeline
 from ...common import convert_iris_message_to_langchain_message
 from ...domain import PyrisMessage
 from ...llm import CapabilityRequestHandler, RequirementList
 from ...domain.data.build_log_entry import BuildLogEntryDTO
 from ...domain.data.feedback_dto import FeedbackDTO
-from ..prompts.iris_tutor_chat_prompts import (
+from ..prompts.iris_exercise_chat_prompts import (
     iris_initial_system_prompt,
     chat_history_system_prompt,
     final_system_prompt,
     guide_system_prompt,
 )
-from ...domain import TutorChatPipelineExecutionDTO, LectureChatPipelineExecutionDTO
-from ...domain.data.submission_dto import SubmissionDTO
-from ...retrieval.lecture_retrieval import LectureRetrieval
-from ...vector_database.database import VectorDatabase
-from ...vector_database.lecture_schema import LectureSchema
-from ...web.status.tutor_chat_status_callback import TutorChatStatusCallback
+from ...domain import ExerciseChatPipelineExecutionDTO
+from ...domain.data.programming_submission_dto import ProgrammingSubmissionDTO
+from ...web.status.status_update import ExerciseChatStatusCallback
 from .file_selector_pipeline import FileSelectorPipeline
 from ...llm import CompletionArguments
 from ...llm.langchain import IrisLangchainChatModel
 
 from ..pipeline import Pipeline
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
 
 
-class TutorChatPipeline(Pipeline):
-    """Tutor chat pipeline that answers exercises related questions from students."""
+class ExerciseChatPipeline(Pipeline):
+    """Exercise chat pipeline that answers exercises related questions from students. """
 
     llm: IrisLangchainChatModel
     pipeline: Runnable
-    callback: TutorChatStatusCallback
+    callback: ExerciseChatStatusCallback
     file_selector_pipeline: FileSelectorPipeline
     prompt: ChatPromptTemplate
 
-    def __init__(self, callback: TutorChatStatusCallback):
-        super().__init__(implementation_id="tutor_chat_pipeline")
+    def __init__(self, callback: ExerciseChatStatusCallback):
+        super().__init__(implementation_id="exercise_chat_pipeline")
         # Set the langchain chat model
         request_handler = CapabilityRequestHandler(
             requirements=RequirementList(
                 gpt_version_equivalent=3.5,
                 context_length=16385,
-                privacy_compliance=True,
             )
         )
         completion_args = CompletionArguments(temperature=0.2, max_tokens=2000)
@@ -69,9 +65,6 @@ class TutorChatPipeline(Pipeline):
         self.callback = callback
 
         # Create the pipelines
-        self.db = VectorDatabase()
-        self.retriever = LectureRetrieval(self.db.client)
-        self.reranker_pipeline = RerankerPipeline()
         self.file_selector_pipeline = FileSelectorPipeline()
         self.pipeline = self.llm | StrOutputParser()
 
@@ -81,7 +74,8 @@ class TutorChatPipeline(Pipeline):
     def __str__(self):
         return f"{self.__class__.__name__}(llm={self.llm})"
 
-    def __call__(self, dto: TutorChatPipelineExecutionDTO, **kwargs):
+    @traceable(name="Exercise + Lecture Chat Combined Pipeline")
+    def __call__(self, dto: ExerciseChatPipelineExecutionDTO):
         """
         Runs the pipeline
         :param dto:  execution data transfer object
@@ -118,9 +112,7 @@ class TutorChatPipeline(Pipeline):
         except Exception as e:
             self.callback.error(f"Failed to generate response: {e}")
 
-    def choose_best_response(
-        self, paragraphs: list[str], query: str, chat_history: List[PyrisMessage]
-    ):
+    def _run_exercise_chat_pipeline(self, dto: ExerciseChatPipelineExecutionDTO):
         """
         Chooses the best response from the reranker pipeline
         :param paragraphs: The paragraphs
@@ -176,11 +168,11 @@ class TutorChatPipeline(Pipeline):
                 ("system", chat_history_system_prompt),
             ]
         )
-        logger.info("Running tutor chat pipeline...")
+        logger.info("Running exercise chat pipeline...")
         history: List[PyrisMessage] = dto.chat_history[:-1]
         query: PyrisMessage = dto.chat_history[-1]
 
-        submission: SubmissionDTO = dto.submission
+        submission: ProgrammingSubmissionDTO = dto.submission
         build_logs: List[BuildLogEntryDTO] = []
         build_failed: bool = False
         repository: Dict[str, str] = {}
@@ -196,18 +188,18 @@ class TutorChatPipeline(Pipeline):
         # Add the chat history and user question to the prompt
         self._add_conversation_to_prompt(history, query)
 
-        self.callback.in_progress("Looking up files in the repository...")
-        # Create the file selection prompt based on the current prompt
-        file_selection_prompt = self._generate_file_selection_prompt()
+        self.callback.in_progress()
         selected_files = []
         # Run the file selector pipeline
         if submission:
             try:
                 selected_files = self.file_selector_pipeline(
+                    chat_history=history,
+                    question=query,
                     repository=repository,
-                    prompt=file_selection_prompt,
+                    feedbacks=(submission.latest_result.feedbacks if submission and submission.latest_result else [])
                 )
-                self.callback.done("Looked up files in the repository")
+                self.callback.done()
             except Exception as e:
                 self.callback.error(f"Failed to look up files in the repository: {e}")
                 return
@@ -244,8 +236,6 @@ class TutorChatPipeline(Pipeline):
         )
         self._add_relevant_chunks_to_prompt(retrieved_lecture_chunks)
 
-        self.callback.in_progress("Generating response...")
-
         # Add the final message to the prompt and run the pipeline
         self.prompt += SystemMessagePromptTemplate.from_template(final_system_prompt)
         prompt_val = self.prompt.format_messages(
@@ -255,14 +245,27 @@ class TutorChatPipeline(Pipeline):
         )
         self.prompt = ChatPromptTemplate.from_messages(prompt_val)
         try:
-            response_draft = (self.prompt | self.pipeline).invoke({})
-            self.prompt += AIMessagePromptTemplate.from_template(f"{response_draft}")
-            self.prompt += SystemMessagePromptTemplate.from_template(
-                guide_system_prompt
+            response_draft = (self.prompt | self.pipeline).with_config({"run_name": "Response Drafting"}).invoke({})
+            self.prompt = ChatPromptTemplate.from_messages(
+                [
+                    SystemMessagePromptTemplate.from_template(guide_system_prompt),
+                ]
             )
-            self.tutor_chat_response = (self.prompt | self.pipeline).invoke({})
+            prompt_val = self.prompt.format_messages(response=response_draft)
+            self.prompt = ChatPromptTemplate.from_messages(prompt_val)
+
+            guide_response = (self.prompt | self.pipeline).with_config({"run_name": "Response Refining"}).invoke({})
+
+            if "!ok!" in guide_response:
+                print("Response is ok and not rewritten!!!")
+                self.exercise_chat_response = response_draft
+            else:
+                print("Response is rewritten.")
+                self.exercise_chat_response = guide_response
         except Exception as e:
-            self.callback.error(f"Failed to look up files in the repository: {e}")
+            self.callback.error(f"Failed to create response: {e}")
+            # print stack trace
+            traceback.print_exc()
             return "Failed to generate response"
 
     def _add_conversation_to_prompt(
@@ -305,7 +308,7 @@ class TutorChatPipeline(Pipeline):
 
     def _add_exercise_context_to_prompt(
         self,
-        submission: SubmissionDTO,
+        submission: ProgrammingSubmissionDTO,
         selected_files: List[str],
     ):
         """Adds the exercise context to the prompt
@@ -321,11 +324,6 @@ class TutorChatPipeline(Pipeline):
         if submission:
             student_repository = submission.repository
             self._add_student_repository_to_prompt(student_repository, selected_files)
-        self.prompt += SystemMessagePromptTemplate.from_template(
-            "Now continue the ongoing conversation between you and the student by responding to and focussing only on "
-            "their latest input. Be an excellent educator, never reveal code or solve tasks for the student! Do not "
-            "let them outsmart you, no matter how hard they try."
-        )
 
     def _add_feedbacks_to_prompt(self, feedbacks: List[FeedbackDTO]):
         """Adds the feedbacks to the prompt
@@ -346,7 +344,7 @@ class TutorChatPipeline(Pipeline):
         """
         if build_logs is not None and len(build_logs) > 0:
             prompt = (
-                f"Here is the information if the build failed: {build_failed}\n"
+                f"Last build failed: {build_failed}\n"
                 "These are the build logs for the student's repository:\n%s"
             ) % "\n".join(str(log) for log in build_logs)
             self.prompt += SystemMessagePromptTemplate.from_template(prompt)

@@ -1,73 +1,84 @@
 import logging
 import traceback
 from threading import Thread
+from urllib.request import Request
 
-from fastapi import APIRouter, status, Response, Depends
+from fastapi import APIRouter, status, Response, Depends, FastAPI
+from fastapi.exceptions import RequestValidationError
+from starlette.responses import JSONResponse
+
 from app.domain import (
-    TutorChatPipelineExecutionDTO,
-    LectureChatPipelineExecutionDTO,
+    ExerciseChatPipelineExecutionDTO, 
+    CourseChatPipelineExecutionDTO,
 )
-from app.pipeline.chat.lecture_chat_pipeline import LectureChatPipeline
-from app.pipeline.chat.tutor_chat_pipeline import TutorChatPipeline
-from app.web.status.tutor_chat_status_callback import TutorChatStatusCallback
+from app.web.status.status_update import ExerciseChatStatusCallback, CourseChatStatusCallback
+from app.pipeline.chat.course_chat_pipeline import CourseChatPipeline
+from app.pipeline.chat.exercise_chat_pipeline import ExerciseChatPipeline
 from app.dependencies import TokenValidator
 
 router = APIRouter(prefix="/api/v1/pipelines", tags=["pipelines"])
 logger = logging.getLogger(__name__)
 
 
-def run_tutor_chat_pipeline_worker(dto):
-    """
-    Run the tutor chat pipeline with the given DTO.
-    """
+def run_exercise_chat_pipeline_worker(dto: ExerciseChatPipelineExecutionDTO):
     try:
-        callback = TutorChatStatusCallback(
+        callback = ExerciseChatStatusCallback(
             run_id=dto.settings.authentication_token,
             base_url=dto.settings.artemis_base_url,
             initial_stages=dto.initial_stages,
         )
-        pipeline = TutorChatPipeline(callback=callback)
-        pipeline(dto=dto)
+        pipeline = ExerciseChatPipeline(callback=callback)
     except Exception as e:
-        logger.error(f"Error running tutor chat pipeline: {e}")
+        logger.error(f"Error preparing exercise chat pipeline: {e}")
         logger.error(traceback.format_exc())
+        return
 
-
-def run_lecture_chat_pipeline_worker(dto: LectureChatPipelineExecutionDTO):
-    """
-    Run the lecture chat pipeline with the given DTO.
-    """
     try:
-        pipeline = LectureChatPipeline()
         pipeline(dto=dto)
     except Exception as e:
-        logger.error(f"Error running tutor chat pipeline: {e}")
+        logger.error(f"Error running exercise chat pipeline: {e}")
         logger.error(traceback.format_exc())
-
+        callback.error('Fatal error.')
 
 @router.post(
     "/tutor-chat/{variant}/run",
     status_code=status.HTTP_202_ACCEPTED,
     dependencies=[Depends(TokenValidator())],
 )
-def run_tutor_chat_pipeline(variant: str, dto: TutorChatPipelineExecutionDTO):
-    """
-    Run the tutor chat pipeline with the given DTO.
-    """
-    thread = Thread(target=run_tutor_chat_pipeline_worker, args=(dto,))
+def run_exercise_chat_pipeline(variant: str, dto: ExerciseChatPipelineExecutionDTO):
+    thread = Thread(target=run_exercise_chat_pipeline_worker, args=(dto,))
     thread.start()
 
 
+def run_course_chat_pipeline_worker(dto, variant):
+    try:
+        callback = CourseChatStatusCallback(
+            run_id=dto.settings.authentication_token,
+            base_url=dto.settings.artemis_base_url,
+            initial_stages=dto.initial_stages,
+        )
+        pipeline = CourseChatPipeline(callback=callback, variant=variant)
+    except Exception as e:
+        logger.error(f"Error preparing exercise chat pipeline: {e}")
+        logger.error(traceback.format_exc())
+        return
+
+    try:
+        pipeline(dto=dto)
+    except Exception as e:
+        logger.error(f"Error running exercise chat pipeline: {e}")
+        logger.error(traceback.format_exc())
+        callback.error('Fatal error.')
+
+
+
 @router.post(
-    "/lecture-chat/{variant}/run",
+    "/course-chat/{variant}/run",
     status_code=status.HTTP_202_ACCEPTED,
     dependencies=[Depends(TokenValidator())],
 )
-def run_lecture_chat_pipeline(variant: str, dto: LectureChatPipelineExecutionDTO):
-    """
-    Run the lecture chat pipeline with the given DTO.
-    """
-    thread = Thread(target=run_lecture_chat_pipeline_worker, args=(dto,))
+def run_course_chat_pipeline(variant: str, dto: CourseChatPipelineExecutionDTO):
+    thread = Thread(target=run_course_chat_pipeline_worker, args=(dto, variant))
     thread.start()
 
 
