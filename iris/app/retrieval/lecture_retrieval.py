@@ -271,7 +271,7 @@ class LectureRetrieval(Pipeline):
         prompt = ChatPromptTemplate.from_messages(prompt_val)
         try:
             response = (prompt | self.pipeline).invoke({})
-            logger.info(f"Response from exercise chat pipeline: {response}")
+            logger.info(f"Response from retirval pipeline: {response}")
             return response
         except Exception as e:
             raise e

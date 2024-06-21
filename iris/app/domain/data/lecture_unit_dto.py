@@ -1,15 +1,14 @@
-from typing import Optional
-
 from pydantic import BaseModel, Field
 
 
 class LectureUnitDTO(BaseModel):
-    to_update: Optional[bool] = Field(alias="toUpdate", default=None)
-    pdf_file_base64: Optional[str] = Field(alias="pdfFile", default=None)
-    lecture_unit_id: Optional[int] = Field(alias="lectureUnitId", default=None)
-    lecture_unit_name: Optional[str] = Field(alias="lectureUnitName", default=None)
-    lecture_id: Optional[int] = Field(alias="lectureId", default=None)
-    lecture_name: Optional[str] = Field(alias="lectureName", default=None)
-    course_id: Optional[int] = Field(alias="courseId", default=None)
-    course_name: Optional[str] = Field(alias="courseName", default=None)
-    course_description: Optional[str] = Field(alias="courseDescription", default=None)
+    to_update: bool = Field(alias="toUpdate")
+    base_url: str = Field(alias="artemisBaseUrl")
+    pdf_file_base64: str = Field(default="", alias="pdfFile")
+    lecture_unit_id: int = Field(alias="lectureUnitId")
+    lecture_unit_name: str = Field(default="", alias="lectureUnitName")
+    lecture_id: int = Field(alias="lectureId")
+    lecture_name: str = Field(default="", alias="lectureName")
+    course_id: int = Field(alias="courseId")
+    course_name: str = Field(default="", alias="courseName")
+    course_description: str = Field(default="", alias="courseDescription")

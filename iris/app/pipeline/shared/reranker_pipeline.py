@@ -30,14 +30,11 @@ class RerankerPipeline(Pipeline):
             requirements=RequirementList(
                 gpt_version_equivalent=3.5,
                 context_length=16385,
-                json_mode=True,
             )
         )
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler,
-            completion_args=CompletionArguments(
-                temperature=0, max_tokens=4000, response_format="JSON"
-            ),
+            completion_args=CompletionArguments(temperature=0, max_tokens=4000),
         )
         dirname = os.path.dirname(__file__)
         prompt_file_path = os.path.join(dirname, "..", "prompts", "reranker_prompt.txt")
@@ -76,12 +73,12 @@ class RerankerPipeline(Pipeline):
         return f"{self.__class__.__name__}(llm={self.llm})"
 
     def __call__(
-            self,
-            paragraphs: Union[List[dict], List[str]],
-            query: str,
-            prompt: Optional[PromptTemplate] = None,
-            chat_history: list[PyrisMessage] = None,
-            **kwargs,
+        self,
+        paragraphs: Union[List[dict], List[str]],
+        query: str,
+        prompt: Optional[PromptTemplate] = None,
+        chat_history: list[PyrisMessage] = None,
+        **kwargs,
     ) -> List[str]:
         """
         Runs the pipeline
@@ -106,11 +103,11 @@ class RerankerPipeline(Pipeline):
                 "Invalid input type for paragraphs. Must be a list of dictionaries or a list of strings."
             )
         text_chat_history = [
-                                chat_history[-i - 1].contents[0].text_content
-                                for i in range(min(10, len(chat_history)))  # Ensure no out-of-bounds error
-                            ][
-                            ::-1
-                            ]  # Reverse to get the messages in chronological order of their appearance  data["question"] = query
+            chat_history[-i - 1].contents[0].text_content
+            for i in range(min(4, len(chat_history)))  # Ensure no out-of-bounds error
+        ][
+            ::-1
+        ]  # Reverse to get the messages in chronological order of their appearance  data["question"] = query
         data["chat_history"] = text_chat_history
         data["question"] = query
         if prompt is None:

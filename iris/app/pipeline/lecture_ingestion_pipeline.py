@@ -223,10 +223,10 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
         Interpret the image passed
         """
         image_interpretation_prompt = TextMessageContentDTO(
-            text_content=f"This page is part of the {name_of_lecture} university lecture,"
-            f" explain what is on the slide in an academic way,"
-            f" respond only with the explanation in {course_language}."
-            f" For more context here is the content of the previous slide: "
+            text_content=f"This page is part of the {name_of_lecture} university lecture, "
+            f" explain what is on the slide in an academic way, "
+            f"respond only with the explanation in {course_language}."
+            f"For more context here is the content of the previous slide: "
             f" {last_page_content}"
         )
         image = ImageMessageContentDTO(base64=img_base64)
