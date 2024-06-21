@@ -9,6 +9,8 @@ llm_config.local.yml
 ######################
 /docker/.docker-data/artemis-data/*
 !/docker/.docker-data/artemis-data/.gitkeep
+/docker/.docker-data/weaviate-data/*
+!/docker/.docker-data/weaviate-data/.gitkeep
 
 ########################
 # Auto-generated rules #
