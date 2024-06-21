@@ -61,7 +61,9 @@ def save_pdf(pdf_file_base64):
     return temp_pdf_file_path
 
 
-def create_page_data(page_num, page_splits, lecture_unit_dto, course_language, base_url):
+def create_page_data(
+    page_num, page_splits, lecture_unit_dto, course_language, base_url
+):
     """
     Create and return a list of dictionnaries to be ingested in the Vector Database.
     """
@@ -129,9 +131,11 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
             for i, lecture_unit in enumerate(self.dto.lecture_units):
                 pdf_path = save_pdf(lecture_unit.pdf_file_base64)
                 chunks.extend(
-                    self.chunk_data(lecture_pdf=pdf_path,
-                                    lecture_unit_dto=lecture_unit,
-                                    base_url=self.dto.settings.artemis_base_url)
+                    self.chunk_data(
+                        lecture_pdf=pdf_path,
+                        lecture_unit_dto=lecture_unit,
+                        base_url=self.dto.settings.artemis_base_url,
+                    )
                 )
                 cleanup_temporary_file(pdf_path)
             self.callback.done("Lecture Chunking and interpretation Finished")
@@ -223,10 +227,10 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
         Interpret the image passed
         """
         image_interpretation_prompt = TextMessageContentDTO(
-            text_content=f"This page is part of the {name_of_lecture} university lecture,"
-            f" explain what is on the slide in an academic way,"
-            f" respond only with the explanation in {course_language}."
-            f" For more context here is the content of the previous slide: "
+            text_content=f"This page is part of the {name_of_lecture} university lecture, "
+            f" explain what is on the slide in an academic way, "
+            f"respond only with the explanation in {course_language}."
+            f"For more context here is the content of the previous slide: "
             f" {last_page_content}"
         )
         image = ImageMessageContentDTO(base64=img_base64)
@@ -296,7 +300,7 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
                     lecture_unit.course_id,
                     lecture_unit.lecture_id,
                     lecture_unit.lecture_unit_id,
-                    self.dto.settings.artemis_base_url
+                    self.dto.settings.artemis_base_url,
                 ):
                     logger.info("Lecture deleted successfully")
                 else:

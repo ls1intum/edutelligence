@@ -29,7 +29,9 @@ from ..shared.reranker_pipeline import RerankerPipeline
 from ...common import convert_iris_message_to_langchain_message
 from ...domain import ExerciseChatPipelineExecutionDTO
 from ...domain import PyrisMessage
-from ...domain.chat.lecture_chat.lecture_chat_pipeline_execution_dto import LectureChatPipelineExecutionDTO
+from ...domain.chat.lecture_chat.lecture_chat_pipeline_execution_dto import (
+    LectureChatPipelineExecutionDTO,
+)
 from ...domain.data.build_log_entry import BuildLogEntryDTO
 from ...domain.data.feedback_dto import FeedbackDTO
 from ...domain.data.programming_submission_dto import ProgrammingSubmissionDTO
@@ -46,7 +48,7 @@ logger.setLevel(logging.INFO)
 
 
 class ExerciseChatPipeline(Pipeline):
-    """Exercise chat pipeline that answers exercises related questions from students. """
+    """Exercise chat pipeline that answers exercises related questions from students."""
 
     llm: IrisLangchainChatModel
     pipeline: Runnable
@@ -99,7 +101,7 @@ class ExerciseChatPipeline(Pipeline):
                     settings=dto.settings,
                     course=dto.course,
                     chatHistory=dto.chat_history,
-                    user=dto.user
+                    user=dto.user,
                 )
                 lecture_chat_thread = threading.Thread(
                     target=self._run_lecture_chat_pipeline(execution_dto), args=(dto,)
@@ -122,7 +124,7 @@ class ExerciseChatPipeline(Pipeline):
             self.callback.error(f"Failed to generate response: {e}")
 
     def choose_best_response(
-            self, paragraphs: list[str], query: str, chat_history: List[PyrisMessage]
+        self, paragraphs: list[str], query: str, chat_history: List[PyrisMessage]
     ):
         """
         Chooses the best response from the reranker pipeline
@@ -163,7 +165,11 @@ class ExerciseChatPipeline(Pipeline):
         pipeline = LectureChatPipeline()
         self.lecture_chat_response = pipeline(dto=dto)
 
-    def _run_exercise_chat_pipeline(self, dto: ExerciseChatPipelineExecutionDTO, should_execute_lecture_pipeline: bool = False):
+    def _run_exercise_chat_pipeline(
+        self,
+        dto: ExerciseChatPipelineExecutionDTO,
+        should_execute_lecture_pipeline: bool = False,
+    ):
         """
         Runs the pipeline
         :param dto:  execution data transfer object
@@ -204,7 +210,11 @@ class ExerciseChatPipeline(Pipeline):
                     chat_history=history,
                     question=query,
                     repository=repository,
-                    feedbacks=(submission.latest_result.feedbacks if submission and submission.latest_result else [])
+                    feedbacks=(
+                        submission.latest_result.feedbacks
+                        if submission and submission.latest_result
+                        else []
+                    ),
                 )
                 self.callback.done()
             except Exception as e:
@@ -244,7 +254,11 @@ class ExerciseChatPipeline(Pipeline):
         )
         self.prompt = ChatPromptTemplate.from_messages(prompt_val)
         try:
-            response_draft = (self.prompt | self.pipeline).with_config({"run_name": "Response Drafting"}).invoke({})
+            response_draft = (
+                (self.prompt | self.pipeline)
+                .with_config({"run_name": "Response Drafting"})
+                .invoke({})
+            )
             self.prompt = ChatPromptTemplate.from_messages(
                 [
                     SystemMessagePromptTemplate.from_template(guide_system_prompt),
@@ -253,7 +267,11 @@ class ExerciseChatPipeline(Pipeline):
             prompt_val = self.prompt.format_messages(response=response_draft)
             self.prompt = ChatPromptTemplate.from_messages(prompt_val)
 
-            guide_response = (self.prompt | self.pipeline).with_config({"run_name": "Response Refining"}).invoke({})
+            guide_response = (
+                (self.prompt | self.pipeline)
+                .with_config({"run_name": "Response Refining"})
+                .invoke({})
+            )
 
             if "!ok!" in guide_response:
                 print("Response is ok and not rewritten!!!")
@@ -268,9 +286,9 @@ class ExerciseChatPipeline(Pipeline):
             return "Failed to generate response"
 
     def _add_conversation_to_prompt(
-            self,
-            chat_history: List[PyrisMessage],
-            user_question: PyrisMessage,
+        self,
+        chat_history: List[PyrisMessage],
+        user_question: PyrisMessage,
     ):
         """
         Adds the chat history and user question to the prompt
@@ -290,7 +308,7 @@ class ExerciseChatPipeline(Pipeline):
         self.prompt += convert_iris_message_to_langchain_message(user_question)
 
     def _add_student_repository_to_prompt(
-            self, student_repository: Dict[str, str], selected_files: List[str]
+        self, student_repository: Dict[str, str], selected_files: List[str]
     ):
         """Adds the student repository to the prompt
         :param student_repository: The student repository
@@ -306,9 +324,9 @@ class ExerciseChatPipeline(Pipeline):
                 )
 
     def _add_exercise_context_to_prompt(
-            self,
-            submission: ProgrammingSubmissionDTO,
-            selected_files: List[str],
+        self,
+        submission: ProgrammingSubmissionDTO,
+        selected_files: List[str],
     ):
         """Adds the exercise context to the prompt
         :param submission: The submission
@@ -330,12 +348,12 @@ class ExerciseChatPipeline(Pipeline):
         """
         if feedbacks is not None and len(feedbacks) > 0:
             prompt = (
-                         "These are the feedbacks for the student's repository:\n%s"
-                     ) % "\n---------\n".join(str(log) for log in feedbacks)
+                "These are the feedbacks for the student's repository:\n%s"
+            ) % "\n---------\n".join(str(log) for log in feedbacks)
             self.prompt += SystemMessagePromptTemplate.from_template(prompt)
 
     def _add_build_logs_to_prompt(
-            self, build_logs: List[BuildLogEntryDTO], build_failed: bool
+        self, build_logs: List[BuildLogEntryDTO], build_failed: bool
     ):
         """Adds the build logs to the prompt
         :param build_logs: The build logs
@@ -343,9 +361,9 @@ class ExerciseChatPipeline(Pipeline):
         """
         if build_logs is not None and len(build_logs) > 0:
             prompt = (
-                         f"Last build failed: {build_failed}\n"
-                         "These are the build logs for the student's repository:\n%s"
-                     ) % "\n".join(str(log) for log in build_logs)
+                f"Last build failed: {build_failed}\n"
+                "These are the build logs for the student's repository:\n%s"
+            ) % "\n".join(str(log) for log in build_logs)
             self.prompt += SystemMessagePromptTemplate.from_template(prompt)
 
     def _add_relevant_chunks_to_prompt(self, retrieved_lecture_chunks: List[dict]):

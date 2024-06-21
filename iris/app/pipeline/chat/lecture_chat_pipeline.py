@@ -11,7 +11,9 @@ from langchain_core.runnables import Runnable
 from ..shared.citation_pipeline import CitationPipeline
 from ...common import convert_iris_message_to_langchain_message
 from ...domain import PyrisMessage
-from ...domain.chat.lecture_chat.lecture_chat_pipeline_execution_dto import LectureChatPipelineExecutionDTO
+from ...domain.chat.lecture_chat.lecture_chat_pipeline_execution_dto import (
+    LectureChatPipelineExecutionDTO,
+)
 from ...llm import CapabilityRequestHandler, RequirementList
 from ...retrieval.lecture_retrieval import LectureRetrieval
 from ...vector_database.database import VectorDatabase
