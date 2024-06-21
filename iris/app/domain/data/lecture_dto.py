@@ -4,6 +4,7 @@ from pydantic import BaseModel, Field
 
 from app.domain.data.lecture_unit_dto import LectureUnitDTO
 
+
 class PyrisLectureDTO(BaseModel):
     id: int = Field(alias="id")
     title: Optional[str] = Field(alias="title", default=None)

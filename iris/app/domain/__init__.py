@@ -1,6 +1,5 @@
 from .error_response_dto import IrisErrorResponseDTO
 from .pipeline_execution_dto import PipelineExecutionDTO
-from .pyris_message import PyrisMessage
 from .pipeline_execution_settings_dto import PipelineExecutionSettingsDTO
 from .chat.chat_pipeline_execution_dto import ChatPipelineExecutionDTO
 from .chat.chat_pipeline_execution_base_data_dto import ChatPipelineExecutionBaseDataDTO

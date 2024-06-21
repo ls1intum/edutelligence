@@ -3,7 +3,7 @@ import os
 from typing import Dict, Optional, List
 
 from langchain.output_parsers import PydanticOutputParser
-from langchain_core.prompts import PromptTemplate, ChatPromptTemplate
+from langchain_core.prompts import PromptTemplate
 from langchain_core.runnables import Runnable
 from langsmith import traceable
 from pydantic import BaseModel
@@ -96,17 +96,29 @@ class FileSelectorPipeline(Pipeline):
         logger.info("Running file selector pipeline...")
 
         file_list = "\n".join(repository.keys())
-        feedback_list = "\n".join(["Case: {}. Credits: {}. Info: {}".format(
-            feedback.test_case_name,
-            feedback.credits, feedback.text)
-            for feedback in feedbacks]) if feedbacks else "No feedbacks."
+        feedback_list = (
+            "\n".join(
+                [
+                    "Case: {}. Credits: {}. Info: {}".format(
+                        feedback.test_case_name, feedback.credits, feedback.text
+                    )
+                    for feedback in feedbacks
+                ]
+            )
+            if feedbacks
+            else "No feedbacks."
+        )
         chat_history_list = "\n".join([str(message) for message in chat_history])
-        response = (self.default_prompt | self.pipeline).with_config({"run_name": "File Selector Prompt"}).invoke(
-            {
-                "file_names": file_list,
-                "feedbacks": feedback_list,
-                "chat_history": chat_history_list,
-                "question": str(question),
-            }
+        response = (
+            (self.default_prompt | self.pipeline)
+            .with_config({"run_name": "File Selector Prompt"})
+            .invoke(
+                {
+                    "file_names": file_list,
+                    "feedbacks": feedback_list,
+                    "chat_history": chat_history_list,
+                    "question": str(question),
+                }
+            )
         )
         return response.selected_files

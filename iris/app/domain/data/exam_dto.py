@@ -10,6 +10,12 @@ class ExamDTO(BaseModel):
     is_text_exam: bool = Field(alias="isTextExam", default=False)
     start_date: Optional[datetime] = Field(alias="startDate", default=None)
     end_date: Optional[datetime] = Field(alias="endDate", default=None)
-    publish_results_date: Optional[datetime] = Field(alias="publishResultsDate", default=None)
-    exam_student_review_start: Optional[datetime] = Field(alias="examStudentReviewStart", default=None)
-    exam_student_review_end: Optional[datetime] = Field(alias="examStudentReviewEnd", default=None)
+    publish_results_date: Optional[datetime] = Field(
+        alias="publishResultsDate", default=None
+    )
+    exam_student_review_start: Optional[datetime] = Field(
+        alias="examStudentReviewStart", default=None
+    )
+    exam_student_review_end: Optional[datetime] = Field(
+        alias="examStudentReviewEnd", default=None
+    )

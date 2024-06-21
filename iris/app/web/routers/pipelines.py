@@ -1,17 +1,17 @@
 import logging
 import traceback
 from threading import Thread
-from urllib.request import Request
 
-from fastapi import APIRouter, status, Response, Depends, FastAPI
-from fastapi.exceptions import RequestValidationError
-from starlette.responses import JSONResponse
+from fastapi import APIRouter, status, Response, Depends
 
 from app.domain import (
-    ExerciseChatPipelineExecutionDTO, 
+    ExerciseChatPipelineExecutionDTO,
     CourseChatPipelineExecutionDTO,
 )
-from app.web.status.status_update import ExerciseChatStatusCallback, CourseChatStatusCallback
+from app.web.status.status_update import (
+    ExerciseChatStatusCallback,
+    CourseChatStatusCallback,
+)
 from app.pipeline.chat.course_chat_pipeline import CourseChatPipeline
 from app.pipeline.chat.exercise_chat_pipeline import ExerciseChatPipeline
 from app.dependencies import TokenValidator
@@ -38,7 +38,8 @@ def run_exercise_chat_pipeline_worker(dto: ExerciseChatPipelineExecutionDTO):
     except Exception as e:
         logger.error(f"Error running exercise chat pipeline: {e}")
         logger.error(traceback.format_exc())
-        callback.error('Fatal error.')
+        callback.error("Fatal error.")
+
 
 @router.post(
     "/tutor-chat/{variant}/run",
@@ -68,8 +69,7 @@ def run_course_chat_pipeline_worker(dto, variant):
     except Exception as e:
         logger.error(f"Error running exercise chat pipeline: {e}")
         logger.error(traceback.format_exc())
-        callback.error('Fatal error.')
-
+        callback.error("Fatal error.")
 
 
 @router.post(

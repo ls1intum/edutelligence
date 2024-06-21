@@ -39,11 +39,17 @@ class ExerciseWithSubmissionsDTO(BaseModel):
     mode: ExerciseMode = Field(alias="mode")
     max_points: Optional[float] = Field(alias="maxPoints", default=None)
     bonus_points: Optional[float] = Field(alias="bonusPoints", default=None)
-    difficulty_level: Optional[DifficultyLevel] = Field(alias="difficultyLevel", default=None)
+    difficulty_level: Optional[DifficultyLevel] = Field(
+        alias="difficultyLevel", default=None
+    )
     release_date: Optional[datetime] = Field(alias="releaseDate", default=None)
     due_date: Optional[datetime] = Field(alias="dueDate", default=None)
-    inclusion_mode: Optional[IncludedInOverallScore] = Field(alias="inclusionMode", default=None)
-    presentation_score_enabled: Optional[bool] = Field(alias="presentationScoreEnabled", default=None)
+    inclusion_mode: Optional[IncludedInOverallScore] = Field(
+        alias="inclusionMode", default=None
+    )
+    presentation_score_enabled: Optional[bool] = Field(
+        alias="presentationScoreEnabled", default=None
+    )
     submissions: List[SimpleSubmissionDTO] = Field(default=[])
 
     class Config:
