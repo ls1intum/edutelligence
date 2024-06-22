@@ -111,7 +111,6 @@ class CourseChatPipeline(Pipeline):
             :param kwargs: The keyword arguments
         """
 
-        used_tools = []
 
         # Define tools
         @tool
@@ -127,7 +126,7 @@ class CourseChatPipeline(Pipeline):
             You see when the student submitted the exercise and what score they got.
             A 100% score means the student solved the exercise correctly and completed it.
             """
-            used_tools.append("get_exercise_list")
+            self.callback.in_progress("Reading exercise list ...")
             current_time = datetime.now(tz=pytz.UTC)
             exercises = []
             for exercise in dto.course.exercises:
@@ -144,7 +143,7 @@ class CourseChatPipeline(Pipeline):
             Get the following course details: course name, course description, programming language, course start date,
             and course end date.
             """
-            used_tools.append("get_course_details")
+            self.callback.in_progress("Reading course details ...")
             return {
                 "course_name": (
                     dto.course.name if dto.course else "No course provided"
@@ -188,7 +187,7 @@ class CourseChatPipeline(Pipeline):
             submissions of all students in the exercise.
             - latest_submission_of_student: The relative time of the latest submission of the student.
             """
-            print(dto.metrics)
+            self.callback.in_progress("Checking your statistics ...")
             if not dto.metrics or not dto.metrics.exercise_metrics:
                 return "No data available!! Do not requery."
             metrics = dto.metrics.exercise_metrics
@@ -229,7 +228,7 @@ class CourseChatPipeline(Pipeline):
             The object describing it also indicates the system-computed confidence at the time when the student
             added their JoL assessment.
             """
-            used_tools.append("get_competency_list")
+            self.callback.in_progress("Reading competency list ...")
             if not dto.metrics or not dto.metrics.competency_metrics:
                 return dto.course.competencies
             competency_metrics = dto.metrics.competency_metrics
@@ -282,7 +281,6 @@ class CourseChatPipeline(Pipeline):
                 datetime.now(tz=pytz.UTC).strftime("%Y-%m-%d %H:%M:%S"),
             )
 
-            params = {}
             if self.variant == "jol":
                 comp = next(
                     (
@@ -366,20 +364,11 @@ class CourseChatPipeline(Pipeline):
             self.callback.in_progress()
             for step in agent_executor.iter(params):
                 print("STEP:", step)
-                if output := step.get("intermediate_step"):
-                    action, value = output[0]
-                    if action.tool == "get_student_metrics":
-                        self.callback.in_progress("Checking your statistics ...")
-                    elif action.tool == "get_exercise_list":
-                        self.callback.in_progress("Reading exercise list ...")
-                    elif action.tool == "get_course_details":
-                        self.callback.in_progress("Reading course details ...")
-                    elif action.tool == "get_competency_list":
-                        self.callback.in_progress("Reading competency list ...")
-                elif step["output"]:
+                if step.get('output', None):
                     out = step["output"]
 
-            print(out)
+            self.callback.done("Response created", final_result=out)
+
             suggestions = None
             try:
                 if out:
@@ -388,14 +377,14 @@ class CourseChatPipeline(Pipeline):
                         last_message=out,
                     )
                     suggestions = self.suggestion_pipeline(suggestion_dto)
+                    self.callback.done(final_result=None, suggestions=suggestions)
             except Exception as e:
                 logger.error(
                     "An error occurred while running the course chat interaction suggestion pipeline",
                     exc_info=e,
                 )
                 traceback.print_exc()
-
-            self.callback.done(None, final_result=out, suggestions=suggestions)
+                self.callback.error("Generating interaction suggestions failed.")
         except Exception as e:
             logger.error(
                 "An error occurred while running the course chat pipeline", exc_info=e

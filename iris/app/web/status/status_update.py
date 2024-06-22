@@ -90,6 +90,8 @@ class StatusCallback(ABC):
         message: Optional[str] = None,
         final_result: Optional[str] = None,
         suggestions: Optional[List[str]] = None,
+        next_stage_message: Optional[str] = None,
+        start_next_stage: bool = True
     ):
         """
         Transition the current stage to DONE and update the status.
@@ -99,13 +101,15 @@ class StatusCallback(ABC):
         if self.stage.state == StageStateEnum.IN_PROGRESS:
             self.stage.state = StageStateEnum.DONE
             self.stage.message = message
+            self.status.result = final_result
+            self.status.suggestions = suggestions
             next_stage = self.get_next_stage()
             if next_stage is not None:
                 self.stage = next_stage
-            else:
-                self.status.result = final_result
-                if (suggestions is not None) and (len(suggestions) > 0):
-                    self.status.suggestions = suggestions
+                if next_stage_message:
+                    self.stage.message = next_stage_message
+                if start_next_stage:
+                    self.stage.state = StageStateEnum.IN_PROGRESS
             self.on_status_update()
         else:
             raise ValueError(
@@ -160,6 +164,11 @@ class CourseChatStatusCallback(StatusCallback):
                 state=StageStateEnum.NOT_STARTED,
                 name="Thinking",
             ),
+            StageDTO(
+                weight=10,
+                state=StageStateEnum.NOT_STARTED,
+                name="Creating suggestions"
+            )
         ]
         status = CourseChatStatusUpdateDTO(stages=stages)
         stage = stages[current_stage_index]
