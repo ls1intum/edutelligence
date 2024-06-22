@@ -102,7 +102,8 @@ class StatusCallback(ABC):
             self.stage.state = StageStateEnum.DONE
             self.stage.message = message
             self.status.result = final_result
-            self.status.suggestions = suggestions
+            if hasattr(self.status, 'suggestions'):
+                self.status.suggestions = suggestions
             next_stage = self.get_next_stage()
             if next_stage is not None:
                 self.stage = next_stage
