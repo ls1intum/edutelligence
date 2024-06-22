@@ -9,6 +9,7 @@ from langchain_core.prompts import (
     ChatPromptTemplate,
 )
 from langchain_core.runnables import Runnable
+from langsmith import traceable
 from pydantic.v1 import Field, BaseModel
 
 from ...common import convert_iris_message_to_langchain_message
@@ -81,8 +82,9 @@ class InteractionSuggestionPipeline(Pipeline):
     def __str__(self):
         return f"{self.__class__.__name__}(llm={self.llm})"
 
+    @traceable(name="Interaction Suggestion Pipeline")
     def __call__(
-        self, dto: InteractionSuggestionPipelineExecutionDTO, **kwargs
+            self, dto: InteractionSuggestionPipelineExecutionDTO, **kwargs
     ) -> list[str]:
         """
         Runs the pipeline
@@ -124,7 +126,7 @@ class InteractionSuggestionPipeline(Pipeline):
                 # Add the conversation to the prompt
                 chat_history_messages = [
                     convert_iris_message_to_langchain_message(message)
-                    for message in history
+                    for message in history[-3:]
                 ]
                 if dto.last_message:
                     logger.info(f"Last message: {dto.last_message}")
@@ -156,8 +158,13 @@ class InteractionSuggestionPipeline(Pipeline):
                         ),
                     ]
                 )
-                response: Questions = (self.prompt | self.pipeline).invoke({})
-                return response["questions"]
+
+            prob_st_val = dto.problem_statement or 'No problem statement provided.'
+            prompt_val = self.prompt.format_messages(problem_statement=prob_st_val)
+            self.prompt = ChatPromptTemplate.from_messages(prompt_val)
+
+            response: dict = (self.prompt | self.pipeline).invoke({})
+            return response["questions"]
         except Exception as e:
             logger.error(
                 "An error occurred while running the course chat pipeline", exc_info=e

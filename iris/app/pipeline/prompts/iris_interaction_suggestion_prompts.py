@@ -56,8 +56,12 @@ Your main task is to help students come up with good questions they can ask as c
 so that they can ask for help with their current programming exercise.
 You can use the current chat history and also observations about their progress in the exercise so far to engage them.
 
-These questions should be framed as if a student is asking a human tutor.
+For your context, this is the problem statement for the exercise:
+---
+{problem_statement}
+---
 
+These questions should be framed as if a student is asking a human tutor.
 Here are some example questions you can generate:
 
 Q: How can I fix the error in my code?
@@ -153,15 +157,6 @@ The conversation with the student is not yet started. They have not asked any qu
 It is your task to generate questions that can initiate the conversation.
 Check the data for anything useful to come up with questions that a student might ask to engage in a conversation.
 It should trigger the student to engage in a conversation with a human tutor.
-"""
-
-course_system_prompt = """
-These are the details about the course:
-- Course name: {course_name}
-- Course description: {course_description}
-- Default programming language: {programming_language}
-- Course start date: {course_start_date}
-- Course end date: {course_end_date}
 """
 
 course_chat_begin_prompt = """

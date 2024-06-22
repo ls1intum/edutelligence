@@ -129,10 +129,10 @@ class ExerciseChatPipeline(Pipeline):
             suggestions = None
             try:
                 if response:
-                    suggestion_dto = InteractionSuggestionPipelineExecutionDTO(
-                        chat_history=dto.chat_history,
-                        last_message=response,
-                    )
+                    suggestion_dto = InteractionSuggestionPipelineExecutionDTO()
+                    suggestion_dto.chat_history = dto.chat_history
+                    suggestion_dto.last_message = response
+                    suggestion_dto.problem_statement = dto.exercise.problem_statement
                     suggestions = self.suggestion_pipeline(suggestion_dto)
                     self.callback.done(final_result=None, suggestions=suggestions)
                 else:
