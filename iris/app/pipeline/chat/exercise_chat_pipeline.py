@@ -94,7 +94,9 @@ class ExerciseChatPipeline(Pipeline):
                 dto.course.id
             )
             self._run_exercise_chat_pipeline(dto, should_execute_lecture_pipeline),
-            self.callback.done("Generated response", final_result=self.exercise_chat_response)
+            self.callback.done(
+                "Generated response", final_result=self.exercise_chat_response
+            )
 
             suggestions = None
             try:
@@ -107,7 +109,9 @@ class ExerciseChatPipeline(Pipeline):
                     self.callback.done(final_result=None, suggestions=suggestions)
                 else:
                     # This should never happen but whatever
-                    self.callback.skip("Skipping suggestion generation as no output was generated.")
+                    self.callback.skip(
+                        "Skipping suggestion generation as no output was generated."
+                    )
             except Exception as e:
                 logger.error(
                     "An error occurred while running the course chat interaction suggestion pipeline",
