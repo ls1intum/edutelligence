@@ -1,15 +1,12 @@
 import logging
-import os
-import threading
 import traceback
 from typing import List, Dict
 
-from langchain_core.output_parsers import StrOutputParser, PydanticOutputParser
+from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import (
     ChatPromptTemplate,
     SystemMessagePromptTemplate,
     HumanMessagePromptTemplate,
-    PromptTemplate,
 )
 from langchain_core.runnables import Runnable
 from langsmith import traceable
@@ -17,8 +14,6 @@ from weaviate.collections.classes.filters import Filter
 
 from .file_selector_pipeline import FileSelectorPipeline
 from .interaction_suggestion_pipeline import InteractionSuggestionPipeline
-from .lecture_chat_pipeline import LectureChatPipeline
-from .output_models.output_models.selected_paragraphs import SelectedParagraphs
 from ..pipeline import Pipeline
 from ..prompts.iris_exercise_chat_prompts import (
     iris_initial_system_prompt,
@@ -32,9 +27,6 @@ from ...domain import ExerciseChatPipelineExecutionDTO
 from ...domain import PyrisMessage
 from ...domain.chat.interaction_suggestion_dto import (
     InteractionSuggestionPipelineExecutionDTO,
-)
-from ...domain.chat.lecture_chat.lecture_chat_pipeline_execution_dto import (
-    LectureChatPipelineExecutionDTO,
 )
 from ...domain.data.build_log_entry import BuildLogEntryDTO
 from ...domain.data.feedback_dto import FeedbackDTO
@@ -101,43 +93,25 @@ class ExerciseChatPipeline(Pipeline):
             should_execute_lecture_pipeline = self.should_execute_lecture_pipeline(
                 dto.course.id
             )
-            self.lecture_chat_response = ""
-            if should_execute_lecture_pipeline:
-                execution_dto = LectureChatPipelineExecutionDTO(
-                    settings=dto.settings,
-                    course=dto.course,
-                    chatHistory=dto.chat_history,
-                    user=dto.user,
-                )
-                lecture_chat_thread = threading.Thread(
-                    target=self._run_lecture_chat_pipeline(execution_dto), args=(dto,)
-                )
-                lecture_chat_thread.start()
-
-            tutor_chat_thread = threading.Thread(
-                target=self._run_exercise_chat_pipeline(dto),
-                args=(dto, should_execute_lecture_pipeline),
+            self._run_exercise_chat_pipeline(dto, should_execute_lecture_pipeline),
+            self.callback.done(
+                "Generated response", final_result=self.exercise_chat_response
             )
-            tutor_chat_thread.start()
-            response = self.choose_best_response(
-                [self.exercise_chat_response, self.lecture_chat_response],
-                dto.chat_history[-1].contents[0].text_content,
-                dto.chat_history,
-            )
-            self.callback.done("Generated response", final_result=response)
 
             suggestions = None
             try:
-                if response:
+                if self.exercise_chat_response:
                     suggestion_dto = InteractionSuggestionPipelineExecutionDTO()
                     suggestion_dto.chat_history = dto.chat_history
-                    suggestion_dto.last_message = response
+                    suggestion_dto.last_message = self.exercise_chat_response
                     suggestion_dto.problem_statement = dto.exercise.problem_statement
                     suggestions = self.suggestion_pipeline(suggestion_dto)
                     self.callback.done(final_result=None, suggestions=suggestions)
                 else:
                     # This should never happen but whatever
-                    self.callback.skip("Skipping suggestion generation as no output was generated.")
+                    self.callback.skip(
+                        "Skipping suggestion generation as no output was generated."
+                    )
             except Exception as e:
                 logger.error(
                     "An error occurred while running the course chat interaction suggestion pipeline",
@@ -148,48 +122,6 @@ class ExerciseChatPipeline(Pipeline):
         except Exception as e:
             traceback.print_exc()
             self.callback.error(f"Failed to generate response: {e}")
-
-    def choose_best_response(
-        self, paragraphs: list[str], query: str, chat_history: List[PyrisMessage]
-    ):
-        """
-        Chooses the best response from the reranker pipeline
-        :param paragraphs: The paragraphs
-        :param query: The query
-        :return: The best response
-        """
-        dirname = os.path.dirname(__file__)
-        prompt_file_path = os.path.join(
-            dirname, "..", "prompts", "choose_response_prompt.txt"
-        )
-        with open(prompt_file_path, "r") as file:
-            logger.info("Loading reranker prompt...")
-            prompt_str = file.read()
-
-        output_parser = PydanticOutputParser(pydantic_object=SelectedParagraphs)
-        choose_response_prompt = PromptTemplate(
-            template=prompt_str,
-            input_variables=["question", "paragraph_0", "paragraph_1", "chat_history"],
-            partial_variables={
-                "format_instructions": output_parser.get_format_instructions()
-            },
-        )
-        paragraph_index = self.reranker_pipeline(
-            paragraphs=paragraphs,
-            query=query,
-            prompt=choose_response_prompt,
-            chat_history=chat_history,
-        )[0]
-        try:
-            chosen_paragraph = paragraphs[int(paragraph_index)]
-        except Exception as e:
-            chosen_paragraph = paragraphs[0]
-            logger.error(f"Failed to choose best response: {e}")
-        return chosen_paragraph
-
-    def _run_lecture_chat_pipeline(self, dto: LectureChatPipelineExecutionDTO):
-        pipeline = LectureChatPipeline()
-        self.lecture_chat_response = pipeline(dto=dto)
 
     def _run_exercise_chat_pipeline(
         self,
@@ -257,18 +189,15 @@ class ExerciseChatPipeline(Pipeline):
         )
 
         if should_execute_lecture_pipeline:
-            retrieved_lecture_chunks = self.retriever(
+            retrieved_lecture_chunks = self.retriever.basic_lecture_retrieval(
                 chat_history=history,
                 student_query=query.contents[0].text_content,
                 result_limit=5,
                 course_name=dto.course.name,
-                problem_statement=problem_statement,
-                exercise_title=exercise_title,
                 course_id=dto.course.id,
                 base_url=dto.settings.artemis_base_url,
             )
             self._add_relevant_chunks_to_prompt(retrieved_lecture_chunks)
-
         self.callback.in_progress()
 
         # Add the final message to the prompt and run the pipeline
@@ -399,6 +328,7 @@ class ExerciseChatPipeline(Pipeline):
         """
         self.prompt += SystemMessagePromptTemplate.from_template(
             "Next you will find the potentially relevant lecture content to answer the student message:\n"
+            "Use This content to answer the student's question:"
         )
         for i, chunk in enumerate(retrieved_lecture_chunks):
             text_content_msg = (
@@ -406,9 +336,6 @@ class ExerciseChatPipeline(Pipeline):
             )
             text_content_msg = text_content_msg.replace("{", "{{").replace("}", "}}")
             self.prompt += SystemMessagePromptTemplate.from_template(text_content_msg)
-        self.prompt += SystemMessagePromptTemplate.from_template(
-            "USE ONLY THE CONTENT YOU NEED TO ANSWER THE QUESTION:\n"
-        )
 
     def should_execute_lecture_pipeline(self, course_id: int) -> bool:
         """
