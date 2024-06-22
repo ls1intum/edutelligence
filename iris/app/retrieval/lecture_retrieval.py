@@ -1,6 +1,7 @@
 from asyncio.log import logger
 from typing import List
 
+from langsmith import traceable
 from weaviate import WeaviateClient
 from weaviate.classes.query import Filter
 
@@ -97,6 +98,7 @@ class LectureRetrieval(Pipeline):
         self.collection = init_lecture_schema(client)
         self.reranker_pipeline = RerankerPipeline()
 
+    @traceable(name="Full Lecture Retrieval")
     def __call__(
         self,
         chat_history: list[PyrisMessage],
@@ -143,6 +145,7 @@ class LectureRetrieval(Pipeline):
             return [merged_chunks[int(i)] for i in selected_chunks_index]
         return []
 
+    @traceable(name="Basic Lecture Retrieval")
     def basic_lecture_retrieval(
         self,
         chat_history: list[PyrisMessage],
@@ -172,6 +175,7 @@ class LectureRetrieval(Pipeline):
         ]
         return basic_retrieved_lecture_chunks
 
+    @traceable(name="Retrieval: Rewrite Student Query")
     def rewrite_student_query(
         self,
         chat_history: list[PyrisMessage],
@@ -205,6 +209,7 @@ class LectureRetrieval(Pipeline):
         except Exception as e:
             raise e
 
+    @traceable(name="Retrieval: Rewrite Student Query with Exercise Context")
     def rewrite_student_query_with_exercise_context(
         self,
         chat_history: list[PyrisMessage],
@@ -242,6 +247,7 @@ class LectureRetrieval(Pipeline):
         except Exception as e:
             raise e
 
+    @traceable(name="Retrieval: Rewrite Elaborated Query")
     def rewrite_elaborated_query(
         self,
         chat_history: list[PyrisMessage],
@@ -276,6 +282,7 @@ class LectureRetrieval(Pipeline):
         except Exception as e:
             raise e
 
+    @traceable(name="Retrieval: Rewrite Elaborated Query with Exercise Context")
     def rewrite_elaborated_query_with_exercise_context(
         self,
         chat_history: list[PyrisMessage],
@@ -314,6 +321,7 @@ class LectureRetrieval(Pipeline):
         except Exception as e:
             raise e
 
+    @traceable(name="Retrieval: Search in DB")
     def search_in_db(
         self,
         query: str,
@@ -359,6 +367,7 @@ class LectureRetrieval(Pipeline):
         )
         return return_value
 
+    @traceable(name="Retrieval: Run Parallel Rewrite Tasks")
     def run_parallel_rewrite_tasks(
         self,
         chat_history: list[PyrisMessage],

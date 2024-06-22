@@ -5,6 +5,7 @@ from typing import Optional, List, Union
 from langchain_core.output_parsers import PydanticOutputParser
 from langchain_core.prompts import ChatPromptTemplate, PromptTemplate
 from langchain_core.runnables import Runnable
+from langsmith import traceable
 
 from app.domain import PyrisMessage
 from app.llm import CapabilityRequestHandler, RequirementList, CompletionArguments
@@ -47,16 +48,7 @@ class RerankerPipeline(Pipeline):
             template=prompt_str,
             input_variables=[
                 "question",
-                "paragraph_0",
-                "paragraph_1",
-                "paragraph_2",
-                "paragraph_3",
-                "paragraph_4",
-                "paragraph_5",
-                "paragraph_6",
-                "paragraph_7",
-                "paragraph_8",
-                "paragraph_9",
+                "paragraphs"
                 "chat_history",
             ],
             partial_variables={
@@ -72,6 +64,7 @@ class RerankerPipeline(Pipeline):
     def __str__(self):
         return f"{self.__class__.__name__}(llm={self.llm})"
 
+    @traceable(name="Lecture Retrieval: Paragraph Selection")
     def __call__(
         self,
         paragraphs: Union[List[dict], List[str]],
@@ -87,29 +80,27 @@ class RerankerPipeline(Pipeline):
             :return: Selected file content
         """
         # Determine if paragraphs are a list of dicts or strings and prepare data accordingly
+        paras = ""
         if paragraphs and isinstance(paragraphs[0], dict):
-            data = {
-                f"paragraph_{i}": paragraph.get(
-                    LectureSchema.PAGE_TEXT_CONTENT.value, ""
-                )
-                for i, paragraph in enumerate(paragraphs)
-            }
+            for i, paragraph in enumerate(paragraphs):
+                paras += "Paragraph {}:\n{}\n".format(str(i), paragraph.get(
+                        LectureSchema.PAGE_TEXT_CONTENT.value, ""
+                    ))
         elif paragraphs and isinstance(paragraphs[0], str):
-            data = {
-                f"paragraph_{i}": paragraph for i, paragraph in enumerate(paragraphs)
-            }
+            for i, paragraph in enumerate(paragraphs):
+                paras += "Paragraph {}:\n{}\n".format(str(i), paragraph)
         else:
             raise ValueError(
                 "Invalid input type for paragraphs. Must be a list of dictionaries or a list of strings."
             )
+
         text_chat_history = [
             chat_history[-i - 1].contents[0].text_content
             for i in range(min(4, len(chat_history)))  # Ensure no out-of-bounds error
         ][
             ::-1
         ]  # Reverse to get the messages in chronological order of their appearance  data["question"] = query
-        data["chat_history"] = text_chat_history
-        data["question"] = query
+        data = {"chat_history": text_chat_history, "question": query, "paragraphs": paras}
         if prompt is None:
             prompt = self.default_prompt
 

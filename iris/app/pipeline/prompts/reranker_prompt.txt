@@ -7,34 +7,5 @@ unnecessary information, only the number of the paragraph if it's really necessa
 otherwise leave the array empty.
 {{"selected_paragraphs": [<number1>, <number2>, ...]}}
 
-Paragraph 0:
-{paragraph_0}
-
-Paragraph 1:
-{paragraph_1}
-
-Paragraph 2:
-{paragraph_2}
-
-Paragraph 3:
-{paragraph_3}
-
-Paragraph 4:
-{paragraph_4}
-
-Paragraph 5:
-{paragraph_5}
-
-Paragraph 6:
-{paragraph_6}
-
-Paragraph 7:
-{paragraph_7}
-
-Paragraph 8:
-{paragraph_8}
-
-Paragraph 9:
-{paragraph_9}
-
+{paragraphs}
 Question: {question}

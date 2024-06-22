@@ -13,15 +13,20 @@ from langchain_core.prompts import (
 )
 from langchain_core.runnables import Runnable
 from langchain_core.tools import tool
+from langsmith import traceable
+from weaviate.collections.classes.filters import Filter
 
 from .interaction_suggestion_pipeline import (
     InteractionSuggestionPipeline,
 )
+from .lecture_chat_pipeline import LectureChatPipeline
 from ...common import convert_iris_message_to_langchain_message
 from ...domain import PyrisMessage
 from app.domain.chat.interaction_suggestion_dto import (
     InteractionSuggestionPipelineExecutionDTO,
 )
+from ...domain.chat.lecture_chat.lecture_chat_pipeline_execution_dto import LectureChatPipelineExecutionDTO
+from ...domain.data.course_dto import CourseDTO
 from ...llm import CapabilityRequestHandler, RequirementList
 from ..prompts.iris_course_chat_prompts import (
     tell_iris_initial_system_prompt,
@@ -40,6 +45,8 @@ from ..prompts.iris_course_chat_prompts_elicit import (
     elicit_begin_agent_jol_prompt,
 )
 from ...domain import CourseChatPipelineExecutionDTO
+from ...vector_database.database import VectorDatabase
+from ...vector_database.lecture_schema import LectureSchema
 from ...web.status.status_update import (
     CourseChatStatusCallback,
 )
@@ -67,6 +74,7 @@ class CourseChatPipeline(Pipeline):
 
     llm: IrisLangchainChatModel
     pipeline: Runnable
+    lecture_pipeline: LectureChatPipeline
     suggestion_pipeline: InteractionSuggestionPipeline
     callback: CourseChatStatusCallback
     prompt: ChatPromptTemplate
@@ -93,6 +101,8 @@ class CourseChatPipeline(Pipeline):
         )
         self.callback = callback
 
+        self.db = VectorDatabase()
+        self.lecture_pipeline = LectureChatPipeline()
         self.suggestion_pipeline = InteractionSuggestionPipeline(variant="course")
 
         # Create the pipeline
@@ -104,6 +114,7 @@ class CourseChatPipeline(Pipeline):
     def __str__(self):
         return f"{self.__class__.__name__}(llm={self.llm})"
 
+    @traceable(name="Course Chat Pipeline")
     def __call__(self, dto: CourseChatPipelineExecutionDTO, **kwargs):
         """
         Runs the pipeline
@@ -252,6 +263,25 @@ class CourseChatPipeline(Pipeline):
                 for comp in competency_metrics.competency_information
             ]
 
+        @tool()
+        def lecture_content_retrieval(prompt: str) -> list[str]:
+            """
+            Retrieve lecture content based on the prompt.
+            This will ask another chatbot to provide a lecture based answer.
+            Use this only if necessary, for example if the student asks about the lecture content.
+            Use the returned answer directly if appropriate, or use it as context to compose your own answer.
+            IF YOU ACTUALLY USE INFORMATION FROM THE RESULT OF THIS LECTURE SEARCH YOU MUST IN ALL CASES IN ALL CIRCUMSTANCES EVERY TIME ALWAYS KEEP THE CITATIONS IN THE ANSWER.
+            """
+            self.callback.in_progress("Looking up information in the lectures ...")
+            coursedto = CourseDTO(id=dto.course.id, name=dto.course.name, description=dto.course.description)
+            execution_dto = LectureChatPipelineExecutionDTO(
+                settings=dto.settings,
+                course=coursedto,
+                chatHistory=dto.chat_history,
+                user=dto.user,
+            )
+            return self.lecture_pipeline(dto=execution_dto)
+
         if dto.user.id % 3 < 2:
             iris_initial_system_prompt = tell_iris_initial_system_prompt
             begin_agent_prompt = tell_begin_agent_prompt
@@ -352,6 +382,9 @@ class CourseChatPipeline(Pipeline):
                 get_student_exercise_metrics,
                 get_competency_list,
             ]
+            if self.should_allow_lecture_tool(dto.course.id):
+                tools.append(lecture_content_retrieval)
+
             agent = create_structured_chat_agent(
                 llm=self.llm, tools=tools, prompt=self.prompt
             )
@@ -394,6 +427,25 @@ class CourseChatPipeline(Pipeline):
             self.callback.error(
                 "An error occurred while running the course chat pipeline."
             )
+
+    def should_allow_lecture_tool(self, course_id: int) -> bool:
+        """
+        Checks if there are indexed lectures for the given course
+
+        :param course_id: The course ID
+        :return: True if there are indexed lectures for the course, False otherwise
+        """
+        if course_id:
+            # Fetch the first object that matches the course ID with the language property
+            result = self.db.lectures.query.fetch_objects(
+                filters=Filter.by_property(LectureSchema.COURSE_ID.value).equal(
+                    course_id
+                ),
+                limit=1,
+                return_properties=[LectureSchema.COURSE_NAME.value],
+            )
+            return len(result.objects) > 0
+        return False
 
 
 def datetime_to_string(dt: Optional[datetime]) -> str:

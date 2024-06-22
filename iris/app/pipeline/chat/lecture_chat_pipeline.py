@@ -7,6 +7,7 @@ from langchain_core.prompts import (
     SystemMessagePromptTemplate,
 )
 from langchain_core.runnables import Runnable
+from langsmith import traceable
 
 from ..shared.citation_pipeline import CitationPipeline
 from ...common import convert_iris_message_to_langchain_message
@@ -80,6 +81,7 @@ class LectureChatPipeline(Pipeline):
     def __str__(self):
         return f"{self.__class__.__name__}(llm={self.llm})"
 
+    @traceable(name="Lecture Chat Pipeline")
     def __call__(self, dto: LectureChatPipelineExecutionDTO):
         """
         Runs the pipeline
