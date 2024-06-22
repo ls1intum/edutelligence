@@ -2,7 +2,6 @@ In the paragraphs below you are provided with an answer to a question. Underneat
 Add citations of the paragraphs to the answer. Cite the paragraphs in brackets after the sentence where the information is used in the answer.
 At the end of the answer list each source with its corresponding number and provide the Lecture Title,as well as the page number in this format "[1] Lecture title, page number".
 Do not Include the Actual paragraphs, only the citations at the end.
-If the question is not a question, or is a greeting, do not add any citations.
 Here is an example how to rewrite the answer with citations:
 "
 Lorem ipsum dolor sit amet, consectetur adipiscing elit.[1] Ded do eiusmod tempor incididunt ut labore et dolore magna aliqua.[2]
