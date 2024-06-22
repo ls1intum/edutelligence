@@ -25,9 +25,9 @@ from langchain_core.prompts import (
 )
 
 from ..pipeline.prompts.lecture_retrieval_prompts import (
+    assessment_prompt, assessment_prompt_final,
     rewrite_student_query_prompt,
     lecture_retriever_initial_prompt,
-    retriever_chat_history_system_prompt,
     write_hypothetical_answer_prompt,
     lecture_retrieval_initial_prompt_with_exercise_context,
     rewrite_student_query_prompt_with_exercise_context,
@@ -158,6 +158,9 @@ class LectureRetrieval(Pipeline):
         """
         Basic retrieval for pipelines thaat need performance and fast answers.
         """
+        if not self.assess_question(chat_history, student_query):
+            return []
+
         rewritten_query = self.rewrite_student_query(
             chat_history, student_query, "course_language", course_name
         )
@@ -175,6 +178,26 @@ class LectureRetrieval(Pipeline):
         ]
         return basic_retrieved_lecture_chunks
 
+    @traceable(name="Retrieval: Question Assessment")
+    def assess_question(self, chat_history: list[PyrisMessage], student_query: str) -> bool:
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", assessment_prompt),
+                                                  ])
+        prompt = _add_last_four_messages_to_prompt(prompt, chat_history)
+        prompt += ChatPromptTemplate.from_messages([
+            ("user", student_query),
+        ])
+        prompt += ChatPromptTemplate.from_messages([
+            ("system", assessment_prompt_final),
+        ])
+
+        try:
+            response = (prompt | self.pipeline).invoke({})
+            logger.info(f"Response from assessment pipeline: {response}")
+            return response == "YES"
+        except Exception as e:
+            raise e
+
     @traceable(name="Retrieval: Rewrite Student Query")
     def rewrite_student_query(
         self,
@@ -189,7 +212,6 @@ class LectureRetrieval(Pipeline):
         prompt = ChatPromptTemplate.from_messages(
             [
                 ("system", lecture_retriever_initial_prompt),
-                ("system", retriever_chat_history_system_prompt),
             ]
         )
         prompt = _add_last_four_messages_to_prompt(prompt, chat_history)
@@ -225,7 +247,6 @@ class LectureRetrieval(Pipeline):
         prompt = ChatPromptTemplate.from_messages(
             [
                 ("system", lecture_retrieval_initial_prompt_with_exercise_context),
-                ("system", retriever_chat_history_system_prompt),
             ]
         )
         prompt = _add_last_four_messages_to_prompt(prompt, chat_history)
@@ -261,18 +282,18 @@ class LectureRetrieval(Pipeline):
         """
         prompt = ChatPromptTemplate.from_messages(
             [
-                ("system", lecture_retriever_initial_prompt),
-                ("system", retriever_chat_history_system_prompt),
+                ("system", write_hypothetical_answer_prompt),
             ]
         )
         prompt = _add_last_four_messages_to_prompt(prompt, chat_history)
-        prompt += SystemMessagePromptTemplate.from_template(
-            write_hypothetical_answer_prompt
+        prompt += ChatPromptTemplate.from_messages(
+            [
+                ("user", student_query),
+            ]
         )
         prompt_val = prompt.format_messages(
             course_language=course_language,
             course_name=course_name,
-            student_query=student_query,
         )
         prompt = ChatPromptTemplate.from_messages(prompt_val)
         try:
@@ -298,22 +319,22 @@ class LectureRetrieval(Pipeline):
         """
         prompt = ChatPromptTemplate.from_messages(
             [
-                ("system", lecture_retrieval_initial_prompt_with_exercise_context),
-                ("system", retriever_chat_history_system_prompt),
+                ("system", write_hypothetical_answer_with_exercise_context_prompt),
             ]
         )
         prompt = _add_last_four_messages_to_prompt(prompt, chat_history)
-        prompt += SystemMessagePromptTemplate.from_template(
-            write_hypothetical_answer_with_exercise_context_prompt
-        )
         prompt_val = prompt.format_messages(
             course_language=course_language,
             course_name=course_name,
             exercise_name=exercise_name,
             problem_statement=problem_statement,
-            student_query=student_query,
         )
         prompt = ChatPromptTemplate.from_messages(prompt_val)
+        prompt += ChatPromptTemplate.from_messages(
+            [
+                ("user", student_query),
+            ]
+        )
         try:
             response = (prompt | self.pipeline).invoke({})
             logger.info(f"Response from exercise chat pipeline: {response}")

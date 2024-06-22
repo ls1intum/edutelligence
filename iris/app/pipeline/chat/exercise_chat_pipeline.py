@@ -1,3 +1,4 @@
+import json
 import logging
 import traceback
 from typing import List, Dict
@@ -21,6 +22,7 @@ from ..prompts.iris_exercise_chat_prompts import (
     final_system_prompt,
     guide_system_prompt,
 )
+from ..shared.citation_pipeline import CitationPipeline
 from ..shared.reranker_pipeline import RerankerPipeline
 from ...common import convert_iris_message_to_langchain_message
 from ...domain import ExerciseChatPipelineExecutionDTO
@@ -56,16 +58,16 @@ class ExerciseChatPipeline(Pipeline):
     def __init__(self, callback: ExerciseChatStatusCallback):
         super().__init__(implementation_id="exercise_chat_pipeline")
         # Set the langchain chat model
-        request_handler = CapabilityRequestHandler(
-            requirements=RequirementList(
-                gpt_version_equivalent=3.5,
-                context_length=16385,
-            )
-        )
-        completion_args = CompletionArguments(temperature=0.2, max_tokens=2000)
+        completion_args = CompletionArguments(temperature=0, max_tokens=2000)
         self.llm = IrisLangchainChatModel(
-            request_handler=request_handler, completion_args=completion_args
+            request_handler=CapabilityRequestHandler(
+                requirements=RequirementList(
+                    gpt_version_equivalent=4.5,
+                    context_length=16385,
+                )
+            ), completion_args=completion_args
         )
+
         self.callback = callback
 
         # Create the pipelines
@@ -75,6 +77,7 @@ class ExerciseChatPipeline(Pipeline):
         self.reranker_pipeline = RerankerPipeline()
         self.file_selector_pipeline = FileSelectorPipeline()
         self.pipeline = self.llm | StrOutputParser()
+        self.citation_pipeline = CitationPipeline()
 
     def __repr__(self):
         return f"{self.__class__.__name__}(llm={self.llm})"
@@ -136,7 +139,6 @@ class ExerciseChatPipeline(Pipeline):
         self.prompt = ChatPromptTemplate.from_messages(
             [
                 ("system", iris_initial_system_prompt),
-                ("system", chat_history_system_prompt),
             ]
         )
         logger.info("Running exercise chat pipeline...")
@@ -156,9 +158,6 @@ class ExerciseChatPipeline(Pipeline):
         exercise_title: str = dto.exercise.name
         programming_language = dto.exercise.programming_language.lower()
 
-        # Add the chat history and user question to the prompt
-        self._add_conversation_to_prompt(history, query)
-
         self.callback.in_progress()
         selected_files = []
         # Run the file selector pipeline
@@ -174,31 +173,39 @@ class ExerciseChatPipeline(Pipeline):
                         else []
                     ),
                 )
-                self.callback.done()
+                self.callback.done(start_next_stage=False)
             except Exception as e:
                 self.callback.error(f"Failed to look up files in the repository: {e}")
                 return
 
             self._add_build_logs_to_prompt(build_logs, build_failed)
         else:
-            self.callback.skip("No submission found")
+            self.callback.skip("No submission found", start_next_stage=False)
         # Add the exercise context to the prompt
         self._add_exercise_context_to_prompt(
             submission,
             selected_files,
         )
 
+        # Add the feedbacks to the prompt
         if should_execute_lecture_pipeline:
-            retrieved_lecture_chunks = self.retriever.basic_lecture_retrieval(
+            self.callback.in_progress()
+            self.retrieved_lecture_chunks = self.retriever.basic_lecture_retrieval(
                 chat_history=history,
                 student_query=query.contents[0].text_content,
-                result_limit=5,
+                result_limit=3,
                 course_name=dto.course.name,
                 course_id=dto.course.id,
                 base_url=dto.settings.artemis_base_url,
             )
-            self._add_relevant_chunks_to_prompt(retrieved_lecture_chunks)
-        self.callback.in_progress()
+            if len(self.retrieved_lecture_chunks) > 0:
+                self._add_relevant_chunks_to_prompt(self.retrieved_lecture_chunks)
+            self.callback.done()
+        else:
+            self.callback.skip()
+
+        # Add the chat history and user question to the prompt
+        self._add_conversation_to_prompt(history, query)
 
         # Add the final message to the prompt and run the pipeline
         self.prompt += SystemMessagePromptTemplate.from_template(final_system_prompt)
@@ -214,6 +221,7 @@ class ExerciseChatPipeline(Pipeline):
                 .with_config({"run_name": "Response Drafting"})
                 .invoke({})
             )
+            self.callback.done()
             self.prompt = ChatPromptTemplate.from_messages(
                 [
                     SystemMessagePromptTemplate.from_template(guide_system_prompt),
@@ -254,12 +262,11 @@ class ExerciseChatPipeline(Pipeline):
         if chat_history is not None and len(chat_history) > 0:
             chat_history_messages = [
                 convert_iris_message_to_langchain_message(message)
-                for message in chat_history
+                for message in chat_history[-4:]
             ]
+            self.prompt += SystemMessagePromptTemplate.from_template(chat_history_system_prompt)
             self.prompt += chat_history_messages
-            self.prompt += SystemMessagePromptTemplate.from_template(
-                "Now, consider the student's newest and latest input:"
-            )
+        self.prompt += SystemMessagePromptTemplate.from_template("Consider the student's newest and latest input:")
         self.prompt += convert_iris_message_to_langchain_message(user_question)
 
     def _add_student_repository_to_prompt(
@@ -326,16 +333,19 @@ class ExerciseChatPipeline(Pipeline):
         Adds the relevant chunks of the lecture to the prompt
         :param retrieved_lecture_chunks: The retrieved lecture chunks
         """
-        self.prompt += SystemMessagePromptTemplate.from_template(
-            "Next you will find the potentially relevant lecture content to answer the student message:\n"
-            "Use This content to answer the student's question:"
-        )
-        for i, chunk in enumerate(retrieved_lecture_chunks):
-            text_content_msg = (
-                f" \n {chunk.get(LectureSchema.PAGE_TEXT_CONTENT.value)} \n"
+        txt = "Next you will find the potentially relevant lecture content to answer the student message."
+        "Use this context to enrich your response.\n"
+
+        for chunk in retrieved_lecture_chunks:
+            props = chunk.get("properties", {})
+            lct = "Lecture: {}, Page: {}\nContent:\n---{}---\n\n".format(
+                props.get(LectureSchema.LECTURE_NAME.value),
+                props.get(LectureSchema.PAGE_NUMBER.value),
+                props.get(LectureSchema.PAGE_TEXT_CONTENT.value),
             )
-            text_content_msg = text_content_msg.replace("{", "{{").replace("}", "}}")
-            self.prompt += SystemMessagePromptTemplate.from_template(text_content_msg)
+            txt += lct
+
+        self.prompt += SystemMessagePromptTemplate.from_template(txt)
 
     def should_execute_lecture_pipeline(self, course_id: int) -> bool:
         """

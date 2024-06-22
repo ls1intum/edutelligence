@@ -20,6 +20,7 @@ from .interaction_suggestion_pipeline import (
     InteractionSuggestionPipeline,
 )
 from .lecture_chat_pipeline import LectureChatPipeline
+from ..shared.citation_pipeline import CitationPipeline
 from ...common import convert_iris_message_to_langchain_message
 from ...domain import PyrisMessage
 from app.domain.chat.interaction_suggestion_dto import (
@@ -45,6 +46,7 @@ from ..prompts.iris_course_chat_prompts_elicit import (
     elicit_begin_agent_jol_prompt,
 )
 from ...domain import CourseChatPipelineExecutionDTO
+from ...retrieval.lecture_retrieval import LectureRetrieval
 from ...vector_database.database import VectorDatabase
 from ...vector_database.lecture_schema import LectureSchema
 from ...web.status.status_update import (
@@ -76,9 +78,11 @@ class CourseChatPipeline(Pipeline):
     pipeline: Runnable
     lecture_pipeline: LectureChatPipeline
     suggestion_pipeline: InteractionSuggestionPipeline
+    citation_pipeline: CitationPipeline
     callback: CourseChatStatusCallback
     prompt: ChatPromptTemplate
     variant: str
+    retrieved_paragraphs: List[dict] = None
 
     def __init__(self, callback: CourseChatStatusCallback, variant: str = "default"):
         super().__init__(implementation_id="course_chat_pipeline")
@@ -102,8 +106,9 @@ class CourseChatPipeline(Pipeline):
         self.callback = callback
 
         self.db = VectorDatabase()
-        self.lecture_pipeline = LectureChatPipeline()
+        self.retriever = LectureRetrieval(self.db.client)
         self.suggestion_pipeline = InteractionSuggestionPipeline(variant="course")
+        self.citation_pipeline = CitationPipeline()
 
         # Create the pipeline
         self.pipeline = self.llm | StrOutputParser()
@@ -264,23 +269,35 @@ class CourseChatPipeline(Pipeline):
             ]
 
         @tool()
-        def lecture_content_retrieval(prompt: str) -> list[str]:
+        def lecture_content_retrieval(prompt: str) -> str:
             """
-            Retrieve lecture content based on the prompt.
-            This will ask another chatbot to provide a lecture based answer.
-            Use this only if necessary, for example if the student asks about the lecture content.
-            Use the returned answer directly if appropriate, or use it as context to compose your own answer.
-            IF YOU ACTUALLY USE INFORMATION FROM THE RESULT OF THIS LECTURE SEARCH YOU MUST IN ALL CASES IN ALL CIRCUMSTANCES EVERY TIME ALWAYS KEEP THE CITATIONS IN THE ANSWER.
+            Retrieve content from indexed lecture slides.
+            The query should be a natural language question that can be answered by looking into the lecture materials.
+            This will run a RAG retrieval on the indexed lecture slides and return the most relevant paragraphs.
+            Use this if you think it can be useful to answer the student's question, or if the student explicitly asks
+            a question about the lecture content or slides.
+            Only use this once.
             """
-            self.callback.in_progress("Looking up information in the lectures ...")
-            coursedto = CourseDTO(id=dto.course.id, name=dto.course.name, description=dto.course.description)
-            execution_dto = LectureChatPipelineExecutionDTO(
-                settings=dto.settings,
-                course=coursedto,
-                chatHistory=dto.chat_history,
-                user=dto.user,
+            self.callback.in_progress("Retrieving lecture content ...")
+            self.retrieved_paragraphs = self.retriever(
+                chat_history=history,
+                student_query=query.contents[0].text_content,
+                result_limit=5,
+                course_name=dto.course.name,
+                course_id=dto.course.id,
+                base_url=dto.settings.artemis_base_url,
             )
-            return self.lecture_pipeline(dto=execution_dto)
+
+            result = ""
+            for paragraph in self.retrieved_paragraphs:
+                lct = "Lecture: {}, Page: {}\nContent:\n---{}---\n\n".format(
+                    paragraph.get(LectureSchema.LECTURE_NAME.value),
+                    paragraph.get(LectureSchema.PAGE_NUMBER.value),
+                    paragraph.get(LectureSchema.PAGE_TEXT_CONTENT.value),
+                )
+                result += lct
+            return result
+
 
         if dto.user.id % 3 < 2:
             iris_initial_system_prompt = tell_iris_initial_system_prompt
@@ -398,6 +415,10 @@ class CourseChatPipeline(Pipeline):
                 print("STEP:", step)
                 if step.get("output", None):
                     out = step["output"]
+
+            if self.retrieved_paragraphs:
+                self.callback.in_progress("Augmenting response ...")
+                out = self.citation_pipeline(self.retrieved_paragraphs, out)
 
             self.callback.done("Response created", final_result=out)
 

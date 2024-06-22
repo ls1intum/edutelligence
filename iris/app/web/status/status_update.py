@@ -139,7 +139,7 @@ class StatusCallback(ABC):
             f"Error occurred in job {self.run_id} in stage {self.stage.name}: {message}"
         )
 
-    def skip(self, message: Optional[str] = None):
+    def skip(self, message: Optional[str] = None, start_next_stage: bool = True):
         """
         Transition the current stage to SKIPPED and update the status.
         If there is a next stage, set the current stage to the next stage.
@@ -149,6 +149,8 @@ class StatusCallback(ABC):
         next_stage = self.get_next_stage()
         if next_stage is not None:
             self.stage = next_stage
+            if start_next_stage:
+                self.stage.state = StageStateEnum.IN_PROGRESS
         self.on_status_update()
 
 
@@ -183,10 +185,16 @@ class ExerciseChatStatusCallback(StatusCallback):
         stages = initial_stages or []
         stages += [
             StageDTO(weight=30, state=StageStateEnum.NOT_STARTED, name="File Lookup"),
+            StageDTO(weight=30, state=StageStateEnum.NOT_STARTED, name="Lecture Context Lookup"),
             StageDTO(
                 weight=60,
                 state=StageStateEnum.NOT_STARTED,
                 name="Response Generation",
+            ),
+            StageDTO(
+                weight=20,
+                state=StageStateEnum.NOT_STARTED,
+                name="Response Refining",
             ),
             StageDTO(
                 weight=10, state=StageStateEnum.NOT_STARTED, name="Creating suggestions"

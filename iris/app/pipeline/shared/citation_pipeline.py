@@ -25,7 +25,7 @@ class CitationPipeline(Pipeline):
         super().__init__(implementation_id="citation_pipeline")
         request_handler = CapabilityRequestHandler(
             requirements=RequirementList(
-                gpt_version_equivalent=3.5,
+                gpt_version_equivalent=4.5,
                 context_length=16385,
             )
         )
@@ -51,43 +51,40 @@ class CitationPipeline(Pipeline):
         """
         formatted_string = ""
         for i, paragraph in enumerate(paragraphs):
-            para = paragraph.get(LectureSchema.PAGE_TEXT_CONTENT.value, "")
-            title = "Lecture Title:" + paragraph.get(
-                LectureSchema.LECTURE_NAME.value, ""
+            lct = "Lecture: {}, Page: {}\nContent:\n---{}---\n\n".format(
+                paragraph.get(LectureSchema.LECTURE_NAME.value),
+                paragraph.get(LectureSchema.PAGE_NUMBER.value),
+                paragraph.get(LectureSchema.PAGE_TEXT_CONTENT.value),
             )
-            page_number = paragraph.get(LectureSchema.PAGE_NUMBER.value, "")
-            formatted_string += (
-                "-" * 50 + "\n\n"
-                f"{title}page {page_number}:"
-                f"\n\n{para}\n" + "-" * 50 + "\n\n"
-            )
+            formatted_string += lct
 
         return (
             formatted_string.replace("{", "{{").replace("}", "}}")
-            + "\n Answer with citations: \n"
         )
 
     def __call__(
         self,
         paragraphs: Union[List[dict], List[str]],
         answer: str,
-        prompt: Optional[PromptTemplate] = None,
         **kwargs,
-    ) -> List[str]:
+    ) -> str:
         """
         Runs the pipeline
             :param paragraphs: List of paragraphs which can be list of dicts or list of strings
             :param query: The query
             :return: Selected file content
         """
-        self.prompt_str += "\n" + self.create_formatted_string(paragraphs)
+        paras = self.create_formatted_string(paragraphs)
 
         try:
             self.default_prompt = PromptTemplate(
                 template=self.prompt_str,
-                input_variables=["Answer"],
+                input_variables=["Answer", "Paragraphs"],
             )
-            response = (self.default_prompt | self.pipeline).invoke({"Answer": answer})
+            response = (self.default_prompt | self.pipeline).invoke({"Answer": answer, "Paragraphs": paras})
+            if response == '!NONE!':
+                return answer
+            print(response)
             return response
         except Exception as e:
             logger.error("citation pipeline failed", e)
