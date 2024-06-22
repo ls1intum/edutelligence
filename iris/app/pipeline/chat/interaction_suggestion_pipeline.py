@@ -126,7 +126,7 @@ class InteractionSuggestionPipeline(Pipeline):
                 # Add the conversation to the prompt
                 chat_history_messages = [
                     convert_iris_message_to_langchain_message(message)
-                    for message in history[-3:]
+                    for message in history[-4:]
                 ]
                 if dto.last_message:
                     logger.info(f"Last message: {dto.last_message}")

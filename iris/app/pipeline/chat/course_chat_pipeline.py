@@ -80,7 +80,7 @@ class CourseChatPipeline(Pipeline):
         # Set the langchain chat model
         request_handler = CapabilityRequestHandler(
             requirements=RequirementList(
-                gpt_version_equivalent=4,
+                gpt_version_equivalent=4.5,
                 context_length=16385,
                 json_mode=True,
             )
@@ -371,10 +371,9 @@ class CourseChatPipeline(Pipeline):
             suggestions = None
             try:
                 if out:
-                    suggestion_dto = InteractionSuggestionPipelineExecutionDTO(
-                        chat_history=history,
-                        last_message=out,
-                    )
+                    suggestion_dto = InteractionSuggestionPipelineExecutionDTO()
+                    suggestion_dto.chat_history = dto.chat_history
+                    suggestion_dto.last_message = out
                     suggestions = self.suggestion_pipeline(suggestion_dto)
                     self.callback.done(final_result=None, suggestions=suggestions)
                 else:
