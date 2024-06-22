@@ -111,7 +111,6 @@ class CourseChatPipeline(Pipeline):
             :param kwargs: The keyword arguments
         """
 
-
         # Define tools
         @tool
         def get_exercise_list() -> list[dict]:
@@ -364,7 +363,7 @@ class CourseChatPipeline(Pipeline):
             self.callback.in_progress()
             for step in agent_executor.iter(params):
                 print("STEP:", step)
-                if step.get('output', None):
+                if step.get("output", None):
                     out = step["output"]
 
             self.callback.done("Response created", final_result=out)

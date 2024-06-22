@@ -16,6 +16,7 @@ from langsmith import traceable
 from weaviate.collections.classes.filters import Filter
 
 from .file_selector_pipeline import FileSelectorPipeline
+from .interaction_suggestion_pipeline import InteractionSuggestionPipeline
 from .lecture_chat_pipeline import LectureChatPipeline
 from .output_models.output_models.selected_paragraphs import SelectedParagraphs
 from ..pipeline import Pipeline
@@ -29,6 +30,9 @@ from ..shared.reranker_pipeline import RerankerPipeline
 from ...common import convert_iris_message_to_langchain_message
 from ...domain import ExerciseChatPipelineExecutionDTO
 from ...domain import PyrisMessage
+from ...domain.chat.interaction_suggestion_dto import (
+    InteractionSuggestionPipelineExecutionDTO,
+)
 from ...domain.chat.lecture_chat.lecture_chat_pipeline_execution_dto import (
     LectureChatPipelineExecutionDTO,
 )
@@ -53,6 +57,7 @@ class ExerciseChatPipeline(Pipeline):
     llm: IrisLangchainChatModel
     pipeline: Runnable
     callback: ExerciseChatStatusCallback
+    suggestion_pipeline: InteractionSuggestionPipeline
     file_selector_pipeline: FileSelectorPipeline
     prompt: ChatPromptTemplate
 
@@ -73,6 +78,7 @@ class ExerciseChatPipeline(Pipeline):
 
         # Create the pipelines
         self.db = VectorDatabase()
+        self.suggestion_pipeline = InteractionSuggestionPipeline(variant="exercise")
         self.retriever = LectureRetrieval(self.db.client)
         self.reranker_pipeline = RerankerPipeline()
         self.file_selector_pipeline = FileSelectorPipeline()
@@ -119,6 +125,23 @@ class ExerciseChatPipeline(Pipeline):
                 dto.chat_history,
             )
             self.callback.done("Generated response", final_result=response)
+
+            suggestions = None
+            try:
+                if response:
+                    suggestion_dto = InteractionSuggestionPipelineExecutionDTO(
+                        chat_history=dto.chat_history,
+                        last_message=response,
+                    )
+                    suggestions = self.suggestion_pipeline(suggestion_dto)
+                    self.callback.done(final_result=None, suggestions=suggestions)
+            except Exception as e:
+                logger.error(
+                    "An error occurred while running the course chat interaction suggestion pipeline",
+                    exc_info=e,
+                )
+                traceback.print_exc()
+                self.callback.error("Generating interaction suggestions failed.")
         except Exception as e:
             traceback.print_exc()
             self.callback.error(f"Failed to generate response: {e}")

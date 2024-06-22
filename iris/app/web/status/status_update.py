@@ -91,7 +91,7 @@ class StatusCallback(ABC):
         final_result: Optional[str] = None,
         suggestions: Optional[List[str]] = None,
         next_stage_message: Optional[str] = None,
-        start_next_stage: bool = True
+        start_next_stage: bool = True,
     ):
         """
         Transition the current stage to DONE and update the status.
@@ -165,10 +165,8 @@ class CourseChatStatusCallback(StatusCallback):
                 name="Thinking",
             ),
             StageDTO(
-                weight=10,
-                state=StageStateEnum.NOT_STARTED,
-                name="Creating suggestions"
-            )
+                weight=10, state=StageStateEnum.NOT_STARTED, name="Creating suggestions"
+            ),
         ]
         status = CourseChatStatusUpdateDTO(stages=stages)
         stage = stages[current_stage_index]
@@ -185,9 +183,12 @@ class ExerciseChatStatusCallback(StatusCallback):
         stages += [
             StageDTO(weight=30, state=StageStateEnum.NOT_STARTED, name="File Lookup"),
             StageDTO(
-                weight=70,
+                weight=60,
                 state=StageStateEnum.NOT_STARTED,
                 name="Response Generation",
+            ),
+            StageDTO(
+                weight=10, state=StageStateEnum.NOT_STARTED, name="Creating suggestions"
             ),
         ]
         status = ExerciseChatStatusUpdateDTO(stages=stages)
