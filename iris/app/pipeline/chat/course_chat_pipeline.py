@@ -91,7 +91,7 @@ class CourseChatPipeline(Pipeline):
         request_handler = CapabilityRequestHandler(
             requirements=RequirementList(
                 gpt_version_equivalent=4.5,
-                context_length=16385,
+                context_length=128000,
                 json_mode=True,
             )
         )
@@ -422,9 +422,10 @@ class CourseChatPipeline(Pipeline):
             suggestions = None
             try:
                 if out:
-                    suggestion_dto = InteractionSuggestionPipelineExecutionDTO()
-                    suggestion_dto.chat_history = dto.chat_history
-                    suggestion_dto.last_message = out
+                    suggestion_dto = InteractionSuggestionPipelineExecutionDTO(
+                        chatHistory=history,
+                        lastMessage=out,
+                    )
                     suggestions = self.suggestion_pipeline(suggestion_dto)
                     self.callback.done(final_result=None, suggestions=suggestions)
                 else:

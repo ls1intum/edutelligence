@@ -129,7 +129,6 @@ class InteractionSuggestionPipeline(Pipeline):
                     for message in history[-4:]
                 ]
                 if dto.last_message:
-                    logger.info(f"Last message: {dto.last_message}")
                     last_message = AIMessage(content=dto.last_message)
                     chat_history_messages.append(last_message)
 
