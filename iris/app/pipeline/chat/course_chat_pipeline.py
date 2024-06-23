@@ -26,10 +26,6 @@ from ...domain import PyrisMessage
 from app.domain.chat.interaction_suggestion_dto import (
     InteractionSuggestionPipelineExecutionDTO,
 )
-from ...domain.chat.lecture_chat.lecture_chat_pipeline_execution_dto import (
-    LectureChatPipelineExecutionDTO,
-)
-from ...domain.data.course_dto import CourseDTO
 from ...llm import CapabilityRequestHandler, RequirementList
 from ..prompts.iris_course_chat_prompts import (
     tell_iris_initial_system_prompt,

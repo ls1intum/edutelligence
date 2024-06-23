@@ -2,14 +2,16 @@ assessment_prompt = """
 You decide if a student question to an AI tutor is a contentful question or not.
 A contentful question is a question that is not a greeting, a thank you, or a statement.
 It is only contentful if it can be potentially answered by looking into the lecture materials.
-If the question is contentful, return 'YES'. If the question is not contentful and a lecture lookup is probably useless, return 'NO'.
+If the question is contentful, return 'YES'. If the question is not contentful and a lecture lookup is probably useless,
+return 'NO'.
 """
 
 assessment_prompt_final = """
 Now, decide if the student question is a contentful question or not.
 A contentful question is a question that is not a greeting, a thank you, or a statement.
 It is only contentful if it can be potentially answered by looking into the lecture materials.
-If the question is contentful, return 'YES'. If the question is not contentful and a lecture lookup is probably useless, return 'NO'.
+If the question is contentful, return 'YES'. If the question is not contentful and a lecture lookup is probably useless,
+return 'NO'.
 Do not answer the question. Only return 'YES' or 'NO'.
 """
 
@@ -28,7 +30,7 @@ lecture_retrieval_initial_prompt_with_exercise_context = """
 You write good and performant vector database queries, in particular for Weaviate,
 from chat histories between an AI tutor and a student.
 The student has sent a query in the context of the lecture {course_name} and the exercise {exercise_name}.
-For more exercise context here is the problem statement: 
+For more exercise context here is the problem statement:
 ---
 {problem_statement}
 ---

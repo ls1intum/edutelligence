@@ -2,7 +2,6 @@ import logging
 import os
 from typing import Dict, Optional, List
 
-from langchain.output_parsers import PydanticOutputParser
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import PromptTemplate
 from langchain_core.runnables import Runnable
@@ -16,9 +15,6 @@ from ...llm import CapabilityRequestHandler, RequirementList
 from ...llm import CompletionArguments
 from ...llm.langchain import IrisLangchainChatModel
 from ...pipeline import Pipeline
-from ...pipeline.chat.output_models.output_models.selected_file_model import (
-    SelectedFiles,
-)
 from ...web.status.status_update import StatusCallback
 
 logger = logging.getLogger(__name__)

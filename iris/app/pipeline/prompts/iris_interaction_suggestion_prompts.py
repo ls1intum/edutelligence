@@ -120,7 +120,8 @@ Never re-use any questions that are already asked. Instead, always write new and
 course_chat_history_exists_prompt = """
 The following messages represent the chat history of your conversation with the student so far.
 Use it to generate questions that are consistent with the conversation and informed by the student's progress.
-Important: The generated questions should be based on the chat history. They should be suggestions for natural follow-up questions or statements like a student would ask a human tutor.
+Important: The generated questions should be based on the chat history. They should be suggestions for natural follow-up
+ questions or statements like a student would ask a human tutor.
 The questions should be engaging, insightful so that the student continues to engage in the conversation.
 Avoid repeating or reusing previous questions or messages; always in all circumstances craft new and original questions.
 Never re-use any questions that are already asked. Instead, always write new and original questions.
@@ -130,7 +131,8 @@ exercise_chat_history_exists_prompt = """
 The following messages represent the chat history of your conversation with the student so far.
 Use it to generate questions that are consistent with the conversation and informed by the student's progress
 in the exercise.
-Important: The generated questions should be related to the chat history. They should be suggestions for natural follow-up questions or statements like a student would ask a human tutor.
+Important: The generated questions should be related to the chat history. They should be suggestions for natural
+follow-up questions or statements like a student would ask a human tutor.
 The questions should be engaging, insightful so that the student continues to engage in the conversation.
 Avoid repeating or reusing previous questions or messages; always in all circumstances craft new and original questions.
 Never re-use any questions that are already asked. Instead, always write new and original questions.

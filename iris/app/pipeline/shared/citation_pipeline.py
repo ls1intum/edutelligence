@@ -1,6 +1,6 @@
 import os
 from asyncio.log import logger
-from typing import Optional, List, Union
+from typing import List, Union
 
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate, PromptTemplate

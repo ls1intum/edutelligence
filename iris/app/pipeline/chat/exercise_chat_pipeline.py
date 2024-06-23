@@ -1,4 +1,3 @@
-import json
 import logging
 import traceback
 from concurrent.futures import ThreadPoolExecutor
@@ -202,7 +201,8 @@ class ExerciseChatPipeline(Pipeline):
                         "(the student should think it's your own idea)! "
                         "\n" + feedback + "\n"
                         "Remember: This is not coming from the student. This is not a message from the student. "
-                        "Is is an automated analysis of the student's code. NEVER claim that the student said this, e.g with 'You mentioned...'"
+                        "Is is an automated analysis of the student's code. "
+                        "NEVER claim that the student said this, e.g with 'You mentioned...'"
                     )
                 except Exception as e:
                     self.callback.error(
