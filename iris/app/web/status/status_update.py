@@ -184,8 +184,7 @@ class ExerciseChatStatusCallback(StatusCallback):
         current_stage_index = len(initial_stages) if initial_stages else 0
         stages = initial_stages or []
         stages += [
-            StageDTO(weight=30, state=StageStateEnum.NOT_STARTED, name="File Lookup"),
-            StageDTO(weight=30, state=StageStateEnum.NOT_STARTED, name="Lecture Context Lookup"),
+            StageDTO(weight=30, state=StageStateEnum.NOT_STARTED, name="Code and Lecture Context Lookup"),
             StageDTO(
                 weight=60,
                 state=StageStateEnum.NOT_STARTED,

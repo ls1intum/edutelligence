@@ -3,12 +3,14 @@ import os
 from typing import Dict, Optional, List
 
 from langchain.output_parsers import PydanticOutputParser
+from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import PromptTemplate
 from langchain_core.runnables import Runnable
 from langsmith import traceable
 from pydantic import BaseModel
 
 from ...domain import PyrisMessage
+from ...domain.data.build_log_entry import BuildLogEntryDTO
 from ...domain.data.feedback_dto import FeedbackDTO
 from ...llm import CapabilityRequestHandler, RequirementList
 from ...llm import CompletionArguments
@@ -34,27 +36,27 @@ class FileSelectionDTO(BaseModel):
         )
 
 
-class FileSelectorPipeline(Pipeline):
-    """File selector pipeline that selects the relevant file from a list of files."""
+class CodeFeedbackPipeline(Pipeline):
+    """Code feedback pipeline that produces issues from student code."""
 
     llm: IrisLangchainChatModel
     pipeline: Runnable
     callback: StatusCallback
     default_prompt: PromptTemplate
-    output_parser: PydanticOutputParser
+    output_parser: StrOutputParser
 
     def __init__(self, callback: Optional[StatusCallback] = None):
-        super().__init__(implementation_id="file_selector_pipeline_reference_impl")
+        super().__init__(implementation_id="code_feedback_pipeline_reference_impl")
         request_handler = CapabilityRequestHandler(
             requirements=RequirementList(
-                gpt_version_equivalent=3.5,
-                context_length=4096,
+                gpt_version_equivalent=4.5,
+                context_length=64000,
                 vendor="OpenAI",
                 json_mode=True,
             )
         )
         completion_args = CompletionArguments(
-            temperature=0, max_tokens=500, response_format="JSON"
+            temperature=0, max_tokens=1024, response_format="text"
         )
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler, completion_args=completion_args
@@ -63,39 +65,44 @@ class FileSelectorPipeline(Pipeline):
         # Load prompt from file
         dirname = os.path.dirname(__file__)
         with open(
-            os.path.join(dirname, "../prompts/file_selector_prompt.txt"), "r"
+                os.path.join(dirname, "../prompts/code_feedback_prompt.txt"), "r"
         ) as file:
             prompt_str = file.read()
 
-        self.output_parser = PydanticOutputParser(pydantic_object=SelectedFiles)
+        self.output_parser = StrOutputParser()
         # Create the prompt
         self.default_prompt = PromptTemplate(
             template=prompt_str,
-            input_variables=["file_names", "feedbacks", "chat_history", "question"],
-            partial_variables={
-                "format_instructions": self.output_parser.get_format_instructions()
-            },
+            input_variables=["files", "feedbacks", "chat_history", "question"],
         )
-        logger.debug(self.output_parser.get_format_instructions())
         # Create the pipeline
         self.pipeline = self.llm | self.output_parser
 
-    @traceable(name="File Selector Pipeline")
+    @traceable(name="Code Feedback Pipeline")
     def __call__(
-        self,
-        repository: Dict[str, str],
-        chat_history: List[PyrisMessage],
-        question: PyrisMessage,
-        feedbacks: List[FeedbackDTO],
-    ) -> List[str]:
+            self,
+            repository: Dict[str, str],
+            chat_history: List[PyrisMessage],
+            question: PyrisMessage,
+            feedbacks: List[FeedbackDTO],
+            build_logs: List[BuildLogEntryDTO],
+            build_failed: bool,
+            problem_statement: str,
+    ) -> str:
         """
         Runs the pipeline
             :param query: The query
             :return: Selected file content
         """
-        logger.info("Running file selector pipeline...")
+        logger.info("Running code feedback pipeline...")
 
-        file_list = "\n".join(repository.keys())
+        logs = "The build was successful." if not build_failed else \
+            ("\n".join(str(log) for log in build_logs if "~~~~~~~~~" not in log.message))
+
+        file_list = "\n------------\n".join([
+            "{}:\n{}".format(file_name, code)
+            for file_name, code in repository.items()
+        ])
         feedback_list = (
             "\n".join(
                 [
@@ -108,17 +115,23 @@ class FileSelectorPipeline(Pipeline):
             if feedbacks
             else "No feedbacks."
         )
-        chat_history_list = "\n".join([str(message) for message in chat_history])
+        chat_history_list = "\n".join("{}: {}".format(message.sender, message.contents[0].text_content)
+                                      for message in chat_history
+                                      if message.contents
+                                      and len(message.contents) > 0
+                                      and message.contents[0].text_content)
         response = (
             (self.default_prompt | self.pipeline)
-            .with_config({"run_name": "File Selector Prompt"})
+            .with_config({"run_name": "Code Feedback Pipeline"})
             .invoke(
                 {
-                    "file_names": file_list,
+                    "files": file_list,
                     "feedbacks": feedback_list,
                     "chat_history": chat_history_list,
                     "question": str(question),
+                    "build_log": logs,
+                    "problem_statement": problem_statement,
                 }
             )
         )
-        return response.selected_files
+        return response.replace("{", "{{").replace("}", "}}")
