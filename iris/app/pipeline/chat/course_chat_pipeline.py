@@ -26,7 +26,9 @@ from ...domain import PyrisMessage
 from app.domain.chat.interaction_suggestion_dto import (
     InteractionSuggestionPipelineExecutionDTO,
 )
-from ...domain.chat.lecture_chat.lecture_chat_pipeline_execution_dto import LectureChatPipelineExecutionDTO
+from ...domain.chat.lecture_chat.lecture_chat_pipeline_execution_dto import (
+    LectureChatPipelineExecutionDTO,
+)
 from ...domain.data.course_dto import CourseDTO
 from ...llm import CapabilityRequestHandler, RequirementList
 from ..prompts.iris_course_chat_prompts import (
@@ -298,7 +300,6 @@ class CourseChatPipeline(Pipeline):
                 result += lct
             return result
 
-
         if dto.user.id % 3 < 2:
             iris_initial_system_prompt = tell_iris_initial_system_prompt
             begin_agent_prompt = tell_begin_agent_prompt
@@ -432,7 +433,9 @@ class CourseChatPipeline(Pipeline):
                     self.callback.done(final_result=None, suggestions=suggestions)
                 else:
                     # This should never happen but whatever
-                    self.callback.skip("Skipping suggestion generation as no output was generated.")
+                    self.callback.skip(
+                        "Skipping suggestion generation as no output was generated."
+                    )
             except Exception as e:
                 logger.error(
                     "An error occurred while running the course chat interaction suggestion pipeline",

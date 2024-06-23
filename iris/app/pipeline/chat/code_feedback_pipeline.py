@@ -65,7 +65,7 @@ class CodeFeedbackPipeline(Pipeline):
         # Load prompt from file
         dirname = os.path.dirname(__file__)
         with open(
-                os.path.join(dirname, "../prompts/code_feedback_prompt.txt"), "r"
+            os.path.join(dirname, "../prompts/code_feedback_prompt.txt"), "r"
         ) as file:
             prompt_str = file.read()
 
@@ -80,14 +80,14 @@ class CodeFeedbackPipeline(Pipeline):
 
     @traceable(name="Code Feedback Pipeline")
     def __call__(
-            self,
-            repository: Dict[str, str],
-            chat_history: List[PyrisMessage],
-            question: PyrisMessage,
-            feedbacks: List[FeedbackDTO],
-            build_logs: List[BuildLogEntryDTO],
-            build_failed: bool,
-            problem_statement: str,
+        self,
+        repository: Dict[str, str],
+        chat_history: List[PyrisMessage],
+        question: PyrisMessage,
+        feedbacks: List[FeedbackDTO],
+        build_logs: List[BuildLogEntryDTO],
+        build_failed: bool,
+        problem_statement: str,
     ) -> str:
         """
         Runs the pipeline
@@ -96,13 +96,22 @@ class CodeFeedbackPipeline(Pipeline):
         """
         logger.info("Running code feedback pipeline...")
 
-        logs = "The build was successful." if not build_failed else \
-            ("\n".join(str(log) for log in build_logs if "~~~~~~~~~" not in log.message))
+        logs = (
+            "The build was successful."
+            if not build_failed
+            else (
+                "\n".join(
+                    str(log) for log in build_logs if "~~~~~~~~~" not in log.message
+                )
+            )
+        )
 
-        file_list = "\n------------\n".join([
-            "{}:\n{}".format(file_name, code)
-            for file_name, code in repository.items()
-        ])
+        file_list = "\n------------\n".join(
+            [
+                "{}:\n{}".format(file_name, code)
+                for file_name, code in repository.items()
+            ]
+        )
         feedback_list = (
             "\n".join(
                 [
@@ -115,11 +124,13 @@ class CodeFeedbackPipeline(Pipeline):
             if feedbacks
             else "No feedbacks."
         )
-        chat_history_list = "\n".join("{}: {}".format(message.sender, message.contents[0].text_content)
-                                      for message in chat_history
-                                      if message.contents
-                                      and len(message.contents) > 0
-                                      and message.contents[0].text_content)
+        chat_history_list = "\n".join(
+            "{}: {}".format(message.sender, message.contents[0].text_content)
+            for message in chat_history
+            if message.contents
+            and len(message.contents) > 0
+            and message.contents[0].text_content
+        )
         response = (
             (self.default_prompt | self.pipeline)
             .with_config({"run_name": "Code Feedback Pipeline"})

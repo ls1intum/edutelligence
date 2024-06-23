@@ -58,9 +58,7 @@ class CitationPipeline(Pipeline):
             )
             formatted_string += lct
 
-        return (
-            formatted_string.replace("{", "{{").replace("}", "}}")
-        )
+        return formatted_string.replace("{", "{{").replace("}", "}}")
 
     def __call__(
         self,
@@ -81,8 +79,10 @@ class CitationPipeline(Pipeline):
                 template=self.prompt_str,
                 input_variables=["Answer", "Paragraphs"],
             )
-            response = (self.default_prompt | self.pipeline).invoke({"Answer": answer, "Paragraphs": paras})
-            if response == '!NONE!':
+            response = (self.default_prompt | self.pipeline).invoke(
+                {"Answer": answer, "Paragraphs": paras}
+            )
+            if response == "!NONE!":
                 return answer
             print(response)
             return response

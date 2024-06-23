@@ -102,7 +102,7 @@ class StatusCallback(ABC):
             self.stage.state = StageStateEnum.DONE
             self.stage.message = message
             self.status.result = final_result
-            if hasattr(self.status, 'suggestions'):
+            if hasattr(self.status, "suggestions"):
                 self.status.suggestions = suggestions
             next_stage = self.get_next_stage()
             if next_stage is not None:
@@ -184,7 +184,11 @@ class ExerciseChatStatusCallback(StatusCallback):
         current_stage_index = len(initial_stages) if initial_stages else 0
         stages = initial_stages or []
         stages += [
-            StageDTO(weight=30, state=StageStateEnum.NOT_STARTED, name="Code and Lecture Context Lookup"),
+            StageDTO(
+                weight=30,
+                state=StageStateEnum.NOT_STARTED,
+                name="Code and Lecture Context Lookup",
+            ),
             StageDTO(
                 weight=60,
                 state=StageStateEnum.NOT_STARTED,

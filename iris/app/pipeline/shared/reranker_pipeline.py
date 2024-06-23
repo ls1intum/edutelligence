@@ -48,8 +48,7 @@ class RerankerPipeline(Pipeline):
             template=prompt_str,
             input_variables=[
                 "question",
-                "paragraphs"
-                "chat_history",
+                "paragraphs" "chat_history",
             ],
             partial_variables={
                 "format_instructions": self.output_parser.get_format_instructions()
@@ -83,9 +82,9 @@ class RerankerPipeline(Pipeline):
         paras = ""
         if paragraphs and isinstance(paragraphs[0], dict):
             for i, paragraph in enumerate(paragraphs):
-                paras += "Paragraph {}:\n{}\n".format(str(i), paragraph.get(
-                        LectureSchema.PAGE_TEXT_CONTENT.value, ""
-                    ))
+                paras += "Paragraph {}:\n{}\n".format(
+                    str(i), paragraph.get(LectureSchema.PAGE_TEXT_CONTENT.value, "")
+                )
         elif paragraphs and isinstance(paragraphs[0], str):
             for i, paragraph in enumerate(paragraphs):
                 paras += "Paragraph {}:\n{}\n".format(str(i), paragraph)
@@ -100,7 +99,11 @@ class RerankerPipeline(Pipeline):
         ][
             ::-1
         ]  # Reverse to get the messages in chronological order of their appearance  data["question"] = query
-        data = {"chat_history": text_chat_history, "question": query, "paragraphs": paras}
+        data = {
+            "chat_history": text_chat_history,
+            "question": query,
+            "paragraphs": paras,
+        }
         if prompt is None:
             prompt = self.default_prompt
 

@@ -65,7 +65,8 @@ class ExerciseChatPipeline(Pipeline):
                     gpt_version_equivalent=4.5,
                     context_length=16385,
                 )
-            ), completion_args=completion_args
+            ),
+            completion_args=completion_args,
         )
 
         self.callback = callback
@@ -126,9 +127,9 @@ class ExerciseChatPipeline(Pipeline):
             self.callback.error(f"Failed to generate response: {e}")
 
     def _run_exercise_chat_pipeline(
-            self,
-            dto: ExerciseChatPipelineExecutionDTO,
-            should_execute_lecture_pipeline: bool = False,
+        self,
+        dto: ExerciseChatPipelineExecutionDTO,
+        should_execute_lecture_pipeline: bool = False,
     ):
         """
         Runs the pipeline
@@ -171,8 +172,12 @@ class ExerciseChatPipeline(Pipeline):
                     problem_statement=problem_statement,
                     build_failed=build_failed,
                     build_logs=build_logs,
-                    feedbacks=(submission.latest_result.feedbacks if submission and submission.latest_result else []),
-                    langsmith_extra={"parent": rt}
+                    feedbacks=(
+                        submission.latest_result.feedbacks
+                        if submission and submission.latest_result
+                        else []
+                    ),
+                    langsmith_extra={"parent": rt},
                 )
 
             if should_execute_lecture_pipeline:
@@ -184,7 +189,7 @@ class ExerciseChatPipeline(Pipeline):
                     course_name=dto.course.name,
                     course_id=dto.course.id,
                     base_url=dto.settings.artemis_base_url,
-                    langsmith_extra={"parent": rt}
+                    langsmith_extra={"parent": rt},
                 )
 
             if submission:
@@ -197,9 +202,12 @@ class ExerciseChatPipeline(Pipeline):
                         "(the student should think it's your own idea)! "
                         "\n" + feedback + "\n"
                         "Remember: This is not coming from the student. This is not a message from the student. "
-                        "Is is an automated analysis of the student's code. NEVER claim that the student said this, e.g with 'You mentioned...'")
+                        "Is is an automated analysis of the student's code. NEVER claim that the student said this, e.g with 'You mentioned...'"
+                    )
                 except Exception as e:
-                    self.callback.error(f"Failed to look up files in the repository: {e}")
+                    self.callback.error(
+                        f"Failed to look up files in the repository: {e}"
+                    )
                     return
 
             # Add the feedbacks to the prompt
@@ -207,7 +215,9 @@ class ExerciseChatPipeline(Pipeline):
                 try:
                     self.retrieved_lecture_chunks = future_lecture.result()
                     if len(self.retrieved_lecture_chunks) > 0:
-                        self._add_relevant_chunks_to_prompt(self.retrieved_lecture_chunks)
+                        self._add_relevant_chunks_to_prompt(
+                            self.retrieved_lecture_chunks
+                        )
                 except Exception as e:
                     self.callback.error(f"Failed to retrieve lecture chunks: {e}")
                     return
@@ -262,9 +272,9 @@ class ExerciseChatPipeline(Pipeline):
             return "Failed to generate response"
 
     def _add_conversation_to_prompt(
-            self,
-            chat_history: List[PyrisMessage],
-            user_question: PyrisMessage,
+        self,
+        chat_history: List[PyrisMessage],
+        user_question: PyrisMessage,
     ):
         """
         Adds the chat history and user question to the prompt
@@ -277,14 +287,18 @@ class ExerciseChatPipeline(Pipeline):
                 convert_iris_message_to_langchain_message(message)
                 for message in chat_history[-4:]
             ]
-            self.prompt += SystemMessagePromptTemplate.from_template(chat_history_system_prompt)
+            self.prompt += SystemMessagePromptTemplate.from_template(
+                chat_history_system_prompt
+            )
             self.prompt += chat_history_messages
-        self.prompt += SystemMessagePromptTemplate.from_template("Consider the student's newest and latest input:")
+        self.prompt += SystemMessagePromptTemplate.from_template(
+            "Consider the student's newest and latest input:"
+        )
         self.prompt += convert_iris_message_to_langchain_message(user_question)
 
     def _add_exercise_context_to_prompt(
-            self,
-            submission: ProgrammingSubmissionDTO,
+        self,
+        submission: ProgrammingSubmissionDTO,
     ):
         """Adds the exercise context to the prompt
         :param submission: The submission
@@ -303,8 +317,8 @@ class ExerciseChatPipeline(Pipeline):
         """
         if feedbacks is not None and len(feedbacks) > 0:
             prompt = (
-                         "These are the feedbacks for the student's repository:\n%s"
-                     ) % "\n---------\n".join(str(log) for log in feedbacks)
+                "These are the feedbacks for the student's repository:\n%s"
+            ) % "\n---------\n".join(str(log) for log in feedbacks)
             self.prompt += SystemMessagePromptTemplate.from_template(prompt)
 
     def _add_relevant_chunks_to_prompt(self, retrieved_lecture_chunks: List[dict]):

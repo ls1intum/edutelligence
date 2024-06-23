@@ -25,7 +25,8 @@ from langchain_core.prompts import (
 )
 
 from ..pipeline.prompts.lecture_retrieval_prompts import (
-    assessment_prompt, assessment_prompt_final,
+    assessment_prompt,
+    assessment_prompt_final,
     rewrite_student_query_prompt,
     lecture_retriever_initial_prompt,
     write_hypothetical_answer_prompt,
@@ -179,17 +180,25 @@ class LectureRetrieval(Pipeline):
         return basic_retrieved_lecture_chunks
 
     @traceable(name="Retrieval: Question Assessment")
-    def assess_question(self, chat_history: list[PyrisMessage], student_query: str) -> bool:
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", assessment_prompt),
-                                                  ])
+    def assess_question(
+        self, chat_history: list[PyrisMessage], student_query: str
+    ) -> bool:
+        prompt = ChatPromptTemplate.from_messages(
+            [
+                ("system", assessment_prompt),
+            ]
+        )
         prompt = _add_last_four_messages_to_prompt(prompt, chat_history)
-        prompt += ChatPromptTemplate.from_messages([
-            ("user", student_query),
-        ])
-        prompt += ChatPromptTemplate.from_messages([
-            ("system", assessment_prompt_final),
-        ])
+        prompt += ChatPromptTemplate.from_messages(
+            [
+                ("user", student_query),
+            ]
+        )
+        prompt += ChatPromptTemplate.from_messages(
+            [
+                ("system", assessment_prompt_final),
+            ]
+        )
 
         try:
             response = (prompt | self.pipeline).invoke({})

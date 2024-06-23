@@ -84,7 +84,7 @@ class InteractionSuggestionPipeline(Pipeline):
 
     @traceable(name="Interaction Suggestion Pipeline")
     def __call__(
-            self, dto: InteractionSuggestionPipelineExecutionDTO, **kwargs
+        self, dto: InteractionSuggestionPipelineExecutionDTO, **kwargs
     ) -> list[str]:
         """
         Runs the pipeline
@@ -159,7 +159,7 @@ class InteractionSuggestionPipeline(Pipeline):
                     ]
                 )
 
-            prob_st_val = dto.problem_statement or 'No problem statement provided.'
+            prob_st_val = dto.problem_statement or "No problem statement provided."
             prompt_val = self.prompt.format_messages(problem_statement=prob_st_val)
             self.prompt = ChatPromptTemplate.from_messages(prompt_val)
 
