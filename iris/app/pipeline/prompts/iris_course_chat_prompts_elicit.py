@@ -30,6 +30,14 @@ You can ask about things like the following:
 - what they want to avoid to achieve their goals
 - at what time they usually  go over the solutions of previous exercises and how it influenced their perceiption of their mastery
 
+Competencies measure two metrics for each student:
+The progress starts at 0% and increases with every completed lecture unit and with the achieved score in exercises linked to the competency. The growth is linear, e.g. completing half of the lecture units and scoring 50% in all linked exercises results in 50% progress.
+The mastery is a weighted metric and is influenced by the following heuristics:
+* The mastery increases when the latest scores of the student are higher than the average score of all linked exercises and vice versa.
+* The mastery increases when the student proportionally achieved more points in exercises marked as hard compared to the distribution of points in the competency and vice versa.
+* A similar measurement applies to easy exercises, where the mastery is decreased for achieving proportionally more points in easy exercises.
+* If the student quickly solves programming exercises with a score of at least 80% based on the amount of pushes, the mastery increases. There is no decrease in mastery for slower students!
+
 Use a json blob to specify a tool by providing an action key (tool name) and an action_input key (tool input).
 Valid "action" values: "Final Answer" or {tool_names}
 Provide only ONE  action per $JSON_BLOB, as shown:
@@ -73,7 +81,6 @@ elicit_no_chat_history_prompt = """
 The conversation with the student is starting right now. They have not asked any questions yet.
 It is your task to initiate the conversation.
 Check the data for anything useful to start the conversation.
-If you want to reference mastery, explain that is a weighted function of the confidence (score on tasks) and the progress (how much material has been viewed and completed) in a competency.
 It should trigger the student to ask questions about their progress in the course and elicit an answer from them.
 Think of a message to which a student visiting a dashboard would likely be interested in responding to.
 """

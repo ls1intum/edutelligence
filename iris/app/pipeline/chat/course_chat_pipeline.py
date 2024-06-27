@@ -65,8 +65,9 @@ def get_mastery(progress, confidence):
     :param competency_progress: The user's progress
     :return: The mastery level
     """
-    weight = 2.0 / 3.0
-    return (1 - weight) * progress + weight * confidence
+
+    return min(100, max(0, round(progress * confidence)))
+
 
 
 class CourseChatPipeline(Pipeline):
