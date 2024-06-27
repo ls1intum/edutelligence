@@ -105,7 +105,11 @@ class ExerciseChatPipeline(Pipeline):
             )
 
             try:
-                if self.exercise_chat_response:
+                if dto.course.id == 346:
+                    self.callback.skip(
+                        "Skipping suggestion generation as the course is not supported."
+                    )
+                elif self.exercise_chat_response:
                     suggestion_dto = InteractionSuggestionPipelineExecutionDTO()
                     suggestion_dto.chat_history = dto.chat_history
                     suggestion_dto.last_message = self.exercise_chat_response
