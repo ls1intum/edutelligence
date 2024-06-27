@@ -73,6 +73,7 @@ elicit_no_chat_history_prompt = """
 The conversation with the student is starting right now. They have not asked any questions yet.
 It is your task to initiate the conversation.
 Check the data for anything useful to start the conversation.
+If you want to reference mastery, explain that is a weighted function of the confidence (score on tasks) and the progress (how much material has been viewed and completed) in a competency.
 It should trigger the student to ask questions about their progress in the course and elicit an answer from them.
 Think of a message to which a student visiting a dashboard would likely be interested in responding to.
 """
