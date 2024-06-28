@@ -21,4 +21,4 @@ class CompetencyDTO(BaseModel):
     taxonomy: Optional[CompetencyTaxonomy] = None
     soft_due_date: Optional[datetime] = Field(default=None, alias="softDueDate")
     optional: Optional[bool] = None
-    exercise_list: Optional[List[int]] = Field(default=None, alias="exerciseList")
+    exercise_list: Optional[List[int]] = Field(default=[], alias="exerciseList")

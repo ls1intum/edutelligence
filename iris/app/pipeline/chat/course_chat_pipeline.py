@@ -71,7 +71,6 @@ def get_mastery(progress, confidence):
     return min(100, max(0, round(progress * confidence)))
 
 
-
 class CourseChatPipeline(Pipeline):
     """Course chat pipeline that answers course related questions from students."""
 
@@ -146,7 +145,7 @@ class CourseChatPipeline(Pipeline):
             current_time = datetime.now(tz=pytz.UTC)
             exercises = []
             for exercise in dto.course.exercises:
-                exercise_dict = exercise.dict()
+                exercise_dict = exercise.model_dump()
                 exercise_dict["due_date_over"] = (
                     exercise.due_date < current_time if exercise.due_date else None
                 )
@@ -368,6 +367,8 @@ class CourseChatPipeline(Pipeline):
                 params = {
                     "exercise": json.dumps(
                         {
+                            "id": dto.finished_exercise.id,
+                            "course_id": dto.course.id,
                             "title": dto.finished_exercise.title,
                             "type": dto.finished_exercise.type,
                             "mode": dto.finished_exercise.mode,
@@ -377,10 +378,18 @@ class CourseChatPipeline(Pipeline):
                             "due_date": datetime_to_string(
                                 dto.finished_exercise.due_date
                             ),
-                            "submissions": dto.finished_exercise.submissions,
+                            "submissions": [
+                                {
+                                    "timestamp": datetime_to_string(
+                                        submission.timestamp
+                                    ),
+                                    "score": submission.score,
+                                }
+                                for submission in dto.finished_exercise.submissions
+                            ],
                         }
                     ),
-                    "competency": comp.json() if comp else "<Unknown competency>",
+                    "competency": comp.model_dump() if comp else "<Unknown competency>",
                 }
             else:
                 agent_prompt = (
@@ -456,9 +465,7 @@ class CourseChatPipeline(Pipeline):
             self.callback.done("Response created", final_result=out)
 
             try:
-                self.callback.skip(
-                    "Skipping suggestion generation."
-                )
+                self.callback.skip("Skipping suggestion generation.")
                 # if out:
                 #     suggestion_dto = InteractionSuggestionPipelineExecutionDTO()
                 #     suggestion_dto.chat_history = dto.chat_history
