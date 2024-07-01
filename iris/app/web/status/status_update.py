@@ -124,6 +124,8 @@ class StatusCallback(ABC):
         """
         self.stage.state = StageStateEnum.ERROR
         self.stage.message = message
+        self.stage.result = None
+        self.stage.suggestions = None
         # Set all subsequent stages to SKIPPED if an error occurs
         rest_of_index = (
             self.current_stage_index + 1
@@ -146,6 +148,8 @@ class StatusCallback(ABC):
         """
         self.stage.state = StageStateEnum.SKIPPED
         self.stage.message = message
+        self.stage.result = None
+        self.stage.suggestions = None
         next_stage = self.get_next_stage()
         if next_stage is not None:
             self.stage = next_stage
