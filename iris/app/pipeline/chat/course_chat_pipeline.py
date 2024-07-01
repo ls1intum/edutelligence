@@ -23,9 +23,6 @@ from .lecture_chat_pipeline import LectureChatPipeline
 from ..shared.citation_pipeline import CitationPipeline
 from ...common import convert_iris_message_to_langchain_message
 from ...domain import PyrisMessage
-from app.domain.chat.interaction_suggestion_dto import (
-    InteractionSuggestionPipelineExecutionDTO,
-)
 from ...llm import CapabilityRequestHandler, RequirementList
 from ..prompts.iris_course_chat_prompts import (
     tell_iris_initial_system_prompt,
@@ -67,7 +64,6 @@ def get_mastery(progress, confidence):
     """
 
     return min(100, max(0, round(progress * confidence)))
-
 
 
 class CourseChatPipeline(Pipeline):
@@ -421,9 +417,7 @@ class CourseChatPipeline(Pipeline):
             self.callback.done("Response created", final_result=out)
 
             try:
-                self.callback.skip(
-                    "Skipping suggestion generation."
-                )
+                self.callback.skip("Skipping suggestion generation.")
                 # if out:
                 #     suggestion_dto = InteractionSuggestionPipelineExecutionDTO()
                 #     suggestion_dto.chat_history = dto.chat_history
