@@ -13,7 +13,7 @@ services:
     depends_on:
       - athena
     ports:
-      - "5000:5000"
+      - "5100:5100"
 
   module_example:
     hostname: module-example
