@@ -2,6 +2,8 @@ import logging
 import traceback
 from threading import Thread
 
+from sentry_sdk import capture_exception
+
 from fastapi import APIRouter, status, Response, Depends
 
 from app.domain import (
@@ -31,6 +33,7 @@ def run_exercise_chat_pipeline_worker(dto: ExerciseChatPipelineExecutionDTO):
     except Exception as e:
         logger.error(f"Error preparing exercise chat pipeline: {e}")
         logger.error(traceback.format_exc())
+        capture_exception(e)
         return
 
     try:
@@ -38,7 +41,7 @@ def run_exercise_chat_pipeline_worker(dto: ExerciseChatPipelineExecutionDTO):
     except Exception as e:
         logger.error(f"Error running exercise chat pipeline: {e}")
         logger.error(traceback.format_exc())
-        callback.error("Fatal error.")
+        callback.error("Fatal error.", exception=e)
 
 
 @router.post(
@@ -62,6 +65,7 @@ def run_course_chat_pipeline_worker(dto, variant):
     except Exception as e:
         logger.error(f"Error preparing exercise chat pipeline: {e}")
         logger.error(traceback.format_exc())
+        capture_exception(e)
         return
 
     try:
@@ -69,7 +73,7 @@ def run_course_chat_pipeline_worker(dto, variant):
     except Exception as e:
         logger.error(f"Error running exercise chat pipeline: {e}")
         logger.error(traceback.format_exc())
-        callback.error("Fatal error.")
+        callback.error("Fatal error.", exception=e)
 
 
 @router.post(

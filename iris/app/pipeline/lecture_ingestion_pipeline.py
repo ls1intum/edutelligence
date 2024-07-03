@@ -147,7 +147,9 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
             return True
         except Exception as e:
             logger.error(f"Error updating lecture unit: {e}")
-            self.callback.error(f"Failed to ingest lectures into the database: {e}")
+            self.callback.error(
+                f"Failed to ingest lectures into the database: {e}", exception=e
+            )
             return False
 
     def batch_update(self, chunks):
@@ -168,7 +170,7 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
                 except Exception as e:
                     logger.error(f"Error updating lecture unit: {e}")
                     self.callback.error(
-                        f"Failed to ingest lectures into the database: {e}"
+                        f"Failed to ingest lectures into the database: {e}", exception=e
                     )
 
     def chunk_data(
