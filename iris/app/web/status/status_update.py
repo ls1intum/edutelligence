@@ -171,9 +171,9 @@ class CourseChatStatusCallback(StatusCallback):
                 state=StageStateEnum.NOT_STARTED,
                 name="Thinking",
             ),
-            StageDTO(
-                weight=10, state=StageStateEnum.NOT_STARTED, name="Creating suggestions"
-            ),
+            # StageDTO(
+            #     weight=10, state=StageStateEnum.NOT_STARTED, name="Creating suggestions"
+            # ),
         ]
         status = CourseChatStatusUpdateDTO(stages=stages)
         stage = stages[current_stage_index]

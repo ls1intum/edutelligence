@@ -416,26 +416,25 @@ class CourseChatPipeline(Pipeline):
 
             self.callback.done("Response created", final_result=out)
 
-            try:
-                self.callback.skip("Skipping suggestion generation.")
-                # if out:
-                #     suggestion_dto = InteractionSuggestionPipelineExecutionDTO()
-                #     suggestion_dto.chat_history = dto.chat_history
-                #     suggestion_dto.last_message = out
-                #     suggestions = self.suggestion_pipeline(suggestion_dto)
-                #     self.callback.done(final_result=None, suggestions=suggestions)
-                # else:
-                #     # This should never happen but whatever
-                #     self.callback.skip(
-                #         "Skipping suggestion generation as no output was generated."
-                #     )
-            except Exception as e:
-                logger.error(
-                    "An error occurred while running the course chat interaction suggestion pipeline",
-                    exc_info=e,
-                )
-                traceback.print_exc()
-                self.callback.error("Generating interaction suggestions failed.")
+            # try:
+            #     # if out:
+            #     #     suggestion_dto = InteractionSuggestionPipelineExecutionDTO()
+            #     #     suggestion_dto.chat_history = dto.chat_history
+            #     #     suggestion_dto.last_message = out
+            #     #     suggestions = self.suggestion_pipeline(suggestion_dto)
+            #     #     self.callback.done(final_result=None, suggestions=suggestions)
+            #     # else:
+            #     #     # This should never happen but whatever
+            #     #     self.callback.skip(
+            #     #         "Skipping suggestion generation as no output was generated."
+            #     #     )
+            # except Exception as e:
+            #     logger.error(
+            #         "An error occurred while running the course chat interaction suggestion pipeline",
+            #         exc_info=e,
+            #     )
+            #     traceback.print_exc()
+            #     self.callback.error("Generating interaction suggestions failed.")
         except Exception as e:
             logger.error(
                 "An error occurred while running the course chat pipeline", exc_info=e
