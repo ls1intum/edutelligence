@@ -1,8 +1,8 @@
 import os
 from pydantic import Field, PositiveInt
 from enum import Enum
-
-from langchain.llms import Replicate
+from langchain_community.llms import Replicate
+# from langchain.llms import Replicate
 from langchain.base_language import BaseLanguageModel
 
 from athena.logger import logger

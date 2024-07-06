@@ -1,18 +1,25 @@
 from typing import Optional, Type, TypeVar, List
+#from pydantic import BaseModel, ValidationError
+import tiktoken
+from langchain_core.output_parsers.openai_functions import JsonOutputFunctionsParser
+from langchain_core.utils.function_calling import convert_to_openai_function
+from langchain_openai.chat_models.base import BaseChatOpenAI
 from pydantic import BaseModel, ValidationError
 import tiktoken
+from langchain_openai import AzureChatOpenAI, AzureOpenAI, ChatOpenAI
 
-from langchain.chains import LLMChain
-from langchain.chat_models import ChatOpenAI
 from langchain.base_language import BaseLanguageModel
 from langchain.prompts import (
     ChatPromptTemplate,
     SystemMessagePromptTemplate,
     HumanMessagePromptTemplate,
 )
-from langchain.chains.openai_functions import create_structured_output_chain
 from langchain.output_parsers import PydanticOutputParser
-from langchain.schema import OutputParserException
+from langchain.schema import (
+    OutputParserException
+)
+
+from langchain.chains import LLMChain
 
 from athena import emit_meta, get_experiment_environment
 
@@ -143,20 +150,38 @@ async def predict_and_parse(
         tags.append(f"module-configuration-{experiment.module_configuration_id}")
     if experiment.run_id is not None:
         tags.append(f"run-{experiment.run_id}")
-
-    if supports_function_calling(model):
-        chain = create_structured_output_chain(pydantic_object, llm=model, prompt=chat_prompt, tags=tags)
         
+    chat_prompt.tags = tags
+    
+    if supports_function_calling(model):
+        #chain = create_structured_output_chain(pydantic_object, llm=model, prompt=chat_prompt, tags=tags)
+        openai_functions = [convert_to_openai_function(pydantic_object)]
+
+        runnable = chat_prompt | model.bind(functions=openai_functions).with_retry(
+            retry_if_exception_type=(ValueError, OutputParserException),
+            wait_exponential_jitter=True,
+            stop_after_attempt=3,
+        ) | JsonOutputFunctionsParser()
         try:
-            return await chain.arun(**prompt_input)
+            #return await chain.arun(**prompt_input)
+            output_dict = await runnable.ainvoke(prompt_input)
+            return pydantic_object.parse_obj(output_dict)
         except (OutputParserException, ValidationError):
             # In the future, we should probably have some recovery mechanism here (i.e. fix the output with another prompt)
             return None
 
     output_parser = PydanticOutputParser(pydantic_object=pydantic_object)
-    chain = LLMChain(llm=model, prompt=chat_prompt, output_parser=output_parser, tags=tags)
+    #chain = LLMChain(llm=model, prompt=chat_prompt, output_parser=output_parser, tags=tags)
+    runnable = chat_prompt | model.with_retry(
+        retry_if_exception_type=(ValueError, OutputParserException),
+        wait_exponential_jitter=True,
+        stop_after_attempt=3,
+    ) | output_parser
+    
     try:
-        return await chain.arun(**prompt_input)
+        output_dict = await runnable.ainvoke(prompt_input)
+        return pydantic_object.parse_obj(output_dict)
+        #return await chain.arun(**prompt_input)
     except (OutputParserException, ValidationError):
         # In the future, we should probably have some recovery mechanism here (i.e. fix the output with another prompt)
         return None

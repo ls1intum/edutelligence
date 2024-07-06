@@ -1,5 +1,5 @@
-from pydantic import BaseModel, Field
-
+from pydantic import  Field
+from pydantic import BaseModel
 from athena import config_schema_provider
 from module_text_llm.helpers.models import ModelConfigType, DefaultModelConfig
 from module_text_llm.prompts.generate_suggestions import (

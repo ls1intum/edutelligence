@@ -5,10 +5,14 @@ from pydantic import Field, validator, PositiveInt
 from enum import Enum
 
 import openai
-from langchain.chat_models import AzureChatOpenAI, ChatOpenAI
-from langchain.llms import AzureOpenAI, OpenAI
-from langchain.llms.openai import BaseOpenAI
+# from langchain.chat_models import AzureChatOpenAI, ChatOpenAI
+# from langchain.llms import AzureOpenAI, OpenAI
+# from langchain.llms.openai import BaseOpenAI
+# from langchain.base_language import BaseLanguageModel
+from langchain_community.llms import OpenAI
+from langchain_community.llms.openai import BaseOpenAI
 from langchain.base_language import BaseLanguageModel
+from langchain_openai import AzureChatOpenAI, AzureOpenAI, ChatOpenAI
 
 from athena.logger import logger
 from .model_config import ModelConfig
@@ -142,46 +146,205 @@ def _openai_client(use_azure_api: bool, is_preference: bool):
     yield
 
 
-def _get_available_deployments(openai_models: Dict[str, List[str]], model_aliases: Dict[str, str]):
+# def _get_available_deployments(openai_models: Dict[str, List[str]], model_aliases: Dict[str, str]):
+#     # available_deployments: Dict[str, Dict[str, Any]] = {
+#     #     "chat_completion": {},
+#     #     "completion": {},
+#     #     "fine_tuneing": {},
+#     # }
+#     available_deployments: Dict[str, Dict[str, Any]] = {
+#         "chat_completion": {},
+#         "completion": {},
+#         "fine_tune": {},
+#         "embeddings": {},
+#         "inference": {}
+#     }
+
+#     with _openai_client(use_azure_api=True, is_preference=False):
+#         if azure_openai_available:
+#             deployments = openai.AzureOpenAI(api_version=openai.api_version, azure_endpoint=openai.api_base, api_key=openai.api_key).models.list() or []
+#             for deployment in deployments:
+#                 if deployment.capabilities["chat_completion"]:
+#                     available_deployments["chat_completion"][deployment.id] = deployment
+#                 # if deployment.capabilities["completion"]:
+#                 #     available_deployments["completion"][deployment.id] = deployment
+#                 # if deployment.capabilities["fine_tune"]:
+#                 #     available_deployments["fine_tune"][deployment.id] = deployment
+#                 # if deployment.capabilities["embeddings"]:
+#                 #     available_deployments["embeddings"][deployment.id] = deployment
+#                 # if deployment.capabilities["inference"]:
+#                 #     available_deployments["inference"][deployment.id] = deployment
+#         if openai_available:
+#             models = openai.Model.list()
+#             for model in models:
+#                 # if "chat" in model:
+#                 #     available_deployments["chat_completion"][model] = {}
+#                 # elif "completion" in model:
+#                 #     available_deployments["completion"][model] = {}
+#                 # elif "fine-tune" in model:
+#                 #     available_deployments["fine_tune"][model] = {}
+#                 # elif "embedding" in model:
+#                 #     available_deployments["embeddings"][model] = {}
+#                 # else:
+#                 #     available_deployments["inference"][model] = {}
+#                 pass
+
+#     return available_deployments    
+#     # if azure_openai_available:
+#     #     with _openai_client(use_azure_api=True, is_preference=False):
+#     #         deployments = openai.Deployment.list().get("data") or []  # type: ignore
+#     #         for deployment in deployments:
+#     #             model_name = deployment.model
+#     #             if model_name in model_aliases:
+#     #                 model_name = model_aliases[model_name]
+#     #             if model_name in openai_models["chat_completion"]:
+#     #                 available_deployments["chat_completion"][deployment.id] = deployment
+#     #             elif model_name in openai_models["completion"]:
+#     #                 available_deployments["completion"][deployment.id] = deployment
+#     #             elif model_name in openai_models["fine_tuneing"]:
+#     #                 available_deployments["fine_tuneing"][deployment.id] = deployment
+
+#     # return available_deployments
+
+
+# def _get_available_models(openai_models: Dict[str, List[str]], 
+#                           available_deployments: Dict[str, Dict[str, Any]]):
+#     available_models: Dict[str, BaseLanguageModel] = {}
+
+#     if openai_available:
+#         openai_api_key = os.environ["LLM_OPENAI_API_KEY"]
+#         for model_name in openai_models["chat_completion"]:
+#             available_models[OPENAI_PREFIX + model_name] = ChatOpenAI(
+#                 model=model_name,
+#                 openai_api_key=openai_api_key,
+#                 client="",
+#                 temperature=0
+#             )
+#         for model_name in openai_models["completion"]:
+#             available_models[OPENAI_PREFIX + model_name] = OpenAI(
+#                 model=model_name,
+#                 openai_api_key=openai_api_key,
+#                 client="",
+#                 temperature=0
+#             )
+
+#     if azure_openai_available:
+#         azure_openai_api_key = os.environ["LLM_AZURE_OPENAI_API_KEY"]
+#         azure_openai_api_base = os.environ["LLM_AZURE_OPENAI_API_BASE"]
+#         azure_openai_api_version = os.environ["LLM_AZURE_OPENAI_API_VERSION"]
+
+#         for model_type, Model in [("chat_completion", AzureChatOpenAI), ("completion", AzureOpenAI)]:
+#             for deployment_name, deployment in available_deployments[model_type].items():
+#                 available_models[AZURE_OPENAI_PREFIX + deployment_name] = Model(
+#                     model=deployment.model,
+#                     deployment_name=deployment_name,
+#                     openai_api_base=azure_openai_api_base,
+#                     openai_api_version=azure_openai_api_version,
+#                     openai_api_key=azure_openai_api_key,
+#                     client="",
+#                     temperature=0
+#                 )
+
+#     return available_models
+
+
+# _model_aliases = {
+#     "gpt-35-turbo": "gpt-3.5-turbo",
+# }
+
+# # Hardcoded because openai can't provide a trustworthly api to get the list of models and capabilities...
+# openai_models = {
+#     "chat_completion": [
+#         "gpt-4",
+#         # "gpt-4-32k", # Not publicly available
+#         "gpt-3.5-turbo",
+#         "gpt-3.5-turbo-16k"
+#     ],
+#     "completion": [
+#         "text-davinci-003",
+#         "text-curie-001",
+#         "text-babbage-001",
+#         "text-ada-001",
+#     ],
+#     "fine_tuneing": [
+#         "davinci",
+#         "curie",
+#         "babbage",
+#         "ada",
+#     ]
+# }
+# available_deployments = _get_available_deployments(openai_models, _model_aliases)
+# available_models = _get_available_models(openai_models, available_deployments)
+
+# if available_models:
+#     logger.info("Available openai models: %s", ", ".join(available_models.keys()))
+
+#     OpenAIModel = Enum('OpenAIModel', {name: name for name in available_models})  # type: ignore
+
+
+#     default_model_name = "gpt-3.5-turbo"
+#     if "LLM_DEFAULT_MODEL" in os.environ and os.environ["LLM_DEFAULT_MODEL"] in available_models:
+#         default_model_name = os.environ["LLM_DEFAULT_MODEL"]
+#     if default_model_name not in available_models:
+#         default_model_name = list(available_models.keys())[0]
+
+#     default_openai_model = OpenAIModel[default_model_name]
+def _get_available_deployments():
     available_deployments: Dict[str, Dict[str, Any]] = {
         "chat_completion": {},
         "completion": {},
-        "fine_tuneing": {},
+        "fine_tune": {},
+        "embeddings": {},
+        "inference": {}
     }
 
-    if azure_openai_available:
-        with _openai_client(use_azure_api=True, is_preference=False):
-            deployments = openai.Deployment.list().get("data") or []  # type: ignore
+    with _openai_client(use_azure_api=True, is_preference=False):
+        if azure_openai_available:
+            deployments = openai.AzureOpenAI(api_version=openai.api_version, azure_endpoint=openai.api_base, api_key=openai.api_key).models.list() or []
             for deployment in deployments:
-                model_name = deployment.model
-                if model_name in model_aliases:
-                    model_name = model_aliases[model_name]
-                if model_name in openai_models["chat_completion"]:
+                if deployment.capabilities["chat_completion"]:
                     available_deployments["chat_completion"][deployment.id] = deployment
-                elif model_name in openai_models["completion"]:
-                    available_deployments["completion"][deployment.id] = deployment
-                elif model_name in openai_models["fine_tuneing"]:
-                    available_deployments["fine_tuneing"][deployment.id] = deployment
+                # if deployment.capabilities["completion"]:
+                #     available_deployments["completion"][deployment.id] = deployment
+                # if deployment.capabilities["fine_tune"]:
+                #     available_deployments["fine_tune"][deployment.id] = deployment
+                # if deployment.capabilities["embeddings"]:
+                #     available_deployments["embeddings"][deployment.id] = deployment
+                # if deployment.capabilities["inference"]:
+                #     available_deployments["inference"][deployment.id] = deployment
+        if openai_available:
+            models = openai.Model.list()
+            for model in models:
+                # if "chat" in model:
+                #     available_deployments["chat_completion"][model] = {}
+                # elif "completion" in model:
+                #     available_deployments["completion"][model] = {}
+                # elif "fine-tune" in model:
+                #     available_deployments["fine_tune"][model] = {}
+                # elif "embedding" in model:
+                #     available_deployments["embeddings"][model] = {}
+                # else:
+                #     available_deployments["inference"][model] = {}
+                pass
 
     return available_deployments
 
 
-def _get_available_models(openai_models: Dict[str, List[str]], 
-                          available_deployments: Dict[str, Dict[str, Any]]):
+def _get_available_models(available_deployments: Dict[str, Dict[str, Any]]):
     available_models: Dict[str, BaseLanguageModel] = {}
 
     if openai_available:
         openai_api_key = os.environ["LLM_OPENAI_API_KEY"]
-        for model_name in openai_models["chat_completion"]:
-            available_models[OPENAI_PREFIX + model_name] = ChatOpenAI(
-                model=model_name,
+        for model in available_models["chat_completion"]:
+            available_models[OPENAI_PREFIX + model.id] = ChatOpenAI(
+                model=model.id,
                 openai_api_key=openai_api_key,
                 client="",
                 temperature=0
             )
-        for model_name in openai_models["completion"]:
-            available_models[OPENAI_PREFIX + model_name] = OpenAI(
-                model=model_name,
+        for model in available_models["completion"]:
+            available_models[OPENAI_PREFIX + model.id] = OpenAI(
+                model=model.id,
                 openai_api_key=openai_api_key,
                 client="",
                 temperature=0
@@ -195,9 +358,8 @@ def _get_available_models(openai_models: Dict[str, List[str]],
         for model_type, Model in [("chat_completion", AzureChatOpenAI), ("completion", AzureOpenAI)]:
             for deployment_name, deployment in available_deployments[model_type].items():
                 available_models[AZURE_OPENAI_PREFIX + deployment_name] = Model(
-                    model=deployment.model,
                     deployment_name=deployment_name,
-                    openai_api_base=azure_openai_api_base,
+                    azure_endpoint=azure_openai_api_base,
                     openai_api_version=azure_openai_api_version,
                     openai_api_key=azure_openai_api_key,
                     client="",
@@ -207,48 +369,19 @@ def _get_available_models(openai_models: Dict[str, List[str]],
     return available_models
 
 
-_model_aliases = {
-    "gpt-35-turbo": "gpt-3.5-turbo",
-}
-
-# Hardcoded because openai can't provide a trustworthly api to get the list of models and capabilities...
-openai_models = {
-    "chat_completion": [
-        "gpt-4",
-        # "gpt-4-32k", # Not publicly available
-        "gpt-3.5-turbo",
-        "gpt-3.5-turbo-16k"
-    ],
-    "completion": [
-        "text-davinci-003",
-        "text-curie-001",
-        "text-babbage-001",
-        "text-ada-001",
-    ],
-    "fine_tuneing": [
-        "davinci",
-        "curie",
-        "babbage",
-        "ada",
-    ]
-}
-available_deployments = _get_available_deployments(openai_models, _model_aliases)
-available_models = _get_available_models(openai_models, available_deployments)
-
+available_deployments = _get_available_deployments()
+available_models = _get_available_models(available_deployments)
 if available_models:
     logger.info("Available openai models: %s", ", ".join(available_models.keys()))
 
     OpenAIModel = Enum('OpenAIModel', {name: name for name in available_models})  # type: ignore
-
-
-    default_model_name = "gpt-3.5-turbo"
+    default_model_name = "gpt-35-turbo"
     if "LLM_DEFAULT_MODEL" in os.environ and os.environ["LLM_DEFAULT_MODEL"] in available_models:
         default_model_name = os.environ["LLM_DEFAULT_MODEL"]
     if default_model_name not in available_models:
         default_model_name = list(available_models.keys())[0]
 
     default_openai_model = OpenAIModel[default_model_name]
-
 
     # Long descriptions will be displayed in the playground UI and are copied from the OpenAI docs
     class OpenAIModelConfig(ModelConfig):
@@ -307,7 +440,8 @@ decreasing the model's likelihood to repeat the same line verbatim.
                 BaseLanguageModel: The model.
             """
             model = available_models[self.model_name.value]
-            kwargs = model._lc_kwargs
+            kwargs = model.__dict__ #BaseLanguageModel type
+            # kw = model._lc_kwargs
             secrets = {secret: getattr(model, secret) for secret in model.lc_secrets.keys()}
             kwargs.update(secrets)
 

@@ -1,7 +1,7 @@
 # type: ignore # too much weird behavior of mypy with decorators
 import inspect
 from fastapi import Depends, BackgroundTasks, Body
-from pydantic import BaseModel, ValidationError
+from pydantic import ValidationError,BaseModel
 from typing import TypeVar, Callable, List, Union, Any, Coroutine, Type
 
 from athena.app import app
@@ -156,7 +156,7 @@ def submission_selector(func: Union[
         class Config:
             # Allow camelCase field names in the API (converted to snake_case)
             alias_generator = to_camel
-            allow_population_by_field_name = True
+            populate_by_name = True
 
     @app.post("/select_submission", responses=module_responses)
     @authenticated
@@ -304,7 +304,10 @@ def feedback_provider(func: Union[
     submission_type = inspect.signature(func).parameters["submission"].annotation
     module_config_type = inspect.signature(func).parameters["module_config"].annotation if "module_config" in inspect.signature(func).parameters else None
     is_graded_type = inspect.signature(func).parameters["is_graded"].annotation if "is_graded" in inspect.signature(func).parameters else None
-
+    if is_graded_type:
+        is_graded_type = is_graded_type.annotation
+    else:
+        is_graded_type = bool  # Default to a known type
     @app.post("/feedback_suggestions", responses=module_responses)
     @authenticated
     @with_meta
