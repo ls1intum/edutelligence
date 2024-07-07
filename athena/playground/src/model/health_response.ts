@@ -3,6 +3,7 @@ export type ModuleMeta = {
   type: string;
   healthy: boolean;
   supportsEvaluation: boolean;
+  supportsNonGradedFeedbackRequests: boolean;
 };
 
 export type HealthResponse = {
