@@ -200,7 +200,6 @@ async def generate_graded_basic_by_file_suggestions(
                 "bonus_points": exercise.bonus_points,
                 "solution_to_submission_diff": solution_to_submission_diff,
                 "template_to_submission_diff": template_to_submission_diff,
-                "template_to_solution_diff": template_to_solution_diff,
                 "grading_instructions": grading_instructions,
                 "problem_statement": problem_statement,
             }
@@ -268,7 +267,7 @@ async def generate_graded_basic_by_file_suggestions(
                     f"exercise-{exercise.id}",
                     f"submission-{submission.id}",
                     f"file-{prompt_input['file_path']}",
-                    "generate-suggestions-by-file",
+                    "generate-graded-suggestions-by-file",
                 ],
             )
             for prompt_input in prompt_inputs
@@ -277,7 +276,7 @@ async def generate_graded_basic_by_file_suggestions(
 
     if debug:
         emit_meta(
-            "generate_suggestions",
+            "generate-graded-suggestions-by-file",
             [
                 {
                     "file_path": prompt_input["file_path"],

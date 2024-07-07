@@ -227,7 +227,7 @@ async def generate_guided_basic_by_file_suggestions(
                     f"exercise-{exercise.id}",
                     f"submission-{submission.id}",
                     f"file-{prompt_input['file_path']}",
-                    "generate-suggestions-by-file",
+                    "generate-guided-suggestions-by-file",
                 ],
             )
             for prompt_input in prompt_inputs
@@ -236,7 +236,7 @@ async def generate_guided_basic_by_file_suggestions(
 
     if debug:
         emit_meta(
-            "generate_suggestions",
+            "generate-guided-suggestions-by-file",
             [
                 {
                     "file_path": prompt_input["file_path"],
