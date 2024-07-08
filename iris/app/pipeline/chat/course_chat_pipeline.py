@@ -337,7 +337,7 @@ class CourseChatPipeline(Pipeline):
                     (
                         c
                         for c in dto.course.competencies
-                        if c.id == dto.competency_jol.competency_id
+                        if c.id == dto.event_payload.competency_id
                     ),
                     None,
                 )
@@ -345,21 +345,21 @@ class CourseChatPipeline(Pipeline):
                 params = {
                     "jol": json.dumps(
                         {
-                            "value": dto.competency_jol.jol_value,
+                            "value": dto.event_payload.jol_value,
                             "competency_mastery": get_mastery(
-                                dto.competency_jol.competency_progress,
-                                dto.competency_jol.competency_confidence,
+                                dto.event_payload.competency_progress,
+                                dto.event_payload.competency_confidence,
                             ),
                         }
                     ),
-                    "competency": comp.json(),
+                    "competency": comp.model_dump_json(),
                 }
             elif self.variant == "submission_successful":
                 comp = next(
                     (
                         c
                         for c in dto.course.competencies
-                        if dto.finished_exercise.id in c.exercise_list
+                        if dto.event_payload.id in c.exercise_list
                     ),
                     None,
                 )
@@ -367,17 +367,15 @@ class CourseChatPipeline(Pipeline):
                 params = {
                     "exercise": json.dumps(
                         {
-                            "id": dto.finished_exercise.id,
+                            "id": dto.event_payload.id,
                             "course_id": dto.course.id,
-                            "title": dto.finished_exercise.title,
-                            "type": dto.finished_exercise.type,
-                            "mode": dto.finished_exercise.mode,
-                            "max_points": dto.finished_exercise.max_points,
-                            "bonus_points": dto.finished_exercise.bonus_points,
-                            "difficulty_level": dto.finished_exercise.difficulty_level,
-                            "due_date": datetime_to_string(
-                                dto.finished_exercise.due_date
-                            ),
+                            "title": dto.event_payload.title,
+                            "type": dto.event_payload.type,
+                            "mode": dto.event_payload.mode,
+                            "max_points": dto.event_payload.max_points,
+                            "bonus_points": dto.event_payload.bonus_points,
+                            "difficulty_level": dto.event_payload.difficulty_level,
+                            "due_date": datetime_to_string(dto.event_payload.due_date),
                             "submissions": [
                                 {
                                     "timestamp": datetime_to_string(
@@ -385,7 +383,7 @@ class CourseChatPipeline(Pipeline):
                                     ),
                                     "score": submission.score,
                                 }
-                                for submission in dto.finished_exercise.submissions
+                                for submission in dto.event_payload.submissions
                             ],
                         }
                     ),
