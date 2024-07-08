@@ -127,10 +127,12 @@ class ExerciseChatPipeline(Pipeline):
                     exc_info=e,
                 )
                 traceback.print_exc()
-                self.callback.error("Generating interaction suggestions failed.")
+                self.callback.error(
+                    "Generating interaction suggestions failed.", exception=e
+                )
         except Exception as e:
             traceback.print_exc()
-            self.callback.error(f"Failed to generate response: {e}")
+            self.callback.error(f"Failed to generate response: {e}", exception=e)
 
     def _run_exercise_chat_pipeline(
         self,
@@ -215,7 +217,7 @@ class ExerciseChatPipeline(Pipeline):
                     )
                 except Exception as e:
                     self.callback.error(
-                        f"Failed to look up files in the repository: {e}"
+                        f"Failed to look up files in the repository: {e}", exception=e
                     )
                     return
 
@@ -228,7 +230,9 @@ class ExerciseChatPipeline(Pipeline):
                             self.retrieved_lecture_chunks
                         )
                 except Exception as e:
-                    self.callback.error(f"Failed to retrieve lecture chunks: {e}")
+                    self.callback.error(
+                        f"Failed to retrieve lecture chunks: {e}", exception=e
+                    )
                     return
 
         self.callback.done()
@@ -282,7 +286,7 @@ class ExerciseChatPipeline(Pipeline):
                 print("Response is rewritten.")
                 self.exercise_chat_response = guide_response
         except Exception as e:
-            self.callback.error(f"Failed to create response: {e}")
+            self.callback.error(f"Failed to create response: {e}", exception=e)
             # print stack trace
             traceback.print_exc()
             return "Failed to generate response"

@@ -2,6 +2,8 @@ import traceback
 from asyncio.log import logger
 from threading import Thread, Semaphore
 
+from sentry_sdk import capture_exception
+
 from fastapi import APIRouter, status, Depends
 from app.dependencies import TokenValidator
 from app.domain.ingestion.ingestion_pipeline_execution_dto import (
@@ -37,6 +39,7 @@ def run_lecture_update_pipeline_worker(dto: IngestionPipelineExecutionDto):
         except Exception as e:
             logger.error(f"Error Ingestion pipeline: {e}")
             logger.error(traceback.format_exc())
+            capture_exception(e)
         finally:
             semaphore.release()
 

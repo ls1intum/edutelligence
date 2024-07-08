@@ -1,5 +1,7 @@
 from typing import Optional, List
 
+from sentry_sdk import capture_exception, capture_message
+
 import requests
 from abc import ABC
 
@@ -57,6 +59,7 @@ class StatusCallback(ABC):
             ).raise_for_status()
         except requests.exceptions.RequestException as e:
             logger.error(f"Error sending status update: {e}")
+            capture_exception(e)
 
     def get_next_stage(self):
         """Return the next stage in the status, or None if there are no more stages."""
@@ -117,13 +120,15 @@ class StatusCallback(ABC):
                 "Invalid state transition to done. current state is ", self.stage.state
             )
 
-    def error(self, message: str):
+    def error(self, message: str, exception=None):
         """
         Transition the current stage to ERROR and update the status.
         Set all later stages to SKIPPED if an error occurs.
         """
         self.stage.state = StageStateEnum.ERROR
         self.stage.message = message
+        self.stage.result = None
+        self.stage.suggestions = None
         # Set all subsequent stages to SKIPPED if an error occurs
         rest_of_index = (
             self.current_stage_index + 1
@@ -138,6 +143,12 @@ class StatusCallback(ABC):
         logger.error(
             f"Error occurred in job {self.run_id} in stage {self.stage.name}: {message}"
         )
+        if exception:
+            capture_exception(exception)
+        else:
+            capture_message(
+                f"Error occurred in job {self.run_id} in stage {self.stage.name}: {message}"
+            )
 
     def skip(self, message: Optional[str] = None, start_next_stage: bool = True):
         """
@@ -146,6 +157,8 @@ class StatusCallback(ABC):
         """
         self.stage.state = StageStateEnum.SKIPPED
         self.stage.message = message
+        self.stage.result = None
+        self.stage.suggestions = None
         next_stage = self.get_next_stage()
         if next_stage is not None:
             self.stage = next_stage
@@ -167,9 +180,9 @@ class CourseChatStatusCallback(StatusCallback):
                 state=StageStateEnum.NOT_STARTED,
                 name="Thinking",
             ),
-            StageDTO(
-                weight=10, state=StageStateEnum.NOT_STARTED, name="Creating suggestions"
-            ),
+            # StageDTO(
+            #     weight=10, state=StageStateEnum.NOT_STARTED, name="Creating suggestions"
+            # ),
         ]
         status = CourseChatStatusUpdateDTO(stages=stages)
         stage = stages[current_stage_index]
