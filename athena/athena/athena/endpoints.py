@@ -304,9 +304,7 @@ def feedback_provider(func: Union[
     submission_type = inspect.signature(func).parameters["submission"].annotation
     module_config_type = inspect.signature(func).parameters["module_config"].annotation if "module_config" in inspect.signature(func).parameters else None
     is_graded_type = inspect.signature(func).parameters["is_graded"].annotation if "is_graded" in inspect.signature(func).parameters else None
-    if is_graded_type:
-        is_graded_type = is_graded_type.annotation
-    else:
+    if not is_graded_type:
         is_graded_type = bool  # Default to a known type
     @app.post("/feedback_suggestions", responses=module_responses)
     @authenticated
