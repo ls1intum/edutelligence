@@ -23,6 +23,8 @@ from .lecture_chat_pipeline import LectureChatPipeline
 from ..shared.citation_pipeline import CitationPipeline
 from ...common import convert_iris_message_to_langchain_message
 from ...domain import PyrisMessage
+from ...domain.data.exercise_with_submissions_dto import ExerciseWithSubmissionsDTO
+from ...domain.data.metrics.competency_jol_dto import CompetencyJolDTO
 from ...llm import CapabilityRequestHandler, RequirementList
 from ..prompts.iris_course_chat_prompts import (
     tell_iris_initial_system_prompt,
@@ -123,6 +125,7 @@ class CourseChatPipeline(Pipeline):
             :param dto: The pipeline execution data transfer object
             :param kwargs: The keyword arguments
         """
+        print(dto.model_dump_json(indent=4))
 
         # Define tools
         @tool
@@ -330,11 +333,12 @@ class CourseChatPipeline(Pipeline):
             )
 
             if self.variant == "jol":
+                event_payload = CompetencyJolDTO.model_validate(dto.event_payload.event)
                 comp = next(
                     (
                         c
                         for c in dto.course.competencies
-                        if c.id == dto.event_payload.competency_id
+                        if c.id == event_payload.competency_id
                     ),
                     None,
                 )
@@ -344,19 +348,22 @@ class CourseChatPipeline(Pipeline):
                         {
                             "value": dto.event_payload.jol_value,
                             "competency_mastery": get_mastery(
-                                dto.event_payload.competency_progress,
-                                dto.event_payload.competency_confidence,
+                                event_payload.competency_progress,
+                                event_payload.competency_confidence,
                             ),
                         }
                     ),
                     "competency": comp.model_dump_json(),
                 }
             elif self.variant == "submission_successful":
+                event_payload = ExerciseWithSubmissionsDTO.model_validate(
+                    dto.event_payload.event
+                )
                 comp = next(
                     (
                         c
                         for c in dto.course.competencies
-                        if dto.event_payload.id in c.exercise_list
+                        if event_payload.id in c.exercise_list
                     ),
                     None,
                 )
@@ -364,15 +371,15 @@ class CourseChatPipeline(Pipeline):
                 params = {
                     "exercise": json.dumps(
                         {
-                            "id": dto.event_payload.id,
+                            "id": event_payload.id,
                             "course_id": dto.course.id,
-                            "title": dto.event_payload.title,
-                            "type": dto.event_payload.type,
-                            "mode": dto.event_payload.mode,
-                            "max_points": dto.event_payload.max_points,
-                            "bonus_points": dto.event_payload.bonus_points,
-                            "difficulty_level": dto.event_payload.difficulty_level,
-                            "due_date": datetime_to_string(dto.event_payload.due_date),
+                            "title": event_payload.title,
+                            "type": event_payload.type,
+                            "mode": event_payload.mode,
+                            "max_points": event_payload.max_points,
+                            "bonus_points": event_payload.bonus_points,
+                            "difficulty_level": event_payload.difficulty_level,
+                            "due_date": datetime_to_string(event_payload.due_date),
                             "submissions": [
                                 {
                                     "timestamp": datetime_to_string(
@@ -380,7 +387,7 @@ class CourseChatPipeline(Pipeline):
                                     ),
                                     "score": submission.score,
                                 }
-                                for submission in dto.event_payload.submissions
+                                for submission in event_payload.submissions
                             ],
                         }
                     ),
