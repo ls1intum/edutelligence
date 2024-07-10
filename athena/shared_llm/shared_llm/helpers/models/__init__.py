@@ -33,7 +33,7 @@ types: List[Type[ModelConfig]] = []
 #     pass
 
 try:
-    import shared_llm.helpers.models.mr_llama as ollama_config
+    import shared_llm.helpers.models.llama as ollama_config
     types.append(ollama_config.OllamaModelConfig)
     DefaultModelConfig = ollama_config.OllamaModelConfig
 except AttributeError:

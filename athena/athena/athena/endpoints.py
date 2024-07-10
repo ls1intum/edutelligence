@@ -5,6 +5,7 @@ import json
 from fastapi import Depends, BackgroundTasks, Body
 from pydantic import ValidationError,BaseModel
 from typing import TypeVar, Callable, List, Union, Any, Coroutine, Type
+import base64
 from langchain_community.llms import Ollama # type: ignore
 import os
 import requests
@@ -433,7 +434,6 @@ async def testing():
     url = 'https://gpu-artemis.ase.cit.tum.de/ollama/api/generate'
     ollama_endpoint = 'https://gpu-artemis.ase.cit.tum.de/ollama'
 
-
     # Lets tell this thing to do some specific format for the response
     # should it be part of the system message ? i guess it makes some sense 
     auth = HTTPBasicAuth(os.environ["GPU_USER"],os.environ["GPU_PASSWORD"])
@@ -481,18 +481,28 @@ async def testing():
     finally:
         response.close()
     return (long_respnse)
-    # llm = Ollama( 
-    #             model = "llama3:70b",
-    #       base_url = os.environ["OLLAMA_ENDPOINT"]+ "api/generate",
-    #         headers ={
-    # 'Authorization': requests.auth._basic_auth_str(os.environ["GPU_USER"],os.environ["GPU_PASSWORD"]) # type: ignore
-    # },
+    llm = Ollama( 
+                model = "llama3:70b",
+          base_url = os.environ["OLLAMA_ENDPOINT"],
+            headers ={
+    'Authorization': requests.auth._basic_auth_str(os.environ["GPU_USER"],os.environ["GPU_PASSWORD"]) # type: ignore
+    },
             
-    #             )
-    # print(os.environ["OLLAMA_ENDPOINT"] )
-    # print(os.environ["GPU_USER"])
-    # print(os.environ["GPU_PASSWORD"])
-    # print(llm.invoke("why would this not work"))
+                )
+    print(os.environ["OLLAMA_ENDPOINT"] )
+    print(os.environ["GPU_USER"])
+    print(os.environ["GPU_PASSWORD"])
+    print(llm.invoke("why would this not work"))
+    # credentials = f"{os.environ['GPU_USER']}:{os.environ['GPU_PASSWORD']}"
+    # encoded_credentials = base64.b64encode(credentials.encode('utf-8')).decode('utf-8')
+
+    # llm = Ollama(
+    #     base_url=os.environ['OLLAMA_ENDPOINT'],
+    #     headers={ 'Authorization': f'Basic {encoded_credentials}' },
+    #     model="llama3:70b"
+    # )
+
+    # print(llm.invoke("Tell me a joke"))
     
 def config_schema_provider(cls: Type[C]) -> Type[C]:
     """

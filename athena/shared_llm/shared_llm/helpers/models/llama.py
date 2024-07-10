@@ -11,14 +11,13 @@ from langchain.base_language import BaseLanguageModel
 import os
 from langchain_community.chat_models import ChatOllama # type: ignore
 
-dotenv.load_dotenv()
 
 class OllamaInstance():
     auth = HTTPBasicAuth(os.environ["GPU_USER"],os.environ["GPU_PASSWORD"])
     headers2={
     'Authorization': requests.auth._basic_auth_str(os.environ["GPU_USER"],os.environ["GPU_PASSWORD"]) # type: ignore
     }
-    ollama_endpoint = 'https://gpu-artemis.ase.cit.tum.de/ollama'
+    ollama_endpoint = os.environ["OLLAMA_ENDPOINT"]
     
     
     def __init__(self):
@@ -43,8 +42,6 @@ url = 'https://gpu-artemis.ase.cit.tum.de/ollama/api/generate'
 ollama_endpoint = 'https://gpu-artemis.ase.cit.tum.de/ollama'
 auth = HTTPBasicAuth(os.environ["GPU_USER"],os.environ["GPU_PASSWORD"])
 
-
-
 headers2={
     'Authorization': requests.auth._basic_auth_str(os.environ["GPU_USER"],os.environ["GPU_PASSWORD"]) # type: ignore
     }
@@ -62,59 +59,6 @@ llm = ChatOllama(
             mirostat =2,
             top_p = 1,
             )
- 
-# Set the authentication
-
-# Send the POST request
-""" This is calling ollama programmatically but like in a curl equivalent way.
-Most likely we will use the langchain way of calling ollama, which tbh is similar but whatevs
-"""
-def call_ollama(system_message, prompt):
-    # Define the data payload
-    payload = {
-        "model": "llama3:70b",
-        "system" : system_message,
-        "prompt": prompt,
-        "options" : {
-            "top_k": 10,
-            "top_p": 0.95,
-            "repeat_penalty": 2.0,
-            "num_predict": 1000 ,
-            "temperature" : 0.1,
-        } 
-    }
-
-    response = requests.post(url, json=payload, auth=auth ,stream=True)
-
-    # Print the response headers
-    print("Response Headers:")
-    for key, value in response.headers.items():
-        print(f"{key}: {value}")
-
-    long_respnse = ""
-    print("\nResponse Content:")
-    try:
-        for chunk in response.iter_lines():
-            if chunk:
-                try:
-                    # Decode the chunk and parse it as JSON
-                    chunk_data = json.loads(chunk.decode('utf-8'))
-                    
-                    # Extract and print the "response" part
-                    if 'response' in chunk_data:
-                        long_respnse +=chunk_data['response']
-                        print(chunk_data['response'], end='', flush=True)
-                    if 'done' in chunk_data:
-                        if(chunk_data['done']):
-                            break
-                except json.JSONDecodeError as e:
-                    print(f"\nError decoding JSON: {e}")
-    except requests.exceptions.RequestException as e:
-        print(f"\nError during streaming: {e}")
-    finally:
-        response.close()
-    return(long_respnse)
-        
 
 def chain_of_thought():
     return 0

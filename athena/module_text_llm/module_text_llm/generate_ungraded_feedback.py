@@ -8,7 +8,7 @@ import os
 from athena import emit_meta#type:ignore
 from athena.text import Exercise, Submission, Feedback#type:ignore
 from athena.logger import logger#type:ignore
-# from shared_llm.helpers.models.mr_llama import OllamaInstance#type: ignore
+# from shared_llm.helpers.models.llama import OllamaInstance#type: ignore
 from module_text_llm.config import BasicApproachConfig
 from langchain_community.chat_models import ChatOllama # type: ignore
 
