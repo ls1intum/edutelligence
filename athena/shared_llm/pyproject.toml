@@ -1,14 +1,12 @@
 [tool.poetry]
-name = "module_text_llm"
-version = "0.1.0"
-description = "Text assessment LLM module."
-authors = ["Felix Dietrich <felixtj.dietrich@tum.de>"]
+name = "shared_llm"
+version = "1.0.0"
+description = "Shared Langchain Middleware"
+authors = ["Me"]
 license = "MIT"
 
 [tool.poetry.dependencies]
 python = "3.11.*"
-athena = {path = "../athena", develop = true}
-shared_llm = {path = "../shared_llm", develop = true}
 openai = "^1.30.5"
 langchain = "^0.2.0"
 langchain-openai = "^0.1.7"

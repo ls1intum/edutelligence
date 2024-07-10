@@ -1,7 +1,9 @@
-from pydantic import  Field
-from pydantic import BaseModel
-from athena import config_schema_provider
-from module_text_llm.helpers.models import ModelConfigType, DefaultModelConfig
+from pydantic import  Field, BaseModel
+from athena import config_schema_provider#type:ignore
+# TODO XXX XXX XXX XXX XXX XXX XXX 
+from shared_llm.helpers.models import ModelConfigType, DefaultModelConfig#type:ignore
+# XXX XXX XXX XXX XXX XXX XXX XXX XXX 
+
 from module_text_llm.prompts.generate_suggestions import (
   system_message as generate_suggestions_system_message, 
   human_message as generate_suggestions_human_message

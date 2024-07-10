@@ -116,8 +116,8 @@ def get_chat_prompt_with_formatting_instructions(
     
     output_parser = PydanticOutputParser(pydantic_object=pydantic_object)
     system_message_prompt = SystemMessagePromptTemplate.from_template(system_message + "\n{format_instructions}")
-    system_message_prompt.prompt.partial_variables = {"format_instructions": output_parser.get_format_instructions()}
-    system_message_prompt.prompt.input_variables.remove("format_instructions")
+    system_message_prompt.prompt.partial_variables = {"format_instructions": output_parser.get_format_instructions()}#type: ignore
+    system_message_prompt.prompt.input_variables.remove("format_instructions") #type:ignore
     human_message_prompt = HumanMessagePromptTemplate.from_template(human_message + "\n\nJSON response following the provided schema:")
     return ChatPromptTemplate.from_messages([system_message_prompt, human_message_prompt])
 
@@ -155,6 +155,8 @@ async def predict_and_parse(
     
     if supports_function_calling(model):
         #chain = create_structured_output_chain(pydantic_object, llm=model, prompt=chat_prompt, tags=tags)
+        # output = model.invoke("just testing") 
+        # return pydantic_object.parse_obj(output)
         openai_functions = [convert_to_openai_function(pydantic_object)]
 
         runnable = chat_prompt | model.bind(functions=openai_functions).with_retry(
@@ -164,6 +166,7 @@ async def predict_and_parse(
         ) | JsonOutputFunctionsParser()
         try:
             #return await chain.arun(**prompt_input)
+            #output_dict = runnable.invoke(prompt_input)
             output_dict = await runnable.ainvoke(prompt_input)
             return pydantic_object.parse_obj(output_dict)
         except (OutputParserException, ValidationError):
@@ -179,9 +182,11 @@ async def predict_and_parse(
     ) | output_parser
     
     try:
+        # output = model.invoke("just testing") 
+        # return pydantic_object.parse_obj(output)
         output_dict = await runnable.ainvoke(prompt_input)
         return pydantic_object.parse_obj(output_dict)
-        #return await chain.arun(**prompt_input)
+        # return await chain.arun(**prompt_input)
     except (OutputParserException, ValidationError):
         # In the future, we should probably have some recovery mechanism here (i.e. fix the output with another prompt)
         return None

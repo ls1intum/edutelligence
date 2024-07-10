@@ -5,15 +5,15 @@ from typing import List, Any
 import nltk
 import tiktoken
 
-from athena import app, submission_selector, submissions_consumer, feedback_consumer, feedback_provider, evaluation_provider
-from athena.text import Exercise, Submission, Feedback
-from athena.logger import logger
+from athena import app, submission_selector,ungraded_feedback_provider, submissions_consumer, feedback_consumer, feedback_provider, evaluation_provider#type:ignore
+from athena.text import Exercise, Submission, Feedback#type:ignore
+from athena.logger import logger#type:ignore
 
 from module_text_llm.config import Configuration
 from module_text_llm.evaluation import get_feedback_statistics, get_llm_statistics
 from module_text_llm.generate_suggestions import generate_suggestions
 from module_text_llm.generate_evaluation import generate_evaluation
-
+from module_text_llm.generate_ungraded_feedback import generate_ungraded_feedback
 
 @submissions_consumer
 def receive_submissions(exercise: Exercise, submissions: List[Submission]):
@@ -36,6 +36,10 @@ async def suggest_feedback(exercise: Exercise, submission: Submission, module_co
     logger.info("suggest_feedback: Suggestions for submission %d of exercise %d were requested", submission.id, exercise.id)
     return await generate_suggestions(exercise, submission, module_config.approach, module_config.debug)
 
+@ungraded_feedback_provider
+async def ungraded_feedback(exercise: Exercise, submission: Submission, module_config: Configuration) -> List[Feedback]:
+    logger.info("ungraded_feedback: Suggestions for submission %d of exercise %d were requested", submission.id, exercise.id)
+    return await generate_ungraded_feedback(exercise, submission, module_config.approach, module_config.debug)
 
 @evaluation_provider
 async def evaluate_feedback(

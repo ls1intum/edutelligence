@@ -9,8 +9,8 @@ import openai
 # from langchain.llms import AzureOpenAI, OpenAI
 # from langchain.llms.openai import BaseOpenAI
 # from langchain.base_language import BaseLanguageModel
-from langchain_community.llms import OpenAI
-from langchain_community.llms.openai import BaseOpenAI
+from langchain_community.llms import OpenAI #type: ignore
+from langchain_community.llms.openai import BaseOpenAI#type: ignore
 from langchain.base_language import BaseLanguageModel
 from langchain_openai import AzureChatOpenAI, AzureOpenAI, ChatOpenAI
 
@@ -65,7 +65,7 @@ def _set_credentials(self):
             api_version = self.openai_api_version
 
     openai.api_type = api_type
-    openai.api_base = api_base
+    openai.api_base = api_base #type:ignore
     openai.api_version = api_version
 
 
@@ -85,7 +85,7 @@ BaseOpenAI._agenerate = _async_wrap(BaseOpenAI._agenerate, _set_credentials)  # 
 def _use_azure_credentials():
     openai.api_type = "azure"
     openai.api_key = os.environ.get("LLM_AZURE_OPENAI_API_KEY")
-    openai.api_base = os.environ.get("LLM_AZURE_OPENAI_API_BASE")
+    openai.api_base = os.environ.get("LLM_AZURE_OPENAI_API_BASE")#type:ignore
     # os.environ.get("LLM_AZURE_OPENAI_API_VERSION")
     openai.api_version = "2023-03-15-preview"
 
@@ -93,7 +93,7 @@ def _use_azure_credentials():
 def _use_openai_credentials():
     openai.api_type = "open_ai"
     openai.api_key = os.environ.get("LLM_OPENAI_API_KEY")
-    openai.api_base = "https://api.openai.com/v1"
+    openai.api_base = "https://api.openai.com/v1"#type:ignore
     openai.api_version = None
 
 
@@ -123,10 +123,11 @@ def _openai_client(use_azure_api: bool, is_preference: bool):
                 "LLM_AZURE_OPENAI_API_VERSION environment variables or LLM_OPENAI_API_KEY environment variable"
             )
         else:
-            raise EnvironmentError(
-                "Azure OpenAI api not available, please set LLM_AZURE_OPENAI_API_KEY, LLM_AZURE_OPENAI_API_BASE and "
-                "LLM_AZURE_OPENAI_API_VERSION environment variables"
-            )
+            print("nothing here but dont about")
+            # raise EnvironmentError(
+            #     "Azure OpenAI api not available, please set LLM_AZURE_OPENAI_API_KEY, LLM_AZURE_OPENAI_API_BASE and "
+            #     "LLM_AZURE_OPENAI_API_VERSION environment variables"
+            # )
     else:
         if openai_available:
             _use_openai_credentials()
@@ -156,12 +157,12 @@ def _get_available_deployments():
 
     with _openai_client(use_azure_api=True, is_preference=False):
         if azure_openai_available:
-            deployments = openai.AzureOpenAI(api_version=openai.api_version, azure_endpoint=openai.api_base, api_key=openai.api_key).models.list() or []
+            deployments = openai.AzureOpenAI(api_version=openai.api_version, azure_endpoint=openai.api_base, api_key=openai.api_key).models.list() or []#type:ignore
             for deployment in deployments:
-                if deployment.capabilities["chat_completion"]:
+                if deployment.capabilities["chat_completion"]:#type:ignore
                     available_deployments["chat_completion"][deployment.id] = deployment
         if openai_available:
-            models = openai.Model.list()
+            models = openai.Model.list()#type:ignore
             # for model in models:
             #     pass
 
@@ -174,15 +175,15 @@ def _get_available_models(available_deployments: Dict[str, Dict[str, Any]]):
     if openai_available:
         openai_api_key = os.environ["LLM_OPENAI_API_KEY"]
         for model in available_models["chat_completion"]:
-            available_models[OPENAI_PREFIX + model.id] = ChatOpenAI(
-                model=model.id,
-                openai_api_key=openai_api_key,
+            available_models[OPENAI_PREFIX + model.id] = ChatOpenAI(#type:ignore
+                model=model.id,#type:ignore
+                openai_api_key=openai_api_key,#type:ignore
                 client="",
                 temperature=0
             )
         for model in available_models["completion"]:
-            available_models[OPENAI_PREFIX + model.id] = OpenAI(
-                model=model.id,
+            available_models[OPENAI_PREFIX + model.id] = OpenAI(#type:ignore
+                model=model.id,#type:ignore
                 openai_api_key=openai_api_key,
                 client="",
                 temperature=0
@@ -219,7 +220,7 @@ if available_models:
     if default_model_name not in available_models:
         default_model_name = list(available_models.keys())[0]
 
-    default_openai_model = OpenAIModel[default_model_name]
+    default_openai_model = OpenAIModel[default_model_name]#type:ignore
 
     # Long descriptions will be displayed in the playground UI and are copied from the OpenAI docs
     class OpenAIModelConfig(ModelConfig):

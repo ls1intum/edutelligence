@@ -24,7 +24,7 @@ export default function useRequestFeedbackSuggestions(
   const athenaFetcher = useAthenaFetcher();
   return useMutation({
     mutationFn: async ({ exercise, submission }) => {
-      let response = await athenaFetcher("/feedback_suggestions", { exercise, submission });
+      let response = await athenaFetcher("/ungraded_feedback_suggestions", { exercise, submission });
       if (response?.data) {
         response.data = response.data.map((feedback: Feedback, index: number) => {
           // Change variable names from camel case to snake case (change this in the future, index_start -> indexStart, index_end -> indexEnd)
