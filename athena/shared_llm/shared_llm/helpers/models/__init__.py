@@ -12,30 +12,30 @@ evaluation_model_name = os.environ.get("LLM_EVALUATION_MODEL")
 evaluation_model: Optional[BaseLanguageModel] = None
 
 types: List[Type[ModelConfig]] = []
-# try:
-#     import shared_llm.helpers.models.openai as openai_config
-#     types.append(openai_config.OpenAIModelConfig)
-#     if default_model_name in openai_config.available_models:
-#         DefaultModelConfig = openai_config.OpenAIModelConfig
-#     if evaluation_model_name in openai_config.available_models:
-#         evaluation_model = openai_config.available_models[evaluation_model_name]
-# except AttributeError:
-#     pass
+try:
+    import shared_llm.helpers.models.openai as openai_config
+    types.append(openai_config.OpenAIModelConfig)
+    if default_model_name in openai_config.available_models:
+        DefaultModelConfig = openai_config.OpenAIModelConfig
+    if evaluation_model_name in openai_config.available_models:
+        evaluation_model = openai_config.available_models[evaluation_model_name]
+except AttributeError:
+    pass
 
-# try:
-#     import shared_llm.helpers.models.replicate as replicate_config
-#     types.append(replicate_config.ReplicateModelConfig)
-#     if default_model_name in replicate_config.available_models:
-#         DefaultModelConfig = replicate_config.ReplicateModelConfig
-#     if evaluation_model_name in replicate_config.available_models:
-#         evaluation_model = replicate_config.available_models[evaluation_model_name]
-# except AttributeError:
-#     pass
+try:
+    import shared_llm.helpers.models.replicate as replicate_config
+    types.append(replicate_config.ReplicateModelConfig)
+    if default_model_name in replicate_config.available_models:
+        DefaultModelConfig = replicate_config.ReplicateModelConfig
+    if evaluation_model_name in replicate_config.available_models:
+        evaluation_model = replicate_config.available_models[evaluation_model_name]
+except AttributeError:
+    pass
 
 try:
     import shared_llm.helpers.models.llama as ollama_config
     types.append(ollama_config.OllamaModelConfig)
-    DefaultModelConfig = ollama_config.OllamaModelConfig
+    # DefaultModelConfig = ollama_config.OllamaModelConfig
 except AttributeError:
     pass
 

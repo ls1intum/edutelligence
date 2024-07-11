@@ -10,77 +10,63 @@ from pydantic import validator, Field, PositiveInt
 from langchain.base_language import BaseLanguageModel
 import os
 from langchain_community.chat_models import ChatOllama # type: ignore
+import base64
 
-
-class OllamaInstance():
-    auth = HTTPBasicAuth(os.environ["GPU_USER"],os.environ["GPU_PASSWORD"])
-    headers2={
+if(os.environ["GPU_USER"] and os.environ["GPU_PASSWORD"]):
+    auth_header= {
     'Authorization': requests.auth._basic_auth_str(os.environ["GPU_USER"],os.environ["GPU_PASSWORD"]) # type: ignore
     }
-    ollama_endpoint = os.environ["OLLAMA_ENDPOINT"]
-    
-    
-    def __init__(self):
-        self.llm = Ollama( 
-            model = "llama3:70b",
-           # system = system_message,
-            base_url = ollama_endpoint,
-            headers =headers2,
-            temperature = 1,
-            mirostat =2,
-            top_p = 1,
-            )
-        
-    def get_llama_llama(self):
-        return self.llm
-    
-    def invoke_this_thing(self, prompt):
-        return self.llm.invoke(prompt)
-    
-# Define the URL
-url = 'https://gpu-artemis.ase.cit.tum.de/ollama/api/generate'
-ollama_endpoint = 'https://gpu-artemis.ase.cit.tum.de/ollama'
-auth = HTTPBasicAuth(os.environ["GPU_USER"],os.environ["GPU_PASSWORD"])
+  
+ollama_models = [
+    'falcon:180b',
+    'llama3:70b',
+    'llama3:70b-instruct',
+    'llama3:70b-text',
+    'llava:13b',
+    'llava:34b',
+    'llava:7b',
+    'llava-llama3:8b',
+]
 
-headers2={
-    'Authorization': requests.auth._basic_auth_str(os.environ["GPU_USER"],os.environ["GPU_PASSWORD"]) # type: ignore
-    }
+available_models = {}
 
-system_message = """ 
-You are an AI Tutor in Software Engineering. Whatever happens to not break character. The Problem Statement is: Name 3 Patterns of software engineering.
-Give Feedback to the students solutions as they come. The maximum points to award are 3.
-"""
-llm = ChatOllama( 
-            model = "llama3:70b",
-           # system = system_message,
-            base_url = ollama_endpoint,
-            headers =headers2,
-            temperature = 1,
-            mirostat =2,
-            top_p = 1,
-            )
+if([os.environ["OLLAMA_ENDPOINT"]]):
+    available_models = {
+        name : ChatOllama(
+            name = name,
+            model = name,
+            base_url = os.environ["OLLAMA_ENDPOINT"],
+            headers = auth_header,
+            
+        ) for name in ollama_models
+    } 
 
-def chain_of_thought():
-    return 0
-
-
+default_model_name = "llama3:70b"
+LlamaModel = Enum('LlamaModel', {name: name for name in available_models}) # type: ignore
 class OllamaModelConfig(ModelConfig):
-        #LlamaModel = Enum('LlamaModel', {"llama3:70b": "llama3:70b"})  # type: ignore
+        """Ollama LLM configuration."""
 
-        """OpenAI LLM configuration."""
-
-        model_name: str = Field(default="mr llama",  # type: ignore
+        model_name: LlamaModel = Field(default=default_model_name,  # type: ignore
                                         description="The name of the model to use.")
+        
+        name : str =  Field(default=default_model_name,  # type: ignore
+                                        description="The name of the model to use.")
+        
+        model : str = Field(default = "llama3:70b", description="ye dont ask me why ")
+        
         max_tokens: PositiveInt = Field(1000, description="")
 
         temperature: float = Field(default=0.0, ge=0, le=2, description="")
 
         top_p: float = Field(default=1, ge=0, le=1, description="")
-
+        
+        headers : dict = Field(default= auth_header, description="headers for authentication") 
+        
         presence_penalty: float = Field(default=0, ge=-2, le=2, description="")
 
         frequency_penalty: float = Field(default=0, ge=-2, le=2, description="")
 
+        base_url : str = Field(default="https://gpu-artemis.ase.cit.tum.de/ollama", description="")
         @validator('max_tokens')
         def max_tokens_must_be_positive(cls, v):
             """
@@ -90,26 +76,21 @@ class OllamaModelConfig(ModelConfig):
                 raise ValueError('max_tokens must be a positive integer')
             return v
         
-        def get_model_name(self) -> str:
-            """Get the model name from the configuration."""
-            return self.model_name
-        
         def get_model(self) -> BaseLanguageModel:
             """Get the model from the configuration.
 
             Returns:
                 BaseLanguageModel: The model.
             """
-            #return llm
             
-            model = llm # "llama3:70b" #available_models[self.model_name.value]
-            kwargs = model.__dict__ #BaseLanguageModel type
-            #kwargs = model._lc_kwargs
+            model = available_models[self.model_name.value]
+            kwargs = model.__dict__
             secrets = {secret: getattr(model, secret) for secret in model.lc_secrets.keys()}
             kwargs.update(secrets)
 
             model_kwargs = kwargs.get("model_kwargs", {})
             for attr, value in self.dict().items():
+                print( attr , " ", value)
                 if attr == "model_name":
                     # Skip model_name
                     continue
@@ -120,9 +101,15 @@ class OllamaModelConfig(ModelConfig):
                     # Otherwise, add it to model_kwargs (necessary for chat models)
                     model_kwargs[attr] = value
             kwargs["model_kwargs"] = model_kwargs
+            #TODO just add the missing kwards to the class
+            allowed_fields = set(self.__fields__.keys())
+            filtered_kwargs = {k: v for k, v in kwargs.items() if k in allowed_fields}
+            # print(kwargs)
+            # Initialize a copy of the model using the filtered kwargs
+            model = model.__class__(**filtered_kwargs)
 
             # Initialize a copy of the model using the config
-            model = model.__class__(**kwargs)
+            #model = model.__class__(**kwargs)
             return model
 
 

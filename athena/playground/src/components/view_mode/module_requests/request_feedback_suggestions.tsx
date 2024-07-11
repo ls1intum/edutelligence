@@ -128,11 +128,12 @@ export default function RequestFeedbackSuggestions() {
         {exercise && submission
           ? isLoading
             ? "Loading..."
-            : "Request ungraded feedback suggestions"
+            : "Request feedback suggestions"
           : exercise
           ? "Please select a submission"
           : "Please select an exercise"}
       </button>
+      
     </div>
   );
 }

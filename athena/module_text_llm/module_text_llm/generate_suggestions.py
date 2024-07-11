@@ -39,7 +39,6 @@ class AssessmentModel(BaseModel):
 
 async def generate_suggestions(exercise: Exercise, submission: Submission, config: BasicApproachConfig, debug: bool) -> List[Feedback]:
     model = config.model.get_model()  # type: ignore[attr-defined]
-    #model[model_name]
     prompt_input = {
         "max_points": exercise.max_points,
         "bonus_points": exercise.bonus_points,
