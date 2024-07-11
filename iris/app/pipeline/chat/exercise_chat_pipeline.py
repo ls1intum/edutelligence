@@ -346,7 +346,9 @@ class ExerciseChatPipeline(Pipeline):
             )
             txt += lct
 
-        self.prompt += SystemMessagePromptTemplate.from_template(txt)
+        self.prompt += SystemMessagePromptTemplate.from_template(
+            txt.replace("{", "{{").replace("}", "}}")
+        )
 
     def should_execute_lecture_pipeline(self, course_id: int) -> bool:
         """

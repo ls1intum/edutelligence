@@ -143,7 +143,8 @@ class LectureRetrieval(Pipeline):
             selected_chunks_index = self.reranker_pipeline(
                 paragraphs=merged_chunks, query=student_query, chat_history=chat_history
             )
-            return [merged_chunks[int(i)] for i in selected_chunks_index]
+            if selected_chunks_index:
+                return [merged_chunks[int(i)] for i in selected_chunks_index]
         return []
 
     @traceable(name="Basic Lecture Retrieval")
@@ -467,7 +468,7 @@ class LectureRetrieval(Pipeline):
             response_future = executor.submit(
                 self.search_in_db,
                 query=rewritten_query,
-                hybrid_factor=0.7,
+                hybrid_factor=0.9,
                 result_limit=result_limit,
                 course_id=course_id,
                 base_url=base_url,
