@@ -6,7 +6,7 @@ from langchain_community.llms import Ollama # type: ignore
 import dotenv
 from langchain_core.prompts import ChatPromptTemplate
 from shared_llm.helpers.models.model_config import ModelConfig # type: ignore
-from pydantic import validator, Field, PositiveInt
+from pydantic import validator, Field, PositiveInt,field_validator
 from langchain.base_language import BaseLanguageModel
 import os
 from langchain_community.chat_models import ChatOllama # type: ignore
@@ -16,6 +16,7 @@ if(os.environ["GPU_USER"] and os.environ["GPU_PASSWORD"]):
     auth_header= {
     'Authorization': requests.auth._basic_auth_str(os.environ["GPU_USER"],os.environ["GPU_PASSWORD"]) # type: ignore
     }
+    # auth_header= {"Authorization:" : HTTPBasicAuth(os.environ["GPU_USER"],os.environ["GPU_PASSWORD"])}
   
 ollama_models = [
     'falcon:180b',
@@ -49,10 +50,10 @@ class OllamaModelConfig(ModelConfig):
         model_name: LlamaModel = Field(default=default_model_name,  # type: ignore
                                         description="The name of the model to use.")
         
-        name : str =  Field(default=default_model_name,  # type: ignore
-                                        description="The name of the model to use.")
+        # name : str =  Field(default="llama3:70b",  # type: ignore
+        #                                 description="The name of the model to use.")
         
-        model : str = Field(default = "llama3:70b", description="ye dont ask me why ")
+        # model : str = Field(default = "llama3:70b", description="ye dont ask me why ")
         
         max_tokens: PositiveInt = Field(1000, description="")
 
@@ -67,7 +68,7 @@ class OllamaModelConfig(ModelConfig):
         frequency_penalty: float = Field(default=0, ge=-2, le=2, description="")
 
         base_url : str = Field(default="https://gpu-artemis.ase.cit.tum.de/ollama", description="")
-        @validator('max_tokens')
+        @field_validator('max_tokens')
         def max_tokens_must_be_positive(cls, v):
             """
             Validate that max_tokens is a positive integer.
@@ -77,6 +78,7 @@ class OllamaModelConfig(ModelConfig):
             return v
         
         def get_model(self) -> BaseLanguageModel:
+            print("Getting Model: ", self.model_name.value)
             """Get the model from the configuration.
 
             Returns:
@@ -90,7 +92,6 @@ class OllamaModelConfig(ModelConfig):
 
             model_kwargs = kwargs.get("model_kwargs", {})
             for attr, value in self.dict().items():
-                print( attr , " ", value)
                 if attr == "model_name":
                     # Skip model_name
                     continue
@@ -104,6 +105,8 @@ class OllamaModelConfig(ModelConfig):
             #TODO just add the missing kwards to the class
             allowed_fields = set(self.__fields__.keys())
             filtered_kwargs = {k: v for k, v in kwargs.items() if k in allowed_fields}
+            filtered_kwargs["headers"] = auth_header
+            filtered_kwargs["model"]= self.model_name.value
             # print(kwargs)
             # Initialize a copy of the model using the filtered kwargs
             model = model.__class__(**filtered_kwargs)

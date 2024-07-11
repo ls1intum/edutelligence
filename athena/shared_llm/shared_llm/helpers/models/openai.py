@@ -9,8 +9,8 @@ import openai
 # from langchain.llms import AzureOpenAI, OpenAI
 # from langchain.llms.openai import BaseOpenAI
 # from langchain.base_language import BaseLanguageModel
-from langchain_community.llms import OpenAI #type: ignore
-from langchain_community.llms.openai import BaseOpenAI#type: ignore
+# from langchain_community.llms import OpenAI #type: ignore
+# from langchain_community.llms.openai import BaseOpenAI#type: ignore
 from langchain.base_language import BaseLanguageModel
 from langchain_openai import AzureChatOpenAI, AzureOpenAI, ChatOpenAI
 
@@ -73,8 +73,8 @@ def _set_credentials(self):
 # pylint: disable=protected-access
 ChatOpenAI._generate = _wrap(ChatOpenAI._generate, _set_credentials)  # type: ignore
 ChatOpenAI._agenerate = _async_wrap(ChatOpenAI._agenerate, _set_credentials)  # type: ignore
-BaseOpenAI._generate = _wrap(BaseOpenAI._generate, _set_credentials)  # type: ignore
-BaseOpenAI._agenerate = _async_wrap(BaseOpenAI._agenerate, _set_credentials)  # type: ignore
+# BaseOpenAI._generate = _wrap(BaseOpenAI._generate, _set_credentials)  # type: ignore
+# BaseOpenAI._agenerate = _async_wrap(BaseOpenAI._agenerate, _set_credentials)  # type: ignore
 # pylint: enable=protected-access
 
 #########################################################################

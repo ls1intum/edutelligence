@@ -1,6 +1,8 @@
 from typing import List, Optional, Sequence
 from pydantic import BaseModel, Field
-
+from langchain_community.chat_models import ChatOllama # type: ignore
+import os
+import requests
 from athena import emit_meta#type:ignore
 from athena.text import Exercise, Submission, Feedback#type:ignore
 from athena.logger import logger#type:ignore
@@ -72,7 +74,18 @@ async def generate_suggestions(exercise: Exercise, submission: Submission, confi
             emit_meta("prompt", chat_prompt.format(**prompt_input))
             emit_meta("error", f"Input too long {num_tokens_from_prompt(chat_prompt, prompt_input)} > {config.max_input_tokens}")
         return []
-
+    
+    # if(isinstance(model,ChatOllama)):
+    #     llm = ChatOllama( 
+    #         model = "llama3:70b",
+    #        # system = system_message,
+    #      base_url = os.environ["OLLAMA_ENDPOINT"],
+    #         headers ={
+    # 'Authorization': requests.auth._basic_auth_str(os.environ["GPU_USER"],os.environ["GPU_PASSWORD"]) # type: ignore
+    # },
+    #         )
+    #     print(llm.invoke("tell me a joke"))
+    # else:
     result = await predict_and_parse(
         model=model, 
         chat_prompt=chat_prompt, 

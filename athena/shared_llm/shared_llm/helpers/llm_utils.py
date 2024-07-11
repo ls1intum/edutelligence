@@ -1,9 +1,5 @@
 from typing import Optional, Type, TypeVar, List
-#from pydantic import BaseModel, ValidationError
-from langchain_community.llms import Ollama # type: ignore
 from langchain_community.chat_models import ChatOllama # type: ignore
-from langchain_core.messages.base import BaseMessage
-from langchain_core.messages import HumanMessage, SystemMessage
 from requests.auth import HTTPBasicAuth
 import json
 import os
@@ -130,38 +126,6 @@ def get_chat_prompt_with_formatting_instructions(
     human_message_prompt = HumanMessagePromptTemplate.from_template(human_message + "\n\nJSON response following the provided schema:")
     return ChatPromptTemplate.from_messages([system_message_prompt, human_message_prompt])
 
-def call_ollama(system_message, prompt):
-    #from requests.auth import HTTPBasicAuth
-
-    url = 'https://gpu-artemis.ase.cit.tum.de/ollama/api/generate'
-    auth = HTTPBasicAuth(os.environ["GPU_USER"],os.environ["GPU_PASSWORD"])
-    # Define the data payload
-    payload = {
-        "model": "llama3:70b",
-        "system" : system_message,
-        "prompt": prompt,
-        "options" : {
-            # "top_k": 10,
-            # "top_p": 0.95,
-            "repeat_penalty": 0,
-            "temperature" : 0,
-        },
-        "stream": False,
-        "format" : "json"
-    }
-
-    response = requests.post(url, json=payload, auth=auth ,stream=False)
-    print(response)
-    response_str = response.content.decode('utf-8')
-
-    # Parse the JSON string into a Python dictionary
-    data = json.loads(str(response_str))
-
-    # Extract the list of models
-    text_response = data['response']
-    
-    return text_response
-
 async def predict_and_parse(
         model: BaseLanguageModel, 
         chat_prompt: ChatPromptTemplate, 
@@ -196,8 +160,6 @@ async def predict_and_parse(
     
     if supports_function_calling(model):
         #chain = create_structured_output_chain(pydantic_object, llm=model, prompt=chat_prompt, tags=tags)
-        # output = model.invoke("just testing") 
-        # return pydantic_object.parse_obj(output)
         openai_functions = [convert_to_openai_function(pydantic_object)]
 
         runnable = chat_prompt | model.bind(functions=openai_functions).with_retry(
@@ -206,11 +168,9 @@ async def predict_and_parse(
             stop_after_attempt=3,
         ) | JsonOutputFunctionsParser()
         try:
-            #return await chain.arun(**prompt_input)
-            #output_dict = runnable.invoke(prompt_input)
             output_dict = await runnable.ainvoke(prompt_input)
             print(output_dict)
-            return pydantic_object.parse_obj(output_dict)
+            return pydantic_object.model_validate(output_dict)
         except (OutputParserException, ValidationError):
             # In the future, we should probably have some recovery mechanism here (i.e. fix the output with another prompt)
             return None
@@ -224,52 +184,25 @@ async def predict_and_parse(
             ) | output_parser
             output_dict = await runnable.ainvoke(prompt_input)
             print(output_dict)
-            return pydantic_object.parse_obj(output_dict)
+            return pydantic_object.model_validate(output_dict)
         except (OutputParserException, ValidationError):
             # In the future, we should probably have some recovery mechanism here (i.e. fix the output with another prompt)
             return None
-
+    else:
     
-    output_parser = PydanticOutputParser(pydantic_object=pydantic_object)
-    #chain = LLMChain(llm=model, prompt=chat_prompt, output_parser=output_parser, tags=tags)
-    
-    
-    runnable = chat_prompt | model | output_parser
+        output_parser = PydanticOutputParser(pydantic_object=pydantic_object)
+        #chain = LLMChain(llm=model, prompt=chat_prompt, output_parser=output_parser, tags=tags)
+        runnable = chat_prompt | model.with_retry(
+                    retry_if_exception_type=(ValueError, OutputParserException),
+                    wait_exponential_jitter=True,
+                    stop_after_attempt=3,
+                ) | output_parser
 
-    try:
-        print(model.__dict__)
-        print("This is only valid for ollama right now, shouldnt show for openai")
-        result = chat_prompt.invoke(prompt_input)
-        # res = model.invoke(result) # no need
-        res = call_ollama("Only reply with the json, do not give any comments at all", result.to_string())
-        print(res)
-        output = output_parser.invoke(res)
-        print(output)
-        # res= runnable.invoke({"topic": "Software Engineering"} )
-        # pass
-        # print(res)
-        # print(runnable.__dict__)
-        # output_dict = await runnable.ainvoke(prompt_input)
-        return pydantic_object.parse_obj(output)
-        # print(model.invoke("hello world"))
-        # return await chain.arun(**prompt_input)
-        # output_dict = runnable.invoke(prompt_input)
-        # output = await model.invoke(prompt_input) 
-        # return pydantic_object.parse_obj(output)
+        try:
+            output_dict = await runnable.ainvoke(prompt_input)
+            return pydantic_object.model_validate(output_dict)
 
-        # output = model.invoke("tell joke no bike no pun")
-        # output = llm.invoke("just testing") 
-        # print(output)
-        # return output
-        # if("llama3:70b" in model.metadata.items()): #type: ignore
-        #     pass
-        
-        # model.ainvoke
-        #return model.invoke("Tell me a joke without bikes and without puns")
-        
-        ## output_dict = await runnable.ainvoke(prompt_input)
-        # return pydantic_object.parse_obj(output_dict)
-        # return await chain.arun(**prompt_input)
-    except (OutputParserException, ValidationError):
-        # In the future, we should probably have some recovery mechanism here (i.e. fix the output with another prompt)
-        return None
+        except (OutputParserException, ValidationError):
+            # In the future, we should probably have some recovery mechanism here (i.e. fix the output with another prompt)
+            # The future is now, or maybe soon
+            return None

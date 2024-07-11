@@ -2,7 +2,7 @@ import os
 from typing import Type, Union, List, Optional
 from langchain.base_language import BaseLanguageModel
 
-from shared_llm.helpers.models.model_config import ModelConfig
+from shared_llm.helpers.models.model_config import ModelConfig #type: ignore
 
 DefaultModelConfig: Type[ModelConfig]
 default_model_name = os.environ.get("LLM_DEFAULT_MODEL")
@@ -23,7 +23,7 @@ except AttributeError:
     pass
 
 try:
-    import shared_llm.helpers.models.replicate as replicate_config
+    import shared_llm.helpers.models.replicate as replicate_config #type: ignore
     types.append(replicate_config.ReplicateModelConfig)
     if default_model_name in replicate_config.available_models:
         DefaultModelConfig = replicate_config.ReplicateModelConfig
@@ -33,7 +33,7 @@ except AttributeError:
     pass
 
 try:
-    import shared_llm.helpers.models.llama as ollama_config
+    import shared_llm.helpers.models.llama as ollama_config #type: ignore
     types.append(ollama_config.OllamaModelConfig)
     # DefaultModelConfig = ollama_config.OllamaModelConfig
 except AttributeError:
