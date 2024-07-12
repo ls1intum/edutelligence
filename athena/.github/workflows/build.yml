@@ -56,6 +56,13 @@ jobs:
           docker build -t athena .
           cd ..
 
+      - name: Build shared_llm image
+        id: set-image
+        run: |
+          cd shared_llm
+          docker build -t shared_llm .
+          cd ..
+
       - name: Docker Login
         id: docker-login
         run: |
