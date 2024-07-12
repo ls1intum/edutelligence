@@ -17,6 +17,8 @@ RUN pip install --no-cache-dir poetry==1.5.0
 COPY pyproject.toml poetry.lock ./
 # athena module (from the Dockerfile in the athena folder)
 COPY --from=athena /code /athena
+COPY --from=shared_llm /code /shared_llm
+
 # install dependencies
 RUN poetry config virtualenvs.create true \
     && poetry config virtualenvs.in-project true \
