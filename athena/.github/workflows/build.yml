@@ -57,7 +57,7 @@ jobs:
           cd ..
 
       - name: Build shared_llm image
-        id: set-image
+        id: set-image-shared
         run: |
           cd shared_llm
           docker build -t shared_llm .
