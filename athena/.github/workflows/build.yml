@@ -58,6 +58,7 @@ jobs:
 
       - name: Build shared_llm image
         id: set-image-shared
+        if: matrix.image == 'module_text_llm'
         run: |
           cd shared_llm
           docker build -t shared_llm .
