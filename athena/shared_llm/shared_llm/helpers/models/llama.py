@@ -1,16 +1,11 @@
 import requests
-from requests.auth import HTTPBasicAuth
-import json
 from enum import Enum
 from langchain_community.llms import Ollama # type: ignore
-import dotenv
-from langchain_core.prompts import ChatPromptTemplate
 from shared_llm.helpers.models.model_config import ModelConfig # type: ignore
 from pydantic import validator, Field, PositiveInt,field_validator
 from langchain.base_language import BaseLanguageModel
 import os
 from langchain_community.chat_models import ChatOllama # type: ignore
-import base64
 
 if(os.environ["GPU_USER"] and os.environ["GPU_PASSWORD"]):
     auth_header= {
@@ -50,10 +45,7 @@ class OllamaModelConfig(ModelConfig):
         model_name: LlamaModel = Field(default=default_model_name,  # type: ignore
                                         description="The name of the model to use.")
         
-        # name : str =  Field(default="llama3:70b",  # type: ignore
-        #                                 description="The name of the model to use.")
-        
-        # model : str = Field(default = "llama3:70b", description="ye dont ask me why ")
+        fromat : str = Field(default = "json" , description="The format to respond with")
         
         max_tokens: PositiveInt = Field(1000, description="")
 
@@ -67,7 +59,7 @@ class OllamaModelConfig(ModelConfig):
 
         frequency_penalty: float = Field(default=0, ge=-2, le=2, description="")
 
-        base_url : str = Field(default="https://gpu-artemis.ase.cit.tum.de/ollama", description="")
+        base_url : str = Field(default="https://gpu-artemis.ase.cit.tum.de/ollama", description=" Base Url where ollama is hosted")
         @field_validator('max_tokens')
         def max_tokens_must_be_positive(cls, v):
             """
@@ -102,17 +94,15 @@ class OllamaModelConfig(ModelConfig):
                     # Otherwise, add it to model_kwargs (necessary for chat models)
                     model_kwargs[attr] = value
             kwargs["model_kwargs"] = model_kwargs
-            #TODO just add the missing kwards to the class
+
             allowed_fields = set(self.__fields__.keys())
             filtered_kwargs = {k: v for k, v in kwargs.items() if k in allowed_fields}
             filtered_kwargs["headers"] = auth_header
             filtered_kwargs["model"]= self.model_name.value
-            # print(kwargs)
+
             # Initialize a copy of the model using the filtered kwargs
             model = model.__class__(**filtered_kwargs)
 
-            # Initialize a copy of the model using the config
-            #model = model.__class__(**kwargs)
             return model
 
 

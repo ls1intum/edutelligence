@@ -3,14 +3,7 @@ from contextlib import contextmanager
 from typing import Any, Callable, Dict, List
 from pydantic import Field, validator, PositiveInt
 from enum import Enum
-
 import openai
-# from langchain.chat_models import AzureChatOpenAI, ChatOpenAI
-# from langchain.llms import AzureOpenAI, OpenAI
-# from langchain.llms.openai import BaseOpenAI
-# from langchain.base_language import BaseLanguageModel
-# from langchain_community.llms import OpenAI #type: ignore
-# from langchain_community.llms.openai import BaseOpenAI#type: ignore
 from langchain.base_language import BaseLanguageModel
 from langchain_openai import AzureChatOpenAI, AzureOpenAI, ChatOpenAI
 

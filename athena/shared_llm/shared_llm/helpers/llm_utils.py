@@ -1,9 +1,5 @@
 from typing import Optional, Type, TypeVar, List
 from langchain_community.chat_models import ChatOllama # type: ignore
-from requests.auth import HTTPBasicAuth
-import json
-import os
-import requests
 import tiktoken
 from langchain_core.output_parsers.openai_functions import JsonOutputFunctionsParser
 from langchain_core.utils.function_calling import convert_to_openai_function
@@ -189,7 +185,6 @@ async def predict_and_parse(
             # In the future, we should probably have some recovery mechanism here (i.e. fix the output with another prompt)
             return None
     else:
-    
         output_parser = PydanticOutputParser(pydantic_object=pydantic_object)
         #chain = LLMChain(llm=model, prompt=chat_prompt, output_parser=output_parser, tags=tags)
         runnable = chat_prompt | model.with_retry(
