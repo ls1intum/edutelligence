@@ -8,6 +8,11 @@ services:
     image: athena
     command: echo "Athena build succeeded, exiting (this is normal)"
 
+  shared_llm:
+    build: ./shared_llm
+    image: shared_llm
+    command: echo "Shared_llm build succeeded, exiting (this is normal)"
+
   assessment_module_manager:
     build: ./assessment_module_manager
     depends_on:
@@ -36,6 +41,7 @@ services:
     build: ./module_text_llm
     depends_on:
       - athena
+      - shared_llm
     ports:
       - "5003:5003"
 
