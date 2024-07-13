@@ -13,7 +13,6 @@ langchain-openai = "^0.1.7"
 python-dotenv = "^1.0.0"
 nltk = "^3.8.1"
 gitpython = "^3.1.41"
-replicate = "^0.11.0"
 tiktoken = "^0.7"
 langchain_community = "^0.2.0"
 

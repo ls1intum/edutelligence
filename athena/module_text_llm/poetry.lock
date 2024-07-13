@@ -1741,25 +1741,6 @@ files = [
 ]
 
 [[package]]
-name = "replicate"
-version = "0.11.0"
-description = "Python client for Replicate"
-optional = false
-python-versions = ">=3.8"
-files = [
-    {file = "replicate-0.11.0-py3-none-any.whl", hash = "sha256:fbb8815068864dc822cd4fa7b6103d6f4089d6ef122abd6c3441ca0f0f110c46"},
-    {file = "replicate-0.11.0.tar.gz", hash = "sha256:4d54b5838c1552a6f76cc37c3af8d9a7998105382082d672acad31636ad443b5"},
-]
-
-[package.dependencies]
-packaging = "*"
-pydantic = ">1"
-requests = ">2"
-
-[package.extras]
-dev = ["black", "mypy", "pytest", "responses", "ruff"]
-
-[[package]]
 name = "requests"
 version = "2.32.3"
 description = "Python HTTP for Humans."
@@ -1839,7 +1820,6 @@ langchain-openai = "^0.1.7"
 nltk = "^3.8.1"
 openai = "^1.30.5"
 python-dotenv = "^1.0.0"
-replicate = "^0.11.0"
 tiktoken = "^0.7"
 
 [package.source]
@@ -2339,4 +2319,4 @@ multidict = ">=4.0"
 [metadata]
 lock-version = "2.0"
 python-versions = "3.11.*"
-content-hash = "111feca6f4ce40955deb00024a5471678e498acfe91a8d9a793533aecccecff9"
+content-hash = "bb8d1fa0e7d43869a32b840e2187fd8517badbb532abbe98cc964565ee25b025"

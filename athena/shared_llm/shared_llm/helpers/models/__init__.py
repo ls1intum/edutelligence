@@ -23,16 +23,6 @@ except AttributeError:
     pass
 
 try:
-    import shared_llm.helpers.models.replicate as replicate_config #type: ignore
-    types.append(replicate_config.ReplicateModelConfig)
-    if default_model_name in replicate_config.available_models:
-        DefaultModelConfig = replicate_config.ReplicateModelConfig
-    if evaluation_model_name in replicate_config.available_models:
-        evaluation_model = replicate_config.available_models[evaluation_model_name]
-except AttributeError:
-    pass
-
-try:
     import shared_llm.helpers.models.llama as ollama_config #type: ignore
     types.append(ollama_config.OllamaModelConfig)
     # DefaultModelConfig = ollama_config.OllamaModelConfig
