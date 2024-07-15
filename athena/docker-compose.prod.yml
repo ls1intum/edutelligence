@@ -60,21 +60,13 @@ services:
       - postgres
     image: ls1tum/athena_module_programming_themisml:${ATHENA_TAG:-develop}
 
-  module_programming_ast:
-    hostname: module-programming-ast
+  module_programming_apted:
+    hostname: module-programming-apted
     env_file:
-      - ${ATHENA_ENV_DIR:-./env_example}/module_programming_ast.env
+      - ${ATHENA_ENV_DIR:-./env_example}/module_programming_apted.env
     depends_on:
       - postgres
-    image: ls1tum/athena_module_programming_ast:${ATHENA_TAG:-develop}
-
-  module_programming_code_embedding:
-    hostname: module-programming-code-embedding
-    env_file:
-      - ${ATHENA_ENV_DIR:-./env_example}/module_programming_code_embedding.env
-    depends_on:
-      - postgres
-    image: ls1tum/athena_module_programming_code_embedding:${ATHENA_TAG:-develop}
+    image: ls1tum/athena_module_programming_apted:${ATHENA_TAG:-develop}
 
   module_modeling_llm:
     hostname: module-modeling-llm

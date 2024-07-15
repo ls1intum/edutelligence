@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 
-# This is the Dockerfile for the module_programming_ast.
+# This is the Dockerfile for the module_programming_apted.
 
 FROM python:3.11
 LABEL org.opencontainers.image.source=https://github.com/ls1intum/Athena
