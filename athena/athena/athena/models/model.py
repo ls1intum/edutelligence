@@ -1,9 +1,17 @@
 import importlib
 
 from pydantic import BaseModel
+from sqlalchemy import Column, String, UniqueConstraint
 
 
 class Model:
+
+    lms_url = Column(String, index=True, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint('id', 'lms_url'),
+    )
+
     @classmethod
     def get_schema_class(cls) -> BaseModel:
         # The schema class has the same name as myself, but without the "DB" prefix.
