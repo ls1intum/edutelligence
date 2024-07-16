@@ -5,14 +5,9 @@ from pydantic import Field, validator, PositiveInt
 from enum import Enum
 
 import openai
-# from langchain.chat_models import AzureChatOpenAI, ChatOpenAI
-# from langchain.llms import AzureOpenAI, OpenAI
-# from langchain.llms.openai import BaseOpenAI
-# from langchain.base_language import BaseLanguageModel
-from langchain_community.llms import OpenAI
-from langchain_community.llms.openai import BaseOpenAI
+from langchain_community.llms.openai import BaseOpenAI # has to stay appreantly
 from langchain.base_language import BaseLanguageModel
-from langchain_openai import AzureChatOpenAI, AzureOpenAI, ChatOpenAI
+from langchain_openai import AzureChatOpenAI, AzureOpenAI, ChatOpenAI,OpenAI
 
 from athena.logger import logger
 from .model_config import ModelConfig
@@ -21,73 +16,12 @@ from .model_config import ModelConfig
 OPENAI_PREFIX = "openai_"
 AZURE_OPENAI_PREFIX = "azure_openai_"
 
-
-#########################################################################
-# Monkey patching openai/langchain api                                  #
-# ===================================================================== #
-# This allows us to have multiple api keys i.e. mixing                  #
-# openai and azure openai api keys so we can use not only deployed      #
-# models but also models from the non-azure openai api.                 #
-# This is mostly for testing purposes, in production we can just deploy #
-# the models to azure that we want to use.                              #
-#########################################################################
-
-# Prevent LangChain error, we will set the key later
-os.environ["OPENAI_API_KEY"] = ""
-
-def _wrap(old: Any, new: Any) -> Callable:
-    def repl(*args: Any, **kwargs: Any) -> Any:
-        new(args[0])  # args[0] is self
-        return old(*args, **kwargs)
-    return repl
-
-
-def _async_wrap(old: Any, new: Any):
-    async def repl(*args, **kwargs):
-        new(args[0])  # args[0] is self
-        return await old(*args, **kwargs)
-    return repl
-
-
-def _set_credentials(self):
-    openai.api_key = self.openai_api_key
-
-    api_type = "open_ai"
-    api_base = "https://api.openai.com/v1"
-    api_version = None
-    if hasattr(self, "openai_api_type"):
-        api_type = self.openai_api_type
-
-    if api_type == "azure":
-        if hasattr(self, "openai_api_base"):
-            api_base = self.openai_api_base
-        if hasattr(self, "openai_api_version"):
-            api_version = self.openai_api_version
-
-    openai.api_type = api_type
-    openai.api_base = api_base
-    openai.api_version = api_version
-
-
-# Monkey patching langchain
-# pylint: disable=protected-access
-ChatOpenAI._generate = _wrap(ChatOpenAI._generate, _set_credentials)  # type: ignore
-ChatOpenAI._agenerate = _async_wrap(ChatOpenAI._agenerate, _set_credentials)  # type: ignore
-BaseOpenAI._generate = _wrap(BaseOpenAI._generate, _set_credentials)  # type: ignore
-BaseOpenAI._agenerate = _async_wrap(BaseOpenAI._agenerate, _set_credentials)  # type: ignore
-# pylint: enable=protected-access
-
-#########################################################################
-# Monkey patching end                                                   #
-#########################################################################
-
-
 def _use_azure_credentials():
     openai.api_type = "azure"
     openai.api_key = os.environ.get("LLM_AZURE_OPENAI_API_KEY")
     openai.api_base = os.environ.get("LLM_AZURE_OPENAI_API_BASE")
-    # os.environ.get("LLM_AZURE_OPENAI_API_VERSION")
-    openai.api_version = "2023-03-15-preview"
+    os.environ.get("LLM_AZURE_OPENAI_API_VERSION")
+    # openai.api_version = "2023-03-15-preview"
 
 
 def _use_openai_credentials():
@@ -144,6 +78,30 @@ def _openai_client(use_azure_api: bool, is_preference: bool):
 
     # API client is setup correctly
     yield
+    
+model_aliases = {
+    "gpt-35-turbo": "gpt-3.5-turbo",
+}
+openai_models = {
+    "chat_completion": [
+        "gpt-4",
+        # "gpt-4-32k", # Not publicly available
+        "gpt-3.5-turbo",
+        "gpt-3.5-turbo-16k"
+    ],
+    "completion": [
+        "text-davinci-003",
+        "text-curie-001",
+        "text-babbage-001",
+        "text-ada-001",
+    ],
+    "fine_tuneing": [
+        "davinci",
+        "curie",
+        "babbage",
+        "ada",
+    ]
+}
 
 def _get_available_deployments():
     available_deployments: Dict[str, Dict[str, Any]] = {
@@ -154,16 +112,20 @@ def _get_available_deployments():
         "inference": {}
     }
 
-    with _openai_client(use_azure_api=True, is_preference=False):
-        if azure_openai_available:
-            deployments = openai.AzureOpenAI(api_version=openai.api_version, azure_endpoint=openai.api_base, api_key=openai.api_key).models.list() or []
+
+    if azure_openai_available:
+        with _openai_client(use_azure_api=True, is_preference=False):
+            deployments = openai.Deployment.list().get("data") or []  # type: ignore
             for deployment in deployments:
-                if deployment.capabilities["chat_completion"]:
+                model_name = deployment.model
+                if model_name in model_aliases:
+                    model_name = model_aliases[model_name]
+                if model_name in openai_models["chat_completion"]:
                     available_deployments["chat_completion"][deployment.id] = deployment
-        if openai_available:
-            models = openai.Model.list()
-            # for model in models:
-            #     pass
+                elif model_name in openai_models["completion"]:
+                    available_deployments["completion"][deployment.id] = deployment
+                elif model_name in openai_models["fine_tuneing"]:
+                    available_deployments["fine_tuneing"][deployment.id] = deployment
 
     return available_deployments
 
