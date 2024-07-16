@@ -41,8 +41,7 @@ body:
     options:
       - Assessment Module Manager
       - Modeling LLM
-      - Programming AST
-      - Programming Code Embedding
+      - Programming APTED
       - Programming LLM
       - Programming ThemisML
       - Text CoFee
