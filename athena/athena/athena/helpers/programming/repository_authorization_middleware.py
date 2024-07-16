@@ -2,6 +2,9 @@ from fastapi import FastAPI, Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 from typing import Callable, Awaitable
 
+from athena.contextvars import set_repository_authorization_secret_context_var
+
+
 class RepositoryAuthorizationMiddleware(BaseHTTPMiddleware):
     """
     Capture the X-Repository-Authorization-Secret header from the assessment module manager and store it in the app state.
@@ -14,7 +17,7 @@ class RepositoryAuthorizationMiddleware(BaseHTTPMiddleware):
         x_repository_auth_secret = request.headers.get("X-Repository-Authorization-Secret")
 
         if x_repository_auth_secret:
-            request.app.state.repository_authorization_secret = x_repository_auth_secret
+            set_repository_authorization_secret_context_var(x_repository_auth_secret)
 
         response = await call_next(request)
         return response
@@ -22,7 +25,3 @@ class RepositoryAuthorizationMiddleware(BaseHTTPMiddleware):
 
 def init_repo_auth_middleware(app: FastAPI):
     app.add_middleware(RepositoryAuthorizationMiddleware)
-
-    def init_repo_auth_secret():
-        app.state.repository_authorization_secret = None
-    app.on_event("startup")(init_repo_auth_secret)

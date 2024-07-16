@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Optional, cast
 from zipfile import ZipFile
 
-import athena  # for importing athena.app (which is not directly possible because of circular imports)
+from athena import contextvars
 
 import httpx
 from git.repo import Repo
@@ -24,10 +24,9 @@ def get_repository_zip(url: str, authorization_secret: Optional[str] = None) -> 
 
     if not cache_file_path.exists():
         if authorization_secret is None:
-            # auto-determine from FastAPI app state
-            if athena.app.state.repository_authorization_secret is None:
+            if contextvars.repository_authorization_secret_context_var_empty():
                 raise ValueError("Authorization secret for the repository API is not set. Pass authorization_secret to this function or add the X-Repository-Authorization-Secret header to the request from the assessment module manager.")
-            authorization_secret = athena.app.state.repository_authorization_secret
+            authorization_secret = contextvars.get_repository_authorization_secret_context_var()
         with httpx.stream("GET", url, headers={ "Authorization": cast(str, authorization_secret) }) as response:
             response.raise_for_status()
             with open(cache_file_path, "wb") as f:
