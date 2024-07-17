@@ -30,10 +30,6 @@ RUN cp ./modules.docker.ini ./modules.ini
 RUN rm ./modules.docker.ini
 
 # Use deployments configuration file for docker
-RUN cp ./deployments.docker.ini ./deployments.ini
-RUN rm ./deployments.docker.ini
-
-# Use deployments configuration file for docker
 RUN mv ./deployments.docker.ini ./deployments.ini
 
 # poetry scripts don't work here
