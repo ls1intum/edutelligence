@@ -2,12 +2,12 @@ import os
 import runpy
 from pathlib import Path
 
+from . import contextvars
 from .app import app
 from .schemas import ExerciseType, GradingCriterion, StructuredGradingInstruction
 from .metadata import emit_meta, get_meta
 from .experiment import get_experiment_environment
 from .endpoints import submission_selector, submissions_consumer, feedback_consumer, feedback_provider, config_schema_provider, evaluation_provider  # type: ignore
-
 
 @app.get("/")
 def module_health():
@@ -23,6 +23,8 @@ def run_module():
 
 
 __all__ = [
+    "contextvars",
+    "app",
     "submission_selector",
     "submissions_consumer",
     "feedback_consumer",
@@ -34,6 +36,5 @@ __all__ = [
     "get_experiment_environment",
     "ExerciseType",
     "GradingCriterion",
-    "StructuredGradingInstruction",
-    "app"
+    "StructuredGradingInstruction"
 ]

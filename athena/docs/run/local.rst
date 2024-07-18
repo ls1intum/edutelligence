@@ -2,7 +2,7 @@ From the Command Line
 ===========================================
 
 To run Athena, you have to start at least two processes.
-The assessment module manager API will be available at http://localhost:5000.
+The assessment module manager API will be available at http://localhost:5100.
 
 **Before you start the processes, make sure that you have loaded the environment variables from the** ``.env`` **file in each folder.** This can be achieved using
     .. code-block:: bash
@@ -22,4 +22,3 @@ Start it from the ``module_example`` (or another ``module_*`` folder) using
     .. code-block:: bash
 
         poetry run module
-

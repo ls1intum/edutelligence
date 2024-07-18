@@ -13,7 +13,7 @@ services:
     depends_on:
       - athena
     ports:
-      - "5000:5000"
+      - "5100:5100"
 
   module_example:
     hostname: module-example
@@ -62,14 +62,6 @@ services:
       - athena
     ports:
       - "5006:5006"
-
-  module_programming_code_embedding:
-    hostname: module-programming-code-embedding
-    build: ./module_programming_code_embedding
-    depends_on:
-      - athena
-    ports:
-      - "5007:5007"
 
   module_modeling_llm:
     hostname: module-modeling-llm

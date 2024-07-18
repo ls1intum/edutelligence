@@ -28,5 +28,8 @@ COPY . ./
 # Use modules configuration file for docker
 RUN mv ./modules.docker.ini ./modules.ini
 
+# Use deployments configuration file for docker
+RUN mv ./deployments.docker.ini ./deployments.ini
+
 # poetry scripts don't work here
 CMD poetry run python -m assessment_module_manager
