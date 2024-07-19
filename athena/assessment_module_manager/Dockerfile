@@ -30,7 +30,8 @@ RUN cp ./modules.docker.ini ./modules.ini
 RUN rm ./modules.docker.ini
 
 # Use deployments configuration file for docker
-RUN mv ./deployments.docker.ini ./deployments.ini
+RUN cp ./deployments.docker.ini ./deployments.ini
+RUN rm ./deployments.docker.ini
 
 # poetry scripts don't work here
 CMD poetry run python -m assessment_module_manager
