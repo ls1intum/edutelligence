@@ -95,7 +95,7 @@ Focus on their input and maintain your role. Use tools if useful, e.g. to figure
 elicit_begin_agent_jol_prompt = """
 Now, this time, the student did not send you a new message.
 You are being activated because something happened: the student submitted a JOL for a competency.
-You should respond to this event. Focus on their self-reflection and the difference between their self-assessment and the system confidence value.
+You should respond to this event. Focus on their self-reflection and the difference between their self-assessment and the system mastery value.
 Note that JoL goes from 0-5, where 0 is the lowest and 5 is the highest, while mastery goes from 0%-100%.
 If they ranked themselves lower than the system, you should encourage them to keep up the good work and that it is normal to feel less confident in the beginning.
 If they ranked themselves higher than the system, you should tell them that it is great to see that they are confident, but that they should keep in mind that the system has a more objective view of their progress
