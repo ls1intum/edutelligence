@@ -19,7 +19,7 @@ type Action =
   | { type: 'SET_VIEW_MODE'; payload: ViewMode };
 
 function createInitialState(): BaseInfo {
-  let athenaUrl = "http://127.0.0.1:5000";
+  let athenaUrl = "http://127.0.0.1:5100";
   let lmsUrl = "http://localhost:3000";
   if (
     typeof window !== "undefined" &&
