@@ -17,14 +17,14 @@ import { Feedback } from "@/model/feedback";
  */
 export default function useRequestFeedbackSuggestions(
   options: Omit<
-    UseMutationOptions<ModuleResponse | undefined, AthenaError, { exercise: Exercise; submission: Submission }>, 
+    UseMutationOptions<ModuleResponse | undefined, AthenaError, { exercise: Exercise; submission: Submission, is_graded: boolean }>,
     "mutationFn"
   > = {}
 ) {
   const athenaFetcher = useAthenaFetcher();
   return useMutation({
-    mutationFn: async ({ exercise, submission }) => {
-      let response = await athenaFetcher("/feedback_suggestions", { exercise, submission });
+    mutationFn: async ({ exercise, submission, is_graded }) => {
+      let response = await athenaFetcher("/feedback_suggestions", { exercise, submission, isGraded: is_graded });
       if (response?.data) {
         response.data = response.data.map((feedback: Feedback, index: number) => {
           // Change variable names from camel case to snake case (change this in the future, index_start -> indexStart, index_end -> indexEnd)

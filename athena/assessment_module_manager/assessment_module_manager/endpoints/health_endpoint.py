@@ -37,7 +37,8 @@ class HealthResponse(BaseModel):
                     "url": "http://localhost:5001",
                     "type": "programming",
                     "healthy": True,
-                    "supportsEvaluation": True
+                    "supportsEvaluation": True,
+                    "supportsNonGradedFeedbackRequests": True
                 }
             }
         ]
@@ -58,7 +59,8 @@ async def get_health() -> HealthResponse:
                 "url": module.url,
                 "type": module.type,
                 "healthy": await is_healthy(module),
-                "supportsEvaluation": module.supports_evaluation
+                "supportsEvaluation": module.supports_evaluation,
+                "supportsNonGradedFeedbackRequests": module.supports_non_graded_feedback_requests
             }
             for module in get_modules()
         }

@@ -91,7 +91,7 @@ async def generate_summary_by_file(
         model=model,
         system_message=config.generate_file_summary_prompt.system_message,
         human_message=config.generate_file_summary_prompt.human_message,
-        pydantic_object=FileDescription,
+        pydantic_object=SolutionSummary,
     )
 
     prompt_inputs = []
