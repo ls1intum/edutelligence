@@ -1,13 +1,10 @@
 import os
-from contextlib import contextmanager
-from typing import Any, Callable, Dict, List
+from typing import Any , Dict
 from pydantic import Field, validator, PositiveInt
 from enum import Enum
-
 import openai
-from langchain_community.llms.openai import BaseOpenAI # has to stay appreantly
 from langchain.base_language import BaseLanguageModel
-from langchain_openai import AzureChatOpenAI, AzureOpenAI, ChatOpenAI,OpenAI
+from langchain_openai import AzureChatOpenAI, AzureOpenAI, ChatOpenAI
 
 from athena.logger import logger
 from .model_config import ModelConfig
@@ -16,72 +13,39 @@ from .model_config import ModelConfig
 OPENAI_PREFIX = "openai_"
 AZURE_OPENAI_PREFIX = "azure_openai_"
 
-def _use_azure_credentials():
-    openai.api_type = "azure"
-    openai.api_key = os.environ.get("LLM_AZURE_OPENAI_API_KEY")
-    openai.api_base = os.environ.get("LLM_AZURE_OPENAI_API_BASE")
-    os.environ.get("LLM_AZURE_OPENAI_API_VERSION")
-    # openai.api_version = "2023-03-15-preview"
-
-
-def _use_openai_credentials():
-    openai.api_type = "open_ai"
-    openai.api_key = os.environ.get("LLM_OPENAI_API_KEY")
-    openai.api_base = "https://api.openai.com/v1"
-    openai.api_version = None
-
-
 openai_available = bool(os.environ.get("LLM_OPENAI_API_KEY"))
+if openai_available:
+    os.environ["OPENAI_API_KEY"] = os.environ["LLM_OPENAI_API_KEY"]
+
 azure_openai_available = bool(os.environ.get("LLM_AZURE_OPENAI_API_KEY"))
+if azure_openai_available:
+    os.environ["AZURE_OPENAI_ENDPOINT"]=os.environ["LLM_AZURE_OPENAI_API_BASE"]
+    os.environ["AZURE_OPENAI_API_KEY"]=os.environ["LLM_AZURE_OPENAI_API_KEY"]
+    os.environ["OPENAI_API_VERSION"]=os.environ["LLM_AZURE_OPENAI_API_VERSION"]
 
+def _get_available_deployments():
+    available_deployments: Dict[str, Dict[str, Any]] = {
+        "chat_completion": {},
+        "completion": {},
+        "fine_tune": {},
+        "embeddings": {},
+        "inference": {}
+    }
 
-# This is a hack to make sure that the openai api is set correctly
-# Right now it is overkill, but it will be useful when the api gets fixed and we no longer
-# hardcode the model names (i.e. OpenAI fixes their api)
-@contextmanager
-def _openai_client(use_azure_api: bool, is_preference: bool):
-    """Set the openai client to use the correct api type, if available
+    if azure_openai_available:
+        deployments = openai.AzureOpenAI().models.list() or []#type:ignore
+        for deployment in deployments:
+            if deployment.capabilities["chat_completion"]:#type:ignore
+                available_deployments["chat_completion"][deployment.id] = deployment
+                
+    if openai_available:
+        
+        models = openai.OpenAI().models.list()#type:ignore
+        for model in models:
+            pass
 
-    Args:
-        use_azure_api (bool): If true, use the azure api, else use the openai api
-        is_preference (bool): If true, it can fall back to the other api if the preferred one is not available
-    """
-    if use_azure_api:
-        if azure_openai_available:
-            _use_azure_credentials()
-        elif is_preference and openai_available:
-            _use_openai_credentials()
-        elif is_preference:
-            raise EnvironmentError(
-                "No OpenAI api available, please set LLM_AZURE_OPENAI_API_KEY, LLM_AZURE_OPENAI_API_BASE and "
-                "LLM_AZURE_OPENAI_API_VERSION environment variables or LLM_OPENAI_API_KEY environment variable"
-            )
-        else:
-            raise EnvironmentError(
-                "Azure OpenAI api not available, please set LLM_AZURE_OPENAI_API_KEY, LLM_AZURE_OPENAI_API_BASE and "
-                "LLM_AZURE_OPENAI_API_VERSION environment variables"
-            )
-    else:
-        if openai_available:
-            _use_openai_credentials()
-        elif is_preference and azure_openai_available:
-            _use_azure_credentials()
-        elif is_preference:
-            raise EnvironmentError(
-                "No OpenAI api available, please set LLM_OPENAI_API_KEY environment variable or LLM_AZURE_OPENAI_API_KEY, "
-                "LLM_AZURE_OPENAI_API_BASE and LLM_AZURE_OPENAI_API_VERSION environment variables"
-            )
-        else:
-            raise EnvironmentError(
-                "OpenAI api not available, please set LLM_OPENAI_API_KEY environment variable"
-            )
+    return available_deployments
 
-    # API client is setup correctly
-    yield
-    
-model_aliases = {
-    "gpt-35-turbo": "gpt-3.5-turbo",
-}
 openai_models = {
     "chat_completion": [
         "gpt-4",
@@ -103,48 +67,21 @@ openai_models = {
     ]
 }
 
-def _get_available_deployments():
-    available_deployments: Dict[str, Dict[str, Any]] = {
-        "chat_completion": {},
-        "completion": {},
-        "fine_tune": {},
-        "embeddings": {},
-        "inference": {}
-    }
-
-
-    if azure_openai_available:
-        with _openai_client(use_azure_api=True, is_preference=False):
-            deployments = openai.Deployment.list().get("data") or []  # type: ignore
-            for deployment in deployments:
-                model_name = deployment.model
-                if model_name in model_aliases:
-                    model_name = model_aliases[model_name]
-                if model_name in openai_models["chat_completion"]:
-                    available_deployments["chat_completion"][deployment.id] = deployment
-                elif model_name in openai_models["completion"]:
-                    available_deployments["completion"][deployment.id] = deployment
-                elif model_name in openai_models["fine_tuneing"]:
-                    available_deployments["fine_tuneing"][deployment.id] = deployment
-
-    return available_deployments
-
-
 def _get_available_models(available_deployments: Dict[str, Dict[str, Any]]):
     available_models: Dict[str, BaseLanguageModel] = {}
 
     if openai_available:
         openai_api_key = os.environ["LLM_OPENAI_API_KEY"]
-        for model in available_models["chat_completion"]:
-            available_models[OPENAI_PREFIX + model.id] = ChatOpenAI(
-                model=model.id,
-                openai_api_key=openai_api_key,
+        for model in openai_models["chat_completion"]:
+            available_models[OPENAI_PREFIX + model.id] = ChatOpenAI(#type:ignore
+                model=model.id,#type:ignore
+                openai_api_key=openai_api_key,#type:ignore
                 client="",
                 temperature=0
             )
-        for model in available_models["completion"]:
-            available_models[OPENAI_PREFIX + model.id] = OpenAI(
-                model=model.id,
+        for model in openai_models["completion"]:
+            available_models[OPENAI_PREFIX + model.id] = OpenAI(#type:ignore
+                model=model.id,#type:ignore
                 openai_api_key=openai_api_key,
                 client="",
                 temperature=0
@@ -175,13 +112,13 @@ if available_models:
     logger.info("Available openai models: %s", ", ".join(available_models.keys()))
 
     OpenAIModel = Enum('OpenAIModel', {name: name for name in available_models})  # type: ignore
-    default_model_name = "gpt-35-turbo"
+    default_model_name = "gpt-3.5-turbo"
     if "LLM_DEFAULT_MODEL" in os.environ and os.environ["LLM_DEFAULT_MODEL"] in available_models:
         default_model_name = os.environ["LLM_DEFAULT_MODEL"]
     if default_model_name not in available_models:
         default_model_name = list(available_models.keys())[0]
 
-    default_openai_model = OpenAIModel[default_model_name]
+    default_openai_model = OpenAIModel[default_model_name]#type:ignore
 
     # Long descriptions will be displayed in the playground UI and are copied from the OpenAI docs
     class OpenAIModelConfig(ModelConfig):

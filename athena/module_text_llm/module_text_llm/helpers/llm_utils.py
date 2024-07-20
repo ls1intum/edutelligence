@@ -1,5 +1,5 @@
 from typing import Optional, Type, TypeVar, List
-#from pydantic import BaseModel, ValidationError
+from langchain_community.chat_models import ChatOllama # type: ignore
 import tiktoken
 from langchain_core.output_parsers.openai_functions import JsonOutputFunctionsParser
 from langchain_core.utils.function_calling import convert_to_openai_function
@@ -24,7 +24,6 @@ from langchain.chains import LLMChain
 from athena import emit_meta, get_experiment_environment
 
 T = TypeVar("T", bound=BaseModel)
-
 
 def num_tokens_from_string(string: str) -> int:
     """Returns the number of tokens in a text string."""
@@ -89,6 +88,8 @@ def supports_function_calling(model: BaseLanguageModel):
     """
     return isinstance(model, ChatOpenAI)
 
+def is_azure_call(model:BaseLanguageModel):
+    return isinstance(model, AzureChatOpenAI)
 
 def get_chat_prompt_with_formatting_instructions(
             model: BaseLanguageModel,
@@ -116,11 +117,10 @@ def get_chat_prompt_with_formatting_instructions(
     
     output_parser = PydanticOutputParser(pydantic_object=pydantic_object)
     system_message_prompt = SystemMessagePromptTemplate.from_template(system_message + "\n{format_instructions}")
-    system_message_prompt.prompt.partial_variables = {"format_instructions": output_parser.get_format_instructions()}
-    system_message_prompt.prompt.input_variables.remove("format_instructions")
+    system_message_prompt.prompt.partial_variables = {"format_instructions": output_parser.get_format_instructions()}#type: ignore
+    system_message_prompt.prompt.input_variables.remove("format_instructions") #type:ignore
     human_message_prompt = HumanMessagePromptTemplate.from_template(human_message + "\n\nJSON response following the provided schema:")
     return ChatPromptTemplate.from_messages([system_message_prompt, human_message_prompt])
-
 
 async def predict_and_parse(
         model: BaseLanguageModel, 
@@ -129,6 +129,7 @@ async def predict_and_parse(
         pydantic_object: Type[T], 
         tags: Optional[List[str]]
     ) -> Optional[T]:
+    print("type of model is ", type(model))
     """Predicts an LLM completion using the model and parses the output using the provided Pydantic model
 
     Args:
@@ -163,25 +164,40 @@ async def predict_and_parse(
             stop_after_attempt=3,
         ) | JsonOutputFunctionsParser()
         try:
-            #return await chain.arun(**prompt_input)
             output_dict = await runnable.ainvoke(prompt_input)
-            return pydantic_object.parse_obj(output_dict)
+            print(output_dict)
+            return pydantic_object.model_validate(output_dict)
         except (OutputParserException, ValidationError):
             # In the future, we should probably have some recovery mechanism here (i.e. fix the output with another prompt)
             return None
+    elif is_azure_call(model) :
+        output_parser = PydanticOutputParser(pydantic_object=pydantic_object)
+        try:    
+            runnable = chat_prompt | model.with_retry(
+                retry_if_exception_type=(ValueError, OutputParserException),
+                wait_exponential_jitter=True,
+                stop_after_attempt=3,
+            ) | output_parser
+            output_dict = await runnable.ainvoke(prompt_input)
+            print(output_dict)
+            return pydantic_object.model_validate(output_dict)
+        except (OutputParserException, ValidationError):
+            # In the future, we should probably have some recovery mechanism here (i.e. fix the output with another prompt)
+            return None
+    else:
+        output_parser = PydanticOutputParser(pydantic_object=pydantic_object)
+        #chain = LLMChain(llm=model, prompt=chat_prompt, output_parser=output_parser, tags=tags)
+        runnable = chat_prompt | model.with_retry(
+                    retry_if_exception_type=(ValueError, OutputParserException),
+                    wait_exponential_jitter=True,
+                    stop_after_attempt=3,
+                ) | output_parser
 
-    output_parser = PydanticOutputParser(pydantic_object=pydantic_object)
-    #chain = LLMChain(llm=model, prompt=chat_prompt, output_parser=output_parser, tags=tags)
-    runnable = chat_prompt | model.with_retry(
-        retry_if_exception_type=(ValueError, OutputParserException),
-        wait_exponential_jitter=True,
-        stop_after_attempt=3,
-    ) | output_parser
-    
-    try:
-        output_dict = await runnable.ainvoke(prompt_input)
-        return pydantic_object.parse_obj(output_dict)
-        #return await chain.arun(**prompt_input)
-    except (OutputParserException, ValidationError):
-        # In the future, we should probably have some recovery mechanism here (i.e. fix the output with another prompt)
-        return None
+        try:
+            output_dict = await runnable.ainvoke(prompt_input)
+            return pydantic_object.model_validate(output_dict)
+
+        except (OutputParserException, ValidationError):
+            # In the future, we should probably have some recovery mechanism here (i.e. fix the output with another prompt)
+            # The future is now, or maybe soon
+            return None
