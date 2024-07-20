@@ -6,6 +6,7 @@ import { ReactNode, createContext, useContext, useReducer } from 'react';
 export type BaseInfo = {
   athenaUrl: string;
   athenaSecret: string;
+  lmsUrl: string;
   dataMode: DataMode;
   viewMode: ViewMode;
 };
@@ -13,21 +14,26 @@ export type BaseInfo = {
 type Action =
   | { type: 'SET_ATHENA_URL'; payload: string }
   | { type: 'SET_ATHENA_SECRET'; payload: string }
+  | { type: 'SET_LMS_URL'; payload: string }
   | { type: 'SET_DATA_MODE'; payload: DataMode }
   | { type: 'SET_VIEW_MODE'; payload: ViewMode };
 
 function createInitialState(): BaseInfo {
-  let defaultUrl = "http://127.0.0.1:5100";
+  let athenaUrl = "http://127.0.0.1:5100";
+  let lmsUrl = "http://localhost:3000";
   if (
     typeof window !== "undefined" &&
     window.location.hostname !== "localhost"
   ) {
-    // default url for non-local development is the origin of the current page
-    defaultUrl = window.location.origin;
+    // athena url for non-local development is the origin of the current page
+    athenaUrl = window.location.origin;
+    // lms url for non-local development is the origin of the current page
+    lmsUrl = window.location.origin;
   }
   return {
-    athenaUrl: defaultUrl,
+    athenaUrl: athenaUrl,
     athenaSecret: "",
+    lmsUrl: lmsUrl,
     dataMode: "example",
     viewMode: "module_requests",
   };
@@ -45,6 +51,8 @@ function reducer(state: BaseInfo, action: Action): BaseInfo {
   switch (action.type) {
     case "SET_ATHENA_URL":
       return { ...state, athenaUrl: action.payload };
+    case "SET_LMS_URL":
+      return { ...state, lmsUrl: action.payload };
     case "SET_ATHENA_SECRET":
       return { ...state, athenaSecret: action.payload };
     case "SET_DATA_MODE":
