@@ -69,14 +69,6 @@ services:
     ports:
       - "5006:5006"
 
-  module_programming_code_embedding:
-    hostname: module-programming-code-embedding
-    build: ./module_programming_code_embedding
-    depends_on:
-      - athena
-    ports:
-      - "5007:5007"
-
   module_modeling_llm:
     hostname: module-modeling-llm
     build: ./module_modeling_llm
