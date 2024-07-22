@@ -4,7 +4,7 @@ from pydantic import Field, validator, PositiveInt
 from enum import Enum
 import openai
 from langchain.base_language import BaseLanguageModel
-from langchain_openai import AzureChatOpenAI, AzureOpenAI, ChatOpenAI
+from langchain_openai import AzureChatOpenAI, AzureOpenAI, ChatOpenAI, OpenAI
 
 from athena.logger import logger
 from .model_config import ModelConfig
@@ -16,6 +16,8 @@ AZURE_OPENAI_PREFIX = "azure_openai_"
 openai_available = bool(os.environ.get("LLM_OPENAI_API_KEY"))
 if openai_available:
     os.environ["OPENAI_API_KEY"] = os.environ["LLM_OPENAI_API_KEY"]
+    models_ai_api = openai.OpenAI().models.list()#type:ignore
+
 
 azure_openai_available = bool(os.environ.get("LLM_AZURE_OPENAI_API_KEY"))
 if azure_openai_available:
@@ -38,17 +40,19 @@ def _get_available_deployments():
             if deployment.capabilities["chat_completion"]:#type:ignore
                 available_deployments["chat_completion"][deployment.id] = deployment
                 
-    if openai_available:
-        
-        models = openai.OpenAI().models.list()#type:ignore
-        for model in models:
-            pass
+    # if openai_available:
+    #     models_ai_api = openai.OpenAI().models.list()#type:ignore
+    #     for model in models_ai_api:
+    #         # print(model)
+    #         pass
 
     return available_deployments
 
 openai_models = {
     "chat_completion": [
         "gpt-4",
+        "gpt-4o-mini",
+        # "gpt-35",
         # "gpt-4-32k", # Not publicly available
         "gpt-3.5-turbo",
         "gpt-3.5-turbo-16k"
@@ -73,19 +77,15 @@ def _get_available_models(available_deployments: Dict[str, Dict[str, Any]]):
     if openai_available:
         openai_api_key = os.environ["LLM_OPENAI_API_KEY"]
         for model in openai_models["chat_completion"]:
-            available_models[OPENAI_PREFIX + model.id] = ChatOpenAI(#type:ignore
-                model=model.id,#type:ignore
-                openai_api_key=openai_api_key,#type:ignore
-                client="",
-                temperature=0
+            available_models[OPENAI_PREFIX + model] = ChatOpenAI(#type:ignore
+                model=model,
             )
+        #     print( )
         for model in openai_models["completion"]:
-            available_models[OPENAI_PREFIX + model.id] = OpenAI(#type:ignore
-                model=model.id,#type:ignore
-                openai_api_key=openai_api_key,
-                client="",
-                temperature=0
+            available_models[OPENAI_PREFIX + model] = OpenAI(#type:ignore
+                model= model
             )
+       
 
     if azure_openai_available:
         azure_openai_api_key = os.environ["LLM_AZURE_OPENAI_API_KEY"]
@@ -102,12 +102,12 @@ def _get_available_models(available_deployments: Dict[str, Dict[str, Any]]):
                     client="",
                     temperature=0
                 )
-
     return available_models
 
 
 available_deployments = _get_available_deployments()
 available_models = _get_available_models(available_deployments)
+
 if available_models:
     logger.info("Available openai models: %s", ", ".join(available_models.keys()))
 
