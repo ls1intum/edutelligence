@@ -1151,13 +1151,13 @@ files = [
 
 [[package]]
 name = "openai"
-version = "1.35.10"
+version = "1.36.0"
 description = "The official Python library for the openai API"
 optional = false
 python-versions = ">=3.7.1"
 files = [
-    {file = "openai-1.35.10-py3-none-any.whl", hash = "sha256:962cb5c23224b5cbd16078308dabab97a08b0a5ad736a4fdb3dc2ffc44ac974f"},
-    {file = "openai-1.35.10.tar.gz", hash = "sha256:85966949f4f960f3e4b239a659f9fd64d3a97ecc43c44dc0a044b5c7f11cccc6"},
+    {file = "openai-1.36.0-py3-none-any.whl", hash = "sha256:82b74ded1fe2ea94abb19a007178bc143675f1b6903cebd63e2968d654bb0a6f"},
+    {file = "openai-1.36.0.tar.gz", hash = "sha256:a124baf0e1657d6156e12248642f88489cd030be8655b69bc1c13eb50e71a93d"},
 ]
 
 [package.dependencies]
@@ -1741,25 +1741,6 @@ files = [
 ]
 
 [[package]]
-name = "replicate"
-version = "0.11.0"
-description = "Python client for Replicate"
-optional = false
-python-versions = ">=3.8"
-files = [
-    {file = "replicate-0.11.0-py3-none-any.whl", hash = "sha256:fbb8815068864dc822cd4fa7b6103d6f4089d6ef122abd6c3441ca0f0f110c46"},
-    {file = "replicate-0.11.0.tar.gz", hash = "sha256:4d54b5838c1552a6f76cc37c3af8d9a7998105382082d672acad31636ad443b5"},
-]
-
-[package.dependencies]
-packaging = "*"
-pydantic = ">1"
-requests = ">2"
-
-[package.extras]
-dev = ["black", "mypy", "pytest", "responses", "ruff"]
-
-[[package]]
 name = "requests"
 version = "2.32.3"
 description = "Python HTTP for Humans."
@@ -2315,4 +2296,4 @@ multidict = ">=4.0"
 [metadata]
 lock-version = "2.0"
 python-versions = "3.11.*"
-content-hash = "c9b950f6709108f9f972bce464ace881a64a7266d2b2b6ce140fae6e3958443a"
+content-hash = "afc7f597cb4b46cb9f564523cd4fdf2bc9926a2934019dd07761acf38b3ba1c2"
