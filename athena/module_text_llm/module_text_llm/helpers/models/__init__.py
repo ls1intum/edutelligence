@@ -22,12 +22,12 @@ try:
 except AttributeError:
     pass
 
-# try:
-#     import module_text_llm.helpers.models.llama as ollama_config #type: ignore
-#     types.append(ollama_config.OllamaModelConfig)
-#     # DefaultModelConfig = ollama_config.OllamaModelConfig
-# except AttributeError:
-#     pass
+try:
+    import module_text_llm.helpers.models.llama as ollama_config #type: ignore
+    types.append(ollama_config.OllamaModelConfig)
+    # DefaultModelConfig = ollama_config.OllamaModelConfig
+except AttributeError:
+    pass
 
 
 if not types:

@@ -2,7 +2,7 @@ import requests
 from enum import Enum
 from langchain_community.llms import Ollama # type: ignore
 from module_text_llm.helpers.models.model_config import ModelConfig # type: ignore
-from pydantic import validator, Field, PositiveInt,field_validator
+from pydantic import validator, Field, PositiveInt
 from langchain.base_language import BaseLanguageModel
 import os
 from langchain_community.chat_models import ChatOllama # type: ignore
@@ -35,7 +35,7 @@ if os.environ.get('GPU_USER') and os.environ.get('GPU_PASSWORD') and os.environ.
                 model = name,
                 base_url = os.environ["OLLAMA_ENDPOINT"],
                 headers = auth_header,
-                
+                format = "json"
             ) for name in ollama_models
         } 
 
@@ -62,7 +62,7 @@ if os.environ.get('GPU_USER') and os.environ.get('GPU_PASSWORD') and os.environ.
             frequency_penalty: float = Field(default=0, ge=-2, le=2, description="")
 
             base_url : str = Field(default="https://gpu-artemis.ase.cit.tum.de/ollama", description=" Base Url where ollama is hosted")
-            @field_validator('max_tokens')
+            @validator('max_tokens')
             def max_tokens_must_be_positive(cls, v):
                 """
                 Validate that max_tokens is a positive integer.

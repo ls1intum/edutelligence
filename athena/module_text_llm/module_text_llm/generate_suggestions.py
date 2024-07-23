@@ -1,6 +1,6 @@
 from typing import List, Optional, Sequence
-from pydantic import BaseModel, Field
-
+# from pydantic import BaseModel, Field
+from langchain_core.pydantic_v1 import BaseModel,Field, ValidationError
 from athena import emit_meta
 from athena.text import Exercise, Submission, Feedback
 from athena.logger import logger
@@ -24,8 +24,8 @@ class FeedbackModel(BaseModel):
         description="ID of the grading instruction that was used to generate this feedback, or empty if no grading instruction was used"
     )
 
-    class Config:
-        title = "Feedback"
+    # class Config:
+    #     title = "Feedback"
 
 
 class AssessmentModel(BaseModel):
@@ -33,8 +33,8 @@ class AssessmentModel(BaseModel):
     
     feedbacks: Sequence[FeedbackModel] = Field(description="Assessment feedbacks")
 
-    class Config:
-        title = "Assessment"
+    # class Config:
+    #     title = "Assessment"
 
 
 async def generate_suggestions(exercise: Exercise, submission: Submission, config: BasicApproachConfig, debug: bool) -> List[Feedback]:

@@ -4,27 +4,53 @@ from pydantic import Field, validator, PositiveInt
 from enum import Enum
 import openai
 from langchain.base_language import BaseLanguageModel
-from langchain_openai import AzureChatOpenAI, AzureOpenAI, ChatOpenAI, OpenAI
-
+from langchain_openai import AzureChatOpenAI, AzureOpenAI, ChatOpenAI
 from athena.logger import logger
 from .model_config import ModelConfig
 
 
 OPENAI_PREFIX = "openai_"
 AZURE_OPENAI_PREFIX = "azure_openai_"
-
-openai_available = bool(os.environ.get("LLM_OPENAI_API_KEY"))
-if openai_available:
+############################################################################################
+# START  Set Enviorment variables that are automatically used by ChatOpenAI/ChatAzureOpenAI#
+############################################################################################
+# Might be worth renaming them
+openai_available = bool(os.environ.get("LLM_OPENAI_API_KEY"))                                      
+if openai_available:                             
     os.environ["OPENAI_API_KEY"] = os.environ["LLM_OPENAI_API_KEY"]
-    models_ai_api = openai.OpenAI().models.list()#type:ignore
-
 
 azure_openai_available = bool(os.environ.get("LLM_AZURE_OPENAI_API_KEY"))
 if azure_openai_available:
     os.environ["AZURE_OPENAI_ENDPOINT"]=os.environ["LLM_AZURE_OPENAI_API_BASE"]
     os.environ["AZURE_OPENAI_API_KEY"]=os.environ["LLM_AZURE_OPENAI_API_KEY"]
     os.environ["OPENAI_API_VERSION"]=os.environ["LLM_AZURE_OPENAI_API_VERSION"]
+#########################################################################################
+# END Set Enviorment variables that are automatically used by ChatOpenAI/ChatAzureOpenAI#
+#########################################################################################
 
+actually_deployed_azure= [
+    "gpt-35-turbo"
+]
+
+new_openai_models = []
+
+# """
+# Calling AzureOpenAI.models returns a lot of models which are not available.
+# A very hacky way to check if the deployments are actually deployed and available in azure.
+# Might incure some minor costs, using the results at actually_deployed_azure for now.
+# """
+# def _check_deployment_availability():
+#     deployments = openai.AzureOpenAI.models.list()
+#     responding_deployments = []
+#     try:
+#         for deployment in deployments:
+#             deployment_model = AzureChatOpenAI(model=deployment.id)
+#             deployment_model.invoke("")
+#             responding_deployments.append(deployment)
+#     except:
+#         pass
+#     return responding_deployments
+    
 def _get_available_deployments():
     available_deployments: Dict[str, Dict[str, Any]] = {
         "chat_completion": {},
@@ -35,71 +61,39 @@ def _get_available_deployments():
     }
 
     if azure_openai_available:
-        deployments = openai.AzureOpenAI().models.list() or []#type:ignore
+        # This returns a lot of unusable models
+        deployments = openai.AzureOpenAI().models.list() or []#type:ignore   
         for deployment in deployments:
-            if deployment.capabilities["chat_completion"]:#type:ignore
-                available_deployments["chat_completion"][deployment.id] = deployment
-                
-    # if openai_available:
-    #     models_ai_api = openai.OpenAI().models.list()#type:ignore
-    #     for model in models_ai_api:
-    #         # print(model)
-    #         pass
+            if(deployment.id in actually_deployed_azure):
+                if deployment.capabilities["chat_completion"]:#type:ignore
+                    available_deployments["chat_completion"][deployment.id] = deployment
+                elif deployment.capabilities["completion"]:#type:ignore
+                    available_deployments["completion"][deployment.id] = deployment       
+    
+    if openai_available:
+        # This will return only the usable models
+        openai.api_type= "openai"
+        for model in openai.models.list():
+            if model.owned_by == "openai":
+                new_openai_models.append(model.id)
 
     return available_deployments
 
-openai_models = {
-    "chat_completion": [
-        "gpt-4",
-        "gpt-4o-mini",
-        # "gpt-35",
-        # "gpt-4-32k", # Not publicly available
-        "gpt-3.5-turbo",
-        "gpt-3.5-turbo-16k"
-    ],
-    "completion": [
-        "text-davinci-003",
-        "text-curie-001",
-        "text-babbage-001",
-        "text-ada-001",
-    ],
-    "fine_tuneing": [
-        "davinci",
-        "curie",
-        "babbage",
-        "ada",
-    ]
-}
 
 def _get_available_models(available_deployments: Dict[str, Dict[str, Any]]):
     available_models: Dict[str, BaseLanguageModel] = {}
 
     if openai_available:
-        openai_api_key = os.environ["LLM_OPENAI_API_KEY"]
-        for model in openai_models["chat_completion"]:
+        for model in new_openai_models:
             available_models[OPENAI_PREFIX + model] = ChatOpenAI(#type:ignore
                 model=model,
             )
-        #     print( )
-        for model in openai_models["completion"]:
-            available_models[OPENAI_PREFIX + model] = OpenAI(#type:ignore
-                model= model
-            )
-       
 
     if azure_openai_available:
-        azure_openai_api_key = os.environ["LLM_AZURE_OPENAI_API_KEY"]
-        azure_openai_api_base = os.environ["LLM_AZURE_OPENAI_API_BASE"]
-        azure_openai_api_version = os.environ["LLM_AZURE_OPENAI_API_VERSION"]
-
         for model_type, Model in [("chat_completion", AzureChatOpenAI), ("completion", AzureOpenAI)]:
             for deployment_name, deployment in available_deployments[model_type].items():
                 available_models[AZURE_OPENAI_PREFIX + deployment_name] = Model(
                     deployment_name=deployment_name,
-                    azure_endpoint=azure_openai_api_base,
-                    openai_api_version=azure_openai_api_version,
-                    openai_api_key=azure_openai_api_key,
-                    client="",
                     temperature=0
                 )
     return available_models
@@ -109,10 +103,10 @@ available_deployments = _get_available_deployments()
 available_models = _get_available_models(available_deployments)
 
 if available_models:
-    logger.info("Available openai models: %s", ", ".join(available_models.keys()))
+    # logger.info("Available openai models: %s", ", ".join(available_models.keys()))
 
     OpenAIModel = Enum('OpenAIModel', {name: name for name in available_models})  # type: ignore
-    default_model_name = "gpt-3.5-turbo"
+    default_model_name = "gpt-35-turbo"
     if "LLM_DEFAULT_MODEL" in os.environ and os.environ["LLM_DEFAULT_MODEL"] in available_models:
         default_model_name = os.environ["LLM_DEFAULT_MODEL"]
     if default_model_name not in available_models:
