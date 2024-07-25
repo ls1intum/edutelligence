@@ -2,13 +2,11 @@ from typing import Optional, Type, TypeVar, List
 from langchain_community.chat_models import ChatOllama # type: ignore
 import tiktoken
 from langchain_core.output_parsers.openai_functions import JsonOutputFunctionsParser
-from langchain_core.utils.function_calling import convert_to_openai_function
 from langchain_openai.chat_models.base import BaseChatOpenAI
 # from pydantic import BaseModel, ValidationError
 from langchain_core.pydantic_v1 import BaseModel, ValidationError
 import tiktoken
 from langchain_openai import AzureChatOpenAI, AzureOpenAI, ChatOpenAI
-
 from langchain.base_language import BaseLanguageModel
 from langchain.prompts import (
     ChatPromptTemplate,
@@ -156,9 +154,14 @@ async def predict_and_parse(
         tags.append(f"run-{experiment.run_id}")
         
     chat_prompt.tags = tags
+    # Openai support with_structured_output effectively
     if is_openai(model):
         runnable = chat_prompt | model.with_structured_output(pydantic_object) # type: ignore
+    else:
+        output_parser = PydanticOutputParser(pydantic_object=pydantic_object)
+        runnable = chat_prompt | model | output_parser
         
+ 
     try:
         output_dict = await runnable.ainvoke(prompt_input)
         return pydantic_object.validate(output_dict)

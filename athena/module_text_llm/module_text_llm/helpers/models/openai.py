@@ -29,7 +29,9 @@ if azure_openai_available:
 #########################################################################################
 
 actually_deployed_azure= [
-    "gpt-35-turbo"
+    "gpt-35-turbo",
+    "gpt-4-turbo",
+    "gpt-4-vision"
 ]
 
 new_openai_models = []
@@ -42,13 +44,18 @@ new_openai_models = []
 # def _check_deployment_availability():
 #     deployments = openai.AzureOpenAI.models.list()
 #     responding_deployments = []
-#     try:
-#         for deployment in deployments:
-#             deployment_model = AzureChatOpenAI(model=deployment.id)
-#             deployment_model.invoke("")
-#             responding_deployments.append(deployment)
-#     except:
-#         pass
+#     for deployment in deployments:
+#         try:
+#             if(deployment.capabilities["chat_completion"]):
+#                 deployment_model = AzureChatOpenAI(model=deployment.id)
+#                 deployment_model.invoke("")
+#                 responding_deployments.append(deployment)
+#             elif(deployment.capabilities["completion"]):
+#                 deployment_model = AzureOpenAI(model=deployment.id)
+#                 deployment_model.invoke("")
+#                 responding_deployments.append(deployment) 
+#         except:
+#             pass
 #     return responding_deployments
     
 def _get_available_deployments():

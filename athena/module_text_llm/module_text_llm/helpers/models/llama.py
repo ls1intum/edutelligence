@@ -13,19 +13,16 @@ if os.environ.get('GPU_USER') and os.environ.get('GPU_PASSWORD') and os.environ.
         auth_header= {
         'Authorization': requests.auth._basic_auth_str(os.environ["GPU_USER"],os.environ["GPU_PASSWORD"]) # type: ignore
         }
-        # auth_header= {"Authorization:" : HTTPBasicAuth(os.environ["GPU_USER"],os.environ["GPU_PASSWORD"])}
 
-    ollama_models = [
-        'falcon:180b',
-        'llama3:70b',
-        'llama3:70b-instruct',
-        'llama3:70b-text',
-        'llava:13b',
-        'llava:34b',
-        'llava:7b',
-        'llava-llama3:8b',
-    ]
 
+    def get_ollama_models():
+        url = os.environ["OLLAMA_ENDPOINT"] + "/api/tags"
+        response = requests.get(url, auth=(os.environ["GPU_USER"], os.environ["GPU_PASSWORD"]))
+        data = response.json()
+        model_list = [model['name'] for model in data['models']]
+        return model_list
+
+    ollama_models = get_ollama_models()
     available_models = {}
 
     if([os.environ["OLLAMA_ENDPOINT"]]):
