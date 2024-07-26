@@ -17,6 +17,7 @@ export default async function handler(
   const url = req.query.url;
   let response;
   const secret = req.headers["authorization"] as string;
+  const lmsUrl = req.headers["x-server-url"] as string;
   const forwardHeaders = [
     "X-Module-Config", 
     "X-Experiment-ID", 
@@ -40,6 +41,7 @@ export default async function handler(
         "Content-Type": "application/json",
         Accept: "application/json",
         "Authorization": secret,
+        "X-Server-URL": lmsUrl,
         ...headers,
       },
       method: req.method,

@@ -21,6 +21,8 @@ def list_modules() -> List[Module]:
             url=cast(AnyHttpUrl, os.environ.get(f"{module.upper()}_URL", modules_config[module]["url"])),
             type=ExerciseType(modules_config[module]["type"]),
             supports_evaluation=modules_config[module].getboolean("supports_evaluation"),
+            supports_non_graded_feedback_requests=modules_config[module].getboolean("supports_non_graded_feedback_requests"),
+            supports_graded_feedback_requests=modules_config[module].getboolean("supports_graded_feedback_requests")
         )
         for module in modules_config.sections()
     ]

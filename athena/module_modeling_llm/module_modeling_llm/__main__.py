@@ -28,7 +28,7 @@ def process_incoming_feedback(exercise: Exercise, submission: Submission, feedba
 
 
 @feedback_provider
-async def suggest_feedback(exercise: Exercise, submission: Submission, module_config: Configuration) -> List[Feedback]:
+async def suggest_feedback(exercise: Exercise, submission: Submission, is_graded: bool, module_config: Configuration) -> List[Feedback]:
     logger.info("suggest_feedback: Suggestions for submission %d of exercise %d were requested", submission.id,
                 exercise.id)
     return await generate_suggestions(exercise, submission, module_config.approach, module_config.debug)

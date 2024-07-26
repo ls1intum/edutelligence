@@ -57,7 +57,7 @@ export default function SubmissionSelect({
         {data?.map((sub: Submission) => {
           const contentPreview =
             (sub as TextSubmission)?.text ||
-            (sub as ProgrammingSubmission)?.repository_url ||
+            (sub as ProgrammingSubmission)?.repository_uri ||
             "?";
           return (
             <option key={sub.id} value={sub.id}>

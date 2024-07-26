@@ -5,5 +5,5 @@
 	redir / /playground 302
 	reverse_proxy /playground* http://playground:3000
 	reverse_proxy /logs* http://log-viewer:4998
-	reverse_proxy http://assessment-module-manager:5000
+	reverse_proxy http://assessment-module-manager:5100
 }

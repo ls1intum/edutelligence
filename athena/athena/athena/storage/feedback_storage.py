@@ -59,7 +59,7 @@ def store_feedback(feedback: Feedback, is_lms_id=False, lms_url: Optional[str] =
                                                                  lms_url=lms_url).scalar()
             feedback.id = internal_id
 
-        stored_feedback_model = db.merge(feedback.to_model(lms_id=lms_id))
+        stored_feedback_model = db.merge(feedback.to_model(lms_id=lms_id, lms_url=lms_url))
         db.commit()
         return stored_feedback_model.to_schema()
 
