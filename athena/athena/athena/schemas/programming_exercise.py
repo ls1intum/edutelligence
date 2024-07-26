@@ -12,16 +12,16 @@ class ProgrammingExercise(Exercise):
 
     type: ExerciseType = Field(ExerciseType.programming, Literal=True)
 
-    programming_language: str = Field(description="The programming language that is used for this exercise.", example="java")
+    programming_language: str = Field(description="The programming language that is used for this exercise.", example="java",alias="programming_language")
     solution_repository_uri: AnyUrl = Field(description="URL to the solution git repository, which contains the "
                                                         "reference solution.",
-                                            example="http://localhost:3000/api/example-solutions/1")
+                                            example="http://localhost:3000/api/example-solutions/1", alias="solution_repository_uri")
     template_repository_uri: AnyUrl = Field(description="URL to the template git repository, which is the starting "
                                                         "point for students.",
-                                            example="http://localhost:3000/api/example-template/1")
+                                            example="http://localhost:3000/api/example-template/1", alias="template_repository_uri")
     tests_repository_uri: AnyUrl = Field(description="URL to the tests git repository, which contains the tests that "
                                                      "are used to automatically grade the exercise.",
-                                         example="http://localhost:3000/api/example-tests/1")
+                                         example="http://localhost:3000/api/example-tests/1", alias = "tests_repository_uri")
 
 
     def get_solution_zip(self) -> ZipFile:

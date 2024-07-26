@@ -110,7 +110,7 @@ available_deployments = _get_available_deployments()
 available_models = _get_available_models(available_deployments)
 
 if available_models:
-    # logger.info("Available openai models: %s", ", ".join(available_models.keys()))
+    logger.info("Available openai models: %s", ", ".join(available_models.keys()))
 
     OpenAIModel = Enum('OpenAIModel', {name: name for name in available_models})  # type: ignore
     default_model_name = "gpt-35-turbo"

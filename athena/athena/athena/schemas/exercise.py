@@ -14,9 +14,12 @@ class Exercise(Schema, ABC):
     title: str = Field("", description="The title of the exercise.",
                        example="Exercise 1")
     type: ExerciseType = Field(example=ExerciseType.text)
-    max_points: float = Field(ge=0,
+    max_points: float = Field(
+                              ge=0,
                               description="The maximum number of points that can be achieved.",
-                              example=1.0)
+                              example=1.0,
+                              alias = "max_points"
+                              )
     bonus_points: float = Field(0.0, ge=0,
                                 description="The number of bonus points that can be achieved.",
                                 example=0.0)
@@ -29,4 +32,6 @@ class Exercise(Schema, ABC):
     meta: dict = Field({}, example={"internal_id": "5"})
 
     class Config:
-        from_attributes = True
+        # from_attributes = True
+        orm_mode=True
+

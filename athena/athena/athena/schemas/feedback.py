@@ -26,11 +26,12 @@ class Feedback(Schema, ABC):
 
     meta: dict = Field({}, example={})
 
-    exercise_id: int = Field(example=1)
-    submission_id: int = Field(example=1)
+    exercise_id: int = Field(example=1, alias="exercise_id")
+    submission_id: int = Field(example=1, alias="submission_id")
 
     def to_model(self, is_suggestion: bool = False, lms_id: Optional[int] = None):
         return type(self).get_model_class()(**self.dict(), is_suggestion=is_suggestion, lms_id=lms_id)
 
     class Config:
-        from_attributes = True
+        # from_attributes = True
+        orm_mode=True
