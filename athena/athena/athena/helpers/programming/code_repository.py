@@ -27,7 +27,7 @@ def get_repository_zip(url: str, authorization_secret: Optional[str] = None) -> 
             if contextvars.repository_authorization_secret_context_var_empty():
                 raise ValueError("Authorization secret for the repository API is not set. Pass authorization_secret to this function or add the X-Repository-Authorization-Secret header to the request from the assessment module manager.")
             authorization_secret = contextvars.get_repository_authorization_secret_context_var()
-        with httpx.stream("GET", url, headers={ "Authorization": cast(str, authorization_secret) }) as response:
+        with httpx.stream("GET", str(url), headers={ "Authorization": cast(str, authorization_secret) }) as response:
             response.raise_for_status()
             with open(cache_file_path, "wb") as f:
                 for chunk in response.iter_bytes():
