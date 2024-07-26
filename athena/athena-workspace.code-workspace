@@ -28,11 +28,8 @@
 			"path": "module_programming_themisml"
 		},
 		{
-      "path": "module_programming_ast"
-		},
-		{
-			"path": "module_programming_code_embedding"
-		},
+      "path": "module_programming_apted"
+		}
 	],
 	"settings": {
 		"python.pythonPath": "./.venv/bin/python",

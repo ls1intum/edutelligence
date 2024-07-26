@@ -19,10 +19,10 @@ def main():
 
     if env.PRODUCTION:
         logger.info("Running in PRODUCTION mode")
-        uvicorn.run("assessment_module_manager.__main__:app", host="0.0.0.0", port=5000)
+        uvicorn.run("assessment_module_manager.__main__:app", host="0.0.0.0", port=5100)
     else:
         logger.warning("Running in DEVELOPMENT mode")
-        uvicorn.run("assessment_module_manager.__main__:app", host="127.0.0.1", port=5000, reload=True)
+        uvicorn.run("assessment_module_manager.__main__:app", host="0.0.0.0", port=5100, reload=True)
 
 
 # Add things to __all__ just to mark them as important to import

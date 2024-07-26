@@ -1,0 +1,79 @@
+name: 🐛 Bug Report
+description: Something's not working in Athena? File a bug report!
+labels: ["bug"]
+body:
+- type: markdown
+  attributes:
+    value: Thank you for taking the time to fill out this bug report! Please provide as much detail as possible to help us identify and fix the problem.
+- type: textarea
+  attributes:
+    label: Please describe the bug
+    description: A clear and concise description of what the bug is.
+    placeholder: What has gone wrong? Please be as specific as possible.
+  validations:
+      required: true
+- type: textarea
+  attributes:
+    label: To Reproduce
+    description: "Steps to reproduce the behavior:"
+    value: |
+      1. Go to '...'
+      2. Click on '...'
+      3. Scroll down to '...'
+      4. See error
+  validations:
+    required: true
+- type: textarea
+  attributes:
+    label: Expected behavior
+    description: A clear and concise description of what you expected to happen.
+    placeholder: What did you expect to happen instead?
+  validations:
+    required: true
+- type: textarea
+  attributes:
+    label: Screenshots
+    description: If applicable, add screenshots to help explain your problem.
+- type: dropdown
+  attributes:
+    label: What module is this bug related to?
+    multiple: true
+    options:
+      - Assessment Module Manager
+      - Modeling LLM
+      - Programming APTED
+      - Programming LLM
+      - Programming ThemisML
+      - Text CoFee
+      - Text LLM
+      - Playground
+      - Other (specify in "Additional context")
+  validations:
+    required: true
+- type: dropdown
+  attributes:
+    label: What browsers are you seeing the problem on?
+    multiple: true
+    options:
+      - Chrome
+      - Safari
+      - Microsoft Edge
+      - Firefox
+      - Other (specify in "Additional context")
+- type: input
+  attributes:
+    label: Operating System
+    description: The operating system you're using. E.g. Windows 11, macOS Sonoma, Ubuntu 20.04, etc.
+- type: textarea
+  attributes:
+    label: Additional context
+    description: Add any other context to the problem here.
+- type: textarea
+  id: logs
+  attributes:
+    label: Relevant log output
+    description: Please copy and paste any relevant log output. This will be automatically formatted into code, so no need for backticks.
+    render: shell
+- type: markdown
+  attributes:
+    value: Thanks for completing our form! Please click the "Submit new issue" button below to submit your bug report.

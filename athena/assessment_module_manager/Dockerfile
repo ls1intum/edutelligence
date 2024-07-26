@@ -26,7 +26,12 @@ RUN poetry config virtualenvs.create true \
 COPY . ./
 
 # Use modules configuration file for docker
-RUN mv ./modules.docker.ini ./modules.ini
+RUN cp ./modules.docker.ini ./modules.ini
+RUN rm ./modules.docker.ini
+
+# Use deployments configuration file for docker
+RUN cp ./deployments.docker.ini ./deployments.ini
+RUN rm ./deployments.docker.ini
 
 # Use deployments configuration file for docker
 RUN mv ./deployments.docker.ini ./deployments.ini

@@ -1,16 +1,15 @@
 import importlib
 
-from pydantic import BaseModel, AnyUrl
-from sqlalchemy import Column, String, UniqueConstraint, event
-from sqlalchemy.orm import mapper
+from pydantic import BaseModel
+from sqlalchemy import Column, String, UniqueConstraint
 
 
 class Model:
 
-    artemis_url = Column(String, index=True, nullable=False)
+    lms_url = Column(String, index=True, nullable=False)
 
     __table_args__ = (
-        UniqueConstraint('id', 'artemis_url'),
+        UniqueConstraint('id', 'lms_url'),
     )
 
     @classmethod

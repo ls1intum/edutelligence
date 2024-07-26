@@ -1405,9 +1405,9 @@ type = "directory"
 url = "module_example"
 
 [[package]]
-name = "module-programming-ast"
+name = "module-programming-apted"
 version = "0.1.0"
-description = "Programming assessment AST module."
+description = "Programming assessment APTED module."
 optional = false
 python-versions = "3.11.*"
 files = []
@@ -1418,7 +1418,7 @@ athena = {path = "../athena", develop = true}
 
 [package.source]
 type = "directory"
-url = "module_programming_ast"
+url = "module_programming_apted"
 
 [[package]]
 name = "module-programming-llm"
