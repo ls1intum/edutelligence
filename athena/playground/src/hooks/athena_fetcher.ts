@@ -38,7 +38,7 @@ export class AthenaError extends Error {
  */
 export function useAthenaFetcher() {
   const { module: contextModule, moduleConfig: contextModuleConfig } = useModule();
-  const { athenaUrl, athenaSecret } = useBaseInfo();  
+  const { athenaUrl, athenaSecret, lmsUrl } = useBaseInfo();
   const { experimentId, moduleConfigurationId, runId } = useExperimentIdentifiers();
 
   return (
@@ -74,6 +74,7 @@ export function useAthenaFetcher() {
           headers: {
             "Content-Type": "application/json",
             "Authorization": athenaSecret,
+            "X-Server-URL": lmsUrl,
             ...headers,
           },
           ...(body && { body: JSON.stringify(body) }),

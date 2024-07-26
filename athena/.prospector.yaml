@@ -7,6 +7,7 @@ ignore-paths:
   - module_text_cofee/module_text_cofee/protobuf
   - module_programming_themisml/module_programming_themisml/extract_methods/languages
   - module_programming_themisml/module_programming_themisml/extract_methods/method_parser_listener.py
+  - module_programming_apted/module_programming_apted/convert_code_to_ast/languages
 
 mypy:
   run: true

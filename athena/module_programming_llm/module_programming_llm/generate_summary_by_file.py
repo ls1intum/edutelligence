@@ -87,6 +87,12 @@ async def generate_summary_by_file(
         submission_repo,
         file_filter=lambda file_path: file_path in changed_files_from_template_to_submission,
     )
+    chat_prompt = get_chat_prompt_with_formatting_instructions(
+        model=model,
+        system_message=config.generate_file_summary_prompt.system_message,
+        human_message=config.generate_file_summary_prompt.human_message,
+        pydantic_object=SolutionSummary,
+    )
 
     prompt_inputs = []
 

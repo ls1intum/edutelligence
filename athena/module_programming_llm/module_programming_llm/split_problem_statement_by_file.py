@@ -77,7 +77,7 @@ async def split_problem_statement_by_file(
         "changed_files_from_template_to_submission": ", ".join(changed_files_from_template_to_submission)
     }
 
-    if "changed_files_from_template_to_solution" in prompt.input_variables:
+    if "changed_files_from_template_to_solution" in chat_prompt.input_variables:
         solution_repo = exercise.get_solution_repository()
         changed_files_from_template_to_solution = get_diff(
             src_repo=template_repo,

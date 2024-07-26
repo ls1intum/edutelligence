@@ -24,5 +24,5 @@ get_stored_feedback_suggestions = functools.partial(athena.storage.get_stored_fe
 
 __all__ = [
     "Exercise", "Submission", "Feedback",
-    "get_stored_exercises", "get_stored_submissions", "get_stored_feedback", "get_stored_feedback_suggestions"
+    "get_stored_exercises", "get_stored_submissions", "get_stored_feedback", "get_stored_feedback_suggestions", "count_stored_submissions"
 ]
