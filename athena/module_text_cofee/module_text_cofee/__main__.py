@@ -45,7 +45,7 @@ def process_incoming_feedback(exercise: Exercise, submission: Submission, feedba
 
 
 @feedback_provider
-def suggest_feedback(exercise: Exercise, submission: Submission) -> List[Feedback]:
+def suggest_feedback(exercise: Exercise, submission: Submission, is_graded: bool = True) -> List[Feedback]:
     logger.info(
         "suggest_feedback: Suggestions for submission %d of exercise %d were requested",
         submission.id, exercise.id

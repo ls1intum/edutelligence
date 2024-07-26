@@ -22,7 +22,7 @@ export default function ModuleExperimentProgress({
       "notStarted",
       "sendingSubmissions",
       "sendingTrainingFeedbacks",
-      "generatingFeedbackSuggestions",
+      "generatingGradedFeedbackSuggestions",
       "finished",
     ];
     return steps.indexOf(step);
