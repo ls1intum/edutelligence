@@ -34,7 +34,7 @@ jobs:
     needs: [ get-labels ]
     runs-on: ubuntu-latest
     # Only run workflow if the added label is a deploy label
-    if: contains(needs.get-labels.outputs.labels, 'deploy:athena-test3')
+    if: contains(needs.get-labels.outputs.labels, 'deploy:athena-test1')
     steps:
       - name: Get latest successful build for branch
         id: check_build
@@ -58,7 +58,7 @@ jobs:
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           labels: |
-            deploy:athena-test3
+            deploy:athena-test1
 
       - name: Check if latest push had successful build
         if: fromJSON(steps.check_build.outputs.data).total_count == 0
@@ -112,9 +112,9 @@ jobs:
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           labels: |
-            deploy:athena-test3
+            deploy:athena-test1
 
-      - name: Check "lock:athena-test3" label
+      - name: Check "lock:athena-test1" label
         uses: actions/github-script@v6
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -122,7 +122,7 @@ jobs:
             const opts = github.rest.issues.listForRepo.endpoint.merge({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              labels: ['lock:athena-test3']
+              labels: ['lock:athena-test1']
             })
             const issues = await github.paginate(opts)
             if (issues.length == 1 && (!context.issue || issues[0].number != context.issue.number)) {
@@ -140,13 +140,13 @@ jobs:
                   repo: context.repo.repo,
                   body: '### ❌ Unable to deploy to test server ❌\nAthena Testserver is already in use by multiple PRs. Check PRs with label "lock:pyris-test"!'
                 })
-              core.setFailed('Athena Testserver is already in use by multiple PRs. Check PRs with label "lock:athena-test3"!');
+              core.setFailed('Athena Testserver is already in use by multiple PRs. Check PRs with label "lock:athena-test1"!');
             } else if (context.issue && context.issue.number) {
               await github.rest.issues.addLabels({
                 issue_number: context.issue.number,
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                labels: ['lock:athena-test3']
+                labels: ['lock:athena-test1']
               })
             }
 
@@ -157,8 +157,8 @@ jobs:
     with:
       docker-tag: ${{ needs.compute-tag.outputs.tag }}
       branch-name: ${{ github.event.pull_request.head.ref }}
-      environment-name: Athena Test Server 3
-      environment-url: https://athenetest1-03.ase.cit.tum.de/
+      environment-name: Athena Test Server 1
+      environment-url: https://athena-test1.ase.cit.tum.de/
     secrets: inherit
 
 
