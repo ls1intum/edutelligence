@@ -1,3 +1,5 @@
+.. _run_playground:
+
 Run the Playground
 ===========================================
 

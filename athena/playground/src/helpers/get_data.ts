@@ -8,6 +8,22 @@ import fs from "fs";
 
 import baseUrl from "@/helpers/base_url";
 
+/**
+ * Splits the given data mode into its parts.
+ * 
+ * @param dataMode - the data mode to split
+ * 
+ * @returns the parts of the given data mode
+ *  - ["example"] for "example"
+ *  - ["evaluation"] for "evaluation"
+ *  - ["evaluation", "custom"] for "evaluation-custom"
+ */
+export function getDataModeParts(dataMode: DataMode): string[] {
+  const [mainMode, ...rest] = dataMode.split("-");
+  const customMode = rest.join("-");
+  return customMode ? [mainMode, customMode] : [mainMode];
+}
+
 function replaceJsonPlaceholders(
   dataMode: DataMode,
   json: any,
@@ -135,10 +151,11 @@ function getExerciseJSON(
   athenaOrigin: string
 ): any {
   // find in cwd/data/<dataMode>/exercise-<exerciseId>.json
+  // or in cwd/data/evaluation/<custom>/exercise-<exerciseId>.json if dataMode is evaluation-<custom>
   const exercisePath = path.join(
     process.cwd(),
     "data",
-    dataMode,
+    ...getDataModeParts(dataMode),
     `exercise-${exerciseId}.json`
   );
   if (fs.existsSync(exercisePath)) {
@@ -160,7 +177,15 @@ function getExerciseJSON(
 
 function getAllExerciseJSON(dataMode: DataMode, athenaOrigin: string): any[] {
   // find in cwd/data/<dataMode> all exercise-*.json
-  const exercisesDir = path.join(process.cwd(), "data", dataMode);
+  // or in cwd/data/evaluation/<custom> all exercise-*.json if dataMode is evaluation-<custom>
+  const parts = getDataModeParts(dataMode);
+  const exercisesDir = path.join(process.cwd(), "data", ...parts);
+  
+  // Check if the directory exists
+  if (!fs.existsSync(exercisesDir)) {
+    return [];
+  }
+
   const exerciseIds = fs
     .readdirSync(exercisesDir)
     .filter(

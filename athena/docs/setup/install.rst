@@ -1,3 +1,5 @@
+.. _setup_install:
+
 Python and Poetry Setup
 ===========================================
 

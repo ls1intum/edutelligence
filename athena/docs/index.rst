@@ -24,6 +24,13 @@ Athena will use the information it is given and provide the automatic suggestion
     overview/playground
 
 .. toctree::
+    :caption: User Guide
+    :includehidden:
+    :maxdepth: 2
+
+    user_guide/index
+
+.. toctree::
     :caption: Setup
     :includehidden:
     :maxdepth: 1
