@@ -13,7 +13,7 @@ There are multiple ways of accessing Athena through the Athena Playground:
   - You can upload, download, and remove your own evaluation data under a directory name.
   - Keep in mind that the **team can technically access the data on the test-server**. If encrypted/secured evaluation data is needed, you must request it.
   - Request the Athena Playground secret from the team or find it on the team's Confluence.
-  - **Playground access:** https://athenetest1-03.ase.cit.tum.de/playground
+  - **Playground access:** https://athena-test1.ase.cit.tum.de/playground
 
 2. **Local setup:**
   - **Pro:** We cannot access your data this way.
@@ -28,7 +28,7 @@ Connect to Athena Instance through the Playground
 --------------------------
 
 1. Open the playground
-  - Test-server setup: https://athenetest1-03.ase.cit.tum.de/playground
+  - Test-server setup: https://athena-test1.ase.cit.tum.de/playground
   - Local setup: http://localhost:3000
 2. Up top you see the **Base Info Header** containing all configuration
   .. figure:: ./base_info_header.png
