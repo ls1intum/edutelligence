@@ -1,8 +1,10 @@
+from typing import Optional
+
 from pydantic import BaseModel, Field
 
 from datetime import datetime
 
 
 class SimpleSubmissionDTO(BaseModel):
-    timestamp: datetime = Field(alias="timestamp")
-    score: float = Field(alias="score")
+    timestamp: Optional[datetime] = Field(alias="timestamp")
+    score: Optional[float] = Field(alias="score")
