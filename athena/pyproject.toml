@@ -1,28 +1,12 @@
 [tool.poetry]
-name = "athena-modularized"
-version = "0.1.0"
-description = ""
+name = "Athena"
+version = "1.0.0"
+description = "This is a helper module for easier development of Athena modules. It provides communication functionality with the Assessment Module manager, as well as helper functions for storage."
 authors = ["Paul Schwind <paul.schwind@tum.de>"]
-license = "MIT"
-readme = "README.md"
-packages = []
 
-[tool.poetry.dependencies]
-python = "3.11.*"
-prospector = "^1.10.2"
-assessment_module_manager = {path = "./assessment_module_manager", develop = true}
-athena = {path = "./athena", develop = true}
-log_viewer = {path = "./log_viewer", develop = true}
-module_example = {path = "./module_example", develop = true}
-module_programming_llm = {path = "./module_programming_llm", develop = true}
-module_text_llm = {path = "./module_text_llm", develop = true}
-module_text_cofee = {path = "./module_text_cofee", develop = true}
-module_programming_themisml = {path = "./module_programming_themisml", develop = true}
-module_programming_apted = {path = "./module_programming_apted", develop = true}
-# start linter with `poetry run prospector`
-
-[tool.poetry.group.dev.dependencies]
-types-requests = "^2.31.0.8"
+[tool.poetry.scripts]
+lint_all = "lint_modules:main"
+install_all = "install_modules:main"
 
 [build-system]
 requires = ["poetry-core"]
