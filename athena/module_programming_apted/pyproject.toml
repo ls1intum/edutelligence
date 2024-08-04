@@ -14,6 +14,7 @@ apted = "^1.0.3"
 antlr4-python3-runtime = "^4.13.1"
 javalang = {git = "https://github.com/c2nes/javalang"}
 pydantic = "1.10.17"
+prospector = "^1.10.2"
 
 [tool.poetry.group.dev.dependencies]
 types-requests = "^2.31.0.8"

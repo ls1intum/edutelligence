@@ -9,6 +9,7 @@ license = "MIT"
 python = "3.11.*"
 protobuf = "^4.24.4"
 requests = "^2.31.0"
+prospector = "^1.10.2"
 
 [tool.poetry.dev-dependencies]
 # if you have local changes in the common Athena module, use the line below. Otherwise, please use a VCS stable version. Also, a version with tag = "" is possible.

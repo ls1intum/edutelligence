@@ -6,6 +6,7 @@ import sys
 def main():
     modules = [
         "assessment_module_manager",
+        "athena",
         "log_viewer",
         "module_example",
         "module_programming_llm",

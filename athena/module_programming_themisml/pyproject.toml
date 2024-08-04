@@ -19,6 +19,7 @@ torch = [
     {url = "https://download.pytorch.org/whl/cpu/torch-2.1.0%2Bcpu-cp311-cp311-win_amd64.whl", platform = "win32", python = ">=3.11 <3.12"}
 ]
 pydantic = "1.10.17"
+prospector = "^1.10.2"
 
 [tool.poetry.group.dev.dependencies]
 types-requests = "^2.31.0.8"
