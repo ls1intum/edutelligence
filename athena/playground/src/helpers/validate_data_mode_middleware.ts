@@ -1,6 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 
-const allowedModes = ["example", "evaluation"];
+const allowedModesRegex = /(example|evaluation(-[a-zA-Z0-9_-]+)?)/;
 
 export const validateDataModeMiddleware = (
   req: NextApiRequest,
@@ -8,8 +8,11 @@ export const validateDataModeMiddleware = (
   next: Function
 ) => {
   const { dataMode } = req.query;
-  if (!allowedModes.includes(dataMode as string)) {
+  if (typeof dataMode !== "string") {
     return res.status(404).end();
   }
+  if (!allowedModesRegex.test(dataMode)) {
+    return res.status(404).end();
+  }  
   next();
 };

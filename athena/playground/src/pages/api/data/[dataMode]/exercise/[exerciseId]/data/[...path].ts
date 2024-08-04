@@ -5,6 +5,7 @@ import { promises as fs } from "fs";
 import { join } from "path";
 import Archiver from "archiver";
 import { validateDataModeMiddleware } from "@/helpers/validate_data_mode_middleware";
+import { getDataModeParts } from "@/helpers/get_data";
 
 const handler = async (req: NextApiRequest, res: NextApiResponse) => {
   const { dataMode, exerciseId, path } = req.query as {
@@ -22,7 +23,7 @@ const handler = async (req: NextApiRequest, res: NextApiResponse) => {
   const folderPath = join(
     process.cwd(),
     "data",
-    dataMode,
+    ...getDataModeParts(dataMode),
     "exercise-" + exerciseId,
     ...path
   );

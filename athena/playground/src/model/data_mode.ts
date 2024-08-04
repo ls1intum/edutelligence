@@ -1,1 +1,1 @@
-export type DataMode = "example" | "evaluation";
+export type DataMode = "example" | "evaluation" | string;
