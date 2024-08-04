@@ -20,15 +20,9 @@ def main():
 
     for module in modules:
         if os.path.isdir(module):
-            print(f"Resolving lock file for {module}...")
             result = subprocess.run(["poetry", "lock"], cwd=module)
             if result.returncode != 0:
-                print(f"Lock file resolving failed for {module}")
                 success = False
-            else:
-                print(f"Lock file resolved successfully for {module}")
-        else:
-            print(f"Directory {module} does not exist. Skipping...")
 
     if success:
         sys.exit(0)

@@ -20,15 +20,9 @@ def main():
 
     for module in modules:
         if os.path.isdir(module):
-            print(f"Installing dependencies for {module}...")
             result = subprocess.run(["poetry", "install"], cwd=module)
             if result.returncode != 0:
-                print(f"Dependency installation failed for {module}")
                 success = False
-            else:
-                print(f"Dependencies installed successfully for {module}")
-        else:
-            print(f"Directory {module} does not exist. Skipping...")
 
     if success:
         sys.exit(0)

@@ -21,16 +21,9 @@ def main():
 
     for module in modules:
         if os.path.isdir(module):
-            print(f"<------------------------------------------------------------>")
-            print(f"Linting {module}...")
             result = subprocess.run(["poetry", "run", "prospector", "--profile", "../.prospector.yaml"], cwd=module)
             if result.returncode != 0:
-                print(f"Linting failed for {module}\n")
                 success = False
-            else:
-                print(f"Linting succeeded for {module}\n")
-        else:
-            print(f"Directory {module} does not exist. Skipping...")
 
     if success:
         sys.exit(0)
