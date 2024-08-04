@@ -8,6 +8,7 @@ authors = ["Paul Schwind <paul.schwind@tum.de>"]
 lint_all = "lint_modules:main"
 install_all = "install_modules:main"
 lock_all = "lock_modules:main"
+test_all = "test_modules:main"
 
 [build-system]
 requires = ["poetry-core"]
