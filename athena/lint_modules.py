@@ -14,6 +14,7 @@ def main():
         "module_text_llm",
         "module_text_cofee",
         "module_programming_themisml",
+        "module_modeling_llm",
         #"module_programming_apted" skip due to an error
     ]
 

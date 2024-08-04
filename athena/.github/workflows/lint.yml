@@ -32,7 +32,6 @@ jobs:
     - name: Install dependencies
       run: |
         echo "$HOME/.local/bin" >> $GITHUB_PATH
-        poetry install
         poetry run install_all
     - name: Run Prospector
       run: poetry run lint_all

@@ -13,16 +13,23 @@ def main():
         "module_text_llm",
         "module_text_cofee",
         "module_programming_themisml",
-        "module_programming_apted"
+        "module_programming_apted",
+        "module_modeling_llm"
     ]
 
     success = True
 
     for module in modules:
         if os.path.isdir(module):
+            print(f"Resolving lock file for {module}...")
             result = subprocess.run(["poetry", "lock"], cwd=module)
             if result.returncode != 0:
+                print(f"Resolving lock file failed for {module}")
                 success = False
+            else:
+                print(f"Resolved lock file successfully for {module}")
+        else:
+            print(f"Directory {module} does not exist. Skipping...")
 
     if success:
         sys.exit(0)

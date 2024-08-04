@@ -13,7 +13,8 @@ def main():
         "module_text_llm",
         "module_text_cofee",
         "module_programming_themisml",
-        "module_programming_apted"
+        "module_programming_apted",
+        "module_modeling_llm",
     ]
 
     success = True
