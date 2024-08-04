@@ -1,4 +1,4 @@
-name: Prospector Linting
+name: Tests
 
 on:
   push:
