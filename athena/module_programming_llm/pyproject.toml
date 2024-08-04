@@ -9,10 +9,11 @@ license = "MIT"
 python = "3.11.*"
 # if you have local changes in the common Athena module, use the line below. Otherwise, please use a VCS stable version. Also, a version with tag = "" is possible.
 # athena = { path = "../athena", develop = true }
-athena = { git = "https://github.com/ls1intum/Athena.git", rev = "ccd00cf8346e76738a66e7f4cf04c84aa4cb4378", subdirectory = "athena"}
+athena = { git = "https://github.com/ls1intum/Athena.git", rev = "d199982", subdirectory = "athena"}
 openai = "^1.30.5"
 langchain = "^0.2.0"
 langchain-openai = "^0.1.7"
+langchain-community = "^0.2.11"
 gitpython = "^3.1.41"
 tiktoken = "^0.7"
 promptlayer = "^0.1.85"
