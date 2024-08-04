@@ -3,6 +3,10 @@ name = "Athena"
 version = "1.0.0"
 description = "This is a helper module for easier development of Athena modules. It provides communication functionality with the Assessment Module manager, as well as helper functions for storage."
 authors = ["Paul Schwind <paul.schwind@tum.de>"]
+package-mode = true
+
+[tool.poetry.dependencies]
+python = "3.11.*"
 
 [tool.poetry.scripts]
 lint_all = "lint_modules:main"
