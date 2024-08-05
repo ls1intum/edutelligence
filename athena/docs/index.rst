@@ -66,3 +66,10 @@ Athena will use the information it is given and provide the automatic suggestion
 
     athena_package/storage
     athena_package/helpers
+
+.. toctree::
+    :caption: Administration of Deployments
+    :includehidden:
+    :maxdepth: 1
+
+    administration_of_deployments/configuration
