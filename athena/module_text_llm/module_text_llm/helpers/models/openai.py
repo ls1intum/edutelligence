@@ -1,50 +1,68 @@
 import os
-from typing import Any , Dict
-from pydantic import Field, validator, PositiveInt
-from enum import Enum
 import openai
+import requests
+
+from typing import Dict, List
+from enum import Enum
+from pydantic import Field, validator, PositiveInt
 from langchain.base_language import BaseLanguageModel
 from langchain_openai import AzureChatOpenAI, ChatOpenAI
+
 from athena.logger import logger
 from .model_config import ModelConfig
 
 OPENAI_PREFIX = "openai_"
 AZURE_OPENAI_PREFIX = "azure_openai_"
-openai_available = bool(os.environ.get("OPENAI_API_KEY"))                                      
+openai_available = bool(os.environ.get("OPENAI_API_KEY"))
 azure_openai_available = bool(os.environ.get("AZURE_OPENAI_API_KEY"))
 
 available_models: Dict[str, BaseLanguageModel] = {}
 
+# Load Non-Azure OpenAI models
 if openai_available:
-    openai.api_type= "openai"
+    openai.api_type = "openai"
     for model in openai.models.list():
-        if model.owned_by == "openai":
-            available_models[OPENAI_PREFIX + model.id] = ChatOpenAI(#type:ignore
-            model=model.id,
-        )
+        if "gpt" in model.id:
+            available_models[OPENAI_PREFIX + model.id] = ChatOpenAI(model=model.id)
 
+# Load Azure OpenAI models
 if azure_openai_available:
-    # Will be replaced in the future
-    for deployment in os.environ['AZURE_DEPLOYMENTS'].split(','):
-                available_models[AZURE_OPENAI_PREFIX + deployment] = AzureChatOpenAI(deployment_name=deployment, temperature=0, client="")
-  
+    def _get_azure_openai_deployments() -> List[str]:
+        # If this breaks in the future we have to use azure-mgmt-cognitiveservices which needs 6 additional environment variables
+        base_url = f"{os.environ.get('AZURE_OPENAI_ENDPOINT')}/openai"
+        headers = {
+            "api-key": os.environ["AZURE_OPENAI_API_KEY"]
+        }
+
+        models_response = requests.get(f"{base_url}/models?api-version=2023-03-15-preview", headers=headers)
+        models_data = models_response.json()["data"]
+        deployments_response = requests.get(f"{base_url}/deployments?api-version=2023-03-15-preview", headers=headers)
+        deployments_data = deployments_response.json()["data"]
+
+        # Check if deployment["model"] is a substring of model["id"], i.e. "gpt-4o" is substring "gpt-4o-2024-05-13"
+        chat_completion_models = ",".join(model["id"] for model in models_data if model["capabilities"]["chat_completion"])
+        return [deployment["id"] for deployment in deployments_data if deployment["model"] in chat_completion_models]
+
+    for deployment in _get_azure_openai_deployments():
+        available_models[AZURE_OPENAI_PREFIX + deployment] = AzureChatOpenAI(azure_deployment=deployment)
+
 if available_models:
     logger.info("Available openai models: %s", ", ".join(available_models.keys()))
 
-    OpenAIModel = Enum('OpenAIModel', {name: name for name in available_models})  # type: ignore
+    OpenAIModel = Enum('OpenAIModel', {name: name for name in available_models}) # type: ignore
     default_model_name = None
     if "LLM_DEFAULT_MODEL" in os.environ and os.environ["LLM_DEFAULT_MODEL"] in available_models:
         default_model_name = os.environ["LLM_DEFAULT_MODEL"]
     if default_model_name not in available_models:
         default_model_name = list(available_models.keys())[0]
 
-    default_openai_model = OpenAIModel[default_model_name]#type:ignore
+    default_openai_model = OpenAIModel[default_model_name] # type: ignore
 
     # Long descriptions will be displayed in the playground UI and are copied from the OpenAI docs
     class OpenAIModelConfig(ModelConfig):
         """OpenAI LLM configuration."""
 
-        model_name: OpenAIModel = Field(default=default_openai_model,  # type: ignore
+        model_name: OpenAIModel = Field(default=default_openai_model, # type: ignore
                                         description="The name of the model to use.")
         max_tokens: PositiveInt = Field(1000, description="""\
 The maximum number of [tokens](https://platform.openai.com/tokenizer) to generate in the chat completion.
