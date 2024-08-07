@@ -1,6 +1,6 @@
 name: Build Docker Images
 
-# Build the Docker images for the the assessment module manager, the modules and the playground.
+# Build the Docker images for the assessment module manager, the modules and the playground.
 # Because the Python images depend on the athena Python package, the package is built first.
 
 on:
