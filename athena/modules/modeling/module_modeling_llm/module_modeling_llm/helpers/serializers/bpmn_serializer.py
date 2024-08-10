@@ -721,7 +721,7 @@ class BPMNSerializer:
 
         return plane
 
-    def __split_elements_by_owning_pool(self, elements: dict) -> tuple[dict, list]:
+    def __split_elements_by_owning_pool(self, elements: dict) -> dict:
         """
         Splits a given list of elements into a dictionary with the IDs of the root
         pool elements as keys and lists of elements contained within the respective pools
@@ -750,7 +750,11 @@ class BPMNSerializer:
                 else:
                     elements_by_owning_pool[owner].append(element)
 
-        return elements_by_owning_pool, unowned_elements
+        # Add all elements that are not contained in a pool to an unnamed pool
+        if len(unowned_elements) > 0:
+            elements_by_owning_pool[""] = unowned_elements
+
+        return elements_by_owning_pool
 
     def __find_root_owner_id(self, elements: dict, current_id: str) -> str:
         """
@@ -798,11 +802,10 @@ class BPMNSerializer:
         serialized_plane = self.__serialize_plane(model)
         diagram.append(serialized_plane)
 
-        elements_by_owning_pool, unowned_elements = self.__split_elements_by_owning_pool(model.get("elements", {}))
+        elements_by_owning_pool = self.__split_elements_by_owning_pool(model.get("elements", {}))
 
         relationships: list[dict] = list(model.get("relationships", {}).values())
 
-        # At the moment, this only supports diagrams that contain pools which should be fine for the time being
         if len(elements_by_owning_pool.keys()) > 0:
 
             collaboration: ElementTree.Element = ElementTree.Element(

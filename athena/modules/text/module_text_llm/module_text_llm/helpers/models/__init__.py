@@ -23,16 +23,6 @@ try:
 except AttributeError:
     pass
 
-try:
-    import module_text_llm.helpers.models.replicate as replicate_config
-    types.append(replicate_config.ReplicateModelConfig)
-    if default_model_name in replicate_config.available_models:
-        DefaultModelConfig = replicate_config.ReplicateModelConfig
-    if evaluation_model_name in replicate_config.available_models:
-        evaluation_model = replicate_config.available_models[evaluation_model_name]
-except AttributeError:
-    pass
-
 if not types:
     raise EnvironmentError(
         "No model configurations available, please set up at least one provider in the environment variables.")
