@@ -44,6 +44,9 @@ for DIR in modules/*/*/ */; do
             continue
         fi
 
+        # Extract just the final directory name (e.g., "module_example") from the full path
+        DIR=$(basename "$DIR")
+
         # Build all images on develop branch
         if [[ "$GITHUB_REF" == "refs/heads/develop" ]]; then
             DIRS+=("$DIR")
