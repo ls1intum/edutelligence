@@ -14,7 +14,8 @@ def main():
         "modules/text/module_text_llm",
         "modules/text/module_text_cofee",
         "modules/programming/module_programming_themisml",
-        "modules/programming/module_programming_apted"
+        "modules/programming/module_programming_apted",
+        "modules/modeling/module_modeling_llm"
     ]
 
     success = True
