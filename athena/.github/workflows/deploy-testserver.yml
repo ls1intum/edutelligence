@@ -85,11 +85,11 @@ jobs:
     strategy:
       matrix:
         include:
-          - environment: athena-test1.ase.cit.tum.de
+          - environment: athenetest1.ase.cit.tum.de/
             label-identifier: athena-test1
             url: https://athenetest1.ase.cit.tum.de
             user: ${{ vars.DEPLOYMENT_USER }}
-            hosts: athena-test1.ase.cit.tum.de
+            hosts: athenetest1.ase.cit.tum.de/
             folder: ${{ vars.DEPLOYMENT_FOLDER }}
 
           - environment: athena-test2.ase.cit.tum.de
