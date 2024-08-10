@@ -67,17 +67,17 @@ jobs:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      
+
       - name: Docker meta
         id: meta
         uses: docker/metadata-action@v4
         with:
           images: |
-            ghcr.io/${{ github.repository_owner }}/Athena/$(basename ${{ matrix.image }})
-            ls1tum/athena_$(basename ${{ matrix.image }})
+              ghcr.io/${{ github.repository_owner }}/Athena/${{ matrix.image | split('/')[-1] }}
+              ls1tum/athena_${{ matrix.image | split('/')[-1] }}
           tags: |
-            type=raw,value=${{ github.ref == 'refs/heads/develop' && 'develop' || github.sha }}
-            type=raw,value=${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.sha }}
+              type=raw,value=${{ github.ref == 'refs/heads/develop' && 'develop' || github.sha }}
+              type=raw,value=${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.sha }}
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v4
