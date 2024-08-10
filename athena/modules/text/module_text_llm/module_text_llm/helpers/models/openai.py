@@ -34,9 +34,10 @@ if azure_openai_available:
             "api-key": os.environ["AZURE_OPENAI_API_KEY"]
         }
 
-        models_response = requests.get(f"{base_url}/models?api-version=2023-03-15-preview", headers=headers)
+        models_response = requests.get(f"{base_url}/models?api-version=2023-03-15-preview", headers=headers, timeout=30)
         models_data = models_response.json()["data"]
-        deployments_response = requests.get(f"{base_url}/deployments?api-version=2023-03-15-preview", headers=headers)
+        deployments_response = requests.get(f"{base_url}/deployments?api-version=2023-03-15-preview", headers=headers,
+                                            timeout=30)
         deployments_data = deployments_response.json()["data"]
 
         # Check if deployment["model"] is a substring of model["id"], i.e. "gpt-4o" is substring "gpt-4o-2024-05-13"
