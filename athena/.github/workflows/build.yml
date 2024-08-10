@@ -70,11 +70,14 @@ jobs:
 
       - name: Docker meta
         id: meta
+        run: |
+          PUSH_IMAGE_NAME=$(basename ${{ matrix.image }})
+          echo "PUSH_IMAGE_NAME=${PUSH_IMAGE_NAME}" >> $GITHUB_ENV
         uses: docker/metadata-action@v4
         with:
           images: |
-            ghcr.io/${{ github.repository_owner }}/Athena/${{ matrix.image | split('/')[-1] }}
-            ls1tum/athena_${{ matrix.image | split('/')[-1] }}
+            ghcr.io/${{ github.repository_owner }}/Athena/${{ env.PUSH_IMAGE_NAME }}
+            ls1tum/athena_${{ env.PUSH_IMAGE_NAME }}
           tags: |
             type=raw,value=${{ github.ref == 'refs/heads/develop' && 'develop' || github.sha }}
             type=raw,value=${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.sha }}
