@@ -22,7 +22,7 @@ def main():
 
     for module in modules:
         if os.path.isdir(module):
-            result = subprocess.run(["poetry", "run", "prospector", "--profile", "../../../prospector.yaml"], cwd=module)
+            result = subprocess.run(["poetry", "run", "prospector", "--profile", "../../../.prospector.yaml"], cwd=module)
             if result.returncode != 0:
                 success = False
 
