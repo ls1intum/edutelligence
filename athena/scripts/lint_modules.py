@@ -15,14 +15,16 @@ def main():
         "modules/text/module_text_cofee",
         "modules/programming/module_programming_themisml",
         "modules/modeling/module_modeling_llm",
-        #"module_programming_apted" skip due to an error
+        # "module_programming_apted" skip due to an error
     ]
 
     success = True
 
     for module in modules:
         if os.path.isdir(module):
-            result = subprocess.run(["poetry", "run", "prospector", "--profile", "../../../.prospector.yaml"], cwd=module)
+            result = subprocess.run(["poetry", "run", "prospector", "--profile",
+                                     os.path.abspath(os.path.join(os.path.dirname(__file__), "../.prospector.yaml"))],
+                                    cwd=module)
             if result.returncode != 0:
                 success = False
 
