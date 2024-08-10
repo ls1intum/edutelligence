@@ -44,8 +44,6 @@ for DIR in modules/*/*/ */; do
             continue
         fi
 
-        # Extract just the final directory name (e.g., "module_example") from the full path
-        DIR=$(basename "$DIR")
 
         # Build all images on develop branch
         if [[ "$GITHUB_REF" == "refs/heads/develop" ]]; then
@@ -59,8 +57,11 @@ for DIR in modules/*/*/ */; do
             continue
         fi
 
+        # Extract just the final directory name (e.g., "module_example") from the full path
+        IMAGE_NAME_SUFFIX=$(basename "$DIR")
+
         # Construct Docker image name and tag
-        IMAGE_NAME="athena/$DIR"
+        IMAGE_NAME="athena/$IMAGE_NAME_SUFFIX"
         IMAGE_TAG="pr-$PR_NUMBER"
 
         # Check if any file has changed in that directory since the pull request was created
