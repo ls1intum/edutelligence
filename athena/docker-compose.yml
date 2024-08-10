@@ -17,7 +17,7 @@ services:
 
   module_example:
     hostname: module-example
-    build: modules/module_example
+    build: modules/programming/module_example
     depends_on:
       - athena
     ports:

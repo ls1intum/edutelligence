@@ -9,7 +9,7 @@ def main():
         "log_viewer",
         "assessment_module_manager",
         "athena",  # the version in this commit only, can differ for modules
-        "modules/module_example",
+        "modules/programming/module_example",
         "modules/programming/module_programming_llm",
         "modules/text/module_text_llm",
         "modules/text/module_text_cofee",
