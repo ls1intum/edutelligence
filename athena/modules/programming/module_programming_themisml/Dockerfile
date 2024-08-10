@@ -24,7 +24,7 @@ RUN poetry config virtualenvs.create true \
     && poetry install --no-interaction --no-ansi
 
 # Project files
-COPY ../../../athena ./
+COPY . ./
 
 # poetry scripts don't work here
 CMD poetry run python -m module_*
