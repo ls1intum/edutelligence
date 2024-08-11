@@ -1,0 +1,20 @@
+name: Testserver Locks
+
+on:
+  pull_request_target:
+    types: [labeled]
+  issues:
+    types: [labeled]
+
+jobs:
+  # Disallow adding testserver locks to PRs manually
+  noManualSetOfLockLabel:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions-ecosystem/action-remove-labels@v1
+        if: startsWith(github.event.label.name, 'lock:athena-test') || startsWith(join(github.event.pull_request.labels.*.name), 'lock:athena-test')
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          labels: |
+            lock:athena-test1
+            lock:athena-test2

@@ -9,10 +9,10 @@ package-mode = true
 python = "3.11.*"
 
 [tool.poetry.scripts]
-lint_all = "lint_modules:main"
-install_all = "install_modules:main"
-lock_all = "lock_modules:main"
-test_all = "test_modules:main"
+lint_all = "scripts.lint_modules:main"
+install_all = "scripts.install_modules:main"
+lock_all = "scripts.lock_modules:main"
+test_all = "scripts.test_modules:main"
 
 [build-system]
 requires = ["poetry-core"]
