@@ -18,11 +18,14 @@ def main():
     ]
 
     success = True
-    subprocess.run(["poetry", "env", "remove", "python"], check=False)
 
     for module in modules:
         if os.path.isdir(module):
-            os.environ["POETRY_VIRTUALENVS_PATH"] = os.path.join(os.getcwd(), module, ".venv")
+            venv_path = os.path.join(os.getcwd(), module, ".venv")
+
+            os.environ['VIRTUAL_ENV'] = venv_path
+            os.environ['PATH'] = os.path.join(venv_path, "bin") + ":" + os.environ['PATH']
+
             result = subprocess.run(["poetry", "run", "prospector", "--profile",
                                      os.path.abspath(os.path.join(os.path.dirname(__file__), "../.prospector.yaml"))],
                                     cwd=module)

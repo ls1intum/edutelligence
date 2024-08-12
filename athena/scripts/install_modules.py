@@ -18,7 +18,6 @@ def main():
     ]
 
     success = True
-    subprocess.run(["poetry", "env", "remove", "python"], check=False)
 
     for module in modules:
         if os.path.isdir(module):
