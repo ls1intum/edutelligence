@@ -58,6 +58,7 @@ async def generate_summary_by_file(
         exercise (Exercise): Exercise to split the problem statement for (respecting the changed files)
         submission (Submission): Submission to split the problem statement for (respecting the changed files)
         config (GradedBasicApproachConfig): Configuration
+        debug (bool): Whether to include debug statements
 
     Returns:
         Optional[SolutionSummary]: Summarization of the given submission, None if it is too short or too long
