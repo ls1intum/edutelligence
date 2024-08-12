@@ -21,6 +21,8 @@ def main():
 
     for module in modules:
         if os.path.isdir(module):
+            subprocess.run(["poetry", "config", "virtualenvs.create", "true"], cwd=module)
+            subprocess.run(["poetry", "config", "virtualenvs.in-project", "true"], cwd=module)
             result = subprocess.run(["poetry", "install"], cwd=module)
             if result.returncode != 0:
                 success = False
