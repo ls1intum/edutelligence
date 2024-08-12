@@ -56,7 +56,7 @@ if __name__ == "__main__":
     tiktoken.get_encoding("cl100k_base")
     app.start()
 
-    enable_debug = os.getenv("ENABLE_DEBUGGING_INFO", False)
+    enable_debug = os.getenv("ENABLE_DEBUGGING_INFO", "False").lower() in ("true", "1")
     if enable_debug:
         set_debug(True)
         set_verbose(True)
