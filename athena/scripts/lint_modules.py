@@ -24,7 +24,6 @@ def main():
             venv_path = os.path.join(os.getcwd(), module, ".venv")
 
             os.environ['VIRTUAL_ENV'] = venv_path
-            os.environ['PATH'] = os.path.join(venv_path, "bin") + ":" + os.environ['PATH']
 
             result = subprocess.run(["poetry", "run", "prospector", "--profile",
                                      os.path.abspath(os.path.join(os.path.dirname(__file__), "../.prospector.yaml"))],
