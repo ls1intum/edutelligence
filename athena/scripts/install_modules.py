@@ -21,9 +21,6 @@ def main():
 
     for module in modules:
         if os.path.isdir(module):
-            venv_path = os.path.join(os.getcwd(), module, ".venv")
-
-            os.environ['VIRTUAL_ENV'] = venv_path
             result = subprocess.run(["poetry", "install"], cwd=module)
             if result.returncode != 0:
                 success = False
