@@ -14,6 +14,8 @@ services:
       - athena
     ports:
       - "5100:5100"
+    volumes:
+      - ./assessment_module_manager/deployments.ini:/code/deployments.ini:ro
 
   module_example:
     hostname: module-example
