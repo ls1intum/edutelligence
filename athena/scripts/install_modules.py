@@ -18,13 +18,11 @@ def main():
     ]
 
     success = True
-
-    # create a new virtual env by default
-    subprocess.run(["poetry", "config", "virtualenvs.create", "true"])
-    subprocess.run(["poetry", "config", "virtualenvs.in-project", "true"])
+    subprocess.run(["poetry", "env", "remove", "python"], check=False)
 
     for module in modules:
         if os.path.isdir(module):
+            os.environ["POETRY_VIRTUALENVS_PATH"] = os.path.join(os.getcwd() + "/" + module, ".venv")
             result = subprocess.run(["poetry", "install"], cwd=module)
             if result.returncode != 0:
                 success = False
