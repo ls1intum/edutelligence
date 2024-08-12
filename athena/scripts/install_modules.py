@@ -18,10 +18,18 @@ def main():
     ]
 
     success = True
+    path_env = os.environ["PATH"]
 
     for module in modules:
         if os.path.isdir(module):
-            result = subprocess.run(["poetry", "install"], cwd=module)
+
+            path = os.path.join(os.getcwd(), module, ".venv")
+            os.environ["VIRTUAL_ENV"] = path
+            os.environ["PATH"] = os.path.join(path, "bin") + os.pathsep + path_env
+
+            subprocess.run([sys.executable, "-m", "venv", path])
+            result = subprocess.run(["poetry", "install"], cwd=path)
+
             if result.returncode != 0:
                 success = False
 

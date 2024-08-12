@@ -5,7 +5,6 @@ import sys
 
 def main():
     modules = [
-        "docs",
         "log_viewer",
         "assessment_module_manager",
         "athena",  # the version in this commit only, can differ for modules
@@ -19,9 +18,15 @@ def main():
     ]
 
     success = True
+    path_env = os.environ["PATH"]
 
     for module in modules:
         if os.path.isdir(module):
+
+            path = os.path.join(os.getcwd(), module, ".venv")
+            os.environ["VIRTUAL_ENV"] = path
+            os.environ["PATH"] = os.path.join(path, "bin") + os.pathsep + path_env
+
             result = subprocess.run(["poetry", "run", "prospector", "--profile",
                                      os.path.abspath(os.path.join(os.path.dirname(__file__), "../.prospector.yaml"))],
                                     cwd=module)
