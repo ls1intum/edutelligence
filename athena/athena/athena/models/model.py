@@ -1,8 +1,7 @@
 import importlib
 
-from pydantic import BaseModel, AnyUrl
-from sqlalchemy import Column, String, UniqueConstraint, event
-from sqlalchemy.orm import mapper
+from pydantic import BaseModel
+from sqlalchemy import Column, String, UniqueConstraint
 
 
 class Model:
