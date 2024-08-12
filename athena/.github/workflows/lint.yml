@@ -35,6 +35,4 @@ jobs:
         poetry install
         poetry run install_all
     - name: Run Prospector
-      run: |
-        echo "$HOME/.local/bin" >> $GITHUB_PATH
-        poetry run lint_all
+      run: poetry run lint_all
