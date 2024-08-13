@@ -23,6 +23,7 @@ services:
     image: ls1tum/athena_assessment_module_manager:${ATHENA_TAG:-develop}
     volumes:
       - ./deployments.ini:/code/deployments.ini:ro
+      - ./modules.ini:/code/modules.ini:ro
 
   module_example:
     hostname: module-example
