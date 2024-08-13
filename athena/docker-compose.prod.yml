@@ -21,6 +21,8 @@ services:
     depends_on:
       - postgres
     image: ls1tum/athena_assessment_module_manager:${ATHENA_TAG:-develop}
+    volumes:
+      - ./deployments.ini:/code/deployments.ini:ro
 
   module_example:
     hostname: module-example
