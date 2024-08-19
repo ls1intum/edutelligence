@@ -190,7 +190,7 @@ export default function InlineFeedback({
         ) : (
           <div
             className={twMerge(
-              "font-medium rounded px-2.5 py-0.5 mt-2",
+              "font-medium rounded px-2.5 py-0.5",
               feedback.credits < 0
                 ? "bg-red-100 text-red-800"
                 : feedback.credits > 0
@@ -210,12 +210,19 @@ export default function InlineFeedback({
                 placeholder="Title..."
                 onChange={(e) => setTitle(e.target.value)}
               />
-            ) : (
+            ) : feedback.title && (
               <span className="font-semibold">
-                {feedback.title ? feedback.title : <i>Missing title</i>}
+                {feedback.title}
               </span>
             )}
           </div>
+          {feedback.structured_grading_instruction?.feedback && (
+            <div className="w-full text-orange-800 rounded px-2 py-0.5 bg-orange-100">
+              <span className="whitespace-pre-wrap">
+                {feedback.structured_grading_instruction.feedback}
+              </span>
+            </div>
+          )}
           <div>
             {isEditing && onFeedbackChange ? (
               <TextareaAutosize
@@ -224,12 +231,10 @@ export default function InlineFeedback({
                 placeholder="Description..."
                 onChange={(e) => setDescription(e.target.value)}
               />
-            ) : feedback.description ? (
+            ) : feedback.description && (
               <span className="whitespace-pre-wrap">
                 {feedback.description}
               </span>
-            ) : (
-              <i>Missing description</i>
             )}
           </div>
         </div>

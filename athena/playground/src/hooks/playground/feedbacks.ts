@@ -15,7 +15,14 @@ export async function fetchFeedbacks(
   const response = await fetch(
     `${baseUrl}/api/data/${dataMode}/${exercise ? `exercise/${exercise.id}/` : ""}feedbacks`
   );
-  const feedbacks = await response.json() as Feedback[];
+
+  let feedbacks = await response.json() as Feedback[];
+  for (const feedback of feedbacks) {
+    if (feedback.structured_grading_instruction_id) {
+      feedback.structured_grading_instruction = exercise?.grading_criteria?.flatMap((criteria) => criteria.structured_grading_instructions).find((instruction) => instruction.id === feedback.structured_grading_instruction_id);
+    }
+  }
+
   if (submission) {
     return feedbacks.filter((feedback) => feedback.submission_id === submission.id);
   }

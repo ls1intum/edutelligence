@@ -1,5 +1,5 @@
 import type { IRange, editor } from "monaco-editor";
-import type { ExerciseType } from "./exercise";
+import type { ExerciseType, StructuredGradingInstruction } from "./exercise";
 import type { Submission } from "./submission";
 
 type FeedbackBase = {
@@ -11,6 +11,7 @@ type FeedbackBase = {
   exercise_id: number;
   submission_id: number;
   structured_grading_instruction_id?: number;
+  structured_grading_instruction?: StructuredGradingInstruction; // Playground only
   isSuggestion?: boolean; // Playground only
   isNew?: boolean; // Playground only
   isChanged?: boolean; // Playground only
