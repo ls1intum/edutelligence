@@ -1,5 +1,6 @@
 import logging
 import time
+import traceback
 from datetime import datetime
 from typing import Literal, Any
 
@@ -7,6 +8,7 @@ from openai import OpenAI
 from openai.lib.azure import AzureOpenAI
 from openai.types.chat import ChatCompletionMessage, ChatCompletionMessageParam
 from openai.types.chat.completion_create_params import ResponseFormat
+from openai.types.shared_params import ResponseFormatJSONObject
 
 from ...common.message_converters import map_str_to_role, map_role_to_str
 from app.domain.data.text_message_content_dto import TextMessageContentDTO
@@ -93,7 +95,7 @@ class OpenAIChatModel(ChatModel):
                         messages=convert_to_open_ai_messages(messages),
                         temperature=arguments.temperature,
                         max_tokens=arguments.max_tokens,
-                        response_format=ResponseFormat(type="json_object"),
+                        response_format=ResponseFormatJSONObject(type="json_object"),
                     )
                 else:
                     response = self._client.chat.completions.create(
@@ -106,6 +108,7 @@ class OpenAIChatModel(ChatModel):
             except Exception as e:
                 wait_time = initial_delay * (backoff_factor**attempt)
                 logging.warning(f"Exception on attempt {attempt + 1}: {e}")
+                traceback.print_exc()
                 logging.info(f"Retrying in {wait_time} seconds...")
                 time.sleep(wait_time)
         logging.error("Failed to interpret image after several attempts.")
