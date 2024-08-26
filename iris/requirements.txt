@@ -1,9 +1,9 @@
 black==24.8.0
-fastapi==0.112.0
+fastapi==0.112.2
 flake8==7.1.1
-langchain==0.2.12
+langchain==0.2.14
 ollama==0.3.1
-openai==1.40.3
+openai==1.42.0
 pre-commit==3.8.0
 psutil==6.0.0
 pydantic==2.8.2
@@ -11,7 +11,7 @@ PyMuPDF==1.24.9
 pytz==2024.1
 PyYAML==6.0.2
 requests==2.32.3
-sentry-sdk[starlette,fastapi,openai]==2.12.0
-unstructured==0.15.1
-uvicorn==0.30.5
+sentry-sdk[starlette,fastapi,openai]==2.13.0
+unstructured==0.15.7
+uvicorn==0.30.6
 weaviate-client==4.7.1
