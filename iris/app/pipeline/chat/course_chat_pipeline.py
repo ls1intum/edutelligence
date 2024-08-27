@@ -232,26 +232,22 @@ class CourseChatPipeline(Pipeline):
             regarding their progress overall or in a specific area.
             A competency has the following attributes: name, description, taxonomy, soft due date, optional,
             and mastery threshold.
-            The response may include metrics for each competency, such as progress and mastery (0%-100%).
+            The response may include metrics for each competency, such as progress and mastery (0% - 100%).
             These are system-generated.
-            The judgment of learning (JOL) values indicate the self-reported confidence by the student (0-5, 5 star).
-            The object describing it also indicates the system-computed confidence at the time when the student
+            The judgment of learning (JOL) values indicate the self-reported mastery by the student (0 - 5, 5 star).
+            The object describing it also indicates the system-computed mastery at the time when the student
             added their JoL assessment.
             """
             self.callback.in_progress("Reading competency list ...")
             if not dto.metrics or not dto.metrics.competency_metrics:
                 return dto.course.competencies
             competency_metrics = dto.metrics.competency_metrics
-            weight = 2.0 / 3.0
             return [
                 {
                     "info": competency_metrics.competency_information.get(comp, None),
                     "exercise_ids": competency_metrics.exercises.get(comp, []),
                     "progress": competency_metrics.progress.get(comp, 0),
-                    "mastery": (
-                        (1 - weight) * competency_metrics.progress.get(comp, 0)
-                        + weight * competency_metrics.confidence.get(comp, 0)
-                    ),
+                    "mastery": get_mastery(competency_metrics.progress.get(comp, 0), competency_metrics.confidence.get(comp, 0)),
                     "judgment_of_learning": (
                         competency_metrics.jol_values.get[comp].json()
                         if competency_metrics.jol_values
