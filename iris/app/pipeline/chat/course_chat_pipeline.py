@@ -247,7 +247,10 @@ class CourseChatPipeline(Pipeline):
                     "info": competency_metrics.competency_information.get(comp, None),
                     "exercise_ids": competency_metrics.exercises.get(comp, []),
                     "progress": competency_metrics.progress.get(comp, 0),
-                    "mastery": get_mastery(competency_metrics.progress.get(comp, 0), competency_metrics.confidence.get(comp, 0)),
+                    "mastery": get_mastery(
+                        competency_metrics.progress.get(comp, 0),
+                        competency_metrics.confidence.get(comp, 0),
+                    ),
                     "judgment_of_learning": (
                         competency_metrics.jol_values.get[comp].json()
                         if competency_metrics.jol_values
