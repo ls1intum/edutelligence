@@ -266,7 +266,8 @@ class CourseChatPipeline(Pipeline):
         def lecture_content_retrieval() -> str:
             """
             Retrieve content from indexed lecture slides.
-            This will run a RAG retrieval based on the chat history on the indexed lecture slides and return the most relevant paragraphs.
+            This will run a RAG retrieval based on the chat history on the indexed lecture slides and return the most
+            relevant paragraphs.
             Use this if you think it can be useful to answer the student's question, or if the student explicitly asks
             a question about the lecture content or slides.
             Only use this once.
