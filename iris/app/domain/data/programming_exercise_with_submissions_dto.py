@@ -32,7 +32,7 @@ class IncludedInOverallScore(str, Enum):
     NOT_INCLUDED = "NOT_INCLUDED"
 
 
-class ExerciseWithSubmissionsDTO(BaseModel):
+class ProgrammingExerciseWithSubmissionsDTO(BaseModel):
     id: int = Field(alias="id")
     title: str = Field(alias="title")
     type: ExerciseType = Field(alias="type")

@@ -13,8 +13,8 @@ from ...domain.chat.course_chat.course_chat_status_update_dto import (
 )
 from ...domain.status.stage_state_dto import StageStateEnum
 from ...domain.status.stage_dto import StageDTO
-from ...domain.chat.exercise_chat.exercise_chat_status_update_dto import (
-    ExerciseChatStatusUpdateDTO,
+from ...domain.chat.programming_exercise_chat.exercise_chat_status_update_dto import (
+    ProgrammingExerciseChatStatusUpdateDTO,
 )
 from ...domain.status.status_update_dto import StatusUpdateDTO
 import logging
@@ -186,7 +186,7 @@ class CourseChatStatusCallback(StatusCallback):
         super().__init__(url, run_id, status, stage, current_stage_index)
 
 
-class ExerciseChatStatusCallback(StatusCallback):
+class ProgrammingExerciseChatStatusCallback(StatusCallback):
     def __init__(
         self, run_id: str, base_url: str, initial_stages: List[StageDTO] = None
     ):
@@ -213,7 +213,7 @@ class ExerciseChatStatusCallback(StatusCallback):
                 weight=10, state=StageStateEnum.NOT_STARTED, name="Creating suggestions"
             ),
         ]
-        status = ExerciseChatStatusUpdateDTO(stages=stages)
+        status = ProgrammingExerciseChatStatusUpdateDTO(stages=stages)
         stage = stages[current_stage_index]
         super().__init__(url, run_id, status, stage, current_stage_index)
 

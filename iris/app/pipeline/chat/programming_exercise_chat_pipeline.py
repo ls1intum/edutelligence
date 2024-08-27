@@ -15,7 +15,7 @@ from weaviate.collections.classes.filters import Filter
 from .code_feedback_pipeline import CodeFeedbackPipeline
 from .interaction_suggestion_pipeline import InteractionSuggestionPipeline
 from ..pipeline import Pipeline
-from ..prompts.iris_exercise_chat_prompts import (
+from ..prompts.iris_programming_exercise_chat_prompts import (
     iris_initial_system_prompt,
     chat_history_system_prompt,
     final_system_prompt,
@@ -24,7 +24,7 @@ from ..prompts.iris_exercise_chat_prompts import (
 from ..shared.citation_pipeline import CitationPipeline
 from ..shared.reranker_pipeline import RerankerPipeline
 from ...common import convert_iris_message_to_langchain_message
-from ...domain import ExerciseChatPipelineExecutionDTO
+from ...domain import ProgrammingExerciseChatPipelineExecutionDTO
 from ...domain import PyrisMessage
 from ...domain.chat.interaction_suggestion_dto import (
     InteractionSuggestionPipelineExecutionDTO,
@@ -38,24 +38,24 @@ from ...llm.langchain import IrisLangchainChatModel
 from ...retrieval.lecture_retrieval import LectureRetrieval
 from ...vector_database.database import VectorDatabase
 from ...vector_database.lecture_schema import LectureSchema
-from ...web.status.status_update import ExerciseChatStatusCallback
+from ...web.status.status_update import ProgrammingExerciseChatStatusCallback
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
 
-class ExerciseChatPipeline(Pipeline):
-    """Exercise chat pipeline that answers exercises related questions from students."""
+class ProgrammingExerciseChatPipeline(Pipeline):
+    """Programming exercise chat pipeline that answers programming exercise related questions from students."""
 
     llm: IrisLangchainChatModel
     pipeline: Runnable
-    callback: ExerciseChatStatusCallback
+    callback: ProgrammingExerciseChatStatusCallback
     suggestion_pipeline: InteractionSuggestionPipeline
     code_feedback_pipeline: CodeFeedbackPipeline
     prompt: ChatPromptTemplate
 
-    def __init__(self, callback: ExerciseChatStatusCallback):
-        super().__init__(implementation_id="exercise_chat_pipeline")
+    def __init__(self, callback: ProgrammingExerciseChatStatusCallback):
+        super().__init__(implementation_id="programming_exercise_chat_pipeline")
         # Set the langchain chat model
         completion_args = CompletionArguments(temperature=0, max_tokens=2000)
         self.llm = IrisLangchainChatModel(
@@ -86,7 +86,7 @@ class ExerciseChatPipeline(Pipeline):
         return f"{self.__class__.__name__}(llm={self.llm})"
 
     @traceable(name="Exercise Chat Pipeline")
-    def __call__(self, dto: ExerciseChatPipelineExecutionDTO):
+    def __call__(self, dto: ProgrammingExerciseChatPipelineExecutionDTO):
         """
         Runs the pipeline
         :param dto:  execution data transfer object
@@ -96,7 +96,9 @@ class ExerciseChatPipeline(Pipeline):
             should_execute_lecture_pipeline = self.should_execute_lecture_pipeline(
                 dto.course.id
             )
-            self._run_exercise_chat_pipeline(dto, should_execute_lecture_pipeline),
+            self._run_programming_exercise_chat_pipeline(
+                dto, should_execute_lecture_pipeline
+            ),
             self.callback.done(
                 "Generated response", final_result=self.exercise_chat_response
             )
@@ -131,9 +133,9 @@ class ExerciseChatPipeline(Pipeline):
             traceback.print_exc()
             self.callback.error(f"Failed to generate response: {e}", exception=e)
 
-    def _run_exercise_chat_pipeline(
+    def _run_programming_exercise_chat_pipeline(
         self,
-        dto: ExerciseChatPipelineExecutionDTO,
+        dto: ProgrammingExerciseChatPipelineExecutionDTO,
         should_execute_lecture_pipeline: bool = False,
     ):
         """

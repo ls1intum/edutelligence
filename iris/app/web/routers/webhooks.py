@@ -21,7 +21,7 @@ semaphore = Semaphore(5)
 
 def run_lecture_update_pipeline_worker(dto: IngestionPipelineExecutionDto):
     """
-    Run the exercise chat pipeline in a separate thread
+    Run the ingestion pipeline in a separate thread
     """
     with semaphore:
         try:
