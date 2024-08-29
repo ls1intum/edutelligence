@@ -10,44 +10,56 @@ def display_exercise_summaries(exercises, max_rows=None):
     """Displays summaries of exercises, submissions, and feedbacks."""
 
     def sample_with_equal_spacing(df, max_rows):
-        return df.iloc[np.linspace(0, len(df) - 1, max_rows, dtype=int)] if max_rows and max_rows < len(df) else df
+        if max_rows and max_rows < len(df):
+            return df.iloc[np.linspace(0, len(df) - 1, max_rows, dtype=int)]
+        return df
 
-    # Create DataFrames using list comprehensions
+    # Create DataFrames
     exercise_df = pd.DataFrame([{
-        'Exercise ID': ex.id, 'Title': ex.title, 'Type': ex.type,
-        'Max Points': ex.max_points, 'Bonus Points': ex.bonus_points,
+        'Exercise ID': ex.id,
+        'Title': ex.title,
+        'Type': ex.type,
+        'Max Points': ex.max_points,
+        'Bonus Points': ex.bonus_points,
         'Problem Statement': ex.problem_statement
     } for ex in exercises])
 
     submission_df = pd.DataFrame([{
-        'Submission ID': sub.id, 'Exercise ID': ex.id, 'Language': sub.language,
+        'Submission ID': sub.id,
+        'Exercise ID': ex.id,
+        'Language': sub.language,
         'Text': sub.text
     } for ex in exercises for sub in ex.submissions])
 
     feedback_df = pd.DataFrame([{
-        'Submission ID': sub.id, 'Exercise ID': ex.id,
-        'Feedback Type': fb_type, 'Number of Feedbacks': len(fbs)
-    } for ex in exercises for sub in ex.submissions for fb_type, fbs in sub.feedbacks.items()])
+        'Submission ID': sub.id,
+        'Exercise ID': ex.id,
+        'Assessment ID': ass.id,
+        'Number of Feedbacks': len(ass.feedbacks)
+    } for ex in exercises for sub in ex.submissions for ass in sub.assessments])
 
     # Sample rows if max_rows is specified
     if max_rows:
-        exercise_df, submission_df, feedback_df = map(lambda df: sample_with_equal_spacing(df, max_rows),
-                                                      [exercise_df, submission_df, feedback_df])
+        exercise_df, submission_df, feedback_df = map(
+            lambda df: sample_with_equal_spacing(df, max_rows),
+            [exercise_df, submission_df, feedback_df]
+        )
 
     # Display the DataFrames with headings
-    for title, df in zip(["Exercises", "Submissions", "Feedback Summary"], [exercise_df, submission_df, feedback_df]):
+    for title, df in zip(["Exercises", "Submissions", "Feedback Summary"],
+                         [exercise_df, submission_df, feedback_df]):
         display(HTML(f"<h3>{title}</h3>"))
         display(df)
 
 
 def print_feedbacks(exercises, exercise_id_to_find=None, submission_id_to_find=None):
-    """Prints a nicely formatted representation of key feedback details for the given exercise and submission."""
+    """Prints a nicely formatted representation of feedback details for the given exercise and submission."""
 
     exercise, submission = find_exercise_submission(exercises, exercise_id_to_find, submission_id_to_find)
 
     if not exercise or not submission:
-        display(HTML(
-            f"<div style='color: red; font-weight: bold;'>Error: {'Exercise' if not exercise else 'Submission'} not found.</div>"))
+        display(HTML(f"<div style='color: red; font-weight: bold;'>"
+                     f"Error: {'Exercise' if not exercise else 'Submission'} not found.</div>"))
         return
 
     feedback_output = f"""
@@ -55,17 +67,20 @@ def print_feedbacks(exercises, exercise_id_to_find=None, submission_id_to_find=N
         <div><b>Submission ID:</b> {submission.id}</div>
         <div><b>Feedbacks:</b><ul>
     """
-    for feedback_type, feedbacks in submission.feedbacks.items():
-        feedback_output += f"<li><b>{feedback_type} Feedback:</b><ul>"
-        feedback_output += "".join(f"""
-            <li>
-                <b>Title:</b> {feedback.title}<br>
-                <b>Description:</b> {feedback.description}<br>
-                <b>Index Start:</b> {feedback.index_start}<br>
-                <b>Index End:</b> {feedback.index_end}<br>
-                <b>Credits:</b> {feedback.credits}<br>
-            </li>
-        """ for feedback in feedbacks)
+
+    # Display feedback details from assessments
+    for assessment in submission.assessments:
+        feedback_output += f"<li><b>Assessment ID:</b> {assessment.id}<ul>"
+        for feedback in assessment.feedbacks:
+            feedback_output += f"""
+                <li>
+                    <b>Title:</b> {feedback.title or 'None'}<br>
+                    <b>Description:</b> {feedback.description}<br>
+                    <b>Index Start:</b> {feedback.index_start}<br>
+                    <b>Index End:</b> {feedback.index_end}<br>
+                    <b>Credits:</b> {feedback.credits}<br>
+                </li>
+            """
         feedback_output += "</ul></li>"
 
     feedback_output += "</ul></div>"

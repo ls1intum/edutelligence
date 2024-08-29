@@ -1,21 +1,18 @@
-from typing import Optional, List, Dict
+from typing import Optional, List
+
+from pydantic.main import BaseModel
 
 from athena import GradingCriterion
 from athena.text import Feedback, Submission, Exercise
 
 
-class EvaluationFeedback(Feedback):
-    pass  # Inherits everything from TextFeedback
+class Assessment(BaseModel):
+    id: str
+    feedbacks: List[Feedback] = []
 
 
 class EvaluationSubmission(Submission):
-    feedbacks: Optional[Dict[str, List[EvaluationFeedback]]] = {}
-    exercise_id: Optional[int] = None  # Allow exercise_id to be optional
-
-    class Config:
-        fields = {
-            'exercise_id': 'exerciseId'  # Ensure the field name matches JSON key
-        }
+    assessments: List[Assessment] = []
 
 
 class EvaluationExercise(Exercise):
@@ -31,4 +28,3 @@ class EvaluationExercise(Exercise):
 # re-export with shorter names, because the module will only use these
 Exercise = EvaluationExercise
 Submission = EvaluationSubmission
-Feedback = EvaluationFeedback

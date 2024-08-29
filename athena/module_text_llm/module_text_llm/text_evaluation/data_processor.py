@@ -1,169 +1,107 @@
 import json
 import os
+from IPython.display import display, HTML
 
-from pydantic import ValidationError, parse_obj_as
-from IPython.display import HTML, display
+from athena import GradingCriterion, ExerciseType
+from athena.schemas import TextLanguageEnum
+from module_text_llm.text_evaluation.evaluation_schemas import Exercise, Submission, Feedback, Assessment
 
-from module_text_llm.text_evaluation.evaluation_schemas import Exercise, Submission, Feedback
+
+def process_dump_data(exercise_id: int, technique: str, data: dict) -> Exercise:
+    grading_criteria = [GradingCriterion(**criterion) for criterion in data.get("grading_criteria", [])]
+
+    submissions = [
+        Submission(
+            id=submission["id"],
+            exercise_id=exercise_id,
+            text=submission["text"],
+            language=TextLanguageEnum(submission["language"]) if "language" in submission else None,
+            assessments=[
+                Assessment(
+                    id=technique,
+                    feedbacks=[
+                        Feedback(**{**feedback, "title": None}) for feedback in submission.get("feedbacks", [])
+                    ]
+                )
+            ]
+        ) for submission in data.get("submissions", [])
+    ]
+
+    exercise = Exercise(
+        id=exercise_id,
+        title=data["title"],
+        type=ExerciseType(data["type"]),
+        max_points=data["max_points"],
+        bonus_points=data["bonus_points"],
+        grading_instructions=data.get("grading_instructions"),
+        grading_criteria=grading_criteria,
+        problem_statement=data["problem_statement"],
+        example_solution=data.get("example_solution"),
+        submissions=submissions
+    )
+
+    return exercise
 
 
-def process_file(file_data, exercise_id, technique, exercises, experiment_data):
-    """Processes a single file's data, attempting to add it to exercises or deferring to experiment_data."""
-    try:
-        # Ensure feedbacks in each submission are properly structured
-        for submission in file_data.get('submissions', []):
-            if isinstance(submission.get('feedbacks'), list):
-                submission['feedbacks'] = {technique: submission['feedbacks']}
-            elif not isinstance(submission.get('feedbacks'), dict):
-                submission['feedbacks'] = {technique: []}
+def add_assessments_to_submissions(exercise: Exercise, data: dict, assessment_id: str) -> Exercise:
+    existing_submissions = {submission.id: submission for submission in exercise.submissions}
 
-        # Convert submissions and feedbacks to correct Pydantic models
-        file_data['submissions'] = [parse_obj_as(Submission, sub) for sub in file_data.get('submissions', [])]
+    for submission_id, feedback_data in data.get("submissionsWithFeedbackSuggestions", {}).items():
+        submission_id = int(submission_id)
 
-        # Attempt to create the Exercise object
-        exercise = Exercise(**file_data)
+        if submission_id not in existing_submissions:
+            raise ValueError(f"Submission with ID {submission_id} does not exist in the provided exercise.")
 
-        # Check if the exercise already exists in the list
-        existing_exercise = next((ex for ex in exercises if ex.id == exercise_id), None)
+        assessment = Assessment(
+            id=assessment_id,
+            feedbacks=[Feedback(**{**suggestion, "title": None}) for suggestion in feedback_data.get("suggestions", [])]
+        )
 
-        if existing_exercise:
-            # Validate and update existing submissions
-            exercises = validate_submissions(exercises, exercise_id, exercise)
-            # Add new feedbacks to existing submissions
-            exercises = add_feedbacks(exercises, exercise_id, exercise, technique)
-        else:
-            # New exercise, add to the list of exercises
+        # Add the assessment to the existing submission
+        existing_submissions[submission_id].assessments.append(assessment)
+
+    return exercise
+
+def process_data(data) -> list[Exercise]:
+    """Function for processing the data into the evaluation schema.
+
+    Parameters:
+    - data: List of tuples, where each tuple contains (exercise_id, technique, file_data).
+    """
+    exercises = []
+
+    # 1. Process the data (i.e. from database dump) and create exercises
+    for exercise_id, technique, file_data in data:
+        is_experiment = file_data.get("experimentId") is not None
+        if not is_experiment:
+            exercise = process_dump_data(exercise_id, technique, file_data)
             exercises.append(exercise)
 
-    except ValidationError as e:
-        # On validation error, store in experiment_data for later processing
-        experiment_data.append((file_data, exercise_id, technique))
-
-    return exercises, experiment_data
-
-
-def validate_submissions(exercises, exercise_id, new_exercise):
-    """Validates that submissions are the same between existing and new exercises."""
-    existing_exercise = next(ex for ex in exercises if ex.id == exercise_id)
-    if len(existing_exercise.submissions) != len(new_exercise.submissions):
-        raise ValueError(f"Submissions count mismatch for exercise {existing_exercise.id}")
-    for existing_sub, new_sub in zip(existing_exercise.submissions, new_exercise.submissions):
-        if existing_sub.id != new_sub.id:
-            raise ValueError(f"Submission ID mismatch for exercise {existing_exercise.id}")
-    return exercises
-
-
-def add_feedbacks(exercises, exercise_id, new_exercise, technique):
-    """Adds feedbacks from a new exercise to an existing one."""
-    existing_exercise = next(ex for ex in exercises if ex.id == exercise_id)
-    for existing_sub, new_sub in zip(existing_exercise.submissions, new_exercise.submissions):
-        if technique not in existing_sub.feedbacks:
-            existing_sub.feedbacks[technique] = []
-        existing_sub.feedbacks[technique].extend(new_sub.feedbacks.get(technique, []))
-    return exercises
-
-
-def process_experiment_data(experiment_data, exercises):
-    """Processes all experiment data, adding feedbacks to existing exercises."""
-    for file_data, exercise_id, technique in experiment_data:
-        existing_exercise = next((ex for ex in exercises if ex.id == exercise_id), None)
-        if not existing_exercise:
-            raise ValueError(f"Exercise {exercise_id} not found for experiment data")
-
-        # Ensure that submissions are correctly typed before processing
-        file_data['submissions'] = [parse_obj_as(Submission, sub) for sub in file_data.get('submissions', [])]
-
-        # Iterate over the submissions in the experiment data
-        for submission_id, submission_data in file_data['submissionsWithFeedbackSuggestions'].items():
-            existing_submission = next((sub for sub in existing_exercise.submissions if sub.id == int(submission_id)),
-                                       None)
-
-            if not existing_submission:
-                raise ValueError(f"Submission ID {submission_id} not found in exercise {exercise_id}")
-
-            # Add the suggestions to the existing feedbacks under the correct technique
-            if technique not in existing_submission.feedbacks:
-                existing_submission.feedbacks[technique] = []
-
-            # Ensure feedbacks are correctly typed before adding them
-            suggestions = parse_obj_as(list[Feedback], submission_data['suggestions'])
-            existing_submission.feedbacks[technique].extend(suggestions)
-
-    return exercises
-
-
-def process_data(data):
-    """Main processing function to handle all files."""
-    exercises = []
-    experiment_data = []
-
-    # Process each file's data
+    # 2. Process the data (i.e. from experiments) and add assessments to submissions
+    # The second step is necessary because experiment data does not contain the full exercise and submission information
+    existing_exercises = {exercise.id: exercise for exercise in exercises}
     for exercise_id, technique, file_data in data:
-        exercises, experiment_data = process_file(file_data, exercise_id, technique, exercises, experiment_data)
-
-    # Process experiment data
-    exercises = process_experiment_data(experiment_data, exercises)
-
-    total_feedbacks = sum(len(sub.feedbacks) for ex in exercises for sub in ex.submissions)
-    total_feedback_items = sum(
-        len(feedbacks) for ex in exercises for sub in ex.submissions for feedbacks in sub.feedbacks.values())
+        is_experiment = file_data.get("experimentId") is not None
+        if is_experiment:
+            if exercise_id not in existing_exercises:
+                raise ValueError(f"Exercise with ID {exercise_id} does not exist in the provided data.")
+            add_assessments_to_submissions(existing_exercises[exercise_id], file_data, technique)
 
     # Display a summary of processing
+    num_exercises = len(exercises)
+    num_submissions = sum(len(exercise.submissions) for exercise in exercises)
+    num_assessments = sum(len(submission.assessments) for exercise in exercises for submission in exercise.submissions)
+    num_feedbacks = sum(len(assessment.feedbacks) for exercise in exercises for submission in exercise.submissions for assessment in submission.assessments)
+
     summary_message = (
         f"<div style='color: green; font-weight: bold;'>Data Processing Completed!</div>"
         f"<div style='color: black;'>"
-        f"Total exercises processed: <span style='color: blue;'>{len(exercises)}</span><br>"
-        f"Total feedbacks processed: <span style='color: blue;'>{total_feedbacks}</span><br>"
-        f"Total feedback items processed: <span style='color: blue;'>{total_feedback_items}</span>"
+        f"Total exercises processed: <span style='color: blue;'>{num_exercises}</span><br>"
+        f"Total submissions processed: <span style='color: blue;'>{num_submissions}</span><br>"
+        f"Total assessments processed: <span style='color: blue;'>{num_assessments}</span><br>"
+        f"Total feedbacks processed: <span style='color: blue;'>{num_feedbacks}</span>"
         f"</div>"
     )
     display(HTML(summary_message))
 
-    return exercises  # Return the list of exercises
-
-
-def remove_feedback_titles(directory):
-    total_titles_replaced = 0
-
-    def replace_titles_in_items(items):
-        nonlocal total_titles_replaced
-        for item in items:
-            if isinstance(item, dict) and "title" in item:
-                item["title"] = None
-                total_titles_replaced += 1
-
-    for filename in os.listdir(directory):
-        if filename.endswith(".json"):
-            file_path = os.path.join(directory, filename)
-            with open(file_path, 'r', encoding='utf-8') as file:
-                data = json.load(file)
-
-            if isinstance(data, dict):
-                # Handle submissions that might contain feedbacks or suggestions
-                if "submissions" in data and isinstance(data["submissions"], list):
-                    for submission in data["submissions"]:
-                        # Replace titles in feedbacks
-                        if "feedbacks" in submission and isinstance(submission["feedbacks"], list):
-                            replace_titles_in_items(submission["feedbacks"])
-
-                        # Replace titles in suggestions
-                        if "suggestions" in submission and isinstance(submission["suggestions"], list):
-                            replace_titles_in_items(submission["suggestions"])
-
-                # Handle other possible structures that might contain feedbacks or suggestions
-                if "submissionsWithFeedbackSuggestions" in data and isinstance(data["submissionsWithFeedbackSuggestions"], dict):
-                    for submission_id, submission_data in data["submissionsWithFeedbackSuggestions"].items():
-                        if "feedbacks" in submission_data and isinstance(submission_data["feedbacks"], list):
-                            replace_titles_in_items(submission_data["feedbacks"])
-                        if "suggestions" in submission_data and isinstance(submission_data["suggestions"], list):
-                            replace_titles_in_items(submission_data["suggestions"])
-
-            with open(file_path, 'w', encoding='utf-8') as file:
-                json.dump(data, file, ensure_ascii=False, indent=4)
-
-    # Displaying the success message
-    summary_message = (
-            f"<div style='color: green; font-weight: bold;'>"
-            f"Success! {total_titles_replaced} title(s) processed.</div>"
-    )
-    display(HTML(summary_message))
+    return exercises
