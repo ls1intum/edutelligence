@@ -87,7 +87,7 @@ def print_feedbacks(exercises, exercise_id_to_find=None, submission_id_to_find=N
     display(HTML(feedback_output))
 
 
-def plot_top_logprobs(logprobs, selected_token, show_logprob=True, show_prob=True, highlight_selected=True, rotate_labels=True):
+def plot_top_logprobs(logprobs, selected_token, highlight_selected=True, rotate_labels=True):
     tokens = [item['token'] for item in logprobs]
     logprob_values = [item['logprob'] for item in logprobs]
     probs = np.exp(logprob_values)
@@ -96,7 +96,7 @@ def plot_top_logprobs(logprobs, selected_token, show_logprob=True, show_prob=Tru
     colors = ['orange' if i == highlight_index else 'skyblue' for i in range(len(tokens))]
 
     tokens_display = [f"'{token}'" for token in tokens]
-    num_plots = sum([show_logprob, show_prob])
+    num_plots = 1
 
     plt.figure(figsize=(max(5, len(tokens) / 2) * (2 if num_plots == 2 else 1), 4 if rotate_labels else 3))
 
@@ -108,10 +108,8 @@ def plot_top_logprobs(logprobs, selected_token, show_logprob=True, show_prob=Tru
         plt.ylabel(ylabel)
         plt.title(title)
 
-    if show_logprob:
-        plot_data(logprob_values, 1, 'Log Probability', 'Log Probabilities of Tokens')
-    if show_prob:
-        plot_data(probs, 2 if show_logprob else 1, 'Probability', 'Exponentiated Log Probabilities of Tokens')
+
+    plot_data(probs, 1, 'Probability', 'Exponentiated Log Probabilities of Tokens')
 
     plt.tight_layout()
     plt.show()

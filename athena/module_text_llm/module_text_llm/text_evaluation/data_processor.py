@@ -1,5 +1,3 @@
-import json
-import os
 from IPython.display import display, HTML
 
 from athena import GradingCriterion, ExerciseType

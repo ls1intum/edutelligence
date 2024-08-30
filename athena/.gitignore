@@ -10,3 +10,5 @@ data/*
 !.idea/runConfigurations/
 .env
 **/.env
+/module_text_llm/module_text_llm/text_evaluation/evaluations/
+/module_text_llm/module_text_llm/text_evaluation/data/

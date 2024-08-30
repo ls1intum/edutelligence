@@ -1,20 +1,4 @@
-from pydantic import BaseModel, Field
-
-
-class Metric(BaseModel):
-    title: str
-    summary: str
-    description: str
-
-
-class MetricEvaluation(BaseModel):
-    title: str = Field(..., description="The title of the metric.")
-    score: int = Field(..., ge=1, le=5, description="The score of the metric.")
-
-
-class MetricEvaluations(BaseModel):
-    evaluations: list[MetricEvaluation] = Field(..., description="The evaluations of the metrics.")
-
+from module_text_llm.text_evaluation.evaluation_schemas import Metric
 
 correctness = Metric(
     title = 'Correctness',
