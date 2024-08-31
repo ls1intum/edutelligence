@@ -21,12 +21,20 @@
             "justMyCode": true
         },
         {
+            "name": "Module Modeling LLM",
+            "type": "python",
+            "request": "launch",
+            "cwd": "${workspaceFolder}/module_modeling_llm",
+            "module": "module_modeling_llm",
+            "justMyCode": false
+        },
+        {
             "name": "Module Programming LLM",
             "type": "python",
             "request": "launch",
             "cwd": "${workspaceFolder}/module_programming_llm",
             "module": "module_programming_llm",
-            "justMyCode": true
+            "justMyCode": false
         },
         {
             "name": "Module Programming ThemisML",
