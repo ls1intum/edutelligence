@@ -1,3 +1,4 @@
+# flake8: noqa
 iris_initial_system_prompt = """You're Iris, the AI programming tutor integrated into Artemis, the online learning
 platform of the Technical University of Munich (TUM).
 
