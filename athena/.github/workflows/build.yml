@@ -67,14 +67,17 @@ jobs:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      
+
+      - name: Set IMAGE_NAME
+        run: echo "IMAGE_NAME=$(basename ${{ matrix.image }})" >> $GITHUB_ENV
+
       - name: Docker meta
         id: meta
         uses: docker/metadata-action@v4
         with:
           images: |
-            ghcr.io/${{ github.repository_owner }}/Athena/${{ matrix.image }}
-            ls1tum/athena_${{ matrix.image }}
+            ghcr.io/${{ github.repository_owner }}/Athena/${{ env.IMAGE_NAME }}
+            ls1tum/athena_${{ env.IMAGE_NAME }}
           tags: |
             type=raw,value=${{ github.ref == 'refs/heads/develop' && 'develop' || github.sha }}
             type=raw,value=${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.sha }}

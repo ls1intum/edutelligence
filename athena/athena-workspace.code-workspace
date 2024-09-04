@@ -13,22 +13,25 @@
 			"path": "log_viewer"
 		},
 		{
-			"path": "module_example"
+			"path": "modules/programming/module_example"
 		},
 		{
-			"path": "module_programming_llm"
+			"path": "modules/programming/module_programming_llm"
 		},
 		{
-			"path": "module_text_llm"
+			"path": "modules/text/module_text_llm"
 		},
 		{
-			"path": "module_text_cofee"
+			"path": "modules/text/module_text_cofee"
 		},
 		{
-			"path": "module_programming_themisml"
+			"path": "modules/programming/module_programming_themisml"
 		},
 		{
-      "path": "module_programming_apted"
+      "path": "modules/programming/module_programming_apted"
+		},
+		{
+      "path": "modules/modeling/module_modeling_llm"
 		}
 	],
 	"settings": {

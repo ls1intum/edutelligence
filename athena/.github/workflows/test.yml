@@ -1,4 +1,4 @@
-name: Prospector Linting
+name: Tests
 
 on:
   push:
@@ -7,7 +7,7 @@ on:
   pull_request:
 
 jobs:
-  prospector:
+  test:
     runs-on: ubuntu-latest
 
     steps:
@@ -34,5 +34,5 @@ jobs:
         echo "$HOME/.local/bin" >> $GITHUB_PATH
         poetry install
         poetry run install_all
-    - name: Run Prospector
-      run: poetry run lint_all
+    - name: Run tests
+      run: poetry run test_all
