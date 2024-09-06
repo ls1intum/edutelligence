@@ -36,6 +36,30 @@ lazy-object-proxy = ">=1.4.0"
 wrapt = {version = ">=1.14,<2", markers = "python_version >= \"3.11\""}
 
 [[package]]
+name = "athena"
+version = "1.0.0"
+description = "This is a helper module for easier development of Athena modules. It provides communication functionality with the Assessment Module manager, as well as helper functions for storage."
+optional = false
+python-versions = "3.11.*"
+files = []
+develop = false
+
+[package.dependencies]
+fastapi = "^0.109.1"
+gitpython = "^3.1.41"
+httpx = "^0.24.1"
+psycopg2 = "^2.9.9"
+sqlalchemy = {version = "^2.0.21", extras = ["mypy"]}
+uvicorn = "^0.23.0"
+
+[package.source]
+type = "git"
+url = "https://github.com/ls1intum/Athena.git"
+reference = "ccd00cf8346e76738a66e7f4cf04c84aa4cb4378"
+resolved_reference = "ccd00cf8346e76738a66e7f4cf04c84aa4cb4378"
+subdirectory = "athena"
+
+[[package]]
 name = "certifi"
 version = "2024.8.30"
 description = "Python package for providing Mozilla's CA Bundle."
@@ -1134,4 +1158,4 @@ files = [
 [metadata]
 lock-version = "2.0"
 python-versions = "3.11.*"
-content-hash = "0c115e830083d14aa96e0f88f102dfcac65ac31bc522fb8c3bc68337adbeaccc"
+content-hash = "0a44c6ca65ad12f9b38c44e61cb84594284cc703c132732f201d5cefa0090050"

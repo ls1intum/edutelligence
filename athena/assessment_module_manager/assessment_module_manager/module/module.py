@@ -9,5 +9,5 @@ class Module(BaseModel):
     url: AnyHttpUrl = Field(example="http://localhost:5001")
     type: ExerciseType = Field(example=ExerciseType.text)
     supports_evaluation: bool = Field(description="Whether the module supports evaluation", example=True)
-    supports_non_graded_feedback_requests: bool = Field(description="Whether the module supports non-graded feedback requests", example=True),
+    supports_non_graded_feedback_requests: bool = Field(description="Whether the module supports non-graded feedback requests", example=True)
     supports_graded_feedback_requests: bool = Field(description="Whether the module supports graded feedback requests", example=True)

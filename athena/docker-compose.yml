@@ -19,7 +19,7 @@ services:
 
   module_example:
     hostname: module-example
-    build: ./module_example
+    build: modules/programming/module_example
     depends_on:
       - athena
     ports:
@@ -27,7 +27,7 @@ services:
 
   module_programming_llm:
     hostname: module-programming-llm
-    build: ./module_programming_llm
+    build: modules/programming/module_programming_llm
     depends_on:
       - athena
     ports:
@@ -35,7 +35,7 @@ services:
 
   module_text_llm:
     hostname: module-text-llm
-    build: ./module_text_llm
+    build: modules/text/module_text_llm
     depends_on:
       - athena
     ports:
@@ -43,7 +43,7 @@ services:
 
   module_text_cofee:
     hostname: module-text-cofee
-    build: ./module_text_cofee
+    build: modules/text/module_text_cofee
     depends_on:
       - athena
     ports:
@@ -51,7 +51,7 @@ services:
 
   module_programming_themisml:
     hostname: module-programming-themisml
-    build: ./module_programming_themisml
+    build: modules/programming/module_programming_themisml
     depends_on:
       - athena
     ports:
@@ -59,7 +59,7 @@ services:
 
   module_programming_apted:
     hostname: module-programming-apted
-    build: module_programming_apted
+    build: modules/programming/module_programming_apted
     depends_on:
       - athena
     ports:
@@ -67,7 +67,7 @@ services:
 
   module_modeling_llm:
     hostname: module-modeling-llm
-    build: ./module_modeling_llm
+    build: modules/modeling/module_modeling_llm
     depends_on:
       - athena
     ports:
