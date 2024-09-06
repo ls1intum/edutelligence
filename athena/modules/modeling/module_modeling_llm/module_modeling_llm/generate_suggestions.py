@@ -27,6 +27,18 @@ class FeedbackModel(BaseModel):
     class Config:
         title = "Feedback"
 
+class Criterion(BaseModel):
+    description: str = Field(..., description="Description of the grading criterion")
+
+class GradingItem(BaseModel):
+    name: str = Field(..., description="Name of the grading item")
+    points: float = Field(..., description="Points allocated to this grading item")
+    criteria: List[Criterion] = Field(..., description="List of criteria for full credit")
+
+class GradingInstruction(BaseModel):
+    total_points: float = Field(..., description="Total points for the entire assessment")
+    items: List[GradingItem] = Field(..., description="List of grading items")
+
 
 class AssessmentModel(BaseModel):
     """Collection of feedbacks making up an assessment"""
