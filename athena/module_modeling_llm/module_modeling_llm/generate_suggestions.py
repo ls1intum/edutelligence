@@ -8,11 +8,9 @@ from athena import emit_meta
 from athena.logger import logger
 from athena.modeling import Exercise, Submission, Feedback
 from module_modeling_llm.config import BasicApproachConfig
-from module_modeling_llm.helpers.llm_utils import (
-    get_chat_prompt_with_formatting_instructions,
-    predict_and_parse
-)
-
+from langchain_core.output_parsers import PydanticOutputParser
+from langchain_core.prompts import ChatPromptTemplate
+from module_modeling_llm.helpers.llm_utils import predict_and_parse
 from module_modeling_llm.helpers.serializers.diagram_model_serializer import DiagramModelSerializer
 from module_modeling_llm.helpers.utils import format_grading_instructions
 
@@ -39,7 +37,7 @@ class AssessmentModel(BaseModel):
         title = "Assessment"
 
 
-async def generate_suggestions(exercise: Exercise, submission: Submission, config: BasicApproachConfig, debug: bool) -> \
+async def generate_suggestions(exercise: Exercise, submission: Submission, is_graded: bool, config: BasicApproachConfig, debug: bool) -> \
         List[Feedback]:
     """
     Generate feedback suggestions for modeling exercise submissions
@@ -69,14 +67,13 @@ async def generate_suggestions(exercise: Exercise, submission: Submission, confi
         "problem_statement": exercise.problem_statement or "No problem statement.",
         "example_solution": serialized_example_solution or "No example solution.",
         "submission": serialized_submission,
-        "uml_diagram_format": apollon_format_description
+        "uml_diagram_format": apollon_format_description,
+        "format_instructions": PydanticOutputParser(pydantic_object=AssessmentModel).get_format_instructions()
     }
 
-    chat_prompt = get_chat_prompt_with_formatting_instructions(
-        system_message=config.generate_suggestions_prompt.system_message,
-        human_message=config.generate_suggestions_prompt.human_message,
-        pydantic_object=AssessmentModel
-    )
+    chat_prompt =  ChatPromptTemplate.from_messages([
+        ("system", config.generate_suggestions_prompt.graded_feedback_system_message),
+        ("human", config.generate_suggestions_prompt.graded_feedback_human_message)])
 
     result = await predict_and_parse(
         model=model,
@@ -97,6 +94,40 @@ async def generate_suggestions(exercise: Exercise, submission: Submission, confi
 
     if result is None:
         return []
+
+    # Check if is graded
+    if is_graded == False:
+        filter_chat_prompt = ChatPromptTemplate.from_messages([
+            ("system", config.generate_suggestions_prompt.filter_feedback_system_message),
+            ("human", config.generate_suggestions_prompt.filter_feedback_human_message)
+        ])
+        
+        filter_prompt_input = {
+            "original_feedback": result.dict(),
+            "format_instructions": PydanticOutputParser(pydantic_object=AssessmentModel).get_format_instructions()
+        }
+
+        print("Filter prompt input", filter_prompt_input)
+
+        result = await predict_and_parse(
+            model=model,
+            chat_prompt=filter_chat_prompt,
+            prompt_input=filter_prompt_input,
+            pydantic_object=AssessmentModel,
+            tags=[
+                f"exercise-{exercise.id}-filter",
+                f"submission-{submission.id}-filter",
+            ]
+        )
+
+        if debug:
+            emit_meta("filter_feedback", {
+                "prompt": filter_chat_prompt.format(**filter_prompt_input),
+                "result": result.dict() if result is not None else None
+            })
+        
+        if result is None:
+            return []
 
     grading_instruction_ids = set(
         grading_instruction.id
