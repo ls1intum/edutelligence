@@ -14,7 +14,6 @@ class Element:
             self.resolve_references(element_dict)
 
     def resolve_references(self, element_dict: Dict[str, Any]):
-        print(element_dict)
         self.attributes = [element_dict[ref].get("name", "") for ref in self.attribute_refs if ref in element_dict]
         self.methods = [element_dict[ref].get('name', '') for ref in self.method_refs if ref in element_dict]
 

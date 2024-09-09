@@ -14,18 +14,6 @@ async def predict_and_parse(
         pydantic_object: Type[T],
         tags: Optional[List[str]]
 ) -> Optional[T]:
-    """Predicts an LLM completion using the model and parses the output using the provided Pydantic model
-
-    Args:
-        model (BaseLanguageModel): The model to predict with
-        chat_prompt (ChatPromptTemplate): Prompt to use
-        prompt_input (dict): Input parameters to use for the prompt
-        pydantic_object (Type[T]): Pydantic model to parse the output
-        tags (Optional[List[str]]: List of tags to tag the prediction with
-
-    Returns:
-        Optional[T]: Parsed output, or None if it could not be parsed
-    """
     experiment = get_experiment_environment()
 
     tags = tags or []
@@ -45,9 +33,4 @@ async def predict_and_parse(
     try:
         return await chain.ainvoke(prompt_input, config={"tags": tags})
     except (ValidationError) as e:
-        # In the future, we should probably have some recovery mechanism here (i.e. fix the output with another prompt)
-        # Show the exception
-
-        print("OutputParserException or ValidationError", e)
-
-        return None
+        raise ValueError(f"Could not parse output: {e}")
