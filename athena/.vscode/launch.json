@@ -24,7 +24,7 @@
             "name": "Module Modeling LLM",
             "type": "python",
             "request": "launch",
-            "cwd": "${workspaceFolder}/module_modeling_llm",
+            "cwd": "${workspaceFolder}/modules/modeling/module_modeling_llm",
             "module": "module_modeling_llm",
             "justMyCode": false
         },

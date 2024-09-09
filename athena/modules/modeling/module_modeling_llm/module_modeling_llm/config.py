@@ -1,14 +1,10 @@
 from pydantic import BaseModel, Field
 
 from athena import config_schema_provider
-from module_modeling_llm.helpers.models import ModelConfigType, DefaultModelConfig
-from module_modeling_llm.prompts.generate_suggestions import (
-    graded_feedback_system_message,
-    graded_feedback_human_message,
-    filter_feedback_system_message,
-    filter_feedback_human_message
-)
-
+from module_modeling_llm.models import ModelConfigType, DefaultModelConfig
+from module_modeling_llm.prompts.graded_feedback_prompt import graded_feedback_system_message, graded_feedback_human_message
+from module_modeling_llm.prompts.filter_feedback_prompt import filter_feedback_system_message, filter_feedback_human_message
+from module_modeling_llm.prompts.structured_grading_instructions_prompt import structured_grading_instructions_system_message, structured_grading_instructions_human_message
 
 class GenerateSuggestionsPrompt(BaseModel):
     """
@@ -26,15 +22,18 @@ class GenerateSuggestionsPrompt(BaseModel):
                                 description="Message for priming AI behavior for filtering ungraded feedback.")
     filter_feedback_human_message: str = Field(default=filter_feedback_human_message,
                                description="Message for instructing AI to filter ungraded feedback.")
+    structured_grading_instructions_system_message : str = Field(default=structured_grading_instructions_system_message,
+                               description="Message for instructing AI to structure the Problem Statement")
+    structured_grading_instructions_human_message : str = Field(default=structured_grading_instructions_human_message,
+                               description="Message for instructing AI to filter ungraded feedback.")
     
-
+    
 
 class BasicApproachConfig(BaseModel):
     """This approach uses a LLM with a single prompt to generate feedback in a single step."""
     max_input_tokens: int = Field(default=3000, description="Maximum number of tokens in the input prompt.")
     model: ModelConfigType = Field(default=DefaultModelConfig())  # type: ignore
     generate_suggestions_prompt: GenerateSuggestionsPrompt = Field(default=GenerateSuggestionsPrompt())
-
 
 @config_schema_provider
 class Configuration(BaseModel):

@@ -1,13 +1,12 @@
 from typing import Dict, Any, List
 from string import ascii_uppercase
 
-from module_modeling_llm.helpers.serializers.parser.element import Element
-from module_modeling_llm.helpers.serializers.parser.relation import Relation
+from module_modeling_llm.apollon_transformer.parser.element import Element
+from module_modeling_llm.apollon_transformer.parser.relation import Relation
 
 
 class UMLParser:
     def __init__(self, json_data: Dict[str, Any]):
-        print("JSON data", json_data)
         self.data = json_data
         self.title = self.data['type']
         self.elements: List[Element] = []
