@@ -9,7 +9,7 @@ from module_modeling_llm.config import BasicApproachConfig
 from module_modeling_llm.models.exercise_model import ExerciseModel
 from module_modeling_llm.models.grading_instruction_model import GradingInstructionModel
 from module_modeling_llm.prompts.structured_grading_instructions_prompt import StructuredGradingInstructionsInputs
-from module_modeling_llm.utils.transform_grading_criteria import transform_grading_criteria
+from module_modeling_llm.utils.transform_grading_criterion import transform_grading_criterion
 
 async def get_structured_grading_instructions(
         exercise_model: ExerciseModel,
@@ -20,7 +20,7 @@ async def get_structured_grading_instructions(
 ) -> GradingInstructionModel:
     
     if grading_criteria:
-        return transform_grading_criteria(grading_criteria)
+        return transform_grading_criterion(grading_criteria)
 
     chat_prompt = ChatPromptTemplate.from_messages([
         ("system", config.generate_suggestions_prompt.structured_grading_instructions_system_message),
