@@ -1,10 +1,10 @@
+from athena.schemas.grading_criterion import StructuredGradingCriterion
 from langchain_core.output_parsers import PydanticOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 
 from athena import emit_meta
 from module_modeling_llm.config import BasicApproachConfig
 from module_modeling_llm.models.assessment_model import AssessmentModel
-from module_modeling_llm.models.grading_instruction_model import GradingInstructionModel
 from module_modeling_llm.prompts.apollon_format_description import apollon_format_description
 from module_modeling_llm.utils.predict_and_parse import predict_and_parse
 from module_modeling_llm.prompts.graded_feedback_prompt import GradedFeedbackInputs
@@ -12,7 +12,7 @@ from module_modeling_llm.models.exercise_model import ExerciseModel
 
 async def generate_suggestions(
         exercise_model: ExerciseModel, 
-        structured_grading_instructions: GradingInstructionModel,
+        structured_grading_instructions: StructuredGradingCriterion,
         config: BasicApproachConfig,
         debug: bool) -> AssessmentModel:
     """
