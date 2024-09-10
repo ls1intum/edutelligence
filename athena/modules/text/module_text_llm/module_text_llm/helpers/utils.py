@@ -3,7 +3,7 @@ from typing import List, Tuple, Optional
 import tiktoken
 from nltk.tokenize import sent_tokenize
 
-from athena import GradingCriterion
+from athena import StructuredGradingInstructionGroup
 
 # This is correct for gpt-4 and chat gpt3.5 but might be different for other models
 def num_tokens_from_string(string: str) -> int:
@@ -13,7 +13,7 @@ def num_tokens_from_string(string: str) -> int:
     return num_tokens
 
 
-def format_grading_instructions(grading_instructions: Optional[str], grading_criteria: Optional[List[GradingCriterion]]) -> Optional[str]:
+def format_grading_instructions(grading_instructions: Optional[str], grading_criteria: Optional[List[StructuredGradingInstructionGroup]]) -> Optional[str]:
     """Formats grading instructions and the grading criteria with nested structured grading instructions into a single string.
 
     Args:

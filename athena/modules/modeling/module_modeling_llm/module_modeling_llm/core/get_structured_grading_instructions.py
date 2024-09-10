@@ -3,7 +3,7 @@ from athena.metadata import emit_meta
 from langchain_core.output_parsers import PydanticOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 
-from athena.schemas.grading_criterion import GradingCriterion, StructuredGradingCriterion
+from athena.schemas.structured_grading_instruction import StructuredGradingInstructionGroup, StructuredGradingInstruction, StructuredGradingInstructionWrapper
 from module_modeling_llm.utils.predict_and_parse import predict_and_parse
 from module_modeling_llm.config import BasicApproachConfig
 from module_modeling_llm.models.exercise_model import ExerciseModel
@@ -13,12 +13,16 @@ async def get_structured_grading_instructions(
         exercise_model: ExerciseModel,
         config: BasicApproachConfig,
         grading_instructions: Optional[str],
-        grading_criteria: Optional[List[GradingCriterion]],
+        grading_criteria: Optional[List[StructuredGradingInstructionGroup]],
         debug: bool
-) -> StructuredGradingCriterion:
+) -> StructuredGradingInstruction:
     
     if grading_criteria:
-        return StructuredGradingCriterion(criteria=grading_criteria)
+        return StructuredGradingInstruction(
+            exercise_id=exercise_model.exerciseId,
+            criteria=grading_criteria,
+            cache_key=StructuredGradingInstruction.generate_cache_key(exercise_model.problem_statement, exercise_model.transformed_example_solution)
+        )
 
     chat_prompt = ChatPromptTemplate.from_messages([
         ("system", config.generate_suggestions_prompt.structured_grading_instructions_system_message),
@@ -31,14 +35,14 @@ async def get_structured_grading_instructions(
             grading_instructions=grading_instructions or "No grading instructions.",
             submission_uml_type=exercise_model.submission_uml_type,
             example_solution=exercise_model.transformed_example_solution or "No example solution.",
-            structured_instructions_output_format=PydanticOutputParser(pydantic_object=StructuredGradingCriterion).get_format_instructions()
+            structured_instructions_output_format=PydanticOutputParser(pydantic_object=StructuredGradingInstructionWrapper).get_format_instructions()
         )
 
     grading_instruction_result = await predict_and_parse(
         model=config.model.get_model(),
         chat_prompt=chat_prompt,
         prompt_input=prompt_inputs.dict(),
-        pydantic_object=StructuredGradingCriterion,
+        pydantic_object=StructuredGradingInstructionWrapper,
         tags=[
             f"exercise-{exercise_model.exerciseId}",
             f"submission-{exercise_model.submissionId}",
@@ -54,4 +58,8 @@ async def get_structured_grading_instructions(
     if not grading_instruction_result:
         raise ValueError("No structured grading instructions were returned by the model.")
 
-    return grading_instruction_result
+    return StructuredGradingInstruction(
+        exercise_id=exercise_model.exerciseId,
+        criteria=grading_instruction_result.criteria,
+        cache_key=StructuredGradingInstruction.generate_cache_key(exercise_model.problem_statement, exercise_model.transformed_example_solution)
+    )

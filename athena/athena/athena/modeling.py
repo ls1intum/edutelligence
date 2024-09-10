@@ -4,7 +4,7 @@ import functools
 
 import athena.storage
 from .module_config import get_module_config
-from .schemas import ModelingExercise, ModelingFeedback, ModelingSubmission
+from .schemas import ModelingExercise, ModelingFeedback, ModelingSubmission, StructuredGradingInstruction
 
 module_type = get_module_config().type
 if module_type.name != "modeling":
@@ -22,8 +22,11 @@ count_stored_submissions = functools.partial(athena.storage.count_stored_submiss
 get_stored_submissions = functools.partial(athena.storage.get_stored_submissions, Submission)
 get_stored_feedback = functools.partial(athena.storage.get_stored_feedback, Feedback)
 get_stored_feedback_suggestions = functools.partial(athena.storage.get_stored_feedback_suggestions, Feedback)
+get_stored_structured_grading_instruction = functools.partial(athena.storage.get_stored_structured_grading_instruction, StructuredGradingInstruction)
+store_structured_grading_instruction = functools.partial(athena.storage.store_structured_grading_instruction, StructuredGradingInstruction)
 
 __all__ = [
     "Exercise", "Submission", "Feedback",
-    "get_stored_exercises", "get_stored_submissions", "get_stored_feedback", "get_stored_feedback_suggestions"
+    "get_stored_exercises", "get_stored_submissions", "get_stored_feedback", "get_stored_feedback_suggestions",
+    "get_stored_structured_grading_instruction", "store_structured_grading_instruction"
 ]

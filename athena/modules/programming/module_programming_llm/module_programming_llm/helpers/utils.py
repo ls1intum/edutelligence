@@ -8,7 +8,7 @@ from git import Remote
 from git.repo import Repo
 from langchain.document_loaders import GitLoader
 
-from athena import GradingCriterion
+from athena import StructuredGradingInstructionGroup
 
 def load_files_from_repo(repo: Repo, file_filter: Optional[Callable[[str], bool]] = None) -> Dict[str, str]:
     return {
@@ -25,7 +25,7 @@ def merge_repos_by_filepath(*repos: Repo, file_filter: Optional[Callable[[str], 
         yield (file, [doc.get(file) for doc in docs])
 
 
-def format_grading_instructions(grading_instructions: Optional[str], grading_criteria: Optional[List[GradingCriterion]]) -> Optional[str]:
+def format_grading_instructions(grading_instructions: Optional[str], grading_criteria: Optional[List[StructuredGradingInstructionGroup]]) -> Optional[str]:
     """Formats grading instructions and the grading criteria with nested structured grading instructions into a single string.
 
     Args:

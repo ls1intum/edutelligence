@@ -1,6 +1,6 @@
 from typing import List, Optional
 from athena.modeling import Feedback
-from athena.schemas.grading_criterion import GradingCriterion
+from athena.schemas.structured_grading_instruction import StructuredGradingInstructionGroup
 from module_modeling_llm.models.assessment_model import AssessmentModel
 from module_modeling_llm.models.exercise_model import ExerciseModel
 
@@ -9,7 +9,7 @@ def convert_to_athana_feedback_model(
         feedback_result : AssessmentModel, 
         exercise_model: ExerciseModel, 
         is_graded: bool,
-        manual_structured_grading_instructions: Optional[List[GradingCriterion]] = None
+        manual_structured_grading_instructions: Optional[List[StructuredGradingInstructionGroup]] = None
     ) -> List[Feedback]:
     
     grading_instruction_ids = set(
