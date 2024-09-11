@@ -10,7 +10,8 @@ Currently, Pyris empowers [Iris](https://artemis.cit.tum.de/about-iris), a virtu
 
 ## Setup
 ### With local environment
-> **⚠️ Warning:** For local Weaviate vector database setup, please refer to [Weaviate Docs](https://weaviate.io/developers/weaviate/quickstart).
+> **⚠️ Warning:** To change the local Weaviate vector database setup, please refer to [Weaviate Docs](https://weaviate.io/developers/weaviate/quickstart).
+
  - Check python version: `python --version` (should be 3.12)
  - Install packages: `pip install -r requirements.txt`
  - Create an `application.local.yml` file in the root directory. This file includes configurations that can be used by the application.
@@ -60,85 +61,66 @@ Currently, Pyris empowers [Iris](https://artemis.cit.tum.de/about-iris), a virtu
     ```
  - Access API docs: http://localhost:8000/docs
 
-### With docker
-Pyris can be deployed using Docker, which provides an easy way to set up the application in a consistent environment.
-Below are the instructions for setting up Pyris using Docker.
+### Getting Started with Docker
 
-#### Prerequisites
-- Ensure Docker and Docker Compose are installed on your machine.
-- Clone the Pyris repository to your local machine.
-- 
-#### Setup Instructions
+Deploying Pyris using Docker is a straightforward way to set up the application in a consistent environment. Here's how you can do it:
 
-1. **Build and Run the Containers**
+**Build and Run the Containers**
 
-   You can run Pyris in different environments: development or production. Docker Compose is used to orchestrate the different services, including Pyris, Weaviate, and Nginx.
+The essential part of setting up Pyris with Docker is building and running the containers. Docker Compose is used to manage the different services, including Pyris, Weaviate, and Nginx, for both development and production environments.
 
-   - **For Development:**
+- **For Development:**
 
-     Use the following command to start the development environment:
-
-     ```bash
-     docker-compose -f docker-compose/pyris-dev.yml up --build
-     ```
-
-     This command will:
-     - Build the Pyris application from the Dockerfile.
-     - Start the Pyris application along with Weaviate in development mode.
-     - Mount the local configuration files (`application.local.yml` and `llm-config.local.yml`) for easy modification.
-
-     The application will be available at `http://localhost:8000`.
-
-   - **For Production:**
-
-     Use the following command to start the production environment:
-
-     ```bash
-     docker-compose -f docker-compose/pyris-production.yml up -d
-     ```
-
-     This command will:
-     - Pull the latest Pyris image from the GitHub Container Registry.
-     - Start the Pyris application along with Weaviate and Nginx in production mode.
-     - Nginx will serve as a reverse proxy, handling SSL termination if certificates are provided.
-
-     The application will be available at `https://<your-domain>`.
-
-2. **Configuration**
-
-   - **Weaviate**: Weaviate is configured via the `weaviate.yml` file. By default, it runs on port 8001.
-   - **Pyris Application**: The Pyris application configuration is handled through environment variables and mounted YAML configuration files.
-   - **Nginx**: Nginx is used for handling requests in a production environment and is configured via `nginx.yml`.
-
-3. **Accessing the Application**
-
-   - For development, access the API documentation at: `http://localhost:8000/docs`
-   - For production, access the application at your domain (e.g., `https://<your-domain>`).
-
-4. **Stopping the Containers**
-
-   To stop the running containers, use:
+   To start the development environment, run:
 
    ```bash
-   docker-compose -f docker-compose/pyris-dev.yml down
+   docker-compose -f docker-compose/pyris-dev.yml up --build
    ```
 
-   or
+   This command will:
+   - Build the Pyris application.
+   - Start the Pyris application along with Weaviate in development mode.
+   - Mount local configuration files for easy modification.
+
+   The application will be available at `http://localhost:8000`.
+
+- **For Production:**
+
+   To start the production environment, run:
 
    ```bash
-   docker-compose -f docker-compose/pyris-production.yml down
+   docker-compose -f docker-compose/pyris-production.yml up -d
    ```
 
-5. **Logs and Debugging**
+   This command will:
+   - Pull the latest Pyris image from the GitHub Container Registry.
+   - Start Pyris along with Weaviate and Nginx in production mode.
+   - Nginx will handle SSL and serve as a reverse proxy.
 
-   - View the logs for a specific service, e.g., Pyris:
+   The application will be available at `https://<your-domain>`.
 
-     ```bash
-     docker-compose -f docker-compose/pyris-dev.yml logs pyris-app
-     ```
+#### Additional Steps (Optional)
 
-   - For production, ensure that Nginx and Weaviate services are running smoothly and check their respective logs if needed.
+If you need to stop the containers, use:
 
----
+```bash
+docker-compose -f docker-compose/pyris-dev.yml down
+```
+
+or
+
+```bash
+docker-compose -f docker-compose/pyris-production.yml down
+```
+
+You can also customize the configuration for Weaviate, Pyris, and Nginx by editing their respective configuration files. However, the default setup should work fine for most users.
+
+For development, access the API documentation at `http://localhost:8000/docs`. For production, access the application at your domain (e.g., `https://<your-domain>`).
+
+If you need to view logs or debug, you can check the logs of specific services using:
+
+```bash
+docker-compose -f docker-compose/pyris-dev.yml logs pyris-app
+```
 
 This setup should help you run the Pyris application in both development and production environments with Docker. Ensure you modify the configuration files as per your specific requirements before deploying.
