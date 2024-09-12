@@ -1,28 +1,23 @@
 import json
 from typing import List, Optional, Sequence
 
+from module_modeling_llm.prompts.apollon_format import apollon_format_description
 from pydantic import BaseModel, Field
 
 from athena import emit_meta
-from athena.logger import logger
 from athena.modeling import Exercise, Submission, Feedback
 from module_modeling_llm.config import BasicApproachConfig
-from module_modeling_llm.helpers.llm_utils import (
-    get_chat_prompt_with_formatting_instructions,
-    check_prompt_length_and_omit_features_if_necessary,
-    num_tokens_from_prompt,
-    predict_and_parse
-)
-from module_modeling_llm.helpers.models.diagram_types import DiagramType
+from langchain_core.output_parsers import PydanticOutputParser
+from langchain_core.prompts import ChatPromptTemplate
+from module_modeling_llm.helpers.llm_utils import predict_and_parse
 from module_modeling_llm.helpers.serializers.diagram_model_serializer import DiagramModelSerializer
-from module_modeling_llm.helpers.utils import format_grading_instructions, get_elements
-from module_modeling_llm.prompts.submission_format.submission_format_remarks import get_submission_format_remarks
+from module_modeling_llm.helpers.utils import format_grading_instructions
 
 
 class FeedbackModel(BaseModel):
     title: str = Field(description="Very short title, i.e. feedback category or similar", example="Logic Error")
     description: str = Field(description="Feedback description")
-    element_ids: Optional[str] = Field(description="Referenced diagram element IDs, or empty if unreferenced")
+    element_names: Optional[List[str]] = Field(description="Referenced diagram element names, and relations (R<number>) or empty if unreferenced")
     credits: float = Field(0.0, description="Number of points received/deducted")
     grading_instruction_id: Optional[int] = Field(
         description="ID of the grading instruction that was used to generate this feedback, or empty if no grading instruction was used"
@@ -35,25 +30,13 @@ class FeedbackModel(BaseModel):
 class AssessmentModel(BaseModel):
     """Collection of feedbacks making up an assessment"""
 
-    feedbacks: Sequence[FeedbackModel] = Field(description="Assessment feedbacks")
+    feedbacks: Sequence[FeedbackModel] = Field(description="Assessment feedbacks, make sure to include all grading instructions")
 
     class Config:
         title = "Assessment"
 
 
-def filter_ids_for_model(ids: List[str], model: dict) -> List[str]:
-    """
-    Filter a list of element ids based on whether a corresponding element is present in a given diagram model.
-    :param ids: List of ids that should be filtered
-    :param model: Diagram model in which elements with the given ids should be contained
-    :return The filtered list of IDs
-    """
-    elements: list[dict] = get_elements(model)
-    model_ids: set[str] = {str(element.get("id")) for element in elements}
-    return list(filter(lambda id: id in model_ids, ids))
-
-
-async def generate_suggestions(exercise: Exercise, submission: Submission, config: BasicApproachConfig, debug: bool) -> \
+async def generate_suggestions(exercise: Exercise, submission: Submission, is_graded: bool, config: BasicApproachConfig, debug: bool) -> \
         List[Feedback]:
     """
     Generate feedback suggestions for modeling exercise submissions
@@ -66,55 +49,28 @@ async def generate_suggestions(exercise: Exercise, submission: Submission, confi
     model = config.model.get_model()  # type: ignore[attr-defined]
 
     serialized_example_solution = None
-
     if exercise.example_solution:
         example_solution_diagram = json.loads(exercise.example_solution)
         serialized_example_solution, _ = DiagramModelSerializer.serialize_model(example_solution_diagram)
 
     submission_diagram = json.loads(submission.model)
-    submission_format_remarks = get_submission_format_remarks(submission_diagram.get("type"))
-
-    # Having the LLM reference IDs that a specific feedback item applies to seems to work a lot more reliable with
-    # shorter IDs, especially if they are prefixed with "id_". We therefore map the UUIDs used in Apollon diagrams to
-    # shortened IDs and have the diagram model serializer return a reverse mapping dictionary which allows us to map
-    # the shortened IDs back to the original ones.
-    serialized_submission, reverse_id_map = DiagramModelSerializer.serialize_model(submission_diagram)
+    serialized_submission, element_id_mapping = DiagramModelSerializer.serialize_model(submission_diagram)
 
     prompt_input = {
         "max_points": exercise.max_points,
         "bonus_points": exercise.bonus_points,
         "grading_instructions": format_grading_instructions(exercise.grading_instructions, exercise.grading_criteria),
-        "submission_format_remarks": submission_format_remarks,
+        "submission_format": submission_diagram.get("type"),
         "problem_statement": exercise.problem_statement or "No problem statement.",
         "example_solution": serialized_example_solution or "No example solution.",
-        "submission": serialized_submission
+        "submission": serialized_submission,
+        "uml_diagram_format": apollon_format_description,
+        "format_instructions": PydanticOutputParser(pydantic_object=AssessmentModel).get_format_instructions()
     }
 
-    chat_prompt = get_chat_prompt_with_formatting_instructions(
-        model=model,
-        system_message=config.generate_suggestions_prompt.system_message,
-        human_message=config.generate_suggestions_prompt.human_message,
-        pydantic_object=AssessmentModel
-    )
-
-    # Check if the prompt is too long and omit features if necessary (in order of importance)
-    omittable_features = ["example_solution", "problem_statement", "grading_instructions"]
-    prompt_input, should_run = check_prompt_length_and_omit_features_if_necessary(
-        prompt=chat_prompt,
-        prompt_input=prompt_input,
-        max_input_tokens=10000,  # config.max_input_tokens,
-        omittable_features=omittable_features,
-        debug=debug
-    )
-
-    # Skip if the prompt is too long
-    if not should_run:
-        logger.warning("Input too long. Skipping.")
-        if debug:
-            emit_meta("prompt", chat_prompt.format(**prompt_input))
-            emit_meta("error",
-                      f"Input too long {num_tokens_from_prompt(chat_prompt, prompt_input)} > {config.max_input_tokens}")
-        return []
+    chat_prompt =  ChatPromptTemplate.from_messages([
+        ("system", config.generate_suggestions_prompt.graded_feedback_system_message),
+        ("human", config.generate_suggestions_prompt.graded_feedback_human_message)])
 
     result = await predict_and_parse(
         model=model,
@@ -136,6 +92,38 @@ async def generate_suggestions(exercise: Exercise, submission: Submission, confi
     if result is None:
         return []
 
+    # Check if is graded
+    if is_graded is False:
+        filter_chat_prompt = ChatPromptTemplate.from_messages([
+            ("system", config.generate_suggestions_prompt.filter_feedback_system_message),
+            ("human", config.generate_suggestions_prompt.filter_feedback_human_message)
+        ])
+        
+        filter_prompt_input = {
+            "original_feedback": result.dict(),
+            "format_instructions": PydanticOutputParser(pydantic_object=AssessmentModel).get_format_instructions()
+        }
+
+        result = await predict_and_parse(
+            model=model,
+            chat_prompt=filter_chat_prompt,
+            prompt_input=filter_prompt_input,
+            pydantic_object=AssessmentModel,
+            tags=[
+                f"exercise-{exercise.id}-filter",
+                f"submission-{submission.id}-filter",
+            ]
+        )
+
+        if debug:
+            emit_meta("filter_feedback", {
+                "prompt": filter_chat_prompt.format(**filter_prompt_input),
+                "result": result.dict() if result is not None else None
+            })
+        
+        if result is None:
+            return []
+
     grading_instruction_ids = set(
         grading_instruction.id
         for criterion in exercise.grading_criteria or []
@@ -145,21 +133,20 @@ async def generate_suggestions(exercise: Exercise, submission: Submission, confi
     feedbacks = []
     for feedback in result.feedbacks:
         grading_instruction_id = feedback.grading_instruction_id if feedback.grading_instruction_id in grading_instruction_ids else None
-        element_ids = list(
-            map(lambda element_id: reverse_id_map[
-                element_id.strip()
-            ] if reverse_id_map else element_id.strip(), feedback.element_ids.split(","))
-        ) if feedback.element_ids else []
+        element_ids = [element_id_mapping[element] for element in (feedback.element_names or [])]
+
 
         feedbacks.append(Feedback(
             exercise_id=exercise.id,
             submission_id=submission.id,
             title=feedback.title,
             description=feedback.description,
-            element_ids=filter_ids_for_model(element_ids, submission_diagram),
+            element_ids=element_ids,
             credits=feedback.credits,
             structured_grading_instruction_id=grading_instruction_id,
-            meta={}
+            meta={},
+            id=None,
+            is_graded=is_graded
         ))
 
     return feedbacks

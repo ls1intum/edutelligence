@@ -26,7 +26,7 @@
             "request": "launch",
             "cwd": "${workspaceFolder}/modules/programming/module_programming_llm",
             "module": "module_programming_llm",
-            "justMyCode": true
+            "justMyCode": false
         },
         {
             "name": "Module Programming ThemisML",
@@ -62,7 +62,7 @@
             "type": "python",
             "request": "launch",
             "cwd": "${workspaceFolder}/modules/modeling/module_modeling_llm",
-            "module": "module_text_cofee"
+            "module": "module_modeling_llm"
         }
     ]
 }
