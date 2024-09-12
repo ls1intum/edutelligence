@@ -10,3 +10,4 @@ data/*
 !.idea/runConfigurations/
 .env
 **/.env
+**/data/*

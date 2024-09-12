@@ -1,18 +1,19 @@
 <component name="ProjectRunConfigurationManager">
-  <configuration default="false" name="module_example" type="PythonConfigurationType" factoryName="Python">
+  <configuration default="false" name="module_programming_llm" type="PythonConfigurationType" factoryName="Python" folderName="Programming">
     <module name="Athena" />
+    <option name="ENV_FILES" value="" />
     <option name="INTERPRETER_OPTIONS" value="" />
     <option name="PARENT_ENVS" value="true" />
     <envs>
       <env name="PYTHONUNBUFFERED" value="1" />
     </envs>
     <option name="SDK_HOME" value="" />
-    <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$/modules/programming/module_example" />
+    <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$/modules/programming/module_programming_llm" />
     <option name="IS_MODULE_SDK" value="true" />
     <option name="ADD_CONTENT_ROOTS" value="true" />
     <option name="ADD_SOURCE_ROOTS" value="true" />
     <EXTENSION ID="PythonCoverageRunConfigurationExtension" runner="coverage.py" />
-    <option name="SCRIPT_NAME" value="$PROJECT_DIR$/modules/programming/module_example/module_example/__main__.py" />
+    <option name="SCRIPT_NAME" value="$PROJECT_DIR$/modules/programming/module_programming_llm/module_programming_llm/__main__.py" />
     <option name="PARAMETERS" value="" />
     <option name="SHOW_COMMAND_LINE" value="false" />
     <option name="EMULATE_TERMINAL" value="false" />
