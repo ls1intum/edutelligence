@@ -30,14 +30,13 @@ if azure_openai_available:
     def _get_azure_openai_deployments() -> List[str]:
         # If this breaks in the future we have to use azure-mgmt-cognitiveservices which needs 6 additional environment variables
         base_url = f"{os.environ.get('AZURE_OPENAI_ENDPOINT')}/openai"
-        api_version = f"{os.environ.get('LLM_AZURE_OPENAI_API_VERSION')}"
         headers = {
             "api-key": os.environ["AZURE_OPENAI_API_KEY"]
         }
 
-        models_response = requests.get(f"{base_url}/models?api-version={api_version}", headers=headers, timeout=30)
+        models_response = requests.get(f"{base_url}/models?api-version=2023-03-15-preview", headers=headers, timeout=30)
         models_data = models_response.json()["data"]
-        deployments_response = requests.get(f"{base_url}/deployments?api-version={api_version}", headers=headers,
+        deployments_response = requests.get(f"{base_url}/deployments?api-version=2023-03-15-preview", headers=headers,
                                             timeout=30)
         deployments_data = deployments_response.json()["data"]
 
