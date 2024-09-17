@@ -8,6 +8,9 @@ from athena.programming import Exercise, Submission, Feedback
 
 from module_programming_llm.config import NonGradedBasicApproachConfig
 from module_programming_llm.generate_summary_by_file import generate_summary_by_file
+from module_programming_llm.split_grading_instructions_by_file import (
+    split_grading_instructions_by_file,
+)
 from module_programming_llm.split_problem_statement_by_file import (
     split_problem_statement_by_file,
 )
@@ -35,6 +38,14 @@ class FeedbackModel(BaseModel):
     )
     line_end: Optional[int] = Field(
         description="Referenced line number end, or empty if unreferenced"
+    )
+    is_positive: Optional[bool] = Field(
+        description="Describes if this feedback item doesn't require work(positive), requires work(negative) or is "
+                    "neutral(empty)")
+    credits: Optional[float] = Field(
+        description="The number of points you would give for this element if you were a human tutor. Remember that "
+                    "the total number of credits should not exceed the total number of points. Negative points mean "
+                    "that the student should put in more work."
     )
 
     class Config:
@@ -108,6 +119,25 @@ async def generate_suggestions_by_file(
     )
 
     problem_statement_tokens = num_tokens_from_string(exercise.problem_statement or "")
+
+    # Get split problem statement and grading instructions by file (if necessary)
+    split_problem_statement, split_grading_instructions = await asyncio.gather(
+        split_problem_statement_by_file(
+            exercise=exercise,
+            submission=submission,
+            prompt=chat_prompt,
+            config=config,
+            debug=debug,
+        ),
+        split_grading_instructions_by_file(
+            exercise=exercise,
+            submission=submission,
+            prompt=chat_prompt,
+            config=config,
+            debug=debug,
+        ),
+    )
+
     is_short_problem_statement = (
         problem_statement_tokens
         <= config.split_problem_statement_by_file_prompt.tokens_before_split
@@ -118,6 +148,21 @@ async def generate_suggestions_by_file(
             for item in split_problem_statement.items
         }
         if split_problem_statement is not None
+        else {}
+    )
+
+    is_short_grading_instructions = (
+        num_tokens_from_string(exercise.grading_instructions)
+        <= config.split_grading_instructions_by_file_prompt.tokens_before_split
+        if exercise.grading_instructions is not None
+        else True
+    )
+    file_grading_instructions = (
+        {
+            item.file_name: item.grading_instructions
+            for item in split_grading_instructions.items
+        }
+        if split_grading_instructions is not None
         else {}
     )
 
@@ -155,6 +200,20 @@ async def generate_suggestions_by_file(
 
         template_to_submission_diff = "\n".join(diff_without_deletions)
 
+        grading_instructions = (
+            exercise.grading_instructions or ""
+            if is_short_grading_instructions
+            else file_grading_instructions.get(
+                file_path, "No relevant grading instructions found."
+            )
+        )
+        grading_instructions = (
+            grading_instructions
+            if grading_instructions.strip()
+            else "No grading instructions found."
+        )
+
+
         prompt_inputs.append(
             {
                 "submission_file": file_content,
@@ -162,6 +221,9 @@ async def generate_suggestions_by_file(
                 "problem_statement": problem_statement,
                 "file_path": file_path,
                 "summary": summary_string,
+                "max_points": exercise.max_points,
+                "bonus_points": exercise.bonus_points,
+                "grading_instructions": grading_instructions,
             }
         )
 
