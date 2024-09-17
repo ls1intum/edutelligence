@@ -31,7 +31,12 @@ class CompetencyExtractionPipeline(Pipeline):
             implementation_id="competency_extraction_pipeline_reference_impl"
         )
         self.callback = callback
-        self.request_handler = CapabilityRequestHandler(requirements=RequirementList())
+        self.request_handler = CapabilityRequestHandler(
+            requirements=RequirementList(
+                gpt_version_equivalent=4.5,
+                context_length=16385,
+            )
+        )
         self.output_parser = PydanticOutputParser(pydantic_object=Competency)
 
     def __call__(
