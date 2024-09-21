@@ -1,5 +1,0 @@
-api_keys:
-  - token: "secret"
-
-env_vars:
-    test: "test"

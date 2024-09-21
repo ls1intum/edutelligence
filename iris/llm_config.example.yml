@@ -1,0 +1,124 @@
+- api_key:
+  api_version: 2024-05-01-preview
+  azure_deployment: gpt-35-turbo
+  capabilities:
+    context_length: 16385
+    gpt_version_equivalent: 3.5
+    image_recognition: false
+    input_cost: 0.5
+    json_mode: true
+    output_cost: 1.5
+    privacy_compliance: true
+    self_hosted: false
+    vendor: OpenAI
+  description: GPT 3.5 16k on Azure
+  endpoint: '<your-endpoint>'
+  id: azure-gpt-35-turbo
+  model: gpt-3.5-turbo
+  name: GPT 3.5 Turbo
+  type: azure_chat
+- api_key:
+  capabilities:
+    input_cost: 0.5
+    output_cost: 1.5
+    gpt_version_equivalent: 3.5
+    context_length: 16385
+    vendor: "OpenAI"
+    privacy_compliance: false
+    self_hosted: false
+    image_recognition: false
+    son_mode: true
+  description: GPT 3.5 16k
+  id: oai-gpt-35-turbo
+  model: gpt-3.5-turbo
+  name: GPT 3.5 Turbo
+  type: openai_chat
+- api_key:
+  api_version: 2024-02-15-preview
+  azure_deployment: gpt-4-turbo
+  capabilities:
+    context_length: 128000
+    gpt_version_equivalent: 4
+    image_recognition: false
+    input_cost: 10
+    json_mode: true
+    output_cost: 30
+    privacy_compliance: true
+    self_hosted: false
+    vendor: OpenAI
+  description: GPT 4 Turbo 128k on Azure
+  endpoint: '<your-endpoint>'
+  id: azure-gpt-4-turbo
+  model: gpt-4-turbo
+  name: GPT 4 Turbo
+  type: azure_chat
+- api_key:
+  api_version: 2024-02-15-preview
+  azure_deployment: gpt-4o
+  capabilities:
+    context_length: 128000
+    gpt_version_equivalent: 4.5
+    image_recognition: true
+    input_cost: 5
+    json_mode: true
+    output_cost: 15
+    privacy_compliance: true
+    self_hosted: false
+    vendor: OpenAI
+  description: GPT 4 Omni on Azure
+  endpoint: '<your-endpoint>'
+  id: azure-gpt-4-omni
+  model: gpt-4o
+  name: GPT 4 Omni
+  type: azure_chat
+- api_key:
+  api_version: 2023-03-15-preview
+  azure_deployment: gpt-4o-mini
+  capabilities:
+    context_length: 128000
+    gpt_version_equivalent: 4.25
+    image_recognition: true
+    input_cost: 0.15
+    json_mode: true
+    output_cost: 0.075
+    privacy_compliance: true
+    self_hosted: false
+    vendor: OpenAI
+  description: GPT 4 Omni Mini on Azure
+  endpoint: '<your-endpoint>'
+  id: azure-gpt-4-omni-mini
+  model: gpt-4o-mini
+  name: GPT 4 Omni Mini
+  type: azure_chat
+- api_key:
+  api_version: '2023-05-15T00:00:00.000Z'
+  azure_deployment: te-3-large
+  capabilities:
+    context_length: 8191
+    input_cost: 0.13
+    output_cost: 0.065
+    privacy_compliance: true
+    self_hosted: false
+    vendor: OpenAI
+  description: Embedding Large 8k Azure
+  endpoint: '<your-endpoint>'
+  id: embedding-large
+  model: text-embedding-3-large
+  name: Embedding Large
+  type: azure_embedding
+- api_key:
+  api_version: 2024-02-15-preview
+  azure_deployment: te-3-small
+  capabilities:
+    context_length: 8191
+    input_cost: 0.02
+    output_cost: 0
+    privacy_compliance: true
+    self_hosted: false
+    vendor: OpenAI
+  description: Embedding Small 8k Azure
+  endpoint: '<your-endpoint>'
+  id: embedding-small
+  model: text-embedding-3-small
+  name: Embedding Small
+  type: azure_embedding
