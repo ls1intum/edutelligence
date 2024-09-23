@@ -1,8 +1,8 @@
 from typing import Dict, Any, List
 from string import ascii_uppercase
 
-from module_modeling_llm.helpers.serializers.parser.element import Element
-from module_modeling_llm.helpers.serializers.parser.relation import Relation
+from module_modeling_llm.apollon_transformer.parser.element import Element
+from module_modeling_llm.apollon_transformer.parser.relation import Relation
 
 
 class UMLParser:
@@ -42,9 +42,14 @@ class UMLParser:
         for element_data in self.data['elements'].values():
             if element_data.get('id') not in referenced_ids:
                 name = element_data.get('name')
-                if name_count[name] > 1:
-                    suffix_index = name_suffix_counters[name]
-                    element_data['name'] = f"{name}{ascii_uppercase[suffix_index]}"
+                suffix_index = name_suffix_counters[name]
+
+                if name == '':
+                    element_data['name'] = f"##{ascii_uppercase[suffix_index]}"
+                    if name_count[name] > 1:
+                        name_suffix_counters[name] += 1
+                elif name_count[name] > 1:
+                    element_data['name'] = f"{name}#{ascii_uppercase[suffix_index]}"
                     name_suffix_counters[name] += 1
 
                 element = Element(element_data, self.data['elements'])
