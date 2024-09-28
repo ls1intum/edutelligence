@@ -7,7 +7,8 @@ license = "MIT"
 
 [tool.poetry.dependencies]
 python = "3.11.*"
-athena = { git = "https://github.com/ls1intum/Athena.git", rev = "7678f60343caf2489116c331cbe5ac253d1a4d07", subdirectory = "athena"}
+athena = { path = "../../../athena", develop = true }
+#athena = { git = "https://github.com/ls1intum/Athena.git", rev = "d9ff3bd", subdirectory = "athena"}
 openai = "1.42.0"
 langchain = "0.2.15"
 python-dotenv = "1.0.0"

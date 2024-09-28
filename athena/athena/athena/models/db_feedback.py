@@ -8,6 +8,7 @@ class DBFeedback(Model):
     __table_args__ = (UniqueConstraint('lms_id'),)
 
     id = Column(BigIntegerWithAutoincrement, primary_key=True, index=True, autoincrement=True)
+    lms_url = Column(String, index=True, nullable=False)
     lms_id = Column(BigInteger)
     title = Column(String)
     description = Column(String)
