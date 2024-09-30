@@ -10,6 +10,8 @@ from langchain_openai import AzureChatOpenAI, ChatOpenAI
 
 from athena.logger import logger
 from .model_config import ModelConfig
+from .callbacks import UsageHandler
+
 
 OPENAI_PREFIX = "openai_"
 AZURE_OPENAI_PREFIX = "azure_openai_"
@@ -132,6 +134,7 @@ decreasing the model's likelihood to repeat the same line verbatim.
                     # Otherwise, add it to model_kwargs (necessary for chat models)
                     model_kwargs[attr] = value
             kwargs["model_kwargs"] = model_kwargs
+            kwargs["callbacks"] = [UsageHandler()]
 
             # Initialize a copy of the model using the config
             model = model.__class__(**kwargs)

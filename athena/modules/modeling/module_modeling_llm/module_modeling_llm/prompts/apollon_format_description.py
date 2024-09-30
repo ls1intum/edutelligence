@@ -43,6 +43,12 @@ Nested Elements:
 <ElementOwner>: [<elementName>]
 ```
 
+##### Naming
+
+When there are elements in the original diagram with the same name, the Apollon format appends a unique suffix to each duplicate name to ensure clarity and avoid ambiguity. This suffix can be identified by the `#` symbol followed by an uppercase letter.
+
+When there are elements in the original diagram with no name, the Apollon format assignes them uppercase letters for the name. These can be identified by the `##` symbol followed by an uppercase letter.
+
 ##### Detailed Breakdown
 
 - **Elements**: 

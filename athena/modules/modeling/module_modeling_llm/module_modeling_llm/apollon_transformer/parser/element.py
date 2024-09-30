@@ -27,11 +27,6 @@ class Element:
         self.attributes = [element_dict[ref].get("name", "") for ref in self.attribute_refs if ref in element_dict]
         self.methods = [element_dict[ref].get('name', '') for ref in self.method_refs if ref in element_dict]
 
-        for ref_list, target_list in [(self.attribute_refs, self.attributes), (self.method_refs, self.methods)]:
-            target_list.extend(
-                element_dict.get(ref, {}).get("name", "") for ref in ref_list if ref in element_dict
-            )
-
     def to_apollon(self) -> str:
         parts = [f"[{self.type}] {self.name}"]
 
