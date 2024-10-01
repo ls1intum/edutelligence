@@ -39,9 +39,6 @@ class FeedbackModel(BaseModel):
     line_end: Optional[int] = Field(
         description="Referenced line number end, or empty if unreferenced"
     )
-    is_positive: Optional[bool] = Field(
-        description="Describes if this feedback item doesn't require work(positive), requires work(negative) or is "
-                    "neutral(empty)")
     credits: Optional[float] = Field(
         description="The number of points you would give for this element if you were a human tutor. Remember that "
                     "the total number of credits should not exceed the total number of points. Negative points mean "
@@ -107,16 +104,6 @@ async def generate_suggestions_by_file(
         debug=debug,
     )
     summary_string = solution_summary.describe_solution_summary() if solution_summary is not None else ""
-
-
-    # Get split problem statement by file (if necessary)
-    split_problem_statement = await split_problem_statement_by_file(
-        exercise=exercise,
-        submission=submission,
-        prompt=chat_prompt,
-        config=config,
-        debug=debug,
-    )
 
     problem_statement_tokens = num_tokens_from_string(exercise.problem_statement or "")
 
@@ -319,6 +306,7 @@ async def generate_suggestions_by_file(
                     file_path=file_path,
                     line_start=feedback.line_start,
                     line_end=feedback.line_end,
+                    credits=feedback.credits,
                     is_graded=False,
                     meta={},
                 )
