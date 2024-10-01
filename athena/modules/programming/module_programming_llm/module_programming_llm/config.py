@@ -133,6 +133,7 @@ Then, it generates non graded suggestions for each file independently.\
 
     split_problem_statement_by_file_prompt: SplitProblemStatementsWithoutSolutionByFilePrompt = Field(default=SplitProblemStatementsWithoutSolutionByFilePrompt())
     generate_suggestions_by_file_prompt: FeedbackGenerationBasePrompt = Field(default=NonGradedFeedbackGenerationPrompt())
+    split_grading_instructions_by_file_prompt: SplitGradingInstructionsByFilePrompt = (Field(default=SplitGradingInstructionsByFilePrompt()))
 
 
 @config_schema_provider
