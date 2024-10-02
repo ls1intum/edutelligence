@@ -22,8 +22,8 @@ from module_programming_llm.helpers.utils import (
 
 
 class FileDescription(BaseModel):
-    file_name: str = Field(description="File name")
-    description: str = Field(description="Summary relevant for this file")
+    file_name: str = Field(description="The name of the file")
+    description: str = Field(description="Summary relevant for the file")
 
     class Config:
         title = "FileDescription"
@@ -32,7 +32,7 @@ class FileDescription(BaseModel):
 class SolutionSummary(BaseModel):
     """Collection of summaries, accessible by file path"""
 
-    items: Dict[str, str] = Field(description="File summaries indexed by file path")
+    items: Dict[str, str] = Field(description="A dictionary of file-wise summary objects")
 
     class Config:
         title = "SolutionSummary"

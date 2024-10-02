@@ -23,9 +23,6 @@ class Feedback(Schema, ABC):
     is_graded: Optional[bool] = Field(None,
                                                              description="Graded or non graded.",
                                                              example=False)
-    positive: int = Field(
-        description="Positive means that the student got a principle correctly. Negative means that the student needs "
-                    "to put in some work. Empty is set if the feedback is neither positive nor negative.")
 
     meta: dict = Field({}, example={})
 
