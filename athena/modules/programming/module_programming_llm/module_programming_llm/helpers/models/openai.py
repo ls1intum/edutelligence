@@ -16,7 +16,7 @@ OPENAI_PREFIX = "openai_"
 AZURE_OPENAI_PREFIX = "azure_openai_"
 openai_available = bool(os.environ.get("OPENAI_API_KEY"))
 azure_openai_available = bool(os.environ.get("AZURE_OPENAI_API_KEY"))
-api_version = bool(os.environ.get("OPENAI_API_VERSION"))
+api_version = os.environ.get("OPENAI_API_VERSION")
 
 available_models: Dict[str, BaseLanguageModel] = {}
 
