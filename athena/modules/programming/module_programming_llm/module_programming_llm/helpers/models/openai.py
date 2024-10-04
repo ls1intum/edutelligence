@@ -16,6 +16,7 @@ OPENAI_PREFIX = "openai_"
 AZURE_OPENAI_PREFIX = "azure_openai_"
 openai_available = bool(os.environ.get("OPENAI_API_KEY"))
 azure_openai_available = bool(os.environ.get("AZURE_OPENAI_API_KEY"))
+api_version = bool(os.environ.get("OPENAI_API_VERSION"))
 
 available_models: Dict[str, BaseLanguageModel] = {}
 
@@ -35,9 +36,9 @@ if azure_openai_available:
             "api-key": os.environ["AZURE_OPENAI_API_KEY"]
         }
 
-        models_response = requests.get(f"{base_url}/models?api-version=2023-03-15-preview", headers=headers, timeout=30)
+        models_response = requests.get(f"{base_url}/models?api-version={api_version}", headers=headers, timeout=30)
         models_data = models_response.json()["data"]
-        deployments_response = requests.get(f"{base_url}/deployments?api-version=2023-03-15-preview", headers=headers,
+        deployments_response = requests.get(f"{base_url}/deployments?api-version={api_version}", headers=headers,
                                             timeout=30)
         deployments_data = deployments_response.json()["data"]
 
