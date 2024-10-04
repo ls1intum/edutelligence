@@ -4,9 +4,10 @@ import requests
 
 from typing import Dict, List
 from enum import Enum
-from pydantic import Field, validator, PositiveInt
+from pydantic import Field, field_validator, PositiveInt
 from langchain.base_language import BaseLanguageModel
-from langchain_openai import AzureChatOpenAI, ChatOpenAI
+from langchain_community.chat_models import ChatOpenAI
+from langchain_openai import AzureChatOpenAI
 
 from athena.logger import logger
 from .model_config import ModelConfig
@@ -100,7 +101,7 @@ decreasing the model's likelihood to repeat the same line verbatim.
 [See more information about frequency and presence penalties.](https://platform.openai.com/docs/api-reference/parameter-details)\
 """)
 
-        @validator('max_tokens')
+        @field_validator('max_tokens')
         def max_tokens_must_be_positive(cls, v):
             """
             Validate that max_tokens is a positive integer.

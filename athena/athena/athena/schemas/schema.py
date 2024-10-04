@@ -32,4 +32,4 @@ class Schema(BaseModel, abc.ABC):
     class Config:
         # Allow camelCase field names in the API (converted to snake_case)
         alias_generator = to_camel
-        allow_population_by_field_name = True
+        populate_by_name = True
