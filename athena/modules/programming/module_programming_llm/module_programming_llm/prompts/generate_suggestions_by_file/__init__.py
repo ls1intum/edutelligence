@@ -1,0 +1,4 @@
+from .generate_suggestions_by_file import GenerateSuggestionsByFile
+from .generate_suggestions_by_file_output import GenerateSuggestionsByFileOutput
+
+__all__ = ['GenerateSuggestionsByFile', 'GenerateSuggestionsByFileOutput']
