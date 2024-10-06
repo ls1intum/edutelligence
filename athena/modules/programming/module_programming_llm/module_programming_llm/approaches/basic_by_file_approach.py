@@ -1,4 +1,4 @@
-from typing import List
+from typing import Optional, List
 
 from athena.programming import Submission, Exercise, Feedback
 from module_programming_llm.config import Configuration
@@ -16,30 +16,30 @@ from module_programming_llm.prompts.split_problem_statement_by_file import Split
 
 async def generate_file_summary(step: GenerateFileSummary,
                                 input_data: GenerateFileSummaryInput, debug: bool,
-                                model: ModelConfigType) -> GenerateFileSummaryOutput:
+                                model: ModelConfigType) -> Optional[GenerateFileSummaryOutput]: # type: ignore[attr-defined]
     return await step.process(input_data, debug, model)
 
 
 async def split_problem_statement(step: SplitProblemStatementByFile,
                                   input_data: SplitProblemStatementByFileInput, debug: bool,
-                                  model: ModelConfigType) -> SplitProblemStatementByFileOutput:
+                                  model: ModelConfigType) -> Optional[SplitProblemStatementByFileOutput]: # type: ignore[attr-defined]
     return await step.process(input_data, debug, model)
 
 
 async def split_grading_instructions(step: SplitGradingInstructionsByFile,
                                      input_data: SplitGradingInstructionsByFileInput, debug: bool,
-                                     model: ModelConfigType) -> SplitGradingInstructionsByFileOutput:
+                                     model: ModelConfigType) -> Optional[SplitGradingInstructionsByFileOutput]: # type: ignore[attr-defined]
     return await step.process(input_data, debug, model)
 
 
 async def generate_suggestions(step: GenerateSuggestionsByFile,
                                input_data: GenerateSuggestionsByFileInput, debug: bool,
-                               model: ModelConfigType) -> GenerateSuggestionsByFileOutput:
+                               model: ModelConfigType) -> Optional[GenerateSuggestionsByFileOutput]: # type: ignore[attr-defined]
     return await step.process(input_data, debug, model)
 
 
 async def generate_feedback(exercise: Exercise, submission: Submission, is_graded: bool,
-                            module_config: Configuration) -> List[Feedback]:
+                            module_config: Configuration) -> List[Feedback]: # type: ignore[attr-defined]
     template_repo = exercise.get_template_repository()
     solution_repo = exercise.get_solution_repository()
     submission_repo = submission.get_repository()
@@ -85,26 +85,25 @@ async def generate_feedback(exercise: Exercise, submission: Submission, is_grade
     for result in generate_suggestions_output.feedbacks:
         if result is None:
             continue
-        for feedback in result.feedbacks:
-            grading_instruction_id = (
-                feedback.grading_instruction_id
-                if feedback.grading_instruction_id in grading_instruction_ids
-                else None
+        grading_instruction_id = (
+            result.grading_instruction_id
+            if result.grading_instruction_id in grading_instruction_ids
+            else None
+        )
+        feedbacks.append(
+            Feedback(
+                exercise_id=exercise.id,
+                submission_id=submission.id,
+                title=result.title,
+                description=result.description,
+                file_path=result.file_name,
+                line_start=result.line_start,
+                line_end=result.line_end,
+                credits=result.credits,
+                structured_grading_instruction_id=grading_instruction_id,
+                is_graded=is_graded,
+                meta={},
             )
-            feedbacks.append(
-                Feedback(
-                    exercise_id=exercise.id,
-                    submission_id=submission.id,
-                    title=feedback.title,
-                    description=feedback.description,
-                    file_path=feedback.file_name,
-                    line_start=feedback.line_start,
-                    line_end=feedback.line_end,
-                    credits=feedback.credits,
-                    structured_grading_instruction_id=grading_instruction_id,
-                    is_graded=True,
-                    meta={},
-                )
-            )
+        )
 
     return feedbacks

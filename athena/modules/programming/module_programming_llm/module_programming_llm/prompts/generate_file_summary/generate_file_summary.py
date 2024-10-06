@@ -30,7 +30,8 @@ class GenerateFileSummary(PipelineStep[GenerateFileSummaryInput, GenerateFileSum
                                description="Message from a human. The input on which the AI is supposed to act.")
 
     # pylint: disable=too-many-locals
-    async def process(self, input_data: GenerateFileSummaryInput, debug: bool, model: ModelConfigType) -> Optional[GenerateFileSummaryOutput]:
+    async def process(self, input_data: GenerateFileSummaryInput, debug: bool, model: ModelConfigType) -> Optional[
+        GenerateFileSummaryOutput]:
         """Generate a summary for the submission, file by file.
 
         Args:
