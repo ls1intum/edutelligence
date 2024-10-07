@@ -32,7 +32,6 @@ class GenerateGradingCriterion(PipelineStep[GenerateGradingCriterionInput, Optio
     tokens_before_split: int = Field(default=2000,
                                      description="Split the grading instructions into file-based ones after this number of tokens.")
 
-    # pylint: disable=too-many-locals
     async def process(self, input_data: GenerateGradingCriterionInput, debug: bool, model: ModelConfigType) -> Optional[GenerateGradingCriterionOutput]: # type: ignore
         model = model.get_model() # type: ignore[attr-defined]
 

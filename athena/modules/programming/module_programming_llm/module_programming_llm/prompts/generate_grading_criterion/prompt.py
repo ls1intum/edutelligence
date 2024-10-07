@@ -6,7 +6,7 @@ Create structured grading criterion for a programming exercise
 You will use these grading instructions to assess the submission in the future.
 
 # Grading
-In case a student implemented everything correctly he should receive maximal available credits.
+In case a student implemented everything correctly he should receive maximal available points(credits).
 If a student made a mistake, he has a chance to compensate with bonus points, if they are available.
 Your criterion must cover these cases.
 
@@ -20,7 +20,7 @@ human_message = """\
 
 # Grading instructions
 Markdown grading instructions, if available: {grading_instructions}
-Max credits: {max_points}, bonus credits: {bonus_points}
+Max points: {max_points}, bonus points: {bonus_points}
 
 Changed files from template to sample solution:
 {changed_files_from_template_to_solution}
