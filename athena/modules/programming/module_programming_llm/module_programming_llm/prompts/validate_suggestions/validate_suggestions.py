@@ -244,7 +244,7 @@ class ValidateSuggestions(PipelineStep[ValidateSuggestionsInput, List[Optional[V
                         f"exercise-{input_data.exercise_id}",
                         f"submission-{input_data.submission_id}",
                         f"file-{prompt_input['file_path']}",
-                        "filter-out-solution",
+                        "validate-suggestions",
                     ],
                 )
                 for prompt_input in prompt_inputs
