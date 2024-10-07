@@ -22,7 +22,7 @@ from ...helpers.models import ModelConfigType
 
 
 class SplitGradingInstructionsByFile(
-    PipelineStep[SplitGradingInstructionsByFileInput, SplitGradingInstructionsByFileOutput]):
+    PipelineStep[SplitGradingInstructionsByFileInput, Optional[SplitGradingInstructionsByFileOutput]]):
     """Splits grading instructions of a programming exercise to match with solution files"""
 
     system_message: str = Field(prompt_system_message,

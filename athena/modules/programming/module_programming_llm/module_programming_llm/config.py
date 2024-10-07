@@ -7,6 +7,8 @@ from athena import config_schema_provider
 from module_programming_llm.prompts import SplitProblemStatementByFile, SplitGradingInstructionsByFile, \
     GenerateSuggestionsByFile, GenerateFileSummary
 from module_programming_llm.prompts.filter_out_solution.filter_out_solution import FilterOutSolution
+from module_programming_llm.prompts.generate_grading_criterion.generate_grading_criterion import \
+    GenerateGradingCriterion
 from module_programming_llm.prompts.validate_suggestions import ValidateSuggestions
 
 
@@ -32,6 +34,7 @@ class BasicByFileApproachConfig(BasicApproachConfig, ABC):
     generate_file_summary: GenerateFileSummary = Field(default=GenerateFileSummary())
     filter_out_solution: FilterOutSolution = Field(default=FilterOutSolution())
     validate_suggestions: ValidateSuggestions = Field(default=ValidateSuggestions())
+    generate_grading_criterion: GenerateGradingCriterion = Field(default=GenerateGradingCriterion())
     max_number_of_files: int = Field(default=25,
                                      description="Maximum number of files. If exceeded, it will prioritize the most important ones.")
     tokens_before_split: int = Field(default=250,

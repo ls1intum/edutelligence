@@ -16,7 +16,7 @@ from module_programming_llm.helpers.llm_utils import (
 from module_programming_llm.helpers.utils import (
     get_diff,
     load_files_from_repo,
-    add_line_numbers, get_programming_language_file_extension
+    add_line_numbers, get_programming_language_file_extension, format_grading_instructions
 )
 from ...helpers.models import ModelConfigType
 
@@ -109,7 +109,7 @@ class GenerateSuggestionsByFile(PipelineStep[GenerateSuggestionsByFileInput, Lis
             )
 
             grading_instructions = (
-                input_data.grading_instructions or ""
+                format_grading_instructions(input_data.grading_instructions, input_data.grading_criteria) or ""
                 if is_short_grading_instructions
                 else file_grading_instructions.get(
                     file_path, "No relevant grading instructions found."

@@ -21,7 +21,7 @@ from module_programming_llm.helpers.utils import (
 from ...helpers.models import ModelConfigType
 
 
-class GenerateFileSummary(PipelineStep[GenerateFileSummaryInput, GenerateFileSummaryOutput]):
+class GenerateFileSummary(PipelineStep[GenerateFileSummaryInput, Optional[GenerateFileSummaryOutput]]):
     """Generates concise summaries of submission files, facilitating a quicker review and understanding of the content for AI processing."""
 
     system_message: str = Field(prompt_system_message,

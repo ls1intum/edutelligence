@@ -15,7 +15,7 @@ from ...helpers.models import ModelConfigType
 from ...helpers.utils import get_diff
 
 
-class SplitProblemStatementByFile(PipelineStep[SplitProblemStatementByFileInput, SplitProblemStatementByFileOutput]):
+class SplitProblemStatementByFile(PipelineStep[SplitProblemStatementByFileInput, Optional[SplitProblemStatementByFileOutput]]):
     """Splits problem statement of a programming exercise to match with solution files"""
 
     system_message: str = Field(prompt_system_message,
