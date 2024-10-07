@@ -16,9 +16,9 @@ class GenerateSuggestionsByFileInput:
     solution_repo: Repo
     exercise_id: int
     submission_id: int
-    grading_instructions_by_file: SplitGradingInstructionsByFileOutput
+    grading_instructions_by_file: Optional[SplitGradingInstructionsByFileOutput]
     grading_criteria: Optional[List[GradingCriterion]]
-    problem_statement_by_file: SplitProblemStatementByFileOutput
+    problem_statement_by_file: Optional[SplitProblemStatementByFileOutput]
     problem_statement: Optional[str]
     grading_instructions: Optional[str]
     max_points: float

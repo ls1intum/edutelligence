@@ -19,41 +19,35 @@ from module_programming_llm.prompts.split_problem_statement_by_file import Split
 
 async def generate_file_summary(step: GenerateFileSummary,
                                 input_data: GenerateFileSummaryInput, debug: bool,
-                                model: ModelConfigType) -> Optional[
-    GenerateFileSummaryOutput]:  # type: ignore[attr-defined]
+                                model: ModelConfigType) -> (Optional)[GenerateFileSummaryOutput]: # type: ignore
     return await step.process(input_data, debug, model)
 
 
 async def split_problem_statement(step: SplitProblemStatementByFile,
                                   input_data: SplitProblemStatementByFileInput, debug: bool,
-                                  model: ModelConfigType) -> Optional[
-    SplitProblemStatementByFileOutput]:  # type: ignore[attr-defined]
+                                  model: ModelConfigType) -> Optional[SplitProblemStatementByFileOutput]: # type: ignore
     return await step.process(input_data, debug, model)
 
 
 async def split_grading_instructions(step: SplitGradingInstructionsByFile,
                                      input_data: SplitGradingInstructionsByFileInput, debug: bool,
-                                     model: ModelConfigType) -> Optional[
-    SplitGradingInstructionsByFileOutput]:  # type: ignore[attr-defined]
+                                     model: ModelConfigType) -> Optional[SplitGradingInstructionsByFileOutput]: # type: ignore
     return await step.process(input_data, debug, model)
 
 
 async def generate_suggestions(step: GenerateSuggestionsByFile,
                                input_data: GenerateSuggestionsByFileInput, debug: bool,
-                               model: ModelConfigType) -> List[
-    Optional[GenerateSuggestionsByFileOutput]]:  # type: ignore[attr-defined]
+                               model: ModelConfigType) -> List[Optional[GenerateSuggestionsByFileOutput]]: # type: ignore
     return await step.process(input_data, debug, model)
 
 
 async def filter_out_solutions(step: FilterOutSolution,
                                input_data: FilterOutSolutionInput, debug: bool,
-                               model: ModelConfigType) -> List[
-    Optional[FilterOutSolutionOutput]]:  # type: ignore[attr-defined]
+                               model: ModelConfigType) -> List[Optional[FilterOutSolutionOutput]]: # type: ignore
     return await step.process(input_data, debug, model)
 
 
-async def generate_feedback(exercise: Exercise, submission: Submission, is_graded: bool,
-                            module_config: Configuration) -> List[Feedback]:  # type: ignore[attr-defined]
+async def generate_feedback(exercise: Exercise, submission: Submission, is_graded: bool, module_config: Configuration) -> List[Feedback]:  # type: ignore
     template_repo = exercise.get_template_repository()
     solution_repo = exercise.get_solution_repository()
     submission_repo = submission.get_repository()

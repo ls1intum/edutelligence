@@ -6,7 +6,7 @@ from athena import emit_meta
 from module_programming_llm.prompts.pipeline_step import PipelineStep
 from .generate_suggestions_by_file_input import GenerateSuggestionsByFileInput
 from .generate_suggestions_by_file_output import GenerateSuggestionsByFileOutput, FeedbackModel
-from .prompt import system_message, human_message
+from .prompt import system_message as prompt_system_message, human_message as prompt_human_message
 from pydantic import Field
 from module_programming_llm.helpers.llm_utils import (
     get_chat_prompt_with_formatting_instructions,
@@ -24,9 +24,9 @@ from ...helpers.models import ModelConfigType
 class GenerateSuggestionsByFile(PipelineStep[GenerateSuggestionsByFileInput, List[Optional[GenerateSuggestionsByFileOutput]]]):
     """Generates concise feedback for submitted files, facilitating a quicker review and understanding of the content"""
 
-    system_message: str = Field(system_message,
+    system_message: str = Field(prompt_system_message,
                                 description="Message for priming AI behavior and instructing it what to do.")
-    human_message: str = Field(human_message,
+    human_message: str = Field(prompt_human_message,
                                description="Message from a human. The input on which the AI is supposed to act.")
     max_number_of_files: int = Field(default=25,
                                      description="Maximum number of files. If exceeded, it will prioritize the most important ones.")
@@ -34,8 +34,8 @@ class GenerateSuggestionsByFile(PipelineStep[GenerateSuggestionsByFileInput, Lis
                                      description="Split the grading instructions into file-based ones after this number of tokens.")
 
     # pylint: disable=too-many-locals
-    async def process(self, input_data: GenerateSuggestionsByFileInput, debug: bool, model: ModelConfigType) -> List[Optional[GenerateSuggestionsByFileOutput]]:
-        model = model.get_model()  # type: ignore[attr-defined]
+    async def process(self, input_data: GenerateSuggestionsByFileInput, debug: bool, model: ModelConfigType) -> List[Optional[GenerateSuggestionsByFileOutput]]: # type: ignore
+        model = model.get_model() # type: ignore[attr-defined]
 
         prompt = get_chat_prompt_with_formatting_instructions(
             model=model,
@@ -90,8 +90,7 @@ class GenerateSuggestionsByFile(PipelineStep[GenerateSuggestionsByFileInput, Lis
         # Changed text files
         changed_files = load_files_from_repo(
             submission_repo,
-            file_filter=lambda file_path: file_path
-                                          in changed_files_from_template_to_submission,
+            file_filter=lambda file_path: file_path in changed_files_from_template_to_submission,
         )
 
         # Gather prompt inputs for each changed file (independently)

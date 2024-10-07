@@ -12,19 +12,20 @@ class FilterOutSolutionInput:
     """
     solution_repo: Repo
     template_repo: Repo
-    problem_statement_by_file: SplitProblemStatementByFileOutput
+    problem_statement_by_file: Optional[SplitProblemStatementByFileOutput]
     problem_statement: Optional[str]
     exercise_id: int
     submission_id: int
     feedback_suggestions: List[Optional[GenerateSuggestionsByFileOutput]]
 
     def __init__(self, solution_repo: Repo, template_repo: Repo, problem_statement: Optional[str], exercise_id: int,
-                 submission_id: int, feedback_suggestions: List[Optional[GenerateSuggestionsByFileOutput]] = None,
-                 problem_statement_by_file: Optional[SplitProblemStatementByFileOutput] = None):
+                 submission_id: int, feedback_suggestions: List[Optional[GenerateSuggestionsByFileOutput]],
+                 problem_statement_by_file: Optional[SplitProblemStatementByFileOutput]):
         self.solution_repo = solution_repo
         self.template_repo = template_repo
         self.exercise_id = exercise_id
         self.submission_id = submission_id
-        self.problem_statement_by_file = problem_statement_by_file
+        if problem_statement_by_file is not None:
+            self.problem_statement_by_file = problem_statement_by_file
         self.problem_statement = problem_statement
         self.feedback_suggestions = feedback_suggestions

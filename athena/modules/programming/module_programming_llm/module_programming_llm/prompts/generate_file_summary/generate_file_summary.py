@@ -7,7 +7,7 @@ from .generate_file_summary_input import GenerateFileSummaryInput
 from .generate_file_summary_output import GenerateFileSummaryOutput
 from module_programming_llm.prompts.pipeline_step import PipelineStep
 from .generate_file_summary_output import FileDescription
-from .prompt import system_message, human_message
+from .prompt import system_message as prompt_system_message, human_message as prompt_human_message
 from pydantic import Field
 from module_programming_llm.helpers.llm_utils import (
     get_chat_prompt_with_formatting_instructions,
@@ -24,14 +24,13 @@ from ...helpers.models import ModelConfigType
 class GenerateFileSummary(PipelineStep[GenerateFileSummaryInput, GenerateFileSummaryOutput]):
     """Generates concise summaries of submission files, facilitating a quicker review and understanding of the content for AI processing."""
 
-    system_message: str = Field(system_message,
-                                description="Message for priming AI behavior and instructing it what to do.")
-    human_message: str = Field(human_message,
-                               description="Message from a human. The input on which the AI is supposed to act.")
+    system_message: str = Field(prompt_system_message,
+                                       description="Message for priming AI behavior and instructing it what to do.")
+    human_message: str = Field(prompt_human_message,
+                                      description="Message from a human. The input on which the AI is supposed to act.")
 
     # pylint: disable=too-many-locals
-    async def process(self, input_data: GenerateFileSummaryInput, debug: bool, model: ModelConfigType) -> Optional[
-        GenerateFileSummaryOutput]:
+    async def process(self, input_data: GenerateFileSummaryInput, debug: bool, model: ModelConfigType) -> Optional[GenerateFileSummaryOutput]: # type: ignore
         """Generate a summary for the submission, file by file.
 
         Args:

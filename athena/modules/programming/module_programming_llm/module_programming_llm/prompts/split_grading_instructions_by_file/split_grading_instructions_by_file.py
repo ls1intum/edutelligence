@@ -6,8 +6,8 @@ from typing import Optional
 
 from athena import emit_meta
 from module_programming_llm.prompts.pipeline_step import PipelineStep
-from . import SplitGradingInstructionsByFileInput, SplitGradingInstructionsByFileOutput
-from .prompt import system_message, human_message
+from .split_grading_instructions_by_file_input import SplitGradingInstructionsByFileInput
+from .prompt import system_message as prompt_system_message, human_message as prompt_human_message
 from pydantic import Field
 from module_programming_llm.helpers.llm_utils import (
     get_chat_prompt_with_formatting_instructions,
@@ -17,7 +17,7 @@ from module_programming_llm.helpers.llm_utils import (
 from module_programming_llm.helpers.utils import (
     get_diff,
 )
-from .split_grading_instructions_by_file_output import FileGradingInstruction
+from .split_grading_instructions_by_file_output import FileGradingInstruction, SplitGradingInstructionsByFileOutput
 from ...helpers.models import ModelConfigType
 
 
@@ -25,16 +25,14 @@ class SplitGradingInstructionsByFile(
     PipelineStep[SplitGradingInstructionsByFileInput, SplitGradingInstructionsByFileOutput]):
     """Splits grading instructions of a programming exercise to match with solution files"""
 
-    system_message: str = Field(system_message,
+    system_message: str = Field(prompt_system_message,
                                 description="Message for priming AI behavior and instructing it what to do.")
-    human_message: str = Field(human_message,
+    human_message: str = Field(prompt_human_message,
                                description="Message from a human. The input on which the AI is supposed to act.")
     tokens_before_split: int = Field(default=250,
                                      description="Split the grading instructions into file-based ones after this number of tokens.")
 
-    # pylint: disable=too-many-locals
-    async def process(self, input_data: SplitGradingInstructionsByFileInput, debug: bool, model: ModelConfigType) -> Optional[
-        SplitGradingInstructionsByFileOutput]:
+    async def process(self, input_data: SplitGradingInstructionsByFileInput, debug: bool, model: ModelConfigType) -> Optional[SplitGradingInstructionsByFileOutput]: # type: ignore
         """Split the general grading instructions by file
 
         Args:

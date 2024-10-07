@@ -7,9 +7,10 @@ from typing import Optional, List, Sequence, Dict
 from athena import emit_meta
 from module_programming_llm.prompts.pipeline_step import PipelineStep
 from .filter_out_solution_input import FilterOutSolutionInput
-from .filter_out_solution_output import FilterOutSolutionOutput, FeedbackModel as FilterOutFeedbackModel
-from module_programming_llm.prompts.generate_suggestions_by_file.generate_suggestions_by_file_output import FeedbackModel as SuggestionsFeedbackModel
-from .prompt import system_message, human_message
+from .filter_out_solution_output import FilterOutSolutionOutput
+from module_programming_llm.prompts.generate_suggestions_by_file.generate_suggestions_by_file_output import \
+    FeedbackModel as SuggestionsFeedbackModel
+from .prompt import system_message as prompt_system_message, human_message as prompt_human_message
 from pydantic import Field
 from module_programming_llm.helpers.llm_utils import (
     get_chat_prompt_with_formatting_instructions,
@@ -27,9 +28,9 @@ from ...helpers.models import ModelConfigType
 class FilterOutSolution(PipelineStep[FilterOutSolutionInput, List[Optional[FilterOutSolutionOutput]]]):
     """Generates concise summaries of submission files, facilitating a quicker review and understanding of the content for AI processing."""
 
-    system_message: str = Field(system_message,
+    system_message: str = Field(prompt_system_message,
                                 description="Message for priming AI behavior and instructing it what to do.")
-    human_message: str = Field(human_message,
+    human_message: str = Field(prompt_human_message,
                                description="Message from a human. The input on which the AI is supposed to act.")
     tokens_before_split: int = Field(default=250,
                                      description="Split the grading instructions into file-based ones after this number of tokens.")
@@ -39,7 +40,7 @@ class FilterOutSolution(PipelineStep[FilterOutSolutionInput, List[Optional[Filte
             self,
             input_data: FilterOutSolutionInput,
             debug: bool,
-            model: ModelConfigType
+            model: ModelConfigType  # type: ignore
     ) -> List[Optional[FilterOutSolutionOutput]]:
         model = model.get_model()  # type: ignore[attr-defined]
 
@@ -78,13 +79,13 @@ class FilterOutSolution(PipelineStep[FilterOutSolutionInput, List[Optional[Filte
         # Changed text files
         changed_files = load_files_from_repo(
             solution_repo,
-            file_filter=lambda file_path: file_path
-                                          in changed_files_from_template_to_solution,
+            file_filter=lambda file_path: file_path in changed_files_from_template_to_solution,
         )
 
         feedback_suggestions_by_file: Dict[str, Sequence[SuggestionsFeedbackModel]] = {}
         for feedback in input_data.feedback_suggestions:
-            feedback_suggestions_by_file[feedback.file_path] = feedback.feedbacks
+            if feedback is not None:
+                feedback_suggestions_by_file[feedback.file_path] = feedback.feedbacks
 
         # Gather prompt inputs for each file
         for file_path, file_content in changed_files.items():
@@ -117,7 +118,8 @@ class FilterOutSolution(PipelineStep[FilterOutSolutionInput, List[Optional[Filte
                     "code_with_line_numbers": file_content,
                     "problem_statement": problem_statement,
                     "template_to_solution_diff": template_to_solution_diff,
-                    "feedback_suggestions": json.dumps([ob.__dict__ for ob in feedback_suggestions_by_file.get(file_path) or []])
+                    "feedback_suggestions": json.dumps(
+                        [ob.__dict__ for ob in feedback_suggestions_by_file.get(file_path) or []])
                 }
             )
 

@@ -4,7 +4,7 @@ from typing import Optional
 from pydantic import Field
 
 from athena import emit_meta
-from .prompt import system_message, human_message
+from .prompt import system_message as prompt_system_message, human_message as prompt_human_message
 
 from .split_problem_statement_by_file_input import SplitProblemStatementByFileInput
 from .split_problem_statement_by_file_output import FileProblemStatement, SplitProblemStatementByFileOutput
@@ -18,17 +18,14 @@ from ...helpers.utils import get_diff
 class SplitProblemStatementByFile(PipelineStep[SplitProblemStatementByFileInput, SplitProblemStatementByFileOutput]):
     """Splits problem statement of a programming exercise to match with solution files"""
 
-    system_message: str = Field(system_message,
+    system_message: str = Field(prompt_system_message,
                                 description="Message for priming AI behavior and instructing it what to do.")
-    human_message: str = Field(human_message,
+    human_message: str = Field(prompt_human_message,
                                description="Message from a human. The input on which the AI is supposed to act.")
     tokens_before_split: int = Field(default=250,
                                      description="Split the grading instructions into file-based ones after this number of tokens.")
 
-    # pylint: disable=too-many-locals
-    async def process(self, input_data: SplitProblemStatementByFileInput, debug: bool, model: ModelConfigType) -> \
-    Optional[
-        SplitProblemStatementByFileOutput]:
+    async def process(self, input_data: SplitProblemStatementByFileInput, debug: bool, model: ModelConfigType) -> Optional[SplitProblemStatementByFileOutput]: # type: ignore
         """Split the general problem statement by file
 
         Args:
