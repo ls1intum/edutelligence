@@ -5,6 +5,9 @@ from module_programming_llm.config import Configuration
 from module_programming_llm.helpers.models import ModelConfigType
 from module_programming_llm.prompts import GenerateFileSummary, SplitProblemStatementByFile, \
     SplitGradingInstructionsByFile, GenerateSuggestionsByFile, GenerateSuggestionsByFileOutput
+from module_programming_llm.prompts.filter_out_solution.filter_out_solution import FilterOutSolution
+from module_programming_llm.prompts.filter_out_solution.filter_out_solution_input import FilterOutSolutionInput
+from module_programming_llm.prompts.filter_out_solution.filter_out_solution_output import FilterOutSolutionOutput
 from module_programming_llm.prompts.generate_file_summary import GenerateFileSummaryOutput, GenerateFileSummaryInput
 from module_programming_llm.prompts.generate_suggestions_by_file.generate_suggestions_by_file_input import \
     GenerateSuggestionsByFileInput
@@ -16,30 +19,41 @@ from module_programming_llm.prompts.split_problem_statement_by_file import Split
 
 async def generate_file_summary(step: GenerateFileSummary,
                                 input_data: GenerateFileSummaryInput, debug: bool,
-                                model: ModelConfigType) -> Optional[GenerateFileSummaryOutput]: # type: ignore[attr-defined]
+                                model: ModelConfigType) -> Optional[
+    GenerateFileSummaryOutput]:  # type: ignore[attr-defined]
     return await step.process(input_data, debug, model)
 
 
 async def split_problem_statement(step: SplitProblemStatementByFile,
                                   input_data: SplitProblemStatementByFileInput, debug: bool,
-                                  model: ModelConfigType) -> Optional[SplitProblemStatementByFileOutput]: # type: ignore[attr-defined]
+                                  model: ModelConfigType) -> Optional[
+    SplitProblemStatementByFileOutput]:  # type: ignore[attr-defined]
     return await step.process(input_data, debug, model)
 
 
 async def split_grading_instructions(step: SplitGradingInstructionsByFile,
                                      input_data: SplitGradingInstructionsByFileInput, debug: bool,
-                                     model: ModelConfigType) -> Optional[SplitGradingInstructionsByFileOutput]: # type: ignore[attr-defined]
+                                     model: ModelConfigType) -> Optional[
+    SplitGradingInstructionsByFileOutput]:  # type: ignore[attr-defined]
     return await step.process(input_data, debug, model)
 
 
 async def generate_suggestions(step: GenerateSuggestionsByFile,
                                input_data: GenerateSuggestionsByFileInput, debug: bool,
-                               model: ModelConfigType) -> Optional[GenerateSuggestionsByFileOutput]: # type: ignore[attr-defined]
+                               model: ModelConfigType) -> List[
+    Optional[GenerateSuggestionsByFileOutput]]:  # type: ignore[attr-defined]
+    return await step.process(input_data, debug, model)
+
+
+async def filter_out_solutions(step: FilterOutSolution,
+                               input_data: FilterOutSolutionInput, debug: bool,
+                               model: ModelConfigType) -> List[
+    Optional[FilterOutSolutionOutput]]:  # type: ignore[attr-defined]
     return await step.process(input_data, debug, model)
 
 
 async def generate_feedback(exercise: Exercise, submission: Submission, is_graded: bool,
-                            module_config: Configuration) -> List[Feedback]: # type: ignore[attr-defined]
+                            module_config: Configuration) -> List[Feedback]:  # type: ignore[attr-defined]
     template_repo = exercise.get_template_repository()
     solution_repo = exercise.get_solution_repository()
     submission_repo = submission.get_repository()
@@ -66,14 +80,22 @@ async def generate_feedback(exercise: Exercise, submission: Submission, is_grade
         model)
 
     generate_suggestions_input = GenerateSuggestionsByFileInput(template_repo, submission_repo, solution_repo,
-                                                                split_grading_instructions_output,
-                                                                split_problem_statement_output, exercise.id,
+                                                                exercise.id,
                                                                 submission.id, exercise.max_points,
                                                                 exercise.bonus_points, exercise.programming_language,
+                                                                split_grading_instructions_output,
+                                                                split_problem_statement_output,
                                                                 exercise.grading_criteria, exercise.problem_statement,
                                                                 exercise.grading_instructions)
-    generate_suggestions_output = await generate_suggestions(
+    output = await generate_suggestions(
         module_config.basic_by_file_approach.generate_suggestions_by_file, generate_suggestions_input, is_debug, model)
+
+    if not is_graded:
+        filter_out_solution_input = FilterOutSolutionInput(solution_repo, template_repo, exercise.problem_statement,
+                                                           exercise.id, submission.id, output,
+                                                           split_problem_statement_output)
+        output = await filter_out_solutions(module_config.basic_by_file_approach.filter_out_solution,
+                                            filter_out_solution_input, is_debug, model)
 
     grading_instruction_ids = set(
         grading_instruction.id
@@ -82,28 +104,29 @@ async def generate_feedback(exercise: Exercise, submission: Submission, is_grade
     )
 
     feedbacks: List[Feedback] = []
-    for result in generate_suggestions_output.feedbacks:
+    for result in output:
         if result is None:
             continue
-        grading_instruction_id = (
-            result.grading_instruction_id
-            if result.grading_instruction_id in grading_instruction_ids
-            else None
-        )
-        feedbacks.append(
-            Feedback(
-                exercise_id=exercise.id,
-                submission_id=submission.id,
-                title=result.title,
-                description=result.description,
-                file_path=result.file_name,
-                line_start=result.line_start,
-                line_end=result.line_end,
-                credits=result.credits,
-                structured_grading_instruction_id=grading_instruction_id,
-                is_graded=is_graded,
-                meta={},
+        for feedback in result.feedbacks:
+            grading_instruction_id = (
+                feedback.grading_instruction_id
+                if feedback.grading_instruction_id in grading_instruction_ids
+                else None
             )
-        )
+            feedbacks.append(
+                Feedback(
+                    exercise_id=exercise.id,
+                    submission_id=submission.id,
+                    title=feedback.title,
+                    description=feedback.description,
+                    file_path=result.file_path,
+                    line_start=feedback.line_start,
+                    line_end=feedback.line_end,
+                    credits=feedback.credits,
+                    structured_grading_instruction_id=grading_instruction_id,
+                    is_graded=is_graded,
+                    meta={},
+                )
+            )
 
     return feedbacks

@@ -6,6 +6,7 @@ from module_programming_llm.helpers.models import ModelConfigType, DefaultModelC
 from athena import config_schema_provider
 from module_programming_llm.prompts import SplitProblemStatementByFile, SplitGradingInstructionsByFile, \
     GenerateSuggestionsByFile, GenerateFileSummary
+from module_programming_llm.prompts.filter_out_solution.filter_out_solution import FilterOutSolution
 
 
 class BasicApproachConfig(BaseModel):
@@ -28,6 +29,7 @@ class BasicByFileApproachConfig(BasicApproachConfig, ABC):
         Field(default=SplitGradingInstructionsByFile()))
     generate_suggestions_by_file: GenerateSuggestionsByFile = Field(default=GenerateSuggestionsByFile())
     generate_file_summary: GenerateFileSummary = Field(default=GenerateFileSummary())
+    filter_out_solution: FilterOutSolution = Field(default=FilterOutSolution())
     max_number_of_files: int = Field(default=25,
                                      description="Maximum number of files. If exceeded, it will prioritize the most important ones.")
     tokens_before_split: int = Field(default=250,

@@ -121,6 +121,6 @@ class GenerateFileSummary(PipelineStep[GenerateFileSummaryInput, GenerateFileSum
 
         for _, file_summary in enumerate(results):
             if file_summary is not None:
-                items_dict[file_summary.file_name] = file_summary.description
+                items_dict[file_summary.file_path] = file_summary.description
 
         return GenerateFileSummaryOutput(items=items_dict)

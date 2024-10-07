@@ -1,4 +1,4 @@
-from typing import Optional, Sequence
+from typing import Dict, Optional, Sequence
 
 from pydantic import BaseModel, Field
 
@@ -23,7 +23,11 @@ class FeedbackModel(BaseModel):
         title = "Feedback"
 
 
-class GenerateSuggestionsByFileOutput(BaseModel):
+class FilterOutSolutionOutput(BaseModel):
     """Collection of feedbacks making up an assessment for a file"""
-    feedbacks: Sequence[FeedbackModel] = Field(description="Assessment feedbacks for a file", default=[])
-    file_path: str = Field(description="The path of the file, as specified in the input prompt")
+
+    feedbacks: Sequence[FeedbackModel] = Field(description="Assessment feedbacks", default=[])
+    file_path: str = Field(description="The full path of the file, as specified in the input prompt")
+
+    class Config:
+        title = "Assessment"

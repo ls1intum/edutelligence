@@ -5,7 +5,7 @@ from typing import Optional, List
 from athena import emit_meta
 from module_programming_llm.prompts.pipeline_step import PipelineStep
 from .generate_suggestions_by_file_input import GenerateSuggestionsByFileInput
-from .generate_suggestions_by_file_output import GenerateSuggestionsByFileOutput
+from .generate_suggestions_by_file_output import GenerateSuggestionsByFileOutput, FeedbackModel
 from .prompt import system_message, human_message
 from pydantic import Field
 from module_programming_llm.helpers.llm_utils import (
@@ -21,7 +21,7 @@ from module_programming_llm.helpers.utils import (
 from ...helpers.models import ModelConfigType
 
 
-class GenerateSuggestionsByFile(PipelineStep[GenerateSuggestionsByFileInput, GenerateSuggestionsByFileOutput]):
+class GenerateSuggestionsByFile(PipelineStep[GenerateSuggestionsByFileInput, List[Optional[GenerateSuggestionsByFileOutput]]]):
     """Generates concise feedback for submitted files, facilitating a quicker review and understanding of the content"""
 
     system_message: str = Field(system_message,
@@ -34,7 +34,7 @@ class GenerateSuggestionsByFile(PipelineStep[GenerateSuggestionsByFileInput, Gen
                                      description="Split the grading instructions into file-based ones after this number of tokens.")
 
     # pylint: disable=too-many-locals
-    async def process(self, input_data: GenerateSuggestionsByFileInput, debug: bool, model: ModelConfigType) -> Optional[GenerateSuggestionsByFileOutput]:
+    async def process(self, input_data: GenerateSuggestionsByFileInput, debug: bool, model: ModelConfigType) -> List[Optional[GenerateSuggestionsByFileOutput]]:
         model = model.get_model()  # type: ignore[attr-defined]
 
         prompt = get_chat_prompt_with_formatting_instructions(
@@ -51,7 +51,7 @@ class GenerateSuggestionsByFile(PipelineStep[GenerateSuggestionsByFileInput, Gen
         )
         file_problem_statements = (
             {
-                item.file_name: item.problem_statement
+                item.file_path: item.problem_statement
                 for item in input_data.problem_statement_by_file.items
             }
             if input_data.problem_statement_by_file is not None
@@ -66,7 +66,7 @@ class GenerateSuggestionsByFile(PipelineStep[GenerateSuggestionsByFileInput, Gen
         )
         file_grading_instructions = (
             {
-                item.file_name: item.grading_instructions
+                item.file_path: item.grading_instructions
                 for item in input_data.grading_instructions_by_file.items
             }
             if input_data.grading_instructions_by_file is not None
@@ -246,13 +246,4 @@ class GenerateSuggestionsByFile(PipelineStep[GenerateSuggestionsByFileInput, Gen
                 ],
             )
 
-        if not results or all(r is None for r in results):
-            return None
-
-        final_assessment = GenerateSuggestionsByFileOutput()
-        final_assessment.feedbacks = []
-        for feedback in results:
-            if feedback is not None:
-                final_assessment.feedbacks.append(feedback)
-
-        return final_assessment
+        return results

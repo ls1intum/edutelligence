@@ -27,4 +27,5 @@ Student\'s submission file to grade (with line numbers <number>: <line>):
 \"\"\"
 {submission_file}
 \"\"\"\
+Path: {file_path}
 """

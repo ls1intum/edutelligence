@@ -104,11 +104,11 @@ class SplitProblemStatementByFile(PipelineStep[SplitProblemStatementByFileInput,
         # Join duplicate file names (some responses contain multiple problem statements for the same file)
         file_problem_statements_by_file_name = defaultdict(list)
         for file_problem_statement in split_problem_statement.items:
-            file_problem_statements_by_file_name[file_problem_statement.file_name].append(file_problem_statement)
+            file_problem_statements_by_file_name[file_problem_statement.file_path].append(file_problem_statement)
 
         split_problem_statement.items = [
             FileProblemStatement(
-                file_name=file_name,
+                file_path=file_name,
                 problem_statement="\n".join(
                     file_problem_statement.problem_statement
                     for file_problem_statement in file_problem_statements

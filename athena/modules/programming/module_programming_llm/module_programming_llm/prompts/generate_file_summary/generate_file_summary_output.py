@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field
 
 
 class FileDescription(BaseModel):
-    file_name: str = Field(description="The name of the file")
+    file_path: str = Field(description="The path of the file, as specified in the input prompt")
     description: str = Field(description="Summary relevant for the file")
 
     class Config:
