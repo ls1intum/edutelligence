@@ -2,7 +2,7 @@ from typing import Optional, List
 
 from git import Repo
 
-from module_programming_llm.prompts import GenerateSuggestionsByFileOutput
+from module_programming_llm.prompts.generate_suggestions_by_file import GenerateSuggestionsByFileOutput
 from module_programming_llm.prompts.split_problem_statement_by_file import SplitProblemStatementByFileOutput
 
 
