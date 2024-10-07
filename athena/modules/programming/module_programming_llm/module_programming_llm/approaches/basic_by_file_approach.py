@@ -15,39 +15,48 @@ from module_programming_llm.prompts.split_grading_instructions_by_file import Sp
     SplitGradingInstructionsByFileInput
 from module_programming_llm.prompts.split_problem_statement_by_file import SplitProblemStatementByFileOutput, \
     SplitProblemStatementByFileInput
+from module_programming_llm.prompts.validate_suggestions import ValidateSuggestions, ValidateSuggestionsInput, \
+    ValidateSuggestionsOutput
 
 
 async def generate_file_summary(step: GenerateFileSummary,
                                 input_data: GenerateFileSummaryInput, debug: bool,
-                                model: ModelConfigType) -> (Optional)[GenerateFileSummaryOutput]: # type: ignore
+                                model: ModelConfigType) -> (Optional)[GenerateFileSummaryOutput]:  # type: ignore
     return await step.process(input_data, debug, model)
 
 
 async def split_problem_statement(step: SplitProblemStatementByFile,
                                   input_data: SplitProblemStatementByFileInput, debug: bool,
-                                  model: ModelConfigType) -> Optional[SplitProblemStatementByFileOutput]: # type: ignore
+                                  model: ModelConfigType) -> Optional[SplitProblemStatementByFileOutput]:  # type: ignore
     return await step.process(input_data, debug, model)
 
 
 async def split_grading_instructions(step: SplitGradingInstructionsByFile,
                                      input_data: SplitGradingInstructionsByFileInput, debug: bool,
-                                     model: ModelConfigType) -> Optional[SplitGradingInstructionsByFileOutput]: # type: ignore
+                                     model: ModelConfigType) -> Optional[SplitGradingInstructionsByFileOutput]:  # type: ignore
     return await step.process(input_data, debug, model)
 
 
 async def generate_suggestions(step: GenerateSuggestionsByFile,
                                input_data: GenerateSuggestionsByFileInput, debug: bool,
-                               model: ModelConfigType) -> List[Optional[GenerateSuggestionsByFileOutput]]: # type: ignore
+                               model: ModelConfigType) -> List[Optional[GenerateSuggestionsByFileOutput]]:  # type: ignore
     return await step.process(input_data, debug, model)
 
 
 async def filter_out_solutions(step: FilterOutSolution,
                                input_data: FilterOutSolutionInput, debug: bool,
-                               model: ModelConfigType) -> List[Optional[FilterOutSolutionOutput]]: # type: ignore
+                               model: ModelConfigType) -> List[Optional[FilterOutSolutionOutput]]:  # type: ignore
     return await step.process(input_data, debug, model)
 
 
-async def generate_feedback(exercise: Exercise, submission: Submission, is_graded: bool, module_config: Configuration) -> List[Feedback]:  # type: ignore
+async def validate_suggestions(step: ValidateSuggestions,
+                               input_data: ValidateSuggestionsInput, debug: bool,
+                               model: ModelConfigType) -> List[Optional[ValidateSuggestionsOutput]]:  # type: ignore
+    return await step.process(input_data, debug, model)
+
+
+async def generate_feedback(exercise: Exercise, submission: Submission, is_graded: bool,
+                            module_config: Configuration) -> List[Feedback]:  # type: ignore
     template_repo = exercise.get_template_repository()
     solution_repo = exercise.get_solution_repository()
     submission_repo = submission.get_repository()
@@ -77,6 +86,7 @@ async def generate_feedback(exercise: Exercise, submission: Submission, is_grade
                                                                 exercise.id,
                                                                 submission.id, exercise.max_points,
                                                                 exercise.bonus_points, exercise.programming_language,
+                                                                file_summary_output.describe_solution_summary() if file_summary_output else "",
                                                                 split_grading_instructions_output,
                                                                 split_problem_statement_output,
                                                                 exercise.grading_criteria, exercise.problem_statement,
@@ -90,6 +100,17 @@ async def generate_feedback(exercise: Exercise, submission: Submission, is_grade
                                                            split_problem_statement_output)
         output = await filter_out_solutions(module_config.basic_by_file_approach.filter_out_solution,
                                             filter_out_solution_input, is_debug, model)
+
+    validate_suggestions_input = ValidateSuggestionsInput(solution_repo, template_repo, submission_repo,
+                                                          split_problem_statement_output, exercise.problem_statement,
+                                                          exercise.id, submission.id, output,
+                                                          split_grading_instructions_output, exercise.grading_criteria,
+                                                          exercise.grading_instructions,
+                                                          file_summary_output.describe_solution_summary() if file_summary_output else "",
+                                                          exercise.max_points, exercise.bonus_points,
+                                                          exercise.programming_language)
+    output = await validate_suggestions(
+        module_config.basic_by_file_approach.validate_suggestions, validate_suggestions_input, is_debug, model)
 
     grading_instruction_ids = set(
         grading_instruction.id

@@ -5,15 +5,15 @@ import sys
 
 def main():
     modules = [
-#        "log_viewer",
-#        "assessment_module_manager",
-#        "athena",  # the version in this commit only, can differ for modules
-#        "modules/programming/module_example",
+        "log_viewer",
+        "assessment_module_manager",
+        "athena",  # the version in this commit only, can differ for modules
+        "modules/programming/module_example",
         "modules/programming/module_programming_llm",
-#        "modules/text/module_text_llm",
-#        "modules/text/module_text_cofee",
-#        "modules/programming/module_programming_themisml",
-#        "modules/modeling/module_modeling_llm",
+        "modules/text/module_text_llm",
+        "modules/text/module_text_cofee",
+        "modules/programming/module_programming_themisml",
+        "modules/modeling/module_modeling_llm",
         # "module_programming_apted" skip due to an error
     ]
 

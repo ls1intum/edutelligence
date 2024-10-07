@@ -29,7 +29,7 @@ class SplitGradingInstructionsByFile(
                                 description="Message for priming AI behavior and instructing it what to do.")
     human_message: str = Field(prompt_human_message,
                                description="Message from a human. The input on which the AI is supposed to act.")
-    tokens_before_split: int = Field(default=250,
+    tokens_before_split: int = Field(default=2000,
                                      description="Split the grading instructions into file-based ones after this number of tokens.")
 
     async def process(self, input_data: SplitGradingInstructionsByFileInput, debug: bool, model: ModelConfigType) -> Optional[SplitGradingInstructionsByFileOutput]: # type: ignore

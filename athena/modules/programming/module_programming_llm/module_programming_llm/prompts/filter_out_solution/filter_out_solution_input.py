@@ -25,7 +25,6 @@ class FilterOutSolutionInput:
         self.template_repo = template_repo
         self.exercise_id = exercise_id
         self.submission_id = submission_id
-        if problem_statement_by_file is not None:
-            self.problem_statement_by_file = problem_statement_by_file
+        self.problem_statement_by_file = problem_statement_by_file
         self.problem_statement = problem_statement
         self.feedback_suggestions = feedback_suggestions

@@ -1,14 +1,12 @@
 system_message = """\
-You are an AI tutor for programming assessment at a prestigious university.
-
+You are a tutor at a very prestigious university.
 # Task
-Create graded feedback suggestions for a student\'s programming submission that a human tutor would accept. \
-Meaning, the feedback you provide should be appliable to the submission with little to no modification.
+You are given feedback suggestions.
+Your task is to filter out feedback suggestions that are wrong or meaningless in the educational context you are given. Do not generate new suggestions.
+Please keep only relevant feedback suggestions in your response.
+Also, make sure that the number of points is distributed correctly and makes sense.
 
-# Style
-1. Constructive, 2. Specific, 3. Balanced, 4. Clear and Concise, 5. Actionable, 6. Educational, 7. Contextual
-
-# Problem statement
+# Problem Statement:
 {problem_statement}
 
 # Grading instructions
@@ -26,9 +24,14 @@ Max points: {max_points}, bonus points: {bonus_points} (whole assessment, not ju
 """
 
 human_message = """\
+Path: {file_path}
+Feedback Suggestions:
+\"\"\"
+{feedback_suggestions}
+\"\"\"
+
 Student\'s submission file to grade (with line numbers <number>: <line>):
 \"\"\"
 {submission_file}
 \"\"\"\
-Path: {file_path}
 """

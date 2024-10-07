@@ -26,13 +26,13 @@ from ...helpers.models import ModelConfigType
 
 
 class FilterOutSolution(PipelineStep[FilterOutSolutionInput, List[Optional[FilterOutSolutionOutput]]]):
-    """Generates concise summaries of submission files, facilitating a quicker review and understanding of the content for AI processing."""
+    """A pipeline step to remove potential solutions from the output."""
 
     system_message: str = Field(prompt_system_message,
                                 description="Message for priming AI behavior and instructing it what to do.")
     human_message: str = Field(prompt_human_message,
                                description="Message from a human. The input on which the AI is supposed to act.")
-    tokens_before_split: int = Field(default=250,
+    tokens_before_split: int = Field(default=2000,
                                      description="Split the grading instructions into file-based ones after this number of tokens.")
 
     # pylint: disable=too-many-locals
