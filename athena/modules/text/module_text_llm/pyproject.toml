@@ -8,15 +8,11 @@ license = "MIT"
 [tool.poetry.dependencies]
 python = "3.11.*"
 athena = { path = "../../../athena", develop = true }
-#athena = { git = "https://github.com/ls1intum/Athena.git", rev = "2da2d33", subdirectory = "athena"}
-replicate = "^0.11.0"
+# athena = { git = "https://github.com/ls1intum/Athena.git", rev = "2da2d33", subdirectory = "athena"}
+llm_core = { path = "../../llm_core", develop = true }
 langsmith = ">=0.1.0,<0.2.0"
 gitpython = "3.1.41"
-langchain = "0.2.11"
-langchain-community="0.2.10"
-langchain-openai = "0.1.19"
 nltk = "3.8.1"
-openai = "1.37.1"
 python-dotenv = "1.0.0"
 tiktoken = "0.7.0"
 

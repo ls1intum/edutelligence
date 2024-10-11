@@ -13,12 +13,13 @@ from module_programming_llm.split_grading_instructions_by_file import (
 from module_programming_llm.split_problem_statement_by_file import (
     split_problem_statement_by_file,
 )
-from module_programming_llm.helpers.llm_utils import (
+from llm_core.utils.llm_utils import (
     check_prompt_length_and_omit_features_if_necessary,
     get_chat_prompt_with_formatting_instructions,
     num_tokens_from_string,
-    predict_and_parse,
 )
+from llm_core.utils.predict_and_parse import predict_and_parse
+
 from module_programming_llm.helpers.utils import (
     get_diff,
     load_files_from_repo,

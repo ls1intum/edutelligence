@@ -8,12 +8,24 @@ from athena import get_experiment_environment
 T = TypeVar("T", bound=BaseModel)
 
 async def predict_and_parse(
-        model: BaseLanguageModel,
-        chat_prompt: ChatPromptTemplate,
-        prompt_input: dict,
-        pydantic_object: Type[T],
+        model: BaseLanguageModel, 
+        chat_prompt: ChatPromptTemplate, 
+        prompt_input: dict, 
+        pydantic_object: Type[T], 
         tags: Optional[List[str]]
-) -> Optional[T]:
+    ) -> Optional[T]:
+    """Predicts an LLM completion using the model and parses the output using the provided Pydantic model
+
+    Args:
+        model (BaseLanguageModel): The model to predict with
+        chat_prompt (ChatPromptTemplate): Prompt to use
+        prompt_input (dict): Input parameters to use for the prompt
+        pydantic_object (Type[T]): Pydantic model to parse the output
+        tags (Optional[List[str]]: List of tags to tag the prediction with
+
+    Returns:
+        Optional[T]: Parsed output, or None if it could not be parsed
+    """
     experiment = get_experiment_environment()
 
     tags = tags or []

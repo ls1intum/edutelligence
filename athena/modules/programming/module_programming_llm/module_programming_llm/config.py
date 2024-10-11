@@ -3,7 +3,7 @@ from abc import ABC
 from pydantic import BaseModel, Field
 
 from athena import config_schema_provider
-from module_programming_llm.helpers.models import ModelConfigType, DefaultModelConfig
+from llm_core.models import ModelConfigType, DefaultModelConfig
 from module_programming_llm.prompts.generate_graded_suggestions_by_file import (
     system_message as generate_graded_suggestions_by_file_system_message,
     human_message as generate_graded_suggestions_by_file_human_message,
