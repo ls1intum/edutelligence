@@ -7,7 +7,7 @@ license = "MIT"
 
 [tool.poetry.dependencies]
 python = "3.11.*"
-athena = {path = "../../athena", develop = true}
+athena = {path = "../athena", develop = true}
 langsmith = ">=0.1.0,<0.2.0"
 gitpython = "3.1.41"
 langchain = "0.2.15"

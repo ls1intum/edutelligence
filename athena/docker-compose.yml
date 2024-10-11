@@ -9,7 +9,7 @@ services:
     command: echo "Athena build succeeded, exiting (this is normal)"
 
   llm_core:
-      build: modules/llm_core
+      build: ./llm_core
       depends_on:
         - athena
       image: llm_core

@@ -11,7 +11,7 @@ python = "3.11.*"
 # athena = { path = "../athena", develop = true }
 athena = { path = "../../../athena", develop = true }
 #athena = { git = "https://github.com/ls1intum/Athena.git", rev = "2da2d33", subdirectory = "athena"}
-llm_core = { path = "../../llm_core", develop = true }
+llm_core = { path = "../../../llm_core", develop = true }
 gitpython = "^3.1.41"
 tiktoken = "0.7.0"
 promptlayer = "^0.1.85"
