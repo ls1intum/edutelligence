@@ -1,6 +1,12 @@
 import logging
 from typing import Literal, Any
-from openai import OpenAI
+from openai import (
+    OpenAI,
+    APIError,
+    APITimeoutError,
+    RateLimitError,
+    InternalServerError,
+)
 from openai.lib.azure import AzureOpenAI
 
 from ...llm.external.model import EmbeddingModel
@@ -13,9 +19,10 @@ class OpenAIEmbeddingModel(EmbeddingModel):
     _client: OpenAI
 
     def embed(self, text: str) -> list[float]:
-        retries = 10
+        retries = 5
         backoff_factor = 2
         initial_delay = 1
+        # Maximum wait time: 1 + 2 + 4 + 8 + 16 = 31 seconds
 
         for attempt in range(retries):
             try:
@@ -25,15 +32,17 @@ class OpenAIEmbeddingModel(EmbeddingModel):
                     encoding_format="float",
                 )
                 return response.data[0].embedding
-            except Exception as e:
+            except (
+                APIError,
+                APITimeoutError,
+                RateLimitError,
+                InternalServerError,
+            ):
                 wait_time = initial_delay * (backoff_factor**attempt)
-                logging.warning(f"Rate limit exceeded on attempt {attempt + 1}: {e}")
+                logging.exception(f"OpenAI error on attempt {attempt + 1}")
                 logging.info(f"Retrying in {wait_time} seconds...")
                 time.sleep(wait_time)
-        logging.error(
-            "Failed to get embedding after several attempts due to rate limit."
-        )
-        return []
+        raise Exception(f"Failed to get embedding from OpenAI after {retries} retries.")
 
 
 class DirectOpenAIEmbeddingModel(OpenAIEmbeddingModel):
