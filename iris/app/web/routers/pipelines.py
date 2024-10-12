@@ -21,6 +21,11 @@ from app.pipeline.chat.exercise_chat_pipeline import ExerciseChatPipeline
 from app.dependencies import TokenValidator
 from app.domain import FeatureDTO
 from app.pipeline.competency_extraction_pipeline import CompetencyExtractionPipeline
+from app.domain.text_exercise_chat_pipeline_execution_dto import (
+    TextExerciseChatPipelineExecutionDTO,
+)
+from app.pipeline.text_exercise_chat_pipeline import TextExerciseChatPipeline
+from app.web.status.status_update import TextExerciseChatCallback
 
 router = APIRouter(prefix="/api/v1/pipelines", tags=["pipelines"])
 logger = logging.getLogger(__name__)
@@ -90,6 +95,44 @@ def run_course_chat_pipeline(variant: str, dto: CourseChatPipelineExecutionDTO):
     thread.start()
 
 
+def run_text_exercise_chat_pipeline_worker(dto, variant):
+    try:
+        callback = TextExerciseChatCallback(
+            run_id=dto.execution.settings.authentication_token,
+            base_url=dto.execution.settings.artemis_base_url,
+            initial_stages=dto.execution.initial_stages,
+        )
+        match variant:
+            case "default" | "text_exercise_chat_pipeline_reference_impl":
+                pipeline = TextExerciseChatPipeline(callback=callback)
+            case _:
+                raise ValueError(f"Unknown variant: {variant}")
+    except Exception as e:
+        logger.error(f"Error preparing text exercise chat pipeline: {e}")
+        logger.error(traceback.format_exc())
+        capture_exception(e)
+        return
+
+    try:
+        pipeline(dto=dto)
+    except Exception as e:
+        logger.error(f"Error running text exercise chat pipeline: {e}")
+        logger.error(traceback.format_exc())
+        callback.error("Fatal error.", exception=e)
+
+
+@router.post(
+    "/text-exercise-chat/{variant}/run",
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(TokenValidator())],
+)
+def run_text_exercise_chat_pipeline(
+    variant: str, dto: TextExerciseChatPipelineExecutionDTO
+):
+    thread = Thread(target=run_text_exercise_chat_pipeline_worker, args=(dto, variant))
+    thread.start()
+
+
 def run_competency_extraction_pipeline_worker(
     dto: CompetencyExtractionPipelineExecutionDTO, _variant: str
 ):
@@ -148,6 +191,14 @@ def get_pipeline(feature: str):
                     id="default",
                     name="Default Variant",
                     description="Default programming exercise chat variant.",
+                )
+            ]
+        case "TEXT_EXERCISE_CHAT":
+            return [
+                FeatureDTO(
+                    id="default",
+                    name="Default Variant",
+                    description="Default text exercise chat variant.",
                 )
             ]
         case "COURSE_CHAT":
