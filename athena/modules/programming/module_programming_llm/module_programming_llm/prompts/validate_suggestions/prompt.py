@@ -13,11 +13,14 @@ Also, make sure that the number of points is distributed correctly and makes sen
 {grading_instructions}
 Max points: {max_points}, bonus points: {bonus_points} (whole assessment, not just this file)
 
-# Diff between solution (deletions) and student\'s submission (additions):
-{solution_to_submission_diff}
+# Diff between template (deletions) and solution (additions):
+{template_to_solution_diff}
 
 # Summary of other solution files
 {solution_summary}
+
+# RAG data
+{rag_data}
 """
 
 human_message = """\

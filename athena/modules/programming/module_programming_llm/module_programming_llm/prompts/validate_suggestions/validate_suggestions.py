@@ -167,14 +167,14 @@ class ValidateSuggestions(PipelineStep[ValidateSuggestionsInput, List[Optional[V
                     "submission_file": file_content,
                     "max_points": input_data.max_points,
                     "bonus_points": input_data.bonus_points,
-                    "solution_to_submission_diff": solution_to_submission_diff,
                     "template_to_submission_diff": template_to_submission_diff,
                     "template_to_solution_diff": template_to_solution_diff,
                     "grading_instructions": grading_instructions,
                     "problem_statement": problem_statement,
                     "solution_summary": input_data.solution_summary,
                     "feedback_suggestions": json.dumps(
-                        [ob.__dict__ for ob in feedback_suggestions_by_file.get(file_path) or []])
+                        [ob.__dict__ for ob in feedback_suggestions_by_file.get(file_path) or []]),
+                    "rag_data": input_data.rag_data
                 }
             )
 

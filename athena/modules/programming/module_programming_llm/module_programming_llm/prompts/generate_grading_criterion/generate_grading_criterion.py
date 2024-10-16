@@ -42,10 +42,21 @@ class GenerateGradingCriterion(PipelineStep[GenerateGradingCriterionInput, Optio
             name_only=True
         ).split("\n")
 
-        changed_files = load_files_from_repo(
-            input_data.solution_repo,
-            file_filter=lambda file_path: file_path in changed_files_from_template_to_solution,
+        all_changed_files = load_files_from_repo(
+            input_data.solution_repo
         )
+        changed_files = {}
+        changed_files_content = ""
+        for file in changed_files_from_template_to_solution:
+            if not file.endswith('.pbxproj'):
+                changed_files[file] = get_diff(
+                    src_repo=input_data.template_repo,
+                    dst_repo=input_data.solution_repo,
+                    src_prefix="template",
+                    dst_prefix="solution",
+                    file_path=file,
+                )
+                changed_files_content += "\n" + file + ":" + changed_files[file]
 
         prompt = get_chat_prompt_with_formatting_instructions(
             model=model,
@@ -56,7 +67,6 @@ class GenerateGradingCriterion(PipelineStep[GenerateGradingCriterionInput, Optio
 
         prompt_input = {
             "problem_statement": input_data.problem_statement or "No problem statement.",
-            "changed_files_from_template_to_solution": ", ".join(changed_files_from_template_to_solution),
             "grading_instructions": input_data.grading_instructions,
             "max_points": input_data.max_points,
             "bonus_points": input_data.bonus_points,

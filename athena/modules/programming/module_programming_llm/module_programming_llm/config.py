@@ -9,6 +9,7 @@ from module_programming_llm.prompts import SplitProblemStatementByFile, SplitGra
 from module_programming_llm.prompts.filter_out_solution.filter_out_solution import FilterOutSolution
 from module_programming_llm.prompts.generate_grading_criterion.generate_grading_criterion import \
     GenerateGradingCriterion
+from module_programming_llm.prompts.rag import RAG
 from module_programming_llm.prompts.validate_suggestions import ValidateSuggestions
 
 
@@ -39,6 +40,7 @@ class BasicByFileApproachConfig(BasicApproachConfig, ABC):
                                      description="Maximum number of files. If exceeded, it will prioritize the most important ones.")
     tokens_before_split: int = Field(default=250,
                                      description="Split the grading instructions into file-based ones after this number of tokens.")
+    rag_requests: RAG = Field(default=RAG())
 
 
 # class ZeroShotApproachConfig(BasicApproachConfig, ABC):

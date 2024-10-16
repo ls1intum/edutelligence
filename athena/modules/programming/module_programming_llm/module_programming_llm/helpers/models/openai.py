@@ -6,7 +6,7 @@ from typing import Dict, List
 from enum import Enum
 from pydantic import Field, field_validator, PositiveInt
 from langchain.base_language import BaseLanguageModel
-from langchain_community.chat_models import ChatOpenAI
+from langchain_openai.chat_models import ChatOpenAI
 from langchain_openai import AzureChatOpenAI
 
 from athena.logger import logger

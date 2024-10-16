@@ -25,6 +25,7 @@ class GenerateSuggestionsByFileInput:
     bonus_points: float
     programming_language: str
     solution_summary: str
+    rag_data: List[str]
 
     def __init__(self,
                  template_repo: Repo,
@@ -36,6 +37,7 @@ class GenerateSuggestionsByFileInput:
                  bonus_points: float,
                  programming_language: str,
                  solution_summary: str,
+                 rag_data: List[str],
                  grading_instructions_by_file: Optional[SplitGradingInstructionsByFileOutput] = None,
                  problem_statement_by_file: Optional[SplitProblemStatementByFileOutput] = None,
                  grading_criteria: Optional[List[GradingCriterion]] = None,
@@ -55,3 +57,4 @@ class GenerateSuggestionsByFileInput:
         self.bonus_points = bonus_points
         self.programming_language = programming_language
         self.solution_summary = solution_summary
+        self.rag_data = rag_data

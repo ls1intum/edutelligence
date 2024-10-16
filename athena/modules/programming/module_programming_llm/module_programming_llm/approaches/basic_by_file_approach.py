@@ -2,6 +2,7 @@ from typing import Optional, List
 
 from athena.programming import Submission, Exercise, Feedback
 from module_programming_llm.config import Configuration
+from module_programming_llm.helpers.web_search import bulk_search
 from module_programming_llm.helpers.models import ModelConfigType
 from module_programming_llm.prompts import GenerateFileSummary, SplitProblemStatementByFile, \
     SplitGradingInstructionsByFile, GenerateSuggestionsByFile, GenerateSuggestionsByFileOutput
@@ -13,6 +14,7 @@ from module_programming_llm.prompts.generate_grading_criterion.generate_grading_
     GenerateGradingCriterion, GenerateGradingCriterionOutput, GenerateGradingCriterionInput
 from module_programming_llm.prompts.generate_suggestions_by_file.generate_suggestions_by_file_input import \
     GenerateSuggestionsByFileInput
+from module_programming_llm.prompts.rag import RAGInput, RAG, RAGOutput
 from module_programming_llm.prompts.split_grading_instructions_by_file import SplitGradingInstructionsByFileOutput, \
     SplitGradingInstructionsByFileInput
 from module_programming_llm.prompts.split_problem_statement_by_file import SplitProblemStatementByFileOutput, \
@@ -62,6 +64,11 @@ async def generate_grading_criterion(step: GenerateGradingCriterion,
                                      model: ModelConfigType) -> Optional[GenerateGradingCriterionOutput]:  # type: ignore
     return await step.process(input_data, debug, model)
 
+async def generate_rag_queries(step: RAG,
+                                     input_data: RAGInput, debug: bool,
+                                     model: ModelConfigType) -> Optional[RAGOutput]:  # type: ignore
+    return await step.process(input_data, debug, model)
+
 
 async def generate_feedback(exercise: Exercise, submission: Submission, is_graded: bool,
                             module_config: Configuration) -> List[Feedback]:  # type: ignore
@@ -70,6 +77,13 @@ async def generate_feedback(exercise: Exercise, submission: Submission, is_grade
     submission_repo = submission.get_repository()
     is_debug = module_config.debug
     model = module_config.basic_by_file_approach.model
+
+#    rag_query_input = RAGInput(template_repo, solution_repo, exercise.id, exercise.problem_statement)
+#    rag_query_output = await generate_rag_queries(module_config.basic_by_file_approach.rag_requests, rag_query_input, module_config.debug, model)
+
+#    rag_result = "" if rag_query_output is None else bulk_search(rag_query_output.rag_queries, model)
+
+    rag_result = ""
 
     generate_file_summary_input = GenerateFileSummaryInput(template_repo, submission_repo, exercise.id, submission.id)
     file_summary_output = await generate_file_summary(module_config.basic_by_file_approach.generate_file_summary,
@@ -109,6 +123,7 @@ async def generate_feedback(exercise: Exercise, submission: Submission, is_grade
                                                                 submission.id, exercise.max_points,
                                                                 exercise.bonus_points, exercise.programming_language,
                                                                 file_summary_output.describe_solution_summary() if file_summary_output else "",
+                                                                rag_result,
                                                                 split_grading_instructions_output,
                                                                 split_problem_statement_output,
                                                                 exercise.grading_criteria, exercise.problem_statement,
@@ -123,16 +138,17 @@ async def generate_feedback(exercise: Exercise, submission: Submission, is_grade
         output = await filter_out_solutions(module_config.basic_by_file_approach.filter_out_solution,
                                             filter_out_solution_input, is_debug, model)
 
-    validate_suggestions_input = ValidateSuggestionsInput(solution_repo, template_repo, submission_repo,
-                                                          split_problem_statement_output, exercise.problem_statement,
-                                                          exercise.id, submission.id, output,
-                                                          split_grading_instructions_output, exercise.grading_criteria,
-                                                          exercise.grading_instructions,
-                                                          file_summary_output.describe_solution_summary() if file_summary_output else "",
-                                                          exercise.max_points, exercise.bonus_points,
-                                                          exercise.programming_language)
-    output = await validate_suggestions(
-        module_config.basic_by_file_approach.validate_suggestions, validate_suggestions_input, is_debug, model)
+    # validate_suggestions_input = ValidateSuggestionsInput(solution_repo, template_repo, submission_repo,
+    #                                                       split_problem_statement_output, exercise.problem_statement,
+    #                                                       exercise.id, submission.id, output,
+    #                                                       split_grading_instructions_output, exercise.grading_criteria,
+    #                                                       exercise.grading_instructions,
+    #                                                       file_summary_output.describe_solution_summary() if file_summary_output else "",
+    #                                                       exercise.max_points, exercise.bonus_points,
+    #                                                       exercise.programming_language,
+    #                                                       rag_result)
+    # output = await validate_suggestions(
+    #     module_config.basic_by_file_approach.validate_suggestions, validate_suggestions_input, is_debug, model)
 
     grading_instruction_ids = set(
         grading_instruction.id

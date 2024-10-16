@@ -27,6 +27,7 @@ class ValidateSuggestionsInput:
     max_points: float
     bonus_points: float
     programming_language: str
+    rag_data: List[str]
 
     def __init__(
             self,
@@ -44,7 +45,8 @@ class ValidateSuggestionsInput:
             solution_summary: str,
             max_points: float,
             bonus_points: float,
-            programming_language: str
+            programming_language: str,
+            rag_data: List[str]
     ):
         self.solution_repo = solution_repo
         self.template_repo = template_repo
@@ -61,3 +63,4 @@ class ValidateSuggestionsInput:
         self.max_points = max_points
         self.bonus_points = bonus_points
         self.programming_language = programming_language
+        self.rag_data = rag_data
