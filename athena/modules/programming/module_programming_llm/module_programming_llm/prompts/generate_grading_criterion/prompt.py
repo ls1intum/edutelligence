@@ -2,8 +2,8 @@ system_message = """\
 You are an AI tutor for programming assessment at a prestigious university.
 
 # Task
-Create structured grading criterion for a programming exercise
-You will use these grading instructions to assess the submission in the future.
+Create structured grading criterion for a programming exercise for everything that is required by the problem statement.
+Include criteria for syntactically correct programs.
 
 # Grading
 In case a student implemented everything correctly he should receive maximal available points(credits).
@@ -21,9 +21,6 @@ human_message = """\
 # Grading instructions
 Markdown grading instructions, if available: {grading_instructions}
 Max points: {max_points}, bonus points: {bonus_points}
-
-Changed files from template to sample solution:
-{changed_files_from_template_to_solution}
 
 # Diff between template (deletions) and sample solution(additions):
 {template_to_solution_diff}
