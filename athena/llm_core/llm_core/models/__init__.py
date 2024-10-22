@@ -23,6 +23,13 @@ try:
 except AttributeError:
     pass
 
+try:
+    import llm_core.models.ollama as ollama_config #type: ignore
+    types.append(ollama_config.OllamaModelConfig)
+    # DefaultModelConfig = ollama_config.OllamaModelConfig
+except AttributeError:
+    pass
+
 if not types:
     raise EnvironmentError(
         "No model configurations available, please set up at least one provider in the environment variables.")

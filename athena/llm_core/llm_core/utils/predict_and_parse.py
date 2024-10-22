@@ -4,8 +4,12 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.pydantic_v1 import BaseModel, ValidationError
 from langchain_core.runnables import RunnableSequence
 from athena import get_experiment_environment
+from langchain_community.chat_models import ChatOllama # type: ignore
 
 T = TypeVar("T", bound=BaseModel)
+
+def isOllama(model: BaseLanguageModel) -> bool:
+    return isinstance(model, ChatOllama)
 
 async def predict_and_parse(
         model: BaseLanguageModel, 
@@ -36,7 +40,8 @@ async def predict_and_parse(
     if experiment.run_id is not None:
         tags.append(f"run-{experiment.run_id}")
 
-    structured_output_llm = model.with_structured_output(pydantic_object, method="json_mode")
+
+    structured_output_llm = model.with_structured_output(pydantic_object, method="json_mode") if not isOllama(model) else model
     chain = RunnableSequence(
         chat_prompt,
         structured_output_llm
