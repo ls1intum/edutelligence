@@ -22,7 +22,7 @@ from .interaction_suggestion_pipeline import (
 from .lecture_chat_pipeline import LectureChatPipeline
 from ..shared.citation_pipeline import CitationPipeline
 from ...common import convert_iris_message_to_langchain_message
-from ...domain import PyrisMessage
+from ...common.pyris_message import PyrisMessage
 from ...llm import CapabilityRequestHandler, RequirementList
 from ..prompts.iris_course_chat_prompts import (
     tell_iris_initial_system_prompt,
@@ -41,6 +41,7 @@ from ..prompts.iris_course_chat_prompts_elicit import (
     elicit_begin_agent_jol_prompt,
 )
 from ...domain import CourseChatPipelineExecutionDTO
+from app.common.PipelineEnum import PipelineEnum
 from ...retrieval.lecture_retrieval import LectureRetrieval
 from ...vector_database.database import VectorDatabase
 from ...vector_database.lecture_schema import LectureSchema
@@ -107,6 +108,7 @@ class CourseChatPipeline(Pipeline):
 
         # Create the pipeline
         self.pipeline = self.llm | StrOutputParser()
+        self.tokens = []
 
     def __repr__(self):
         return f"{self.__class__.__name__}(llm={self.llm})"
@@ -406,14 +408,18 @@ class CourseChatPipeline(Pipeline):
             self.callback.in_progress()
             for step in agent_executor.iter(params):
                 print("STEP:", step)
+                self._append_tokens(
+                    self.llm.tokens, PipelineEnum.IRIS_CHAT_COURSE_MESSAGE
+                )
                 if step.get("output", None):
                     out = step["output"]
 
             if self.retrieved_paragraphs:
                 self.callback.in_progress("Augmenting response ...")
                 out = self.citation_pipeline(self.retrieved_paragraphs, out)
+            self.tokens.extend(self.citation_pipeline.tokens)
 
-            self.callback.done("Response created", final_result=out)
+            self.callback.done("Response created", final_result=out, tokens=self.tokens)
 
             # try:
             #     # if out:
@@ -440,7 +446,8 @@ class CourseChatPipeline(Pipeline):
             )
             traceback.print_exc()
             self.callback.error(
-                "An error occurred while running the course chat pipeline."
+                "An error occurred while running the course chat pipeline.",
+                tokens=self.tokens,
             )
 
     def should_allow_lecture_tool(self, course_id: int) -> bool:

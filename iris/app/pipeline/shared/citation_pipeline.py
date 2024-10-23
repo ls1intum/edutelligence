@@ -7,6 +7,7 @@ from langchain_core.prompts import ChatPromptTemplate, PromptTemplate
 from langchain_core.runnables import Runnable
 
 from app.llm import CapabilityRequestHandler, RequirementList, CompletionArguments
+from app.common.PipelineEnum import PipelineEnum
 from app.llm.langchain import IrisLangchainChatModel
 from app.pipeline import Pipeline
 
@@ -38,6 +39,7 @@ class CitationPipeline(Pipeline):
         with open(prompt_file_path, "r") as file:
             self.prompt_str = file.read()
         self.pipeline = self.llm | StrOutputParser()
+        self.tokens = []
 
     def __repr__(self):
         return f"{self.__class__.__name__}(llm={self.llm})"
@@ -83,6 +85,7 @@ class CitationPipeline(Pipeline):
             response = (self.default_prompt | self.pipeline).invoke(
                 {"Answer": answer, "Paragraphs": paras}
             )
+            self._append_tokens(self.llm.tokens, PipelineEnum.IRIS_CITATION_PIPELINE)
             if response == "!NONE!":
                 return answer
             print(response)

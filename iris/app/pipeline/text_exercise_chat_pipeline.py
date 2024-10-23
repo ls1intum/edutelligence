@@ -2,9 +2,9 @@ import logging
 from datetime import datetime
 from typing import Optional, List, Tuple
 
+from app.common.pyris_message import PyrisMessage, IrisMessageRole
 from app.llm import CapabilityRequestHandler, RequirementList, CompletionArguments
 from app.pipeline import Pipeline
-from app.domain import PyrisMessage, IrisMessageRole
 from app.domain.text_exercise_chat_pipeline_execution_dto import (
     TextExerciseChatPipelineExecutionDTO,
 )

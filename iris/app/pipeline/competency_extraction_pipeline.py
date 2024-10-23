@@ -6,10 +6,10 @@ from langchain_core.prompts import (
     ChatPromptTemplate,
 )
 
+from app.common.PipelineEnum import PipelineEnum
+from app.common.pyris_message import PyrisMessage, IrisMessageRole
 from app.domain import (
     CompetencyExtractionPipelineExecutionDTO,
-    PyrisMessage,
-    IrisMessageRole,
 )
 from app.domain.data.text_message_content_dto import TextMessageContentDTO
 from app.domain.data.competency_dto import Competency
@@ -38,6 +38,7 @@ class CompetencyExtractionPipeline(Pipeline):
             )
         )
         self.output_parser = PydanticOutputParser(pydantic_object=Competency)
+        self.tokens = []
 
     def __call__(
         self,
@@ -76,6 +77,9 @@ class CompetencyExtractionPipeline(Pipeline):
         response = self.request_handler.chat(
             [prompt], CompletionArguments(temperature=0.4)
         )
+        self._append_tokens(
+            response.token_usage, PipelineEnum.IRIS_COMPETENCY_GENERATION
+        )
         response = response.contents[0].text_content
 
         generated_competencies: list[Competency] = []
@@ -98,4 +102,4 @@ class CompetencyExtractionPipeline(Pipeline):
                 continue
             logger.debug(f"Generated competency: {competency}")
             generated_competencies.append(competency)
-        self.callback.done(final_result=generated_competencies)
+        self.callback.done(final_result=generated_competencies, tokens=self.tokens)

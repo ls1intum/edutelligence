@@ -1,7 +1,7 @@
 import logging
 import time
 from datetime import datetime
-from typing import Literal, Any
+from typing import Literal, Any, Optional
 
 from openai import (
     OpenAI,
@@ -12,12 +12,14 @@ from openai import (
     ContentFilterFinishReasonError,
 )
 from openai.lib.azure import AzureOpenAI
+from openai.types import CompletionUsage
 from openai.types.chat import ChatCompletionMessage, ChatCompletionMessageParam
 from openai.types.shared_params import ResponseFormatJSONObject
 
 from ...common.message_converters import map_str_to_role, map_role_to_str
 from app.domain.data.text_message_content_dto import TextMessageContentDTO
-from ...domain import PyrisMessage
+from ...common.pyris_message import PyrisMessage
+from ...common.token_usage_dto import TokenUsageDTO
 from ...domain.data.image_message_content_dto import ImageMessageContentDTO
 from ...domain.data.json_message_content_dto import JsonMessageContentDTO
 from ...llm import CompletionArguments
@@ -67,15 +69,28 @@ def convert_to_open_ai_messages(
     return openai_messages
 
 
-def convert_to_iris_message(message: ChatCompletionMessage) -> PyrisMessage:
+def convert_to_iris_message(
+    message: ChatCompletionMessage, usage: Optional[CompletionUsage], model: str
+) -> PyrisMessage:
     """
     Convert a ChatCompletionMessage to a PyrisMessage
     """
-    return PyrisMessage(
+    num_input_tokens = getattr(usage, "prompt_tokens", 0)
+    num_output_tokens = getattr(usage, "completion_tokens", 0)
+
+    tokens = TokenUsageDTO(
+        model=model,
+        numInputTokens=num_input_tokens,
+        numOutputTokens=num_output_tokens,
+    )
+
+    message = PyrisMessage(
         sender=map_str_to_role(message.role),
         contents=[TextMessageContentDTO(textContent=message.content)],
-        send_at=datetime.now(),
+        sentAt=datetime.now(),
+        token_usage=tokens,
     )
+    return message
 
 
 class OpenAIChatModel(ChatModel):
@@ -113,13 +128,15 @@ class OpenAIChatModel(ChatModel):
                         max_tokens=arguments.max_tokens,
                     )
                 choice = response.choices[0]
+                usage = response.usage
+                model = response.model
                 if choice.finish_reason == "content_filter":
                     # I figured that an openai error would be automatically raised if the content filter activated,
                     # but it seems that that is not the case.
                     # We don't want to retry because the same message will likely be rejected again.
                     # Raise an exception to trigger the global error handler and report a fatal error to the client.
                     raise ContentFilterFinishReasonError()
-                return convert_to_iris_message(choice.message)
+                return convert_to_iris_message(choice.message, usage, model)
             except (
                 APIError,
                 APITimeoutError,

@@ -4,7 +4,7 @@ from typing import Literal
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, SystemMessage
 
 from app.domain.data.text_message_content_dto import TextMessageContentDTO
-from app.domain.pyris_message import PyrisMessage, IrisMessageRole
+from app.common.pyris_message import PyrisMessage, IrisMessageRole
 
 
 def convert_iris_message_to_langchain_message(

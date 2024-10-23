@@ -1,7 +1,7 @@
 from abc import ABCMeta, abstractmethod
 from typing import Optional
 
-from ...domain import PyrisMessage
+from ...common.pyris_message import PyrisMessage
 from ...domain.data.image_message_content_dto import ImageMessageContentDTO
 from ...llm import CompletionArguments
 

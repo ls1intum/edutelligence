@@ -8,11 +8,13 @@ from langchain_core.runnables import Runnable
 from langsmith import traceable
 from pydantic import BaseModel
 
-from ...domain import PyrisMessage
+from ...common.pyris_message import PyrisMessage
 from ...domain.data.build_log_entry import BuildLogEntryDTO
 from ...domain.data.feedback_dto import FeedbackDTO
+from app.common.token_usage_dto import TokenUsageDTO
 from ...llm import CapabilityRequestHandler, RequirementList
 from ...llm import CompletionArguments
+from app.common.PipelineEnum import PipelineEnum
 from ...llm.langchain import IrisLangchainChatModel
 from ...pipeline import Pipeline
 from ...web.status.status_update import StatusCallback
@@ -40,6 +42,7 @@ class CodeFeedbackPipeline(Pipeline):
     callback: StatusCallback
     default_prompt: PromptTemplate
     output_parser: StrOutputParser
+    tokens: TokenUsageDTO
 
     def __init__(self, callback: Optional[StatusCallback] = None):
         super().__init__(implementation_id="code_feedback_pipeline_reference_impl")
@@ -141,4 +144,7 @@ class CodeFeedbackPipeline(Pipeline):
                 }
             )
         )
+        token_usage = self.llm.tokens
+        token_usage.pipeline = PipelineEnum.IRIS_CODE_FEEDBACK
+        self.tokens = token_usage
         return response.replace("{", "{{").replace("}", "}}")

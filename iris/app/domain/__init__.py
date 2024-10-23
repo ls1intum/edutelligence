@@ -12,6 +12,5 @@ from app.domain.chat.exercise_chat.exercise_chat_pipeline_execution_dto import (
 from app.domain.chat.course_chat.course_chat_pipeline_execution_dto import (
     CourseChatPipelineExecutionDTO,
 )
-from .pyris_message import PyrisMessage, IrisMessageRole
 from app.domain.data import image_message_content_dto
 from app.domain.feature_dto import FeatureDTO

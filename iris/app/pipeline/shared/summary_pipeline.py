@@ -45,6 +45,7 @@ class SummaryPipeline(Pipeline):
         )
         # Create the pipeline
         self.pipeline = self.prompt | self.llm | StrOutputParser()
+        self.tokens = []
 
     def __repr__(self):
         return f"{self.__class__.__name__}(llm={self.llm})"

@@ -7,8 +7,9 @@ from langchain_core.prompts import ChatPromptTemplate, PromptTemplate
 from langchain_core.runnables import Runnable
 from langsmith import traceable
 
-from app.domain import PyrisMessage
+from app.common.pyris_message import PyrisMessage
 from app.llm import CapabilityRequestHandler, RequirementList, CompletionArguments
+from app.common.PipelineEnum import PipelineEnum
 from app.llm.langchain import IrisLangchainChatModel
 from app.pipeline import Pipeline
 from app.pipeline.chat.output_models.output_models.selected_paragraphs import (
@@ -56,6 +57,7 @@ class RerankerPipeline(Pipeline):
         )
         logger.debug(self.output_parser.get_format_instructions())
         self.pipeline = self.llm | self.output_parser
+        self.tokens = []
 
     def __repr__(self):
         return f"{self.__class__.__name__}(llm={self.llm})"
@@ -108,4 +110,5 @@ class RerankerPipeline(Pipeline):
             prompt = self.default_prompt
 
         response = (prompt | self.pipeline).invoke(data)
+        self._append_tokens(self.llm.tokens, PipelineEnum.IRIS_RERANKER_PIPELINE)
         return response.selected_paragraphs

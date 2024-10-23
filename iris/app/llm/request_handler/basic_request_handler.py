@@ -1,6 +1,6 @@
 from typing import Optional
 
-from app.domain import PyrisMessage
+from app.common.pyris_message import PyrisMessage
 from app.domain.data.image_message_content_dto import ImageMessageContentDTO
 from app.llm.request_handler import RequestHandler
 from app.llm.completion_arguments import CompletionArguments

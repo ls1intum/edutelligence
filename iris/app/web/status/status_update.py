@@ -5,6 +5,7 @@ from sentry_sdk import capture_exception, capture_message
 import requests
 from abc import ABC
 
+from app.common.token_usage_dto import TokenUsageDTO
 from app.domain.status.competency_extraction_status_update_dto import (
     CompetencyExtractionStatusUpdateDTO,
 )
@@ -99,6 +100,7 @@ class StatusCallback(ABC):
         message: Optional[str] = None,
         final_result: Optional[str] = None,
         suggestions: Optional[List[str]] = None,
+        tokens: Optional[List[TokenUsageDTO]] = None,
         next_stage_message: Optional[str] = None,
         start_next_stage: bool = True,
     ):
@@ -110,6 +112,7 @@ class StatusCallback(ABC):
         self.stage.state = StageStateEnum.DONE
         self.stage.message = message
         self.status.result = final_result
+        self.status.tokens = tokens or self.status.tokens
         if hasattr(self.status, "suggestions"):
             self.status.suggestions = suggestions
         next_stage = self.get_next_stage()
@@ -121,7 +124,9 @@ class StatusCallback(ABC):
                 self.stage.state = StageStateEnum.IN_PROGRESS
         self.on_status_update()
 
-    def error(self, message: str, exception=None):
+    def error(
+        self, message: str, exception=None, tokens: Optional[List[TokenUsageDTO]] = None
+    ):
         """
         Transition the current stage to ERROR and update the status.
         Set all later stages to SKIPPED if an error occurs.
@@ -129,6 +134,7 @@ class StatusCallback(ABC):
         self.stage.state = StageStateEnum.ERROR
         self.stage.message = message
         self.status.result = None
+        self.status.tokens = tokens or self.status.tokens
         # Set all subsequent stages to SKIPPED if an error occurs
         rest_of_index = (
             self.current_stage_index + 1

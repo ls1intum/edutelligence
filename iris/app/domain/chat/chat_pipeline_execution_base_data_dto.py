@@ -3,7 +3,7 @@ from typing import List, Optional
 from pydantic import Field, BaseModel
 
 from app.domain import PipelineExecutionSettingsDTO
-from app.domain.pyris_message import PyrisMessage
+from app.common.pyris_message import PyrisMessage
 from app.domain.data.user_dto import UserDTO
 from app.domain.status.stage_dto import StageDTO
 

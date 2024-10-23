@@ -1,7 +1,7 @@
 from abc import ABCMeta, abstractmethod
 from pydantic import BaseModel
 
-from ...domain import PyrisMessage
+from ...common.pyris_message import PyrisMessage
 from ...llm import CompletionArguments
 from ...llm.capability import CapabilityList
 
