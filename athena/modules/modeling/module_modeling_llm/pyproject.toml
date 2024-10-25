@@ -18,7 +18,7 @@ langsmith = "0.1.106"
 
 [tool.poetry.group.dev.dependencies]
 pydantic = "1.10.17"
-prospector = "1.10.2"
+prospector = "^1.10.2"
 types-requests = "2.31.0.8"
 
 [tool.poetry.scripts]
