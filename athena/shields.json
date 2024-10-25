@@ -1,1 +1,1 @@
-{"athena-test1":{"label":"athena-test1.ase.cit.tum.de","status":"fix-coffee-module-path-in-docker-shell-script","color":"red"},"athena-test2":{"label":"athena-test2.ase.cit.tum.de","status":"feature/chain-of-thought","color":"red"}}
+{"athena-test1":{"label":"athena-test1.ase.cit.tum.de","status":"fix-coffee-module-path-in-docker-shell-script","color":"red"},"athena-test2":{"label":"athena-test2.ase.cit.tum.de","status":"feature/chain-of-thought","color":"green"}}
