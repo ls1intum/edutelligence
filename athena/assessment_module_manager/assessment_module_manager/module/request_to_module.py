@@ -33,6 +33,7 @@ async def find_module_by_name(module_name: str) -> Optional[Module]:
     return None
 
 
+# pylint: disable=too-many-positional-arguments
 async def request_to_module(module: Module, headers: dict, path: str, lms_url: str, data: Optional[dict], method: str) -> ModuleResponse:
     """
     Helper function to send a request to a module.
