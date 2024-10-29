@@ -2,8 +2,7 @@ from typing import Optional, List
 
 from athena.programming import Submission, Exercise, Feedback
 from module_programming_llm.config import Configuration
-from module_programming_llm.helpers.web_search import bulk_search
-from module_programming_llm.helpers.models import ModelConfigType
+from llm_core.models import ModelConfigType
 from module_programming_llm.prompts import GenerateFileSummary, SplitProblemStatementByFile, \
     SplitGradingInstructionsByFile, GenerateSuggestionsByFile, GenerateSuggestionsByFileOutput
 from module_programming_llm.prompts.filter_out_solution.filter_out_solution import FilterOutSolution

@@ -2,7 +2,7 @@ from abc import ABC
 
 from pydantic import BaseModel, Field
 
-from module_programming_llm.helpers.models import ModelConfigType, DefaultModelConfig
+from llm_core.models import ModelConfigType, DefaultModelConfig
 from athena import config_schema_provider
 from module_programming_llm.prompts import SplitProblemStatementByFile, SplitGradingInstructionsByFile, \
     GenerateSuggestionsByFile, GenerateFileSummary

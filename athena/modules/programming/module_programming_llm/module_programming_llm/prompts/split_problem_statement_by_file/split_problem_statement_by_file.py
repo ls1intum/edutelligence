@@ -9,9 +9,10 @@ from .prompt import system_message as prompt_system_message, human_message as pr
 from .split_problem_statement_by_file_input import SplitProblemStatementByFileInput
 from .split_problem_statement_by_file_output import FileProblemStatement, SplitProblemStatementByFileOutput
 from ..pipeline_step import PipelineStep
-from ...helpers.llm_utils import num_tokens_from_string, get_chat_prompt_with_formatting_instructions, \
-    num_tokens_from_prompt, predict_and_parse
-from ...helpers.models import ModelConfigType
+from llm_core.utils.llm_utils import num_tokens_from_string, get_chat_prompt_with_formatting_instructions, \
+    num_tokens_from_prompt
+from llm_core.utils.predict_and_parse import predict_and_parse
+from llm_core.models import ModelConfigType
 from ...helpers.utils import get_diff
 
 

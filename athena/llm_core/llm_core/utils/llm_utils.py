@@ -1,7 +1,7 @@
 from typing import Type, TypeVar, List
 from pydantic import BaseModel
 import tiktoken
-from langchain.chat_models import ChatOpenAI
+from langchain_openai import ChatOpenAI
 from langchain.base_language import BaseLanguageModel
 from langchain.prompts import (
     ChatPromptTemplate,
@@ -106,5 +106,6 @@ def get_chat_prompt_with_formatting_instructions(
     system_message_prompt = SystemMessagePromptTemplate.from_template(system_message + "\n{format_instructions}")
     system_message_prompt.prompt.partial_variables = {"format_instructions": output_parser.get_format_instructions()}
     system_message_prompt.prompt.input_variables.remove("format_instructions")
-    human_message_prompt = HumanMessagePromptTemplate.from_template(human_message + "\n\nJSON response following the provided schema:")
+    human_message_prompt = HumanMessagePromptTemplate.from_template(
+        human_message + "\n\nJSON response following the provided schema:")
     return ChatPromptTemplate.from_messages([system_message_prompt, human_message_prompt])

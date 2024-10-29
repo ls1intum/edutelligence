@@ -9,16 +9,17 @@ from module_programming_llm.prompts.pipeline_step import PipelineStep
 from .generate_file_summary_output import FileDescription
 from .prompt import system_message as prompt_system_message, human_message as prompt_human_message
 from pydantic import Field
-from module_programming_llm.helpers.llm_utils import (
+from llm_core.utils.llm_utils import (
     get_chat_prompt_with_formatting_instructions,
-    predict_and_parse, num_tokens_from_prompt,
+    num_tokens_from_prompt
 )
+from llm_core.utils.predict_and_parse import predict_and_parse
 from module_programming_llm.helpers.utils import (
     get_diff,
     load_files_from_repo,
     add_line_numbers
 )
-from ...helpers.models import ModelConfigType
+from llm_core.models import ModelConfigType
 
 
 class GenerateFileSummary(PipelineStep[GenerateFileSummaryInput, Optional[GenerateFileSummaryOutput]]):

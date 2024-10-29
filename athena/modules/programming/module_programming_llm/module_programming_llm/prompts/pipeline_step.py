@@ -2,7 +2,7 @@ from typing import Generic, TypeVar, Optional
 from abc import abstractmethod
 from pydantic import BaseModel, Field
 
-from module_programming_llm.helpers.models import ModelConfigType
+from llm_core.models import ModelConfigType
 
 # Generic types for input and output
 TInput = TypeVar('TInput')
