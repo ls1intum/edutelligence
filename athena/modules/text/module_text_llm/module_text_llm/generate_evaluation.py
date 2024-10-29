@@ -5,12 +5,13 @@ import json
 from athena.text import Exercise, Submission, Feedback
 from athena.logger import logger
 
-from module_text_llm.helpers.models import evaluation_model
-from module_text_llm.helpers.llm_utils import (
+from llm_core.models import evaluation_model
+from llm_core.utils.llm_utils import (
     get_chat_prompt_with_formatting_instructions,
     check_prompt_length_and_omit_features_if_necessary,
-    predict_and_parse
 )
+from llm_core.utils.predict_and_parse import predict_and_parse
+
 from module_text_llm.helpers.utils import add_sentence_numbers, get_line_range_from_index_range
 from module_text_llm.prompts.generate_evaluation import system_message, human_message
 

@@ -8,6 +8,13 @@ services:
     image: athena
     command: echo "Athena build succeeded, exiting (this is normal)"
 
+  llm_core:
+      build: ./llm_core
+      depends_on:
+        - athena
+      image: llm_core
+      command: echo "llm_core build succeeded, exiting (this is normal)"
+
   assessment_module_manager:
     build: ./assessment_module_manager
     depends_on:
@@ -30,6 +37,7 @@ services:
     build: modules/programming/module_programming_llm
     depends_on:
       - athena
+      - llm_core
     ports:
       - "5002:5002"
 
@@ -38,6 +46,7 @@ services:
     build: modules/text/module_text_llm
     depends_on:
       - athena
+      - llm_core
     ports:
       - "5003:5003"
 
@@ -70,5 +79,6 @@ services:
     build: modules/modeling/module_modeling_llm
     depends_on:
       - athena
+      - llm_core
     ports:
       - "5008:5008"

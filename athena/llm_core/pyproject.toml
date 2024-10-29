@@ -1,0 +1,29 @@
+[tool.poetry]
+name = "llm_core"
+version = "0.1.0"
+description = "SHared LLM module."
+authors = ["Felix Dietrich <felixtj.dietrich@tum.de>"]
+license = "MIT"
+
+[tool.poetry.dependencies]
+python = "3.11.*"
+athena = {path = "../athena", develop = true}
+langsmith = ">=0.1.0,<0.2.0"
+gitpython = "3.1.41"
+langchain = "0.2.15"
+langchain-community="0.2.10"
+langchain-openai = "0.1.23"
+nltk = "3.8.1"
+openai = "1.51.1"
+python-dotenv = "1.0.0"
+tiktoken = "0.7.0"
+
+[tool.poetry.scripts]
+module = "athena:run_module"
+
+[tool.poetry.group.dev.dependencies]
+prospector = "^1.10.2"
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"

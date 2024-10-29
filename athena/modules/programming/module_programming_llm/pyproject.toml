@@ -11,6 +11,7 @@ python = "3.11.*"
 # athena = { path = "../athena", develop = true }
 athena = { path = "../../../athena", develop = true }
 #athena = { git = "https://github.com/ls1intum/Athena.git", rev = "2da2d33", subdirectory = "athena"}
+llm_core = { path = "../../../llm_core", develop = true }
 openai = "1.40.0"
 langchain = "0.3.2"
 langchain-community="0.3.1"
@@ -34,7 +35,7 @@ faiss-gpu = {version = "^1.7.1", platform = "posix"}
 bs4 = "0.0.2"
 
 [tool.poetry.group.dev.dependencies]
-
+types-requests = "^2.31.0.8"
 pydantic = "2.7.4"
 prospector = "^1.10.2"
 

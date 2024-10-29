@@ -4,7 +4,7 @@ from langchain_core.output_parsers import PydanticOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 
 from athena.schemas.grading_criterion import GradingCriterion, StructuredGradingCriterion
-from module_modeling_llm.utils.predict_and_parse import predict_and_parse
+from llm_core.utils.predict_and_parse import predict_and_parse
 from module_modeling_llm.config import BasicApproachConfig
 from module_modeling_llm.models.exercise_model import ExerciseModel
 from module_modeling_llm.prompts.structured_grading_instructions_prompt import StructuredGradingInstructionsInputs

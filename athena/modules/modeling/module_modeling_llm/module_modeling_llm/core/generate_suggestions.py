@@ -6,7 +6,7 @@ from athena import emit_meta
 from module_modeling_llm.config import BasicApproachConfig
 from module_modeling_llm.models.assessment_model import AssessmentModel
 from module_modeling_llm.prompts.apollon_format_description import apollon_format_description
-from module_modeling_llm.utils.predict_and_parse import predict_and_parse
+from llm_core.utils.predict_and_parse import predict_and_parse
 from module_modeling_llm.prompts.graded_feedback_prompt import GradedFeedbackInputs
 from module_modeling_llm.models.exercise_model import ExerciseModel
 

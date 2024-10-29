@@ -104,6 +104,7 @@ def temporary_remote(remote_name: str, repo: Repo, remote_url: str) -> Iterator[
         repo.delete_remote(remote)
 
 
+# pylint: disable=too-many-positional-arguments
 def get_diff(src_repo: Repo, 
              dst_repo: Repo, 
              src_prefix: str = "a",

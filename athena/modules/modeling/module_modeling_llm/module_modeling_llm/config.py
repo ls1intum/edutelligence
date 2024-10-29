@@ -1,7 +1,7 @@
 from pydantic import BaseModel, Field
 
 from athena import config_schema_provider
-from module_modeling_llm.models import ModelConfigType, DefaultModelConfig
+from llm_core.models import ModelConfigType, DefaultModelConfig
 from module_modeling_llm.prompts import (
     graded_feedback_prompt,
     filter_feedback_prompt,

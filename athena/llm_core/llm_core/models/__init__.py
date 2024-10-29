@@ -2,7 +2,7 @@ import os
 from typing import Type, Union, List, Optional
 from langchain.base_language import BaseLanguageModel
 
-from module_text_llm.helpers.models.model_config import ModelConfig
+from llm_core.models.model_config import ModelConfig
 
 
 DefaultModelConfig: Type[ModelConfig]
@@ -14,7 +14,7 @@ evaluation_model: Optional[BaseLanguageModel] = None
 
 types: List[Type[ModelConfig]] = []
 try:
-    import module_text_llm.helpers.models.openai as openai_config
+    import llm_core.models.openai as openai_config
     types.append(openai_config.OpenAIModelConfig)
     if default_model_name in openai_config.available_models:
         DefaultModelConfig = openai_config.OpenAIModelConfig
