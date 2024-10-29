@@ -1,7 +1,7 @@
 import logging
 import time
 from datetime import datetime
-from typing import Literal, Any, Optional
+from typing import Literal, Optional
 
 from openai import (
     OpenAI,
@@ -96,7 +96,6 @@ def convert_to_iris_message(
 class OpenAIChatModel(ChatModel):
     model: str
     api_key: str
-    _client: OpenAI
 
     def chat(
         self, messages: list[PyrisMessage], arguments: CompletionArguments
@@ -106,6 +105,7 @@ class OpenAIChatModel(ChatModel):
         retries = 5
         backoff_factor = 2
         initial_delay = 1
+        client = self.get_client()
         # Maximum wait time: 1 + 2 + 4 + 8 + 16 = 31 seconds
 
         messages = convert_to_open_ai_messages(messages)
@@ -113,7 +113,7 @@ class OpenAIChatModel(ChatModel):
         for attempt in range(retries):
             try:
                 if arguments.response_format == "JSON":
-                    response = self._client.chat.completions.create(
+                    response = client.chat.completions.create(
                         model=self.model,
                         messages=messages,
                         temperature=arguments.temperature,
@@ -121,7 +121,7 @@ class OpenAIChatModel(ChatModel):
                         response_format=ResponseFormatJSONObject(type="json_object"),
                     )
                 else:
-                    response = self._client.chat.completions.create(
+                    response = client.chat.completions.create(
                         model=self.model,
                         messages=messages,
                         temperature=arguments.temperature,
@@ -153,8 +153,8 @@ class OpenAIChatModel(ChatModel):
 class DirectOpenAIChatModel(OpenAIChatModel):
     type: Literal["openai_chat"]
 
-    def model_post_init(self, __context: Any) -> None:
-        self._client = OpenAI(api_key=self.api_key)
+    def get_client(self) -> OpenAI:
+        return OpenAI(api_key=self.api_key)
 
     def __str__(self):
         return f"OpenAIChat('{self.model}')"
@@ -166,8 +166,8 @@ class AzureOpenAIChatModel(OpenAIChatModel):
     azure_deployment: str
     api_version: str
 
-    def model_post_init(self, __context: Any) -> None:
-        self._client = AzureOpenAI(
+    def get_client(self) -> OpenAI:
+        return AzureOpenAI(
             azure_endpoint=self.endpoint,
             azure_deployment=self.azure_deployment,
             api_version=self.api_version,
