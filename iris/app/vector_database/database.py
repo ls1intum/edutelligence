@@ -21,6 +21,7 @@ class VectorDatabase:
         self.lectures = init_lecture_schema(self.client)
 
     def __del__(self):
+        logger.info("Closing Weaviate client")
         self.client.close()
 
     def delete_collection(self, collection_name):
