@@ -1,29 +1,28 @@
 import subprocess
 import os
 import sys
+import shutil
 
 
 def main():
-    modules = [
-        "docs",
-        "log_viewer",
-        "assessment_module_manager",
-        "athena",  # the version in this commit only, can differ for modules
-        "modules/programming/module_example",
-        "modules/programming/module_programming_llm",
-        "modules/text/module_text_llm",
-        "modules/text/module_text_cofee",
-        "modules/programming/module_programming_themisml",
-        "modules/programming/module_programming_apted",
-        "modules/modeling/module_modeling_llm"
+    poetry_path = shutil.which("poetry")
+    if poetry_path is None:
+        print("Could not find poetry.")
+        sys.exit(1)
+    os.environ["POETRY_PATH"] = poetry_path
+
+    test_modules = [
+        "tests/integration_tests"
     ]
 
     success = True
 
-    if success:
-        sys.exit(0)
-    else:
-        sys.exit(-1)
+    for module in test_modules:
+        result = subprocess.run([poetry_path, "run", "pytest", module])
+        if result.returncode != 0:
+            success = False
+
+    sys.exit(0 if success else -1)
 
 
 if __name__ == "__main__":

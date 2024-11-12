@@ -10,7 +10,8 @@ from athena import env
 
 # SQLite specific configuration
 is_sqlite = env.DATABASE_URL.startswith("sqlite:///")
-if is_sqlite:
+is_in_memory = env.DATABASE_URL == "sqlite:///:memory:"
+if is_sqlite and not is_in_memory:
     connect_args = {"check_same_thread": False}
     # create the data directory if it does not exist
     data_dir = os.path.dirname(env.DATABASE_URL[10:])

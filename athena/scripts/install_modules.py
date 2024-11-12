@@ -15,6 +15,7 @@ def main():
         "modules/programming/module_programming_themisml",
         "modules/programming/module_programming_apted",
         "modules/modeling/module_modeling_llm",
+        "tests/integration_tests"
     ]
 
     success = True

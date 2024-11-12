@@ -1,0 +1,23 @@
+[tool.poetry]
+name = "integration_tests"
+version = "0.1.0"
+description = "Integration tests for Athena."
+authors = ["Felix Dietrich <felixtj.dietrich@tum.de>"]
+license = "MIT"
+
+[tool.poetry.dependencies]
+python = "3.11.*"
+pytest = "^7.0"
+pytest-mock = "^3.10"
+sqlalchemy = "^2.0"
+requests = "^2.31.0"  # if you need basic HTTP requests (alternative to httpx)
+llm_core = { path = "../../llm_core", develop = true }
+
+[tool.poetry.dev-dependencies]
+pydantic = "1.10.17"
+prospector = "^1.10.2"
+coverage = "^7.0"
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
