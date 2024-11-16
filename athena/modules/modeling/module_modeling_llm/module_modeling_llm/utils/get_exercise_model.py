@@ -7,9 +7,9 @@ def get_exercise_model(exercise: Exercise, submission: Submission) -> ExerciseMo
 
     serialized_example_solution = None
     if exercise.example_solution:
-        serialized_example_solution, _, _ = ApollonJSONTransformer.transform_json(exercise.example_solution)
+        serialized_example_solution, _, _, _ = ApollonJSONTransformer.transform_json(exercise.example_solution)
 
-    transformed_submission, element_id_mapping, diagram_type = ApollonJSONTransformer.transform_json(submission.model)
+    transformed_submission, element_id_mapping, diagram_type, id_type_mapping = ApollonJSONTransformer.transform_json(submission.model)
 
     return ExerciseModel(
         submission_id=submission.id,
@@ -22,6 +22,7 @@ def get_exercise_model(exercise: Exercise, submission: Submission) -> ExerciseMo
         submission_uml_type=diagram_type,
         transformed_example_solution=serialized_example_solution,
         element_id_mapping=element_id_mapping,
+        id_type_mapping=id_type_mapping
     )
 
     

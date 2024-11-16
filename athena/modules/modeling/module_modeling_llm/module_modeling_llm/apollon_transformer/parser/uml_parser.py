@@ -94,3 +94,11 @@ class UMLParser:
 
     def get_relations(self) -> List[Relation]:
         return self.relations
+    
+    def get_id_to_type_mapping(self) -> Dict[str, str]:
+        id_to_type = {}
+        for element in self.elements:
+            id_to_type[element.id] = element.type
+        for relation in self.relations:
+            id_to_type[relation.id] = relation.type
+        return id_to_type

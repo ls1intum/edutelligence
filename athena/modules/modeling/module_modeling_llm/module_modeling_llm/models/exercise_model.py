@@ -12,3 +12,4 @@ class ExerciseModel(BaseModel):
     submission_uml_type: str
     transformed_example_solution: Optional[str] = None
     element_id_mapping: dict[str, str]
+    id_type_mapping: dict[str, str]
