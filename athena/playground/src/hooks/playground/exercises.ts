@@ -19,7 +19,7 @@ export async function fetchExercises(dataMode: DataMode) {
  * @param options The react-query options.
  */
 export default function useExercises(
-  options: Omit<UseQueryOptions<Exercise[], Error, Exercise[]>, 'queryFn'> = {}
+  options: Omit<UseQueryOptions<Exercise[], Error, Exercise[]>, 'queryFn'> & { eager?: boolean } = {},
 ) {
   const { dataMode } = useBaseInfo();
 
