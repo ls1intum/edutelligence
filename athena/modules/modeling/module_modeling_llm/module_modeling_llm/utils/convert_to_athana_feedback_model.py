@@ -6,8 +6,8 @@ from module_modeling_llm.models.exercise_model import ExerciseModel
 
 
 def convert_to_athana_feedback_model(
-        feedback_result : AssessmentModel, 
-        exercise_model: ExerciseModel, 
+        feedback_result: AssessmentModel,
+        exercise_model: ExerciseModel,
         manual_structured_grading_instructions: Optional[List[GradingCriterion]] = None
     ) -> List[Feedback]:
 
@@ -19,10 +19,9 @@ def convert_to_athana_feedback_model(
 
     feedbacks = []
     for feedback in feedback_result.feedbacks:
-        # Each feedback has a grading_instruction_id. However we only want to have the grading_instruction_id in the final feedback that are associated with the manual structured grading instructions
         grading_instruction_id = (
-            feedback.grading_instruction_id 
-            if feedback.grading_instruction_id in grading_instruction_ids 
+            feedback.grading_instruction_id
+            if feedback.grading_instruction_id in grading_instruction_ids
             else None
         )
 
