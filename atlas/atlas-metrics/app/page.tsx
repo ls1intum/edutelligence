@@ -1,101 +1,108 @@
-import Image from "next/image";
+import {EndpointActivity} from "@/components/custom/endpoint-activity";
+
+// TODO: Replace this with actual data
+const endpointActivityChartData = [
+    {date: "2024-04-01", "api/call": 222, "api/test": 150},
+    {date: "2024-04-02", "api/call": 97, "api/test": 180},
+    {date: "2024-04-03", "api/call": 167, "api/test": 120},
+    {date: "2024-04-04", "api/call": 242, "api/test": 260},
+    {date: "2024-04-05", "api/call": 373, "api/test": 290},
+    {date: "2024-04-06", "api/call": 301, "api/test": 340},
+    {date: "2024-04-07", "api/call": 245, "api/test": 180},
+    {date: "2024-04-08", "api/call": 409, "api/test": 320},
+    {date: "2024-04-09", "api/call": 59, "api/test": 110},
+    {date: "2024-04-10", "api/call": 261, "api/test": 190},
+    {date: "2024-04-11", "api/call": 327, "api/test": 350},
+    {date: "2024-04-12", "api/call": 292, "api/test": 210},
+    {date: "2024-04-13", "api/call": 342, "api/test": 380},
+    {date: "2024-04-14", "api/call": 137, "api/test": 220},
+    {date: "2024-04-15", "api/call": 120, "api/test": 170},
+    {date: "2024-04-16", "api/call": 138, "api/test": 190},
+    {date: "2024-04-17", "api/call": 446, "api/test": 360},
+    {date: "2024-04-18", "api/call": 364, "api/test": 410},
+    {date: "2024-04-19", "api/call": 243, "api/test": 180},
+    {date: "2024-04-20", "api/call": 89, "api/test": 150},
+    {date: "2024-04-21", "api/call": 137, "api/test": 200},
+    {date: "2024-04-22", "api/call": 224, "api/test": 170},
+    {date: "2024-04-23", "api/call": 138, "api/test": 230},
+    {date: "2024-04-24", "api/call": 387, "api/test": 290},
+    {date: "2024-04-25", "api/call": 215, "api/test": 250},
+    {date: "2024-04-26", "api/call": 75, "api/test": 130},
+    {date: "2024-04-27", "api/call": 383, "api/test": 420},
+    {date: "2024-04-28", "api/call": 122, "api/test": 180},
+    {date: "2024-04-29", "api/call": 315, "api/test": 240},
+    {date: "2024-04-30", "api/call": 454, "api/test": 380},
+    {date: "2024-05-01", "api/call": 165, "api/test": 220},
+    {date: "2024-05-02", "api/call": 293, "api/test": 310},
+    {date: "2024-05-03", "api/call": 247, "api/test": 190},
+    {date: "2024-05-04", "api/call": 385, "api/test": 420},
+    {date: "2024-05-05", "api/call": 481, "api/test": 390},
+    {date: "2024-05-06", "api/call": 498, "api/test": 520},
+    {date: "2024-05-07", "api/call": 388, "api/test": 300},
+    {date: "2024-05-08", "api/call": 149, "api/test": 210},
+    {date: "2024-05-09", "api/call": 227, "api/test": 180},
+    {date: "2024-05-10", "api/call": 293, "api/test": 330},
+    {date: "2024-05-11", "api/call": 335, "api/test": 270},
+    {date: "2024-05-12", "api/call": 197, "api/test": 240},
+    {date: "2024-05-13", "api/call": 197, "api/test": 160},
+    {date: "2024-05-14", "api/call": 448, "api/test": 490},
+    {date: "2024-05-15", "api/call": 473, "api/test": 380},
+    {date: "2024-05-16", "api/call": 338, "api/test": 400},
+    {date: "2024-05-17", "api/call": 499, "api/test": 420},
+    {date: "2024-05-18", "api/call": 315, "api/test": 350},
+    {date: "2024-05-19", "api/call": 235, "api/test": 180},
+    {date: "2024-05-20", "api/call": 177, "api/test": 230},
+    {date: "2024-05-21", "api/call": 82, "api/test": 140},
+    {date: "2024-05-22", "api/call": 81, "api/test": 120},
+    {date: "2024-05-23", "api/call": 252, "api/test": 290},
+    {date: "2024-05-24", "api/call": 294, "api/test": 220},
+    {date: "2024-05-25", "api/call": 201, "api/test": 250},
+    {date: "2024-05-26", "api/call": 213, "api/test": 170},
+    {date: "2024-05-27", "api/call": 420, "api/test": 460},
+    {date: "2024-05-28", "api/call": 233, "api/test": 190},
+    {date: "2024-05-29", "api/call": 78, "api/test": 130},
+    {date: "2024-05-30", "api/call": 340, "api/test": 280},
+    {date: "2024-05-31", "api/call": 178, "api/test": 230},
+    {date: "2024-06-01", "api/call": 178, "api/test": 200},
+    {date: "2024-06-02", "api/call": 470, "api/test": 410},
+    {date: "2024-06-03", "api/call": 103, "api/test": 160},
+    {date: "2024-06-04", "api/call": 439, "api/test": 380},
+    {date: "2024-06-05", "api/call": 88, "api/test": 140},
+    {date: "2024-06-06", "api/call": 294, "api/test": 250},
+    {date: "2024-06-07", "api/call": 323, "api/test": 370},
+    {date: "2024-06-08", "api/call": 385, "api/test": 320},
+    {date: "2024-06-09", "api/call": 438, "api/test": 480},
+    {date: "2024-06-10", "api/call": 155, "api/test": 200},
+    {date: "2024-06-11", "api/call": 92, "api/test": 150},
+    {date: "2024-06-12", "api/call": 492, "api/test": 420},
+    {date: "2024-06-13", "api/call": 81, "api/test": 130},
+    {date: "2024-06-14", "api/call": 426, "api/test": 380},
+    {date: "2024-06-15", "api/call": 307, "api/test": 350},
+    {date: "2024-06-16", "api/call": 371, "api/test": 310},
+    {date: "2024-06-17", "api/call": 475, "api/test": 520},
+    {date: "2024-06-18", "api/call": 107, "api/test": 170},
+    {date: "2024-06-19", "api/call": 341, "api/test": 290},
+    {date: "2024-06-20", "api/call": 408, "api/test": 450},
+    {date: "2024-06-21", "api/call": 169, "api/test": 210},
+    {date: "2024-06-22", "api/call": 317, "api/test": 270},
+    {date: "2024-06-23", "api/call": 480, "api/test": 530},
+    {date: "2024-06-24", "api/call": 132, "api/test": 180},
+    {date: "2024-06-25", "api/call": 141, "api/test": 190},
+    {date: "2024-06-26", "api/call": 434, "api/test": 380},
+    {date: "2024-06-27", "api/call": 448, "api/test": 490},
+    {date: "2024-06-28", "api/call": 149, "api/test": 200},
+    {date: "2024-06-29", "api/call": 103, "api/test": 160},
+    {date: "2024-06-30", "api/call": 446, "api/test": 400},
+]
 
 export default function Home() {
   return (
-    <div className="grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20 font-[family-name:var(--font-geist-sans)]">
-      <main className="flex flex-col gap-8 row-start-2 items-center sm:items-start">
-        <Image
-          className="dark:invert"
-          src="https://nextjs.org/icons/next.svg"
-          alt="Next.js logo"
-          width={180}
-          height={38}
-          priority
-        />
-        <ol className="list-inside list-decimal text-sm text-center sm:text-left font-[family-name:var(--font-geist-mono)]">
-          <li className="mb-2">
-            Get started by editing{" "}
-            <code className="bg-black/[.05] dark:bg-white/[.06] px-1 py-0.5 rounded font-semibold">
-              app/page.tsx
-            </code>
-            .
-          </li>
-          <li>Save and see your changes instantly.</li>
-        </ol>
-
-        <div className="flex gap-4 items-center flex-col sm:flex-row">
-          <a
-            className="rounded-full border border-solid border-transparent transition-colors flex items-center justify-center bg-foreground text-background gap-2 hover:bg-[#383838] dark:hover:bg-[#ccc] text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="https://nextjs.org/icons/vercel.svg"
-              alt="Vercel logomark"
-              width={20}
-              height={20}
-            />
-            Deploy now
-          </a>
-          <a
-            className="rounded-full border border-solid border-black/[.08] dark:border-white/[.145] transition-colors flex items-center justify-center hover:bg-[#f2f2f2] dark:hover:bg-[#1a1a1a] hover:border-transparent text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 sm:min-w-44"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Read our docs
-          </a>
-        </div>
-      </main>
-      <footer className="row-start-3 flex gap-6 flex-wrap items-center justify-center">
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="https://nextjs.org/icons/file.svg"
-            alt="File icon"
-            width={16}
-            height={16}
-          />
-          Learn
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="https://nextjs.org/icons/window.svg"
-            alt="Window icon"
-            width={16}
-            height={16}
-          />
-          Examples
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="https://nextjs.org/icons/globe.svg"
-            alt="Globe icon"
-            width={16}
-            height={16}
-          />
-          Go to nextjs.org →
-        </a>
-      </footer>
+    <div className="text-center m-5">
+        <h1 className="scroll-m-20 text-4xl font-extrabold tracking-tight lg:text-5xl m-10">
+            Atlas Metrics
+        </h1>
+        <EndpointActivity title="Endpoint Activity" description="Recent activity for all endpoints of Atlas"
+                          chartData={endpointActivityChartData} />
     </div>
   );
 }
