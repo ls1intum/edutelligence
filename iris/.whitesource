@@ -1,7 +1,7 @@
 {
   "scanSettings": {
     "enableScan": true,
-    "baseBranches": ["develop"],
+    "baseBranches": ["main"],
     "scanDependabotPR": false
   },
   "checkRunSettings": {
