@@ -1,7 +1,8 @@
 import { EndpointActivity } from "@/components/custom/endpoint-activity";
+import applicationContainer from "@/app/server/applicationContainer";
 
 // TODO: Replace this with actual data
-const endpointActivityChartData = [
+const endpointActivityChartDataMocked = [
   { date: "2024-04-01", "api/call": 222, "api/test": 150 },
   { date: "2024-04-02", "api/call": 97, "api/test": 180 },
   { date: "2024-04-03", "api/call": 167, "api/test": 120 },
@@ -95,7 +96,11 @@ const endpointActivityChartData = [
   { date: "2024-06-30", "api/call": 446, "api/test": 400 },
 ];
 
-export default function Home() {
+export default async function Home() {
+
+  const metricsService = applicationContainer.getMetricsService();
+  const endpointActivityChartData = await metricsService.getEndpointActivityByDayForChart("atlas");
+
   return (
     <div className="m-5 text-center">
       <h1 className="m-10 scroll-m-20 text-4xl font-extrabold tracking-tight lg:text-5xl">
@@ -104,7 +109,7 @@ export default function Home() {
       <EndpointActivity
         title="Endpoint Activity"
         description="Recent activity for all endpoints of Atlas"
-        chartData={endpointActivityChartData}
+        chartData={endpointActivityChartDataMocked}
       />
     </div>
   );

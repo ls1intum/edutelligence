@@ -21,18 +21,13 @@ import {
 } from "@/components/ui/select";
 import { generateColor } from "@/lib/utils";
 
-interface ChartDataItem {
-  date: string;
-  [key: string]: number | string;
-}
-
 interface EndpointActivityProps {
   title: string;
   description: string;
-  chartData: ChartDataItem[];
+  chartData: ChartDataItemDAO[];
 }
 
-export function generateChartConfig(chartData: ChartDataItem[]): ChartConfig {
+export function generateChartConfig(chartData: ChartDataItemDAO[]): ChartConfig {
   const endpoints = Object.keys(chartData[0]).filter((key) => key !== "date");
   const chartConfig: ChartConfig = {};
 
