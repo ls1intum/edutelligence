@@ -1,5 +1,9 @@
 import { EndpointActivity } from "@/components/custom/endpoint-activity";
 import applicationContainer from "@/app/server/applicationContainer";
+import {PieChartDonut} from "@/components/custom/pie-chart-donut";
+import {Menu} from "@/components/custom/menu";
+import {Header} from "@/components/custom/header";
+import {Footer} from "@/components/custom/footer";
 
 // TODO: Replace this with actual data
 const endpointActivityChartDataMocked = [
@@ -96,21 +100,32 @@ const endpointActivityChartDataMocked = [
   { date: "2024-06-30", "api/call": 446, "api/test": 400 },
 ];
 
+const pieChartDataMock = [
+  { label: "GET", value: 275 },
+  { label: "POST", value: 275 },
+]
+
 export default async function Home() {
 
   const metricsService = applicationContainer.getMetricsService();
   const endpointActivityChartData = await metricsService.getEndpointActivityByDayForChart("atlas");
 
   return (
-    <div className="m-5 text-center">
-      <h1 className="m-10 scroll-m-20 text-4xl font-extrabold tracking-tight lg:text-5xl">
-        Atlas Metrics
-      </h1>
-      <EndpointActivity
-        title="Endpoint Activity"
-        description="Recent activity for all endpoints of Atlas"
-        chartData={endpointActivityChartDataMocked}
-      />
-    </div>
+        <div className="m-5 text-center min-h-screen">
+          <Header/>
+          <Menu />
+          <div className="pb-5">
+            <EndpointActivity
+                title="Endpoint Activity"
+                description="Recent activity for all endpoints of Atlas"
+                chartData={endpointActivityChartDataMocked}
+            />
+          </div>
+          <div className="grid grid-cols-2 gap-5 pb-10">
+            <PieChartDonut title="Activity by Type" description="Activity grouped by the type of endpoints" label="Calls" chartData={pieChartDataMock}/>
+            <PieChartDonut title="Activity by Category" description="Activity grouped by data retrieval or injection" label="Calls" chartData={pieChartDataMock}/>
+          </div>
+          <Footer/>
+        </div>
   );
 }

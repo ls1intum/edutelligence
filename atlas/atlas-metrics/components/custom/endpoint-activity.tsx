@@ -12,13 +12,6 @@ import {
   ChartTooltip,
   ChartTooltipContent,
 } from "@/components/ui/chart";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { generateColor } from "@/lib/utils";
 
 interface EndpointActivityProps {
@@ -27,13 +20,13 @@ interface EndpointActivityProps {
   chartData: ChartDataItemDAO[];
 }
 
-export function generateChartConfig(chartData: ChartDataItemDAO[]): ChartConfig {
+function generateChartConfig(chartData: ChartDataItemDAO[]): ChartConfig {
   const endpoints = Object.keys(chartData[0]).filter((key) => key !== "date");
   const chartConfig: ChartConfig = {};
 
   endpoints.forEach((endpoint, index) => {
     chartConfig[endpoint] = {
-      label: endpoint.charAt(0).toUpperCase() + endpoint.slice(1),
+      label: endpoint,
       color: generateColor(index),
     };
   });
@@ -42,53 +35,22 @@ export function generateChartConfig(chartData: ChartDataItemDAO[]): ChartConfig 
 }
 
 export function EndpointActivity({ title, description, chartData }: EndpointActivityProps) {
-  const [timeRange, setTimeRange] = React.useState("90d");
-
-  const filteredData = chartData.filter((item) => {
-    const date = new Date(item.date);
-    const referenceDate = new Date("2024-06-30");
-    let daysToSubtract = 90;
-    if (timeRange === "30d") {
-      daysToSubtract = 30;
-    } else if (timeRange === "7d") {
-      daysToSubtract = 7;
-    }
-    const startDate = new Date(referenceDate);
-    startDate.setDate(startDate.getDate() - daysToSubtract);
-    return date >= startDate;
-  });
 
   const endpoints = Object.keys(chartData[0]).filter((key) => key !== "date");
 
   return (
     <Card>
-      <CardHeader className="flex items-center gap-2 space-y-0 border-b py-5 sm:flex-row">
+      <CardHeader className="flex items-center gap-2 space-y-0 py-5 sm:flex-row">
         <div className="grid flex-1 gap-1 text-center sm:text-left">
           <CardTitle>{title}</CardTitle>
           <CardDescription>{description}</CardDescription>
         </div>
-        <Select value={timeRange} onValueChange={setTimeRange}>
-          <SelectTrigger className="w-[160px] rounded-lg sm:ml-auto" aria-label="Select a value">
-            <SelectValue placeholder="Last 3 months" />
-          </SelectTrigger>
-          <SelectContent className="rounded-xl">
-            <SelectItem value="90d" className="rounded-lg">
-              Last 3 months
-            </SelectItem>
-            <SelectItem value="30d" className="rounded-lg">
-              Last 30 days
-            </SelectItem>
-            <SelectItem value="7d" className="rounded-lg">
-              Last 7 days
-            </SelectItem>
-          </SelectContent>
-        </Select>
       </CardHeader>
       <CardContent className="px-2 pt-4 sm:px-6 sm:pt-6">
         <ChartContainer
           config={generateChartConfig(chartData)}
           className="aspect-auto h-[250px] w-full">
-          <AreaChart data={filteredData}>
+          <AreaChart data={chartData}>
             <defs>
               {endpoints.map((endpoint, index) => {
                 const color = generateColor(index);
