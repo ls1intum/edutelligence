@@ -1,5 +1,4 @@
-import {Button} from "@/components/ui/button";
-import Link from "next/link";
+import {AuthButton} from "@/components/custom/auth-button";
 
 export function Header() {
 
@@ -9,9 +8,7 @@ export function Header() {
                 <h1 className="justify-self-start scroll-m-20 text-4xl font-extrabold tracking-tight lg:text-5xl">
                     Atlas Metrics
                 </h1>
-                <Button asChild>
-                    <Link href="/login">Login</Link>
-                </Button>
+                <AuthButton />
             </div>
         </header>
     )
