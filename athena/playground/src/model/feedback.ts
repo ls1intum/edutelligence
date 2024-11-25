@@ -40,6 +40,10 @@ export type ModelingFeedback = FeedbackBase & {
 
 export type Feedback = TextFeedback | ProgrammingFeedback | ModelingFeedback;
 
+export type CategorizedFeedback = {
+  [key: string]: Feedback[];
+};
+
 /**
  * Returns the formatted reference of a given feedback. This can be a line range or an element ID depending on the
  * exercise type.

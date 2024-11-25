@@ -1,3 +1,5 @@
+import { Submission } from "@/model/submission";
+
 export type ExerciseType = "text" | "programming" | "modeling";
 
 export type StructuredGradingInstruction = {
@@ -25,6 +27,7 @@ type ExerciseBase = {
   grading_instructions?: string;
   grading_criteria?: GradingCriteria[];
   problem_statement?: string;
+  submissions?: Submission[]; // Playground only
   meta: {
     [key: string]: any;
   };
