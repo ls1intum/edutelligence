@@ -34,6 +34,7 @@ class IncludedInOverallScore(str, Enum):
 
 class ExerciseWithSubmissionsDTO(BaseModel):
     id: int = Field(alias="id")
+    url: Optional[str] = Field(alias="url", default=None)
     title: str = Field(alias="title")
     type: ExerciseType = Field(alias="type")
     mode: ExerciseMode = Field(alias="mode")

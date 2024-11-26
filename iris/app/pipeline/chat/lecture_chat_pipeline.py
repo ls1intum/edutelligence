@@ -10,7 +10,7 @@ from langchain_core.runnables import Runnable
 from langsmith import traceable
 
 from ..shared.citation_pipeline import CitationPipeline
-from ...common import convert_iris_message_to_langchain_message
+from ...common.message_converters import convert_iris_message_to_langchain_message
 from ...common.pyris_message import PyrisMessage
 from ...domain.chat.lecture_chat.lecture_chat_pipeline_execution_dto import (
     LectureChatPipelineExecutionDTO,

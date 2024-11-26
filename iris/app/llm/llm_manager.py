@@ -1,6 +1,7 @@
 import os
+from typing import Annotated
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Discriminator
 
 import yaml
 
@@ -15,7 +16,7 @@ from ..llm.external import LanguageModel, AnyLLM
 
 # Small workaround to get pydantic discriminators working
 class LlmList(BaseModel):
-    llms: list[AnyLLM] = Field(discriminator="type")
+    llms: list[Annotated[AnyLLM, Discriminator("type")]]
 
 
 class LlmManager(metaclass=Singleton):
@@ -39,7 +40,7 @@ class LlmManager(metaclass=Singleton):
         with open(path, "r") as file:
             loaded_llms = yaml.safe_load(file)
 
-        self.entries = LlmList.parse_obj({"llms": loaded_llms}).llms
+        self.entries = LlmList.model_validate({"llms": loaded_llms}).llms
 
     def get_llms_sorted_by_capabilities_score(
         self, requirements: RequirementList, invert_cost: bool = False

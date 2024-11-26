@@ -5,9 +5,9 @@ from langsmith import traceable
 from weaviate import WeaviateClient
 from weaviate.classes.query import Filter
 
-from ..common import convert_iris_message_to_langchain_message
 from app.common.token_usage_dto import TokenUsageDTO
 from app.common.PipelineEnum import PipelineEnum
+from ..common.message_converters import convert_iris_message_to_langchain_message
 from ..common.pyris_message import PyrisMessage
 from ..llm.langchain import IrisLangchainChatModel
 from ..pipeline import Pipeline

@@ -32,7 +32,7 @@ class Settings(BaseModel):
         try:
             with open(file_path, "r") as file:
                 settings_file = yaml.safe_load(file)
-            return cls.parse_obj(settings_file)
+            return cls.model_validate(settings_file)
         except FileNotFoundError as e:
             raise FileNotFoundError(
                 f"Configuration file not found at {file_path}."

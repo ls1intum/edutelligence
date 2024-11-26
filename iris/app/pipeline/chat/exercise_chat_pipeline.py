@@ -20,6 +20,9 @@ from ..prompts.iris_exercise_chat_prompts import (
     chat_history_system_prompt,
     final_system_prompt,
     guide_system_prompt,
+    no_chat_history_system_prompt,
+    progress_stalled_system_prompt,
+    build_failed_system_prompt,
 )
 from ..shared.citation_pipeline import CitationPipeline
 from ..shared.reranker_pipeline import RerankerPipeline
@@ -54,8 +57,15 @@ class ExerciseChatPipeline(Pipeline):
     suggestion_pipeline: InteractionSuggestionPipeline
     code_feedback_pipeline: CodeFeedbackPipeline
     prompt: ChatPromptTemplate
+    variant: str
+    event: str | None
 
-    def __init__(self, callback: ExerciseChatStatusCallback):
+    def __init__(
+        self,
+        callback: ExerciseChatStatusCallback,
+        variant: str = "default",
+        event: str | None = None,
+    ):
         super().__init__(implementation_id="exercise_chat_pipeline")
         # Set the langchain chat model
         completion_args = CompletionArguments(temperature=0, max_tokens=2000)
@@ -68,8 +78,9 @@ class ExerciseChatPipeline(Pipeline):
             ),
             completion_args=completion_args,
         )
-
+        self.variant = variant
         self.callback = callback
+        self.event = event
 
         # Create the pipelines
         self.db = VectorDatabase()
@@ -164,7 +175,9 @@ class ExerciseChatPipeline(Pipeline):
         )
         logger.info("Running exercise chat pipeline...")
         history: List[PyrisMessage] = dto.chat_history[:-1]
-        query: PyrisMessage = dto.chat_history[-1]
+        query: PyrisMessage | None = None
+        if history:
+            query = dto.chat_history[-1]
 
         submission: ProgrammingSubmissionDTO = dto.submission
         build_logs: List[BuildLogEntryDTO] = []
@@ -266,7 +279,18 @@ class ExerciseChatPipeline(Pipeline):
         self._add_conversation_to_prompt(history, query)
 
         # Add the final message to the prompt and run the pipeline
-        self.prompt += SystemMessagePromptTemplate.from_template(final_system_prompt)
+        if self.event == "progress_stalled":
+            self.prompt += SystemMessagePromptTemplate.from_template(
+                progress_stalled_system_prompt
+            )
+        elif self.event == "build_failed":
+            self.prompt += SystemMessagePromptTemplate.from_template(
+                build_failed_system_prompt
+            )
+        else:
+            self.prompt += SystemMessagePromptTemplate.from_template(
+                final_system_prompt
+            )
         prompt_val = self.prompt.format_messages(
             exercise_title=exercise_title,
             problem_statement=problem_statement,
@@ -334,10 +358,15 @@ class ExerciseChatPipeline(Pipeline):
                 chat_history_system_prompt
             )
             self.prompt += chat_history_messages
-        self.prompt += SystemMessagePromptTemplate.from_template(
-            "Consider the student's newest and latest input:"
-        )
-        self.prompt += convert_iris_message_to_langchain_message(user_question)
+        else:
+            self.prompt += SystemMessagePromptTemplate.from_template(
+                no_chat_history_system_prompt
+            )
+        if user_question:
+            self.prompt += SystemMessagePromptTemplate.from_template(
+                "Consider the student's newest and latest input:"
+            )
+            self.prompt += convert_iris_message_to_langchain_message(user_question)
 
     def _add_exercise_context_to_prompt(
         self,

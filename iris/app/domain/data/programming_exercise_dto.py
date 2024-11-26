@@ -30,3 +30,9 @@ class ProgrammingExerciseDTO(BaseModel):
     problem_statement: str = Field(alias="problemStatement", default=None)
     start_date: Optional[datetime] = Field(alias="startDate", default=None)
     end_date: Optional[datetime] = Field(alias="endDate", default=None)
+    max_points: Optional[float] = Field(alias="maxPoints", default=None)
+    recent_changes: Optional[str] = Field(
+        alias="recentChanges",
+        default=None,
+        description="Git diff of the recent changes",
+    )

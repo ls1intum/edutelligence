@@ -1,6 +1,6 @@
 from datetime import datetime
 from enum import Enum
-from typing import Optional
+from typing import Optional, List
 
 from pydantic import BaseModel, Field
 from pydantic.v1 import validator
@@ -22,6 +22,7 @@ class CompetencyDTO(BaseModel):
     taxonomy: Optional[CompetencyTaxonomy] = None
     soft_due_date: Optional[datetime] = Field(default=None, alias="softDueDate")
     optional: Optional[bool] = None
+    exercise_list: Optional[List[int]] = Field(default=[], alias="exerciseList")
 
 
 class Competency(BaseModel):

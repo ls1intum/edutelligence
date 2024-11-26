@@ -1,7 +1,12 @@
 import base64
 from datetime import datetime
-from typing import Literal, Any, Optional
-from pydantic import Field
+from typing import Literal, Any, Optional, Sequence, Union, Dict, Type, Callable
+
+from langchain_core.language_models import LanguageModelInput
+from langchain_core.messages import BaseMessage
+from langchain_core.runnables import Runnable
+from langchain_core.tools import BaseTool
+from pydantic import Field, BaseModel
 
 from ollama import Client, Message
 
@@ -83,6 +88,7 @@ class OllamaModel(
     ChatModel,
     EmbeddingModel,
 ):
+
     type: Literal["ollama"]
     model: str
     host: str
@@ -129,6 +135,30 @@ class OllamaModel(
             model=self.model, prompt=text, options=self.options
         )
         return list(response)
+
+    """Bind tools to the language model for function calling capabilities.
+
+    Note: Tool binding is currently not supported in Ollama models. This feature
+    is only available for OpenAI models.
+
+    Args:
+        tools: A sequence of tools to bind to the model.
+
+    Returns:
+        A runnable that can process inputs with the bound tools.
+
+    Raises:
+        NotImplementedError: Always raised as Ollama does not support tool binding.
+    """
+
+    # TODO: Implement tool binding support for Ollama models
+    def bind_tools(
+        self,
+        tools: Sequence[Union[Dict[str, Any], Type[BaseModel], Callable, BaseTool]],
+    ) -> Runnable[LanguageModelInput, BaseMessage]:
+        raise NotImplementedError(
+            f"The LLM {self.__str__()} does not support binding tools"
+        )
 
     def __str__(self):
         return f"Ollama('{self.model}')"

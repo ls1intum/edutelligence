@@ -1,19 +1,25 @@
 import logging
-from typing import List, Optional, Any
+from logging import Logger
+from typing import List, Optional, Any, Sequence, Union, Dict, Type, Callable
 
 from langchain_core.callbacks import CallbackManagerForLLMRun
+from langchain_core.language_models import LanguageModelInput
 from langchain_core.language_models.chat_models import (
     BaseChatModel,
 )
 from langchain_core.messages import BaseMessage
-from langchain_core.outputs import ChatResult, ChatGeneration
+from langchain_core.outputs import ChatResult
+from langchain_core.outputs.chat_generation import ChatGeneration
+from langchain_core.runnables import Runnable
+from langchain_core.tools import BaseTool
+from pydantic import BaseModel
 
 from app.common.PipelineEnum import PipelineEnum
-from ...common import (
-    convert_iris_message_to_langchain_message,
-    convert_langchain_message_to_iris_message,
-)
 from app.common.token_usage_dto import TokenUsageDTO
+from ...common.message_converters import (
+    convert_langchain_message_to_iris_message,
+    convert_iris_message_to_langchain_message,
+)
 from ...llm import RequestHandler, CompletionArguments
 
 
@@ -23,24 +29,51 @@ class IrisLangchainChatModel(BaseChatModel):
     request_handler: RequestHandler
     completion_args: CompletionArguments
     tokens: TokenUsageDTO = None
-    logger = logging.getLogger(__name__)
+    logger: Logger = logging.getLogger(__name__)
 
     def __init__(
         self,
         request_handler: RequestHandler,
         completion_args: Optional[CompletionArguments] = CompletionArguments(stop=None),
-        **kwargs: Any
+        **kwargs: Any,
     ) -> None:
         super().__init__(
             request_handler=request_handler, completion_args=completion_args, **kwargs
         )
+
+    def bind_tools(
+        self,
+        tools: Sequence[Union[Dict[str, Any], Type[BaseModel], Callable, BaseTool]],
+        **kwargs: Any,
+    ) -> Runnable[LanguageModelInput, BaseMessage]:
+        """Bind a sequence of tools to the request handler for function calling support.
+
+        Args:
+            tools: Sequence of tools that can be one of:
+                  - Dict describing the tool
+                  - Pydantic BaseModel
+                  - Callable function
+                  - BaseTool instance
+            **kwargs: Additional arguments passed to the request handler
+
+        Returns:
+            self: Returns this instance as a Runnable
+
+        Raises:
+            ValueError: If tools sequence is empty or contains invalid tool types
+        """
+        if not tools:
+            raise ValueError("At least one tool must be provided")
+
+        self.request_handler.bind_tools(tools)
+        return self
 
     def _generate(
         self,
         messages: List[BaseMessage],
         stop: Optional[List[str]] = None,
         run_manager: Optional[CallbackManagerForLLMRun] = None,
-        **kwargs: Any
+        **kwargs: Any,
     ) -> ChatResult:
         iris_messages = [convert_langchain_message_to_iris_message(m) for m in messages]
         self.completion_args.stop = stop

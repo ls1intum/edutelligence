@@ -61,8 +61,7 @@ class StatusCallback(ABC):
                     "Content-Type": "application/json",
                     "Authorization": f"Bearer {self.run_id}",
                 },
-                # FIXME: Deprecated. Replace dict with model_dump
-                json=self.status.dict(by_alias=True),
+                json=self.status.model_dump(by_alias=True),
             ).raise_for_status()
         except requests.exceptions.RequestException as e:
             logger.error(f"Error sending status update: {e}")
@@ -134,6 +133,7 @@ class StatusCallback(ABC):
         self.stage.state = StageStateEnum.ERROR
         self.stage.message = message
         self.status.result = None
+        self.status.suggestions = None
         self.status.tokens = tokens or self.status.tokens
         # Set all subsequent stages to SKIPPED if an error occurs
         rest_of_index = (
@@ -164,7 +164,7 @@ class StatusCallback(ABC):
         self.stage.state = StageStateEnum.SKIPPED
         self.stage.message = message
         self.status.result = None
-        self.stage.suggestions = None
+        self.status.suggestions = None
         next_stage = self.get_next_stage()
         if next_stage is not None:
             self.stage = next_stage
@@ -206,17 +206,7 @@ class ExerciseChatStatusCallback(StatusCallback):
             StageDTO(
                 weight=30,
                 state=StageStateEnum.NOT_STARTED,
-                name="Code and Lecture Context Lookup",
-            ),
-            StageDTO(
-                weight=60,
-                state=StageStateEnum.NOT_STARTED,
-                name="Response Generation",
-            ),
-            StageDTO(
-                weight=20,
-                state=StageStateEnum.NOT_STARTED,
-                name="Response Refining",
+                name="Checking available information",
             ),
             StageDTO(
                 weight=10, state=StageStateEnum.NOT_STARTED, name="Creating suggestions"
