@@ -1,10 +1,10 @@
 "use client"
 
 import {ColumnDef} from "@tanstack/table-core";
-import {RawEndpointActivityDAO} from "@/app/domain/dao/endpointActivity";
+import {EndpointActivityDAO} from "@/app/domain/dao/endpointActivity";
 import {DataTableColumnHeader} from "@/components/custom/data-table-column-header";
 
-export const endpointActivityColumns: ColumnDef<RawEndpointActivityDAO>[] = [
+export const endpointActivityColumns: ColumnDef<EndpointActivityDAO>[] = [
     {
         accessorKey: "date",
         header: ({ column }) => (
