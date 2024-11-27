@@ -112,7 +112,6 @@ export default function Dashboard() {
 
     return (
         <div className="m-5 text-center min-h-screen">
-            <Header/>
             <Menu />
             <div className="pb-5">
                 <EndpointActivity
@@ -125,7 +124,6 @@ export default function Dashboard() {
                 <PieChartDonut title="Activity by Type" description="Activity grouped by the type of endpoints" label="Calls" chartData={pieChartDataMock}/>
                 <PieChartDonut title="Activity by Category" description="Activity grouped by data retrieval or injection" label="Calls" chartData={pieChartDataMock}/>
             </div>
-            <Footer/>
         </div>
     );
 }

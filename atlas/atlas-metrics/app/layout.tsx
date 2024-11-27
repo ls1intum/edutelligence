@@ -3,6 +3,8 @@ import localFont from "next/font/local";
 import "./globals.css";
 import {Session} from "next-auth";
 import NextAuthProvider from "@/app/next-auth-provider";
+import {Header} from "@/components/custom/header";
+import {Footer} from "@/components/custom/footer";
 
 const geistSans = localFont({
   src: "./fonts/GeistVF.woff",
@@ -29,7 +31,13 @@ export default function RootLayout({
     <html lang="en">
       <body className={`${geistSans.variable} ${geistMono.variable} antialiased`}>
       <NextAuthProvider session={session}>
+          <div className="m-5">
+              <Header/>
+          </div>
         {children}
+          <div className="m-5">
+              <Footer/>
+          </div>
       </NextAuthProvider>
       </body>
     </html>
