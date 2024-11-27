@@ -13,14 +13,40 @@ import {
     PopoverContent,
     PopoverTrigger,
 } from "@/components/ui/popover"
+import {useRouter, useSearchParams} from "next/navigation";
 
 export function DateRangePicker({
                                         className,
                                     }: React.HTMLAttributes<HTMLDivElement>) {
+
+    const router = useRouter();
+
+    const setQueryParams = (from?: Date, to?: Date) => {
+        const params = new URLSearchParams(window.location.search);
+        if (from) {
+            params.set('from', from.toISOString());
+        }
+        if (to) {
+            params.set('to', to.toISOString());
+        }
+        router.push(`${window.location.pathname}?${params.toString()}`);
+    };
+
+    const searchParams = useSearchParams();
+    const initFrom = searchParams.get('from') ? new Date(searchParams.get('from') as string) : subMonths(new Date(), 1);
+    const initTo = searchParams.get('to') ? new Date(searchParams.get('to') as string) : new Date();
+
     const [date, setDate] = React.useState<DateRange | undefined>({
-        from: subMonths(new Date(), 1),
-        to: new Date(),
+        from: initFrom,
+        to: initTo,
     })
+
+    const handleSelect = (range: DateRange | undefined) => {
+        setDate(range);
+        if (range?.from && range?.to) {
+            setQueryParams(range.from, range.to);
+        }
+    };
 
     return (
         <div className={cn("grid gap-2", className)}>
@@ -55,7 +81,7 @@ export function DateRangePicker({
                         mode="range"
                         defaultMonth={date?.from}
                         selected={date}
-                        onSelect={setDate}
+                        onSelect={handleSelect}
                         numberOfMonths={2}
                     />
                 </PopoverContent>
