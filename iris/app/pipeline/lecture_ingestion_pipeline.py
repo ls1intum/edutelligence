@@ -74,6 +74,7 @@ def create_page_data(
             LectureSchema.LECTURE_NAME.value: lecture_unit_dto.lecture_name,
             LectureSchema.LECTURE_UNIT_ID.value: lecture_unit_dto.lecture_unit_id,
             LectureSchema.LECTURE_UNIT_NAME.value: lecture_unit_dto.lecture_unit_name,
+            LectureSchema.LECTURE_UNIT_LINK.value: lecture_unit_dto.lecture_unit_link,
             LectureSchema.COURSE_ID.value: lecture_unit_dto.course_id,
             LectureSchema.COURSE_NAME.value: lecture_unit_dto.course_name,
             LectureSchema.COURSE_DESCRIPTION.value: lecture_unit_dto.course_description,

@@ -47,7 +47,9 @@ def lecture_initial_prompt():
      questions about the lectures. To answer them the best way, relevant lecture content is provided to you with the
      student's question. If the context provided to you is not enough to formulate an answer to the student question
      you can simply ask the student to elaborate more on his question. Use only the parts of the context provided for
-     you that is relevant to the student's question. If the user greets you greet him back, and ask him how you can help
+     you that is relevant to the student's question. If the user greets you greet him back,
+      and ask him how you can help.
+     Always formulate your answer in the same language as the user's language.
      """
 
 
@@ -105,7 +107,7 @@ class LectureChatPipeline(Pipeline):
         retrieved_lecture_chunks = self.retriever(
             chat_history=history,
             student_query=query.contents[0].text_content,
-            result_limit=10,
+            result_limit=5,
             course_name=dto.course.name,
             course_id=dto.course.id,
             base_url=dto.settings.artemis_base_url,
