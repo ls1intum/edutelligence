@@ -43,7 +43,8 @@ def convert_to_athana_feedback_model(
             meta={},
             id=None,
             is_graded=False,
-            reference=reference
+            reference=reference,
+            element_ids=[reference_id] if reference_id else []
         ))
 
     return feedbacks
