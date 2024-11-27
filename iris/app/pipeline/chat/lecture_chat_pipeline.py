@@ -25,6 +25,7 @@ from ...llm import CompletionArguments
 from ...llm.langchain import IrisLangchainChatModel
 
 from ..pipeline import Pipeline
+from ...web.status.status_update import LectureChatCallback
 
 logger = logging.getLogger(__name__)
 
@@ -57,17 +58,28 @@ class LectureChatPipeline(Pipeline):
     llm: IrisLangchainChatModel
     pipeline: Runnable
     prompt: ChatPromptTemplate
+    callback: LectureChatCallback
 
-    def __init__(self):
+    def __init__(
+        self,
+        callback: LectureChatCallback,
+        dto: LectureChatPipelineExecutionDTO,
+        variant: str,
+    ):
         super().__init__(implementation_id="lecture_chat_pipeline")
         # Set the langchain chat model
         request_handler = CapabilityRequestHandler(
             requirements=RequirementList(
-                gpt_version_equivalent=3.5,
+                gpt_version_equivalent=4.5,
                 context_length=16385,
                 privacy_compliance=True,
             )
         )
+
+        self.callback = callback
+        self.dto = dto
+        self.variant = variant
+
         completion_args = CompletionArguments(temperature=0, max_tokens=2000)
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler, completion_args=completion_args
@@ -91,7 +103,6 @@ class LectureChatPipeline(Pipeline):
         Runs the pipeline
         :param dto:  execution data transfer object
         """
-
         self.prompt = ChatPromptTemplate.from_messages(
             [
                 ("system", lecture_initial_prompt()),
@@ -124,8 +135,17 @@ class LectureChatPipeline(Pipeline):
             )
             self.tokens.extend(self.citation_pipeline.tokens)
             logger.info(f"Response from lecture chat pipeline: {response}")
-            return response_with_citation
+            self.callback.done(
+                "Response created",
+                final_result=response_with_citation,
+                tokens=self.tokens,
+            )
         except Exception as e:
+            self.callback.error(
+                "Generating interaction suggestions failed.",
+                exception=e,
+                tokens=self.tokens,
+            )
             raise e
 
     def _add_conversation_to_prompt(

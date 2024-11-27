@@ -33,12 +33,26 @@ def init_lecture_schema(client: WeaviateClient) -> Collection:
     if client.collections.exists(LectureSchema.COLLECTION_NAME.value):
         collection = client.collections.get(LectureSchema.COLLECTION_NAME.value)
         properties = collection.config.get(simple=True).properties
+
+        # Check and add 'course_language' property if missing
         if not any(
-            property.__name__ == LectureSchema.LECTURE_UNIT_LINK.value
-            for property_found in properties
+            property.name == LectureSchema.COURSE_LANGUAGE.value
+            for property in collection.config.get(simple=False).properties
         ):
-            return collection
-        else:
+            collection.config.add_property(
+                Property(
+                    name=LectureSchema.COURSE_LANGUAGE.value,
+                    description="The language of the COURSE",
+                    data_type=DataType.TEXT,
+                    index_searchable=False,
+                )
+            )
+
+        # Check and add 'lecture_unit_link' property if missing
+        if not any(
+            property.name == LectureSchema.LECTURE_UNIT_LINK.value
+            for property in properties
+        ):
             collection.config.add_property(
                 Property(
                     name=LectureSchema.LECTURE_UNIT_LINK.value,
@@ -47,7 +61,9 @@ def init_lecture_schema(client: WeaviateClient) -> Collection:
                     index_searchable=False,
                 )
             )
+
         return collection
+
     return client.collections.create(
         name=LectureSchema.COLLECTION_NAME.value,
         vectorizer_config=Configure.Vectorizer.none(),
@@ -70,6 +86,12 @@ def init_lecture_schema(client: WeaviateClient) -> Collection:
             Property(
                 name=LectureSchema.COURSE_DESCRIPTION.value,
                 description="The description of the COURSE",
+                data_type=DataType.TEXT,
+                index_searchable=False,
+            ),
+            Property(
+                name=LectureSchema.COURSE_LANGUAGE.value,
+                description="The language of the COURSE",
                 data_type=DataType.TEXT,
                 index_searchable=False,
             ),

@@ -12,10 +12,15 @@ from app.domain import (
     CompetencyExtractionPipelineExecutionDTO,
 )
 from app.pipeline.chat.exercise_chat_agent_pipeline import ExerciseChatAgentPipeline
+from app.domain.chat.lecture_chat.lecture_chat_pipeline_execution_dto import (
+    LectureChatPipelineExecutionDTO,
+)
+from app.pipeline.chat.lecture_chat_pipeline import LectureChatPipeline
 from app.web.status.status_update import (
     ExerciseChatStatusCallback,
     CourseChatStatusCallback,
     CompetencyExtractionCallback,
+    LectureChatCallback,
 )
 from app.pipeline.chat.course_chat_pipeline import CourseChatPipeline
 from app.dependencies import TokenValidator
@@ -139,6 +144,34 @@ def run_text_exercise_chat_pipeline_worker(dto, variant):
         callback.error("Fatal error.", exception=e)
 
 
+def run_lecture_chat_pipeline_worker(dto, variant):
+    try:
+        callback = LectureChatCallback(
+            run_id=dto.settings.authentication_token,
+            base_url=dto.settings.artemis_base_url,
+            initial_stages=dto.initial_stages,
+        )
+        match variant:
+            case "default" | "lecture_chat_pipeline_reference_impl":
+                pipeline = LectureChatPipeline(
+                    callback=callback, dto=dto, variant=variant
+                )
+            case _:
+                raise ValueError(f"Unknown variant: {variant}")
+    except Exception as e:
+        logger.error(f"Error preparing lecture chat pipeline: {e}")
+        logger.error(traceback.format_exc())
+        capture_exception(e)
+        return
+
+    try:
+        pipeline(dto=dto)
+    except Exception as e:
+        logger.error(f"Error running lecture chat pipeline: {e}")
+        logger.error(traceback.format_exc())
+        callback.error("Fatal error.", exception=e)
+
+
 @router.post(
     "/text-exercise-chat/{variant}/run",
     status_code=status.HTTP_202_ACCEPTED,
@@ -148,6 +181,16 @@ def run_text_exercise_chat_pipeline(
     variant: str, dto: TextExerciseChatPipelineExecutionDTO
 ):
     thread = Thread(target=run_text_exercise_chat_pipeline_worker, args=(dto, variant))
+    thread.start()
+
+
+@router.post(
+    "/lecture-chat/{variant}/run",
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(TokenValidator())],
+)
+def run_lecture_chat_pipeline(variant: str, dto: LectureChatPipelineExecutionDTO):
+    thread = Thread(target=run_lecture_chat_pipeline_worker, args=(dto, variant))
     thread.start()
 
 
@@ -241,6 +284,14 @@ def get_pipeline(feature: str):
                     id="default",
                     name="Default Variant",
                     description="Default lecture ingestion variant.",
+                )
+            ]
+        case "LECTURE_CHAT":
+            return [
+                FeatureDTO(
+                    id="default",
+                    name="Default Variant",
+                    description="Default lecture chat variant.",
                 )
             ]
         case _:
