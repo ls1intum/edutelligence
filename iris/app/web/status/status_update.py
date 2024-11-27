@@ -125,6 +125,9 @@ class StatusCallback(ABC):
             if start_next_stage:
                 self.stage.state = StageStateEnum.IN_PROGRESS
         self.on_status_update()
+        self.status.result = None
+        if hasattr(self.status, "suggestions"):
+            self.status.suggestions = None
 
     def error(
         self, message: str, exception=None, tokens: Optional[List[TokenUsageDTO]] = None
