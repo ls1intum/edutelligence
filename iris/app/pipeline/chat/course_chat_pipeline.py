@@ -6,13 +6,13 @@ from datetime import datetime
 from typing import List, Optional, Union
 
 import pytz
-from langchain.agents import create_structured_chat_agent, AgentExecutor
-from langchain_core.output_parsers import StrOutputParser
+from langchain.agents import create_tool_calling_agent, AgentExecutor
+from langchain_core.messages import SystemMessage
+from langchain_core.output_parsers import JsonOutputParser
 from langchain_core.prompts import (
     ChatPromptTemplate,
 )
 from langchain_core.runnables import Runnable
-from langchain_core.tools import tool
 from langsmith import traceable
 from weaviate.collections.classes.filters import Filter
 
@@ -21,6 +21,7 @@ from .interaction_suggestion_pipeline import (
 )
 from .lecture_chat_pipeline import LectureChatPipeline
 from ..shared.citation_pipeline import CitationPipeline
+from ..shared.utils import generate_structured_tools_from_functions
 from ...common.message_converters import convert_iris_message_to_langchain_message
 from ...common.pyris_message import PyrisMessage
 from ...domain.data.metrics.competency_jol_dto import CompetencyJolDTO
@@ -30,7 +31,6 @@ from ..prompts.iris_course_chat_prompts import (
     tell_begin_agent_prompt,
     tell_chat_history_exists_prompt,
     tell_no_chat_history_prompt,
-    tell_format_reminder_prompt,
     tell_begin_agent_jol_prompt,
 )
 from ..prompts.iris_course_chat_prompts_elicit import (
@@ -38,7 +38,6 @@ from ..prompts.iris_course_chat_prompts_elicit import (
     elicit_begin_agent_prompt,
     elicit_chat_history_exists_prompt,
     elicit_no_chat_history_prompt,
-    elicit_format_reminder_prompt,
     elicit_begin_agent_jol_prompt,
 )
 from ...domain import CourseChatPipelineExecutionDTO
@@ -97,13 +96,9 @@ class CourseChatPipeline(Pipeline):
         request_handler = CapabilityRequestHandler(
             requirements=RequirementList(
                 gpt_version_equivalent=4.5,
-                context_length=16385,
-                json_mode=True,
             )
         )
-        completion_args = CompletionArguments(
-            temperature=0, max_tokens=2000, response_format="JSON"
-        )
+        completion_args = CompletionArguments(temperature=0.5, max_tokens=2000)
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler, completion_args=completion_args
         )
@@ -115,7 +110,7 @@ class CourseChatPipeline(Pipeline):
         self.citation_pipeline = CitationPipeline()
 
         # Create the pipeline
-        self.pipeline = self.llm | StrOutputParser()
+        self.pipeline = self.llm | JsonOutputParser()
         self.tokens = []
 
     def __repr__(self):
@@ -134,7 +129,6 @@ class CourseChatPipeline(Pipeline):
         logger.debug(dto.model_dump_json(indent=4))
 
         # Define tools
-        @tool
         def get_exercise_list() -> list[dict]:
             """
             Get the list of exercises in the course.
@@ -158,7 +152,6 @@ class CourseChatPipeline(Pipeline):
                 exercises.append(exercise_dict)
             return exercises
 
-        @tool
         def get_course_details() -> dict:
             """
             Get the following course details: course name, course description, programming language, course start date,
@@ -191,7 +184,6 @@ class CourseChatPipeline(Pipeline):
                 ),
             }
 
-        @tool
         def get_student_exercise_metrics(
             exercise_ids: typing.List[int],
         ) -> Union[dict[int, dict], str]:
@@ -232,7 +224,6 @@ class CourseChatPipeline(Pipeline):
             else:
                 return "No data available! Do not requery."
 
-        @tool
         def get_competency_list() -> list:
             """
             Get the list of competencies in the course.
@@ -243,25 +234,24 @@ class CourseChatPipeline(Pipeline):
             regarding their progress overall or in a specific area.
             A competency has the following attributes: name, description, taxonomy, soft due date, optional,
             and mastery threshold.
-            The response may include metrics for each competency, such as progress and mastery (0%-100%).
+            The response may include metrics for each competency, such as progress and mastery (0% - 100%).
             These are system-generated.
-            The judgment of learning (JOL) values indicate the self-reported confidence by the student (0-5, 5 star).
-            The object describing it also indicates the system-computed confidence at the time when the student
+            The judgment of learning (JOL) values indicate the self-reported mastery by the student (0 - 5, 5 star).
+            The object describing it also indicates the system-computed mastery at the time when the student
             added their JoL assessment.
             """
             self.callback.in_progress("Reading competency list ...")
             if not dto.metrics or not dto.metrics.competency_metrics:
                 return dto.course.competencies
             competency_metrics = dto.metrics.competency_metrics
-            weight = 2.0 / 3.0
             return [
                 {
                     "info": competency_metrics.competency_information.get(comp, None),
                     "exercise_ids": competency_metrics.exercises.get(comp, []),
                     "progress": competency_metrics.progress.get(comp, 0),
-                    "mastery": (
-                        (1 - weight) * competency_metrics.progress.get(comp, 0)
-                        + weight * competency_metrics.confidence.get(comp, 0)
+                    "mastery": get_mastery(
+                        competency_metrics.progress.get(comp, 0),
+                        competency_metrics.confidence.get(comp, 0),
                     ),
                     "judgment_of_learning": (
                         competency_metrics.jol_values.get[comp].json()
@@ -273,7 +263,6 @@ class CourseChatPipeline(Pipeline):
                 for comp in competency_metrics.competency_information
             ]
 
-        @tool
         def lecture_content_retrieval() -> str:
             """
             Retrieve content from indexed lecture slides.
@@ -309,14 +298,12 @@ class CourseChatPipeline(Pipeline):
             begin_agent_prompt = tell_begin_agent_prompt
             chat_history_exists_prompt = tell_chat_history_exists_prompt
             no_chat_history_prompt = tell_no_chat_history_prompt
-            format_reminder_prompt = tell_format_reminder_prompt
             begin_agent_jol_prompt = tell_begin_agent_jol_prompt
         else:
             iris_initial_system_prompt = elicit_iris_initial_system_prompt
             begin_agent_prompt = elicit_begin_agent_prompt
             chat_history_exists_prompt = elicit_chat_history_exists_prompt
             no_chat_history_prompt = elicit_no_chat_history_prompt
-            format_reminder_prompt = elicit_format_reminder_prompt
             begin_agent_jol_prompt = elicit_begin_agent_jol_prompt
 
         try:
@@ -374,47 +361,43 @@ class CourseChatPipeline(Pipeline):
                 ]
                 self.prompt = ChatPromptTemplate.from_messages(
                     [
-                        (
-                            "system",
+                        SystemMessage(
                             initial_prompt_with_date
                             + "\n"
                             + chat_history_exists_prompt
                             + "\n"
-                            + agent_prompt,
+                            + agent_prompt
                         ),
                         *chat_history_messages,
-                        ("system", format_reminder_prompt),
+                        ("placeholder", "{agent_scratchpad}"),
                     ]
                 )
             else:
                 self.prompt = ChatPromptTemplate.from_messages(
                     [
-                        (
-                            "system",
-                            initial_prompt_with_date
-                            + "\n"
-                            + agent_prompt
-                            + "\n"
-                            + format_reminder_prompt,
+                        SystemMessage(
+                            initial_prompt_with_date + "\n" + agent_prompt + "\n"
                         ),
+                        ("placeholder", "{agent_scratchpad}"),
                     ]
                 )
 
-            tools = [
+            tool_list = [
                 get_course_details,
                 get_exercise_list,
                 get_student_exercise_metrics,
                 get_competency_list,
             ]
             if self.should_allow_lecture_tool(dto.course.id):
-                tools.append(lecture_content_retrieval)
+                tool_list.append(lecture_content_retrieval)
 
-            agent = create_structured_chat_agent(
+            tools = generate_structured_tools_from_functions(tool_list)
+            # No idea why we need this extra contrary to exercise chat agent in this case, but solves the issue.
+            params.update({"tools": tools})
+            agent = create_tool_calling_agent(
                 llm=self.llm, tools=tools, prompt=self.prompt
             )
-            agent_executor = AgentExecutor(
-                agent=agent, tools=tools, verbose=True, max_iterations=5
-            )
+            agent_executor = AgentExecutor(agent=agent, tools=tools, verbose=False)
 
             out = None
             self.callback.in_progress()

@@ -29,37 +29,6 @@ The mastery is a weighted metric and is influenced by the following heuristics:
 * The mastery increases when the student proportionally achieved more points in exercises marked as hard compared to the distribution of points in the competency and vice versa.
 * A similar measurement applies to easy exercises, where the mastery is decreased for achieving proportionally more points in easy exercises.
 * If the student quickly solves programming exercises with a score of at least 80% based on the amount of pushes, the mastery increases. There is no decrease in mastery for slower students!
-
-Use a json blob to specify a tool by providing an action key (tool name) and an action_input key (tool input).
-Valid "action" values: "Final Answer" or {tool_names}
-Provide only ONE  action per $JSON_BLOB, as shown:
-```
-{{
-  "thought": "(First|Next), I need to ... so ...",
-  "action": $TOOL_NAME,
-  "action_input": $INPUT
-}}
-```
-
-Follow this format:
-
-Question: input to answer
-Thought: consider previous and subsequent steps
-Action:
-```
-$JSON_BLOB
-```
-
-Observation: action result
-... (repeat Thought/Action/Observation N times)
-Thought: I know what to respond
-Action:
-```
-{{
-  "thought": "I know what to respond",
-  "action": "Final Answer",
-  "action_input": "Final response to human"
-}}
 """
 
 tell_chat_history_exists_prompt = """
@@ -103,23 +72,6 @@ Here is the data about the JOL they submitted: {jol}
 Compose your answer now. Use tools if necessary.
 DO NOT UNDER ANY CIRCUMSTANCES repeat any message you have already sent before or send a similar message. Your
 messages must ALWAYS BE NEW AND ORIGINAL. It MUST NOT be a copy of any previous message. Do not repeat yourself. Do not repeat yourself. Do not repeat yourself.
-"""
-
-tell_format_reminder_prompt = """
-Reminder to ALWAYS respond with a valid json blob of a single action. 
-Respond directly if appropriate (with "Final Answer" as action).
-You are not forced to use tools if the question is off-topic or chatter only.
-Never invoke the same tool twice in a row with the same arguments - they will always return the same output.
-Remember to ALWAYS respond with valid JSON in schema:
-{{
-  "thought": "Your thought process",
-  "action": $TOOL_NAME,
-  "action_input": $INPUT
-}}
-Valid "action" values: "Final Answer" or {tool_names}
-
-This is your thinking history to generate this answer, your "memory" while solving this task iteratively. If this is the first call to you it might be empty:             
-{agent_scratchpad}
 """
 
 tell_course_system_prompt = """

@@ -2,7 +2,7 @@ import logging
 import traceback
 from datetime import datetime
 from operator import attrgetter
-from typing import List, Callable
+from typing import List
 
 import pytz
 from langchain.agents import create_tool_calling_agent, AgentExecutor
@@ -10,7 +10,6 @@ from langchain_core.messages import SystemMessage, HumanMessage
 from langchain_core.output_parsers import StrOutputParser, JsonOutputParser
 from langchain_core.prompts import ChatPromptTemplate, SystemMessagePromptTemplate
 from langchain_core.runnables import Runnable
-from langchain_core.tools import StructuredTool
 from langsmith import traceable
 
 from .code_feedback_pipeline import CodeFeedbackPipeline
@@ -29,6 +28,7 @@ from ..prompts.iris_exercise_chat_agent_prompts import (
 
 from ..shared.citation_pipeline import CitationPipeline
 from ..shared.reranker_pipeline import RerankerPipeline
+from ..shared.utils import generate_structured_tools_from_functions
 from ...common.PipelineEnum import PipelineEnum
 from ...common.message_converters import convert_iris_message_to_langchain_human_message
 from ...common.pyris_message import PyrisMessage, IrisMessageRole
@@ -63,26 +63,6 @@ def add_exercise_context_to_prompt(
     - **Problem Statement:** {problem_statement.replace("{", "{{").replace("}", "}}")}
     - **Programming Language:** {programming_language}
     """
-
-
-def generate_structured_tool_from_function(tool_function: Callable) -> StructuredTool:
-    """
-    Generates a structured tool from a function
-    :param tool_function: The tool function
-    :return: The structured tool
-    """
-    return StructuredTool.from_function(tool_function)
-
-
-def generate_structured_tools_from_functions(
-    tools: List[Callable],
-) -> List[StructuredTool]:
-    """
-    Generates a list of structured tools from a list of functions
-    :param tools: The list of tool functions
-    :return: The list of structured tools
-    """
-    return [generate_structured_tool_from_function(_tool) for _tool in tools]
 
 
 def convert_chat_history_to_str(chat_history: List[PyrisMessage]) -> str:
