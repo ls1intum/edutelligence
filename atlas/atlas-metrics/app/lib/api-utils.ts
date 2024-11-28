@@ -1,5 +1,4 @@
-import { EnumLike } from "zod/lib/types";
-import { z } from "zod";
+import { EnumLike, z } from "zod";
 import { NextResponse } from "next/server";
 
 export const SearchParamStringOrUndefined = (searchParams: URLSearchParams, key: string) => {
