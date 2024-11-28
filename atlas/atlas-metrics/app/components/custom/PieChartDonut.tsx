@@ -52,7 +52,6 @@ export function PieChartDonut({ title, description, label, chartData }: PieChart
 
   const chartConfig = generateChartConfig(chartData);
   const chartDataAugmented = augmentColorInChartData(chartConfig, chartData);
-  console.log(chartDataAugmented);
 
   return (
     <Card className="flex flex-col">

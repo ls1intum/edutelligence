@@ -13,7 +13,6 @@ export async function GET(request: NextRequest) {
     // return NextResponse.json(metrics);
     return NextResponse.json(null);
   } catch (error) {
-    console.log(error);
     return NextResponse.json({ error }, { status: 500 });
   }
 }
