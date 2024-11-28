@@ -25,6 +25,7 @@ type FileEditorProps = {
   createNewFeedback?: () => Feedback;
   manualRatings?: ManualRating[];
   onManualRatingsChange?: (manualRatings: ManualRating[]) => void;
+  hideFeedbackDetails?: boolean;
 };
 
 export default function FileEditor({
@@ -38,6 +39,7 @@ export default function FileEditor({
   createNewFeedback,
   manualRatings,
   onManualRatingsChange,
+  hideFeedbackDetails
 }: FileEditorProps) {
   const monaco = useMonaco();
   const editorRef = useRef<editor.IStandaloneCodeEditor>();
@@ -358,6 +360,7 @@ export default function FileEditor({
                       }
                       model={model}
                       className="mr-4"
+                      hideDetails={hideFeedbackDetails}
                     />
                   </EditorWidget>
                 )
