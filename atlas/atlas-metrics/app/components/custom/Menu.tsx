@@ -1,6 +1,6 @@
 "use client";
 
-import {DateRangePicker} from "@components/custom/DateRangePicker";
+import { DateRangePicker } from "@components/custom/DateRangePicker";
 
 export function Menu() {
   return (

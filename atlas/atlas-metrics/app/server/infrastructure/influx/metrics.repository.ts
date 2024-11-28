@@ -1,9 +1,9 @@
 import { InfluxClient, InfluxMetricsPoint } from "@server/infrastructure/influx/influx";
 import { Point } from "@influxdata/influxdb-client";
 import { validateEndpointActivitySchema } from "@server/infrastructure/influx/models/endpointActivity.schema";
-import {RequestType} from "@server/domain/dao/RequestTypes";
-import {IMetricsRepository} from "@server/domain/repository/metrics.repository";
-import {EndpointActivityFullDAO} from "@server/domain/dao/endpointActivity";
+import { RequestType } from "@server/domain/dao/RequestTypes";
+import { IMetricsRepository } from "@server/domain/repository/metrics.repository";
+import { EndpointActivityFullDAO } from "@server/domain/dao/endpointActivity";
 
 enum Measurement {
   ENDPOINT_ACTIVITY = "endpoint_activity",

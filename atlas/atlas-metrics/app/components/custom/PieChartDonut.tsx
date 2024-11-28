@@ -3,13 +3,7 @@
 import * as React from "react";
 import { Label, Pie, PieChart } from "recharts";
 
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@components/ui/card";
 import {
   ChartConfig,
   ChartContainer,
@@ -19,7 +13,7 @@ import {
   ChartTooltipContent,
 } from "@components/ui/chart";
 import { generateColor } from "@lib/utils";
-import {PieChartDataItemDAO} from "@server/domain/dao/pieChartDataItem";
+import { PieChartDataItemDAO } from "@server/domain/dao/pieChartDataItem";
 
 interface PieChartProps {
   title: string;

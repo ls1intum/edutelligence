@@ -1,7 +1,7 @@
 import { Menu } from "@components/custom/Menu";
 import { DataTable } from "@components/custom/DataTable";
 import applicationContainer from "@server/applicationContainer";
-import {endpointActivityColumns} from "./columns";
+import { endpointActivityColumns } from "./columns";
 
 export default async function Admin() {
   const metricsService = applicationContainer.getMetricsService();
