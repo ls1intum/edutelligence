@@ -1,5 +1,5 @@
 export type EndpointActivityBucketDAO = {
-    endpoint: string;
-    date: Date;
-    count: number;
-}
+  endpoint: string;
+  date: Date;
+  count: number;
+};

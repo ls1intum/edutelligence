@@ -1,4 +1,4 @@
 export interface PieChartDataItemDAO {
-    label: string
-    value: number
+  label: string;
+  value: number;
 }

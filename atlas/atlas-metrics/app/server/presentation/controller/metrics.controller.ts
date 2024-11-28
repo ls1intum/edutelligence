@@ -1,11 +1,7 @@
-import {IMetricsService} from "@/app/domain/service/metrics.service";
+import { IMetricsService } from "@/app/domain/service/metrics.service";
 
-export interface IMetricsController {
-
-}
+export interface IMetricsController {}
 
 export class MetricsControllerImpl implements IMetricsController {
-    constructor(
-        private readonly metricsService: IMetricsService,
-    ) {}
+  constructor(private readonly metricsService: IMetricsService) {}
 }

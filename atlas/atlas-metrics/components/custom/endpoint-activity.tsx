@@ -35,7 +35,6 @@ function generateChartConfig(chartData: ChartDataItemDAO[]): ChartConfig {
 }
 
 export function EndpointActivity({ title, description, chartData }: EndpointActivityProps) {
-
   const endpoints = Object.keys(chartData[0]).filter((key) => key !== "date");
 
   return (
