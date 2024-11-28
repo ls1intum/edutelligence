@@ -2,7 +2,7 @@
 
 import { ColumnDef } from "@tanstack/table-core";
 import { EndpointActivityDAO } from "@/app/domain/dao/endpointActivity";
-import { DataTableColumnHeader } from "@/components/custom/data-table-column-header";
+import { DataTableColumnHeader } from "@/components/custom/DataTableColumnHeader";
 import { useEffect, useState } from "react";
 
 export const endpointActivityColumns: ColumnDef<EndpointActivityDAO>[] = [

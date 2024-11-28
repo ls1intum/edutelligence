@@ -18,7 +18,7 @@ import {
   SortingState,
 } from "@tanstack/table-core";
 import { flexRender, useReactTable } from "@tanstack/react-table";
-import { DataTablePagination } from "@/components/custom/data-table-pagination";
+import { DataTablePagination } from "@/components/custom/DataTablePagination";
 
 interface DataTableProps<TData, TValue> {
   title: string;

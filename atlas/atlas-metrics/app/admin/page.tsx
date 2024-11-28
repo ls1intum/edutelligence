@@ -1,5 +1,5 @@
-import { Menu } from "@/components/custom/menu";
-import { DataTable } from "@/components/custom/data-table";
+import { Menu } from "@/components/custom/Menu";
+import { DataTable } from "@/components/custom/DataTable";
 import { endpointActivityColumns } from "@/app/admin/columns";
 import applicationContainer from "@/app/server/applicationContainer";
 
