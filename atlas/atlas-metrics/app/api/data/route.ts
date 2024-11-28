@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import applicationContainer from "@/app/server/applicationContainer";
+import applicationContainer from "@server/applicationContainer";
 
 export async function GET(request: NextRequest) {
   const moduleName = request.nextUrl.searchParams.get("module");

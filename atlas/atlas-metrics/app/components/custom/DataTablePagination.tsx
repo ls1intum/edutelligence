@@ -1,6 +1,6 @@
 "use client";
 
-import { Button } from "@/components/ui/button";
+import { Button } from "@components/ui/button";
 import { Table } from "@tanstack/table-core";
 
 interface DataTablePaginationProps<TData> {

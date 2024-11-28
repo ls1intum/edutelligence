@@ -1,17 +1,15 @@
 "use client";
 
 import * as React from "react";
-import { TrendingUp } from "lucide-react";
 import { Label, Pie, PieChart } from "recharts";
 
 import {
   Card,
   CardContent,
   CardDescription,
-  CardFooter,
   CardHeader,
   CardTitle,
-} from "@/components/ui/card";
+} from "@components/ui/card";
 import {
   ChartConfig,
   ChartContainer,
@@ -19,9 +17,9 @@ import {
   ChartLegendContent,
   ChartTooltip,
   ChartTooltipContent,
-} from "@/components/ui/chart";
-import { PieChartDataItemDAO } from "@/app/domain/dao/pieChartDataItem";
-import { generateColor } from "@/lib/utils";
+} from "@components/ui/chart";
+import { generateColor } from "@lib/utils";
+import {PieChartDataItemDAO} from "@server/domain/dao/pieChartDataItem";
 
 interface PieChartProps {
   title: string;

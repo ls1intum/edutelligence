@@ -1,7 +1,7 @@
 "use client";
 
-import Dashboard from "@/app/dashboard/dashboard";
 import { SessionProvider } from "next-auth/react";
+import Dashboard from "./dashboard/dashboard";
 
 export default function Home() {
   return (

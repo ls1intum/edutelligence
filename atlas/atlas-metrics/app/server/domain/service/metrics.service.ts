@@ -1,7 +1,7 @@
-import { IMetricsRepository } from "@/app/domain/repository/metrics.repository";
-import { EndpointActivityBucketDAO } from "@/app/domain/dao/endpointActivityBucket";
-import { RequestType } from "@/app/domain/dao/RequestTypes";
-import { EndpointActivityFullDAO } from "@/app/domain/dao/endpointActivity";
+import { IMetricsRepository } from "@server/domain/repository/metrics.repository";
+import { EndpointActivityBucketDAO } from "@server/domain/dao/endpointActivityBucket";
+import { RequestType } from "@server/domain/dao/RequestTypes";
+import { EndpointActivityFullDAO } from "@server/domain/dao/endpointActivity";
 
 export interface IMetricsService {
   /**

@@ -1,6 +1,6 @@
 "use client";
 
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@components/ui/card";
 import * as React from "react";
 import {
   Table,
@@ -9,7 +9,7 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-} from "@/components/ui/table";
+} from "@components/ui/table";
 import {
   ColumnDef,
   getCoreRowModel,
@@ -18,7 +18,7 @@ import {
   SortingState,
 } from "@tanstack/table-core";
 import { flexRender, useReactTable } from "@tanstack/react-table";
-import { DataTablePagination } from "@/components/custom/DataTablePagination";
+import { DataTablePagination } from "@components/custom/DataTablePagination";
 
 interface DataTableProps<TData, TValue> {
   title: string;

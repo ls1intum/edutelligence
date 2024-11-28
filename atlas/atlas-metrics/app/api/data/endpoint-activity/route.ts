@@ -1,13 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { RequestType } from "@/app/domain/dao/RequestTypes";
-import applicationContainer from "@/app/server/applicationContainer";
+import { RequestType } from "@server/domain/dao/RequestTypes";
+import applicationContainer from "@server/applicationContainer";
 import {
   ErrorResponse,
   SearchParamDateOrUndefined,
   SearchParamEnumOrUndefined,
   SearchParamStringOrUndefined,
-} from "@/lib/api-utils";
+} from "@lib/api-utils";
 
 const PutEndpointActivityBodySchema = z.object({
   service: z.string(),

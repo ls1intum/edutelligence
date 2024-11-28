@@ -1,5 +1,5 @@
-import { EndpointActivityFullDAO } from "@/app/domain/dao/endpointActivity";
-import { RequestType } from "@/app/domain/dao/RequestTypes";
+import { EndpointActivityFullDAO } from "@server/domain/dao/endpointActivity";
+import { RequestType } from "@server/domain/dao/RequestTypes";
 
 export interface IMetricsRepository {
   saveEndpointActivity(

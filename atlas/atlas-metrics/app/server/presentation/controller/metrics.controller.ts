@@ -1,4 +1,4 @@
-import { IMetricsService } from "@/app/domain/service/metrics.service";
+import { IMetricsService } from "@server/domain/service/metrics.service";
 
 export interface IMetricsController {}
 

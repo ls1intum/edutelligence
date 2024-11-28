@@ -1,13 +1,10 @@
 "use cache";
 
-import { IMetricsService, MetricsServiceImpl } from "@/app/domain/service/metrics.service";
-import {
-  IMetricsController,
-  MetricsControllerImpl,
-} from "@/app/server/presentation/controller/metrics.controller";
-import { InfluxClient } from "@/app/server/infrastructure/influx/influx";
-import { IMetricsRepository } from "@/app/domain/repository/metrics.repository";
-import { MetricsRepositoryImpl } from "@/app/server/infrastructure/influx/metrics.repository";
+import {IMetricsController, MetricsControllerImpl} from "@server/presentation/controller/metrics.controller";
+import {IMetricsService, MetricsServiceImpl} from "@server/domain/service/metrics.service";
+import {InfluxClient} from "@server/infrastructure/influx/influx";
+import {IMetricsRepository} from "@server/domain/repository/metrics.repository";
+import {MetricsRepositoryImpl} from "@server/infrastructure/influx/metrics.repository";
 
 interface ApplicationContainer {
   getMetricsService: () => IMetricsService;

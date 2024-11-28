@@ -1,9 +1,6 @@
-import { EndpointActivity } from "@/components/custom/EndpointActivity";
-import applicationContainer from "@/app/server/applicationContainer";
-import { PieChartDonut } from "@/components/custom/PieChartDonut";
-import { Menu } from "@/components/custom/Menu";
-import { Header } from "@/components/custom/Header";
-import { Footer } from "@/components/custom/Footer";
+import { EndpointActivity } from "@components/custom/EndpointActivity";
+import { PieChartDonut } from "@components/custom/PieChartDonut";
+import { Menu } from "@components/custom/Menu";
 
 // TODO: Replace this with actual data
 const endpointActivityChartDataMocked = [
