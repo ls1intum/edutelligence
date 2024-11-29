@@ -89,7 +89,7 @@ class LectureRetrieval(Pipeline):
         super().__init__(implementation_id="lecture_retrieval_pipeline")
         request_handler = CapabilityRequestHandler(
             requirements=RequirementList(
-                gpt_version_equivalent=3.5,
+                gpt_version_equivalent=4.25,
                 context_length=16385,
                 privacy_compliance=True,
             )
