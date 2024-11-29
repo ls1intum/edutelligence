@@ -15,6 +15,11 @@ Lorem ipsum dolor sit amet, consectetur adipiscing elit [1]. Ded do eiusmod temp
 [2] <a href="https://example.com/lecture2">Lecture 2, Unit B, page 5,25</a>.
 "
 
+Note: If there is no link available, please do not include the link in the citation. For example, if citation 1 does not have a link, it should look like this:
+[1] "Lecture title", "Lecture unit title", "page number"
+but if citation 2 has a link, it should look like this:
+[2] <a href="URL">"Lecture title", "Lecture unit title", "page number"</a>
+
 Here are the answer and the paragraphs:
 
 Answer without citations:
