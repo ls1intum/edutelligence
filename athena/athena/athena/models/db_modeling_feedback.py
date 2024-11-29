@@ -1,6 +1,6 @@
 from typing import Optional
 
-from sqlalchemy import Column, ForeignKey, String
+from sqlalchemy import Column, ForeignKey, JSON, String
 from sqlalchemy.orm import relationship
 
 from athena.database import Base
