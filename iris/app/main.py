@@ -7,6 +7,7 @@ import app.sentry as sentry
 from app.web.routers.health import router as health_router
 from app.web.routers.pipelines import router as pipelines_router
 from app.web.routers.webhooks import router as webhooks_router
+from app.web.routers.ingestion_status import router as ingestion_status_router
 
 import logging
 from fastapi import FastAPI, Request, status
@@ -57,3 +58,4 @@ async def some_middleware(request: Request, call_next):
 app.include_router(health_router)
 app.include_router(pipelines_router)
 app.include_router(webhooks_router)
+app.include_router(ingestion_status_router)

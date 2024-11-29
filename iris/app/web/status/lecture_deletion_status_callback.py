@@ -9,7 +9,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-class IngestionStatusCallback(StatusCallback):
+class LecturesDeletionStatusCallback(StatusCallback):
     """
     Callback class for updating the status of a Tutor Chat pipeline run.
     """
@@ -23,17 +23,7 @@ class IngestionStatusCallback(StatusCallback):
         stages = initial_stages or []
         stages += [
             StageDTO(
-                weight=10, state=StageStateEnum.NOT_STARTED, name="Old slides removal"
-            ),
-            StageDTO(
-                weight=60,
-                state=StageStateEnum.NOT_STARTED,
-                name="Slides Interpretation",
-            ),
-            StageDTO(
-                weight=30,
-                state=StageStateEnum.NOT_STARTED,
-                name="Slides ingestion",
+                weight=100, state=StageStateEnum.NOT_STARTED, name="Slides removal"
             ),
         ]
         status = IngestionStatusUpdateDTO(stages=stages)
