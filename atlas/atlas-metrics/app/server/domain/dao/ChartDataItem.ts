@@ -1,4 +1,4 @@
-import {z} from "zod";
+import { z } from "zod";
 
 export interface ChartDataItemDAO {
   label: string;
@@ -15,6 +15,8 @@ export interface TimeSeriesChartDataItemDAO {
   [key: string]: number | string;
 }
 
-export const TimeSeriesChartDataItemSchema = z.object({
-  date: z.string(),
-}).catchall(z.union([z.number(), z.string()]));
+export const TimeSeriesChartDataItemSchema = z
+  .object({
+    date: z.string(),
+  })
+  .catchall(z.union([z.number(), z.string()]));

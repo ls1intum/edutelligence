@@ -35,8 +35,8 @@ export class InfluxClient {
   public async collectRows(fluxQuery: string) {
     try {
       return await this.client.getQueryApi(this.org).collectRows(fluxQuery);
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
     } catch (error) {
-      console.log(error);
       throw new Error("Failed to collect rows");
     }
   }

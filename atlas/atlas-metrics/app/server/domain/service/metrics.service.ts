@@ -2,7 +2,6 @@ import { IMetricsRepository } from "@server/domain/repository/metrics.repository
 import { EndpointActivityBucketDAO } from "@server/domain/dao/endpointActivityBucket";
 import { RequestType } from "@server/domain/dao/RequestTypes";
 import { EndpointActivityFullDAO } from "@server/domain/dao/endpointActivity";
-import {TimeSeriesChartDataItemDAO} from "@server/domain/dao/ChartDataItem";
 
 export interface IMetricsService {
   /**
@@ -105,11 +104,11 @@ export class MetricsServiceImpl implements IMetricsService {
       service,
       version,
       endpoint,
-        type,
-        from,
-        to,
+      type,
+      from,
+      to,
     );
-    const groupedData = new Map<string, { type: RequestType, date: Date; count: number }>();
+    const groupedData = new Map<string, { type: RequestType; date: Date; count: number }>();
 
     endpointActivity.forEach(({ endpoint, type, date }) => {
       const normalizedDate = new Date(date);
@@ -118,7 +117,7 @@ export class MetricsServiceImpl implements IMetricsService {
       const key = `${endpoint}_${type}_${normalizedDate.toISOString()}`;
 
       if (!groupedData.has(key)) {
-        groupedData.set(key, {type: type, date: normalizedDate, count: 0 });
+        groupedData.set(key, { type: type, date: normalizedDate, count: 0 });
       }
       groupedData.get(key)!.count += 1;
     });

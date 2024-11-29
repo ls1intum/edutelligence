@@ -1,6 +1,6 @@
-import {z} from "zod";
-import {RequestType} from "@server/domain/dao/RequestTypes";
-import {z_stringOrDateToDate} from "@lib/zod-utils";
+import { z } from "zod";
+import { RequestType } from "@server/domain/dao/RequestTypes";
+import { z_stringOrDateToDate } from "@lib/zod-utils";
 
 export type EndpointActivityBucketDAO = {
   endpoint: string;

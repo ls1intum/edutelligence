@@ -1,13 +1,13 @@
 import {
-    EndpointActivityDashboardDAO,
-    EndpointActivityDashboardSchema
+  EndpointActivityDashboardDAO,
+  EndpointActivityDashboardSchema,
 } from "@server/domain/dao/endpointActivityDashboard";
-import {z} from "zod";
+import { z } from "zod";
 
 export interface DashboardDataDAO {
-    endpointActivity: EndpointActivityDashboardDAO;
+  endpointActivity: EndpointActivityDashboardDAO;
 }
 
 export const DashboardDataSchema = z.object({
-    endpointActivity: EndpointActivityDashboardSchema,
+  endpointActivity: EndpointActivityDashboardSchema,
 });

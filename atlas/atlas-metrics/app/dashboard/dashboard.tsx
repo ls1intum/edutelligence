@@ -1,12 +1,11 @@
 import { EndpointActivity } from "@components/custom/EndpointActivity";
 import { PieChartDonut } from "@components/custom/PieChartDonut";
 import { Menu } from "@components/custom/Menu";
-import {useEffect, useState} from "react";
-import {DashboardDataDAO, DashboardDataSchema} from "@server/domain/dao/dashboardData";
+import { useEffect, useState } from "react";
+import { DashboardDataDAO, DashboardDataSchema } from "@server/domain/dao/dashboardData";
 
 export default function Dashboard() {
-
-  const [metrics, setMetrics] = useState<DashboardDataDAO|undefined>(undefined);
+  const [metrics, setMetrics] = useState<DashboardDataDAO | undefined>(undefined);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -30,9 +29,9 @@ export default function Dashboard() {
     fetchMetrics().finally(() => setLoading(false));
   }, []);
 
-    if (loading) {
-        return <div>Loading...</div>;
-    }
+  if (loading) {
+    return <div>Loading...</div>;
+  }
 
   if (error) {
     return <p>Error: {error}</p>;
