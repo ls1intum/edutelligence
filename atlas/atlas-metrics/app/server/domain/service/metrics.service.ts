@@ -2,7 +2,7 @@ import { IMetricsRepository } from "@server/domain/repository/metrics.repository
 import { EndpointActivityBucketDAO } from "@server/domain/dao/endpointActivityBucket";
 import { RequestType } from "@server/domain/dao/RequestTypes";
 import { EndpointActivityFullDAO } from "@server/domain/dao/endpointActivity";
-import {ChartDataItemDAO} from "@server/domain/dao/chartDataItem";
+import {TimeSeriesChartDataItemDAO} from "@server/domain/dao/ChartDataItem";
 
 export interface IMetricsService {
   /**
@@ -109,28 +109,23 @@ export class MetricsServiceImpl implements IMetricsService {
         from,
         to,
     );
-    const groupedData = new Map<string, { date: Date; count: number }>();
+    const groupedData = new Map<string, { type: RequestType, date: Date; count: number }>();
 
-    endpointActivity.forEach(({ endpoint, date }) => {
-      // Normalize date to the day level (remove time)
+    endpointActivity.forEach(({ endpoint, type, date }) => {
       const normalizedDate = new Date(date);
       normalizedDate.setHours(0, 0, 0, 0);
 
-      // Create a unique key for grouping by endpoint and normalized date
-      const key = `${endpoint}_${normalizedDate.toISOString()}`;
+      const key = `${endpoint}_${type}_${normalizedDate.toISOString()}`;
 
       if (!groupedData.has(key)) {
-        groupedData.set(key, { date: normalizedDate, count: 0 });
+        groupedData.set(key, {type: type, date: normalizedDate, count: 0 });
       }
-
-      // Increment the count for the group
       groupedData.get(key)!.count += 1;
     });
 
-    // Convert the grouped Map back to an array of EndpointActivityBucketDAO
-    return Array.from(groupedData.entries()).map(([key, { date, count }]) => {
+    return Array.from(groupedData.entries()).map(([key, { type, date, count }]) => {
       const endpoint = key.split("_")[0]; // Extract endpoint from the key
-      return { endpoint, date, count };
+      return { endpoint, type, date, count };
     });
   }
 }

@@ -4,11 +4,6 @@ import { Menu } from "@components/custom/Menu";
 import {useEffect, useState} from "react";
 import {DashboardDataDAO, DashboardDataSchema} from "@server/domain/dao/dashboardData";
 
-const pieChartDataMock = [
-  { label: "GET", value: 275 },
-  { label: "POST", value: 275 },
-];
-
 export default function Dashboard() {
 
   const [metrics, setMetrics] = useState<DashboardDataDAO|undefined>(undefined);
@@ -58,13 +53,13 @@ export default function Dashboard() {
           title="Activity by Type"
           description="Activity grouped by the type of endpoints"
           label="Calls"
-          chartData={pieChartDataMock}
+          chartData={metrics!.endpointActivity.byType}
         />
         <PieChartDonut
           title="Activity by Category"
-          description="Activity grouped by data retrieval or injection"
+          description="Activity grouped by category of endpoints"
           label="Calls"
-          chartData={pieChartDataMock}
+          chartData={metrics!.endpointActivity.byCategory}
         />
       </div>
     </div>

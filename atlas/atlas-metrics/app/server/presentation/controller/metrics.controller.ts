@@ -1,7 +1,8 @@
 import { IMetricsService } from "@server/domain/service/metrics.service";
 import {DashboardDataDAO} from "@server/domain/dao/dashboardData";
 import {EndpointActivityBucketDAO} from "@server/domain/dao/endpointActivityBucket";
-import {ChartDataItemDAO} from "@server/domain/dao/chartDataItem";
+import {TimeSeriesChartDataItemDAO, ChartDataItemDAO} from "@server/domain/dao/ChartDataItem";
+import {mapRequestTypeToCategory} from "@server/domain/dao/RequestTypes";
 
 export interface IMetricsController {
 
@@ -22,28 +23,29 @@ export class MetricsControllerImpl implements IMetricsController {
 
     const endpointActivityByDay = await this.metricsService.getEndpointActivityByDay(service, undefined, undefined, undefined, from, to);
 
-    const endpointActivityByDayForChart = this.transformEndpointActivityToChartData(endpointActivityByDay);
+    const timeSeries = this.transformEndpointActivityToChartData(endpointActivityByDay);
+    const byType = this.transformEndpointActivityToTypeChartData(endpointActivityByDay);
+    const byCategory = this.transformEndpointActivityToCategoryChartData(endpointActivityByDay);
 
     return {
       endpointActivity: {
-        timeSeries: endpointActivityByDayForChart,
+        timeSeries: timeSeries,
+        byType: byType,
+        byCategory: byCategory,
       },
     };
   }
 
-  private transformEndpointActivityToChartData(buckets: EndpointActivityBucketDAO[]): ChartDataItemDAO[] {
-    // Create a Map to group data by date
-    const groupedByDate = new Map<string, ChartDataItemDAO>();
+  private transformEndpointActivityToChartData(buckets: EndpointActivityBucketDAO[]): TimeSeriesChartDataItemDAO[] {
+    const groupedByDate = new Map<string, TimeSeriesChartDataItemDAO>();
 
     buckets.forEach(({ endpoint, date, count }) => {
-      // Normalize date to string format (e.g., "YYYY-MM-DD")
       const dateString = date.toISOString().split("T")[0];
 
       if (!groupedByDate.has(dateString)) {
         groupedByDate.set(dateString, { date: dateString });
       }
 
-      // Update the count for the endpoint on this date
       const dataForDate = groupedByDate.get(dateString)!;
       if (typeof dataForDate[endpoint] === "number") {
         dataForDate[endpoint] = dataForDate[endpoint] + count;
@@ -52,7 +54,38 @@ export class MetricsControllerImpl implements IMetricsController {
       }
     });
 
-    // Convert the grouped data to an array
     return Array.from(groupedByDate.values());
+  }
+
+  private transformEndpointActivityToTypeChartData(buckets: EndpointActivityBucketDAO[]): ChartDataItemDAO[] {
+    const groupedByType = new Map<string, number>();
+
+    buckets.forEach(({ type, count }) => {
+      if (!groupedByType.has(type)) {
+        groupedByType.set(type, 0);
+      }
+
+      const currentCount = groupedByType.get(type)!;
+      groupedByType.set(type, currentCount + count);
+    });
+
+    return Array.from(groupedByType.entries()).map(([label, value]) => ({ label, value }));
+  }
+
+  private transformEndpointActivityToCategoryChartData(buckets: EndpointActivityBucketDAO[]): ChartDataItemDAO[] {
+    const groupedByCategory = new Map<string, number>();
+
+    buckets.forEach(({ type, count }) => {
+      const category = mapRequestTypeToCategory(type);
+
+      if (!groupedByCategory.has(category)) {
+        groupedByCategory.set(category, 0);
+      }
+
+      const currentCount = groupedByCategory.get(category)!;
+      groupedByCategory.set(category, currentCount + count);
+    });
+
+    return Array.from(groupedByCategory.entries()).map(([label, value]) => ({ label, value }));
   }
 }

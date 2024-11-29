@@ -1,10 +1,14 @@
 import {z} from "zod";
-import {ChartDataItemDAO, ChartDataItemSchema} from "@server/domain/dao/chartDataItem";
+import {TimeSeriesChartDataItemDAO, TimeSeriesChartDataItemSchema, ChartDataItemDAO, ChartDataItemSchema} from "@server/domain/dao/ChartDataItem";
 
 export interface EndpointActivityDashboardDAO {
-    timeSeries: ChartDataItemDAO[];
+    timeSeries: TimeSeriesChartDataItemDAO[];
+    byType: ChartDataItemDAO[];
+    byCategory: ChartDataItemDAO[];
 }
 
 export const EndpointActivityDashboardSchema = z.object({
-    timeSeries: ChartDataItemSchema.array(),
+    timeSeries: TimeSeriesChartDataItemSchema.array(),
+    byType: ChartDataItemSchema.array(),
+    byCategory: ChartDataItemSchema.array(),
 });

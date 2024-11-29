@@ -13,16 +13,16 @@ import {
   ChartTooltipContent,
 } from "@components/ui/chart";
 import { generateColor } from "@lib/utils";
-import { PieChartDataItemDAO } from "@server/domain/dao/pieChartDataItem";
+import { ChartDataItemDAO } from "@server/domain/dao/ChartDataItem";
 
 interface PieChartProps {
   title: string;
   description: string;
   label: string;
-  chartData: PieChartDataItemDAO[];
+  chartData: ChartDataItemDAO[];
 }
 
-function generateChartConfig(chartData: PieChartDataItemDAO[]): ChartConfig {
+function generateChartConfig(chartData: ChartDataItemDAO[]): ChartConfig {
   const labels = chartData.map((item) => item.label);
   const chartConfig: ChartConfig = {};
 
@@ -37,8 +37,8 @@ function generateChartConfig(chartData: PieChartDataItemDAO[]): ChartConfig {
 
 function augmentColorInChartData(
   chartConfig: ChartConfig,
-  chartData: PieChartDataItemDAO[],
-): PieChartDataItemDAO[] {
+  chartData: ChartDataItemDAO[],
+): ChartDataItemDAO[] {
   return chartData.map((item) => {
     const color = chartConfig[item.label].color;
     return { ...item, fill: color };
