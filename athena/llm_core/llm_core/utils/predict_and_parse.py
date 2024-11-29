@@ -12,7 +12,8 @@ async def predict_and_parse(
         chat_prompt: ChatPromptTemplate, 
         prompt_input: dict, 
         pydantic_object: Type[T], 
-        tags: Optional[List[str]]
+        tags: Optional[List[str]],
+        use_function_calling: bool = False
     ) -> Optional[T]:
     """Predicts an LLM completion using the model and parses the output using the provided Pydantic model
 
@@ -36,13 +37,30 @@ async def predict_and_parse(
     if experiment.run_id is not None:
         tags.append(f"run-{experiment.run_id}")
 
-    structured_output_llm = model.with_structured_output(pydantic_object, method="json_mode")
-    chain = RunnableSequence(
-        chat_prompt,
-        structured_output_llm
-    )
-
-    try:
-        return await chain.ainvoke(prompt_input, config={"tags": tags})
-    except ValidationError as e:
-        raise ValueError(f"Could not parse output: {e}") from e
+    
+    if (use_function_calling):
+        structured_output_llm = model.with_structured_output(pydantic_object)
+        chain = chat_prompt | structured_output_llm
+        
+        try:
+            result = await chain.ainvoke(prompt_input, config={"tags": tags})
+            
+            if isinstance(result, pydantic_object):
+                return result
+            else:
+                raise ValueError("Parsed output does not match the expected Pydantic model.")
+            
+        except ValidationError as e:
+            raise ValueError(f"Could not parse output: {e}") from e
+        
+    else:
+        structured_output_llm = model.with_structured_output(pydantic_object, method = "json_mode")
+        chain = RunnableSequence(
+            chat_prompt,
+            structured_output_llm
+        )
+        try:
+            return await chain.ainvoke(prompt_input, config={"tags": tags})
+        except ValidationError as e:
+            raise ValueError(f"Could not parse output: {e}") from e
+        
