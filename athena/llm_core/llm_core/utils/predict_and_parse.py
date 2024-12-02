@@ -5,12 +5,34 @@ from langchain_core.pydantic_v1 import BaseModel, ValidationError
 from langchain_core.runnables import RunnableSequence
 from athena import get_experiment_environment
 from langchain_community.chat_models import ChatOllama # type: ignore
-
+from langchain.output_parsers import PydanticOutputParser
 T = TypeVar("T", bound=BaseModel)
 
 def isOllama(model: BaseLanguageModel) -> bool:
     return isinstance(model, ChatOllama)
 
+async def predict_plain_text(        
+        model: BaseLanguageModel, 
+        chat_prompt: ChatPromptTemplate, 
+        prompt_input: dict,
+        tags: Optional[List[str]]) -> Optional[str]: 
+    """Predict plain text using the provided model and prompt.
+
+    Args:
+        model (BaseLanguageModel): The model to predict with.
+        chat_prompt (ChatPromptTemplate): The prompt template to use.
+        prompt_input (dict): Input parameters to use for the prompt.
+        tags (Optional[List[str]]): List of tags to tag the prediction with.
+
+    Returns:
+        Optional[str]: Prediction as a string, or None if it failed.
+    """
+    try:
+        chain = chat_prompt | model
+        return await chain.ainvoke(prompt_input, config={"tags": tags})
+    except:
+        raise ValueError("Llm prediction failed.")
+        
 async def predict_and_parse(
         model: BaseLanguageModel, 
         chat_prompt: ChatPromptTemplate, 
@@ -41,7 +63,14 @@ async def predict_and_parse(
     if experiment.run_id is not None:
         tags.append(f"run-{experiment.run_id}")
 
-    
+    if isOllama(model):
+        try:
+            outputParser = PydanticOutputParser(pydantic_object = pydantic_object)
+            chain = chat_prompt | model | outputParser
+            return await chain.ainvoke(prompt_input, config={"tags": tags})
+        except ValidationError as e:
+            raise ValueError(f"Could not parse output: {e}") from e
+        
     if (use_function_calling):
         structured_output_llm = model.with_structured_output(pydantic_object)
         chain = chat_prompt | structured_output_llm
@@ -67,4 +96,4 @@ async def predict_and_parse(
             return await chain.ainvoke(prompt_input, config={"tags": tags})
         except ValidationError as e:
             raise ValueError(f"Could not parse output: {e}") from e
-        
+    

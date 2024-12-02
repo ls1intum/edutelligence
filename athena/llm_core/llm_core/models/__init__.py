@@ -7,6 +7,7 @@ from llm_core.models.model_config import ModelConfig
 
 DefaultModelConfig: Type[ModelConfig]
 MiniModelConfig: ModelConfig
+OllamaModelConfig: ModelConfig
 default_model_name = os.environ.get("LLM_DEFAULT_MODEL")
 evaluation_model_name = os.environ.get("LLM_EVALUATION_MODEL")
 
@@ -29,6 +30,7 @@ except AttributeError:
 try:
     import llm_core.models.ollama as ollama_config #type: ignore
     types.append(ollama_config.OllamaModelConfig)
+    OllamaModelConfig = ollama_config.OllamaModelConfig(model_name="llama3.1:70b",max_tokens=1000, temperature=0,top_p=1,presence_penalty=0,frequency_penalty=0)
     # DefaultModelConfig = ollama_config.OllamaModelConfig
 except AttributeError:
     pass

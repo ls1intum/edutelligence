@@ -2,24 +2,15 @@ from pydantic import BaseModel, Field
 from typing import List, Optional
 
 system_message = """
-         You gave the following feedback on the first iteration: {answer}
-         On this step you need to refine your feedback.
-         Make sure to follow the following steps to assess and improve your feedback:
-         It shuold follow the grading instructions and the sample solution, if it doesn't, consider improvements.
-         If you have your own additional improvements that are not present in the grading instructions, add them in a new feedback with 0 credits and no reference.
-         Remember that your response is directly seen by students and it should adress them directly.
-         For each feedback where the student has room for improvement, think about how the student could improve his solution.
-         Once you have thought how the student can improve the solution, formulate it in a way that guides the student towards the correct solution without revealing it directly.
-         Consider improvements to the feedback if any of this points is not satisfied.
-         
-         Respond in json
+ Your task is to format the given text from the human into a json. The json must strictly follow the following instructions:
+You should only reply in valid json without any additional comments.
+The json must begin with the property "feedback_list" which is an array of many feedback elements. Each element of this array only has these fields and it must contain all of them with the exact same name as given here: "feedback_list", which contains "description", "credits", "line_start", "line_end", "title", "grading_instruction_id".
 
          """
 
 human_message = """\
-Student\'s submission to grade (with sentence numbers <number>: <sentence>):
 \"\"\"
-{submission}
+{answer}
 \"\"\"\
 """
 
@@ -52,5 +43,4 @@ class FeedbackModel(BaseModel):
 class AssessmentModel(BaseModel):
     """Collection of feedbacks making up an assessment"""
     
-    feedbacks: List[FeedbackModel] = Field(description="Assessment feedbacks")
-    
+    feedback_list: List[FeedbackModel] = Field(description="Assessment feedbacks")

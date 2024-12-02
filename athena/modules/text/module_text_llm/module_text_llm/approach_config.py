@@ -6,6 +6,7 @@ from enum import Enum
 class ApproachType(str, Enum):
     basic = "BasicApproach"
     chain_of_thought = "ChainOfThought"
+    ollama_cot = "OllamaChainOfThought"
     
 class ApproachConfig(BaseModel, ABC):
     max_input_tokens: int = Field(default=3000, description="Maximum number of tokens in the input prompt.")
