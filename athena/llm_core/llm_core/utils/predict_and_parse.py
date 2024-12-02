@@ -68,9 +68,3 @@ async def predict_and_parse(
         except ValidationError as e:
             raise ValueError(f"Could not parse output: {e}") from e
         
-
-
-    try:
-        return await chain.ainvoke(prompt_input, config={"tags": tags})
-    except ValidationError as e:
-        raise ValueError(f"Could not parse output: {e}") from e
