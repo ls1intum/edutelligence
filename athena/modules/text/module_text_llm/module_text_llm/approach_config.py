@@ -6,7 +6,8 @@ from enum import Enum
 class ApproachType(str, Enum):
     basic = "BasicApproach"
     chain_of_thought = "ChainOfThought"
-    
+    rag = "RagApproach"
+
 class ApproachConfig(BaseModel, ABC):
     max_input_tokens: int = Field(default=3000, description="Maximum number of tokens in the input prompt.")
     model: ModelConfigType = Field(default=DefaultModelConfig())
