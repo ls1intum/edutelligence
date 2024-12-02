@@ -6,7 +6,7 @@ from module_text_llm.approach_config import ApproachConfig
 from module_text_llm.ollama_chain_of_thought_approach.prompt_generate_feedback import CoTGenerateSuggestionsPrompt
 from module_text_llm.ollama_chain_of_thought_approach.prompt_thinking import ThinkingPrompt
 
-class ChainOfThoughtConfig(ApproachConfig):
+class OllamaChainOfThoughtConfig(ApproachConfig):
     # Defaults to the cheaper mini 4o model
     type: Literal['ollama_chain_of_thought'] = 'ollama_chain_of_thought'
     model: ModelConfigType = Field(default=OllamaModelConfig)  # type: ignore
