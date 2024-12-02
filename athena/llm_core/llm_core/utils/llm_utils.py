@@ -1,7 +1,7 @@
 from typing import Type, TypeVar, List
 from pydantic import BaseModel
 import tiktoken
-from langchain.chat_models import ChatOpenAI
+from langchain_openai import AzureChatOpenAI, ChatOpenAI
 from langchain.base_language import BaseLanguageModel
 from langchain.prompts import (
     ChatPromptTemplate,
@@ -75,7 +75,7 @@ def supports_function_calling(model: BaseLanguageModel):
     Returns:
         boolean: True if the model supports function calling, False otherwise
     """
-    return isinstance(model, ChatOpenAI)
+    return isinstance(model, ChatOpenAI)  or isinstance(model, AzureChatOpenAI)
 
 
 def get_chat_prompt_with_formatting_instructions(
