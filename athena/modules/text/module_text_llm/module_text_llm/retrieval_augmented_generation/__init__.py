@@ -8,3 +8,4 @@ from module_text_llm.retrieval_augmented_generation.prompt_generate_suggestions 
 class RAGApproachConfig(ApproachConfig):
     type: Literal['rag'] = 'rag'
     generate_suggestions_prompt: GenerateSuggestionsPrompt = Field(default=GenerateSuggestionsPrompt())
+    

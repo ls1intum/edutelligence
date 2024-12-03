@@ -12,7 +12,6 @@ from athena.text import Exercise, Submission, Feedback
 from module_text_llm.config import BasicApproachConfig
 from module_text_llm.helpers.utils import add_sentence_numbers, get_index_range_from_line_range, format_grading_instructions
 from module_text_llm.basic_approach.prompt_generate_suggestions import AssessmentModel
-from module_text_llm.retrieval_augmented_generation.agents import TutorAgent
 from module_text_llm.retrieval_augmented_generation import tutor
 async def generate_suggestions(exercise: Exercise, submission: Submission, config: BasicApproachConfig, debug: bool) -> List[Feedback]:
     model = config.model.get_model()  # type: ignore[attr-defined]

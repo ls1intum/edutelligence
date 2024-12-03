@@ -2,7 +2,6 @@ from langchain_openai import ChatOpenAI
 from langchain_core.chat_history import InMemoryChatMessageHistory
 from langchain_core.prompts import ChatPromptTemplate
 from langchain.agents import AgentExecutor, create_tool_calling_agent
-from langchain_core.runnables.history import RunnableWithMessageHistory
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_core.vectorstores import InMemoryVectorStore
 from langchain_openai import OpenAIEmbeddings
@@ -36,7 +35,7 @@ class AssessmentModelParse(BaseModel):
         
 class TutorAgent:
     def __init__(self, session_id="test-session"):
-        # Initialize model, memory, and tools
+        # TODO make model selecteable later
         self.model = ChatOpenAI(model="gpt-4o-2024-08-06") #gpt-4o-2024-08-06 , gpt-4o-mini
         self.memory = InMemoryChatMessageHistory(session_id=session_id)
         all_docs = []
@@ -55,14 +54,7 @@ class TutorAgent:
 
         retriever = vectorstore.as_retriever()
         retriever_tool = create_retriever_tool(retriever, name="retrieve_document", description="Retrieves the pdf documents from the relevant lecture")
-   
-        # Define the prompt template with a system message placeholder
-
-
-        # Define the tools
         self.tools = [retriever_tool,AssessmentModel]
-        # structured_llm = self.model.with_structured_output(AssessmentModel)
-        # Create the agent and executor
 
         
     def setConfig(self,approach_config):
@@ -71,7 +63,7 @@ class TutorAgent:
             [
                 ("system", self.approach_config.generate_suggestions_prompt.system_message),
                 ("human", "{submission}"),
-                ("placeholder", "{agent_scratchpad}"),  # Internal for steps created through function calling
+                ("placeholder", "{agent_scratchpad}"),
             ])
         self.agent = create_tool_calling_agent(self.model, self.tools, self.prompt)
         self.agent_executor = AgentExecutor(agent=self.agent, tools=self.tools)
@@ -88,40 +80,10 @@ class TutorAgent:
 
         chain = self.agent_executor | parser 
         response = self.agent_executor.invoke(
-            input = prompt#  , "system_message": system_message
+            input = prompt
         )
         import json
         print(response)
         res = AssessmentModelParse.parse_obj(json.loads(response["output"]))
         return res
-
-
-#      system_message = """You are an AI tutor for text assessment at a prestigious university.
-
-# # Task
-# Create graded feedback suggestions for a student's text submission that a human tutor would accept. Meaning, the feedback you provide should be applicable to the submission with little to no modification.
-
-# You have access to the provided document lecture slides to help you provide feedback. 
-# If you do use them, please reference the title and the page on your feedback.
-# Write it down epxlicitly when lecture slides or contents are relvant. 
-
-# # Style
-# 1. Constructive, 2. Specific, 3. Balanced, 4. Clear and Concise, 5. Actionable, 6. Educational, 7. Contextual
-
-# Make use of the lecture slides provided. State clearly on your feedback which lecture you are using. If you
-# believe that the student could benefit from the slide refer it on your feedback.
-
-# The grading instructions are there to guide you on which criteria to give points. 
-# You can comment with 0 points about grammar and spelling errors, but you should not give or remove points for them.
-
-# # Problem statement
-# {problem_statement}
-
-# # Example solution
-# {example_solution}
-
-# # Grading instructions
-# {grading_instructions}
-# Max points: {max_points}, bonus points: {bonus_points}    
-# Respond only in json with the provided Assessment Feedback schema.
-# """
+    
