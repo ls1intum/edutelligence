@@ -44,7 +44,7 @@ def convert_to_athana_feedback_model(
             id=None,
             is_graded=False,
             reference=reference,
-            element_ids=[reference_id] if reference_id else []
+            element_ids=[reference] if reference else [] # Todo: Remove after adding migrations to athena
         ))
 
     return feedbacks
