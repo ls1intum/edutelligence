@@ -29,14 +29,11 @@ You can comment with 0 points about grammar and spelling errors, but you should 
 # You can use the following grading instructions as a baseline for how you distribute credits, but write your own fedeback. Do not use the feedback provided to write your feedback.
 {grading_instructions}
 Max points: {max_points}, bonus points: {bonus_points}    
-Respond only in json with the provided Assessment Feedback schema but do not prefix the json with "json".
-
+Your feedback must include a title, a feedback, credits, where applicable also the grading instrution id, and where also preferably the line_start and line_end in the submission to which this feedback belongs to.
 """
 
 human_message = """\
 Student\'s submission to grade (with sentence numbers <number>: <sentence>):
-
-Respond in json.
 
 \"\"\"
 {submission}

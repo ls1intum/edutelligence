@@ -9,6 +9,9 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain.tools.retriever import create_retriever_tool
 from pydantic import BaseModel, Field
 from langchain_core.tools import tool
+from langchain.chains.combine_documents import create_stuff_documents_chain
+from langchain.chains import create_retrieval_chain
+
 import glob
 from typing import List, Optional
 # Output Object
@@ -34,10 +37,10 @@ class AssessmentModelParse(BaseModel):
     feedbacks: List[FeedbackModel] = Field(description="Assessment feedbacks")
         
 class TutorAgent:
-    def __init__(self, session_id="test-session"):
+    def __init__(self):
         # TODO make model selecteable later
         self.model = ChatOpenAI(model="gpt-4o-2024-08-06") #gpt-4o-2024-08-06 , gpt-4o-mini
-        self.memory = InMemoryChatMessageHistory(session_id=session_id)
+        self.outputModel = ChatOpenAI(model="gpt-4o-mini")
         all_docs = []
         file_paths = glob.glob("module_text_llm/retrieval_augmented_generation/pdfs/*.pdf")
         self.approach_config = None
@@ -52,10 +55,9 @@ class TutorAgent:
             documents=splits, embedding=OpenAIEmbeddings()
         )
 
-        retriever = vectorstore.as_retriever()
-        retriever_tool = create_retriever_tool(retriever, name="retrieve_document", description="Retrieves the pdf documents from the relevant lecture")
+        self.retriever = vectorstore.as_retriever()
+        retriever_tool = create_retriever_tool(self.retriever, name="retrieve_document", description="Retrieves the pdf documents from the relevant lecture")
         self.tools = [retriever_tool,AssessmentModel]
-
         
     def setConfig(self,approach_config):
         self.approach_config = approach_config
@@ -67,23 +69,16 @@ class TutorAgent:
             ])
         self.agent = create_tool_calling_agent(self.model, self.tools, self.prompt)
         self.agent_executor = AgentExecutor(agent=self.agent, tools=self.tools)
-
         # Default configuration for the agent
         self.config = {"configurable": {"session_id": "test-session"}}
         
     def call_agent(self, prompt):
         """Calls the agent with a prompt and returns the response output.
         Optionally takes a system_message to update the agent's behavior dynamically."""
-        from langchain_core.output_parsers import PydanticOutputParser
-
-        parser = PydanticOutputParser(pydantic_object=AssessmentModelParse)
-
-        chain = self.agent_executor | parser 
         response = self.agent_executor.invoke(
             input = prompt
         )
-        import json
         print(response)
-        res = AssessmentModelParse.parse_obj(json.loads(response["output"]))
+        res = self.outputModel.with_structured_output(AssessmentModelParse).invoke(f"Format the following output {response}") 
         return res
     
