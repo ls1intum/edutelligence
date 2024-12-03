@@ -8,4 +8,4 @@ from module_text_llm.basic_approach.prompt_generate_suggestions import GenerateS
 class BasicApproachConfig(ApproachConfig):
     type: Literal['basic'] = 'basic'
     generate_suggestions_prompt: GenerateSuggestionsPrompt = Field(default=GenerateSuggestionsPrompt())
-
+    

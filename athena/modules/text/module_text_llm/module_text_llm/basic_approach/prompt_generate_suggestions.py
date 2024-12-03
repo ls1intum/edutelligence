@@ -1,6 +1,5 @@
 from pydantic import Field, BaseModel
 from typing import List, Optional
-from pydantic import BaseModel, Field
 
 system_message = """\
 You are an AI tutor for text assessment at a prestigious university.
@@ -62,4 +61,4 @@ class AssessmentModel(BaseModel):
     """Collection of feedbacks making up an assessment"""
     
     feedbacks: List[FeedbackModel] = Field(description="Assessment feedbacks")
-
+    

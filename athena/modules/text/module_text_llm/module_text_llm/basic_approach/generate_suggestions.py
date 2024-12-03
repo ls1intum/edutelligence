@@ -8,7 +8,6 @@ from llm_core.utils.llm_utils import (
     check_prompt_length_and_omit_features_if_necessary, 
     num_tokens_from_prompt,
 )
-from athena.text import Exercise, Submission, Feedback
 from llm_core.utils.predict_and_parse import predict_and_parse
 
 from module_text_llm.config import BasicApproachConfig
