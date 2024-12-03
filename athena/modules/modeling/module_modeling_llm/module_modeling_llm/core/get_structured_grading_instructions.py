@@ -1,9 +1,13 @@
-from typing import List, Optional
+import hashlib
+import json
+from typing import Any, Dict, List, Optional
+from athena import logger
 from athena.metadata import emit_meta
+from athena.storage.structured_grading_criterion_storage import get_structured_grading_criterion, store_structured_grading_criterion
 from langchain_core.output_parsers import PydanticOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 
-from athena.schemas.grading_criterion import GradingCriterion, StructuredGradingCriterion
+from athena.schemas import GradingCriterion, StructuredGradingCriterion
 from llm_core.utils.predict_and_parse import predict_and_parse
 from module_modeling_llm.config import BasicApproachConfig
 from module_modeling_llm.models.exercise_model import ExerciseModel
@@ -19,6 +23,12 @@ async def get_structured_grading_instructions(
     
     if grading_criteria:
         return StructuredGradingCriterion(criteria=grading_criteria)
+    
+    # Check if we have cached instructions for this exercise
+    current_hash = get_grading_instructions_hash(exercise_model)
+    cached_instructions = get_structured_grading_criterion(exercise_model.exercise_id, current_hash)
+    if cached_instructions:
+        return cached_instructions
 
     chat_prompt = ChatPromptTemplate.from_messages([
         ("system", config.generate_suggestions_prompt.structured_grading_instructions_system_message),
@@ -53,5 +63,22 @@ async def get_structured_grading_instructions(
 
     if not grading_instruction_result:
         raise ValueError("No structured grading instructions were returned by the model.")
+    
+    # Cache the grading instructions
+    hash = get_grading_instructions_hash(exercise_model)
+    store_structured_grading_criterion(exercise_model.exercise_id, hash, grading_instruction_result)
 
     return grading_instruction_result
+
+def get_grading_instructions_hash(exercise: ExerciseModel) -> str:
+
+    hashable_data = {
+        "problem_statement": exercise.problem_statement,
+        "grading_instructions": exercise.grading_instructions,
+        "sample_solution": exercise.transformed_example_solution,
+        "max_points": exercise.max_points,
+        "bonus_points": exercise.bonus_points,
+    }
+
+    json_string = json.dumps(hashable_data, sort_keys=True, default=str)
+    return hashlib.sha256(json_string.encode()).hexdigest()
