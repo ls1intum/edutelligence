@@ -13,6 +13,6 @@ async def generate_suggestions(exercise: Exercise, submission: Submission, confi
         return await generate_suggestions_basic(exercise, submission, config, debug)
     if isinstance(config, ChainOfThoughtConfig):
         return await generate_cot_suggestions(exercise, submission, config, debug)
-    if(isinstance(config, RAGApproachConfig)):
+    if isinstance(config, RAGApproachConfig):
         return await generate_rag_suggestions(exercise, submission, config, debug)
     raise ValueError("Unsupported config type provided.")
