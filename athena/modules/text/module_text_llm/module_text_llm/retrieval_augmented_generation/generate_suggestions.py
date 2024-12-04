@@ -8,7 +8,6 @@ from llm_core.utils.llm_utils import (
     check_prompt_length_and_omit_features_if_necessary, 
     num_tokens_from_prompt,
 )
-from athena.text import Exercise, Submission, Feedback
 from module_text_llm.config import BasicApproachConfig
 from module_text_llm.helpers.utils import add_sentence_numbers, get_index_range_from_line_range, format_grading_instructions
 from module_text_llm.basic_approach.prompt_generate_suggestions import AssessmentModel
