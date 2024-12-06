@@ -1,0 +1,69 @@
+name: Documentation
+
+on:
+  push:
+    branches:
+    - main
+    paths:
+    - 'docs/**'
+    - '.github/workflows/docs.yml'
+  workflow_dispatch:
+
+jobs:
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-python@v5
+      with:
+        # keep in sync with Python version in docs/.readthedocs.yaml
+        python-version: "3.10"
+    - name: Build documentation
+      run: |
+        cd docs
+        pip install -r requirements.txt
+        make html dirhtml
+    - uses: actions/upload-artifact@v4
+      with:
+        name: documentation
+        path: docs/_build/html/
+
+  # Deployment job
+  deploy:
+    if: github.ref == 'refs/heads/develop'
+    environment:
+      name: documentation
+      url: "https://atlas-docs.ase.cit.tum.de"
+    runs-on: ubuntu-latest
+    needs: docs
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: documentation
+          path: public
+      - name: Copy site to server
+        uses: appleboy/scp-action@master
+        with:
+          host: atlas-docs.ase.cit.tum.de
+          username: ${{ vars.DOCS_SSH_USER }}
+          key: ${{ secrets.DEPLOYMENT_SSH_KEY }}
+          proxy_host: ${{ vars.DEPLOYMENT_GATEWAY_HOST }}
+          proxy_username: ${{ vars.DEPLOYMENT_GATEWAY_USER }}
+          proxy_key: ${{ secrets.DEPLOYMENT_GATEWAY_SSH_KEY }}
+          proxy_port: ${{ vars.DEPLOYMENT_GATEWAY_PORT }}
+          source: "public"
+          target: ${{ vars.DOCS_HOME }}
+      - name: Move site to www
+        uses: appleboy/ssh-action@master
+        with:
+          host: atlas-docs.ase.cit.tum.de
+          username: ${{ vars.DOCS_SSH_USER }}
+          key: ${{ secrets.DEPLOYMENT_SSH_KEY }}
+          proxy_host: ${{ vars.DEPLOYMENT_GATEWAY_HOST }}
+          proxy_username: ${{ vars.DEPLOYMENT_GATEWAY_USER }}
+          proxy_key: ${{ secrets.DEPLOYMENT_GATEWAY_SSH_KEY }}
+          proxy_port: ${{ vars.DEPLOYMENT_GATEWAY_PORT }}
+          script: |
+              rm -rf ${{ vars.DOCS_WWW }}/*
+              mv -f public/* ${{ vars.DOCS_WWW }}/
