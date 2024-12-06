@@ -28,6 +28,7 @@ async def get_structured_grading_instructions(
     current_hash = get_grading_instructions_hash(exercise_model)
     cached_instructions = get_structured_grading_criterion(exercise_model.exercise_id, current_hash)
     if cached_instructions:
+        print("Using cached instructions")
         return cached_instructions
 
     chat_prompt = ChatPromptTemplate.from_messages([
