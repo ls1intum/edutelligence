@@ -82,3 +82,11 @@ services:
       - llm_core
     ports:
       - "5008:5008"
+
+  module_programming_winnowing:
+    hostname: module-programming-winnowing
+    build: modules/programming/module_programming_winnowing
+    depends_on:
+      - athena
+    ports:
+      - "5009:5009"

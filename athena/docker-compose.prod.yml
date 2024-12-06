@@ -71,6 +71,14 @@ services:
       - postgres
     image: ls1tum/athena_module_programming_apted:${ATHENA_TAG:-develop}
 
+  module_programming_winnowing:
+    hostname: module-programming-winnowing
+    env_file:
+      - ${ATHENA_ENV_DIR:-./env_example}/module_programming_winnowing.env
+    depends_on:
+      - postgres
+    image: ls1tum/athena_module_programming_winnowing:${ATHENA_TAG:-develop}
+
   module_modeling_llm:
     hostname: module-modeling-llm
     env_file:
