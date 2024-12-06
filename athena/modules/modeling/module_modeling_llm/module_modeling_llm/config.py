@@ -43,7 +43,7 @@ class GenerateSuggestionsPrompt(BaseModel):
 
 class BasicApproachConfig(BaseModel):
     """This approach uses a LLM with a single prompt to generate feedback in a single step."""
-    max_input_tokens: int = Field(default=3000, description="Maximum number of tokens in the input prompt.")
+    max_input_tokens: int = Field(default=5000, description="Maximum number of tokens in the input prompt.")
     model: ModelConfigType = Field(default=DefaultModelConfig())  # type: ignore
     generate_suggestions_prompt: GenerateSuggestionsPrompt = Field(default=GenerateSuggestionsPrompt())
 

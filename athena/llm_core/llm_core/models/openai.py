@@ -67,7 +67,7 @@ if available_models:
 
         model_name: OpenAIModel = Field(default=default_openai_model, # type: ignore
                                         description="The name of the model to use.")
-        max_tokens: PositiveInt = Field(1000, description="""\
+        max_tokens: PositiveInt = Field(4000, description="""\
 The maximum number of [tokens](https://platform.openai.com/tokenizer) to generate in the chat completion.
 
 The total length of input tokens and generated tokens is limited by the model's context length. \
