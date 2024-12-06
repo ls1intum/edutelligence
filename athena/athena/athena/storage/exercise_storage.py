@@ -42,10 +42,13 @@ def store_exercises(exercises: List[Exercise], lms_url: Optional[str] = None):
     if lms_url is None:
         lms_url = get_lms_url()
 
+    print("Exercise lms_url 2: ", lms_url, "\n\n\n\n")
+
     with get_db() as db:
         for e in exercises:
             exercise_model = e.to_model()
             exercise_model.lms_url = lms_url
+            print("Exercise model: ", exercise_model.lms_url, "\n\n\n\n")
             db.merge(exercise_model)
         db.commit()
 
