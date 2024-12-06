@@ -30,7 +30,6 @@ jobs:
 
   # Deployment job
   deploy:
-    if: github.ref == 'refs/heads/develop'
     environment:
       name: documentation
       url: "https://atlas-docs.ase.cit.tum.de"
