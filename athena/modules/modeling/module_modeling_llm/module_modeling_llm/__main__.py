@@ -58,6 +58,6 @@ async def suggest_feedback(exercise: Exercise, submission: Submission, is_graded
 
 
 if __name__ == "__main__":
-    nltk.download("punkt")
+    nltk.download("punkt_tab")
     tiktoken.get_encoding("cl100k_base")
     app.start()
