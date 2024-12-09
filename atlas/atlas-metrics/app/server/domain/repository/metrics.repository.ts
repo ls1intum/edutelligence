@@ -18,4 +18,6 @@ export interface IMetricsRepository {
     from?: Date,
     to?: Date,
   ): Promise<EndpointActivityFullDAO[]>;
+
+  getRegisteredServices(): Promise<string[]>;
 }

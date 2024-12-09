@@ -56,6 +56,11 @@ export interface IMetricsService {
     from?: Date,
     to?: Date,
   ): Promise<EndpointActivityBucketDAO[]>;
+
+  /**
+   * Get all registered services.
+   */
+  getRegisteredServices(): Promise<string[]>;
 }
 
 export class MetricsServiceImpl implements IMetricsService {
@@ -126,5 +131,10 @@ export class MetricsServiceImpl implements IMetricsService {
       const endpoint = key.split("_")[0]; // Extract endpoint from the key
       return { endpoint, type, date, count };
     });
+  }
+
+  async getRegisteredServices(): Promise<string[]> {
+    const services = await this.metricsRepository.getRegisteredServices();
+    return services.sort();
   }
 }

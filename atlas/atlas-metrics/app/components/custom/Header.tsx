@@ -1,5 +1,5 @@
 import { AuthButton } from "@components/custom/AuthButton";
-import {Nav} from "@components/custom/Nav";
+import { Nav } from "@components/custom/Nav";
 
 export function Header() {
   return (
@@ -8,9 +8,9 @@ export function Header() {
         <h1 className="scroll-m-20 justify-self-start text-4xl font-extrabold tracking-tight lg:text-5xl">
           Atlas Metrics
         </h1>
-          <div className="justify-self-start">
-              <Nav />
-          </div>
+        <div className="justify-self-start">
+          <Nav />
+        </div>
         <AuthButton />
       </div>
     </header>

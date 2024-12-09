@@ -4,6 +4,7 @@ import { validateEndpointActivitySchema } from "@server/infrastructure/influx/mo
 import { RequestType } from "@server/domain/dao/RequestTypes";
 import { IMetricsRepository } from "@server/domain/repository/metrics.repository";
 import { EndpointActivityFullDAO } from "@server/domain/dao/endpointActivity";
+import { validateServiceSchema } from "@server/infrastructure/influx/models/service.schema";
 
 enum Measurement {
   ENDPOINT_ACTIVITY = "endpoint_activity",
@@ -71,6 +72,20 @@ export class MetricsRepositoryImpl implements IMetricsRepository {
         `;
     const rows = await this.influxClient.collectRows(query);
     return validateEndpointActivitySchema(rows);
+  }
+
+  async getRegisteredServices(): Promise<string[]> {
+    const query = `
+        from(bucket: "atlas-metrics")
+          |> range(start: 0)
+          |> filter(fn: (r) => exists r["service"])
+          |> keep(columns: ["service"])
+          |> distinct(column: "service")
+          |> drop(columns: ["service"])
+          |> rename(columns: {_value: "service"})
+      `;
+    const rows = await this.influxClient.collectRows(query);
+    return validateServiceSchema(rows);
   }
 
   private writePointsToInflux = async (
