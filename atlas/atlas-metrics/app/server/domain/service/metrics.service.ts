@@ -134,7 +134,6 @@ export class MetricsServiceImpl implements IMetricsService {
   }
 
   async getRegisteredServices(): Promise<string[]> {
-    const services = await this.metricsRepository.getRegisteredServices();
-    return services.sort();
+    return (await this.metricsRepository.getRegisteredServices()).sort();
   }
 }
