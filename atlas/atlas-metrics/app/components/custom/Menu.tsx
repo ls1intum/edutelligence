@@ -3,12 +3,15 @@
 import { DateRangePicker } from "@components/custom/DateRangePicker";
 import { ServiceSelect } from "@components/custom/ServiceSelect";
 
-const services = ["Service A", "Service B"];
+interface MenuProps {
+  selectedService?: string;
+  services: string[];
+}
 
-export function Menu() {
+export function Menu({ selectedService, services }: MenuProps) {
   return (
     <div className="grid auto-cols-max grid-flow-col justify-end gap-5 pb-5">
-      <ServiceSelect selectedService={services[0]} services={services} />
+      <ServiceSelect selectedService={selectedService} services={services} />
       <DateRangePicker />
     </div>
   );

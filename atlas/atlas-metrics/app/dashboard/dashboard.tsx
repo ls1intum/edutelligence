@@ -3,16 +3,39 @@ import { PieChartDonut } from "@components/custom/PieChartDonut";
 import { Menu } from "@components/custom/Menu";
 import { useEffect, useState } from "react";
 import { DashboardDataDAO, DashboardDataSchema } from "@server/domain/dao/dashboardData";
+import { z } from "zod";
+import { useSearchParams } from "next/navigation";
 
 export default function Dashboard() {
+  const searchParams = useSearchParams();
+  const selectedService = searchParams.get("service") ?? undefined;
+  const [services, setServices] = useState<string[]>([]);
   const [metrics, setMetrics] = useState<DashboardDataDAO | undefined>(undefined);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    async function fetchServices() {
+      try {
+        const response = await fetch("/api/data/service");
+        const data = await response.json();
+        const parsed = z.array(z.string()).safeParse(data);
+        if (parsed.success) {
+          setServices(parsed.data);
+        } else {
+          setError(`Invalid response type: ${parsed.error}`);
+        }
+      } catch (error) {
+        setError((error as Error).message);
+      }
+    }
+
     async function fetchMetrics() {
       try {
-        const response = await fetch("/api/data/dashboard");
+        const requestUrl = selectedService
+          ? `/api/data/dashboard?service=${selectedService}`
+          : "/api/data/dashboard";
+        const response = await fetch(requestUrl);
         const data = await response.json();
         const parsed = DashboardDataSchema.safeParse(data);
 
@@ -26,7 +49,9 @@ export default function Dashboard() {
       }
     }
 
-    fetchMetrics().finally(() => setLoading(false));
+    fetchServices()
+      .then(fetchMetrics)
+      .finally(() => setLoading(false));
   }, []);
 
   if (loading) {
@@ -39,7 +64,7 @@ export default function Dashboard() {
 
   return (
     <div className="m-5 min-h-screen text-center">
-      <Menu />
+      <Menu selectedService={selectedService} services={services} />
       <div className="pb-5">
         <EndpointActivity
           title="Endpoint Activity"

@@ -10,7 +10,7 @@ import {
 } from "@components/ui/select";
 
 interface ServiceSelectProps {
-  selectedService: string;
+  selectedService?: string;
   services: string[];
 }
 
