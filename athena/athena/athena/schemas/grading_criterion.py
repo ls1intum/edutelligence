@@ -1,7 +1,7 @@
 from abc import ABC
 from typing import List, Optional
 
-from pydantic import Field
+from pydantic import BaseModel, Field
 
 from .schema import Schema
 
@@ -24,3 +24,6 @@ class GradingCriterion(Schema, ABC):
     structured_grading_instructions: List[StructuredGradingInstruction] = Field(
         [], example=[{"credits": 1.0, "gradingScale": "Good", "instructionDescription": "Some instructions", "feedback": "Nicely done!", "usageCount": 1},
                      {"credits": 0.0, "gradingScale": "Bad", "instructionDescription": "Some instructions", "feedback": "Try again!", "usageCount": 0}])
+
+class StructuredGradingCriterion(BaseModel):
+    criteria: List[GradingCriterion]

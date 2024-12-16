@@ -1,12 +1,16 @@
 import type { Exercise } from "@/model/exercise";
 import type { Submission } from "@/model/submission";
-import type { Feedback } from "@/model/feedback";
+import type { CategorizedFeedback, Feedback } from "@/model/feedback";
 import type { DataMode } from "@/model/data_mode";
 
 import path from "path";
 import fs from "fs";
 
 import baseUrl from "@/helpers/base_url";
+import { ExpertEvaluationProgress } from "@/model/expert_evaluation_progress";
+import { ExpertEvaluationConfig } from "@/model/expert_evaluation_config";
+import { v4 as uuidv4 } from "uuid";
+import { ExpertEvaluationProgressStats } from "@/model/expert_evaluation_progress_stats";
 
 /**
  * Splits the given data mode into its parts.
@@ -100,10 +104,14 @@ function addExerciseTypeToSubmissionsAndFeedbacks(json: any): any {
 
   json.submissions = json.submissions?.map((submissionJson: any) => {
     submissionJson.type = exerciseType;
-    submissionJson.feedbacks = submissionJson.feedbacks?.map((feedbackJson: any) => {
-      feedbackJson.type = exerciseType;
-      return feedbackJson;
-    });
+
+    if (Array.isArray(submissionJson.feedbacks)) {
+      submissionJson.feedbacks = submissionJson.feedbacks?.map((feedbackJson: any) => {
+        feedbackJson.type = exerciseType;
+        return feedbackJson;
+      });
+    }
+
     return submissionJson;
   });
   return json;
@@ -206,6 +214,42 @@ function jsonToExercise(json: any): Exercise {
   return exercise;
 }
 
+export function addStructuredGradingInstructionsToFeedback(
+  config: ExpertEvaluationConfig | undefined,
+) {
+  if (config) {
+    config.exercises.forEach((exercise) => {
+      const submissions = exercise.submissions;
+      if (submissions) {
+        for (const submission of submissions) {
+          const feedback = submission.feedbacks;
+
+          if (feedback) {
+            const processedFeedbacks: CategorizedFeedback = {};
+
+            Object.keys(feedback).forEach((category) => {
+              // Map over feedback and link structured grading instructions
+              processedFeedbacks[category] = feedback[category].map((feedbackItem) => {
+                if (feedbackItem.structured_grading_instruction_id) {
+                  feedbackItem.structured_grading_instruction = exercise?.grading_criteria
+                    ?.flatMap((criteria) => criteria.structured_grading_instructions)
+                    .find(
+                      (instruction) =>
+                        instruction.id === feedbackItem.structured_grading_instruction_id
+                    );
+                }
+                return feedbackItem;
+              });
+
+            });
+            submission.feedbacks = processedFeedbacks;
+          }
+        }
+      }
+    });
+  }
+}
+
 function jsonToSubmissions(json: any): Submission[] {
   return json.submissions.map((submissionJson: any) => {
     const submission = submissionJson as Submission;
@@ -221,7 +265,7 @@ function jsonToSubmissions(json: any): Submission[] {
 function jsonToFeedbacks(json: any): Feedback[] {
   return json.submissions.flatMap((submissionJson: any) => {
     if (Array.isArray(submissionJson.feedbacks)) {
-      const feedbacks = submissionJson.feedbacks.map((feedbackJson: any) => {
+      return submissionJson.feedbacks.map((feedbackJson: any) => {
         const feedback = feedbackJson as Feedback;
         // exercise_id is not provided in the json for convenience, so we add it here
         feedback.exercise_id = json.id;
@@ -229,7 +273,6 @@ function jsonToFeedbacks(json: any): Feedback[] {
         feedback.submission_id = submissionJson.id;
         return feedback;
       });
-      return feedbacks;
     }
     return [];
   });
@@ -259,4 +302,233 @@ export function getFeedbacks(
     return jsonToFeedbacks(getExerciseJSON(dataMode, exerciseId, athenaOrigin));
   }
   return getAllExerciseJSON(dataMode, athenaOrigin).flatMap(jsonToFeedbacks);
+}
+
+export function saveProgressToFileSync(
+  dataMode: DataMode,
+  expertEvaluationId: string,
+  expertId: string,
+  expertEvaluationProgress: ExpertEvaluationProgress
+) {
+  const progressData = JSON.stringify(expertEvaluationProgress, null, 2);
+
+  const progressPath = path.join(
+    process.cwd(),
+    "data",
+    ...getDataModeParts(dataMode),
+    `evaluation_${expertEvaluationId}`,
+    `evaluation_progress_${expertId}.json`
+  );
+
+  return fs.writeFileSync(progressPath, progressData, 'utf8');
+}
+
+export function anonymizeFeedbackCategoriesAndShuffle(
+  expertEvaluationConfig: ExpertEvaluationConfig
+) {
+  const mappings: { [key: string]: string } = {};
+
+  // Iterate over exercises
+  for (const exercise of expertEvaluationConfig.exercises) {
+    const submissions = exercise.submissions;
+    if (submissions) {
+      // Shuffle submissions
+      exercise.submissions = submissions.sort(() => Math.random() - 0.5);
+
+      // Iterate over submissions
+      for (const submission of submissions) {
+        const feedback = submission.feedbacks;
+
+        if (feedback) {
+          const anonymizedFeedback: CategorizedFeedback = {};
+
+          // Iterate over each feedback category and anonymize the category names
+          Object.keys(feedback).forEach((originalCategory) => {
+            const anonymizedCategory = uuidv4();
+            mappings[anonymizedCategory] = originalCategory;
+
+            anonymizedFeedback[anonymizedCategory] = feedback[originalCategory];
+          });
+
+          // Now shuffle the anonymized feedback categories
+          const shuffledFeedbackEntries = Object.entries(anonymizedFeedback).sort(() => Math.random() - 0.5);
+          submission.feedbacks = Object.fromEntries(shuffledFeedbackEntries);
+        }
+      }
+    }
+  }
+  // Save the mappings as a plain object in the config
+  expertEvaluationConfig.mappings = mappings;
+}
+
+export function saveConfigToFileSync(
+  dataMode: DataMode,
+  expertEvaluation: ExpertEvaluationConfig,
+) {
+  const configData = JSON.stringify(expertEvaluation, null, 2);
+
+  const configPath = path.join(
+    process.cwd(),
+    "data",
+    ...getDataModeParts(dataMode),
+    `evaluation_config_${expertEvaluation.id}.json`
+  );
+
+  const progress: ExpertEvaluationProgress = {
+    current_submission_index: 0,
+    current_exercise_index: 0,
+    selected_values: {},
+    has_started_evaluating: false,
+    is_finished_evaluating: false,
+  };
+  const expertProgressData = JSON.stringify(progress, null, 2);
+
+  let dirPath = path.join(
+    process.cwd(),
+    "data",
+    ...getDataModeParts(dataMode),
+    `evaluation_${expertEvaluation.id}`);
+
+  // Create parent directory
+  if (!fs.existsSync(dirPath)) {
+    fs.mkdirSync(dirPath, { recursive: true });
+  }
+
+  if (expertEvaluation.expertIds) {
+    for (const expertId of expertEvaluation.expertIds) {
+      // Create progress json for each expert
+      let expertProgressPath = path.join(
+        dirPath,
+        `evaluation_progress_${expertId}.json`
+      );
+
+      // Only create a new empty progress file if it does not yet exist
+      if (!fs.existsSync(expertProgressPath)) {
+        fs.writeFileSync(expertProgressPath, expertProgressData, 'utf8');
+      }
+    }
+  }
+
+  // Create or update config file with exercises and data
+  return fs.writeFileSync(configPath, configData, 'utf8');
+}
+
+export function getProgressStatsFromFileSync(
+  dataMode: DataMode,
+  expertEvaluationId: string
+): ExpertEvaluationProgressStats | undefined {
+  let config = getConfigFromFileSync(dataMode, expertEvaluationId);
+  if (!config) {
+    return undefined;
+  }
+
+  let expertIds = config.expertIds;
+  if (!expertIds || expertIds.length === 0) {
+    return undefined;
+  }
+
+  const totalSubmissions = config.exercises.reduce((acc, exercise) => acc + (exercise.submissions?.length || 0), 0);
+
+  let progressStats: { [expertId: string]: number } = {};
+  for (const expertId of expertIds) {
+    let progress = getProgressFromFileSync(dataMode, expertEvaluationId, expertId);
+
+    if (progress && progress.is_finished_evaluating) {
+      progressStats[expertId] = totalSubmissions;
+    } else if (progress && progress.has_started_evaluating) {
+      progressStats[expertId] = config.exercises.slice(0, progress.current_exercise_index).reduce((sum, exercise) => sum + exercise.submissions!.length, 0) + progress.current_submission_index;
+    }
+  }
+
+  return {
+    totalSubmissions: totalSubmissions,
+    ...progressStats
+  };
+}
+
+export function getProgressFromFileSync(
+  dataMode: DataMode,
+  expertEvaluationId: string,
+  expertId: string
+): ExpertEvaluationProgress | undefined {
+
+  const progressPath = path.join(
+    process.cwd(),
+    "data",
+    ...getDataModeParts(dataMode),
+    `evaluation_${expertEvaluationId}`,
+    `evaluation_progress_${expertId}.json`
+  );
+
+  if (!fs.existsSync(progressPath)) {
+    console.log(`Could not find expert ${expertId}, belonging to expert evaluation ${expertEvaluationId}`);
+    return undefined;
+  }
+
+  return JSON.parse(fs.readFileSync(progressPath, "utf8"));
+}
+
+export function getConfigFromFileSync(
+  dataMode: DataMode,
+  expertEvaluationId: string
+): ExpertEvaluationConfig | undefined {
+  const configPath = path.join(
+    process.cwd(),
+    "data",
+    ...getDataModeParts(dataMode),
+    `evaluation_config_${expertEvaluationId}.json`
+  );
+
+  if (!fs.existsSync(configPath)) {
+    console.log(`Could not find find expert evaluation ${expertEvaluationId}`);
+    return undefined;
+  }
+  return JSON.parse(fs.readFileSync(configPath, "utf8"));
+}
+
+export function getAnonymizedConfigFromFileSync(
+  dataMode: DataMode,
+  expertEvaluationId: string
+): ExpertEvaluationConfig | undefined {
+  let config = getConfigFromFileSync(dataMode, expertEvaluationId);
+
+  if (config) {
+    delete config["expertIds"];
+    delete config["mappings"];
+  }
+
+  return config;
+}
+
+export function getAllConfigsFromFilesSync(
+  dataMode: DataMode,
+): ExpertEvaluationConfig[] {
+
+  const configPath = path.join(
+    process.cwd(),
+    "data",
+    ...getDataModeParts(dataMode));
+
+  const configs: ExpertEvaluationConfig[] = [];
+
+  if (!fs.existsSync(configPath)) {
+    return configs;
+  }
+
+  fs.readdirSync(configPath)
+    .filter((file) => file.startsWith('evaluation_config_') && file.endsWith('.json'))
+    .forEach((file) => {
+      const filePath = path.join(configPath, file);
+      const fileContents = fs.readFileSync(filePath, 'utf8');
+
+      try {
+        const config = JSON.parse(fileContents) as ExpertEvaluationConfig;
+        configs.push(config);
+
+      } catch (error) {
+        console.error(`Error parsing JSON from file ${file}:`, error);
+      }
+    });
+
+  return configs;
 }

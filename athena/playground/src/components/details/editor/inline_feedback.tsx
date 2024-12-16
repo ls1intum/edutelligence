@@ -19,6 +19,7 @@ type InlineFeedbackProps = {
   onManualRatingChange?: (manualRating: ManualRating) => void;
   model?: editor.ITextModel;
   className?: string;
+  hideDetails?: boolean;
 };
 
 export default function InlineFeedback({
@@ -28,6 +29,7 @@ export default function InlineFeedback({
   onManualRatingChange,
   model,
   className,
+  hideDetails,
 }: InlineFeedbackProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -145,29 +147,31 @@ export default function InlineFeedback({
       onMouseEnter={() => setIsHovering(true)}
       onMouseLeave={() => setIsHovering(false)}
     >
-      <div className="flex items-center justify-between px-4 py-2 border-b border-gray-300 text-xs text-gray-600">
-        <div className="break-all">
-          {referenceType === "unreferenced" && "Unreferenced"}
-          {"file_path" in feedback &&
-            referenceType === "unreferenced_file" &&
-            `References ${feedback.file_path}`}
-          {referenceType === "referenced" &&
-            `References ${formatReference(feedback)}`}
+      {hideDetails ? null : (
+        <div className="flex items-center justify-between px-4 py-2 border-b border-gray-300 text-xs text-gray-600">
+          <div className="break-all">
+            {referenceType === "unreferenced" && "Unreferenced"}
+            {"file_path" in feedback &&
+              referenceType === "unreferenced_file" &&
+              `References ${feedback.file_path}`}
+            {referenceType === "referenced" &&
+              `References ${formatReference(feedback)}`}
+          </div>
+          <div className="flex gap-1">
+            {feedback.structured_grading_instruction_id && (
+              <span className="text-xs text-orange-800 rounded-full px-2 py-0.5 bg-orange-100">
+                Grading&nbsp;Instruction&nbsp;
+                {feedback.structured_grading_instruction_id}
+              </span>
+            )}
+            {feedback.isSuggestion && (
+              <span className="text-xs text-violet-800 rounded-full px-2 py-0.5 bg-violet-100">
+                Suggestion
+              </span>
+            )}
+          </div>
         </div>
-        <div className="flex gap-1">
-          {feedback.structured_grading_instruction_id && (
-            <span className="text-xs text-orange-800 rounded-full px-2 py-0.5 bg-orange-100">
-              Grading&nbsp;Instruction&nbsp;
-              {feedback.structured_grading_instruction_id}
-            </span>
-          )}
-          {feedback.isSuggestion && (
-            <span className="text-xs text-violet-800 rounded-full px-2 py-0.5 bg-violet-100">
-              Suggestion
-            </span>
-          )}
-        </div>
-      </div>
+      )}
       <div className="flex justify-start items-start space-x-2 px-4 py-2">
         {isEditing && onFeedbackChange ? (
           <input

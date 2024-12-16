@@ -20,7 +20,7 @@ export default function ExerciseDetail({
   const specificExerciseDetail = (() => {
     switch (exercise.type) {
       case "text":
-        return <TextExerciseDetail exercise={exercise} openedInitially={openedInitially}/>;
+        return <TextExerciseDetail exercise={exercise} openedInitially={openedInitially} />;
       case "programming":
         return <ProgrammingExerciseDetail exercise={exercise} openedInitially={openedInitially} />;
       default:
@@ -29,7 +29,7 @@ export default function ExerciseDetail({
   })();
 
   return hideDisclosure ? (
-    <div className="mt-2 space-y-1">
+    <div className="mt-2 space-y-1 w-full lg:w-[60vw] max-h-[50vh] overflow-y-auto overflow-x-hidden flex flex-col">
       <CommonExerciseDetail exercise={exercise} openedInitially={openedInitially} />
       {specificExerciseDetail}
     </div>
@@ -40,7 +40,7 @@ export default function ExerciseDetail({
       openedInitially={openedInitially}
     >
       <>
-        <CommonExerciseDetail exercise={exercise}/>
+        <CommonExerciseDetail exercise={exercise} />
         {specificExerciseDetail}
       </>
     </Disclosure>

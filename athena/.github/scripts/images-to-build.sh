@@ -28,8 +28,8 @@ fi
 # Check if athena folder was changed (then we need to build all module_* images)
 ATHENA_CHANGED=$(echo "$CHANGED_FILES" | grep -q "^athena" && echo "true" || echo "false")
 
-# Loop over all root level directories
-for DIR in */; do
+# Loop over all root level directories and modules
+for DIR in modules/*/*/ */; do
     # If a Dockerfile exists in the directory
     if [[ -e "${DIR}Dockerfile" ]]; then
         DIR=${DIR%/} # Remove trailing slash
@@ -44,6 +44,7 @@ for DIR in */; do
             continue
         fi
 
+
         # Build all images on develop branch
         if [[ "$GITHUB_REF" == "refs/heads/develop" ]]; then
             DIRS+=("$DIR")
@@ -56,8 +57,11 @@ for DIR in */; do
             continue
         fi
 
+        # Extract just the final directory name (e.g., "module_example") from the full path
+        IMAGE_NAME_SUFFIX=$(basename "$DIR")
+
         # Construct Docker image name and tag
-        IMAGE_NAME="athena/$DIR"
+        IMAGE_NAME="athena/$IMAGE_NAME_SUFFIX"
         IMAGE_TAG="pr-$PR_NUMBER"
 
         # Check if any file has changed in that directory since the pull request was created

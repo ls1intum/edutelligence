@@ -1,9 +1,11 @@
 import type { ExerciseType } from "./exercise";
+import { CategorizedFeedback } from "@/model/feedback";
 
 type SubmissionBase = {
     id: number;
     type: ExerciseType; // Playground only
     exercise_id: number;
+    feedbacks?: CategorizedFeedback; // Playground only
     meta: {
         [key: string]: any;
     };
