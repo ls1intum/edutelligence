@@ -1,11 +1,5 @@
-import React, { useState } from 'react';
+import React, {useState} from 'react';
 import Popup from "@/components/expert_evaluation/expert_view/popup";
-import exerciseDetails from "@/assets/evaluation_tutorial/exercise_details.gif";
-import readSubmission from "@/assets/evaluation_tutorial/read_submission.gif";
-import evaluateMetrics from "@/assets/evaluation_tutorial/evaluate_metrics.gif";
-import metricsExplanation from "@/assets/evaluation_tutorial/metrics-explanation.gif";
-import viewNext from "@/assets/evaluation_tutorial/view-next.gif";
-import continueLater from "@/assets/evaluation_tutorial/continue_later.gif";
 import {
     InfoIconButton,
     NextButton,
@@ -17,24 +11,24 @@ import ExerciseDetail from "@/components/details/exercise_detail";
 
 const baseTutorialSteps = [
     {
-        image: exerciseDetails.src,
+        src: "/playground/exercise_details.mp4",
         description: (
             <>
                 1. Read the
-                <SecondaryButton text={'📄 Exercise Details'} isInline={true} className="mx-1" />
+                <SecondaryButton text={'📄 Exercise Details'} isInline={true} className="mx-1"/>
             </>
         ),
     },
     {
-        image: readSubmission.src,
+        src: "/playground/read_submission.mp4",
         description: "2. Read the Submission and the corresponding feedback"
     },
     {
-        image: evaluateMetrics.src,
+        src: "/playground/evaluation_metrics.mp4",
         description: "3. Evaluate the feedback based on the metrics"
     },
     {
-        image: metricsExplanation.src,
+        src: "/playground/metrics_explanation.mp4",
         description: (
             <>
                 4. If unsure what a metric means, press the
@@ -45,7 +39,7 @@ const baseTutorialSteps = [
         ),
     },
     {
-        image: viewNext.src,
+        src: "/playground/view_next.mp4",
         description: (
             <>
                 5. After evaluating all metrics for all feedbacks, click on the
@@ -53,7 +47,7 @@ const baseTutorialSteps = [
             </>),
     },
     {
-        image: continueLater.src,
+        src: "/playground/continue_later.mp4",
         description: (
             <>
                 6. When you are ready to take a break, click on the
@@ -79,7 +73,7 @@ export default function TutorialPopup(tutorialPopupProps: TutorialPopupProps) {
         ? [
             ...baseTutorialSteps,
             {
-                image: "",
+                src: "",
                 description: (
                     <>
                         <div className="text-left">
@@ -104,15 +98,19 @@ export default function TutorialPopup(tutorialPopupProps: TutorialPopupProps) {
         }
     };
 
-    const { image, description } = tutorialSteps[currentStep];
+    const {src, description} = tutorialSteps[currentStep];
 
     const isLastStep = currentStep === tutorialSteps.length - 1;
     return (
         <Popup isOpen={isOpen} onClose={onClose} title="Evaluation Tutorial"
-            disableCloseOnOutsideClick={disableCloseOnOutsideClick}>
+               disableCloseOnOutsideClick={disableCloseOnOutsideClick}>
             <div className="text-center">
-                {/* Display the current GIF */}
-                {image && <img src={image} alt={`Tutorial Step ${currentStep + 1}`} className="w-full h-auto mb-4" />}
+                {/* Display the current video */}
+                {src &&
+                    <video key={src} controls autoPlay className="mb-4">
+                        <source src={src} type="video/mp4"/>
+                        Your browser does not support the video tag.
+                    </video>}
 
                 {/* Render the description directly, which may include text and button */}
                 <div className={"text-lg mb-4"}>
