@@ -59,7 +59,16 @@ def systematic_random_sampling(data: pd.DataFrame, exercise_samples: dict, rando
 
     # Combine all sampled data into a single DataFrame
     if sampled_data:
-        return pd.concat(sampled_data, ignore_index=True)
+        sampled_data = pd.concat(sampled_data, ignore_index=True)
+
+        # Print the counts
+        print("Number of submissions per exercise:")
+        submission_counts = sampled_data.groupby("exercise_id")["submission_id"].nunique()
+        for exercise_id, count in submission_counts.items():
+            print(f"Exercise ID {exercise_id}: {count} submissions")
+        print(f"Total number of submissions: {submission_counts.sum()}")
+
+        return sampled_data
     else:
         print("Error: No data was sampled.")
         return pd.DataFrame()

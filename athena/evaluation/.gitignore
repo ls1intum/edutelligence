@@ -1,3 +1,4 @@
-notebooks/*.ipynb
+notebooks/*
+!notebooks/*.gitkeep
 data/*
 !data/*.gitkeep

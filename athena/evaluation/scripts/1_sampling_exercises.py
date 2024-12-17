@@ -17,25 +17,21 @@
 from evaluation.service.db_service import get_data
 import pandas as pd
 
-# TODO: Decide on the exercise IDs to sample from
 EXERCISE_IDS = {4066, 642, 544, 506}
 
-data = get_data(EXERCISE_IDS)
-data.to_csv("../data/1_exercises.csv", index=False)
+sampled_exercises = get_data(EXERCISE_IDS)
+sampled_exercises.to_csv("../data/1_sampled_exercises.csv", index=False)
 
-data = pd.read_csv("../data/1_exercises.csv")
+# sampled_exercises = pd.read_csv("../data/1_sampled_exercises.csv")
 
 # %%
-# Count the number of unique submissions
-overall_submissions = data["submission_id"].nunique()
-
-# Print the result
+overall_submissions = sampled_exercises["submission_id"].nunique()
 print(f"Overall number of submissions: {overall_submissions}")
 
 # %%
 # Group by 'exercise_id' and 'result_score'
 grouped_data = (
-    data
+    sampled_exercises
     .groupby(["exercise_id", "result_score"])
     .agg(
         distinct_feedback_count=("feedback_id", "nunique"),  # Count distinct feedback IDs per score
@@ -47,7 +43,7 @@ grouped_data = (
 
 # Calculate total feedbacks per exercise
 total_feedbacks_per_exercise = (
-    data
+    sampled_exercises
     .groupby("exercise_id")["feedback_id"]
     .nunique()
     .reset_index()
@@ -55,7 +51,7 @@ total_feedbacks_per_exercise = (
 )
 
 total_submissions_per_exercise = (
-    data
+    sampled_exercises
     .groupby("exercise_id")["submission_id"]
     .nunique()
     .reset_index()
@@ -82,8 +78,7 @@ grouped_data = grouped_data[[
     "avg_feedbacks_per_score"
 ]]
 
-# Print the result in a tabular format
-grouped_data.head(1000)
+grouped_data.to_csv("../data/grouped_data.csv", index=False)
 
 # %%
 import matplotlib.pyplot as plt
@@ -91,7 +86,7 @@ import pandas as pd
 import numpy as np
 
 # Load the grouped data
-grouped_data = pd.read_csv("grouped_data.csv")
+grouped_data = pd.read_csv("../data/grouped_data.csv")
 
 # Create a color and marker map for exercises
 exercise_ids = grouped_data["exercise_id"].unique()

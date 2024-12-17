@@ -76,18 +76,20 @@ def filter_missing_data(data: pd.DataFrame) -> pd.DataFrame:
     return data
 
 def filter_english_submissions(data: pd.DataFrame) -> pd.DataFrame:
-    """Filters out non-English and empty submissions efficiently."""
+    """Filters out non-English and empty submissions."""
     print("Filtering English and non-empty submissions...")
 
     data = data.dropna(subset=["submission_text"])
     data = data[data["submission_text"].str.strip() != ""]
 
-    is_english = data["submission_text"].apply(lambda text: classify(text)[0] == "en")
-    filtered_data = data[is_english]
+    unique_texts = data["submission_text"].unique()
+    classification_results = {text: classify(text)[0] == "en" for text in unique_texts}
+
+    data["is_english"] = data["submission_text"].map(classification_results)
+    filtered_data = data[data["is_english"]]
 
     print(f"Filtered down to {len(filtered_data)} rows.")
-    return filtered_data
-
+    return filtered_data.drop(columns=["is_english"])
 
 def get_data(exercise_ids: List[int]) -> pd.DataFrame:
     """
@@ -102,7 +104,6 @@ def get_data(exercise_ids: List[int]) -> pd.DataFrame:
 
     print(f"Returning flat DataFrame with {len(data)} rows.")
     return data
-
 
 def get_columns(table_name: str, column_names: List[str]) -> str:
     """

@@ -26,12 +26,13 @@ def validate_columns(df: pd.DataFrame, required_columns: List[str]) -> None:
         )
 
 
-def group_exercise_data(df: pd.DataFrame) -> List[Exercise]:
+def group_exercise_data(df: pd.DataFrame, feedback_type_filter: str = "Tutor") -> List[Exercise]:
     """
-    Groups exercises, submissions, grading instructions, and feedback into a structured format.
+    Groups exercises, submissions, grading instructions, and feedback of specified type into a structured format.
 
     Args:
         df (pd.DataFrame): The DataFrame containing all exercise data.
+        feedback_type_filter (str, optional): The feedback type to include (e.g., "LLM"). Defaults to "Tutor".
 
     Returns:
         List[Exercise]: A list of Exercise objects.
@@ -112,8 +113,9 @@ def group_exercise_data(df: pd.DataFrame) -> List[Exercise]:
         'grading_instruction_instruction_description', 'grading_instruction_feedback',
         'grading_instruction_usage_count', 'text_block_start_index', 'text_block_end_index', 'feedback_type'
     ]
-
     validate_columns(df, required_columns)
+
+    df = df[df["feedback_type"] == feedback_type_filter]
 
     exercises = []
     for exercise_id, exercise_group in df.groupby("exercise_id"):
@@ -146,27 +148,33 @@ def exercises_to_json(exercises: List[Exercise], output_path: str):
 def read_result_files_to_dataframe(results_dir: str) -> pd.DataFrame:
     """Reads result JSON files from the specified directory and returns a flat DataFrame."""
     feedback_records = []
-    for filename in os.listdir(results_dir):
-        if filename.startswith("text_results_") and filename.endswith(".json"):
-            feedback_type = filename.split("_")[2]
-            file_path = os.path.join(results_dir, filename)
-            with open(file_path, "r", encoding="utf-8") as file:
-                result_data = json.load(file)
-                submissions = result_data.get("submissionsWithFeedbackSuggestions", {})
-                for submission_id, submission_data in submissions.items():
-                    for suggestion in submission_data.get("suggestions", []):
-                        feedback_records.append({
-                            "feedback_id": suggestion["id"],
-                            "feedback_text": suggestion.get("title"),
-                            "feedback_detail_text": suggestion["description"],
-                            "feedback_credits": suggestion["credits"],
-                            "feedback_grading_instruction_id": suggestion.get("structured_grading_instruction_id"),
-                            "text_block_start_index": suggestion.get("index_start"),
-                            "text_block_end_index": suggestion.get("index_end"),
-                            "feedback_type": feedback_type,
-                            "exercise_id": suggestion["exercise_id"],
-                            "submission_id": suggestion["submission_id"],
-                        })
+
+    filenames = [filename for filename in os.listdir(results_dir) if
+                 filename.endswith(".json") and filename.startswith("text_results_")]
+
+    if not filenames:
+        raise ValueError(f"No files with name text_results_<...> of type json were found in directory: {results_dir}.")
+
+    for filename in filenames:
+        feedback_type = filename.split("_")[2]
+        file_path = os.path.join(results_dir, filename)
+        with open(file_path, "r", encoding="utf-8") as file:
+            result_data = json.load(file)
+            submissions = result_data.get("submissionsWithFeedbackSuggestions", {})
+            for submission_id, submission_data in submissions.items():
+                for suggestion in submission_data.get("suggestions", []):
+                    feedback_records.append({
+                        "feedback_id": suggestion["id"],
+                        "feedback_text": suggestion.get("title"),
+                        "feedback_detail_text": suggestion["description"],
+                        "feedback_credits": suggestion["credits"],
+                        "feedback_grading_instruction_id": suggestion.get("structured_grading_instruction_id"),
+                        "text_block_start_index": suggestion.get("index_start"),
+                        "text_block_end_index": suggestion.get("index_end"),
+                        "feedback_type": feedback_type,
+                        "exercise_id": suggestion["exercise_id"],
+                        "submission_id": suggestion["submission_id"],
+                    })
     return pd.DataFrame(feedback_records)
 
 
@@ -260,7 +268,7 @@ def add_feedback_suggestions_to_data(data: pd.DataFrame, feedback_suggestions: p
     return combined_data
 
 
-def fill_missing_feedback(data: pd.DataFrame) -> pd.DataFrame:
+def fill_missing_feedback_with_tutor_feedback(data: pd.DataFrame) -> pd.DataFrame:
     """
     Fills missing feedback entries for submissions by copying Tutor feedback for the corresponding feedback type.
     Ensures all submissions have Tutor feedback before proceeding.
