@@ -18,6 +18,17 @@ import pandas as pd
 
 sampled_submissions = pd.read_csv("../data/2_sampled_submissions.csv")
 
+# %% [markdown]
+# ### Upload the json files from data/2_exercise_jsons to the playground. In evaluation mode, generate feedback for each exercise and export the results. Make sure that the configuration names for feedback generation do not contain underscores '_'.
+#
+# The downloaded json files should have the following naming scheme:
+#
+# ```text_results_<Configuration name (e.g.: LLM)>_<...>```
+#
+# **Do not change the names of the downloaded files!**
+#
+# Save these files in the data/3_feedback_suggestions directory
+
 # %%
 from evaluation.service.json_service import read_result_files_to_dataframe, add_feedback_suggestions_to_data, fill_missing_feedback_with_tutor_feedback
 
@@ -27,6 +38,12 @@ sampled_submissions_with_feedback = add_feedback_suggestions_to_data(sampled_sub
 sampled_submissions_with_feedback = fill_missing_feedback_with_tutor_feedback(sampled_submissions_with_feedback)
 
 sampled_submissions_with_feedback.to_csv("../data/3_sampled_submissions_with_feedback.csv", index=False)
+
+# %%
+from evaluation.service.json_service import group_exercise_data, exercises_to_json
+
+exercises = group_exercise_data(sampled_submissions)
+exercises_to_json(exercises, "../data/3_submissions_with_categorized_feedback_jsons")
 
 # %%
 # Group by 'exercise_id' and 'result_score' to calculate submission counts

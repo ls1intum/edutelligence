@@ -31,19 +31,5 @@ sampled_submissions.to_csv("../data/2_sampled_submissions.csv", index=False)
 # %%
 from evaluation.service.json_service import group_exercise_data, exercises_to_json
 
-exercises = group_exercise_data(sampled_submissions)
+exercises = group_exercise_data(sampled_submissions, "Tutor")
 exercises_to_json(exercises, "../data/2_exercise_jsons")
-
-# %% [markdown]
-# ## Upload the json exercises from data/2_exercise_jsons to the playground. In evaluation mode, generate feedback for each exercise and export the results. Make sure that the configuration names for feedback generation do not contain underscores '_'.
-#
-# The downloaded json files should have the following naming scheme:
-#
-# ```text_results_<Configuration name (e.g.: LLM)>_<...>```
-#
-# **Do not change the names of the downloaded files!**
-#
-# Save these files in the data/3_feedback_suggestions directory
-
-# %% [markdown]
-# # Continue in the next notebook: [3_feedback_generation.ipynb](3_feedback_generation.ipynb)

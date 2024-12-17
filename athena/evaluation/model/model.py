@@ -1,5 +1,6 @@
 from dataclasses import dataclass, asdict
-from typing import Optional, List
+from typing import Optional, List, Union, Dict
+
 
 @dataclass
 class Feedback:
@@ -32,9 +33,9 @@ class Submission:
     text: str
     language: str
     meta: dict
-    feedbacks: Optional[List[Feedback]]
+    feedbacks: Optional[Union[List[Feedback], Dict[str, List[Feedback]]]] = None
 
-    def __init__(self, id: int, text: str, language: str, feedbacks: List[Feedback]) -> None:
+    def __init__(self, id: int, text: str, language: str, feedbacks: Optional[Union[List[Feedback], Dict[str, List[Feedback]]]]) -> None:
         self.id = id
         self.text = text
         self.language = language

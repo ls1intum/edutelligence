@@ -14,3 +14,16 @@
 # ---
 
 # %%
+import pandas as pd
+
+sampled_submissions = pd.read_csv("../data/3_sampled_submissions_with_feedback.csv")
+
+# %% [markdown]
+# ### Import the json files from data/3_submissions_with_categorized_feedback_jsons into a new expert evaluation in the playground. Conduct the evaluation and download the results as well as the evaluation configuration.
+#
+# **Do not change the names of the downloaded files!**
+#
+# Save these files in the data/4_expert_evaluation directory
+
+# %%
+# TODO: Implement the expert evaluation import

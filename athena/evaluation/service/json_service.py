@@ -1,6 +1,6 @@
 import json
 import os
-from typing import List
+from typing import List, Dict, Union
 import pandas as pd
 
 from evaluation.model.model import Exercise, Feedback, Submission, GradingCriterion, StructuredGradingInstruction
@@ -26,7 +26,7 @@ def validate_columns(df: pd.DataFrame, required_columns: List[str]) -> None:
         )
 
 
-def group_exercise_data(df: pd.DataFrame, feedback_type_filter: str = "Tutor") -> List[Exercise]:
+def group_exercise_data(df: pd.DataFrame, feedback_type_filter: str = None) -> List[Exercise]:
     """
     Groups exercises, submissions, grading instructions, and feedback of specified type into a structured format.
 
@@ -38,8 +38,10 @@ def group_exercise_data(df: pd.DataFrame, feedback_type_filter: str = "Tutor") -
         List[Exercise]: A list of Exercise objects.
     """
 
-    def process_feedbacks(submission_group: pd.DataFrame, exercise_id: int, submission_id: int) -> List[Feedback]:
+    def process_feedbacks(submission_group: pd.DataFrame, exercise_id: int, submission_id: int) -> Union[
+        List[Feedback], Dict[str, List[Feedback]]]:
         """Process feedbacks for a submission."""
+        categorized_feedbacks = {}
         feedbacks = []
         for feedback_id, feedback_group in submission_group.groupby("feedback_id"):
             feedback_details = feedback_group.iloc[0]
@@ -54,8 +56,13 @@ def group_exercise_data(df: pd.DataFrame, feedback_type_filter: str = "Tutor") -
                 exercise_id=exercise_id,
                 submission_id=submission_id
             )
-            feedbacks.append(feedback)
-        return feedbacks
+
+            if feedback_type_filter:  # Single feedback type
+                feedbacks.append(feedback)
+            else:  # Categorized feedback
+                categorized_feedbacks.setdefault(feedback_details["feedback_type"], []).append(feedback)
+
+        return feedbacks if feedback_type_filter else categorized_feedbacks
 
     def process_submissions(exercise_group: pd.DataFrame, exercise_id: int) -> List[Submission]:
         """Process submissions for an exercise."""
@@ -115,7 +122,8 @@ def group_exercise_data(df: pd.DataFrame, feedback_type_filter: str = "Tutor") -
     ]
     validate_columns(df, required_columns)
 
-    df = df[df["feedback_type"] == feedback_type_filter]
+    if feedback_type_filter:
+        df = df[df["feedback_type"] == feedback_type_filter]
 
     exercises = []
     for exercise_id, exercise_group in df.groupby("exercise_id"):
