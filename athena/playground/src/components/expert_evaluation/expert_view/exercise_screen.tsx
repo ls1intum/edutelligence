@@ -43,7 +43,7 @@ export default function ExerciseScreen(exerciseScreenProps: ExerciseScreenProps)
           continue later. Your progress has been saved.
         </p>
         <p className="text-lg mb-6">
-          When you are ready, continue with the next exercise: {exercise.title}.
+          When you are ready, continue with the next exercise:  <strong>{exercise.title}</strong>.
         </p>
         <div className="flex justify-center mt-4">
           <SecondaryButton
