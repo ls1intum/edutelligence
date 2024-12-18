@@ -37,12 +37,14 @@ feedback_suggestions = read_result_files_to_dataframe("../data/3_feedback_sugges
 sampled_submissions_with_feedback = add_feedback_suggestions_to_data(sampled_submissions, feedback_suggestions)
 sampled_submissions_with_feedback = fill_missing_feedback_with_tutor_feedback(sampled_submissions_with_feedback)
 
+sampled_submissions_with_feedback = sampled_submissions_with_feedback.assign(feedback_text=None)
+
 sampled_submissions_with_feedback.to_csv("../data/3_sampled_submissions_with_feedback.csv", index=False)
 
 # %%
 from evaluation.service.json_service import group_exercise_data, exercises_to_json
 
-exercises = group_exercise_data(sampled_submissions)
+exercises = group_exercise_data(sampled_submissions_with_feedback)
 exercises_to_json(exercises, "../data/3_submissions_with_categorized_feedback_jsons")
 
 # %%

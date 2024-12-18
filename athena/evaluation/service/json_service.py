@@ -1,6 +1,8 @@
 import json
 import os
 from typing import List, Dict, Union
+
+import numpy as np
 import pandas as pd
 
 from evaluation.model.model import Exercise, Feedback, Submission, GradingCriterion, StructuredGradingInstruction
@@ -9,13 +11,6 @@ from evaluation.model.model import Exercise, Feedback, Submission, GradingCriter
 def validate_columns(df: pd.DataFrame, required_columns: List[str]) -> None:
     """
     Validates that the given DataFrame contains the required columns.
-
-    Args:
-        df (pd.DataFrame): The DataFrame to validate.
-        required_columns (List[str]): List of required column names.
-
-    Raises:
-        ValueError: If the DataFrame is missing any of the required columns.
     """
     missing_columns = set(required_columns) - set(df.columns)
     if missing_columns:
@@ -25,6 +20,16 @@ def validate_columns(df: pd.DataFrame, required_columns: List[str]) -> None:
             f"Available columns: {', '.join(df.columns)}."
         )
 
+def get_columns_from_dataframe(df: pd.DataFrame, rename_map: Dict[str, str], columns: List[str] = None) -> pd.DataFrame:
+    """
+    Extracts and renames columns from a DataFrame, replacing NaN values with None.
+    """
+    if columns is None:
+        columns = list(rename_map.keys())
+
+    validate_columns(df, columns)
+
+    return df[columns].rename(columns=rename_map).replace({pd.NA: None, np.nan: None}).drop_duplicates()
 
 def group_exercise_data(df: pd.DataFrame, feedback_type_filter: str = None) -> List[Exercise]:
     """
@@ -38,110 +43,73 @@ def group_exercise_data(df: pd.DataFrame, feedback_type_filter: str = None) -> L
         List[Exercise]: A list of Exercise objects.
     """
 
-    def process_feedbacks(submission_group: pd.DataFrame, exercise_id: int, submission_id: int) -> Union[
-        List[Feedback], Dict[str, List[Feedback]]]:
+    def process_feedbacks(exercise_id: int, submission_id: int) -> Union[List[Feedback], Dict[str, List[Feedback]]]:
         """Process feedbacks for a submission."""
-        categorized_feedbacks = {}
-        feedbacks = []
-        for feedback_id, feedback_group in submission_group.groupby("feedback_id"):
-            feedback_details = feedback_group.iloc[0]
-            feedback = Feedback(
-                id=int(feedback_id) if pd.notna(feedback_id) else None,
-                title=str(feedback_details["feedback_text"]) if pd.notna(feedback_details["feedback_text"]) else None,
-                description=str(feedback_details["feedback_detail_text"]) if pd.notna(feedback_details["feedback_detail_text"]) else None,
-                credits=float(feedback_details["feedback_credits"]),
-                index_start=int(feedback_details["text_block_start_index"]) if pd.notna(feedback_details["text_block_start_index"]) else None,
-                index_end=int(feedback_details["text_block_end_index"]) if pd.notna(feedback_details["text_block_end_index"]) else None,
-                structured_grading_instruction_id=int(feedback_details["feedback_grading_instruction_id"]) if pd.notna(feedback_details["feedback_grading_instruction_id"]) else None,
-                exercise_id=exercise_id,
-                submission_id=submission_id
-            )
+        feedback_columns_map = {
+            "feedback_id": "id", "feedback_text": "title", "feedback_detail_text": "description", "feedback_credits": "credits",
+            "text_block_start_index": "index_start", "text_block_end_index": "index_end", "feedback_grading_instruction_id": "structured_grading_instruction_id",
+            "exercise_id": "exercise_id", "submission_id": "submission_id"
+        }
+        filtered_df = df[(df["exercise_id"] == exercise_id) & (df["submission_id"] == submission_id) & (df["feedback_id"].notnull())]
+        if feedback_type_filter:
+            filtered_df = filtered_df[filtered_df["feedback_type"] == feedback_type_filter]
 
-            if feedback_type_filter:  # Single feedback type
-                feedbacks.append(feedback)
-            else:  # Categorized feedback
-                categorized_feedbacks.setdefault(feedback_details["feedback_type"], []).append(feedback)
+        feedback_data = get_columns_from_dataframe(filtered_df, feedback_columns_map, list(feedback_columns_map.keys()) + ["feedback_type"])
+        feedback_data = feedback_data.sort_values(by=["index_start"], na_position="last")
 
-        return feedbacks if feedback_type_filter else categorized_feedbacks
+        if feedback_type_filter:  # Return a list of Feedback objects for a single type
+            return [Feedback(**row) for row in feedback_data.drop("feedback_type", axis=1).to_dict(orient="records")]
 
-    def process_submissions(exercise_group: pd.DataFrame, exercise_id: int) -> List[Submission]:
+        categorized_feedback = {} # Return a dictionary of feedback lists for all types
+        for feedback_type, group in feedback_data.groupby("feedback_type"):
+            categorized_feedback[str(feedback_type)] = [
+                Feedback(**row) for row in group.drop("feedback_type", axis=1).to_dict(orient="records")
+            ]
+
+        return categorized_feedback
+
+    def process_submissions(exercise_id: int) -> List[Submission]:
         """Process submissions for an exercise."""
-        submissions = []
-        for submission_id, submission_group in exercise_group.groupby("submission_id"):
-            submission_details = submission_group.iloc[0]
-            feedbacks = process_feedbacks(submission_group, exercise_id, int(submission_id))
-            submission = Submission(
-                id=int(submission_id),
-                text=str(submission_details["submission_text"]),
-                language="ENGLISH", # Assume all submissions are in English because we filtered out non-English submissions
-                feedbacks=feedbacks
-            )
-            submissions.append(submission)
-        return submissions
+        submission_columns_map = {
+            "submission_id": "id", "submission_text": "text"
+        }
 
-    def process_grading_instructions(criterion_group: pd.DataFrame) -> List[StructuredGradingInstruction]:
+        filtered_df = df[(df["exercise_id"] == exercise_id) & (df["submission_id"].notnull())]
+        submission_data = get_columns_from_dataframe(filtered_df, submission_columns_map)
+
+        return [Submission(**row, language="ENGLISH", feedbacks=process_feedbacks(exercise_id, row["id"])) for row in submission_data.to_dict(orient="records")]
+
+    def process_grading_instructions(exercise_id: int, criterion_id: int) -> List[StructuredGradingInstruction]:
         """Process grading instructions for a grading criterion."""
-        instructions = []
-        for grading_instruction_id, grading_instruction_group in criterion_group.groupby("grading_instruction_id"):
-            instruction_details = grading_instruction_group.iloc[0]
-            instruction = StructuredGradingInstruction(
-                id=int(grading_instruction_id),
-                credits=float(instruction_details["grading_instruction_credits"]),
-                grading_scale=str(instruction_details["grading_instruction_grading_scale"]),
-                instruction_description=str(instruction_details["grading_instruction_instruction_description"]),
-                feedback=str(instruction_details["grading_instruction_feedback"]),
-                usage_count=int(instruction_details["grading_instruction_usage_count"])
-            )
-            instructions.append(instruction)
-        return instructions
+        instruction_columns_map = {
+            "grading_instruction_id": "id", "grading_instruction_credits": "credits", "grading_instruction_grading_scale": "grading_scale",
+            "grading_instruction_instruction_description": "instruction_description", "grading_instruction_feedback": "feedback",
+            "grading_instruction_usage_count": "usage_count"
+        }
+        filtered_df = df[(df["exercise_id"] == exercise_id) & (df["grading_criterion_id"] == criterion_id) & (df["grading_instruction_id"].notnull())]
+        instruction_data = get_columns_from_dataframe(filtered_df, instruction_columns_map)
 
-    def process_grading_criteria(exercise_group: pd.DataFrame) -> List[GradingCriterion]:
+        return [StructuredGradingInstruction(**row) for row in instruction_data.to_dict(orient="records")]
+
+    def process_grading_criteria(exercise_id: int) -> List[GradingCriterion]:
         """Process grading criteria for an exercise."""
-        grading_criteria = []
-        for criterion_id, criterion_group in exercise_group.groupby("grading_criterion_id"):
-            criterion_details = criterion_group.iloc[0]
-            instructions = process_grading_instructions(criterion_group)
-            criterion = GradingCriterion(
-                id=int(criterion_id),
-                title=str(criterion_details["grading_criterion_title"]) if pd.notna(criterion_details["grading_criterion_title"]) else None,
-                structured_grading_instructions=instructions
-            )
-            grading_criteria.append(criterion)
-        return grading_criteria
+        criterion_columns_map = {
+            "grading_criterion_id": "id", "grading_criterion_title": "title"
+        }
+        filtered_df = df[(df["exercise_id"] == exercise_id) & (df["grading_criterion_id"].notnull())]
+        criterion_data = get_columns_from_dataframe(filtered_df, criterion_columns_map)
 
-    required_columns = [
-        'exercise_id', 'exercise_title', 'exercise_max_points', 'exercise_bonus_points',
-        'exercise_grading_instructions', 'exercise_problem_statement', 'exercise_example_solution',
-        'submission_id', 'submission_text', 'submission_language', 'result_id',
-        'result_score', 'result_results_order', 'feedback_id', 'feedback_text',
-        'feedback_detail_text', 'feedback_credits', 'feedback_grading_instruction_id',
-        'grading_criterion_id', 'grading_criterion_title', 'grading_instruction_id',
-        'grading_instruction_credits', 'grading_instruction_grading_scale',
-        'grading_instruction_instruction_description', 'grading_instruction_feedback',
-        'grading_instruction_usage_count', 'text_block_start_index', 'text_block_end_index', 'feedback_type'
-    ]
-    validate_columns(df, required_columns)
+        return [GradingCriterion(**row, structured_grading_instructions=process_grading_instructions(exercise_id, row["id"])) for row in criterion_data.to_dict(orient="records")]
 
-    if feedback_type_filter:
-        df = df[df["feedback_type"] == feedback_type_filter]
+    exercise_columns_map = {
+        "exercise_id": "id", "exercise_title": "title", "exercise_max_points": "max_points", "exercise_bonus_points": "bonus_points",
+        "exercise_grading_instructions": "grading_instructions", "exercise_problem_statement": "problem_statement", "exercise_example_solution": "example_solution"
+    }
 
-    exercises = []
-    for exercise_id, exercise_group in df.groupby("exercise_id"):
-        exercise_details = exercise_group.iloc[0]
-        exercise = Exercise(
-            id=int(exercise_id),
-            title=str(exercise_details["exercise_title"]),
-            max_points=float(exercise_details["exercise_max_points"]),
-            bonus_points=float(exercise_details["exercise_bonus_points"]),
-            grading_instructions=str(exercise_details["exercise_grading_instructions"]) if pd.notna(exercise_details["exercise_grading_instructions"]) else None,
-            problem_statement=str(exercise_details["exercise_problem_statement"]) if pd.notna(exercise_details["exercise_problem_statement"]) else None,
-            example_solution=str(exercise_details["exercise_example_solution"]) if pd.notna(exercise_details["exercise_example_solution"]) else None,
-            submissions=process_submissions(exercise_group, exercise_id),
-            grading_criteria=process_grading_criteria(exercise_group)
-        )
-        exercises.append(exercise)
+    filtered_df = df[(df["exercise_id"].notnull())]
+    exercise_data = get_columns_from_dataframe(filtered_df, exercise_columns_map)
 
-    return exercises
+    return [Exercise(**row, submissions=process_submissions(row["id"]), grading_criteria=process_grading_criteria(row["id"])) for row in exercise_data.to_dict(orient="records")]
 
 
 def exercises_to_json(exercises: List[Exercise], output_path: str):
@@ -157,15 +125,19 @@ def read_result_files_to_dataframe(results_dir: str) -> pd.DataFrame:
     """Reads result JSON files from the specified directory and returns a flat DataFrame."""
     feedback_records = []
 
-    filenames = [filename for filename in os.listdir(results_dir) if
-                 filename.endswith(".json") and filename.startswith("text_results_")]
+    file_paths = []
+    for root, dirs, files in os.walk(results_dir):
+        for file in files:
+            if file.endswith(".json") and file.startswith("text_results_"):
+                file_paths.append(os.path.join(root, file))
 
-    if not filenames:
+    if not file_paths:
         raise ValueError(f"No files with name text_results_<...> of type json were found in directory: {results_dir}.")
 
-    for filename in filenames:
-        feedback_type = filename.split("_")[2]
-        file_path = os.path.join(results_dir, filename)
+    for file_path in file_paths:
+        filename = os.path.basename(file_path)  # Extract only the filename
+        feedback_type = filename.split("_")[2]  # Perform split on the filename only
+
         with open(file_path, "r", encoding="utf-8") as file:
             result_data = json.load(file)
             submissions = result_data.get("submissionsWithFeedbackSuggestions", {})
