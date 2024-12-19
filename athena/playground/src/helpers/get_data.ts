@@ -364,8 +364,18 @@ export function anonymizeFeedbackCategoriesAndShuffle(
 export function saveConfigToFileSync(
   dataMode: DataMode,
   expertEvaluation: ExpertEvaluationConfig,
-) {
-  const configData = JSON.stringify(expertEvaluation, null, 2);
+  isAddExpertLinksAfterStart = false
+){
+
+  if (isAddExpertLinksAfterStart) {
+    let config = getConfigFromFileSync(dataMode, expertEvaluation.id);
+    if (config && config.expertIds) {
+      config.expertIds = expertEvaluation.expertIds;
+      expertEvaluation = config;
+    }
+  }
+
+  let configData = JSON.stringify(expertEvaluation, null, 2);
 
   const configPath = path.join(
     process.cwd(),
@@ -410,7 +420,8 @@ export function saveConfigToFileSync(
   }
 
   // Create or update config file with exercises and data
-  return fs.writeFileSync(configPath, configData, 'utf8');
+  fs.writeFileSync(configPath, configData, 'utf8');
+  return configData;
 }
 
 export function getProgressStatsFromFileSync(

@@ -66,7 +66,7 @@ export default function EvaluationManagement() {
     return newConfig;
   };
 
-  const saveExpertEvaluationConfig = (configToSave = selectedConfig) => {
+  const saveExpertEvaluationConfig = (configToSave = selectedConfig, isAnonymize = false) => {
     const isNewConfig = configToSave.id === "new";
     const newConfig = isNewConfig ? { ...configToSave, id: uuidv4() } : configToSave;
     setExpertEvaluationConfigs((prevConfigs) => {
@@ -81,7 +81,7 @@ export default function EvaluationManagement() {
     });
 
     setSelectedConfig(newConfig);
-    externalSaveExpertEvaluationConfig(dataMode, newConfig, isNewConfig);
+    externalSaveExpertEvaluationConfig(dataMode, newConfig, isAnonymize);
     setHasUnsavedChanges(false);
   };
 
@@ -122,7 +122,7 @@ export default function EvaluationManagement() {
   const startEvaluation = () => {
     if (confirm("Are you sure you want to start the evaluation? Once started, you can add new expert links but no other changes can be made to the configuration!")) {
       const updatedConfig = updateSelectedConfig({ started: true });
-      saveExpertEvaluationConfig(updatedConfig);
+      saveExpertEvaluationConfig(updatedConfig, true);
     }
   };
 
