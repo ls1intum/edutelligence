@@ -70,7 +70,8 @@ def get_mastery(progress, confidence):
 class CourseChatPipeline(Pipeline):
     """Course chat pipeline that answers course related questions from students."""
 
-    llm: IrisLangchainChatModel
+    llm_big: IrisLangchainChatModel
+    llm_small: IrisLangchainChatModel
     pipeline: Runnable
     lecture_pipeline: LectureChatPipeline
     suggestion_pipeline: InteractionSuggestionPipeline
@@ -93,14 +94,20 @@ class CourseChatPipeline(Pipeline):
         self.event = event
 
         # Set the langchain chat model
-        request_handler = CapabilityRequestHandler(
-            requirements=RequirementList(
-                gpt_version_equivalent=4.5,
-            )
-        )
         completion_args = CompletionArguments(temperature=0.5, max_tokens=2000)
-        self.llm = IrisLangchainChatModel(
-            request_handler=request_handler, completion_args=completion_args
+        self.llm_big = IrisLangchainChatModel(
+            request_handler=CapabilityRequestHandler(
+                requirements=RequirementList(
+                    gpt_version_equivalent=4.5,
+                )
+            ), completion_args=completion_args
+        )
+        self.llm_small = IrisLangchainChatModel(
+            request_handler=CapabilityRequestHandler(
+                requirements=RequirementList(
+                    gpt_version_equivalent=4.25,
+                )
+            ), completion_args=completion_args
         )
         self.callback = callback
 
@@ -110,14 +117,14 @@ class CourseChatPipeline(Pipeline):
         self.citation_pipeline = CitationPipeline()
 
         # Create the pipeline
-        self.pipeline = self.llm | JsonOutputParser()
+        self.pipeline = self.llm_big | JsonOutputParser()
         self.tokens = []
 
     def __repr__(self):
-        return f"{self.__class__.__name__}(llm={self.llm})"
+        return f"{self.__class__.__name__}(llm_big={self.llm_big}, llm_small={self.llm_small})"
 
     def __str__(self):
-        return f"{self.__class__.__name__}(llm={self.llm})"
+        return f"{self.__class__.__name__}(llm_big={self.llm_big}, llm_small={self.llm_small})"
 
     @traceable(name="Course Chat Pipeline")
     def __call__(self, dto: CourseChatPipelineExecutionDTO, **kwargs):
@@ -395,7 +402,7 @@ class CourseChatPipeline(Pipeline):
             # No idea why we need this extra contrary to exercise chat agent in this case, but solves the issue.
             params.update({"tools": tools})
             agent = create_tool_calling_agent(
-                llm=self.llm, tools=tools, prompt=self.prompt
+                llm=self.llm_big, tools=tools, prompt=self.prompt
             )
             agent_executor = AgentExecutor(agent=agent, tools=tools, verbose=False)
 
@@ -404,7 +411,7 @@ class CourseChatPipeline(Pipeline):
             for step in agent_executor.iter(params):
                 print("STEP:", step)
                 self._append_tokens(
-                    self.llm.tokens, PipelineEnum.IRIS_CHAT_COURSE_MESSAGE
+                    self.llm_big.tokens, PipelineEnum.IRIS_CHAT_COURSE_MESSAGE
                 )
                 if step.get("output", None):
                     out = step["output"]

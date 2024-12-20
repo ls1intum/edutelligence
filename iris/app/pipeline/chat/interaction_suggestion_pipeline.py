@@ -61,7 +61,7 @@ class InteractionSuggestionPipeline(Pipeline):
         # Set the langchain chat model
         request_handler = CapabilityRequestHandler(
             requirements=RequirementList(
-                gpt_version_equivalent=4.5,
+                gpt_version_equivalent=4.25,
                 json_mode=True,
             )
         )

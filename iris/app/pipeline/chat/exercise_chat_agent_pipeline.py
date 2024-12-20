@@ -94,7 +94,8 @@ def convert_chat_history_to_str(chat_history: List[PyrisMessage]) -> str:
 class ExerciseChatAgentPipeline(Pipeline):
     """Exercise chat agent pipeline that answers exercises related questions from students."""
 
-    llm: IrisLangchainChatModel
+    llm_big: IrisLangchainChatModel
+    llm_small: IrisLangchainChatModel
     pipeline: Runnable
     callback: ExerciseChatStatusCallback
     suggestion_pipeline: InteractionSuggestionPipeline
@@ -112,10 +113,18 @@ class ExerciseChatAgentPipeline(Pipeline):
         super().__init__(implementation_id="exercise_chat_pipeline")
         # Set the langchain chat model
         completion_args = CompletionArguments(temperature=0.5, max_tokens=2000)
-        self.llm = IrisLangchainChatModel(
+        self.llm_big = IrisLangchainChatModel(
             request_handler=CapabilityRequestHandler(
                 requirements=RequirementList(
                     gpt_version_equivalent=4.5,
+                ),
+            ),
+            completion_args=completion_args,
+        )
+        self.llm_small = IrisLangchainChatModel(
+            request_handler=CapabilityRequestHandler(
+                requirements=RequirementList(
+                    gpt_version_equivalent=4.25,
                 ),
             ),
             completion_args=completion_args,
@@ -130,15 +139,15 @@ class ExerciseChatAgentPipeline(Pipeline):
         self.retriever = LectureRetrieval(self.db.client)
         self.reranker_pipeline = RerankerPipeline()
         self.code_feedback_pipeline = CodeFeedbackPipeline()
-        self.pipeline = self.llm | JsonOutputParser()
+        self.pipeline = self.llm_big | JsonOutputParser()
         self.citation_pipeline = CitationPipeline()
         self.tokens = []
 
     def __repr__(self):
-        return f"{self.__class__.__name__}(llm={self.llm})"
+        return f"{self.__class__.__name__}(llm_big={self.llm_big}, llm_small={self.llm_small})"
 
     def __str__(self):
-        return f"{self.__class__.__name__}(llm={self.llm})"
+        return f"{self.__class__.__name__}(llm_big={self.llm_big}, llm_small={self.llm_small})"
 
     @traceable(name="Exercise Chat Agent Pipeline")
     def __call__(self, dto: ExerciseChatPipelineExecutionDTO):
@@ -504,15 +513,14 @@ class ExerciseChatAgentPipeline(Pipeline):
                 tool_list.append(lecture_content_retrieval)
             tools = generate_structured_tools_from_functions(tool_list)
             agent = create_tool_calling_agent(
-                llm=self.llm, tools=tools, prompt=self.prompt
+                llm=self.llm_big, tools=tools, prompt=self.prompt
             )
             agent_executor = AgentExecutor(agent=agent, tools=tools, verbose=False)
             self.callback.in_progress()
             out = None
             for step in agent_executor.iter(params):
-                print("STEP:", step)
                 self._append_tokens(
-                    self.llm.tokens, PipelineEnum.IRIS_CHAT_EXERCISE_AGENT_MESSAGE
+                    self.llm_big.tokens, PipelineEnum.IRIS_CHAT_EXERCISE_AGENT_MESSAGE
                 )
                 if step.get("output", None):
                     out = step["output"]
@@ -525,13 +533,13 @@ class ExerciseChatAgentPipeline(Pipeline):
                     ]
                 )
 
-                guide_response = (self.prompt | self.llm | StrOutputParser()).invoke(
+                guide_response = (self.prompt | self.llm_small | StrOutputParser()).invoke(
                     {
                         "response": out,
                     }
                 )
                 self._append_tokens(
-                    self.llm.tokens, PipelineEnum.IRIS_CHAT_EXERCISE_AGENT_MESSAGE
+                    self.llm_small.tokens, PipelineEnum.IRIS_CHAT_EXERCISE_AGENT_MESSAGE
                 )
                 if "!ok!" in guide_response:
                     print("Response is ok and not rewritten!!!")

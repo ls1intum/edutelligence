@@ -28,5 +28,5 @@ Answer without citations:
 Paragraphs with their Lecture Names, Unit Names, Links and Page Numbers:
 {Paragraphs}
 
-Answer with citations (ensure empty line between the message and the citations):
 If the answer actually does not contain any information from the paragraphs, please do not include any citations and return '!NONE!'.
+Original answer with citations (ensure two empty lines between the message and the citations):
