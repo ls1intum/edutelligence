@@ -11,19 +11,19 @@ import { ExpertEvaluationConfig } from "@/model/expert_evaluation_config";
 
 function handler(req: NextApiRequest, res: NextApiResponse) {
     if (req.method == 'POST') {
-        const { dataMode } = req.query as { dataMode: DataMode };
+        const { dataMode, isAnonymize } = req.query as { dataMode: DataMode, isAnonymize: string };
         const expertEvaluationConfig: ExpertEvaluationConfig = req.body;
 
-        anonymizeFeedbackCategoriesAndShuffle(expertEvaluationConfig);
-        saveConfigToFileSync(dataMode, expertEvaluationConfig);
-        return res.status(200).json({ message: 'Config created successfully' });
+        if (isAnonymize == "true") {
+            anonymizeFeedbackCategoriesAndShuffle(expertEvaluationConfig);
+            saveConfigToFileSync(dataMode, expertEvaluationConfig);
 
-    } else if (req.method == 'PUT') {
-        const { dataMode } = req.query as { dataMode: DataMode };
-        const expertEvaluationConfig: ExpertEvaluationConfig = req.body;
+          // Add expert links after the evaluation has already started
+        } else {
+            saveConfigToFileSync(dataMode, expertEvaluationConfig, expertEvaluationConfig.started);
+        }
 
-        saveConfigToFileSync(dataMode, expertEvaluationConfig);
-        return res.status(200).json({ message: 'Config saved successfully' });
+        return res.status(200).json({expertEvaluationConfig});
 
     } else if (req.method == 'GET') {
         const { dataMode, expertEvaluationId } = req.query as { dataMode: DataMode; expertEvaluationId: string };
@@ -33,7 +33,7 @@ function handler(req: NextApiRequest, res: NextApiResponse) {
         return res.status(200).json(config);
     } else {
         res.setHeader('Allow', ['POST']);
-        return res.status(405).json({ message: 'Only GET, POST and PUT requests allowed' });
+        return res.status(405).json({ message: 'Only GET and POST requests allowed' });
     }
 }
 

@@ -8,6 +8,8 @@ ignore-paths:
   - module_programming_themisml/extract_methods/languages
   - module_programming_themisml/extract_methods/method_parser_listener.py
   - module_programming_apted/convert_code_to_ast/languages
+  - module_programming_winnowing/convert_code_to_ast/languages
+  - module_programming_winnowing/test_codes
 
 mypy:
   run: true

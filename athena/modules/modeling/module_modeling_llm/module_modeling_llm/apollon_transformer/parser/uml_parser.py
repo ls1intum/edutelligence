@@ -94,3 +94,29 @@ class UMLParser:
 
     def get_relations(self) -> List[Relation]:
         return self.relations
+
+    def get_element_id_mapping(self) -> Dict[str, str]:
+        """
+        Creates a mapping from element names to their IDs, including attributes and methods.
+        """
+        mapping = {}
+        for element in self.elements:
+            mapping[element.name] = element.id
+            for simplified_name_with_suffix, attr_id in element.attribute_id_mapping.items():
+                mapping[f"{element.name}.{simplified_name_with_suffix}"] = attr_id
+            for simplified_name_with_suffix, method_id in element.method_id_mapping.items():
+                mapping[f"{element.name}.{simplified_name_with_suffix}"] = method_id
+        for relation in self.relations:
+            mapping[relation.name] = relation.id
+        return mapping
+
+    def get_id_to_type_mapping(self) -> Dict[str, str]:
+        """
+        Creates a mapping from IDs to their types, including attributes and methods.
+        """
+        mapping = {}
+        for element in self.data['elements'].values():
+            mapping[element['id']] = element['type']
+        for relation in self.data['relationships'].values():
+            mapping[relation['id']] = relation['type']
+        return mapping

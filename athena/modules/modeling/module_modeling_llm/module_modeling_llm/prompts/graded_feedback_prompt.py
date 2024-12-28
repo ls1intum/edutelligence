@@ -42,9 +42,15 @@ Instructions:
 {example_solution}
 
 Important:
-Make sure to provide detailed feedback for each criterion. Always try to be as specific as possible.
-Also make sure your feedback adds up to the correct number of points. If there are n points available and everything is correct, then the feedback should add up to n points.
-Deeply think about the diagram and what the student potentially missed, misunderstood or mixed up.
+- Make sure to provide detailed feedback for each criterion. Always try to be as specific as possible.
+- Also make sure your feedback adds up to the correct number of points. If there are n points available and everything is correct, then the feedback should add up to n points.
+- Deeply think about the diagram and what the student potentially missed, misunderstood, or mixed up.
+- For the `element_name` field in the output, reference the specific diagram element, attribute, method, or relation related to the feedback. Use the following formats:
+    - For classes or elements: `<ClassName>`
+    - For attributes: `<ClassName>.<AttributeName>`
+    - For methods: `<ClassName>.<MethodName>`
+    - For relations: `R<number>` (e.g., `R1`, `R2`)
+- If the feedback is not related to a specific element, leave the `element_name` field empty.
 
 <UML Diagram Format>
 The submission uses the following UML diagram format:

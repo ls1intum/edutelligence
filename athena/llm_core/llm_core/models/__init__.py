@@ -20,8 +20,6 @@ try:
     types.append(openai_config.OpenAIModelConfig)
     if default_model_name in openai_config.available_models:
         DefaultModelConfig = openai_config.OpenAIModelConfig
-    if "openai_gpt-4o-mini" in openai_config.available_models:        
-        MiniModelConfig = openai_config.OpenAIModelConfig(model_name="openai_gpt-4o-mini",max_tokens=3000, temperature=0,top_p=0.9,presence_penalty=0,frequency_penalty=0)
     if evaluation_model_name in openai_config.available_models:
         evaluation_model = openai_config.available_models[evaluation_model_name]
 except AttributeError:

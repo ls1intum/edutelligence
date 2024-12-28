@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, Dict
 from pydantic import BaseModel
 
 class ExerciseModel(BaseModel):
@@ -11,4 +11,5 @@ class ExerciseModel(BaseModel):
     grading_instructions: Optional[str] = None
     submission_uml_type: str
     transformed_example_solution: Optional[str] = None
-    element_id_mapping: dict[str, str]
+    element_id_mapping: Dict[str, str]
+    id_type_mapping: Dict[str, str]
