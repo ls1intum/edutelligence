@@ -15,9 +15,9 @@ class ApproachConfig(BaseModel, ABC):
     model: ModelConfigType = Field(default=DefaultModelConfig())
     type: str = Field(..., description="The type of approach config")
 
-    # @abstractmethod
-    # async def generate_suggestions(self, exercise: Exercise, submission: Submission, config, debug: bool):
-    #     pass
+    @abstractmethod
+    async def generate_suggestions(self, exercise: Exercise, submission: Submission, config, debug: bool):
+        pass
     
     class Config:
         use_enum_values = True
