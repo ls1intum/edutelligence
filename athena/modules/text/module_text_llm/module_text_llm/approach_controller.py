@@ -1,11 +1,6 @@
 from typing import List
 from athena.text import Exercise, Submission, Feedback
-# from module_text_llm.basic_approach import BasicApproachConfig
-# from module_text_llm.chain_of_thought_approach import ChainOfThoughtConfig
 from module_text_llm.approach_config import ApproachConfig
-
-# from module_text_llm.basic_approach.generate_suggestions import generate_suggestions as generate_suggestions_basic
-# from module_text_llm.chain_of_thought_approach.generate_suggestions import generate_suggestions as generate_cot_suggestions
 import importlib
 import pkgutil
 import inspect
@@ -51,7 +46,7 @@ class SuggestionStrategyFactory:
     @staticmethod
     def initialize_strategies():
         if not SuggestionStrategyFactory._strategies:
-            configs = discover_approach_configs()  # Assuming this function is defined
+            configs = discover_approach_configs()
             strategies = SuggestionStrategyFactory.discover_and_initialize_strategies()
 
             for config_name, config_class in configs.items():
