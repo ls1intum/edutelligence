@@ -4,9 +4,8 @@ from module_text_llm.approach_config import ApproachConfig
 import importlib
 import pkgutil
 import inspect
-from typing import Dict
 
-def discover_classes(base_package, base_class=None):
+def discover_approach_configs(base_package, base_class=None):
     """
     Discover and return classes within the specified package.
 
@@ -64,11 +63,11 @@ class SuggestionStrategyFactory:
                                 Defaults to "module_text_llm".
         """
         if not SuggestionStrategyFactory._strategies:
-            configs = discover_classes(base_package, base_class=ApproachConfig)
-            strategies = discover_classes(base_package)
+            configs = discover_approach_configs(base_package, base_class=ApproachConfig)
+            # strategies = discover_approach_configs(base_package)
 
             for config_name, config_class in configs.items():
-                strategy_class = strategies.get(config_name)
+                strategy_class = configs.get(config_name)
                 if strategy_class:
                     SuggestionStrategyFactory._strategies[config_name] = strategy_class
 
@@ -98,7 +97,7 @@ class SuggestionStrategyFactory:
         if not strategy_class:
             raise ValueError(f"No strategy found for config type: {config_type}")
         return strategy_class()
-    
+
 async def generate_suggestions(exercise: Exercise, submission: Submission, config: ApproachConfig, debug: bool) -> List[Feedback]:
     strategy = SuggestionStrategyFactory.get_strategy(config)
     return await strategy.generate_suggestions(exercise, submission, config, debug)
