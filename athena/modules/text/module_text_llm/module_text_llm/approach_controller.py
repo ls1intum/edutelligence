@@ -48,7 +48,7 @@ class SuggestionStrategyFactory:
     Attributes:
         _strategies (dict): A dictionary mapping configuration class names to their corresponding strategy classes.
     """
-    _strategies = {}
+    _strategies: dict[str, ApproachConfig] = {}
 
     @staticmethod
     def initialize_strategies(base_package="module_text_llm"):
@@ -101,4 +101,3 @@ class SuggestionStrategyFactory:
 async def generate_suggestions(exercise: Exercise, submission: Submission, config: ApproachConfig, debug: bool) -> List[Feedback]:
     strategy = SuggestionStrategyFactory.get_strategy(config)
     return await strategy.generate_suggestions(exercise, submission, config, debug)
-
