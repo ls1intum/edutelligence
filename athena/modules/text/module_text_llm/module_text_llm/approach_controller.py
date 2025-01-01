@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Callable
 from athena.text import Exercise, Submission, Feedback
 from module_text_llm.approach_config import ApproachConfig
 import importlib
@@ -48,7 +48,7 @@ class SuggestionStrategyFactory:
     Attributes:
         _strategies (dict): A dictionary mapping configuration class names to their corresponding strategy classes.
     """
-    _strategies: dict[str, ApproachConfig] = {}
+    _strategies: dict[str, Callable] = {}
 
     @staticmethod
     def initialize_strategies(base_package="module_text_llm"):
