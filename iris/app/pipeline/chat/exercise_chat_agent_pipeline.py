@@ -533,7 +533,9 @@ class ExerciseChatAgentPipeline(Pipeline):
                     ]
                 )
 
-                guide_response = (self.prompt | self.llm_small | StrOutputParser()).invoke(
+                guide_response = (
+                    self.prompt | self.llm_small | StrOutputParser()
+                ).invoke(
                     {
                         "response": out,
                     }

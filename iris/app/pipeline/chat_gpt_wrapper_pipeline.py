@@ -20,9 +20,7 @@ class ChatGPTWrapperPipeline(Pipeline):
     request_handler: CapabilityRequestHandler
 
     def __init__(self, callback: Optional[ChatGPTWrapperCallback] = None):
-        super().__init__(
-            implementation_id="chat_gpt_wrapper_pipeline_reference_impl"
-        )
+        super().__init__(implementation_id="chat_gpt_wrapper_pipeline_reference_impl")
         self.callback = callback
         self.request_handler = CapabilityRequestHandler(
             requirements=RequirementList(

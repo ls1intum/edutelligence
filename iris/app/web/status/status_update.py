@@ -24,7 +24,9 @@ from app.domain.status.text_exercise_chat_status_update_dto import (
 from app.domain.chat.exercise_chat.exercise_chat_status_update_dto import (
     ExerciseChatStatusUpdateDTO,
 )
-from app.domain.status.chat_gpt_wrapper_status_update_dto import ChatGPTWrapperStatusUpdateDTO
+from app.domain.status.chat_gpt_wrapper_status_update_dto import (
+    ChatGPTWrapperStatusUpdateDTO,
+)
 from app.domain.status.status_update_dto import StatusUpdateDTO
 import logging
 
@@ -301,6 +303,7 @@ class LectureChatCallback(StatusCallback):
             stages[stage],
             stage,
         )
+
 
 class ChatGPTWrapperCallback(StatusCallback):
     def __init__(

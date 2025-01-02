@@ -7,4 +7,4 @@ from . import PipelineExecutionDTO
 
 class ChatGPTWrapperPipelineExecutionDTO(BaseModel):
     execution: PipelineExecutionDTO
-    conversation: list[PyrisMessage] = Field(default=[]) 
+    conversation: list[PyrisMessage] = Field(default=[])

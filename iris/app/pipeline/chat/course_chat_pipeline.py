@@ -100,14 +100,16 @@ class CourseChatPipeline(Pipeline):
                 requirements=RequirementList(
                     gpt_version_equivalent=4.5,
                 )
-            ), completion_args=completion_args
+            ),
+            completion_args=completion_args,
         )
         self.llm_small = IrisLangchainChatModel(
             request_handler=CapabilityRequestHandler(
                 requirements=RequirementList(
                     gpt_version_equivalent=4.25,
                 )
-            ), completion_args=completion_args
+            ),
+            completion_args=completion_args,
         )
         self.callback = callback
 
