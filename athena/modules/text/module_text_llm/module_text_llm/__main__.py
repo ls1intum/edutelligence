@@ -61,6 +61,6 @@ async def evaluate_feedback(
     return evaluation
 
 if __name__ == "__main__":
-    nltk.download("punkt")
+    nltk.download("punkt_tab")
     tiktoken.get_encoding("cl100k_base")
     app.start()

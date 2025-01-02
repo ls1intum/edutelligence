@@ -11,7 +11,7 @@ from .big_integer_with_autoincrement import BigIntegerWithAutoincrement
 class DBModelingFeedback(DBFeedback, Base):
     __tablename__ = "modeling_feedbacks"
 
-    element_ids: Optional[list[str]] = Column(JSON) # type: ignore
+    element_ids: Optional[list[str]] = Column(JSON) # type: ignore # Todo: Remove after adding migrations to athena
     reference: Optional[str] = Column(String, nullable=True) # type: ignore
 
     exercise_id = Column(BigIntegerWithAutoincrement, ForeignKey("modeling_exercises.id", ondelete="CASCADE"), index=True)

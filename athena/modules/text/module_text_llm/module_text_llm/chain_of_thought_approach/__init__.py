@@ -10,7 +10,6 @@ from module_text_llm.chain_of_thought_approach.prompt_thinking import ThinkingPr
 llm_config = get_llm_config()
 
 class ChainOfThoughtConfig(ApproachConfig):
-    # Defaults to the cheaper mini 4o model
     type: Literal['chain_of_thought'] = 'chain_of_thought'
     model: ModelConfig = Field(default=llm_config.models.base_model_config)
     thikning_prompt: ThinkingPrompt = Field(default=ThinkingPrompt())
