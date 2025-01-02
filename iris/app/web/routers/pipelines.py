@@ -21,6 +21,7 @@ from app.web.status.status_update import (
     CourseChatStatusCallback,
     CompetencyExtractionCallback,
     LectureChatCallback,
+    ChatGPTWrapperCallback,
 )
 from app.pipeline.chat.course_chat_pipeline import CourseChatPipeline
 from app.dependencies import TokenValidator
@@ -31,6 +32,8 @@ from app.domain.text_exercise_chat_pipeline_execution_dto import (
 )
 from app.pipeline.text_exercise_chat_pipeline import TextExerciseChatPipeline
 from app.web.status.status_update import TextExerciseChatCallback
+from app.domain.chat_gpt_wrapper_pipeline_execution_dto import ChatGPTWrapperPipelineExecutionDTO
+from app.pipeline.chat_gpt_wrapper_pipeline import ChatGPTWrapperPipeline
 
 router = APIRouter(prefix="/api/v1/pipelines", tags=["pipelines"])
 logger = logging.getLogger(__name__)
@@ -231,6 +234,41 @@ def run_competency_extraction_pipeline(
     )
     thread.start()
 
+def run_chatgpt_wrapper_pipeline_worker(
+    dto: ChatGPTWrapperPipelineExecutionDTO, _variant: str
+):
+    try:
+        callback = ChatGPTWrapperCallback(
+            run_id=dto.execution.settings.authentication_token,
+            base_url=dto.execution.settings.artemis_base_url,
+            initial_stages=dto.execution.initial_stages,
+        )
+        pipeline = ChatGPTWrapperPipeline(callback=callback)
+    except Exception as e:
+        logger.error(f"Error preparing ChatGPT wrapper pipeline: {e}")
+        logger.error(traceback.format_exc())
+        capture_exception(e)
+        return
+
+    try:
+        pipeline(dto=dto)
+    except Exception as e:
+        logger.error(f"Error running ChatGPT wrapper pipeline: {e}")
+        logger.error(traceback.format_exc())
+        callback.error("Fatal error.", exception=e)
+
+@router.post(
+    "/chat-gpt-wrapper/{variant}/run",
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(TokenValidator())],
+)
+def run_chatgpt_wrapper_pipeline(
+    variant: str, dto: ChatGPTWrapperPipelineExecutionDTO
+):
+    thread = Thread(
+        target=run_chatgpt_wrapper_pipeline_worker, args=(dto, variant)
+    )
+    thread.start()
 
 @router.get("/{feature}/variants")
 def get_pipeline(feature: str):
@@ -292,6 +330,14 @@ def get_pipeline(feature: str):
                     id="default",
                     name="Default Variant",
                     description="Default lecture chat variant.",
+                )
+            ]
+        case "CHAT_GPT_WRAPPER":
+            return [
+                FeatureDTO(
+                    id="default",
+                    name="Default Variant",
+                    description="Default ChatGPT wrapper variant.",
                 )
             ]
         case _:
