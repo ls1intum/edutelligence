@@ -14,7 +14,7 @@ langchain = "0.2.15"
 langchain-community="0.2.10"
 langchain-openai = "0.1.23"
 nltk = "3.8.1"
-openai = "1.51.1"
+openai = "1.58.1"
 python-dotenv = "1.0.0"
 tiktoken = "0.7.0"
 

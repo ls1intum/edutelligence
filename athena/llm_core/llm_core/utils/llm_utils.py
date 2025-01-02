@@ -1,18 +1,14 @@
-from typing import Type, TypeVar, List
+from typing import List, TypeVar
 from pydantic import BaseModel
 import tiktoken
-from langchain_openai import AzureChatOpenAI, ChatOpenAI
-from langchain.base_language import BaseLanguageModel
 from langchain.prompts import (
     ChatPromptTemplate,
     SystemMessagePromptTemplate,
     HumanMessagePromptTemplate,
 )
-from langchain.output_parsers import PydanticOutputParser
 from athena import emit_meta
 
 T = TypeVar("T", bound=BaseModel)
-
 
 def num_tokens_from_string(string: str) -> int:
     """Returns the number of tokens in a text string."""
@@ -26,11 +22,13 @@ def num_tokens_from_prompt(chat_prompt: ChatPromptTemplate, prompt_input: dict) 
     return num_tokens_from_string(chat_prompt.format(**prompt_input))
 
 
-def check_prompt_length_and_omit_features_if_necessary(prompt: ChatPromptTemplate, 
-                                                       prompt_input: dict, 
-                                                       max_input_tokens: int, 
-                                                       omittable_features: List[str],
-                                                       debug: bool):
+def check_prompt_length_and_omit_features_if_necessary(
+    prompt: ChatPromptTemplate,
+    prompt_input: dict,
+    max_input_tokens: int,
+    omittable_features: List[str],
+    debug: bool,
+):
     """Check if the input is too long and omit features if necessary.
 
     Note: Omitted features will be replaced with "omitted" in the prompt
@@ -43,7 +41,7 @@ def check_prompt_length_and_omit_features_if_necessary(prompt: ChatPromptTemplat
         debug (bool): Debug flag
 
     Returns:
-        (dict, bool): Tuple of (prompt_input, should_run) where prompt_input is the input with omitted features and 
+        (dict, bool): Tuple of (prompt_input, should_run) where prompt_input is the input with omitted features and
                       should_run is True if the model should run, False otherwise
     """
     if num_tokens_from_prompt(prompt, prompt_input) <= max_input_tokens:
@@ -66,45 +64,29 @@ def check_prompt_length_and_omit_features_if_necessary(prompt: ChatPromptTemplat
     return prompt_input, False
 
 
-def supports_function_calling(model: BaseLanguageModel):
-    """Returns True if the model supports function calling, False otherwise
+def get_chat_prompt(
+    system_message: str,
+    human_message: str,
+) -> ChatPromptTemplate:
+    system_message_prompt = SystemMessagePromptTemplate.from_template(system_message)
+    human_message_prompt = HumanMessagePromptTemplate.from_template(human_message)
+    return ChatPromptTemplate.from_messages(
+        [system_message_prompt, human_message_prompt]
+    )
 
-    Args:
-        model (BaseLanguageModel): The model to check
-
-    Returns:
-        boolean: True if the model supports function calling, False otherwise
+def remove_system_message(chat_prompt: ChatPromptTemplate) -> ChatPromptTemplate:
     """
-    return isinstance(model, ChatOpenAI)  or isinstance(model, AzureChatOpenAI)
-
-
-def get_chat_prompt_with_formatting_instructions(
-            model: BaseLanguageModel,
-            system_message: str, 
-            human_message: str,
-            pydantic_object: Type[T]
-        ) -> ChatPromptTemplate:
-    """Returns a ChatPromptTemplate with formatting instructions (if necessary)
-
-    Note: Does nothing if the model supports function calling
-
-    Args:
-        model (BaseLanguageModel): The model to check if it supports function calling
-        system_message (str): System message
-        human_message (str): Human message
-        pydantic_object (Type[T]): Model to parse the output
-
-    Returns:
-        ChatPromptTemplate: ChatPromptTemplate with formatting instructions (if necessary)
+    Create a NEW ChatPromptTemplate with "system" messages replaced as "human" if the model does not support system messages.
     """
-    if supports_function_calling(model):
-        system_message_prompt = SystemMessagePromptTemplate.from_template(system_message)
-        human_message_prompt = HumanMessagePromptTemplate.from_template(human_message)
-        return ChatPromptTemplate.from_messages([system_message_prompt, human_message_prompt])
-    
-    output_parser = PydanticOutputParser(pydantic_object=pydantic_object)
-    system_message_prompt = SystemMessagePromptTemplate.from_template(system_message + "\n{format_instructions}")
-    system_message_prompt.prompt.partial_variables = {"format_instructions": output_parser.get_format_instructions()}
-    system_message_prompt.prompt.input_variables.remove("format_instructions")
-    human_message_prompt = HumanMessagePromptTemplate.from_template(human_message + "\n\nJSON response following the provided schema:")
-    return ChatPromptTemplate.from_messages([system_message_prompt, human_message_prompt])
+    new_prompt_templates = []
+    for prompt_msg in chat_prompt.messages:
+        if isinstance(prompt_msg, SystemMessagePromptTemplate):
+            # Convert it to a human prompt, preserving content
+            new_prompt_templates.append(
+                HumanMessagePromptTemplate.from_template(
+                    "[System message]: " + prompt_msg.prompt.template  # type: ignore
+                )
+            )
+        else:
+            new_prompt_templates.append(prompt_msg)
+    return ChatPromptTemplate.from_messages(new_prompt_templates)

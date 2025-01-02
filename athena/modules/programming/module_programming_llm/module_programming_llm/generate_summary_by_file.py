@@ -10,10 +10,10 @@ from athena.programming import Exercise, Submission
 
 from module_programming_llm.config import GradedBasicApproachConfig, BasicApproachConfig
 from llm_core.utils.llm_utils import (
-    get_chat_prompt_with_formatting_instructions,
+    get_chat_prompt,
     num_tokens_from_prompt,
 )
-from llm_core.utils.predict_and_parse import predict_and_parse
+from llm_core.core.predict_and_parse import predict_and_parse
 
 from module_programming_llm.helpers.utils import (
     get_diff,
@@ -70,8 +70,6 @@ async def generate_summary_by_file(
     if "summary" not in prompt.input_variables:
         return None
 
-    model = config.model.get_model()  # type: ignore[attr-defined]
-
     template_repo = exercise.get_template_repository()
     submission_repo = submission.get_repository()
 
@@ -88,11 +86,9 @@ async def generate_summary_by_file(
         submission_repo,
         file_filter=lambda file_path: file_path in changed_files_from_template_to_submission,
     )
-    chat_prompt = get_chat_prompt_with_formatting_instructions(
-        model=model,
+    chat_prompt = get_chat_prompt(
         system_message=config.generate_file_summary_prompt.system_message,
         human_message=config.generate_file_summary_prompt.human_message,
-        pydantic_object=SolutionSummary,
     )
 
     prompt_inputs = []
@@ -118,7 +114,7 @@ async def generate_summary_by_file(
     results: List[Optional[FileDescription]] = await asyncio.gather(
         *[
             predict_and_parse(
-                model=model,
+                model=config.model,
                 chat_prompt=chat_prompt,
                 prompt_input=prompt_input,
                 pydantic_object=FileDescription,

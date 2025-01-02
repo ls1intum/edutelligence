@@ -1,5 +1,4 @@
-from typing import List, Optional
-from pydantic import BaseModel, Field
+from typing import List
 
 from athena import emit_meta
 from athena.text import Exercise, Submission, Feedback
@@ -8,11 +7,11 @@ from athena.logger import logger
 from module_text_llm.chain_of_thought_approach import ChainOfThoughtConfig
 
 from llm_core.utils.llm_utils import (
-    get_chat_prompt_with_formatting_instructions, 
-    check_prompt_length_and_omit_features_if_necessary, 
+    check_prompt_length_and_omit_features_if_necessary,
+    get_chat_prompt, 
     num_tokens_from_prompt,
 )
-from llm_core.utils.predict_and_parse import predict_and_parse
+from llm_core.core.predict_and_parse import predict_and_parse
 
 from module_text_llm.helpers.utils import add_sentence_numbers, get_index_range_from_line_range, format_grading_instructions
 from module_text_llm.chain_of_thought_approach.prompt_thinking import InitialAssessmentModel
@@ -20,7 +19,6 @@ from module_text_llm.chain_of_thought_approach.prompt_generate_feedback import A
 
 
 async def generate_suggestions(exercise: Exercise, submission: Submission, config: ChainOfThoughtConfig, debug: bool) -> List[Feedback]:
-    model = config.model.get_model()  # type: ignore[attr-defined]
 
     prompt_input = {
         "max_points": exercise.max_points,
@@ -31,11 +29,9 @@ async def generate_suggestions(exercise: Exercise, submission: Submission, confi
         "submission": add_sentence_numbers(submission.text)
     }
 
-    chat_prompt = get_chat_prompt_with_formatting_instructions(
-        model=model, 
+    chat_prompt = get_chat_prompt(
         system_message=config.thikning_prompt.system_message, 
         human_message=config.thikning_prompt.human_message, 
-        pydantic_object=InitialAssessmentModel
     )
     
 
@@ -59,15 +55,14 @@ async def generate_suggestions(exercise: Exercise, submission: Submission, confi
         return []
 
     initial_result = await predict_and_parse(
-        model=model, 
+        model=config.model, 
         chat_prompt=chat_prompt, 
         prompt_input=prompt_input, 
         pydantic_object=InitialAssessmentModel,
         tags=[
             f"exercise-{exercise.id}",
             f"submission-{submission.id}",
-        ],
-        use_function_calling=True
+        ]
     )
 
     second_prompt_input = {
@@ -76,24 +71,22 @@ async def generate_suggestions(exercise: Exercise, submission: Submission, confi
 
     }
     
-    second_chat_prompt = get_chat_prompt_with_formatting_instructions(     
-        model=model, 
+    second_chat_prompt = get_chat_prompt(     
         system_message=config.generate_suggestions_prompt.second_system_message, 
         human_message=config.generate_suggestions_prompt.answer_message, 
-        pydantic_object=AssessmentModel)
+    )
     
     result = await predict_and_parse(
-    model=model, 
+    model=config.model,
     chat_prompt=second_chat_prompt, 
     prompt_input=second_prompt_input, 
     pydantic_object=AssessmentModel,
     tags=[
         f"exercise-{exercise.id}",
         f"submission-{submission.id}",
-    ],
-        use_function_calling=True
+    ]
     )
-        
+    
     if debug:
         emit_meta("generate_suggestions", {
             "prompt": chat_prompt.format(**prompt_input),

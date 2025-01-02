@@ -1,9 +1,10 @@
 from abc import ABC
 
+from llm_core.loaders.llm_config_loader import get_llm_config
 from pydantic import BaseModel, Field
+from llm_core.models.model_config import ModelConfig
 
 from athena import config_schema_provider
-from llm_core.models import ModelConfigType, DefaultModelConfig
 from module_programming_llm.prompts.generate_graded_suggestions_by_file import (
     system_message as generate_graded_suggestions_by_file_system_message,
     human_message as generate_graded_suggestions_by_file_human_message,
@@ -28,6 +29,8 @@ from module_programming_llm.prompts.summarize_submission_by_file import (
     system_message as summarize_submission_by_file_system_message,
     human_message as summarize_submission_by_file_human_message,
 )
+
+llm_config = get_llm_config()
 
 
 class SplitProblemStatementsBasePrompt(BaseModel):
@@ -107,7 +110,7 @@ class BasicApproachConfig(BaseModel):
     """Defines a basic configuration for processing submissions, incorporating problem statement splitting, feedback generation, and file summarization."""
 
     max_input_tokens: int = Field(default=3000, description="Maximum number of tokens in the input prompt.")
-    model: ModelConfigType = Field(default=DefaultModelConfig()) # type: ignore
+    model: ModelConfig = Field(default=llm_config.models.base_model_config)
     max_number_of_files: int = Field(default=25, description="Maximum number of files. If exceeded, it will prioritize the most important ones.")
     split_problem_statement_by_file_prompt: SplitProblemStatementsBasePrompt = Field(description="To be defined in " "subclasses.")
     generate_suggestions_by_file_prompt: SplitProblemStatementsBasePrompt = Field(description="To be defined in " "subclasses.")
