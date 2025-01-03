@@ -1,3 +1,19 @@
+## Content
+
+- [Overview](#overview)
+- [Key Features](#key-features)
+- [Core Components](#core-components)
+  - [1. Configuration Files](#1-configuration-files)
+  - [2. `ModelConfig` and Type System](#2-modelconfig-and-type-system)
+  - [3. Loaders](#3-loaders)
+  - [4. Utils](#4-utils)
+  - [5. Core Logic](#5-core-logic)
+  - [6. Callbacks](#6-callbacks)
+- [Usage](#usage)
+  - [1. Configuration](#1-configuration)
+  - [2. Using LLMs in Modules](#2-using-llms-in-modules)
+- [Extending with New Providers](#extending-with-new-providers)
+
 ## Overview
 
 The `llm_core` module provides a robust and extensible system for configuring and managing Large Language Models (LLMs) within the Athena framework. It allows for defining task-specific LLM models, configure their capabilities, and seamlessly integrate new LLM providers. This README provides a comprehensive guide to understanding and utilizing the `llm_core` module's features.
@@ -195,3 +211,4 @@ The `ModelConfig` class serves as an abstraction layer for different LLM provide
 
     *   In your module's `llm_config.yml`, specify the model name using your provider's prefix.
     *   The `llm_core` system will automatically use your new `ModelConfig` implementation.
+
