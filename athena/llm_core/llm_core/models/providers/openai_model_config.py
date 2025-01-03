@@ -4,8 +4,8 @@ from pydantic import Field, PrivateAttr, validator, PositiveInt
 from langchain.base_language import BaseLanguageModel
 from llm_core.loaders.openai_loader import available_models
 
-from .model_config import ModelConfig
-from .callbacks import UsageHandler
+from ..model_config import ModelConfig
+from ..usage_handler import UsageHandler
 
 class OpenAIModelConfig(ModelConfig):
     """OpenAI LLM configuration."""

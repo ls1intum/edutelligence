@@ -1,6 +1,6 @@
 
 from typing import Optional
-from llm_core.models.openai_model_config import OpenAIModelConfig
+from llm_core.models.providers.openai_model_config import OpenAIModelConfig
 
 def find_provider_for_model(model_name: str) -> Optional[str]:
     """
