@@ -1,4 +1,5 @@
 from llm_core.loaders.llm_config_loader import get_llm_config
+from llm_core.models import ModelConfigType
 from pydantic import BaseModel, Field
 
 from athena import config_schema_provider
@@ -47,10 +48,10 @@ class GenerateSuggestionsPrompt(BaseModel):
 class BasicApproachConfig(BaseModel):
     """This approach uses a LLM with a single prompt to generate feedback in a single step."""
     max_input_tokens: int = Field(default=5000, description="Maximum number of tokens in the input prompt.")
-    generate_feedback: ModelConfig = Field(default=llm_config.models.base_model_config)
-    filter_feedback: ModelConfig = Field(default=llm_config.models.base_model_config)
-    review_feedback: ModelConfig = Field(default=llm_config.models.fast_reasoning_model_config)
-    generate_grading_instructions: ModelConfig = Field(default=llm_config.models.base_model_config)
+    generate_feedback: ModelConfigType = Field(default=llm_config.models.base_model_config)
+    filter_feedback: ModelConfigType = Field(default=llm_config.models.base_model_config)
+    review_feedback: ModelConfigType = Field(default=llm_config.models.fast_reasoning_model_config)
+    generate_grading_instructions: ModelConfigType = Field(default=llm_config.models.base_model_config)
     generate_suggestions_prompt: GenerateSuggestionsPrompt = Field(default=GenerateSuggestionsPrompt())
 
 @config_schema_provider

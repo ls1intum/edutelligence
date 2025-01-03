@@ -1,5 +1,5 @@
 from llm_core.loaders.llm_config_loader import get_llm_config
-from llm_core.models.model_config import ModelConfig
+from llm_core.models import ModelConfigType
 from pydantic import Field
 from typing import Literal
 
@@ -11,7 +11,7 @@ llm_config = get_llm_config()
 
 class ChainOfThoughtConfig(ApproachConfig):
     type: Literal['chain_of_thought'] = 'chain_of_thought'
-    model: ModelConfig = Field(default=llm_config.models.base_model_config)
+    model: ModelConfigType = Field(default=llm_config.models.base_model_config)
     thikning_prompt: ThinkingPrompt = Field(default=ThinkingPrompt())
     generate_suggestions_prompt: CoTGenerateSuggestionsPrompt = Field(default=CoTGenerateSuggestionsPrompt())
     
