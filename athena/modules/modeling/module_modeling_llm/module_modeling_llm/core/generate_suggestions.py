@@ -1,14 +1,17 @@
+import base64
 from athena.schemas.grading_criterion import StructuredGradingCriterion
 from langchain_core.output_parsers import PydanticOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 
 from athena import emit_meta
 from module_modeling_llm.config import BasicApproachConfig
+from module_modeling_llm.helius_render.api import render_diagram
 from module_modeling_llm.models.assessment_model import AssessmentModel
 from module_modeling_llm.prompts.apollon_format_description import apollon_format_description
 from llm_core.utils.predict_and_parse import predict_and_parse
 from module_modeling_llm.prompts.graded_feedback_prompt import GradedFeedbackInputs
 from module_modeling_llm.models.exercise_model import ExerciseModel
+from langchain_core.prompts import ChatPromptTemplate, HumanMessagePromptTemplate
 
 async def generate_suggestions(
         exercise_model: ExerciseModel, 
@@ -36,6 +39,19 @@ async def generate_suggestions(
         uml_diagram_format=apollon_format_description,
         feedback_output_format=PydanticOutputParser(pydantic_object=AssessmentModel).get_format_instructions()
     )
+
+    diagram_json = exercise_model.model
+    png_data = render_diagram(diagram_json, {value: key for key, value in exercise_model.element_id_mapping.items()})
+    base64_image = base64.b64encode(png_data).decode("utf-8")
+
+    chat_prompt = ChatPromptTemplate.from_messages([
+        ("system", config.generate_suggestions_prompt.graded_feedback_system_message),
+        ("human", config.generate_suggestions_prompt.graded_feedback_human_message),
+        HumanMessagePromptTemplate.from_template(
+            [{'image_url': {'url': f'data:image/jpeg;base64,{base64_image}', 'detail': 'high'}}]
+        )
+    ])
+
 
     chat_prompt = ChatPromptTemplate.from_messages([
         ("system", config.generate_suggestions_prompt.graded_feedback_system_message),

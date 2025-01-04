@@ -1,0 +1,7 @@
+{
+    "default": {
+      "shape": "rectangle",
+      "class_name": "uml-element",
+      "text_class": "uml-element-name"
+    }
+  }

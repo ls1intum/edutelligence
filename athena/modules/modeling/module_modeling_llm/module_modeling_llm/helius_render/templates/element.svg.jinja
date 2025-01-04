@@ -1,0 +1,78 @@
+
+<g id="{{ element.id }}" transform="translate({{ bounds.x }}, {{ bounds.y }})">
+    <rect class="{{ element_class }}" width="{{ bounds.width }}" height="{{ bounds.height }}" fill="white" stroke="black" />
+
+    {% set padding_x = 20 %}
+    {% set padding_y = 20 %}
+    {% set available_width = bounds.width - (padding_x * 2) %}
+
+    {% set name_lines = element._wrapped_name_lines if '_wrapped_name_lines' in element else [] %}
+    {% set type_lines = element._wrapped_type_lines if '_wrapped_type_lines' in element else [] %}
+
+    {% set line_height_name = 22 %}
+    {% set line_height_type = 18 %}
+    {% set vertical_gap = 5 if type_lines else 0 %}
+    {% set total_name_height = (name_lines|length * line_height_name) %}
+    {% set total_type_height = (type_lines|length * line_height_type) %}
+    {% set total_text_height = total_name_height + total_type_height + vertical_gap %}
+    
+    {% set center_y = (bounds.height / 2) %}
+    {% set start_y = center_y - (total_text_height / 2) %}
+
+    {% set is_owner = (element.type == "BPMNPool" or element.type == "BPMNSwimlane") %}
+
+    {% if is_owner %}
+    <!-- For owner elements, position text at the top middle -->
+    <text class="uml-element-name owner" text-anchor="middle" dominant-baseline="hanging"
+          x="{{ bounds.width/2 }}" y="{{ padding_y }}">
+        {% for line in name_lines %}
+        {% if loop.first %}
+        <tspan fill="black" x="{{ bounds.width/2 }}" dy="0">{{ line }}</tspan>
+        {% else %}
+        <tspan fill="black" x="{{ bounds.width/2 }}" dy="1em">{{ line }}</tspan>
+        {% endif %}
+        {% endfor %}
+    </text>
+
+    {% if type_lines %}
+    <text class="uml-element-type" text-anchor="middle" dominant-baseline="hanging"
+          x="{{ bounds.width/2 }}" y="{{ padding_y + total_name_height + vertical_gap }}">
+        {% for line in type_lines %}
+        {% if loop.first %}
+        <tspan fill="black" x="{{ bounds.width/2 }}" dy="0">{{ line }}</tspan>
+        {% else %}
+        <tspan fill="black" x="{{ bounds.width/2 }}" dy="1em">{{ line }}</tspan>
+        {% endif %}
+        {% endfor %}
+    </text>
+    {% endif %}
+
+    {% else %}
+    <!-- Default positioning (centered) for non-owner elements -->
+    <text class="uml-element-name" text-anchor="middle" dominant-baseline="alphabetic"
+          x="{{ bounds.width/2 }}" y="{{ start_y }}">
+        {% for line in name_lines %}
+        {% if loop.first %}
+        <tspan fill="black" x="{{ bounds.width/2 }}" dy="1em">{{ line }}</tspan>
+        {% else %}
+        <tspan fill="black" x="{{ bounds.width/2 }}" dy="1em">{{ line }}</tspan>
+        {% endif %}
+        {% endfor %}
+    </text>
+
+    {% if type_lines %}
+    <text class="uml-element-type" text-anchor="middle" dominant-baseline="alphabetic"
+          x="{{ bounds.width/2 }}" y="{{ start_y + total_name_height + vertical_gap }}">
+        {% for line in type_lines %}
+        {% if loop.first %}
+        <tspan fill="black" x="{{ bounds.width/2 }}" dy="1em">{{ line }}</tspan>
+        {% else %}
+        <tspan fill="black" x="{{ bounds.width/2 }}" dy="1em">{{ line }}</tspan>
+        {% endif %}
+        {% endfor %}
+    </text>
+    {% endif %}
+
+    {% endif %}
+</g>
+
