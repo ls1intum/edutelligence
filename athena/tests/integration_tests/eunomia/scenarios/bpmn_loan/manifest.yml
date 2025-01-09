@@ -1,0 +1,213 @@
+server_url: "http://127.0.0.1:5100/modules/modeling/module_modeling_llm/feedback_suggestions"
+exercise:
+  course_id: 2
+  title: "Process Modelling with BPMN: Obtaining a loan"
+  type: "modeling"
+  max_points: 10
+  bonus_points: 0
+  grading_instructions: "For every correct diagram element, give 1 point. 1. Only give full points if all elements described in the problem statement are present in the submission. 2. If a gateway has a label, ensure the outgoing flows are also labelled. 3. Make sure a start event is present in the student's submission. 4. Make sure an end event is in the student's submissions. 5. Make sure the activities in the diagram are in the same ordered as described in the problem statement. 6. Make sure pools and lanes are labelled. 7. Make sure the submission does not contain elements that are not described in the problem statement. 8. Make sure all elements are connected. 9. Make sure activities are named in the \"Verb Object\"-format where a name consists of a verb followed by the object."
+  problem_statement: "Two collaboration partners are interacting with each other, the \"Loan Applicant\" and the \"Credit Institute\". The Loan Applicant sends a credit request to the Credit Institute. When a credit request is received, the Loan Provider within the Credit Institute reviews the request. The Loan Provider then checks if standard terms are applicable while the Loan Assessor of the Credit Institute assesses the risk. If the standard terms are applicable, the Loan Provider calculates terms, if they do not apply, the Loan Provider prepares special terms. After that, the Loan Provider prepares a contract. As soon as the Loan Assessor has assessed the risk and the Loan Provider has prepared a contract, the Loan Assessor sends a quote to the Loan Applicant and ends the process afterward. The Loan Applicant, upon receiving the quote then reviews the quote and ends its process afterward as well."
+  example_solution: "example_solution.json"
+  meta: {}
+
+criteria:
+  - id: "participants"
+    title: "Representation of Participants"
+    instructions:
+      - id: "participants_correct"
+        grading_scale: "Correct"
+        instruction_description: "Both 'Loan Applicant' and 'Credit Institute' are represented as pools and correctly labeled."
+        feedback: "Great! Both participants are correctly modeled."
+        credits: 1.0
+      - id: "participants_incorrect"
+        grading_scale: "Incorrect"
+        instruction_description: "Either participants are missing or mislabeled as pools."
+        feedback: "Ensure that you model both 'Loan Applicant' and 'Credit Institute' as properly labeled pools."
+        credits: 0.0
+
+  - id: "events"
+    title: "Start and End Events"
+    instructions:
+      - id: "events_correct"
+        grading_scale: "Events Correct"
+        instruction_description: "All necessary start and end events are present for both Loan Applicant and Credit Institute."
+        feedback: "Good job including proper start and end events."
+        credits: 1.0
+      - id: "events_incorrect"
+        grading_scale: "Events Missing/Incorrect"
+        instruction_description: "Start or end events are missing or misplaced."
+        feedback: "Include correct start/end events as described."
+        credits: 0.0
+
+  - id: "activities"
+    title: "Activities Presence and Correctness"
+    instructions:
+      - id: "activities_correct"
+        grading_scale: "All Activities Correct"
+        instruction_description: "All required tasks are present and correctly named and no incorrect markers"
+        feedback: "All tasks match the specification perfectly."
+        credits: 1.0
+      - id: "activities_incorrect"
+        grading_scale: "Incorrect Activities"
+        instruction_description: "Required tasks are missing, misnamed, or extraneous tasks are present."
+        feedback: "Check that all tasks match the problem statement in names and presence."
+        credits: 0.0
+
+  - id: "gateway"
+    title: "Gateway Logic and Conditions"
+    instructions:
+      - id: "gateway_correct"
+        grading_scale: "Gateway Correct"
+        instruction_description: "The exclusive gateway for standard terms is correct and outgoing flows are labeled."
+        feedback: "Your gateway and conditions are clearly modeled."
+        credits: 1.0
+      - id: "gateway_incorrect"
+        grading_scale: "Gateway Incorrect"
+        instruction_description: "The gateway is not exclusive or outgoing flows are unlabeled."
+        feedback: "Label the outgoing flows of your exclusive gateway and ensure the correct gateway type."
+        credits: 0.0
+
+  - id: "message_flows"
+    title: "Message Flows Between Participants"
+    instructions:
+      - id: "message_flows_correct"
+        grading_scale: "Message Flows Correct"
+        instruction_description: "All cross-participant interactions use message flows."
+        feedback: "Nice use of message flows for inter-participant communication."
+        credits: 1.0
+      - id: "message_flows_incorrect"
+        grading_scale: "Message Flows Incorrect"
+        instruction_description: "Sequence flows are used instead of message flows across participants."
+        feedback: "Use message flows (dashed lines) for interactions between participants."
+        credits: 0.0
+
+  - id: "lanes"
+    title: "Pool and Lane Labeling"
+    instructions:
+      - id: "lanes_correct"
+        grading_scale: "Lanes Correct"
+        instruction_description: "All pools and lanes are properly labeled."
+        feedback: "All pools and lanes are clearly and correctly labeled."
+        credits: 1.0
+      - id: "lanes_incorrect"
+        grading_scale: "Lanes Incorrect"
+        instruction_description: "Pools or lanes are missing or mislabeled."
+        feedback: "Ensure that pools and lanes match the names given in the problem statement."
+        credits: 0.0
+
+  - id: "naming_format"
+    title: "Verb-Object Naming Convention"
+    instructions:
+      - id: "naming_format_correct"
+        grading_scale: "Naming Format Correct"
+        instruction_description: "All tasks use 'Verb Object' naming."
+        feedback: "Task names follow the correct naming scheme."
+        credits: 1.0
+      - id: "naming_format_incorrect"
+        grading_scale: "Naming Format Incorrect"
+        instruction_description: "One or more tasks do not follow the Verb-Object format."
+        feedback: "Rename tasks to follow the 'Verb Object' convention."
+        credits: 0.0
+
+  - id: "sequence"
+    title: "Correct Sequencing and Parallelism"
+    instructions:
+      - id: "sequence_correct"
+        grading_scale: "Sequence Correct"
+        instruction_description: "Activities are in the correct logical order and parallel paths are correct."
+        feedback: "The sequence and parallel structure of the process is correctly represented."
+        credits: 1.0
+      - id: "sequence_incorrect"
+        grading_scale: "Sequence Incorrect"
+        instruction_description: "Activities are out of order or parallel paths not modeled correctly."
+        feedback: "Adjust the order and parallelism of tasks."
+        credits: 0.0
+
+  - id: "connectivity"
+    title: "Full Connectivity"
+    instructions:
+      - id: "connectivity_correct"
+        grading_scale: "Connectivity Correct"
+        instruction_description: "All flow objects are connected with no dangling flows."
+        feedback: "All elements are well-connected."
+        credits: 1.0
+      - id: "connectivity_incorrect"
+        grading_scale: "Connectivity Incorrect"
+        instruction_description: "Some elements are not connected or flows are dangling."
+        feedback: "Ensure every element is part of a continuous, connected flow."
+        credits: 0.0
+
+  - id: "extras"
+    title: "No Unnecessary Elements"
+    instructions:
+      - id: "no_extras"
+        grading_scale: "No Extras"
+        instruction_description: "No extraneous elements beyond those described."
+        feedback: "No unnecessary elements found. Perfect!"
+        credits: 1.0
+      - id: "extras_present"
+        grading_scale: "Extras Present"
+        instruction_description: "Unnecessary elements are present."
+        feedback: "Remove extraneous elements."
+        credits: 0.0
+
+default_expected:
+  - "participants_correct"
+  - "events_correct"
+  - "activities_correct"
+  - "gateway_correct"
+  - "message_flows_correct"
+  - "lanes_correct"
+  - "naming_format_correct"
+  - "sequence_correct"
+  - "connectivity_correct"
+  - "no_extras"
+
+test_case_diffs:
+  participants_correct: {}
+  events_correct:
+    "missing_start_event": "events_incorrect"
+    "missing_end_event": "events_incorrect"
+    "wrong_use_of_start_event": "events_incorrect"
+    "wrong_use_of_end_event": "events_incorrect"
+    "missing_event": "events_incorrect"
+    "use_of_wrong_event_type": "events_incorrect"
+    "missing_description_on_timed_event": "events_incorrect"
+  activities_correct:
+    "unlabelled_activity": "activities_incorrect"
+    "activity_missing_entirely": "activities_incorrect"
+    "activity_has_been_merged": "activities_incorrect"
+    "use_of_wrong_activity_type": "activities_incorrect"
+    "wrongly_named_activity": "activities_incorrect"
+    "wrong_use_of_the_sequential_multi_instance_marker": "activities_incorrect"
+    "wrong_use_of_the_parallel_multi_instance_marker": "activities_incorrect"
+    "wrong_use_of_the_loop_marker": "activities_incorrect"
+  gateway_correct:
+    "using_an_event_as_indicator": "gateway_incorrect"
+    "unlabelled_gateway": "gateway_incorrect"
+    "no_gateway_logic_description": "gateway_incorrect"
+    "missing_gateway": "gateway_incorrect"
+    "use_of_wrong_gateway_type": "gateway_incorrect"
+    "wrongly_named_gateway": "gateway_incorrect"
+    "use_of_uncontrolled_flows": "gateway_incorrect"
+  message_flows_correct:
+    "sequence_flow_crossing_pool_boundaries": "message_flows_incorrect"
+    "missing_message_flow": "message_flows_incorrect"
+  lanes_correct:
+    "unlabelled_pool": "lanes_incorrect"
+    "unlabelled_lane": "lanes_incorrect"
+    "wrongly_named_pools_lanes_and_artifacts": "lanes_incorrect"
+  naming_format_correct:
+    "unlabelled_activity": "naming_format_incorrect"
+    "wrongly_named_activity": "naming_format_incorrect"
+    "wrong_naming_scheme": "naming_format_incorrect"
+  sequence_correct:
+    "wrong_sequence_of_diagram_objects": "sequence_incorrect"
+  connectivity_correct:
+    "non_control_flow_as_control_flow": "connectivity_incorrect"
+    "missing_incoming_connection": "connectivity_incorrect"
+    "missing_outgoing_connection": "connectivity_incorrect"
+    "missing_sequence_flow": "connectivity_incorrect"
+  no_extras:
+    "excessive_diagram_object": "extras_present"
+    "excessive_diagram_object2": "extras_present"
