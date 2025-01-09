@@ -4,6 +4,9 @@ from typing import Optional
 from langchain_core.prompts import (
     ChatPromptTemplate,
 )
+from app.common.pyris_message import IrisMessageRole, PyrisMessage
+from app.domain.data.text_message_content_dto import TextMessageContentDTO
+from prompts.chat_gpt_wrapper_prompts import chat_gpt_initial_system_prompt
 
 from app.domain.chat_gpt_wrapper_pipeline_execution_dto import (
     ChatGPTWrapperPipelineExecutionDTO,
@@ -43,7 +46,16 @@ class ChatGPTWrapperPipeline(Pipeline):
         if not dto.conversation:
             raise ValueError("Conversation with at least one message is required")
 
+        pyris_system_prompt = PyrisMessage(
+            sender=IrisMessageRole.SYSTEM,
+            contents=[
+                TextMessageContentDTO(text_content=chat_gpt_initial_system_prompt)
+            ],
+        )
+
+        prompts = [pyris_system_prompt] + dto.conversation
+
         response = self.request_handler.chat(
-            dto.conversation, CompletionArguments(temperature=0.4)
+            prompts, CompletionArguments(temperature=0.4)
         )
         self.callback.done(final_result=response)
