@@ -6,7 +6,7 @@ from langchain_core.prompts import (
 )
 from app.common.pyris_message import IrisMessageRole, PyrisMessage
 from app.domain.data.text_message_content_dto import TextMessageContentDTO
-from prompts.chat_gpt_wrapper_prompts import chat_gpt_initial_system_prompt
+from app.pipeline.prompts.chat_gpt_wrapper_prompts import chat_gpt_initial_system_prompt
 
 from app.domain.chat_gpt_wrapper_pipeline_execution_dto import (
     ChatGPTWrapperPipelineExecutionDTO,
