@@ -1,35 +1,22 @@
-import os
-from llm_core.loaders.llm_capabilities_loader import get_model_capabilities
-import openai
-import requests
-
-from typing import Dict, List
 from enum import Enum
-from pydantic import Field, PrivateAttr, validator, PositiveInt
+import os
+import requests
+from typing import Dict, List
+
 from langchain.base_language import BaseLanguageModel
-from langchain_openai import AzureChatOpenAI, ChatOpenAI
+from langchain_openai import AzureChatOpenAI
 
 from athena.logger import logger
 
 
-# Discover available models from OpenAI / Azure 
-OPENAI_PREFIX = "openai_"
+# Discover available models from Azure 
 AZURE_OPENAI_PREFIX = "azure_openai_"
-openai_available = bool(os.environ.get("OPENAI_API_KEY"))
-azure_openai_available = bool(os.environ.get("AZURE_OPENAI_API_KEY"))
+azure_available = bool(os.environ.get("AZURE_OPENAI_API_KEY"))
 
-available_models: Dict[str, BaseLanguageModel] = {}
-
-# OpenAI
-if openai_available:
-    openai.api_type = "openai"
-    for model in openai.models.list():
-        if "gpt" in model.id or "o1" in model.id:
-            available_models[OPENAI_PREFIX + model.id] = ChatOpenAI(model=model.id)
-
+azure_available_models: Dict[str, BaseLanguageModel] = {}
 
 # Azure OpenAI
-if azure_openai_available:
+if azure_available:
     def _get_azure_openai_deployments() -> List[str]:
         base_url = f"{os.environ.get('AZURE_OPENAI_ENDPOINT')}/openai"
         headers = {"api-key": os.environ["AZURE_OPENAI_API_KEY"]}
@@ -57,17 +44,17 @@ if azure_openai_available:
         ]
 
     for deployment in _get_azure_openai_deployments():
-        available_models[AZURE_OPENAI_PREFIX + deployment] = AzureChatOpenAI(azure_deployment=deployment)
+        azure_available_models[AZURE_OPENAI_PREFIX + deployment] = AzureChatOpenAI(azure_deployment=deployment)
 
 
-if available_models:
-    logger.info("Available openai models: %s", ", ".join(available_models.keys()))
+if azure_available_models:
+    logger.info("Available azure models: %s", ", ".join(azure_available_models.keys()))
 else:
-    logger.warning("No openai/azure models discovered.")
+    logger.warning("No azure models discovered.")
 
 # Enum for referencing the discovered models
-if available_models:
-    OpenAIModel = Enum('OpenAIModel', {name: name for name in available_models})  # type: ignore
+if azure_available_models:
+    AzureModel = Enum('AzureModel', {name: name for name in azure_available_models})  # type: ignore
 else:
-    class OpenAIModel(str, Enum):
+    class AzureModel(str, Enum):
         pass

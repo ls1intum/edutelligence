@@ -2,19 +2,19 @@ from llm_core.loaders.model_loaders.openai_loader import OpenAIModel
 from llm_core.loaders.llm_capabilities_loader import get_model_capabilities
 from pydantic import Field, PrivateAttr, validator, PositiveInt
 from langchain.base_language import BaseLanguageModel
-from llm_core.loaders.model_loaders.openai_loader import openai_available_models
+from llm_core.loaders.model_loaders.azure_loader import AzureModel, azure_available_models
 
 from ..model_config import ModelConfig
 from ..usage_handler import UsageHandler
 
-class OpenAIModelConfig(ModelConfig):
+class AzureModelConfig(ModelConfig):
     """OpenAI LLM configuration."""
 
-    model_name: OpenAIModel = Field(
+    model_name: AzureModel = Field(
         description="The name of the model to use (e.g., openai_gpt-3.5-turbo)."
     )
 
-    max_completion_tokens: PositiveInt = Field(
+    max_tokens: PositiveInt = Field(
         4000,
         description="An upper bound for the number of tokens that can be generated for a completion, including visible output tokens and reasoning tokens."
     )
@@ -82,8 +82,8 @@ decreasing the model's likelihood to repeat the same line verbatim.
             self.presence_penalty = float(caps["presence_penalty"])
         if "frequency_penalty" not in fields_set_by_user and "frequency_penalty" in caps:
             self.frequency_penalty = float(caps["frequency_penalty"])
-        if "max_completion_tokens" not in fields_set_by_user and "max_completion_tokens" in caps:
-            self.max_completion_tokens = caps["max_completion_tokens"]
+        if "max_tokens" not in fields_set_by_user and "max_tokens" in caps:
+            self.max_tokens = caps["max_tokens"]
 
         # set booleans from caps
         self._supports_function_calling = bool(caps.get("supports_function_calling", True))
@@ -99,10 +99,10 @@ decreasing the model's likelihood to repeat the same line verbatim.
     def supports_structured_output(self) -> bool:
         return self._supports_structured_output
 
-    @validator('max_completion_tokens')
-    def max_completion_tokens_must_be_positive(cls, v):
+    @validator('max_tokens')
+    def max_tokens_must_be_positive(cls, v):
         if v <= 0:
-            raise ValueError('max_completion_tokens must be a positive integer')
+            raise ValueError('max_tokens must be a positive integer')
         return v
 
     def get_model(self) -> BaseLanguageModel:
@@ -110,7 +110,7 @@ decreasing the model's likelihood to repeat the same line verbatim.
         Create the ChatOpenAI/AzureChatOpenAI object.
         Only add parameters that the model actually supports.
         """
-        model = openai_available_models[self.model_name.value]
+        model = azure_available_models[self.model_name.value]
         kwargs = model.__dict__.copy()
 
         secrets = {secret: getattr(model, secret) for secret in model.lc_secrets.keys()}
@@ -134,4 +134,4 @@ decreasing the model's likelihood to repeat the same line verbatim.
         return new_model
 
     class Config:
-        title = 'OpenAI'
+        title = 'Azure'

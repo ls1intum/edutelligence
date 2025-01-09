@@ -1,6 +1,8 @@
 
 from typing import Optional
+from llm_core.models.model_config import ModelConfig
 from llm_core.models.providers.openai_model_config import OpenAIModelConfig
+from llm_core.models.providers.azure_model_config import AzureModelConfig
 
 def find_provider_for_model(model_name: str) -> Optional[str]:
     """
@@ -17,7 +19,7 @@ def find_provider_for_model(model_name: str) -> Optional[str]:
     else:
         return None
 
-def create_config_for_model(model_name: str) -> OpenAIModelConfig:  # or Union[OpenAIModelConfig, AzureOpenAIModelConfig, ...]
+def create_config_for_model(model_name: str) -> ModelConfig:
     """
     Create the appropriate ModelConfig subclass instance (OpenAI, Azure, etc.) 
     depending on the provider indicated by `model_name`.
@@ -26,8 +28,8 @@ def create_config_for_model(model_name: str) -> OpenAIModelConfig:  # or Union[O
     if provider == "openai":
         return OpenAIModelConfig(model_name=model_name)
     elif provider == "azure_openai":
-        return OpenAIModelConfig(model_name=model_name)
-    elif provider == "replicate":
-        raise NotImplementedError("Replicate support is not implemented yet.")
+        return AzureModelConfig(model_name=model_name)
+    elif provider == "ollama":
+        raise NotImplementedError("ollama support is not implemented yet.")
     else:
         raise ValueError(f"Unknown provider for model name '{model_name}'")
