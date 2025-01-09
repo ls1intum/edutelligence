@@ -5,7 +5,7 @@ from langchain_core.prompts import ChatPromptTemplate
 
 from athena import emit_meta
 from module_modeling_llm.config import BasicApproachConfig
-from module_modeling_llm.helius_render.api import render_diagram
+from module_modeling_llm.helios_renderer.api import render_diagram
 from module_modeling_llm.models.assessment_model import AssessmentModel
 from module_modeling_llm.prompts.apollon_format_description import apollon_format_description
 from llm_core.utils.predict_and_parse import predict_and_parse

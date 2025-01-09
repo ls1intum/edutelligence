@@ -1,7 +1,7 @@
 
-from module_modeling_llm.helius_render.models.diagram import UMLDiagram
-from module_modeling_llm.helius_render.models.bounds import Bounds
-from module_modeling_llm.helius_render.utils.constants import (PADDING_LEFT, PADDING_RIGHT, PADDING_TOP, PADDING_BOTTOM, MARKER_SIZE)
+from module_modeling_llm.helios_renderer.models.diagram import UMLDiagram
+from module_modeling_llm.helios_renderer.models.bounds import Bounds
+from module_modeling_llm.helios_renderer.utils.constants import (PADDING_LEFT, PADDING_RIGHT, PADDING_TOP, PADDING_BOTTOM, MARKER_SIZE)
 
 def compute_diagram_bounds(diagram: UMLDiagram):
     """

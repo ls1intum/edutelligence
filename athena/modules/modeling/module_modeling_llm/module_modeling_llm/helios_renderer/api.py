@@ -1,9 +1,9 @@
 import json
 from typing import Dict, Optional, cast
-from module_modeling_llm.helius_render.models.diagram import UMLDiagram
-from module_modeling_llm.helius_render.utils.config_loader import load_all_configs
-from module_modeling_llm.helius_render.renderers.uml_renderer import UMLRenderer
-from module_modeling_llm.helius_render.utils.css_loader import load_css
+from module_modeling_llm.helios_renderer.models.diagram import UMLDiagram
+from module_modeling_llm.helios_renderer.utils.config_loader import load_all_configs
+from module_modeling_llm.helios_renderer.renderers.uml_renderer import UMLRenderer
+from module_modeling_llm.helios_renderer.utils.css_loader import load_css
 
 # Global initialization
 # Load configs and css once

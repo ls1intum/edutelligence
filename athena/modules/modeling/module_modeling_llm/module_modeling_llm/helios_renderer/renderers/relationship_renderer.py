@@ -1,10 +1,10 @@
 from typing import Dict, List, Tuple
 import xml.etree.ElementTree as ET
-from module_modeling_llm.helius_render.services.path_service import compute_relationship_path
-from module_modeling_llm.helius_render.models.element import Element
-from module_modeling_llm.helius_render.models.relationship import Relationship
-from module_modeling_llm.helius_render.models.config_types import RelationshipConfig
-from module_modeling_llm.helius_render.utils.template_manager import TemplateManager
+from module_modeling_llm.helios_renderer.services.path_service import compute_relationship_path
+from module_modeling_llm.helios_renderer.models.element import Element
+from module_modeling_llm.helios_renderer.models.relationship import Relationship
+from module_modeling_llm.helios_renderer.models.config_types import RelationshipConfig
+from module_modeling_llm.helios_renderer.utils.template_manager import TemplateManager
 
 class RelationshipRenderer:
     """

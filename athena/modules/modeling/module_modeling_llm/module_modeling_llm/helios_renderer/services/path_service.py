@@ -9,9 +9,9 @@ The purpose of this adaptation is to ensure that the server-side layout renderer
 
 import math
 from typing import Dict, List, Optional, Any
-from module_modeling_llm.helius_render.utils.constants import ENTITY_MARGIN, OVERLAP_THRESHOLD
-from module_modeling_llm.helius_render.models.element import Element
-from module_modeling_llm.helius_render.models.relationship import Relationship
+from module_modeling_llm.helios_renderer.utils.constants import ENTITY_MARGIN, OVERLAP_THRESHOLD
+from module_modeling_llm.helios_renderer.models.element import Element
+from module_modeling_llm.helios_renderer.models.relationship import Relationship
 
 # Directions enumeration as used in the original code for port/connection directions
 class Direction:

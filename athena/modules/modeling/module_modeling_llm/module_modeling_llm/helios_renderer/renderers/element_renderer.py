@@ -2,10 +2,10 @@ from typing import Dict
 import xml.etree.ElementTree as ET
 
 from jinja2 import Template
-from module_modeling_llm.helius_render.models.bounds import Bounds
-from module_modeling_llm.helius_render.models.config_types import ElementConfig, ElementConfigEntry
-from module_modeling_llm.helius_render.models.element import Element
-from module_modeling_llm.helius_render.utils.template_manager import TemplateManager
+from module_modeling_llm.helios_renderer.models.bounds import Bounds
+from module_modeling_llm.helios_renderer.models.config_types import ElementConfig, ElementConfigEntry
+from module_modeling_llm.helios_renderer.models.element import Element
+from module_modeling_llm.helios_renderer.utils.template_manager import TemplateManager
 
 class ElementRenderer:
     """

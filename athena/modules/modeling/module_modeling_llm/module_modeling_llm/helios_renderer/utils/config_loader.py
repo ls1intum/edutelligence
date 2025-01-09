@@ -1,7 +1,7 @@
 import os
 import json
 from typing import Dict
-from module_modeling_llm.helius_render.models.config_types import AllConfigs, ElementConfigEntry, RelationshipConfigEntry, MarkerConfigEntry
+from module_modeling_llm.helios_renderer.models.config_types import AllConfigs, ElementConfigEntry, RelationshipConfigEntry, MarkerConfigEntry
 
 def load_config(filename: str):
     base_dir = os.path.dirname(os.path.dirname(__file__))

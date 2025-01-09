@@ -4,13 +4,13 @@ from typing import Tuple, List
 
 from PIL import Image, ImageDraw, ImageFont
 
-from module_modeling_llm.helius_render.models.config_types import AllConfigs
-from module_modeling_llm.helius_render.models.diagram import UMLDiagram
-from module_modeling_llm.helius_render.services.diagram_service import compute_diagram_bounds
-from module_modeling_llm.helius_render.renderers.element_renderer import ElementRenderer
-from module_modeling_llm.helius_render.renderers.relationship_renderer import RelationshipRenderer
-from module_modeling_llm.helius_render.utils.template_manager import template_manager
-from module_modeling_llm.helius_render.utils.constants import DEFAULT_DPI
+from module_modeling_llm.helios_renderer.models.config_types import AllConfigs
+from module_modeling_llm.helios_renderer.models.diagram import UMLDiagram
+from module_modeling_llm.helios_renderer.services.diagram_service import compute_diagram_bounds
+from module_modeling_llm.helios_renderer.renderers.element_renderer import ElementRenderer
+from module_modeling_llm.helios_renderer.renderers.relationship_renderer import RelationshipRenderer
+from module_modeling_llm.helios_renderer.utils.template_manager import template_manager
+from module_modeling_llm.helios_renderer.utils.constants import DEFAULT_DPI
 
 
 class UMLRenderer:
