@@ -25,8 +25,8 @@ def select_submission(exercise: Exercise, submissions: List[Submission]) -> Subm
 @feedback_consumer
 async def process_incoming_feedback(exercise: Exercise, submission: Submission, feedbacks: List[Feedback]):
     logger.info("process_feedback: Received %d feedbacks for submission %d of exercise %d.", len(feedbacks), submission.id, exercise.id)
-    logger.info("Recieved feedbacks: %s", feedbacks)
-    updated_SGI = await update_grading_instructions(exercise.id, feedbacks, submission )
+    # logger.info("Recieved feedbacks: %s", feedbacks)
+    updated_SGI = await update_grading_instructions(exercise, feedbacks, submission)
     logger.info("Updated grading instructions: %s", updated_SGI)
     return updated_SGI
 @feedback_provider

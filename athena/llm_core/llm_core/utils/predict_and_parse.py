@@ -4,16 +4,18 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.pydantic_v1 import BaseModel, ValidationError
 from langchain_core.runnables import RunnableSequence
 from athena import get_experiment_environment
+from llm_core.models import DefaultModelConfig
 
 T = TypeVar("T", bound=BaseModel)
 
 async def predict_and_parse(
-        model: BaseLanguageModel, 
+        model: BaseLanguageModel,
         chat_prompt: ChatPromptTemplate, 
         prompt_input: dict, 
         pydantic_object: Type[T], 
         tags: Optional[List[str]],
         use_function_calling: bool = False
+
     ) -> Optional[T]:
     """Predicts an LLM completion using the model and parses the output using the provided Pydantic model
 

@@ -1,17 +1,49 @@
 from pydantic import Field, BaseModel
 from typing import List, Optional
 
+system_message_upgrade = """
+You are tasked with upgrading the following Grading instructions. 
+You have been given some tutor feedback based on a student submission to do so. 
+Keep in mind that you must stay consistent with the original grading instructions.
+Do not remove any grading instructions, only add new ones if absoluetly necessary in the case that you think the llm will provide feedback consistent to the tutor.
+"""
+
+human_message_upgrade = """\
+# Problem statement
+{problem_statement}
+
+# Example solution
+{example_solution}
+
+# Original Grading Instructions
+{grading_instructions}
+
+# Internal Grading instructions
+{internal_SGI}
+
+#Tutor Feedback
+{feedbacks}
+
+# Submission
+{submission}
+
+#
+Max points: {max_points}, bonus points: {bonus_points}\
+    
+Respond in json.
+"""
+
 system_message = """\
 You are an AI tutor for text assessment at a prestigious university.
 
 # Task
 You are an assistant at a prestigious University. You are assisting in assessing student text based submissions.
-In order to do so, it is important to have structurred grading instructions, which will be continuesly updated.
+In order to do so, it is important to have internal structurred grading instructions that will help the llm give better feedback, which will be continuesly updated.
 
-Your task is to use the provided grading instructions and use the example solution, to provide examples for how 
-the grading instruction is utilized.
+Your task is to use the provided grading instructions and use the example solution, to create a set of grading instructions that a machine can
+better understand and use to give feedback to students that is consistent with human feedback.
 
-
+Stay focused on the existing grading instructions, do not add new criteria, for example if grammar, clarity and whatever else is not an instruction do not add it.
 """
 
 human_message = """\
