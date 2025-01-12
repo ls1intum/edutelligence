@@ -1,0 +1,85 @@
+{
+    "grading_instructions": [
+        {
+            "title": "Plagiarism",
+            "description": "You plagiarised the slide. We noted it down and will reserve us the right to exclude you from the bonus",
+            "credits": 0.0,
+            "grading_instruction_id": 6052,
+            "examples": [
+                "The student copied the definition of coupling and cohesion directly from the lecture slides without paraphrasing."
+            ]
+        },
+        {
+            "title": "Assessment of the Difference between Coupling/Cohesion",
+            "description": "You correctly explained the difference between coupling and cohesion, well done!",
+            "credits": 1.0,
+            "grading_instruction_id": 6053,
+            "examples": [
+                "The student explained that cohesion refers to the internal dependencies within a subsystem, while coupling refers to the dependencies between different subsystems."
+            ]
+        },
+        {
+            "title": "Assessment of the Difference between Coupling/Cohesion",
+            "description": "You provided the correct difference, however you did not explain it",
+            "credits": 0.5,
+            "grading_instruction_id": 6054,
+            "examples": [
+                "The student stated that coupling is about dependencies between subsystems and cohesion is about dependencies within a subsystem, but did not elaborate further."
+            ]
+        },
+        {
+            "title": "Assessment of the Difference between Coupling/Cohesion",
+            "description": "You did not provide a correct explanation of the difference between coupling and cohesion",
+            "credits": 0.0,
+            "grading_instruction_id": 6055,
+            "examples": [
+                "The student confused the definitions, stating that cohesion is about dependencies between subsystems and coupling is about dependencies within a subsystem."
+            ]
+        },
+        {
+            "title": "Assessment of the Explanation why Coupling/Cohesion are important",
+            "description": "You correctly explained why coupling and cohesion are important, well done!",
+            "credits": 1.0,
+            "grading_instruction_id": 6056,
+            "examples": [
+                "The student articulated that high cohesion and low coupling lead to easier maintenance and adaptability of the system."
+            ]
+        },
+        {
+            "title": "Assessment of the Explanation why Coupling/Cohesion are important",
+            "description": "Your explanation of why the terms are important is incorrect, please review the lecture slides again and ask your tutor if something is still unclear",
+            "credits": 0.0,
+            "grading_instruction_id": 6057,
+            "examples": [
+                "The student claimed that coupling and cohesion are not important for system design, which is incorrect."
+            ]
+        },
+        {
+            "title": "Assessment of the Example",
+            "description": "Great example, well done!",
+            "credits": 1.0,
+            "grading_instruction_id": 6058,
+            "examples": [
+                "The student provided a unique example of a software development team where high cohesion is seen in team members working closely together, while low coupling is illustrated by their independence from other teams."
+            ]
+        },
+        {
+            "title": "Assessment of the Example",
+            "description": "Correct but a weak example. Be more creative with your examples and explain them in more detail!",
+            "credits": 0.5,
+            "grading_instruction_id": 6059,
+            "examples": [
+                "The student used a generic example of a project team, which was similar to the one discussed in the lecture slides, without adding new insights."
+            ]
+        },
+        {
+            "title": "Assessment of the Example",
+            "description": "You did not provide an example for coupling and cohesion. Please reiterate over your submission and ask your tutor if something is still unclear",
+            "credits": 0.0,
+            "grading_instruction_id": 6060,
+            "examples": [
+                "The student failed to include any example related to coupling and cohesion in their submission."
+            ]
+        }
+    ]
+}
