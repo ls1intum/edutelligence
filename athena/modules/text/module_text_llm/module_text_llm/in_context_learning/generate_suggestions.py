@@ -15,28 +15,20 @@ from llm_core.utils.predict_and_parse import predict_and_parse
 from module_text_llm.helpers.utils import add_sentence_numbers, get_index_range_from_line_range, format_grading_instructions
 from module_text_llm.in_context_learning.prompt_generate_suggestions import AssessmentModel
 from module_text_llm.in_context_learning.generate_internal import generate
+from module_text_llm.helpers.get_internal_sgi import get_internal_sgi, write_internal_sgi
 async def generate_suggestions(exercise: Exercise, submission: Submission, config: ApproachConfig, debug: bool) -> List[Feedback]:
-    # First you need to recieve the grading instructions.
-    file_name = 'internal_grading_instructions.json'
-
-    # This can be saved in a json for now.
-    # Check if the file exists
-    if not os.path.exists(file_name):
-        internal_instructions  = "wow"
-        internal_instructions = await generate(exercise, config, debug)
-        print(internal_instructions)
-        # Create and write the result variable to the file
-        with open(file_name, 'w') as file:
-            json.dump(internal_instructions.dict(), file, indent=4)
-        print(f"{file_name} created and result written into it.")
-    else:
-        internal_instructions = json.loads(open(file_name).read())
-        print(f"{file_name} already exists.")
+    # Define the file name
+    internal_instructions = get_internal_sgi()
+    if(exercise.id not in internal_instructions):
+        instructions = await generate(exercise, config, debug)
+        internal_instructions[exercise.id] = instructions.dict()
+        write_internal_sgi(exercise.id, internal_instructions)
+ 
     model = config.model.get_model()  # type: ignore[attr-defined]
     prompt_input = {
         "max_points": exercise.max_points,
         "bonus_points": exercise.bonus_points,
-        "grading_instructions": format_grading_instructions(str(internal_instructions), exercise.grading_criteria),
+        "grading_instructions": format_grading_instructions(str(internal_instructions[exercise.id]), exercise.grading_criteria),
         "problem_statement": exercise.problem_statement or "No problem statement.",
         "example_solution": exercise.example_solution,
         "submission": add_sentence_numbers(submission.text)

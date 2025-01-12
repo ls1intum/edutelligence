@@ -49,8 +49,9 @@ class GradingInstruction(BaseModel):
     grading_instruction_id: int = Field(
         description="ID of the grading instruction that was used to generate this feedback, or empty if no grading instruction was used"
     )
-    examples: List[str] = Field(description="Examples of how the grading instruction is utilized")
-
+    student_text_example: List[str] = Field(description="Examples student text that would receive this feedback")
+    # maximum_usage_count: conint(gt=0) = Field(description="Maximum number of times the grading instruction can be used, positive number")
+    
 class InternalGradingInstructions(BaseModel):
     """Collection of feedbacks making up an assessment"""
     

@@ -1,85 +1,145 @@
 {
-    "grading_instructions": [
-        {
-            "title": "Plagiarism",
-            "description": "You plagiarised the slide. We noted it down and will reserve us the right to exclude you from the bonus",
-            "credits": 0.0,
-            "grading_instruction_id": 6052,
-            "examples": [
-                "The student copied the definition of coupling and cohesion directly from the lecture slides without paraphrasing."
-            ]
-        },
-        {
-            "title": "Assessment of the Difference between Coupling/Cohesion",
-            "description": "You correctly explained the difference between coupling and cohesion, well done!",
-            "credits": 1.0,
-            "grading_instruction_id": 6053,
-            "examples": [
-                "The student explained that cohesion refers to the internal dependencies within a subsystem, while coupling refers to the dependencies between different subsystems."
-            ]
-        },
-        {
-            "title": "Assessment of the Difference between Coupling/Cohesion",
-            "description": "You provided the correct difference, however you did not explain it",
-            "credits": 0.5,
-            "grading_instruction_id": 6054,
-            "examples": [
-                "The student stated that coupling is about dependencies between subsystems and cohesion is about dependencies within a subsystem, but did not elaborate further."
-            ]
-        },
-        {
-            "title": "Assessment of the Difference between Coupling/Cohesion",
-            "description": "You did not provide a correct explanation of the difference between coupling and cohesion",
-            "credits": 0.0,
-            "grading_instruction_id": 6055,
-            "examples": [
-                "The student confused the definitions, stating that cohesion is about dependencies between subsystems and coupling is about dependencies within a subsystem."
-            ]
-        },
-        {
-            "title": "Assessment of the Explanation why Coupling/Cohesion are important",
-            "description": "You correctly explained why coupling and cohesion are important, well done!",
-            "credits": 1.0,
-            "grading_instruction_id": 6056,
-            "examples": [
-                "The student articulated that high cohesion and low coupling lead to easier maintenance and adaptability of the system."
-            ]
-        },
-        {
-            "title": "Assessment of the Explanation why Coupling/Cohesion are important",
-            "description": "Your explanation of why the terms are important is incorrect, please review the lecture slides again and ask your tutor if something is still unclear",
-            "credits": 0.0,
-            "grading_instruction_id": 6057,
-            "examples": [
-                "The student claimed that coupling and cohesion are not important for system design, which is incorrect."
-            ]
-        },
-        {
-            "title": "Assessment of the Example",
-            "description": "Great example, well done!",
-            "credits": 1.0,
-            "grading_instruction_id": 6058,
-            "examples": [
-                "The student provided a unique example of a software development team where high cohesion is seen in team members working closely together, while low coupling is illustrated by their independence from other teams."
-            ]
-        },
-        {
-            "title": "Assessment of the Example",
-            "description": "Correct but a weak example. Be more creative with your examples and explain them in more detail!",
-            "credits": 0.5,
-            "grading_instruction_id": 6059,
-            "examples": [
-                "The student used a generic example of a project team, which was similar to the one discussed in the lecture slides, without adding new insights."
-            ]
-        },
-        {
-            "title": "Assessment of the Example",
-            "description": "You did not provide an example for coupling and cohesion. Please reiterate over your submission and ask your tutor if something is still unclear",
-            "credits": 0.0,
-            "grading_instruction_id": 6060,
-            "examples": [
-                "The student failed to include any example related to coupling and cohesion in their submission."
-            ]
-        }
-    ]
+    "5150": {
+        "grading_instructions": [
+            {
+                "title": "You identified this mistake properly",
+                "description": "The student correctly identified a mistake in the UML class diagram regarding the direct dependency of ReservationGUI on the REST-API.",
+                "credits": 0.5,
+                "grading_instruction_id": 11619,
+                "student_text_example": [
+                    "ReservationGUI gets called by the REST-API. This is a clear violation against the Client-Server Style, since the server should not know the Client, but the Client should know the Server."
+                ]
+            },
+            {
+                "title": "You did identify and explain the mistake properly",
+                "description": "The student identified the mistake and provided a clear explanation in the same sentence.",
+                "credits": 1.5,
+                "grading_instruction_id": 11621,
+                "student_text_example": [
+                    "ReservationGUI gets called by the REST-API. This is a clear violation against the Client-Server Style, since the server should not know the Client, but the Client should know the Server."
+                ]
+            },
+            {
+                "title": "Very good refactoring",
+                "description": "The student proposed a very good refactoring by suggesting to turn around the arrow to correct the dependency issue.",
+                "credits": 1.5,
+                "grading_instruction_id": 11626,
+                "student_text_example": [
+                    "We can fix this issue by simply turning around the arrow."
+                ]
+            },
+            {
+                "title": "You did explain the mistake properly",
+                "description": "The student explained the mistake regarding the direct dependency of ReservationGUI on TicketDataBase clearly.",
+                "credits": 1.0,
+                "grading_instruction_id": 11622,
+                "student_text_example": [
+                    "ReservationGUI has a direct dependency to the TicketDataBase. This is a violation against the layered style, since the ReservationGUI should not know low-level layers and should only call the REST-API."
+                ]
+            },
+            {
+                "title": "Good refactoring.",
+                "description": "The student proposed a good refactoring by suggesting to replace the direct connection with a connection to the REST-API.",
+                "credits": 1.0,
+                "grading_instruction_id": 11627,
+                "student_text_example": [
+                    "We can refactor this by replacing the direct connection with a connection to the REST-API."
+                ]
+            },
+            {
+                "title": "You did not give a refactoring for this mistake",
+                "description": "The student did not provide a refactoring for the mistake regarding the RepositoryLayer's dependency on the RestAPI.",
+                "credits": 0.0,
+                "grading_instruction_id": 11630,
+                "student_text_example": [
+                    "RepositoryLayer has a dependency to the RestAPI, which is a clear violation against the layered architecture as well."
+                ]
+            }
+        ]
+    },
+    "4160": {
+        "grading_instructions": [
+            {
+                "title": "Plagiarism",
+                "description": "You plagiarised the slide. We noted it down and will reserve us the right to exclude you from the bonus",
+                "credits": 0.0,
+                "grading_instruction_id": 6052,
+                "student_text_example": [
+                    "Cohesion is the number of dependencies within a subsystem, while Coupling is the number of dependencies between two subsystems."
+                ]
+            },
+            {
+                "title": "Assessment of the Difference between Coupling/Cohesion",
+                "description": "You correctly explained the difference between coupling and cohesion, well done!",
+                "credits": 1.0,
+                "grading_instruction_id": 6053,
+                "student_text_example": [
+                    "Cohesion refers to how closely related and focused the responsibilities of a single module are, while coupling refers to how dependent modules are on each other."
+                ]
+            },
+            {
+                "title": "Assessment of the Difference between Coupling/Cohesion",
+                "description": "You provided the correct difference, however you did not explain it",
+                "credits": 0.5,
+                "grading_instruction_id": 6054,
+                "student_text_example": [
+                    "Cohesion is about dependencies within a subsystem, and coupling is about dependencies between subsystems."
+                ]
+            },
+            {
+                "title": "Assessment of the Difference between Coupling/Cohesion",
+                "description": "You did not provide a correct explanation of the difference between coupling and cohesion",
+                "credits": 0.0,
+                "grading_instruction_id": 6055,
+                "student_text_example": [
+                    "Cohesion is the same as coupling, they both mean how parts of a system interact."
+                ]
+            },
+            {
+                "title": "Assessment of the Explanation why Coupling/Cohesion are important",
+                "description": "You correctly explained why coupling and cohesion are important, well done!",
+                "credits": 1.0,
+                "grading_instruction_id": 6056,
+                "student_text_example": [
+                    "Cohesion and coupling are important because they affect the maintainability and scalability of a system. High cohesion within modules makes them easier to understand and modify, while low coupling between modules reduces the impact of changes."
+                ]
+            },
+            {
+                "title": "Assessment of the Explanation why Coupling/Cohesion are important",
+                "description": "Your explanation of why the terms are important is incorrect, please review the lecture slides again and ask your tutor if something is still unclear",
+                "credits": 0.0,
+                "grading_instruction_id": 6057,
+                "student_text_example": [
+                    "Coupling and cohesion are not important in system design. They are just technical terms."
+                ]
+            },
+            {
+                "title": "Assessment of the Example",
+                "description": "Great example, well done!",
+                "credits": 1.0,
+                "grading_instruction_id": 6058,
+                "student_text_example": [
+                    "In a software project, a team of developers works on a module that handles user authentication. This module has high cohesion because all its functions are related to user authentication, and it has low coupling with other modules like payment processing, which means changes in one do not affect the other."
+                ]
+            },
+            {
+                "title": "Assessment of the Example",
+                "description": "Correct but a weak example. Be more creative with your examples and explain them in more detail!",
+                "credits": 0.5,
+                "grading_instruction_id": 6059,
+                "student_text_example": [
+                    "A team in a company works on different projects. They have some dependencies but can work independently."
+                ]
+            },
+            {
+                "title": "Assessment of the Example",
+                "description": "You did not provide an example for coupling and cohesion. Please reiterate over your submission and ask your tutor if something is still unclear",
+                "credits": 0.0,
+                "grading_instruction_id": 6060,
+                "student_text_example": [
+                    "Cohesion and coupling are important concepts."
+                ]
+            }
+        ]
+    }
 }

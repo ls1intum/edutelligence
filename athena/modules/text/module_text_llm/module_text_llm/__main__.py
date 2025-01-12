@@ -11,7 +11,7 @@ from module_text_llm.config import Configuration
 from module_text_llm.evaluation import get_feedback_statistics, get_llm_statistics
 from module_text_llm.generate_evaluation import generate_evaluation
 from module_text_llm.approach_controller import generate_suggestions
-
+from module_text_llm.in_context_learning.generate_updated_internal_SGI import update_grading_instructions
 @submissions_consumer
 def receive_submissions(exercise: Exercise, submissions: List[Submission]):
     logger.info("receive_submissions: Received %d submissions for exercise %d", len(submissions), exercise.id)
@@ -22,12 +22,13 @@ def select_submission(exercise: Exercise, submissions: List[Submission]) -> Subm
     logger.info("select_submission: Received %d, submissions for exercise %d", len(submissions), exercise.id)
     return submissions[0]
 
-
 @feedback_consumer
-def process_incoming_feedback(exercise: Exercise, submission: Submission, feedbacks: List[Feedback]):
+async def process_incoming_feedback(exercise: Exercise, submission: Submission, feedbacks: List[Feedback]):
     logger.info("process_feedback: Received %d feedbacks for submission %d of exercise %d.", len(feedbacks), submission.id, exercise.id)
     logger.info("Recieved feedbacks: %s", feedbacks)
-
+    updated_SGI = await update_grading_instructions(exercise.id, feedbacks, submission )
+    logger.info("Updated grading instructions: %s", updated_SGI)
+    return updated_SGI
 @feedback_provider
 async def suggest_feedback(exercise: Exercise, submission: Submission, is_graded: bool, module_config: Configuration) -> List[Feedback]:
     logger.info("suggest_feedback: %s suggestions for submission %d of exercise %d were requested",
