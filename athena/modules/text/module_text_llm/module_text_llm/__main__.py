@@ -26,6 +26,7 @@ def select_submission(exercise: Exercise, submissions: List[Submission]) -> Subm
 @feedback_consumer
 def process_incoming_feedback(exercise: Exercise, submission: Submission, feedbacks: List[Feedback]):
     logger.info("process_feedback: Received %d feedbacks for submission %d of exercise %d.", len(feedbacks), submission.id, exercise.id)
+    logger.info("Recieved feedbacks: %s", feedbacks)
 
 @feedback_provider
 async def suggest_feedback(exercise: Exercise, submission: Submission, is_graded: bool, module_config: Configuration) -> List[Feedback]:
