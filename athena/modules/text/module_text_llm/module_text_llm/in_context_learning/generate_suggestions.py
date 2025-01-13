@@ -17,14 +17,13 @@ from module_text_llm.in_context_learning.prompt_generate_suggestions import Asse
 from module_text_llm.in_context_learning.generate_internal import generate
 from module_text_llm.helpers.get_internal_sgi import get_internal_sgi, write_internal_sgi
 async def generate_suggestions(exercise: Exercise, submission: Submission, config: ApproachConfig, debug: bool) -> List[Feedback]:
-    # Define the file name
     internal_instructions = get_internal_sgi()
-    if(exercise.id not in internal_instructions):
+    if (exercise.id not in internal_instructions):
         instructions = await generate(exercise, config, debug)
-        internal_instructions[exercise.id] = instructions.dict()
+        internal_instructions[exercise.id] = instructions.dict() # type: ignore
         write_internal_sgi(exercise.id, internal_instructions)
  
-    model = config.model.get_model()  # type: ignore[attr-defined]
+    model = config.model.get_model()  # type: ignore
     prompt_input = {
         "max_points": exercise.max_points,
         "bonus_points": exercise.bonus_points,

@@ -3,14 +3,13 @@ from module_text_llm.approach_config import ApproachConfig
 
 from athena import emit_meta
 from athena.text import Exercise, Feedback
-from athena.logger import logger
 from llm_core.utils.llm_utils import (
     get_chat_prompt_with_formatting_instructions
 )
 import os
 import json
 from llm_core.utils.predict_and_parse import predict_and_parse
-from module_text_llm.helpers.utils import add_sentence_numbers, get_index_range_from_line_range, format_grading_instructions
+from module_text_llm.helpers.utils import format_grading_instructions
 from module_text_llm.in_context_learning.prompt_internal import InternalGradingInstructions
 from module_text_llm.in_context_learning.prompt_internal import system_message, human_message
 async def generate(exercise: Exercise, config: ApproachConfig, debug: bool) -> List[Feedback]:

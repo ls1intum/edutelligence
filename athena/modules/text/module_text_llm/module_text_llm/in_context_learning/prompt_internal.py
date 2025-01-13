@@ -1,5 +1,5 @@
 from pydantic import Field, BaseModel
-from typing import List, Optional
+from typing import List
 
 system_message_upgrade = """
 You are tasked with upgrading the following Grading instructions. 
@@ -60,7 +60,6 @@ Max points: {max_points}, bonus points: {bonus_points}\
 Respond in json.
 """
 
-# Input Prompt
 class GenerateSuggestionsPrompt(BaseModel):
     """\
 Features available: **{problem_statement}**, **{example_solution}**, **{grading_instructions}**, **{max_points}**, **{bonus_points}**, **{submission}**
@@ -71,18 +70,14 @@ _Note: **{problem_statement}**, **{example_solution}**, or **{grading_instructio
                                 description="Message for priming AI behavior and instructing it what to do.")
     human_message: str = Field(default=human_message,
                                description="Message from a human. The input on which the AI is supposed to act.")
-# Output Object
 class GradingInstruction(BaseModel):
     title: str = Field(description="Very short title, i.e. feedback category or similar", example="Logic Error")
     description: str = Field(description="Feedback description")
-    # line_start: Optional[int] = Field(description="Referenced line number start, or empty if unreferenced")
-    # line_end: Optional[int] = Field(description="Referenced line number end, or empty if unreferenced")
     credits: float = Field(0.0, description="Number of points received/deducted")
     grading_instruction_id: int = Field(
         description="ID of the grading instruction that was used to generate this feedback, or empty if no grading instruction was used"
     )
     student_text_example: List[str] = Field(description="Examples student text that would receive this feedback")
-    # maximum_usage_count: conint(gt=0) = Field(description="Maximum number of times the grading instruction can be used, positive number")
     
 class InternalGradingInstructions(BaseModel):
     """Collection of feedbacks making up an assessment"""

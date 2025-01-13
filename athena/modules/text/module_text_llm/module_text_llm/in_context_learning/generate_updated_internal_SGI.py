@@ -20,11 +20,10 @@ async def update_grading_instructions(exercise: Exercise, feedbacks:List[Feedbac
     debug = True
     iSGI = get_internal_sgi()
     ex_id = str(exercise.id)   
-    if(ex_id not in iSGI):
-        logger.info("Not in iSGI")
+    if (ex_id not in iSGI):
         return []
+    
     internal_instructions = iSGI[ex_id]
-    # We get the internal SGI
     config = InContextLearningConfig()
     model = config.model.get_model()  # type: ignore[attr-defined]
     prompt_input = {
