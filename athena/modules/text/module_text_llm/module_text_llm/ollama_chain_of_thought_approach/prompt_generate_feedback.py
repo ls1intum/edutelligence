@@ -2,11 +2,14 @@ from pydantic import BaseModel, Field
 from typing import List, Optional
 
 system_message = """
- Your task is to format the given text from the human into a json. The json must strictly follow the following instructions:
-You should only reply in valid json without any additional comments.
-The json must begin with the property "feedback_list" which is an array of many feedback elements. Each element of this array only has these fields and it must contain all of them with the exact same name as given here: "feedback_list", which contains "description", "credits", "line_start", "line_end", "title", "grading_instruction_id".
+Your task is to format the given text from the human into a json that will be the assessment presented to a student. 
+The json must strictly follow the following instructions:
+1. You should only reply in valid json without any additional comments.
+2. The json must begin with the property "feedback_list" which is an array of many feedback elements. 
+3. Each element of this array only has these fields and it must contain all of them with the exact same name as given here: "feedback_list", which contains "description", "credits", "line_start", "line_end", "title", "grading_instruction_id".
+4. The maximum amount of credits to be given is {max_points} credits.
 
-         """
+"""
 
 human_message = """\
 \"\"\"

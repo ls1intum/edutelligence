@@ -5,7 +5,7 @@ from athena import emit_meta
 from athena.text import Exercise, Submission, Feedback
 from athena.logger import logger
 
-from module_text_llm.chain_of_thought_approach import ChainOfThoughtConfig
+from module_text_llm.approach_config import ApproachConfig
 
 from llm_core.utils.llm_utils import (
     get_chat_prompt_with_formatting_instructions, 
@@ -19,7 +19,7 @@ from module_text_llm.helpers.utils import add_sentence_numbers, get_index_range_
 from module_text_llm.ollama_chain_of_thought_approach.prompt_generate_feedback import AssessmentModel
 
 
-async def generate_suggestions(exercise: Exercise, submission: Submission, config: ChainOfThoughtConfig, debug: bool) -> List[Feedback]:
+async def generate_suggestions(exercise: Exercise, submission: Submission, config: ApproachConfig, debug: bool) -> List[Feedback]:
     model = config.model.get_model()  # type: ignore[attr-defined]
 
     prompt_input = {
@@ -32,8 +32,8 @@ async def generate_suggestions(exercise: Exercise, submission: Submission, confi
     }
 
     chat_prompt = get_simple_chat_prompt(
-        system_message=config.thikning_prompt.system_message, 
-        human_message=config.thikning_prompt.human_message, 
+        system_message=config.thinking_prompt.system_message, 
+        human_message=config.thinking_prompt.human_message, 
     )
     
 
@@ -67,6 +67,7 @@ async def generate_suggestions(exercise: Exercise, submission: Submission, confi
     )
 
     second_prompt_input = {
+        "max_points": exercise.max_points,
         "answer" : initial_result,
 
     }
