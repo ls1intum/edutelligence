@@ -3,7 +3,8 @@ from athena.text import Exercise, Submission, Feedback
 from module_text_llm.approach_config import ApproachConfig
 
 async def generate_suggestions(exercise: Exercise, submission: Submission, config: ApproachConfig, debug: bool) -> List[Feedback]:
-    from module_text_llm import strategyFactory
+    # Importing the strategy_factory here to avoid circular imports with ApproachConfig
+    from module_text_llm import strategy_factory # pylint: disable=import-outside-toplevel
 
-    strategy = strategyFactory.get_strategy(config)
+    strategy = strategy_factory.get_strategy(config)
     return await strategy.generate_suggestions(exercise, submission, config, debug)
