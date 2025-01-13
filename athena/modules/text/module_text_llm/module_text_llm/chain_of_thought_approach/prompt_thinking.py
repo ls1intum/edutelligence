@@ -52,6 +52,9 @@ class InitialAssessment(BaseModel):
     credits: float = Field(0.0, description="Number of points received/deducted")
     reasoning: str = Field(description="Reasoning why the feedback was given")
     impprovment_suggestion: str = Field(description="Suggestion for improvement for the student")
+    grading_instruction_id: Optional[int] = Field(
+        description="ID of the grading instruction that was used to generate this feedback, or empty if no grading instruction was used"
+    )
 
 class InitialAssessmentModel(BaseModel):
     """Collection of feedbacks making up an assessment"""
