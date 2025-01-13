@@ -6,10 +6,10 @@ import { DataMode } from "@/model/data_mode";
 export async function saveExpertEvaluationConfig(
     dataMode: DataMode,
     config: ExpertEvaluationConfig,
-    isCreate: boolean) {
+    isAnonymize: boolean) {
 
-    const response = await fetch(`${baseUrl}/api/data/${dataMode}/expert_evaluation/${config.id}/config`, {
-        method: isCreate ? 'POST' : 'PUT',
+    const response = await fetch(`${baseUrl}/api/data/${dataMode}/expert_evaluation/${config.id}/config?isAnonymize=${isAnonymize}`, {
+        method: 'POST',
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(config),
     });
