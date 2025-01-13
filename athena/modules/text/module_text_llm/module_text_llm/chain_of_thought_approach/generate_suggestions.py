@@ -32,8 +32,8 @@ async def generate_suggestions(exercise: Exercise, submission: Submission, confi
 
     chat_prompt = get_chat_prompt_with_formatting_instructions(
         model=model, 
-        system_message=config.thikning_prompt.system_message, 
-        human_message=config.thikning_prompt.human_message, 
+        system_message=config.thinking_prompt.system_message, 
+        human_message=config.thinking_prompt.human_message, 
         pydantic_object=InitialAssessmentModel
     )
     

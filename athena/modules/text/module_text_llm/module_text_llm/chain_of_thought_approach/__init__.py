@@ -8,7 +8,7 @@ from module_text_llm.chain_of_thought_approach.generate_suggestions import gener
 
 class ChainOfThoughtConfig(ApproachConfig):
     type: Literal['chain_of_thought'] = 'chain_of_thought'
-    thikning_prompt: ThinkingPrompt = Field(default=ThinkingPrompt())
+    thinking_prompt: ThinkingPrompt = Field(default=ThinkingPrompt())
     generate_suggestions_prompt: CoTGenerateSuggestionsPrompt = Field(default=CoTGenerateSuggestionsPrompt())
     
     async def generate_suggestions(self, exercise: Exercise, submission: Submission, config, debug: bool):
