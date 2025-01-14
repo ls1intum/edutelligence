@@ -1,27 +1,28 @@
+# -*- coding: utf-8 -*-
 """
-This script creates a new approach for inside the module_text_llm package.
+This script creates a new approach inside the module_text_llm package.
 
-Run with python create_approach_script.py <approach_name>
+Run with: python create_approach_script.py <approach_name>
 
 It creates the __init__.py, prompt_generate_suggestions.py, and generate_suggestions.py files for the new approach.
 
-It also imports the new approach to the conifg.py and adds the new approach to the ApproachConfigUnion.
+It also imports the new approach into the config.py and adds the new approach to the ApproachConfigUnion.
 """
-import os
 import re
 import argparse
 from pathlib import Path
+from typing import Union
 
-def to_camel_case(snake_str):
+def to_camel_case(snake_str: str) -> str:
     components = snake_str.split('_')
     return ''.join(x.title() for x in components)
 
-def create_approach_directory(approach_name):
+def create_approach_directory(approach_name: str) -> Path:
     base_dir = Path(__file__).parent / approach_name
     base_dir.mkdir(parents=True, exist_ok=True)
     return base_dir
 
-def create_init_py(base_dir, approach_name):
+def create_init_py(base_dir: Path, approach_name: str) -> None:
     init_content = f"""
 from module_text_llm.approach_config import ApproachConfig
 from pydantic import Field
@@ -35,13 +36,13 @@ class {to_camel_case(approach_name)}Config(ApproachConfig):
     generate_suggestions_prompt: GenerateSuggestionsPrompt = Field(default=GenerateSuggestionsPrompt())
     
     async def generate_suggestions(self, exercise: Exercise, submission: Submission, config, debug: bool):
-        return await generate_suggestions(exercise,submission,config,debug)
+        return await generate_suggestions(exercise, submission, config, debug)
 """
-    with open(base_dir / "__init__.py", "w") as f:
+    with open(base_dir / "__init__.py", "w", encoding="utf-8") as f:
         f.write(init_content.strip())
 
-def create_prompt_py(base_dir):
-    prompt_content = prompt_content = '''
+def create_prompt_py(base_dir: Path) -> None:
+    prompt_content = '''
 from pydantic import Field, BaseModel
 from typing import List, Optional
 
@@ -99,46 +100,44 @@ class FeedbackModel(BaseModel):
 
 class AssessmentModel(BaseModel):
     """Collection of feedbacks making up an assessment"""
-    
     feedbacks: List[FeedbackModel] = Field(description="Assessment feedbacks")
 '''
-    with open(base_dir / "prompt_generate_suggestions.py", "w") as f:
+    with open(base_dir / "prompt_generate_suggestions.py", "w", encoding="utf-8") as f:
         f.write(prompt_content.strip())
 
-def create_generate_suggestions_py(base_dir):
+def create_generate_suggestions_py(base_dir: Path) -> None:
     generate_suggestions_content = """
 # Placeholder for generate suggestions logic.
 def generate_suggestions():
     pass
 """
-    with open(base_dir / "generate_suggestions.py", "w") as f:
+    with open(base_dir / "generate_suggestions.py", "w", encoding="utf-8") as f:
         f.write(generate_suggestions_content.strip())
 
-def update_config_py(approach_name):
+def update_config_py(approach_name: str) -> None:
     config_path = Path(__file__).parent / "config.py"
     camel_case_name = to_camel_case(approach_name)
     config_import = f"from module_text_llm.{approach_name.lower()} import {camel_case_name}Config"
 
-    with open(config_path, "r+") as f:
+    with open(config_path, "r+", encoding="utf-8") as f:
         content = f.read()
 
         # Add import
         if config_import not in content:
-            content = f"{config_import}\n" + content
+            content = f"{config_import}\n{content}"
 
         # Update Union
         union_pattern = r"ApproachConfigUnion = Union\[(.*?)\]"
         match = re.search(union_pattern, content, re.DOTALL)
         if match:
-            updated_union = match.group(1).strip() + f", {camel_case_name}Config"
-            updated_union = updated_union.replace(" ,", ",")
+            updated_union = f"{match.group(1).strip()}, {camel_case_name}Config".replace(" ,", ",")
             content = re.sub(union_pattern, f"ApproachConfigUnion = Union[{updated_union}]", content)
 
         f.seek(0)
         f.write(content)
         f.truncate()
 
-def create_approach(approach_name):
+def create_approach(approach_name: str) -> None:
     base_dir = create_approach_directory(approach_name)
     create_init_py(base_dir, approach_name)
     create_prompt_py(base_dir)
