@@ -11,16 +11,17 @@ It also imports the new approach into the config.py and adds the new approach to
 import re
 import argparse
 from pathlib import Path
-from typing import Union
 
 def to_camel_case(snake_str: str) -> str:
     components = snake_str.split('_')
     return ''.join(x.title() for x in components)
 
+
 def create_approach_directory(approach_name: str) -> Path:
     base_dir = Path(__file__).parent / approach_name
     base_dir.mkdir(parents=True, exist_ok=True)
     return base_dir
+
 
 def create_init_py(base_dir: Path, approach_name: str) -> None:
     init_content = f"""
@@ -40,6 +41,7 @@ class {to_camel_case(approach_name)}Config(ApproachConfig):
 """
     with open(base_dir / "__init__.py", "w", encoding="utf-8") as f:
         f.write(init_content.strip())
+
 
 def create_prompt_py(base_dir: Path) -> None:
     prompt_content = '''
@@ -105,6 +107,7 @@ class AssessmentModel(BaseModel):
     with open(base_dir / "prompt_generate_suggestions.py", "w", encoding="utf-8") as f:
         f.write(prompt_content.strip())
 
+
 def create_generate_suggestions_py(base_dir: Path) -> None:
     generate_suggestions_content = """
 # Placeholder for generate suggestions logic.
@@ -113,6 +116,7 @@ def generate_suggestions():
 """
     with open(base_dir / "generate_suggestions.py", "w", encoding="utf-8") as f:
         f.write(generate_suggestions_content.strip())
+
 
 def update_config_py(approach_name: str) -> None:
     config_path = Path(__file__).parent / "config.py"
@@ -137,12 +141,14 @@ def update_config_py(approach_name: str) -> None:
         f.write(content)
         f.truncate()
 
+
 def create_approach(approach_name: str) -> None:
     base_dir = create_approach_directory(approach_name)
     create_init_py(base_dir, approach_name)
     create_prompt_py(base_dir)
     create_generate_suggestions_py(base_dir)
     update_config_py(approach_name)
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Create a new approach for the Athena project.")
