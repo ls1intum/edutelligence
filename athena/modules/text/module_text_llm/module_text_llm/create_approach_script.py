@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 This script creates a new approach inside the module_text_llm package.
 
