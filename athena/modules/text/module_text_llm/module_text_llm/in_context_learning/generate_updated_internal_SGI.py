@@ -24,8 +24,7 @@ async def update_grading_instructions(exercise: Exercise, feedbacks:List[Feedbac
     if (ex_id not in iSGI):
         return []
 
-    stored_feedback = list(get_stored_feedback_suggestions(exercise.id, submission.id))
-    ai_feedback = [feedback for feedback in stored_feedback]
+    ai_feedback = list(get_stored_feedback_suggestions(exercise.id, submission.id))
     internal_instructions = iSGI[ex_id]
     
     model = config.model.get_model()  # type: ignore[attr-defined]
