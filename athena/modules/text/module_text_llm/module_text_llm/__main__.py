@@ -29,7 +29,7 @@ async def process_incoming_feedback(exercise: Exercise, submission: Submission, 
     if useForContinuousLearning:
         updated_SGI = await update_grading_instructions(exercise, feedbacks,module_config.approach, submission)
         logger.info("Updated grading instructions: %s", updated_SGI)
-    return updated_SGI
+        return updated_SGI
 @feedback_provider
 async def suggest_feedback(exercise: Exercise, submission: Submission, is_graded: bool, module_config: Configuration) -> List[Feedback]:
     logger.info("suggest_feedback: %s suggestions for submission %d of exercise %d were requested",
