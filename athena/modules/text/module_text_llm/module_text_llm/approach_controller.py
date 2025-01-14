@@ -11,5 +11,4 @@ async def generate_suggestions(exercise: Exercise, submission: Submission, confi
     result =  await strategy.generate_suggestions(exercise, submission, config, debug)
     stored_feedback = list(get_stored_feedback_suggestions(exercise.id, submission.id))
     ai_feedback = [feedback for feedback in stored_feedback]
-    logger.info(f"Stored feedback: {ai_feedback} for exercise {exercise.id} and submission {submission.id}")
     return result

@@ -9,8 +9,6 @@ from llm_core.utils.llm_utils import (
     check_prompt_length_and_omit_features_if_necessary, 
     num_tokens_from_prompt,
 )
-import os
-import json
 from llm_core.utils.predict_and_parse import predict_and_parse
 from module_text_llm.helpers.utils import add_sentence_numbers, get_index_range_from_line_range, format_grading_instructions
 from module_text_llm.in_context_learning.prompt_generate_suggestions import AssessmentModel
@@ -20,7 +18,7 @@ async def generate_suggestions(exercise: Exercise, submission: Submission, confi
     internal_instructions = get_internal_sgi()
     exercise_id = str(exercise.id)
     if (exercise_id not in internal_instructions):
-        logger.info(f"Generating internal SGI for exercise {exercise.id}")
+        logger.info("Generating internal SGI for exercise %s", exercise.id)
         instructions = await generate(exercise, config, debug)
         internal_instructions[exercise_id] = instructions.dict() # type: ignore
         write_internal_sgi(exercise.id, internal_instructions)
