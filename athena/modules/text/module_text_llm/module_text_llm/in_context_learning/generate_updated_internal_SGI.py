@@ -1,7 +1,7 @@
 from typing import List
 
 from athena import emit_meta
-from athena.text import Exercise, Submission, Feedback
+from athena.text import Exercise, Submission, Feedback, get_stored_feedback_suggestions, get_stored_exercises
 from athena.logger import logger
 from llm_core.utils.llm_utils import (
     get_chat_prompt_with_formatting_instructions
@@ -13,8 +13,9 @@ from module_text_llm.helpers.utils import add_sentence_numbers,format_grading_in
 from module_text_llm.in_context_learning.prompt_internal import InternalGradingInstructions
 from module_text_llm.in_context_learning.prompt_internal import system_message_upgrade, human_message_upgrade
 from module_text_llm.helpers.get_internal_sgi import get_internal_sgi, write_internal_sgi, extract_text_from_reference
-from module_text_llm.in_context_learning import InContextLearningConfig
-async def update_grading_instructions(exercise: Exercise, feedbacks:List[Feedback], submission : Submission) -> List[Feedback]:
+# from module_text_llm.in_context_learning import InContextLearningConfig
+from module_text_llm.approach_config import ApproachConfig
+async def update_grading_instructions(exercise: Exercise, feedbacks:List[Feedback],config: ApproachConfig, submission : Submission) -> List[Feedback]:
 
     logger.info("Generating updated internal SGI")
     debug = True
@@ -22,18 +23,22 @@ async def update_grading_instructions(exercise: Exercise, feedbacks:List[Feedbac
     ex_id = str(exercise.id)   
     if (ex_id not in iSGI):
         return []
-    
+
+    stored_feedback = list(get_stored_feedback_suggestions(exercise.id, submission.id))
+    ai_feedback = [feedback for feedback in stored_feedback]
+    logger.info(f"Stored feedback: {ai_feedback} for exercise {exercise.id} and submission {submission.id}")
     internal_instructions = iSGI[ex_id]
-    config = InContextLearningConfig()
+    
     model = config.model.get_model()  # type: ignore[attr-defined]
     prompt_input = {
         "max_points": exercise.max_points,
         "bonus_points": exercise.bonus_points,
         "internal_SGI": str(internal_instructions),
-        "grading_instructions": format_grading_instructions(exercise.grading_instructions, exercise.grading_criteria),
-        "problem_statement": exercise.problem_statement or "No problem statement.",
-        "example_solution": exercise.example_solution,
-        "feedbacks" : extract_text_from_reference(exercise.id,submission, feedbacks), # Model suggestion TODO get the exact text from the submission
+        # "grading_instructions": format_grading_instructions(exercise.grading_instructions, exercise.grading_criteria),
+        # "problem_statement": exercise.problem_statement or "No problem statement.",
+        # "example_solution": exercise.example_solution,
+        "ai_feedback": extract_text_from_reference(exercise.id,submission, ai_feedback),
+        "tutor_feedback" : extract_text_from_reference(exercise.id,submission, feedbacks), # Model suggestion TODO get the exact text from the submission
         "submission": add_sentence_numbers(submission.text)
     }
 
@@ -62,7 +67,6 @@ async def update_grading_instructions(exercise: Exercise, feedbacks:List[Feedbac
         })
 
     if result is None:
-        print("result was none")
         return []
     
     iSGI[ex_id] = result.dict()

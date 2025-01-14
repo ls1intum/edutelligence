@@ -6,8 +6,6 @@ from athena.text import Exercise, Feedback
 from llm_core.utils.llm_utils import (
     get_chat_prompt_with_formatting_instructions
 )
-import os
-import json
 from llm_core.utils.predict_and_parse import predict_and_parse
 from module_text_llm.helpers.utils import format_grading_instructions
 from module_text_llm.in_context_learning.prompt_internal import InternalGradingInstructions
@@ -21,7 +19,6 @@ async def generate(exercise: Exercise, config: ApproachConfig, debug: bool) -> L
         "grading_instructions": format_grading_instructions(exercise.grading_instructions, exercise.grading_criteria),
         "problem_statement": exercise.problem_statement or "No problem statement.",
         "example_solution": exercise.example_solution,
-        # "submission": add_sentence_numbers(submission.text)
     }
 
     chat_prompt = get_chat_prompt_with_formatting_instructions(

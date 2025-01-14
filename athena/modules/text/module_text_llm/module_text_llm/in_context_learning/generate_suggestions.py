@@ -18,16 +18,18 @@ from module_text_llm.in_context_learning.generate_internal import generate
 from module_text_llm.helpers.get_internal_sgi import get_internal_sgi, write_internal_sgi
 async def generate_suggestions(exercise: Exercise, submission: Submission, config: ApproachConfig, debug: bool) -> List[Feedback]:
     internal_instructions = get_internal_sgi()
-    if (exercise.id not in internal_instructions):
+    exercise_id = str(exercise.id)
+    if (exercise_id not in internal_instructions):
+        logger.info(f"Generating internal SGI for exercise {exercise.id}")
         instructions = await generate(exercise, config, debug)
-        internal_instructions[exercise.id] = instructions.dict() # type: ignore
+        internal_instructions[exercise_id] = instructions.dict() # type: ignore
         write_internal_sgi(exercise.id, internal_instructions)
  
     model = config.model.get_model()  # type: ignore
     prompt_input = {
         "max_points": exercise.max_points,
         "bonus_points": exercise.bonus_points,
-        "grading_instructions": format_grading_instructions(str(internal_instructions[exercise.id]), exercise.grading_criteria),
+        "grading_instructions": format_grading_instructions(str(internal_instructions[exercise_id]), exercise.grading_criteria),
         "problem_statement": exercise.problem_statement or "No problem statement.",
         "example_solution": exercise.example_solution,
         "submission": add_sentence_numbers(submission.text)
