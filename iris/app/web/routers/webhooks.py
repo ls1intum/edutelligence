@@ -2,6 +2,7 @@ import traceback
 from asyncio.log import logger
 from threading import Thread, Semaphore
 
+from openai.types.audio import Transcription
 from sentry_sdk import capture_exception
 
 from fastapi import APIRouter, status, Depends
@@ -14,6 +15,8 @@ from ..status.lecture_deletion_status_callback import LecturesDeletionStatusCall
 from ...domain.ingestion.deletionPipelineExecutionDto import (
     LecturesDeletionExecutionDto,
 )
+from ...domain.ingestion.transcription_ingestion.transcription_ingestion_pipeline_execution_dto import \
+    TranscriptionIngestionPipelineExecutionDto
 from ...pipeline.lecture_ingestion_pipeline import LectureIngestionPipeline
 from ...vector_database.database import VectorDatabase
 
@@ -91,3 +94,16 @@ def lecture_deletion_webhook(dto: LecturesDeletionExecutionDto):
     """
     thread = Thread(target=run_lecture_deletion_pipeline_worker, args=(dto,))
     thread.start()
+
+@router.post(
+    "/transcriptions/fullIngestion",
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(TokenValidator())],
+)
+def transcription_ingestion_webhook(dto: TranscriptionIngestionPipelineExecutionDto):
+    """
+    Webhook endpoint to trigger the exercise chat pipeline
+    """
+    # thread = Thread(target=run_lecture_update_pipeline_worker, args=(dto,))
+    # thread.start()
+    print(f"transcription ingestion got DTO {dto}")
