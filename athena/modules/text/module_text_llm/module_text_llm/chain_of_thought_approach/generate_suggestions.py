@@ -1,6 +1,4 @@
-from typing import List, Optional
-from pydantic import BaseModel, Field
-
+from typing import List
 from athena import emit_meta
 from athena.text import Exercise, Submission, Feedback
 from athena.logger import logger
@@ -33,13 +31,11 @@ async def generate_suggestions(exercise: Exercise, submission: Submission, confi
 
     chat_prompt = get_chat_prompt_with_formatting_instructions(
         model=model, 
-        system_message=config.thikning_prompt.system_message, 
-        human_message=config.thikning_prompt.human_message, 
+        system_message=config.thinking_prompt.system_message, 
+        human_message=config.thinking_prompt.human_message, 
         pydantic_object=InitialAssessmentModel
     )
     
-
-
     # Check if the prompt is too long and omit features if necessary (in order of importance)
     omittable_features = ["example_solution", "problem_statement", "grading_instructions"]
     prompt_input, should_run = check_prompt_length_and_omit_features_if_necessary(

@@ -3,15 +3,17 @@ from typing import List, Optional
 
 system_message = """
          You gave the following feedback on the first iteration: {answer}
-         On this step you need to refine your feedback.
+         On this step you need to refine your feedback. You will recieve the student submission once more.
          Make sure to follow the following steps to assess and improve your feedback:
-         It shuold follow the grading instructions and the sample solution, if it doesn't, consider improvements.
-         If you have your own additional improvements that are not present in the grading instructions, add them in a new feedback with 0 credits and no reference.
-         Remember that your response is directly seen by students and it should adress them directly.
-         For each feedback where the student has room for improvement, think about how the student could improve his solution.
-         Once you have thought how the student can improve the solution, formulate it in a way that guides the student towards the correct solution without revealing it directly.
-         Consider improvements to the feedback if any of this points is not satisfied.
-         
+         - Credits given or deducted should be consistent and tracable to the grading instructions and the sample solution, if it doesn't, consider improvements.
+         - If you have your own additional improvements that are not present in the grading instructions, add them in a new feedback with 0 credits and no reference.
+         - Remember that your response is directly seen by students and it should adress them directly.
+         - For each feedback where the student has room for improvement, think about how the student could improve his solution.
+         - Once you have thought how the student can improve the solution, formulate it in a way that guides the student towards the correct solution without revealing it directly.
+         - References should not overlap, that means that no two feedback must have overlaping line_start and line_end.
+         - If the feedback is general and not related to a specific line, leave line_start and line_end empty.
+         - Consider improvements to the feedback if any of this points is not satisfied.
+         You will be provided once again with the student submission.
          Respond in json
 
          """
@@ -53,3 +55,4 @@ class AssessmentModel(BaseModel):
     """Collection of feedbacks making up an assessment"""
     
     feedbacks: List[FeedbackModel] = Field(description="Assessment feedbacks")
+    
