@@ -243,6 +243,7 @@ def feedback_consumer(func: Union[
             exercise: exercise_type,
             submission: submission_type,
             feedbacks: List[feedback_type],
+            useForContinuousLearning: bool = False,
             module_config: module_config_type = Depends(get_dynamic_module_config_factory(module_config_type))):
 
         # Retrieve existing metadata for the exercise, submission and feedback
@@ -258,7 +259,8 @@ def feedback_consumer(func: Union[
         kwargs = {}
         if "module_config" in inspect.signature(func).parameters:
             kwargs["module_config"] = module_config
-
+        if "useForContinuousLearning" in inspect.signature(func).parameters:
+            kwargs["useForContinuousLearning"] = useForContinuousLearning
         # Call the actual consumer asynchronously
         background_tasks.add_task(func, exercise, submission, feedbacks, **kwargs)
 
