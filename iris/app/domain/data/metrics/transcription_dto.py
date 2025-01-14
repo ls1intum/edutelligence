@@ -1,12 +1,11 @@
 from typing import List
 
 from pydantic import BaseModel, Field
-from sqlalchemy import Double
 
 
 class TranscriptionSegmentDTO(BaseModel):
-    start_time: Double = Field(default="", alias="startTime")
-    end_time: Double = Field(default="", alias="endTime")
+    start_time: float = Field(default="", alias="startTime")
+    end_time: float = Field(default="", alias="endTime")
     text: str = Field(default="", alias="text")
     slide_number: int = Field(default=0, alias="slideNumber")
     lecture_unit_id: int = Field(default=0, alias="lectureUnitId")

@@ -2,7 +2,6 @@ import traceback
 from asyncio.log import logger
 from threading import Thread, Semaphore
 
-from openai.types.audio import Transcription
 from sentry_sdk import capture_exception
 
 from fastapi import APIRouter, status, Depends
