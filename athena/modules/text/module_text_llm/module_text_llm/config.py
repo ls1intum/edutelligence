@@ -4,8 +4,9 @@ from athena import config_schema_provider
 
 from module_text_llm.chain_of_thought_approach import ChainOfThoughtConfig
 from module_text_llm.basic_approach import BasicApproachConfig
+from module_text_llm.self_consistency import SelfConsistencyConfig
 
-ApproachConfigUnion = Union[BasicApproachConfig, ChainOfThoughtConfig]
+ApproachConfigUnion = Union[BasicApproachConfig, ChainOfThoughtConfig, SelfConsistencyConfig]
 
 @config_schema_provider
 class Configuration(BaseModel):
