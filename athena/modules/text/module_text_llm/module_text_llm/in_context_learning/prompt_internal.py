@@ -41,12 +41,18 @@ human_message_upgrade = """\
 # Internal Grading instructions
 {internal_SGI}
 
-You must include the Ai Feedback and tutor feedback into the feedback history depending on the instruction id.
+You must include the Ai Feedback and tutor feedback into the feedback history depending on the criterion used.
 This is a list, so you must include all the feedbacks that are relevant to the grading instruction id.
-Furthermore, it is most important to include where ai gave feedback but the tutor didnt
+
 #(Your) AI Feedback
 {ai_feedback}
 
+### Tutor Feedback
+Now you will recieve the tutor feedback. Take note of the structure:
+suggestion:accepted means that the ai feedback was accepted by the tutor
+suggestion:adapted means that the ai feedback was only adapted but not completely rejected
+if neither of this is present it means that the tutor gave new feedback.
+Take careful not of feedback that are present in the ai_feedback but not on the tutor feedback, this means that the tutor completely deleted your feedback and you shuould note this.
 #Tutor Feedback
 {tutor_feedback}
 
@@ -72,22 +78,32 @@ _Note: **{problem_statement}**, **{example_solution}**, or **{grading_instructio
     
     
 class FeedbackInstance(BaseModel):
-    ai_referenced_text: str = Field(description="Text from the submission that the AI used to generate this feedback")
     tutor_referenced_text: str = Field(None, description="Text from the submission that the tutor used to generate this feedback")
-    ai_feedback: str = Field(description="YOUR AI Feedback")
+    tutor_credits: float = Field(0.0, description="Number of points received/deducted by the tutor")
     tutor_feedback: str = Field(None, description="Feedback provided by the tutor for this instance")
+    
+    ai_referenced_text: str = Field(description="Text from the submission that the AI used to generate this feedback")
+    ai_credits: float = Field(0.0, description="Number of points received/deducted by the AI")
+    ai_feedback: str = Field(description="YOUR AI Feedback")
+    
     consistent: bool = Field(False, description="Whether the AI feedback is consistent with the tutor feedback")
-
+    difference: str = Field(None, description="Difference between the AI and tutor feedback, describe how AI could do better")
+    
 class GradingInstruction(BaseModel):
-    title: str = Field(description="Very short title, i.e. feedback category or similar", example="Logic Error")
+    # title: str = Field(description="Very short title, i.e. feedback category or similar", example="Logic Error")
     description: str = Field(description="Feedback description")
     credits: float = Field(0.0, description="Number of points received/deducted")
     grading_instruction_id: int = Field(description="ID of the grading instruction that was used to generate this feedback, or empty if no grading instruction was used")
-    feedback_history: List[FeedbackInstance] = Field(default_factory=list, description="History of feedback instances related to this grading instruction")
 
+class Criterion(BaseModel):
+    criterion_title: str = Field(description="Title of the criterion")
+    grading_instructions: List[GradingInstruction] = Field(description="Feedbacks for the criterion")
+    feedback_history: List[FeedbackInstance] = Field(default_factory=list, description="History of feedback instances related to this grading instruction")
+    can_use_multiple_times : bool = Field(False, description="Whether the grading instruction can be used multiple times")
+    
 class InternalGradingInstructions(BaseModel):
     """Collection of feedbacks making up an assessment"""
     problem_statement: str = Field(description="The Problem statement")
     example_solution: str = Field(description="The Example Solution")
-    grading_instructions: List[GradingInstruction] = Field(description="Assessment feedbacks")
+    grading_instructions: List[Criterion] = Field(description="Assessment feedbacks")
     

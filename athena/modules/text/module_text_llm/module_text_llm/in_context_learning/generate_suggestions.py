@@ -14,7 +14,7 @@ from module_text_llm.helpers.utils import add_sentence_numbers, get_index_range_
 from module_text_llm.in_context_learning.prompt_generate_suggestions import AssessmentModel
 from module_text_llm.in_context_learning.generate_internal import generate
 from module_text_llm.helpers.get_internal_sgi import get_internal_sgi, write_internal_sgi
-async def generate_suggestions(exercise: Exercise, submission: Submission, config: ApproachConfig, debug: bool) -> List[Feedback]:
+async def generate_suggestions(exercise: Exercise, submission: Submission, config: ApproachConfig, debug: bool, is_graded: bool) -> List[Feedback]:
     internal_instructions = get_internal_sgi()
     exercise_id = str(exercise.id)
     if (exercise_id not in internal_instructions):
@@ -98,6 +98,7 @@ async def generate_suggestions(exercise: Exercise, submission: Submission, confi
             index_end=index_end,
             credits=feedback.credits,
             structured_grading_instruction_id=grading_instruction_id,
+            is_graded=is_graded,
             meta={}
         ))
 

@@ -21,12 +21,14 @@ async def update_grading_instructions(exercise: Exercise, feedbacks:List[Feedbac
     debug = True
     iSGI = get_internal_sgi()
     ex_id = str(exercise.id)   
-    if (ex_id not in iSGI):
-        return []
 
+    if (ex_id not in iSGI):
+        # Generate them, it shouldnt happen though
+        pass 
+    
     ai_feedback = list(get_stored_feedback_suggestions(exercise.id, submission.id))
     internal_instructions = iSGI[ex_id]
-    
+    logger.info(ai_feedback)
     model = config.model.get_model()  # type: ignore[attr-defined]
     prompt_input = {
         "max_points": exercise.max_points,
