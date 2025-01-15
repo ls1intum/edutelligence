@@ -24,7 +24,7 @@ def select_submission(exercise: Exercise, submissions: List[Submission]) -> Subm
 
 @feedback_consumer
 async def process_incoming_feedback(exercise: Exercise, submission: Submission, feedbacks: List[Feedback], use_for_continuous_learning: bool, module_config: Configuration):
-    logger.info("process_feedback: Received %d feedbacks for submission %d of exercise %d. Approach: %s", len(feedbacks), submission.id, exercise.id,module_config.approach.__name__)
+    logger.info("process_feedback: Received %d feedbacks for submission %d of exercise %d. Approach: %s", len(feedbacks), submission.id, exercise.id,module_config.approach.__class__.__name__)
     logger.info("useForContinuousLearning: %s", use_for_continuous_learning)
     # logger.info("Recieved feedbacks: %s", feedbacks)
     if use_for_continuous_learning:
@@ -34,7 +34,7 @@ async def process_incoming_feedback(exercise: Exercise, submission: Submission, 
 @feedback_provider
 async def suggest_feedback(exercise: Exercise, submission: Submission, is_graded: bool, module_config: Configuration) -> List[Feedback]:
     logger.info("suggest_feedback: %s suggestions for submission %d of exercise %d were requested",
-                "Graded" if is_graded else "Non-graded", submission.id, exercise.id)
+                "Graded" if is_graded else "Non-graded", submission.id, exercise.id, " with approach: ", module_config.approach.__class__.__name__)
     return await generate_suggestions(exercise, submission, module_config.approach, module_config.debug)
 
 
