@@ -242,7 +242,7 @@ def feedback_consumer(func: Union[
             exercise: exercise_type,
             submission: submission_type,
             feedbacks: List[feedback_type],
-            use_for_continuous_learning: bool = Body(default=False),
+            use_for_continuous_learning: bool = Body(default=False, alias="useForContinuousLearning"),
             module_config: module_config_type = Depends(get_dynamic_module_config_factory(module_config_type))):
 
         # Retrieve existing metadata for the exercise, submission and feedback
