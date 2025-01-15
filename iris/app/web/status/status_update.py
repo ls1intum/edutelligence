@@ -24,9 +24,6 @@ from app.domain.status.text_exercise_chat_status_update_dto import (
 from app.domain.chat.exercise_chat.exercise_chat_status_update_dto import (
     ExerciseChatStatusUpdateDTO,
 )
-from app.domain.status.chat_gpt_wrapper_status_update_dto import (
-    ChatGPTWrapperStatusUpdateDTO,
-)
 from app.domain.status.status_update_dto import StatusUpdateDTO
 import logging
 
@@ -300,32 +297,6 @@ class LectureChatCallback(StatusCallback):
             url,
             run_id,
             LectureChatStatusUpdateDTO(stages=stages, result=""),
-            stages[stage],
-            stage,
-        )
-
-
-class ChatGPTWrapperCallback(StatusCallback):
-    def __init__(
-        self,
-        run_id: str,
-        base_url: str,
-        initial_stages: List[StageDTO],
-    ):
-        url = f"{base_url}/api/public/pyris/pipelines/chat-gpt-wrapper/runs/{run_id}/status"
-        stages = initial_stages or []
-        stage = len(stages)
-        stages += [
-            StageDTO(
-                weight=30,
-                state=StageStateEnum.NOT_STARTED,
-                name="Thinking",
-            ),
-        ]
-        super().__init__(
-            url,
-            run_id,
-            ChatGPTWrapperStatusUpdateDTO(stages=stages, result=""),
             stages[stage],
             stage,
         )
