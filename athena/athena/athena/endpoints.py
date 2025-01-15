@@ -246,7 +246,7 @@ def feedback_consumer(func: Union[
             exercise: exercise_type,
             submission: submission_type,
             feedbacks: List[feedback_type],
-            use_for_continuous_learning: use_for_continuous_learning_type = Body(default=False, alias="useForContinuousLearning"),
+            useForContinuousLearning: use_for_continuous_learning_type = Body(default=False, alias="useForContinuousLearning"),
             module_config: module_config_type = Depends(get_dynamic_module_config_factory(module_config_type))):
 
         # Retrieve existing metadata for the exercise, submission and feedback
@@ -261,7 +261,8 @@ def feedback_consumer(func: Union[
 
         kwargs = {}
         if "use_for_continuous_learning" in inspect.signature(func).parameters:
-            kwargs["use_for_continuous_learning"] = use_for_continuous_learning
+            kwargs["use_for_continuous_learning"] = useForContinuousLearning
+            logger.info("It was in signature")
         if "module_config" in inspect.signature(func).parameters:
             kwargs["module_config"] = module_config
 
