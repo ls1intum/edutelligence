@@ -33,8 +33,8 @@ async def process_incoming_feedback(exercise: Exercise, submission: Submission, 
         return updated_SGI
 @feedback_provider
 async def suggest_feedback(exercise: Exercise, submission: Submission, is_graded: bool, module_config: Configuration) -> List[Feedback]:
-    logger.info("suggest_feedback: %s suggestions for submission %d of exercise %d were requested",
-                "Graded" if is_graded else "Non-graded", submission.id, exercise.id, " with approach: ", module_config.approach.__class__.__name__)
+    logger.info("suggest_feedback: %s suggestions for submission %d of exercise %d were requested, with approach: %s",
+                "Graded" if is_graded else "Non-graded", submission.id, exercise.id, module_config.approach.__class__.__name__)
     return await generate_suggestions(exercise, submission, module_config.approach, module_config.debug)
 
 
