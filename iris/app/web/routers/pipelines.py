@@ -259,6 +259,7 @@ def run_chatgpt_wrapper_pipeline_worker(
         logger.error(traceback.format_exc())
         callback.error("Fatal error.", exception=e)
 
+
 @router.get("/{feature}/variants")
 def get_pipeline(feature: str):
     """

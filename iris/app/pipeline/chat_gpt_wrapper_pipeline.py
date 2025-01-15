@@ -5,7 +5,9 @@ from langchain_core.prompts import (
     ChatPromptTemplate,
 )
 from app.common.pyris_message import IrisMessageRole, PyrisMessage
-from app.domain.chat.exercise_chat.exercise_chat_pipeline_execution_dto import ExerciseChatPipelineExecutionDTO
+from app.domain.chat.exercise_chat.exercise_chat_pipeline_execution_dto import (
+    ExerciseChatPipelineExecutionDTO,
+)
 from app.domain.data.text_message_content_dto import TextMessageContentDTO
 from app.pipeline.prompts.chat_gpt_wrapper_prompts import chat_gpt_initial_system_prompt
 from langchain_core.messages import SystemMessage, HumanMessage
@@ -15,6 +17,7 @@ from app.pipeline import Pipeline
 from app.web.status.status_update import ExerciseChatStatusCallback
 
 logger = logging.getLogger(__name__)
+
 
 def convert_chat_history_to_str(chat_history: List[PyrisMessage]) -> str:
     """
@@ -40,6 +43,7 @@ def convert_chat_history_to_str(chat_history: List[PyrisMessage]) -> str:
             for message in chat_history
         ]
     )
+
 
 class ChatGPTWrapperPipeline(Pipeline):
     callback: ExerciseChatStatusCallback
@@ -73,7 +77,7 @@ class ChatGPTWrapperPipeline(Pipeline):
         chat_history = (
             dto.chat_history[-5:] if query is None else dto.chat_history[-6:-1]
         )
-        
+
         chat_history_messages = convert_chat_history_to_str(chat_history)
 
         prompts = ChatPromptTemplate.from_messages(
