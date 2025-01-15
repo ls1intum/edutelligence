@@ -82,15 +82,15 @@ Currently, Pyris powers [Iris](https://artemis.cit.tum.de/about-iris), a virtual
        port: "8001"
        grpc_port: "50051"
 
-     env_vars:
+     env_vars: {}
      ```
 
    - **Create an LLM Config File**
 
-     Create an `llm-config.local.yml` file in the root directory. You can use the provided `llm-config.example.yml` as a base.
+     Create an `llm_config.local.yml` file in the root directory. You can use the provided `llm_config.example.yml` as a base.
 
      ```bash
-     cp llm-config.example.yml llm-config.local.yml
+     cp llm_config.example.yml llm_config.local.yml
      ```
 
      **Example OpenAI Configuration:**
@@ -176,7 +176,7 @@ Currently, Pyris powers [Iris](https://artemis.cit.tum.de/about-iris), a virtual
      >- GPT-4 equivalent: 4
      >- GPT-3.5 Turbo equivalent: 3.5
 
-     > **Warning:** Most existing pipelines in Pyris require a model with a `gpt_version_equivalent` of **4.5 or higher**. It is advised to define models in the `llm-config.local.yml` file with a `gpt_version_equivalent` of 4.5 or higher.
+     > **Warning:** Most existing pipelines in Pyris require a model with a `gpt_version_equivalent` of **4.5 or higher**. It is advised to define models in the `llm_config.local.yml` file with a `gpt_version_equivalent` of 4.5 or higher.
 
 4. **Run the Server**
 
@@ -184,7 +184,7 @@ Currently, Pyris powers [Iris](https://artemis.cit.tum.de/about-iris), a virtual
 
    ```bash
    APPLICATION_YML_PATH=./application.local.yml \
-   LLM_CONFIG_PATH=./llm-config.local.yml \
+   LLM_CONFIG_PATH=./llm_config.local.yml \
    uvicorn app.main:app --reload
    ```
 
@@ -203,7 +203,7 @@ Deploying Pyris using Docker ensures a consistent environment and simplifies the
 - **Docker**: Install Docker from the [official website](https://www.docker.com/get-started).
 - **Docker Compose**: Comes bundled with Docker Desktop or install separately on Linux.
 - **Clone the Pyris Repository**: If not already done, clone the repository.
-- **Create Configuration Files**: Create the `application.local.yml` and `llm-config.local.yml` files as described in the [Local Development Setup](#local-development-setup) section.
+- **Create Configuration Files**: Create the `application.local.yml` and `llm_config.local.yml` files as described in the [Local Development Setup](#local-development-setup) section.
 
   ```bash
   git clone https://github.com/ls1intum/Pyris.git Pyris
@@ -312,7 +312,7 @@ Deploying Pyris using Docker ensures a consistent environment and simplifies the
 
   - `PYRIS_DOCKER_TAG`: Specifies the Pyris Docker image tag.
   - `PYRIS_APPLICATION_YML_FILE`: Path to your `application.yml` file.
-  - `PYRIS_LLM_CONFIG_YML_FILE`: Path to your `llm-config.yml` file.
+  - `PYRIS_LLM_CONFIG_YML_FILE`: Path to your `llm_config.yml` file.
   - `PYRIS_PORT`: Host port for Pyris application (default is `8000`).
   - `WEAVIATE_PORT`: Host port for Weaviate REST API (default is `8001`).
   - `WEAVIATE_GRPC_PORT`: Host port for Weaviate gRPC interface (default is `50051`).
@@ -321,7 +321,7 @@ Deploying Pyris using Docker ensures a consistent environment and simplifies the
 
   Modify configuration files as needed:
 
-  - **Pyris Configuration**: Update `application.yml` and `llm-config.yml`.
+  - **Pyris Configuration**: Update `application.yml` and `llm_config.yml`.
   - **Weaviate Configuration**: Adjust settings in `weaviate.yml`.
   - **Nginx Configuration**: Modify Nginx settings in `nginx.yml` and related config files.
 
