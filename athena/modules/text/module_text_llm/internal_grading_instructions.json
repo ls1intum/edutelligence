@@ -22,7 +22,43 @@
                 "description": "The student submitted a complete response that meets the requirements for evaluation.",
                 "credits": 3.0,
                 "grading_instruction_id": 3,
-                "feedback_history": []
+                "feedback_history": [
+                    {
+                        "ai_referenced_text": "when we look at a well made computer program, we normally see multiple, in is self, densely connected modules that each provide a core functionality to the program.",
+                        "tutor_referenced_text": "when we look at a well made computer program, we normally see multiple, in is self, densely connected modules that each provide a core functionality to the program.",
+                        "ai_feedback": "There are several grammatical and spelling errors throughout your submission. For example, 'modures' should be 'modules', 'refered' should be 'referred', and 'maintanance' should be 'maintenance'. Additionally, 'in is self' should be 'in itself'. Please proofread your work to correct these errors.",
+                        "tutor_feedback": "You correctly explained why coupling and cohesion are important, well done!",
+                        "consistent": false
+                    },
+                    {
+                        "ai_referenced_text": "The dense connections within one module are refered to as cohesion.",
+                        "tutor_referenced_text": "The dense connections within one module are refered to as cohesion.",
+                        "ai_feedback": "Your explanation of cohesion and coupling is generally accurate, but it could benefit from more precise definitions. For example, you might want to elaborate on how cohesion and coupling impact software design and maintenance.",
+                        "tutor_feedback": "You correctly explained the difference between coupling and cohesion, well done!",
+                        "consistent": false
+                    },
+                    {
+                        "ai_referenced_text": "As an example we could look at a banking software.",
+                        "tutor_referenced_text": "As an example we could look at a banking software.",
+                        "ai_feedback": "The example of banking software is relevant, but it would be more effective if you explicitly linked it back to the concepts of cohesion and coupling. Explain how the example illustrates these principles in practice.",
+                        "tutor_feedback": "Great example, well done!",
+                        "consistent": false
+                    },
+                    {
+                        "ai_referenced_text": "each instance is highly connected in it self ( or is made up of an other layer of modules for that matter) and has loose connections inbetween those instances.",
+                        "tutor_referenced_text": null,
+                        "ai_feedback": "Some sentences could be clearer and more concise. For instance, sentence 10 is quite long and could be broken into two sentences for better readability. Consider simplifying complex sentences to enhance clarity.",
+                        "tutor_feedback": null,
+                        "consistent": false
+                    },
+                    {
+                        "ai_referenced_text": "probably even via a specific interface to eliminate having to change more than one instance at a time.",
+                        "tutor_referenced_text": null,
+                        "ai_feedback": "The overall structure of your submission is logical, but the flow between ideas could be improved. Consider using transitional phrases to connect your thoughts more smoothly, especially between the definitions of cohesion and coupling and the example of banking software.",
+                        "tutor_feedback": null,
+                        "consistent": false
+                    }
+                ]
             }
         ]
     }

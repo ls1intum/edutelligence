@@ -3,7 +3,7 @@ from typing import List, Any
 
 import nltk
 import tiktoken
-from athena import app, submission_selector, submissions_consumer, feedback_consumer, feedback_provider, evaluation_provider
+from athena import app, submission_selector, submissions_consumer, feedback_consumer, feedback_provider, evaluation_provider, feedback_feeder
 from athena.text import Exercise, Submission, Feedback
 from athena.logger import logger
 
@@ -27,10 +27,19 @@ async def process_incoming_feedback(exercise: Exercise, submission: Submission, 
     logger.info("process_feedback: Received %d feedbacks for submission %d of exercise %d. Approach: %s", len(feedbacks), submission.id, exercise.id,module_config.approach.__class__.__name__)
     logger.info("useForContinuousLearning: %s", use_for_continuous_learning)
     # logger.info("Recieved feedbacks: %s", feedbacks)
-    if use_for_continuous_learning:
-        updated_SGI = await update_grading_instructions(exercise, feedbacks,module_config.approach, submission)
-        logger.info("Updated grading instructions: %s", updated_SGI)
-        return updated_SGI
+    # if use_for_continuous_learning:
+    #     updated_SGI = await update_grading_instructions(exercise, feedbacks,module_config.approach, submission)
+    #     logger.info("Updated grading instructions: %s", updated_SGI)
+    #     return updated_SGI
+
+@feedback_feeder
+async def feed_feedback(exercise: Exercise, submission: Submission, feedbacks: List[Feedback], use_for_continuous_learning: bool, module_config: Configuration):
+    logger.info("process_feedback: Received %d feedbacks for submission %d of exercise %d. Approach: %s", len(feedbacks), submission.id, exercise.id,module_config.approach.__class__.__name__)
+    logger.info("useForContinuousLearning: %s", use_for_continuous_learning)
+    # logger.info("Recieved feedbacks: %s", feedbacks)
+    return await update_grading_instructions(exercise, feedbacks,module_config.approach, submission)
+
+
 @feedback_provider
 async def suggest_feedback(exercise: Exercise, submission: Submission, is_graded: bool, module_config: Configuration) -> List[Feedback]:
     logger.info("suggest_feedback: %s suggestions for submission %d of exercise %d were requested, with approach: %s",
