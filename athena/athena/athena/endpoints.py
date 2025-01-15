@@ -274,42 +274,15 @@ def feedback_consumer(func: Union[
 
 
 def feedback_feeder(func: Union[
-    Callable[[E, S, List[F]], None],
-    Callable[[E, S, List[F]], Coroutine[Any, Any, None]],
-    Callable[[E, S, List[F], C], None],
-    Callable[[E, S, List[F], C], Coroutine[Any, Any, None]],
-    Callable[[E, S, List[F], G, C], Coroutine[Any, Any, None]],
-    Callable[[E, S, List[F], G, C],None],
-    Callable[[E, S, List[F], G], None],
-    Callable[[E, S, List[F], G], Coroutine[Any, Any, None]]
+    Callable[[E, S, List[F]], Any],
+    Callable[[E, S, List[F]], Coroutine[Any, Any, Any]],
+    Callable[[E, S, List[F], C], Any],
+    Callable[[E, S, List[F], C], Coroutine[Any, Any, Any]],
+    Callable[[E, S, List[F], G, C], Coroutine[Any, Any, Any]],
+    Callable[[E, S, List[F], G, C],Any],
+    Callable[[E, S, List[F], G], Any],
+    Callable[[E, S, List[F], G], Coroutine[Any, Any, Any]]
 ]):
-    """
-    Receive feedback from the Assessment Module Manager.
-    The feedback consumer is usually called whenever the LMS gets feedback from a tutor.
-
-    This decorator can be used with several types of functions: synchronous or asynchronous, with or without a module config.
-
-    Examples:
-        Below are some examples of possible functions that you can decorate with this decorator:
-
-        Without using module config (both synchronous and asynchronous forms):
-        >>> @feedback_consumer
-        ... def sync_process_feedback(exercise: Exercise, submission: Submission, feedbacks: List[Feedback]):
-        ...     # process feedback here
-
-        >>> @feedback_consumer
-        ... async def async_process_feedback(exercise: Exercise, submission: Submission, feedbacks: List[Feedback]):
-        ...     # process feedback here
-
-        With using module config (both synchronous and asynchronous forms):
-        >>> @feedback_consumer
-        ... def sync_process_feedback_with_config(exercise: Exercise, submission: Submission, feedbacks: List[Feedback], module_config: Optional[dict]):
-        ...     # process feedback here using module_config
-
-        >>> @feedback_consumer
-        ... async def async_process_feedback_with_config(exercise: Exercise, submission: Submission, feedbacks: List[Feedback], module_config: Optional[dict]):
-        ...     # process feedback here using module_config
-    """
     exercise_type = inspect.signature(func).parameters["exercise"].annotation
     submission_type = inspect.signature(func).parameters["submission"].annotation
     feedback_type = inspect.signature(func).parameters["feedbacks"].annotation.__args__[0]
@@ -339,22 +312,11 @@ def feedback_feeder(func: Union[
         kwargs = {}
         if "use_for_continuous_learning" in inspect.signature(func).parameters:
             kwargs["use_for_continuous_learning"] = useForContinuousLearning
-            logger.info("It was in signature")
+            logger.info("It was in signature feed_feedbacks")
         if "module_config" in inspect.signature(func).parameters:
             kwargs["module_config"] = module_config
         
-        if inspect.iscoroutinefunction(func):
-            result = await func(exercise, submission,feedbacks, **kwargs)
-        else:
-            result = func(exercise, submission,feedbacks, **kwargs)
-
-        # Store feedback suggestions and assign internal IDs
-        # feedbacks = store_feedback_suggestions(feedbacks)
-        return result
-        # Call the actual consumer asynchronously
-        # background_tasks.add_task(func, exercise, submission, feedbacks, **kwargs)
-
-        # return None
+        return await func(exercise, submission,feedbacks, **kwargs)
     return wrapper
 
 def feedback_provider(func: Union[

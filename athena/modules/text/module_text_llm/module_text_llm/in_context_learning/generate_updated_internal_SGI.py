@@ -15,7 +15,7 @@ from module_text_llm.in_context_learning.prompt_internal import system_message_u
 from module_text_llm.helpers.get_internal_sgi import get_internal_sgi, write_internal_sgi, extract_text_from_reference
 # from module_text_llm.in_context_learning import InContextLearningConfig
 from module_text_llm.approach_config import ApproachConfig
-async def update_grading_instructions(exercise: Exercise, feedbacks:List[Feedback],config: ApproachConfig, submission : Submission) -> List[Feedback]:
+async def update_grading_instructions(exercise: Exercise, feedbacks:List[Feedback],config: ApproachConfig, submission : Submission) -> InternalGradingInstructions:
 
     logger.info("Generating updated internal SGI")
     debug = True
@@ -36,7 +36,7 @@ async def update_grading_instructions(exercise: Exercise, feedbacks:List[Feedbac
         # "problem_statement": exercise.problem_statement or "No problem statement.",
         # "example_solution": exercise.example_solution,
         "ai_feedback": extract_text_from_reference(exercise.id,submission, ai_feedback),
-        "tutor_feedback" : extract_text_from_reference(exercise.id,submission, feedbacks), # Model suggestion TODO get the exact text from the submission
+        "tutor_feedback" : extract_text_from_reference(exercise.id,submission, feedbacks), # Mode]l suggestion TODO get the exact text from the submission
         "submission": add_sentence_numbers(submission.text)
     }
 
