@@ -233,7 +233,7 @@ def feedback_consumer(func: Union[
     submission_type = inspect.signature(func).parameters["submission"].annotation
     feedback_type = inspect.signature(func).parameters["feedbacks"].annotation.__args__[0]
     module_config_type = inspect.signature(func).parameters["module_config"].annotation if "module_config" in inspect.signature(func).parameters else None
-    use_for_continuous_learning = inspect.signature(func).parameters["use_for_continuous_learning"].annotation if "use_for_continuous_learning" in inspect.signature(func).parameters else None
+    use_for_continuous_learning_type = inspect.signature(func).parameters["use_for_continuous_learning"].annotation if "use_for_continuous_learning" in inspect.signature(func).parameters else None
     @app.post("/feedbacks", responses=module_responses)
     @authenticated
     @with_meta
@@ -242,7 +242,7 @@ def feedback_consumer(func: Union[
             exercise: exercise_type,
             submission: submission_type,
             feedbacks: List[feedback_type],
-            use_for_continuous_learning: bool = Body(default=False, alias="useForContinuousLearning"),
+            use_for_continuous_learning: use_for_continuous_learning_type = Body(default=False, alias="useForContinuousLearning"),
             module_config: module_config_type = Depends(get_dynamic_module_config_factory(module_config_type))):
 
         # Retrieve existing metadata for the exercise, submission and feedback
