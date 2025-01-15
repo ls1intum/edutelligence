@@ -23,10 +23,11 @@ def select_submission(exercise: Exercise, submissions: List[Submission]) -> Subm
     return submissions[0]
 
 @feedback_consumer
-async def process_incoming_feedback(exercise: Exercise, submission: Submission, feedbacks: List[Feedback], useForContinuousLearning: bool, module_config: Configuration):
+async def process_incoming_feedback(exercise: Exercise, submission: Submission, feedbacks: List[Feedback], use_for_continuous_learning: bool, module_config: Configuration):
     logger.info("process_feedback: Received %d feedbacks for submission %d of exercise %d.", len(feedbacks), submission.id, exercise.id)
+    logger.info("useForContinuousLearning: %s", use_for_continuous_learning)
     # logger.info("Recieved feedbacks: %s", feedbacks)
-    if useForContinuousLearning:
+    if use_for_continuous_learning:
         updated_SGI = await update_grading_instructions(exercise, feedbacks,module_config.approach, submission)
         logger.info("Updated grading instructions: %s", updated_SGI)
         return updated_SGI

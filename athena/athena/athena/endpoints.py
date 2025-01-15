@@ -3,7 +3,6 @@ import inspect
 from fastapi import Depends, BackgroundTasks, Body
 from pydantic import BaseModel, ValidationError
 from typing import TypeVar, Callable, List, Union, Any, Coroutine, Type
-
 from athena.app import app
 from athena.authenticate import authenticated
 from athena.metadata import with_meta
@@ -234,7 +233,7 @@ def feedback_consumer(func: Union[
     submission_type = inspect.signature(func).parameters["submission"].annotation
     feedback_type = inspect.signature(func).parameters["feedbacks"].annotation.__args__[0]
     module_config_type = inspect.signature(func).parameters["module_config"].annotation if "module_config" in inspect.signature(func).parameters else None
-
+    use_for_continuous_learning = inspect.signature(func).parameters["use_for_continuous_learning"].annotation if "use_for_continuous_learning" in inspect.signature(func).parameters else None
     @app.post("/feedbacks", responses=module_responses)
     @authenticated
     @with_meta
@@ -243,7 +242,7 @@ def feedback_consumer(func: Union[
             exercise: exercise_type,
             submission: submission_type,
             feedbacks: List[feedback_type],
-            useForContinuousLearning: bool = False,
+            use_for_continuous_learning: bool = False,
             module_config: module_config_type = Depends(get_dynamic_module_config_factory(module_config_type))):
 
         # Retrieve existing metadata for the exercise, submission and feedback
@@ -257,10 +256,11 @@ def feedback_consumer(func: Union[
             feedback.id = store_feedback(feedback, is_lms_id=True).id
 
         kwargs = {}
+        if "use_for_continuous_learning" in inspect.signature(func).parameters:
+            kwargs["use_for_continuous_learning"] = use_for_continuous_learning
         if "module_config" in inspect.signature(func).parameters:
             kwargs["module_config"] = module_config
-        if "useForContinuousLearning" in inspect.signature(func).parameters:
-            kwargs["useForContinuousLearning"] = useForContinuousLearning
+
         # Call the actual consumer asynchronously
         background_tasks.add_task(func, exercise, submission, feedbacks, **kwargs)
 

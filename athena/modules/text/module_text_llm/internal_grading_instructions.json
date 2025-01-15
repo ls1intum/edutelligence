@@ -1,0 +1,29 @@
+{
+    "3004": {
+        "problem_statement": "",
+        "example_solution": "",
+        "grading_instructions": [
+            {
+                "title": "No Submission",
+                "description": "The student did not submit any text for evaluation.",
+                "credits": 0.0,
+                "grading_instruction_id": 1,
+                "feedback_history": []
+            },
+            {
+                "title": "Incomplete Submission",
+                "description": "The submission is incomplete and does not meet the requirements for evaluation.",
+                "credits": 0.0,
+                "grading_instruction_id": 2,
+                "feedback_history": []
+            },
+            {
+                "title": "Full Submission",
+                "description": "The student submitted a complete response that meets the requirements for evaluation.",
+                "credits": 3.0,
+                "grading_instruction_id": 3,
+                "feedback_history": []
+            }
+        ]
+    }
+}
