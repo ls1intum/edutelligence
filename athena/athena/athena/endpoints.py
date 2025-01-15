@@ -199,12 +199,11 @@ def submission_selector(func: Union[
 def feedback_consumer(func: Union[
     Callable[[E, S, List[F]], None],
     Callable[[E, S, List[F]], Coroutine[Any, Any, None]],
-    Callable[[E, S, List[F], C], None],
-    Callable[[E, S, List[F], C], Coroutine[Any, Any, None]],
+    # Callable[[E, S, List[F], C], None],
+    # Callable[[E, S, List[F], C], Coroutine[Any, Any, None]],
     Callable[[E, S, List[F], G, C], Coroutine[Any, Any, None]],
-    Callable[[E, S, List[F], G, C]],
-    Callable[[E, S, List[F], G, C], None],
-
+    # Callable[[E, S, List[F], G, C]],
+    Callable[[E, S, List[F], G, C], None]
 ]):
     """
     Receive feedback from the Assessment Module Manager.
