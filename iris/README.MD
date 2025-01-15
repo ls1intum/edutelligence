@@ -212,9 +212,9 @@ Deploying Pyris using Docker ensures a consistent environment and simplifies the
 
 #### Docker Compose Files
 
-- **Development**: `docker-compose/pyris-dev.yml`
-- **Production with Nginx**: `docker-compose/pyris-production.yml`
-- **Production without Nginx**: `docker-compose/pyris-production-internal.yml`
+- **Development**: `docker/pyris-dev.yml`
+- **Production with Nginx**: `docker/pyris-production.yml`
+- **Production without Nginx**: `docker/pyris-production-internal.yml`
 
 #### Running the Containers
 
@@ -223,7 +223,7 @@ Deploying Pyris using Docker ensures a consistent environment and simplifies the
 1. **Start the Containers**
 
    ```bash
-   docker-compose -f docker-compose/pyris-dev.yml up --build
+   docker-compose -f docker/pyris-dev.yml up --build
    ```
 
    - Builds the Pyris application.
@@ -246,7 +246,7 @@ Deploying Pyris using Docker ensures a consistent environment and simplifies the
 2. **Start the Containers**
 
    ```bash
-   docker-compose -f docker-compose/pyris-production.yml up -d
+   docker-compose -f docker/pyris-production.yml up -d
    ```
 
    - Pulls the latest Pyris image.
@@ -262,7 +262,7 @@ Deploying Pyris using Docker ensures a consistent environment and simplifies the
 1. **Start the Containers**
 
    ```bash
-   docker-compose -f docker-compose/pyris-production-internal.yml up -d
+   docker-compose -f docker/pyris-production-internal.yml up -d
    ```
 
    - Pulls the latest Pyris image.
@@ -293,7 +293,7 @@ Deploying Pyris using Docker ensures a consistent environment and simplifies the
   Example:
 
   ```bash
-  docker-compose -f docker-compose/pyris-dev.yml logs -f pyris-app
+  docker-compose -f docker/pyris-dev.yml logs -f pyris-app
   ```
 
 - **Rebuild Containers**
