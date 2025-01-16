@@ -18,7 +18,7 @@ def get_stored_feedback(
 
     db_feedback_cls = feedback_cls.get_model_class()
     with get_db() as db:
-        query = db.query(db_feedback_cls).filter_by(exercise_id=exercise_id, is_suggestion=0, lms_url=lms_url)
+        query = db.query(db_feedback_cls).filter_by(exercise_id=exercise_id, is_suggestion=False, lms_url=lms_url)
         if submission_id is not None:
             query = query.filter_by(submission_id=submission_id)
         return (f.to_schema() for f in query.all())
