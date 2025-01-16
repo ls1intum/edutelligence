@@ -9,7 +9,7 @@ class ApproachConfig(BaseModel, ABC):
     type: str = Field(..., description="The type of approach config")
 
     @abstractmethod
-    async def generate_suggestions(self, exercise: Exercise, submission: Submission, config, debug: bool, is_graded: bool):
+    async def generate_suggestions(self, exercise: Exercise, submission: Submission, config, *, debug: bool, is_graded: bool):
         pass
     
     class Config:
