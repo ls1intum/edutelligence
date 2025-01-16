@@ -35,8 +35,8 @@ class {to_camel_case(approach_name)}Config(ApproachConfig):
     type: Literal['{approach_name.lower()}'] = '{approach_name.lower()}'
     generate_suggestions_prompt: GenerateSuggestionsPrompt = Field(default=GenerateSuggestionsPrompt())
     
-    async def generate_suggestions(self, exercise: Exercise, submission: Submission, config, debug: bool):
-        return await generate_suggestions(exercise, submission, config, debug)
+    async def generate_suggestions(self, exercise: Exercise, submission: Submission, config,*, debug: bool, is_graded: bool):
+        return await generate_suggestions(exercise, submission, config, debug, is_graded)
 """
     with open(base_dir / "__init__.py", "w", encoding="utf-8") as f:
         f.write(init_content.strip())
@@ -109,8 +109,14 @@ class AssessmentModel(BaseModel):
 
 def create_generate_suggestions_py(base_dir: Path) -> None:
     generate_suggestions_content = """
+from typing import List
+from athena import emit_meta
+from athena.text import Exercise, Submission, Feedback
+from athena.logger import logger
+
+from module_text_llm.approach_config import ApproachConfig
 # Placeholder for generate suggestions logic.
-def generate_suggestions():
+def generate_suggestions(exercise: Exercise, submission: Submission, config: ApproachConfig, debug: bool, is_graded: bool):
     pass
 """
     with open(base_dir / "generate_suggestions.py", "w", encoding="utf-8") as f:

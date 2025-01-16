@@ -3,7 +3,7 @@ from typing import Type, Union, List, Optional
 from langchain.base_language import BaseLanguageModel
 
 from llm_core.models.model_config import ModelConfig
-
+from athena.logger import logger
 
 DefaultModelConfig: Type[ModelConfig]
 MiniModelConfig: ModelConfig
@@ -21,6 +21,9 @@ try:
     if default_model_name in openai_config.available_models:
         DefaultModelConfig = openai_config.OpenAIModelConfig
     if evaluation_model_name in openai_config.available_models:
+        logger.info("Evaluation model: %s", evaluation_model_name)
+        for model in openai_config.available_models:
+            logger.info("Available openai models: %s", model)
         evaluation_model = openai_config.available_models[evaluation_model_name]
 except AttributeError:
     pass
