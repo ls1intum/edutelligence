@@ -66,8 +66,6 @@ class SuggestionStrategyFactory:
         Raises:
             ValueError: If no strategy is found for the given configuration type.
         """
-        # if not SuggestionStrategyFactory._strategies:
-        #     self.initialize_strategies()
 
         config_type = type(config).__name__
         strategy_class = SuggestionStrategyFactory._strategies.get(config_type)
