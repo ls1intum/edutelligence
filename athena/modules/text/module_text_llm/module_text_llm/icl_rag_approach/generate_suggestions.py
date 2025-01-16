@@ -11,7 +11,7 @@ from llm_core.utils.llm_utils import (
 from llm_core.utils.predict_and_parse import predict_and_parse
 from module_text_llm.helpers.utils import add_sentence_numbers, get_index_range_from_line_range, format_grading_instructions
 from module_text_llm.icl_rag_approach.prompt_generate_suggestions import AssessmentModel
-from module_text_llm.index_storage import retrieve_embedding_index
+from module_text_llm.index_storage import retrieve_embedding_index, retrieve_feedbacks
 from module_text_llm.storage_embeddings import query_embedding
 from module_text_llm.generate_embeddings import embed_text
 from athena.text import get_stored_feedback
@@ -47,10 +47,12 @@ async def generate_suggestions(exercise: Exercise, submission: Submission, confi
         for index in list_of_indices[0]:
             if index != -1:
                 exercise_id, submission_id = retrieve_embedding_index(list_of_indices)
-                stored_feedback = list(get_stored_feedback(exercise_id, submission_id))
+                stored_feedback = retrieve_feedbacks(index) # -> List[Feedback]
+                # stored_feedback = list(get_stored_feedback(exercise_id, submission_id))
                 logger.info("Stored feedback:")
-                for feedback_item in stored_feedback:
-                    logger.info("- %s", feedback_item) 
+                if stored_feedback is not None:
+                    for feedback_item in stored_feedback:
+                        logger.info("- %s", feedback_item) 
 
                 logger.info("Stored submission:")
                 rag_context.append({"submission": submission.text, "feedback": stored_feedback})

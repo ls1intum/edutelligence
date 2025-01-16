@@ -1,0 +1,47 @@
+{
+    "0": {
+        "exercise_id": 3002,
+        "submission_id": 787782,
+        "feedbacks": [
+            {
+                "id": 6620,
+                "title": "Assessment of the Difference between Coupling/Cohesion",
+                "description": "You correctly explained the difference between coupling and cohesion, well done!",
+                "credits": 1.0,
+                "structured_grading_instruction_id": 6053,
+                "is_graded": null,
+                "meta": {},
+                "exercise_id": 3002,
+                "submission_id": 787782,
+                "index_start": 0,
+                "index_end": 722
+            },
+            {
+                "id": 6621,
+                "title": "Assessment of the Example",
+                "description": "Great example, well done!",
+                "credits": 1.0,
+                "structured_grading_instruction_id": 6058,
+                "is_graded": null,
+                "meta": {},
+                "exercise_id": 3002,
+                "submission_id": 787782,
+                "index_start": 909,
+                "index_end": 1299
+            },
+            {
+                "id": 6622,
+                "title": "Assessment of the Explanation why Coupling/Cohesion are important",
+                "description": "You correctly explained why coupling and cohesion are important, well done!",
+                "credits": 1.0,
+                "structured_grading_instruction_id": 6056,
+                "is_graded": null,
+                "meta": {},
+                "exercise_id": 3002,
+                "submission_id": 787782,
+                "index_start": null,
+                "index_end": null
+            }
+        ]
+    }
+}

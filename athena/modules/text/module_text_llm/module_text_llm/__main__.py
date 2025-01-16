@@ -32,7 +32,7 @@ def process_incoming_feedback(exercise: Exercise, submission: Submission, feedba
     submission_id = submission.id
     exercise_id = exercise.id
     embedded_submission = embed_text(submission.text)
-    store_embedding_index(exercise_id, submission_id)
+    store_embedding_index(exercise_id, submission_id, feedbacks)
     save_embedding(embedded_submission)
     
 @feedback_provider
