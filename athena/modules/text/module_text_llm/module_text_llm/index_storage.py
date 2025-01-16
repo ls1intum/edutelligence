@@ -28,7 +28,6 @@ def store_embedding_index(exercise_id, submission_id):
 
 def retrieve_embedding_index(index):
     index = str(index)
-    """ Retrieve the exercise_id and submission_id by index. """
     indices = load_indices()
 
     if index in indices:
