@@ -14,7 +14,7 @@ from module_text_llm.icl_rag_approach.prompt_generate_suggestions import Assessm
 from module_text_llm.index_storage import retrieve_embedding_index
 from module_text_llm.storage_embeddings import query_embedding
 from module_text_llm.generate_embeddings import embed_text
-from athena.text import get_stored_feedback,get_stored_submissions
+from athena.text import get_stored_feedback
 
 def format_rag_context(rag_context):
     formatted_string = ""
@@ -48,20 +48,18 @@ async def generate_suggestions(exercise: Exercise, submission: Submission, confi
             if index != -1:
                 exercise_id, submission_id = retrieve_embedding_index(list_of_indices)
                 stored_feedback = list(get_stored_feedback(exercise_id, submission_id))
-                stored_submission = list(get_stored_submissions(exercise_id, only_ids=[submission_id]))[0]
                 logger.info("Stored feedback:")
                 for feedback_item in stored_feedback:
                     logger.info("- %s", feedback_item) 
 
                 logger.info("Stored submission:")
-                logger.info("%s", stored_submission.text)
-                rag_context.append({"submission": stored_submission.text, "feedback": stored_feedback})
+                rag_context.append({"submission": submission.text, "feedback": stored_feedback})
         
         formatted_rag_context = format_rag_context(rag_context)
     else:
         formatted_rag_context = "There are no submission at the moment"
         
-    logger.info("Formatted RAG context %s: {formatted_rag_context}")
+    logger.info("Formatted RAG context %s:", formatted_rag_context)
     prompt_input = {
         "max_points": exercise.max_points,
         "bonus_points": exercise.bonus_points,
