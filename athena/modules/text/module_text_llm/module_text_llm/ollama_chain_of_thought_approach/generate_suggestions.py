@@ -19,7 +19,7 @@ from module_text_llm.helpers.utils import add_sentence_numbers, get_index_range_
 from module_text_llm.ollama_chain_of_thought_approach.prompt_generate_feedback import AssessmentModel
 
 
-async def generate_suggestions(exercise: Exercise, submission: Submission, config: ApproachConfig, debug: bool) -> List[Feedback]:
+async def generate_suggestions(exercise: Exercise, submission: Submission, config: ApproachConfig, debug: bool, is_graded:bool) -> List[Feedback]:
     model = config.model.get_model()  # type: ignore[attr-defined]
 
     prompt_input = {
@@ -116,6 +116,7 @@ async def generate_suggestions(exercise: Exercise, submission: Submission, confi
             index_start=index_start,
             index_end=index_end,
             credits=feedback.credits,
+            is_graded=is_graded,
             structured_grading_instruction_id=grading_instruction_id,
             meta={}
         ))
