@@ -9,3 +9,4 @@ async def generate_suggestions(exercise: Exercise, submission: Submission, confi
 
     strategy = strategy_factory.get_strategy(config)
     return await strategy.generate_suggestions(exercise, submission, config, debug)
+  

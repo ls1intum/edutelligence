@@ -119,6 +119,7 @@ async def generate_suggestions(exercise: Exercise, submission: Submission, confi
             index_end=index_end,
             credits=feedback.credits,
             structured_grading_instruction_id=grading_instruction_id,
+            is_graded=is_graded,
             meta={}
         ))
 
