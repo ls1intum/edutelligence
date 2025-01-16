@@ -8,4 +8,9 @@ async def generate_suggestions(exercise: Exercise, submission: Submission, confi
     from module_text_llm import strategy_factory 
 
     strategy = strategy_factory.get_strategy(config)
+<<<<<<< HEAD
     return await strategy.generate_suggestions(exercise, submission, config, debug, is_graded)
+=======
+    return await strategy.generate_suggestions(exercise, submission, config, debug)
+  
+>>>>>>> 200e0c48ce5a6bd5675e60e1f89196b6138acce4
