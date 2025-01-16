@@ -37,33 +37,30 @@ def format_rag_context(rag_context):
     return formatted_string
 async def generate_suggestions(exercise: Exercise, submission: Submission, config:ApproachConfig, debug: bool) -> List[Feedback]:
     model = config.model.get_model()  # type: ignore[attr-defined]
-    
-    # We can now, retrieve the embeddings. And feed them to the prompt.
     query_submission= embed_text(submission.text)
     
     rag_context = []
     
-    list_of_indices = query_embedding(query_submission) # a list of indicies in the index storage
+    list_of_indices = query_embedding(query_submission)
     if list_of_indices is not None:
-        logger.info(f"List of indices: {list_of_indices}")
+        logger.info("List of indices: %s", list_of_indices)
         for index in list_of_indices[0]:
             if index != -1:
-                exercise_id, submission_id = retrieve_embedding_index(list_of_indices) # retrieve the embeddings from the index storage
+                exercise_id, submission_id = retrieve_embedding_index(list_of_indices)
                 stored_feedback = list(get_stored_feedback(exercise_id, submission_id))
-                stored_submission = list(get_stored_submissions(exercise_id,only_ids=[submission_id]))[0]
-                # Assuming `stored_feedback` is a list and `stored_submission` has a `.text` attribute
+                stored_submission = list(get_stored_submissions(exercise_id, only_ids=[submission_id]))[0]
                 logger.info("Stored feedback:")
                 for feedback_item in stored_feedback:
-                    logger.info(f"- {feedback_item}")  # Each feedback is logged on a new line
+                    logger.info("- %s", feedback_item) 
 
                 logger.info("Stored submission:")
-                logger.info(f"{stored_submission.text}")  # The submission text is logged
+                logger.info("%s", stored_submission.text)
                 rag_context.append({"submission": stored_submission.text, "feedback": stored_feedback})
         
         formatted_rag_context = format_rag_context(rag_context)
         logger.info("Formatted RAG context %s: {formatted_rag_context}")
     else:
-        format_rag_context = "There are no submission at the moment"
+        formatted_rag_context = "There are no submission at the moment"
     prompt_input = {
         "max_points": exercise.max_points,
         "bonus_points": exercise.bonus_points,
