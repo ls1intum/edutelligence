@@ -30,7 +30,7 @@ def format_rag_context(rag_context):
         formatted_string += "**Feedback:**\n"
         for idx, feedback in enumerate(feedback_list, start=1):
             formatted_string += f"{idx}. {feedback}\n"
-        
+        formatted_string += f"Referenced Text {submission_text[feedback.index_start:feedback.index_end]}\n"
         # Add a separator between submissions
         formatted_string += "\n" + "-"*40 + "\n"
     
@@ -84,7 +84,7 @@ async def generate_suggestions(exercise: Exercise, submission: Submission, confi
     prompt_input, should_run = check_prompt_length_and_omit_features_if_necessary(
         prompt=chat_prompt,
         prompt_input= prompt_input,
-        max_input_tokens=config.max_input_tokens,
+        max_input_tokens=config.max_input_tokens+7000,
         omittable_features=omittable_features,
         debug=debug
     )

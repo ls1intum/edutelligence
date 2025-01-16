@@ -18,8 +18,9 @@ Create graded feedback suggestions for a student's text submission that a human 
 # Grading instructions
 {grading_instructions}
 Max points: {max_points}, bonus points: {bonus_points}
-
-# Tutor selected feedback to guide you
+--------------------------
+Here are some examples of similar submissions and feedback given by the best human tutors:
+Carefully examine the feedback and the submission to understand the expectations and the grading criteria and use them to guide you in your assessment.
 {rag_context}
     
 Respond in json.
