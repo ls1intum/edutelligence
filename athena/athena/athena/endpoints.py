@@ -235,7 +235,7 @@ def feedback_consumer(func: Union[
     feedback_type = inspect.signature(func).parameters["feedbacks"].annotation.__args__[0]
     module_config_type = inspect.signature(func).parameters["module_config"].annotation if "module_config" in inspect.signature(func).parameters else None
 
-    @app.post("/feedbacks", responses=module_responses)
+    @app.post("/feed_feedbacks", responses=module_responses)
     @authenticated
     @with_meta
     async def wrapper(
