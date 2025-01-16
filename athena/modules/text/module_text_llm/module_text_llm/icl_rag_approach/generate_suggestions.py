@@ -20,7 +20,7 @@ def format_rag_context(rag_context):
     formatted_string = ""
     
     for context_item in rag_context:
-        submission_text = context_item["submission"].text
+        submission_text = context_item["submission"]
         feedback_list = context_item["feedback"]
         
         # Format submission text
