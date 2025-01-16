@@ -31,7 +31,7 @@ def process_incoming_feedback(exercise: Exercise, submission: Submission, feedba
 async def suggest_feedback(exercise: Exercise, submission: Submission, is_graded: bool, module_config: Configuration) -> List[Feedback]:
     logger.info("suggest_feedback: %s suggestions for submission %d of exercise %d were requested",
                 "Graded" if is_graded else "Non-graded", submission.id, exercise.id)
-    return await generate_suggestions(exercise, submission, module_config.approach, module_config.debug)
+    return await generate_suggestions(exercise, submission, module_config.approach, module_config.debug, is_graded)
 
 
 @evaluation_provider
