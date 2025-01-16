@@ -30,7 +30,8 @@ def format_rag_context(rag_context):
         formatted_string += "**Feedback:**\n"
         for idx, feedback in enumerate(feedback_list, start=1):
             formatted_string += f"{idx}. {feedback}\n"
-        formatted_string += f"Referenced Text {submission_text[feedback.index_start:feedback.index_end]}\n"
+        if (feedback["index_start"] is not None) and (feedback["index_end"] is not None):
+            formatted_string += f"Referenced Text: {submission_text[feedback['index_start'],feedback['index_end']]}\n"
         # Add a separator between submissions
         formatted_string += "\n" + "-"*40 + "\n"
     
