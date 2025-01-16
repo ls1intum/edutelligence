@@ -58,9 +58,10 @@ async def generate_suggestions(exercise: Exercise, submission: Submission, confi
                 rag_context.append({"submission": stored_submission.text, "feedback": stored_feedback})
         
         formatted_rag_context = format_rag_context(rag_context)
-        logger.info("Formatted RAG context %s: {formatted_rag_context}")
     else:
         formatted_rag_context = "There are no submission at the moment"
+        
+    logger.info("Formatted RAG context %s: {formatted_rag_context}")
     prompt_input = {
         "max_points": exercise.max_points,
         "bonus_points": exercise.bonus_points,
