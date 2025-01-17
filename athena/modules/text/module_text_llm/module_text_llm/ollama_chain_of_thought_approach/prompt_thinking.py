@@ -16,8 +16,8 @@ system_message = """
         {grading_instructions}
         Max points: {max_points}. The total points granted in all feedback elements must not exceed {max_points}.
         Format your response in the following way:
-        Grading instruction <id> (sentence <x> to <y>): <feedback>, credits: <credits>
-        If the feedback is unreferenced simple right Unreferenced
+        Title: <grading title> Grading instruction <id> (sentence <x> to <y>): <feedback>, credits: <credits>
+        If the feedback is unreferenced simple right Unreferenced instead of the sentence range.
             """
 
 human_message = """\
