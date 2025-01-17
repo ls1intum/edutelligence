@@ -27,7 +27,7 @@ def format_rag_context(rag_context):
         # formatted_string += f"**Submission:**\n{submission_text}\n\n"
         
         # Format feedback list
-        formatted_string += f"**Tutor provided Feedback from previous submissions of this same exercise:**\n"
+        formatted_string += "**Tutor provided Feedback from previous submissions of this same exercise:**\n"
         for idx, feedback in enumerate(feedback_list, start=1):
             if (feedback["index_start"] is not None) and (feedback["index_end"] is not None):
                 feedback["text_reference"] = submission_text[feedback["index_start"]:feedback["index_end"]]

@@ -33,7 +33,7 @@ __all__ = [
     "evaluation_provider",
     "emit_meta",
     "get_meta",
-    feedback_storer,
+    "feedback_storer",
     "get_experiment_environment",
     "ExerciseType",
     "GradingCriterion",
