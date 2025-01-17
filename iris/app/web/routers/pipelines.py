@@ -75,12 +75,12 @@ def run_exercise_chat_pipeline(
         description="Exercise Chat Pipeline Execution DTO"
     ),
 ):
-    if variant == "default":
+    if variant == "chat-gpt-wrapper":
+        thread = Thread(target=run_chatgpt_wrapper_pipeline_worker, args=(dto, variant))
+    else:
         thread = Thread(
             target=run_exercise_chat_pipeline_worker, args=(dto, variant, event)
         )
-    else:
-        thread = Thread(target=run_chatgpt_wrapper_pipeline_worker, args=(dto, variant))
     thread.start()
 
 

@@ -98,5 +98,5 @@ class ChatGPTWrapperPipeline(Pipeline):
         )
 
         response = (prompt | self.pipeline).invoke({})
+        self.callback.done()
         self.callback.done(final_result=response)
-        self.callback.skip("Skipping suggestion generation as no output was generated.")
