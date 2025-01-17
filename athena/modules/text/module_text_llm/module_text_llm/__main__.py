@@ -3,7 +3,7 @@ from typing import List, Any
 
 import nltk
 import tiktoken
-from athena import app, submission_selector, submissions_consumer, feedback_consumer, feedback_provider, evaluation_provider
+from athena import app, submission_selector, submissions_consumer, feedback_storer, feedback_consumer, feedback_provider, evaluation_provider
 from athena.text import Exercise, Submission, Feedback
 from athena.logger import logger
 
@@ -25,6 +25,16 @@ def select_submission(exercise: Exercise, submissions: List[Submission]) -> Subm
     return submissions[0]
 
 
+@feedback_storer
+def process_do_feedback(exercise: Exercise, submission: Submission, feedbacks: List[Feedback]):
+    logger.info("process_feedback: Received %d feedbacks for submission %d of exercise %d.", len(feedbacks), submission.id, exercise.id)
+    # Saving of the embeddings here.
+    submission_id = submission.id
+    exercise_id = exercise.id
+    embedded_submission = embed_text(submission.text)
+    store_embedding_index(exercise_id, submission_id, feedbacks)
+    save_embedding(embedded_submission)
+    
 @feedback_consumer
 def process_incoming_feedback(exercise: Exercise, submission: Submission, feedbacks: List[Feedback]):
     logger.info("process_feedback: Received %d feedbacks for submission %d of exercise %d.", len(feedbacks), submission.id, exercise.id)

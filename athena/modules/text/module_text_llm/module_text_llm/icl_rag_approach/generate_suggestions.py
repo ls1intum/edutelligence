@@ -24,14 +24,20 @@ def format_rag_context(rag_context):
         feedback_list = context_item["feedback"]
         
         # Format submission text
-        formatted_string += f"**Submission:**\n{submission_text}\n\n"
+        # formatted_string += f"**Submission:**\n{submission_text}\n\n"
         
         # Format feedback list
-        formatted_string += "**Feedback:**\n"
+        formatted_string += f"**Tutor provided Feedback from previous submissions of this same exercise:**\n"
         for idx, feedback in enumerate(feedback_list, start=1):
-            formatted_string += f"{idx}. {feedback}\n"
-        if (feedback["index_start"] is not None) and (feedback["index_end"] is not None):
-            formatted_string += f"Referenced Text: {submission_text[feedback['index_start']:feedback['index_end']]}\n"
+            if (feedback["index_start"] is not None) and (feedback["index_end"] is not None):
+                feedback["text_reference"] = submission_text[feedback["index_start"]:feedback["index_end"]]
+            clean_feedback = {key: value for key, value in feedback.items() if key not in ["id","index_start","index_end","is_graded","meta"]} 
+
+            formatted_string += f"{idx}. {clean_feedback}\n"
+
+            # formatted_string += f"{idx}. {feedback}\n"
+            # if (feedback["index_start"] is not None) and (feedback["index_end"] is not None):
+            #     formatted_string += f"Referenced Text: {submission_text[feedback['index_start']:feedback['index_end']]}\n"
         # Add a separator between submissions
         formatted_string += "\n" + "-"*40 + "\n"
     

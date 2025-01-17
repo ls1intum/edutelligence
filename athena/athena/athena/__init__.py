@@ -7,7 +7,7 @@ from .app import app
 from .schemas import ExerciseType, GradingCriterion, StructuredGradingInstruction, StructuredGradingCriterion
 from .metadata import emit_meta, get_meta
 from .experiment import get_experiment_environment
-from .endpoints import submission_selector, submissions_consumer, feedback_consumer, feedback_provider, config_schema_provider, evaluation_provider  # type: ignore
+from .endpoints import submission_selector, submissions_consumer, feedback_storer, feedback_consumer, feedback_provider, config_schema_provider, evaluation_provider  # type: ignore
 
 @app.get("/")
 def module_health():
@@ -33,6 +33,7 @@ __all__ = [
     "evaluation_provider",
     "emit_meta",
     "get_meta",
+    feedback_storer,
     "get_experiment_environment",
     "ExerciseType",
     "GradingCriterion",
