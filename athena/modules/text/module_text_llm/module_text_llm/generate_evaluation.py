@@ -23,7 +23,7 @@ class AccuracyMetric(BaseModel):
     level_of_needed_modification_label: Literal["no", "minor", "major"] = Field(..., description="Estimated level of needed modification")
 
 class Evaluation(BaseModel):
-    metrics: Sequence[AccuracyMetric] = Field(...)
+    metrics: List[AccuracyMetric] = Field(..., description="List of accuracy metrics for each feedback")
 
 
 async def generate_evaluation(
@@ -86,7 +86,8 @@ async def generate_evaluation(
             f"exercise-{exercise.id}",
             f"submission-{submission.id}",
             "evaluation"
-        ]
+        ],
+        use_function_calling=True
     )
 
     if result is None:
