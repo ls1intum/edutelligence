@@ -42,7 +42,7 @@ def format_rag_context(rag_context):
         formatted_string += "\n" + "-"*40 + "\n"
     
     return formatted_string
-async def generate_suggestions(exercise: Exercise, submission: Submission, config:ApproachConfig, debug: bool) -> List[Feedback]:
+async def generate_suggestions(exercise: Exercise, submission: Submission, config:ApproachConfig, debug: bool, is_graded :bool) -> List[Feedback]:
     model = config.model.get_model()  # type: ignore[attr-defined]
     query_submission= embed_text(submission.text)
     
@@ -143,6 +143,7 @@ async def generate_suggestions(exercise: Exercise, submission: Submission, confi
             index_start=index_start,
             index_end=index_end,
             credits=feedback.credits,
+            is_graded=is_graded,
             structured_grading_instruction_id=grading_instruction_id,
             meta={}
         ))

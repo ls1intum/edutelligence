@@ -9,5 +9,5 @@ class IclRagApproachConfig(ApproachConfig):
     type: Literal['icl_rag_approach'] = 'icl_rag_approach'
     generate_suggestions_prompt: GenerateSuggestionsPrompt = Field(default=GenerateSuggestionsPrompt())
     
-    async def generate_suggestions(self, exercise: Exercise, submission: Submission, config, debug: bool):
-        return await generate_suggestions(exercise, submission, config, debug)
+    async def generate_suggestions(self, exercise: Exercise, submission: Submission, config, *,  debug: bool, is_graded: bool):
+        return await generate_suggestions(exercise, submission, config, debug, is_graded)
