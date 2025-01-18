@@ -80,6 +80,26 @@ def get_index_range_from_line_range(line_start: Optional[int], line_end: Optiona
     if line_start is None and line_end is None:
         return None, None
     
+    # Default None values to 0 for indexing
+    line_start = line_start or 0
+    line_end = line_end or 0
+    
+    sentences = sent_tokenize(content)
+    sentences = [line for sentence in sentences for line in sentence.split("\n")]
+    start_index = 0
+    
+    # Use range with converted line_start
+    for i in range(line_start):
+        if i < len(sentences):
+            start_index += len(sentences[i]) + 1  # +1 to account for the period
+    
+    end_index = start_index
+    for i in range(line_start, line_end):
+        if i < len(sentences):
+            end_index += len(sentences[i]) + 1
+    
+    return start_index, end_index
+        
     line_start = line_start or line_end or 0
     line_end = line_end or line_start or 0
 

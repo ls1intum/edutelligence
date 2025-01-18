@@ -1,14 +1,14 @@
 from athena.logger import logger
 from module_text_llm.index_storage import retrieve_embedding_index, retrieve_feedbacks
 from module_text_llm.storage_embeddings import query_embedding
-from module_text_llm.generate_embeddings import embed_text
+from module_text_llm.generate_embeddings import embed_text,embed_bert
 
-def retrieve_rag_context(submission):
-    query_submission= embed_text(submission.text)
+def retrieve_rag_context(submission,exercise_id):
+    query_submission= embed_bert(submission.text)
 
     rag_context = []
     
-    list_of_indices = query_embedding(query_submission)
+    list_of_indices = query_embedding(query_submission,exercise_id)
     if list_of_indices is not None:
         # logger.info("List of indices: %s", list_of_indices)
         for index in list_of_indices[0]:
@@ -37,11 +37,19 @@ def format_rag_context(rag_context):
         feedback_list = context_item["feedback"]
         formatted_string += "**Tutor provided Feedback from previous submissions of this same exercise:**\n"
         for idx, feedback in enumerate(feedback_list, start=1):
-            if (feedback["index_start"] is not None) and (feedback["index_end"] is not None):
-                feedback["text_reference"] = submission_text[feedback["index_start"]:feedback["index_end"]]
+            feedback["text_reference"] = get_reference(feedback, submission_text)
             clean_feedback = {key: value for key, value in feedback.items() if key not in ["id","index_start","index_end","is_graded","meta"]} 
 
             formatted_string += f"{idx}. {clean_feedback}\n"
         formatted_string += "\n" + "-"*40 + "\n"
     
     return formatted_string
+
+def get_reference(feedback, submission_text):
+    logger.info("Inside  reference")
+    if (feedback["index_start"] is not None) and (feedback["index_end"] is not None):
+        logger.info("Inside  reference if")
+        return submission_text[feedback["index_start"]:feedback["index_end"]]
+    else:
+        logger.info("Inside  reference else")
+        return submission_text

@@ -1,17 +1,17 @@
 import faiss
 import numpy as np
 import os
-def save_embedding(embedding):
-    if os.path.exists("embeddings.index"):
-        index = faiss.read_index("embeddings.index")
+def save_embedding(embedding, exercise_id):
+    if os.path.exists(f"embeddings_{exercise_id}.index"):
+        index = faiss.read_index(f"embeddings_{exercise_id}.index")
     else:
         index = faiss.IndexFlatL2(embedding.shape[0])
 
     index.add(np.array([embedding], dtype=np.float32))
-    faiss.write_index(index, "embeddings.index")
+    faiss.write_index(index, f"embeddings_{exercise_id}.index")
 
-def query_embedding(query_embedding):
-    index_file = 'embeddings.index'
+def query_embedding(query_embedding,exercise_id):
+    index_file = f'embeddings_{exercise_id}.index'
     
     if not os.path.exists(index_file):
         print(f"Error: The index file '{index_file}' does not exist.")
