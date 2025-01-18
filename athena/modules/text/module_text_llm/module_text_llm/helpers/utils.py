@@ -80,38 +80,24 @@ def get_index_range_from_line_range(line_start: Optional[int], line_end: Optiona
     if line_start is None and line_end is None:
         return None, None
     
-    # Default None values to 0 for indexing
     line_start = line_start or 0
     line_end = line_end or 0
     
     sentences = sent_tokenize(content)
     sentences = [line for sentence in sentences for line in sentence.split("\n")]
-    start_index = 0
     
-    # Use range with converted line_start
+    start_index = 0
     for i in range(line_start):
         if i < len(sentences):
-            start_index += len(sentences[i]) + 1  # +1 to account for the period
-    
+            start_index += len(sentences[i]) + 1
+
     end_index = start_index
-    for i in range(line_start, line_end):
-        if i < len(sentences):
-            end_index += len(sentences[i]) + 1
-    
+    if line_start != line_end:  # Add this condition to avoid the extra line inclusion
+        for i in range(line_start, line_end):
+            if i < len(sentences):
+                end_index += len(sentences[i]) + 1
+
     return start_index, end_index
-        
-    line_start = line_start or line_end or 0
-    line_end = line_end or line_start or 0
-
-    if line_start > line_end:
-        line_start, line_end = line_end, line_start
-
-    sentence_spans = get_sentence_spans(content)
-    line_start_index = min(max(int(line_start), 0), len(sentence_spans) - 1)
-
-    line_end_index = min(max(int(line_end), 0), len(sentence_spans) - 1)
-    
-    return sentence_spans[line_start_index][0], sentence_spans[line_end_index][1]
 
 
 def get_line_range_from_index_range(index_start: Optional[int], index_end: Optional[int], content: str) -> Tuple[Optional[int], Optional[int]]:
