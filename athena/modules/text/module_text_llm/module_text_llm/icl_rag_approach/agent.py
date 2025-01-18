@@ -4,7 +4,7 @@ from langchain.agents import AgentExecutor, create_tool_calling_agent
 from pydantic import BaseModel, Field
 from langchain_core.tools import tool
 from module_text_llm.helpers.feedback_icl.retrieve_rag_context_icl import retrieve_rag_context_icl
-from module_text_llm.icl_rag_approach.prompt_generate_suggestions import FeedbackModel
+from module_text_llm.icl_rag_approach.prompt_generate_suggestions import FeedbackModel, AssessmentModel
 from typing import List, Optional
 
 @tool
@@ -27,7 +27,7 @@ class AssessmentModel(BaseModel):
     """Collection of feedbacks making up an assessment"""
     
     feedbacks: List[FeedbackModel] = Field(description="Assessment feedbacks")
-    
+
 class AssessmentModelParse(BaseModel):
     """Collection of feedbacks making up an assessment"""
     
@@ -38,7 +38,7 @@ class TutorAgent:
         self.model = config.model.get_model()# ChatOpenAI(model="gpt-4o-2024-08-06") #gpt-4o-2024-08-06 , gpt-4o-mini
         self.outputModel = ChatOpenAI(model="gpt-4o-mini")
         self.approach_config = None
-        self.openai_tools = [retrieve_rag_context,AssessmentModel]
+        self.openai_tools = [retrieve_rag_context]
         self.setConfig(config)
     
         
@@ -62,7 +62,7 @@ class TutorAgent:
             input = prompt
         )
         
-        res = self.outputModel.with_structured_output(AssessmentModelParse).invoke(f"Format the following output {response}") 
+        res = self.model.with_structured_output(AssessmentModelParse).invoke(f"Format the following output {response}") 
         return res
     
     

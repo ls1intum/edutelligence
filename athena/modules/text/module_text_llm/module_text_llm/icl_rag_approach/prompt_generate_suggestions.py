@@ -20,7 +20,7 @@ The exercise id is: {exercise_id}
 You have access to a tool which gives you example feedback from professional tutors. You can use these to think about what kind of feedback would be appropriate for the student's submission.
 You do not need to write the exact same feedback as the examples, but you can use them as inspiration.
 When providing line references, they should never overlap.
-Respond in json.
+Your response must include a title, description, credits, line_start and line end for each feedback and the grading isntruction id. Line start and end can be left out if it does not apply to a specific part of the submission but its a general feedback.
 """
 
 human_message = """Student's submission to grade (with sentence numbers <number>: <sentence>):

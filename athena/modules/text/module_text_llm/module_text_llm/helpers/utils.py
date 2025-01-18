@@ -93,9 +93,9 @@ def get_index_range_from_line_range(line_start: Optional[int], line_end: Optiona
 
     end_index = start_index
     if line_start != line_end:  # Add this condition to avoid the extra line inclusion
-        for i in range(line_start, line_end):
+        for i in range(line_start, line_end+1):
             if i < len(sentences):
-                end_index += len(sentences[i]) + 1
+                end_index += len(sentences[i])
 
     return start_index, end_index
 
