@@ -4,8 +4,8 @@ from langchain.agents import AgentExecutor, create_tool_calling_agent
 from pydantic import BaseModel, Field
 from langchain_core.tools import tool
 from module_text_llm.helpers.feedback_icl.retrieve_rag_context_icl import retrieve_rag_context_icl
-from module_text_llm.icl_rag_approach.prompt_generate_suggestions import FeedbackModel, AssessmentModel
-from typing import List, Optional
+from module_text_llm.icl_rag_approach.prompt_generate_suggestions import FeedbackModel
+from typing import List
 
 @tool
 def retrieve_rag_context(submission_segment: str ,exercise_id: int) -> str:
@@ -35,7 +35,7 @@ class AssessmentModelParse(BaseModel):
         
 class TutorAgent:
     def __init__(self,config): 
-        self.model = config.model.get_model()# ChatOpenAI(model="gpt-4o-2024-08-06") #gpt-4o-2024-08-06 , gpt-4o-mini
+        self.model = config.model.get_model()
         self.outputModel = ChatOpenAI(model="gpt-4o-mini")
         self.approach_config = None
         self.openai_tools = [retrieve_rag_context]

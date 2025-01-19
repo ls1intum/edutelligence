@@ -4,9 +4,11 @@ from typing import List, Optional
 class Segment(BaseModel):
     segment: str = Field(description="Segment of the text")
     title: str = Field(description="Title of the criterion that this text adresses")
+   
     
 class Segmentation(BaseModel):
     segments: List[Segment] = Field(description="List of segments")
+    
     
 system_message_segment = """
 You are an AI asisstnat for text assessment at a prestigious university.

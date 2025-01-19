@@ -49,5 +49,4 @@ def format_rag_context(rag_context):
 def get_reference(feedback, submission_text):
     if (feedback["index_start"] is not None) and (feedback["index_end"] is not None):
         return submission_text[feedback["index_start"]:feedback["index_end"]]
-    else:
-        return submission_text
+    return submission_text

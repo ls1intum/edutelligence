@@ -20,12 +20,8 @@ from module_text_llm.helpers.feedback_icl.store_feedback_icl import check_if_emb
 async def generate_suggestions(exercise: Exercise, submission: Submission, config:ApproachConfig, debug: bool, is_graded :bool) -> List[Feedback]:
     model = config.model.get_model()  # type: ignore[attr-defined]
     isOllama = isinstance(model, ChatOllama)
-    if not isOllama:
-        tutor = TutorAgent(config)
-
-
+        
     formatted_rag_context = ""
-    # logger.info("Formatted RAG context %s:", formatted_rag_context)
     prompt_input = {
         "max_points": exercise.max_points,
         "bonus_points": exercise.bonus_points,
@@ -62,7 +58,7 @@ async def generate_suggestions(exercise: Exercise, submission: Submission, confi
             emit_meta("error", f"Input too long {num_tokens_from_prompt(chat_prompt, prompt_input)} > {config.max_input_tokens}")
         return []
     
-    if(isOllama):
+    if (isOllama):
         embeddings_exist = check_if_embedding_exists(exercise.id)
         
         if embeddings_exist:
@@ -96,9 +92,8 @@ async def generate_suggestions(exercise: Exercise, submission: Submission, confi
                 f"submission-{submission.id}",
             ],
     )
-
-        print(result)
     else :
+        tutor = TutorAgent(config)
         result = tutor.call_agent(prompt_input)
 
     if debug:

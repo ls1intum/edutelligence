@@ -6,10 +6,7 @@ from typing import List
 from athena.logger import logger
 from module_text_llm.helpers.feedback_icl.generate_embeddings import embed_bert
 from module_text_llm.helpers.feedback_icl.store_indices_icl import store_embedding_index
-"""
-We store the reference of the feedback in the index file.
-We also need to store the index with the actual feedback now.    
-"""
+
 def store_feedback_icl(submission: Submission, exercise: Exercise, feedbacks: List[Feedback]):
     logger.info("Storing feedback for submission %d of exercise %d.", submission.id, exercise.id)
     for feedback in feedbacks:
@@ -61,8 +58,7 @@ def query_embedding(query_embedding,exercise_id, k=5):
 def get_reference(feedback, submission_text):
     if (feedback.index_start is not None) and (feedback.index_end is not None):
         return submission_text[feedback.index_start:feedback.index_end ]
-    else:
-        return submission_text
+    return submission_text
     
 def check_if_embedding_exists(exercise_id):
     return os.path.exists(f"embeddings_{exercise_id}.index")

@@ -10,18 +10,14 @@ def retrieve_rag_context(submission,exercise_id):
     
     list_of_indices = query_embedding(query_submission,exercise_id)
     if list_of_indices is not None:
-        # logger.info("List of indices: %s", list_of_indices)
         for index in list_of_indices[0]:
             if index != -1:
                 exercise_id, submission_id = retrieve_embedding_index(list_of_indices)
-                stored_feedback = retrieve_feedbacks(index) # -> List[Feedback]
-                # stored_feedback = list(get_stored_feedback(exercise_id, submission_id))
-                # logger.info("Stored feedback:")
+                stored_feedback = retrieve_feedbacks(index)
                 if stored_feedback is not None:
                     for feedback_item in stored_feedback:
                         logger.info("- %s", feedback_item) 
 
-                # logger.info("Stored submission:")
                 rag_context.append({"submission": submission.text, "feedback": stored_feedback})
         
         formatted_rag_context = format_rag_context(rag_context)
@@ -31,7 +27,6 @@ def retrieve_rag_context(submission,exercise_id):
 
 def format_rag_context(rag_context):
     formatted_string = ""
-    
     for context_item in rag_context:
         submission_text = context_item["submission"]
         feedback_list = context_item["feedback"]
@@ -42,14 +37,9 @@ def format_rag_context(rag_context):
 
             formatted_string += f"{idx}. {clean_feedback}\n"
         formatted_string += "\n" + "-"*40 + "\n"
-    
     return formatted_string
 
 def get_reference(feedback, submission_text):
-    logger.info("Inside  reference")
     if (feedback["index_start"] is not None) and (feedback["index_end"] is not None):
-        logger.info("Inside  reference if")
         return submission_text[feedback["index_start"]:feedback["index_end"]]
-    else:
-        logger.info("Inside  reference else")
-        return submission_text
+    return submission_text
