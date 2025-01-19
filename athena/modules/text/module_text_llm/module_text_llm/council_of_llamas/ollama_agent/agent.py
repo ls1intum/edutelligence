@@ -3,9 +3,9 @@ import requests
 import os
 import inspect
 import json
-from llm_core.ollama_agent.agent import Agent
 from enum import Enum
-from llm_core.ollama_agent.prompts import system_message_initiator, system_message_summarizer, build_agent_prompt
+# from llm_core.ollama_agent.prompts import system_message_initiator,system_message_summarizer, build_agent_prompt
+from module_text_llm.council_of_llamas.ollama_agent.prompts import build_initiation_prompt, system_message_summarizer, build_agent_prompt
 from athena.logger import logger
 from athena.text import Exercise, Submission
 
@@ -194,7 +194,7 @@ class MultiAgentExecutor():
             type (AgentType, optional): The type of agents to be created. Defaults to AgentType.TEXT.
         """
         self.initiator_agent = Agent(model=model)
-        self.initiator_agent.add_system_message(system_message_initiator)
+        self.initiator_agent.add_system_message(build_initiation_prompt(exercise.problem_statement, exercise.grading_instructions))
         self.agents = []
         
         for i in range (num_agents):
@@ -233,7 +233,7 @@ class MultiAgentExecutor():
             initiation = self.initiator_agent.invoke(f"Initiator: Beginning round {i+1} / {rounds} of discussion.")
             logger.info(f"Initiator response: {initiation}")
             round_messages = []
-            for idx,agent in self.agents:
+            for idx,agent in enumerate(self.agents):
                 agent.add_user_message(initiation)
                 agent_response = agent.invoke(initiation)
                 logger.info(f"Agent {idx} response: {agent_response}")
@@ -242,7 +242,7 @@ class MultiAgentExecutor():
                 self.information_manager.add_user_message(agent_response)
                 self.initiator_agent.add_user_message(agent_response)
                 
-            summarizer_response = self.information_manager.add_user_message(f"Based on the discussion of round {i+1}, communicate with the tool calling agent")
+            summarizer_response = self.information_manager.invoke(f"Based on the discussion of round {i+1}, communicate with the tool calling agent")
             logger.info(f"Summarizer response: {summarizer_response}")
             tool_response = self.tool_agent.invoke(summarizer_response) # CALLS TOOLS
 
@@ -251,19 +251,3 @@ class MultiAgentExecutor():
             if agent != agent_creator:
                 agent.add_user_message(message)
 
-    # The self conversating agent
-    
-    
-    # What should this be able to do. 
-    # Initiate two agents to grade
-    # Initiate a mediator and a Tool calling agent
-    # What is the flow though.
-    # The mediator must be able to call the tool calling agent, but how
-    # Simple. The mediator only communicates with the tool calling agent. So far is correct
-    # But here is the catch. 
-    # The tool calling agent immediately adds a user message with the retrieved information.
-    # It does this by formatting on behalf of the mediator.
-    # In the end 
-    # The tool calling agent return the response which is sent to the mediator.
-    # Not only that, it also calls the mediator itself with the information.
-    pass

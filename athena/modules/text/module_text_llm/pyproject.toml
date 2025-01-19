@@ -17,7 +17,7 @@ python-dotenv = "1.0.0"
 tiktoken = "0.7.0"
 
 [tool.poetry.dev-dependencies]
-pydantic = "1.10.17"
+pydantic = "2.9.0"
 prospector = "^1.10.2"
 
 [tool.poetry.scripts]

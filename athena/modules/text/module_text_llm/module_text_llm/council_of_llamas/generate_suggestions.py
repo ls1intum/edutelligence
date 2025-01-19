@@ -2,7 +2,8 @@ from typing import List
 from athena import emit_meta
 from athena.text import Exercise, Submission, Feedback
 from athena.logger import logger
-from llm_core.llm_core.ollama_agent import MultiAgentExecutor
+# from .ollama_agent.agent import MultiAgentExecutor
+from module_text_llm.council_of_llamas.ollama_agent.agent import MultiAgentExecutor
 from module_text_llm.approach_config import ApproachConfig
 
 # Placeholder for generate suggestions logic.
@@ -24,6 +25,6 @@ def generate_suggestions(exercise: Exercise, submission: Submission, config: App
         exercise = exercise,
         submission = submission,
         )
-    agent_executor.invoke_deliberation(rounds = 3, conensus_mechanism = "unanimity")
+    agent_executor.invoke_deliberation(rounds = 3, consensus_mechanism = "unanimity")
     return None
     

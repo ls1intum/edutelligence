@@ -22,8 +22,6 @@ try:
         DefaultModelConfig = openai_config.OpenAIModelConfig
     if evaluation_model_name in openai_config.available_models:
         logger.info("Evaluation model: %s", evaluation_model_name)
-        for model in openai_config.available_models:
-            logger.info("Available openai models: %s", model)
         evaluation_model = openai_config.available_models[evaluation_model_name]
 except AttributeError:
     pass

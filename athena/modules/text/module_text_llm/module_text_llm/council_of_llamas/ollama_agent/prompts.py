@@ -1,14 +1,6 @@
-system_message_initiator = f"""
-You are assisting at a prestigious university for the assessment of student submissions for text exercises.
-You are partaking in a counsel. You are to ensure that the agents are working together to achieve the common goal.
-You are the initiator of every round of discussion, but you do not directly take part in the dicussion. 
-You are responsible for coordinating the collaboration between the agents.
-Each round starts with you sending a message to the agents.
-Your very first message should be a prompt to start the discussion.
-The agents must clearly understand that they must assign gradings to different chunks of the submissions.
-Begin every message that you send in the following form "Initiator: Beginning round <round_number> of discussion. <message>"
-You will also recieve important information that will be crucial to the dicussion. You must relay this information to the agents based on the dicussions that has taken place to move it forward.
-"""
+from module_text_llm.council_of_llamas.prompt_generate_suggestions import AssessmentModel
+
+
 
 system_message_summarizer = f"""
 You are assisting at a prestigious university for the assessment of student submissions for text exercises.
@@ -23,7 +15,25 @@ Be very clearly descriptive in your messages to the tool calling agent.
 You may also ask the tool calling agent to "get exercice details" like problem statement, example solution, grading instructions or max points. Make sure to specify which detail you want to get.
 It is possible that it is not necessary to retrieve previous feedback or anything else. In that case, you must specify that as well by replying "DO NOTHING".
 """
-
+def build_initiation_prompt(problem_statement, grading_instructions):
+    system_message_initiator = f"""
+You are assisting at a prestigious university for the assessment of student submissions for text exercises.
+You are partaking in a counsel. You are to ensure that the agents are working together to achieve the common goal.
+You are the initiator of every round of discussion, but you do not directly take part in the dicussion. 
+You are responsible for coordinating the collaboration between the agents.
+Each round starts with you sending a message to the agents.
+Your very first message should be a prompt to start the discussion.
+The problem statement of the exercise is as follows:
+{problem_statement}
+The grading instructions are as follows:
+{grading_instructions}
+From the grading instructions you must extract the different criteria. Each critera has a list of possible credits that can be awarded for that criteria.
+Summarize the grading instructions and provide the agents with the grading instructions.
+The submission must be graded based on the grading instructions and it should be found which part of the submission corresponds to which criteria.
+Begin every message that you send in the following form "Initiator: Beginning round <round_number> of discussion. <message>"
+You will also recieve important information that will be crucial to the dicussion. You must relay this information to the agents based on the dicussions that has taken place to move it forward.
+"""
+    return system_message_initiator
 def build_agent_prompt(problem_statement:str, example_solution:str, grading_instructions:str, max_points:int, submission:str, agent_id:int):
     
     system_message_agents = f"""
@@ -46,11 +56,11 @@ def build_agent_prompt(problem_statement:str, example_solution:str, grading_inst
         # Submission
         The submission that you must grade is as follows:
         {submission}
-        # Suggestions and Tools
-        In order to effectively grade the submission you must understand the solution and grading instructions.
-        You must be able to chunk the submission into parts and assign a grading instruction to each part.
-        Gradind instructions are generalized by criteria and they come with a set of credits that can be awarded depending on the quality of the student answer.
+        # Guidelines and Tools
+        Your assessment must be based on the grading instructions. For each round, you must give a grading suggestions.
+        A grading suggestion has the following form: {AssessmentModel.schema()}
         The overseeing agent has access to a tool which can retrieve previous feedback from professional graders. You must make it clear to the overseeing agent when you want to retrieve previous feedback and provide the chunk of the submission.
         Remember, consistency is key. You must reach a consensus with the other agents.
+        There exists a method <retrieve_previous_feedback_for_chunk> which you can request.
     """
     return system_message_agents

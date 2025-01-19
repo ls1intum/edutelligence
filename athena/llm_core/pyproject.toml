@@ -17,6 +17,7 @@ nltk = "3.9.1"
 openai = "1.51.1"
 python-dotenv = "1.0.0"
 tiktoken = "0.7.0"
+ollama ="0.4.6"
 
 [tool.poetry.scripts]
 module = "athena:run_module"
