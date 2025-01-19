@@ -1,37 +1,68 @@
-from module_text_llm.council_of_llamas.prompt_generate_suggestions import AssessmentModel
+from module_text_llm.council_of_llamas.prompt_generate_suggestions import AssessmentModel, FeedbackModel
 
 
+def build_summarizer_prompt(exercise_id,submission):
+    system_message_summarizer = f"""
+    You are assisting at a prestigious university for the assessment of student submissions for text exercises.
+    You are partaking in a council and your role is to understand the agent needs and instruct a tool agent to retrieve neccessary information.
+    You must also keep to yourself a summary of the discussions, because in the end a consensus must be met on the assessment and you will need to summarize the final assessment.
+    You are the last agent in a round of dicussions.
+    You must carefully analyze the dicussions and rely the information to the tool managing Agent.
 
-system_message_summarizer = f"""
-You are assisting at a prestigious university for the assessment of student submissions for text exercises.
-You are partaking in a counsel. You are to ensure that the agents are working together to achieve the common goal.
-You are the summarizer of every round of discussion, but you do not directly take part in the dicussion. 
-You end the round, and have the following task:
-You must carefully analyze the dicussions and rely the information to the tool managing Agent.
-The responses from this agent will be paramount to start the next round of dicussions so you must ensure proper rely of information.
+    Be very clearly descriptive in your messages to the tool calling agent but only give instructions from the list below:
+    - You can ask it to retrieve previous feedback for a similar segment using its "retrieve_previous_feedback_for_chunk" method, and pass the information which are a list of segments from the submission and the exercise id which is {exercise_id}. Make sure that the segment belong to the submission. If the agents are trying to pass other types of segments to not send them to the tool agent. The submission is as follows: {submission}
+    - If the discussion rounds are over, the only method you can request is "generate_suggesiton". For this you must provide the information in a list of feedbacks which are of the form {AssessmentModel.schema()}. You must pass the full assessment as a json string to the tool agent.
+    - If none of this apply, you can instruct the tool agent to do nothing by instructing it to "DO NOTHING".
+    """
+    return system_message_summarizer
 
-Because each assessment relies on chunking the text and assigning a grading instruction to each chunk, you must ensure that you relay to the tool managing agent that you would want to retrieve previous feedback and you must provide chunks in form of a list.
-Be very clearly descriptive in your messages to the tool calling agent.
-You may also ask the tool calling agent to "get exercice details" like problem statement, example solution, grading instructions or max points. Make sure to specify which detail you want to get.
-It is possible that it is not necessary to retrieve previous feedback or anything else. In that case, you must specify that as well by replying "DO NOTHING".
+def build_summarizer_prompt_human(grading_criteria,submission, rounds,i):
+    sumarizer_prompt_human = f"""
+f"Based on the discussion of round {i+1} out of total {rounds}, communicate with the tool calling agent. 
+If this is the final round you must pick a final grading suggestion based on the dicussions that have taken place. 
+You must give this suggestion to the tool calling agent, instruct it to generate_suggestion, you must make sure that each feedback element references the correct grading instruction id or else None. 
+This is the ONLY method you can request in the final round and you must request it no matter what.
+#   Here are the grading criteria {grading_criteria}
+#   The submission is as follows: {submission}
 """
+    return sumarizer_prompt_human
+
 def build_initiation_prompt(problem_statement, grading_instructions):
     system_message_initiator = f"""
 You are assisting at a prestigious university for the assessment of student submissions for text exercises.
-You are partaking in a counsel. You are to ensure that the agents are working together to achieve the common goal.
-You are the initiator of every round of discussion, but you do not directly take part in the dicussion. 
-You are responsible for coordinating the collaboration between the agents.
+You are partaking in a council which should come to a consensus to grade a student submission.
+You are the initiator of every round of discussion, but you do not directly take part in the deliberation. 
+Begin every message that you send in the following form "Initiator: Beginning round <round_number> of discussion. <message>"
 Each round starts with you sending a message to the agents.
 Your very first message should be a prompt to start the discussion.
 The problem statement of the exercise is as follows:
 {problem_statement}
 The grading instructions are as follows:
 {grading_instructions}
+# If the grading_instrcutions section is empty, the agents must figure out how to grade the submission themselves using all the information possible.
 From the grading instructions you must extract the different criteria. Each critera has a list of possible credits that can be awarded for that criteria.
-Summarize the grading instructions and provide the agents with the grading instructions.
-The submission must be graded based on the grading instructions and it should be found which part of the submission corresponds to which criteria.
-Begin every message that you send in the following form "Initiator: Beginning round <round_number> of discussion. <message>"
-You will also recieve important information that will be crucial to the dicussion. You must relay this information to the agents based on the dicussions that has taken place to move it forward.
+For example if the grading instructions are as follows:
+'''
+title: Assessment of example
+    credits: 1.0
+    description: good example
+    grading_instruction_id: 2001
+title: Assessment of example
+    credits: 0.5
+    description: weak example
+    grading_instruction_id: 2002
+title: Assessment of example
+    credits: 0.0
+    description: bad or no example
+    grading_instruction_id: 2003
+'''
+In this example, the criteria would be "Assessment of example" and the possible credits are 1.0, 0.5 and 0.0. The total credits for this criteria is the maximum (here 1.0) and not the sum. The instructions ids are 2001, 2002 and 2003.
+Summarize the grading instructions and provide the agents with the grading instructions only in the first message. Make sure to include the real grading instruction ids.
+# For every other round:
+You might recieve important information that will be crucial to the dicussion. You must give this information to the agents in the form that you get it, do not change it.
+On The last round, you must start with the following message "Initiator: Beginning final round of discussion.
+On this round you must provide a final grading suggestion based on the dicussions that have taken place. You can no longer retrieve further information."
+Keep you answers short, to the point and scientific.
 """
     return system_message_initiator
 def build_agent_prompt(problem_statement:str, example_solution:str, grading_instructions:str, max_points:int, submission:str, agent_id:int):
@@ -57,10 +88,19 @@ def build_agent_prompt(problem_statement:str, example_solution:str, grading_inst
         The submission that you must grade is as follows:
         {submission}
         # Guidelines and Tools
+        You must consistently and throughout your dicussion refer to the lines of the submission as well as the grading instruction you are considering.
+        Each response of yours must be structured in the following way:
+        Suggested Assessment:As a list of feedbacks, include the title of the criteria, credits, line numbers and a description. The description must be specific and actionable because that is the feedback the student recieves.
+        Reasoning: Why did you suggest this assessment? What in the submission made you suggest this assessment?
+        Keep you answers short, succint,concise, actionable and scientific.
+
         Your assessment must be based on the grading instructions. For each round, you must give a grading suggestions.
-        A grading suggestion has the following form: {AssessmentModel.schema()}
+        An assessment has the following form: {AssessmentModel.schema()}
         The overseeing agent has access to a tool which can retrieve previous feedback from professional graders. You must make it clear to the overseeing agent when you want to retrieve previous feedback and provide the chunk of the submission.
-        Remember, consistency is key. You must reach a consensus with the other agents.
-        There exists a method <retrieve_previous_feedback_for_chunk> which you can request.
+        Remember, consistency is important, both within your grading and with the grading of other submissions. 
+        Your goal is to reach a consensus with the other agents as quickly as possible but while mainting high quality.
+        There exists a method <retrieve_previous_feedback_for_chunk> which you can request. You must provide segments from the submission to get feedback on. The only input accepted are exact segments from the submission.
+        You may NOT use this method in the final round.
+        You are need to be consistent in your assessment, and strict but fair.
     """
     return system_message_agents
