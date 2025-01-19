@@ -1,6 +1,10 @@
 import faiss
 import numpy as np
 import os
+
+def check_if_embedding_exists(exercise_id):
+    return os.path.exists(f"embeddings_{exercise_id}.index")
+
 def save_embedding(embedding, exercise_id):
     if os.path.exists(f"embeddings_{exercise_id}.index"):
         index = faiss.read_index(f"embeddings_{exercise_id}.index")

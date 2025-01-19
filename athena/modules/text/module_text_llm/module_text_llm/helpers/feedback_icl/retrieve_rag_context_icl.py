@@ -1,7 +1,7 @@
 from athena.logger import logger
 from module_text_llm.helpers.feedback_icl.store_indices_icl import retrieve_embedding_index, retrieve_feedback
-from module_text_llm.storage_embeddings import query_embedding
-from module_text_llm.generate_embeddings import embed_text,embed_bert
+from module_text_llm.helpers.feedback_icl.store_feedback_icl import query_embedding
+from module_text_llm.helpers.feedback_icl.generate_embeddings import embed_text,embed_bert
 
 def retrieve_rag_context_icl(submission_segment: str ,exercise_id: int) -> str:
     """

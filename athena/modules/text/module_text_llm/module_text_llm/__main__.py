@@ -12,7 +12,7 @@ from module_text_llm.evaluation import get_feedback_statistics, get_llm_statisti
 from module_text_llm.generate_evaluation import generate_evaluation
 from module_text_llm.approach_controller import generate_suggestions
 from module_text_llm.storage_embeddings import save_embedding
-from module_text_llm.generate_embeddings import embed_text, embed_bert
+from module_text_llm.helpers.feedback_icl.generate_embeddings import embed_text, embed_bert
 from module_text_llm.index_storage import store_embedding_index
 @submissions_consumer
 def receive_submissions(exercise: Exercise, submissions: List[Submission]):
