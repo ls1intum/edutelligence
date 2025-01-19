@@ -104,9 +104,16 @@ class ToolCallingAgent(Agent):
         {system_context}
     """)
     
-    def get_exercise_detail(self, detail: str)->str:
-        """ Gets a detail, the detail must be one of problem_statement, example_solution, grading_criteria, max_points, title"""
-        return self.exercise[detail]
+    def get_exercise_detail(self, detail: str) -> str:
+        """Gets a detail from the exercise object. The detail must be one of 
+        'problem_statement', 'example_solution', 'grading_criteria', 
+        'max_points', or 'title'.
+        """
+        # Map the detail string to the corresponding attribute of the exercise object
+        if hasattr(self.exercise, detail):
+            return getattr(self.exercise, detail)
+        
+        return "Detail does not exist."
     
     def invoke(self,message):
         self.add_user_message(message)
@@ -201,13 +208,13 @@ class MultiAgentExecutor():
         self.tool_agent = ToolCallingAgent(model, exercise)
         self.tool_agent.bind_tools(tools)
     
-    def invoke_deliberation(self, rounds = 3,consensus_mechanism = "majority"):
+    def invoke_deliberation(self, rounds = 3,consensus_mechanism = "majority", threshold = 0.5):
         """Invoke a deliberation process with multiple rounds and a consensus mechanism.
 
         Args:
             rounds (int, optional): Number of deliberation rounds. Defaults to 3.
             consensus_mechanism (str, optional): Consensus mechanism to use. Must be one of 
-            ["majority", "unanimity", "plurality", "consensus_threshold"]. Defaults to "majority".
+            ["majority", "unanimity", "plurality", "ranked_choice", "consensus_threshold"]. Defaults to "majority".
 
         Raises:
             ValueError: If the consensus mechanism is not one of the acceptable options.
@@ -215,7 +222,7 @@ class MultiAgentExecutor():
         if rounds < 2:
             raise ValueError("The number of rounds must be at least 2")
             
-        acceptable_mechanisms = ["majority", "unanimity", "plurality", "ranked_choice"]
+        acceptable_mechanisms = ["majority", "unanimity", "plurality", "ranked_choice", "consensus_threshold"]
         if consensus_mechanism not in acceptable_mechanisms:
             raise ValueError(f"Invalid consensus mechanism. Choose from {acceptable_mechanisms}")
         
@@ -224,17 +231,19 @@ class MultiAgentExecutor():
             if tool_response:
                 self.initiator_agent.add_user_message(f"The following information were recieved: {tool_response}")
             initiation = self.initiator_agent.invoke(f"Initiator: Beginning round {i+1} / {rounds} of discussion.")
+            logger.info(f"Initiator response: {initiation}")
             round_messages = []
-            for agent in self.agents:
+            for idx,agent in self.agents:
                 agent.add_user_message(initiation)
                 agent_response = agent.invoke(initiation)
+                logger.info(f"Agent {idx} response: {agent_response}")
                 round_messages.append(agent_response)
                 self.update_agent_messages(agent_response, agent)
                 self.information_manager.add_user_message(agent_response)
                 self.initiator_agent.add_user_message(agent_response)
                 
             summarizer_response = self.information_manager.add_user_message(f"Based on the discussion of round {i+1}, communicate with the tool calling agent")
-            
+            logger.info(f"Summarizer response: {summarizer_response}")
             tool_response = self.tool_agent.invoke(summarizer_response) # CALLS TOOLS
 
     def update_agent_messages(self, message, agent_creator):
