@@ -31,12 +31,13 @@ def process_incoming_feedback(exercise: Exercise, submission: Submission, feedba
 async def suggest_feedback(exercise: Exercise, submission: Submission, is_graded: bool, module_config: Configuration) -> List[Feedback]:
     logger.info("suggest_feedback: %s suggestions for submission %d of exercise %d were requested",
                 "Graded" if is_graded else "Non-graded", submission.id, exercise.id)
-    is_sus = hybrid_suspicion_score(submission.text, threshold=0.8)
+    is_sus, score = hybrid_suspicion_score(submission.text, threshold=0.8)
     if is_sus:
-        print("Suspicious submission detected")
+        logger.info("Suspicious submission detected with score %f", score)
         is_suspicious,suspicios_text = await llm_check(submission.text)
         if is_suspicious:
-            return [Feedback(title="Instructors need to review this input", description=suspicios_text, credits=0.0, exercise_id=exercise.id, submission_id=submission.id, is_graded=is_graded)]
+            logger.info("Suspicious submission detected by LLM with text %s", suspicios_text)
+            return [Feedback(title="Instructors need to review this submission", description="This Submission was flagged for violating the content policy!", credits=-1.0, exercise_id=exercise.id, submission_id=submission.id, is_graded=is_graded)]
     return await generate_suggestions(exercise, submission, module_config.approach, module_config.debug, is_graded)
 
 
