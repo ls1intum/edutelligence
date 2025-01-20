@@ -13,13 +13,12 @@ class TranscriptionSegmentDTO(BaseModel):
 class TranscriptionDTO(BaseModel):
     language: str = Field(default="", alias="language")
     segments: List[TranscriptionSegmentDTO] = Field(default=[], alias="segments")
-    lecture_id: int = Field(alias="lectureId")
 
 class TranscriptionWebhookDTO(BaseModel):
     transcription: TranscriptionDTO = Field(default="", alias="transcription")
     lecture_id: int = Field(alias="lectureId")
-    lecture_name: str = Field(default="", alias="lectureName")
-    lecture_unit_link: str = Field(default="", alias="lectureUnitLink")
+    # lecture_name: str = Field(default="", alias="lectureName")
+    # lecture_unit_link: str = Field(default="", alias="lectureUnitLink")
     course_id: int = Field(alias="courseId")
-    course_name: str = Field(default="", alias="courseName")
-    course_description: str = Field(default="", alias="courseDescription")
+    # course_name: str = Field(default="", alias="courseName")
+    # course_description: str = Field(default="", alias="courseDescription")
