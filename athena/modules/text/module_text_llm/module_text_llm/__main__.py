@@ -37,7 +37,7 @@ async def suggest_feedback(exercise: Exercise, submission: Submission, is_graded
         is_suspicious,suspicios_text = await llm_check(submission.text)
         if is_suspicious:
             logger.info("Suspicious submission detected by LLM with text %s", suspicios_text)
-            return [Feedback(title="Instructors need to review this submission", description="This Submission was flagged for violating the content policy!", credits=-1.0, exercise_id=exercise.id, submission_id=submission.id, is_graded=is_graded)]
+            return [Feedback(title="Instructors need to review this submission", description="This Submission potentially violates the content policy!", credits=-1.0, exercise_id=exercise.id, submission_id=submission.id, is_graded=is_graded)]
     return await generate_suggestions(exercise, submission, module_config.approach, module_config.debug, is_graded)
 
 
