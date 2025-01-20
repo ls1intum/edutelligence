@@ -11,7 +11,7 @@ from module_text_llm.config import Configuration
 from module_text_llm.evaluation import get_feedback_statistics, get_llm_statistics
 from module_text_llm.generate_evaluation import generate_evaluation
 from module_text_llm.approach_controller import generate_suggestions
-from module_text_llm.helpers.detect_suspicios_submission import hybrid_suspicion_score
+from module_text_llm.helpers.detect_suspicios_submission import hybrid_suspicion_score, llm_check
 @submissions_consumer
 def receive_submissions(exercise: Exercise, submissions: List[Submission]):
     logger.info("receive_submissions: Received %d submissions for exercise %d", len(submissions), exercise.id)
@@ -31,9 +31,12 @@ def process_incoming_feedback(exercise: Exercise, submission: Submission, feedba
 async def suggest_feedback(exercise: Exercise, submission: Submission, is_graded: bool, module_config: Configuration) -> List[Feedback]:
     logger.info("suggest_feedback: %s suggestions for submission %d of exercise %d were requested",
                 "Graded" if is_graded else "Non-graded", submission.id, exercise.id)
-    is_sus = hybrid_suspicion_score(submission.text)
+    is_sus = hybrid_suspicion_score(submission.text, threshold=0.8)
     if is_sus:
-        pass
+        print("Suspicious submission detected")
+        is_suspicious,suspicios_text = await llm_check(submission.text)
+        if(is_suspicious):
+            return [Feedback(title="Suspicious submission detected", description="Suspicious submission detected", credits=0.0, exercise_id=exercise.id, submission_id=submission.id, is_graded=is_graded)]
     return await generate_suggestions(exercise, submission, module_config.approach, module_config.debug, is_graded)
 
 
