@@ -52,6 +52,7 @@ class Agent():
             host=self.host,
             headers=self.auth_headers
         )
+        self.final_suggestion = ""
         
     def invoke(self, message):
         """Calls the agent with a message and returns the response
@@ -109,7 +110,7 @@ class ToolCallingAgent(Agent):
         """Binds the tools to the agent. you can also bind tools with an identifier"""
         available_tools = {}
         system_context = ""
-        tools.append(self.get_exercise_detail)
+        # tools.append(self.get_exercise_detail)
         for tool in tools:   
             print("Binding tool ", tool.__name__) 
             available_tools[tool.__name__] = tool
@@ -147,7 +148,8 @@ class ToolCallingAgent(Agent):
             model=self.model,
             messages=self.messages,
             stream=False,
-            tools=[self.tools]
+            tools=[self.tools],
+            format="json"
             )
         print(response)
         tool_calls = response["message"]["tool_calls"]
@@ -227,15 +229,14 @@ class MultiAgentExecutor():
         self.submission = submission
         for i in range (num_agents):
             agent = Agent(model=model)
-            agent.add_system_message(build_agent_prompt(exercise.problem_statement, exercise.example_solution, exercise.grading_criteria, exercise.max_points, submission, i+1))
+            agent.add_system_message(build_agent_prompt(exercise.problem_statement, exercise.example_solution, exercise.grading_criteria, exercise.max_points,submission,exercise.id, i+1))
 
             self.agents.append(agent)
         self.information_manager = Agent(model=model)
         self.information_manager.add_system_message(build_summarizer_prompt(exercise.id,submission))
         
         self.tool_agent = ToolCallingAgent(model, exercise)
-        tools.append(self.generate_suggestion)
-        tools.append(self.end_deliberation)
+        # tools.append(self.generate_suggestion)
         self.tool_agent.bind_tools(tools)
     
     def invoke_deliberation(self, rounds = 1,consensus_mechanism = "majority", threshold = 0.5, turn_selection = "round_robin"):
@@ -250,8 +251,8 @@ class MultiAgentExecutor():
         Raises:
             ValueError: If the consensus mechanism is not one of the acceptable options.
         """
-        if rounds < 2:
-            raise ValueError("The number of rounds must be at least 2")
+        if rounds < 1:
+            raise ValueError("The number of rounds must be at least 1")
             
         acceptable_mechanisms = ["majority", "unanimity", "plurality", "ranked_choice", "consensus_threshold"]
         if consensus_mechanism not in acceptable_mechanisms:
@@ -259,78 +260,47 @@ class MultiAgentExecutor():
         
         tool_response = None
         # Deliberation loop
+        suggestions = []
         for i in range(rounds):
+            isLastRound = i == rounds - 1
+            final_round_message = "This is the final round " if isLastRound else ""
+
             added_tool_response = f"The following information were recieved: {tool_response}" if tool_response is not None else "" 
             
-            initiation = self.initiator_agent.invoke(f"Initiator: Beginning round {i+1} / {rounds} of discussion. {added_tool_response}")
+            # initiation = self.initiator_agent.invoke(f"Initiator: Beginning round {i+1} / {rounds} of discussion. {added_tool_response}")
             
-            logger.info(f"Initiator response: {initiation}")
+            # logger.info(f"Initiator response: {initiation}")
             round_messages = []
             for idx,agent in enumerate(self.agents):
-                agent.add_user_message(initiation)
-                agent_response = agent.invoke(initiation)
-                logger.info(f"Agent {idx} response: {agent_response}")
-                round_messages.append(agent_response)
-                self.update_agent_messages(agent_response, agent)
-                self.information_manager.add_user_message(agent_response)
-                self.initiator_agent.add_user_message(agent_response)
-            
-            final_round_message = "This is the final round " if (i == rounds -1) else ""
-            summarizer_response = self.information_manager.invoke(f"{final_round_message},{build_summarizer_prompt_human(self.exercise.grading_criteria, self.submission, rounds, i)}")
-            logger.info(f"Summarizer response: {summarizer_response}")
-            tool_response = self.tool_agent.invoke(summarizer_response) # CALLS TOOLS
+                # agent.add_user_message(initiation)
+
+                # self.information_manager.add_user_message(agent_response)
+                # self.initiator_agent.add_user_message(agent_response)
+                if isLastRound:
+                    agent_schema = agent.invoke_with_json(f"Beginning round {i+1} / {rounds} of discussion. Provide your final assessment in json only based on the following schema: {AssessmentModel.schema()} \n Also remember to focus your grading based on the criteria provided: {self.exercise.grading_criteria}" )
+                    agent.final_suggestion = agent_schema
+                    suggestions.append(agent_schema)
+                else:
+                    agent_response = agent.invoke(f"Beginning round {i+1} / {rounds} of discussion.")
+                    logger.info(f"Agent {idx} response: {agent_response}")
+                    round_messages.append(agent_response)
+                    self.update_agent_messages(agent_response, agent)
+                    self.tool_agent.add_user_message(agent_response)
+
+                # summarizer_response = self.information_manager.invoke(build_summarizer_prompt_human(self.exercise.grading_criteria, self.submission, rounds, i))
+                # logger.info(f"Summarizer response: {summarizer_response}")
+                # tool_response = self.tool_agent.invoke("Retrieve the requested information")
+        #after the rounds
+        for agent in self.agents:
+            # agent_schema = agent.invoke_with_json(f"As a reminder the problem statement was {self.exercise.problem_statement}. The grading criteria were:{self.exercise.grading_criteria} and the student submission was: {self.submission}  Provide your final assessment in json based on the following schema: {AssessmentModel.schema()}" )
+            agent.final_suggestion = agent_schema
+            suggestions.append(agent_schema)
         # Consensus reaching
-        return self.feedbacks
+        return json.loads(suggestions[0])
+        # return self.feedbacks
         pass
     def update_agent_messages(self, message, agent_creator):
         for agent in self.agents:
             if agent != agent_creator:
                 agent.add_user_message(message)
-                
-    def end_deliberation(self):
-        """This method indicates that consensus has been reached and the deliberation has ended."""
-        self.deliberation_ended = True
-    
-    class FeedbackOllama():
-        def __init__(self, title:str, description:str, credits:float, grading_instruction_id:int, line_start:int, line_end:int):
-            self.title = title
-            self.description = description
-            self.credits = credits
-            self.grading_instruction_id = grading_instruction_id
-            self.line_start = line_start
-            self.line_end = line_end
-        def to_dict(self):
-            return {
-                "title": self.title,
-                "description": self.description,
-                "credits": self.credits,
-                "grading_instruction_id": self.grading_instruction_id,
-                "line_start": self.line_start,
-                "line_end": self.line_end
-            }
-            
-    def generate_suggestion(self, full_assessment: str):
-        """Generates a suggestion and stores it in the agent's memory.
-
-        Args:
-            full_assessment (str): The full assessment to be generated.
-        """
-        # feedback = self.FeedbackOllama(title, description, credits, grading_instruction_id, line_start, line_end)
-        # self.feedbacks.append(feedback)
-        # pass it to another llm
-        print("wow finalizing grading")
-        print(f"the full assessment is: {full_assessment}")#
-        feedbacks = json.loads(full_assessment)
-            
-        self.feedbacks = feedbacks
-
-        # """_summary_
-
-        # Args:
-        #     title (str): The title of the grading instruction.
-        #     credits (float): The credits to be awarded for the grading instruction.
-        #     description (str): The description of the assessment
-        #     grading_instruction_id (int): The id of the grading instruction.
-        #     line_start (int): The starting reference line in the submission text.
-        #     line_end (int): The ending reference line in the submission text.
-        # """
+        

@@ -12,19 +12,22 @@ from typing import List
 from module_text_llm.approach_config import ApproachConfig
 from module_text_llm.helpers.utils import add_sentence_numbers, get_index_range_from_line_range
 
-def retrieve_previous_feedback_for_chunks(submission_segment: str ,exercise_id: int) -> str:
+def retrieve_previous_feedback_for_chunks(submission_segments: List[str] ,exercise_id: int) -> str:
     """
     This method takes a segment from a submission and for a given exercise id, 
     returns feedback that has been given for similar texts.
     Args:
-        submission_segment: A segment of the submission.
+        submission_segments: A list of segments of the submission.
         exercise_id: The id of the exercise.
     Returns:
         str: A formatted string of feedbacks which reference text similar to the submission_segment.
     """
-    return retrieve_rag_context_icl(submission_segment,exercise_id)
+    final_response = ""
+    for segment in submission_segments:
+        final_response += retrieve_rag_context_icl(segment,exercise_id)
+    return final_response
 # Placeholder for generate suggestions logic.
-def generate_suggestions(exercise: Exercise, submission: Submission, config: ApproachConfig, debug: bool, is_graded: bool):
+async def generate_suggestions(exercise: Exercise, submission: Submission, config: ApproachConfig, debug: bool, is_graded: bool):
     
     tools = [retrieve_previous_feedback_for_chunks] #icl
     agent_executor = MultiAgentExecutor(
@@ -34,7 +37,7 @@ def generate_suggestions(exercise: Exercise, submission: Submission, config: App
         submission = add_sentence_numbers(submission.text),
         num_agents = 2
         )
-    result = agent_executor.invoke_deliberation(rounds = 3, consensus_mechanism = "unanimity")
+    result = agent_executor.invoke_deliberation(rounds = 5, consensus_mechanism = "unanimity")
 
     grading_instruction_ids = set(
         grading_instruction.id 
@@ -46,19 +49,18 @@ def generate_suggestions(exercise: Exercise, submission: Submission, config: App
     for feedback in result["feedbacks"]:
         index_start, index_end = get_index_range_from_line_range(feedback.get("line_start"), feedback.get("line_end"), submission.text)
         grading_instruction_id = feedback.get("grading_instruction_id") if feedback.get("grading_instruction_id") in grading_instruction_ids else None
-        feedback_data = {
-            "exercise_id": exercise.id,
-            "submission_id": submission.id,
-            "title": feedback["title"],
-            "description": feedback["description"],
-            "index_start": index_start,
-            "index_end": index_end,
-            "credits": feedback["credits"],
-            "is_graded": is_graded,
-            "structured_grading_instruction_id": grading_instruction_id,
-            "meta": {}
-        }
-        feedbacks.append(feedback_data)
+        feedbacks.append(Feedback(
+            exercise_id=exercise.id,
+            submission_id=submission.id,
+            title=feedback["title"],
+            description=feedback["description"],
+            index_start=index_start,
+            index_end=index_end,
+            credits=feedback["credits"],
+            is_graded=is_graded,
+            structured_grading_instruction_id=grading_instruction_id,
+            meta={}
+        ))
 
     return feedbacks
     

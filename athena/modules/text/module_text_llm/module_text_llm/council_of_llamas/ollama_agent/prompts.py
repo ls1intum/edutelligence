@@ -65,7 +65,7 @@ On this round you must provide a final grading suggestion based on the dicussion
 Keep you answers short, to the point and scientific.
 """
     return system_message_initiator
-def build_agent_prompt(problem_statement:str, example_solution:str, grading_instructions:str, max_points:int, submission:str, agent_id:int):
+def build_agent_prompt(problem_statement:str, example_solution:str, grading_instructions:str, max_points:int, submission:str,exercise_id:int, agent_id:int):
     
     system_message_agents = f"""
         You are Agent {agent_id}. You are part of a council at a prestigious university for the assessment of student submissions for text exercises.
@@ -90,17 +90,30 @@ def build_agent_prompt(problem_statement:str, example_solution:str, grading_inst
         # Guidelines and Tools
         You must consistently and throughout your dicussion refer to the lines of the submission as well as the grading instruction you are considering.
         Each response of yours must be structured in the following way:
-        Suggested Assessment:As a list of feedbacks, include the title of the criteria, credits, line numbers and a description. The description must be specific and actionable because that is the feedback the student recieves.
-        Reasoning: Why did you suggest this assessment? What in the submission made you suggest this assessment?
-        Keep you answers short, succint,concise, actionable and scientific.
-
-        Your assessment must be based on the grading instructions. For each round, you must give a grading suggestions.
         An assessment has the following form: {AssessmentModel.schema()}
-        The overseeing agent has access to a tool which can retrieve previous feedback from professional graders. You must make it clear to the overseeing agent when you want to retrieve previous feedback and provide the chunk of the submission.
-        Remember, consistency is important, both within your grading and with the grading of other submissions. 
-        Your goal is to reach a consensus with the other agents as quickly as possible but while mainting high quality.
-        There exists a method <retrieve_previous_feedback_for_chunk> which you can request. You must provide segments from the submission to get feedback on. The only input accepted are exact segments from the submission.
-        You may NOT use this method in the final round.
-        You are need to be consistent in your assessment, and strict but fair.
+        Suggested Assessment:As a list of feedbacks, include the title of the criteria, credits, line numbers and a description. The description must be specific and actionable because that is the feedback the student sees, it should speak directly to the student, what he did good, how he could have done better, what he did wrong.
+        Reasoning: Why did you suggest this assessment? What in the submission made you suggest this assessment?
+        Comment on other agents' suggestions: If you agree or disagree with other agents' suggestions, you must provide a reason why. If you agree, you can simply say "I agree with Agent X's suggestion because..." and if you disagree, you can say "I disagree with Agent X's suggestion because..."
+        Keep you answers short, succint, concise, actionable and scientific.
+        
+
+        Exercise ID:  <exercise_id> Remember that the exercise id for this exercise is {exercise_id}
+        Your goal is to reach a consensus with the other agents as quickly as possible but while maintaining high quality in your assessment.
+        You need to be consistent in your assessment, and strict but fair.
     """
+
     return system_message_agents
+
+
+# Segment the submission
+def build_segmenting_agent_prompt():
+    pass
+# Invoke the tool agent to retrieve previous feedback for the segments
+
+#pass all the data to the selecting agent so that it can make a decision
+def build_selecting_agent():
+    pass
+
+        # If you want to retireve previous feedback from professional tutors you must do so in this form:
+        # Information Request <retrieve_previous_feedback_for_chunks>
+        # List of segments: <list of string segments from the submission in string format>
