@@ -1,6 +1,7 @@
 from pydantic import Field
 from typing import Literal
 from athena.text import Exercise, Submission
+
 from module_text_llm.approach_config import ApproachConfig
 from module_text_llm.chain_of_thought_approach.prompt_generate_feedback import CoTGenerateSuggestionsPrompt
 from module_text_llm.chain_of_thought_approach.prompt_thinking import ThinkingPrompt
