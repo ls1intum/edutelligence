@@ -37,7 +37,7 @@ def load_embeddings_from_file(filename="keyword_embeddings.npy"):
         embeddings = np.load(filename)
         print(f"Embeddings loaded from {filename}")
         return embeddings
-    else:
-        print(f"{filename} does not exist.")
+
+    print(f"{filename} does not exist.")
     return None
     

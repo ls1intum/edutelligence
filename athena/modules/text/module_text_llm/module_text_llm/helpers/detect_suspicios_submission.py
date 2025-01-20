@@ -6,6 +6,7 @@ from cryptography.fernet import Fernet
 from module_text_llm.helpers.generate_embeddings import embed_text, load_embeddings_from_file
 from llm_core.models import DefaultModelConfig
 from pydantic import BaseModel
+
 def hybrid_suspicion_score(submission, threshold=0.75):
     keywords_embeddings = load_embeddings_from_file("keywords_embeddings.npy")
     keywords = decrypt_keywords()
