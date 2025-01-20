@@ -36,7 +36,7 @@ async def suggest_feedback(exercise: Exercise, submission: Submission, is_graded
         print("Suspicious submission detected")
         is_suspicious,suspicios_text = await llm_check(submission.text)
         if(is_suspicious):
-            return [Feedback(title="Suspicious submission detected", description="Suspicious submission detected", credits=0.0, exercise_id=exercise.id, submission_id=submission.id, is_graded=is_graded)]
+            return [Feedback(title="Instructors need to review this input", description=suspicios_text, credits=0.0, exercise_id=exercise.id, submission_id=submission.id, is_graded=is_graded)]
     return await generate_suggestions(exercise, submission, module_config.approach, module_config.debug, is_graded)
 
 
