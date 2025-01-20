@@ -2,13 +2,13 @@ from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain.agents import AgentExecutor, create_tool_calling_agent
 from pydantic import BaseModel, Field
-from langchain_core.tools import tool
+# from langchain_core.tools import tool
 from module_text_llm.helpers.feedback_icl.retrieve_rag_context_icl import retrieve_rag_context_icl
 from module_text_llm.icl_rag_approach.prompt_generate_suggestions import FeedbackModel
 from typing import List
+from langchain.tools import Tool
 
-@tool
-def retrieve_rag_context(submission_segment: str ,exercise_id: int) -> str:
+def retrieve_rag_context(submission_segment: str ) -> str:
     """
     This method takes a segment from a submission and for a given exercise id, 
     returns feedback that has been given for similar texts.
@@ -20,9 +20,18 @@ def retrieve_rag_context(submission_segment: str ,exercise_id: int) -> str:
     Returns:
         str: A formatted string of feedbacks which reference text similar to the submission_segment.
     """
-    return retrieve_rag_context_icl(submission_segment,exercise_id)
+    return retrieve_rag_context_icl(submission_segment,3004)
+rag_tool = Tool(name="retrieve_rag_context", func= retrieve_rag_context,description=    """
+    This method takes a segment from a submission and for a given exercise id, 
+    returns feedback that has been given for similar texts.
 
-@tool
+    Args:
+        submission_segment: A segment of the submission.
+        exercise_id: The id of the exercise.
+
+    Returns:
+        str: A formatted string of feedbacks which reference text similar to the submission_segment.
+    """)
 class AssessmentModel(BaseModel):
     """Collection of feedbacks making up an assessment"""
     
@@ -38,7 +47,7 @@ class TutorAgent:
         self.model = config.model.get_model()
         self.outputModel = ChatOpenAI(model="gpt-4o-mini")
         self.approach_config = None
-        self.openai_tools = [retrieve_rag_context]
+        self.openai_tools = [rag_tool]
         self.setConfig(config)
     
         
