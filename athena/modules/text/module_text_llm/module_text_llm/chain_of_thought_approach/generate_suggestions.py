@@ -1,11 +1,9 @@
-from typing import List, Optional
-from pydantic import BaseModel, Field
-
+from typing import List
 from athena import emit_meta
 from athena.text import Exercise, Submission, Feedback
 from athena.logger import logger
 
-from module_text_llm.chain_of_thought_approach import ChainOfThoughtConfig
+from module_text_llm.approach_config import ApproachConfig
 
 from llm_core.utils.llm_utils import (
     get_chat_prompt_with_formatting_instructions, 
@@ -19,7 +17,7 @@ from module_text_llm.chain_of_thought_approach.prompt_thinking import InitialAss
 from module_text_llm.chain_of_thought_approach.prompt_generate_feedback import AssessmentModel
 
 
-async def generate_suggestions(exercise: Exercise, submission: Submission, config: ChainOfThoughtConfig, debug: bool) -> List[Feedback]:
+async def generate_suggestions(exercise: Exercise, submission: Submission, config: ApproachConfig, debug: bool, is_graded: bool) -> List[Feedback]:
     model = config.model.get_model()  # type: ignore[attr-defined]
 
     prompt_input = {
@@ -33,13 +31,11 @@ async def generate_suggestions(exercise: Exercise, submission: Submission, confi
 
     chat_prompt = get_chat_prompt_with_formatting_instructions(
         model=model, 
-        system_message=config.thikning_prompt.system_message, 
-        human_message=config.thikning_prompt.human_message, 
+        system_message=config.thinking_prompt.system_message, 
+        human_message=config.thinking_prompt.human_message, 
         pydantic_object=InitialAssessmentModel
     )
     
-
-
     # Check if the prompt is too long and omit features if necessary (in order of importance)
     omittable_features = ["example_solution", "problem_statement", "grading_instructions"]
     prompt_input, should_run = check_prompt_length_and_omit_features_if_necessary(
@@ -122,6 +118,7 @@ async def generate_suggestions(exercise: Exercise, submission: Submission, confi
             index_start=index_start,
             index_end=index_end,
             credits=feedback.credits,
+            is_graded=is_graded,
             structured_grading_instruction_id=grading_instruction_id,
             meta={}
         ))
