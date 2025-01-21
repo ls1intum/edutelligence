@@ -74,6 +74,8 @@ class ChatGPTWrapperPipeline(Pipeline):
         Run the ChatGPT wrapper pipeline.
         This consists of a single response generation step.
         """
-        response = self.request_handler.chat(dto.chat_history, CompletionArguments(temperature=0.5, max_tokens=2000))
+        response = self.request_handler.chat(
+            dto.chat_history, CompletionArguments(temperature=0.5, max_tokens=2000)
+        )
         self.callback.done()
         self.callback.done(final_result=response)
