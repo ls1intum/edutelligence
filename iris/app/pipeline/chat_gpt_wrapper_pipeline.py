@@ -8,16 +8,14 @@ from app.common.pyris_message import IrisMessageRole, PyrisMessage
 from app.domain.chat.exercise_chat.exercise_chat_pipeline_execution_dto import (
     ExerciseChatPipelineExecutionDTO,
 )
-from langchain_core.output_parsers import StrOutputParser
+from app.domain.data.text_message_content_dto import TextMessageContentDTO
 from app.llm.langchain.iris_langchain_chat_model import IrisLangchainChatModel
 from app.pipeline.prompts.chat_gpt_wrapper_prompts import chat_gpt_initial_system_prompt
-from langchain_core.messages import SystemMessage, HumanMessage
 from langchain_core.runnables import Runnable
 
 from app.llm import CapabilityRequestHandler, RequirementList, CompletionArguments
 from app.pipeline import Pipeline
 from app.web.status.status_update import ExerciseChatStatusCallback
-from ..common.message_converters import convert_iris_message_to_langchain_human_message
 
 logger = logging.getLogger(__name__)
 
@@ -74,8 +72,18 @@ class ChatGPTWrapperPipeline(Pipeline):
         Run the ChatGPT wrapper pipeline.
         This consists of a single response generation step.
         """
+
+        pyris_system_prompt = PyrisMessage(
+            sender=IrisMessageRole.SYSTEM,
+            contents=[
+                TextMessageContentDTO(text_content=chat_gpt_initial_system_prompt)
+            ],
+        )
+
+        prompts = [pyris_system_prompt] + dto.chat_history
+
         response = self.request_handler.chat(
-            dto.chat_history, CompletionArguments(temperature=0.5, max_tokens=2000)
+            prompts, CompletionArguments(temperature=0.5, max_tokens=2000)
         )
         self.callback.done()
         self.callback.done(final_result=response)
