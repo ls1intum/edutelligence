@@ -11,4 +11,4 @@ logger.info(" Embedder loaded!")
 
 def get_strategy_factory(base_class):
     return SuggestionStrategyFactory("module_text_llm", base_class)
- 
+

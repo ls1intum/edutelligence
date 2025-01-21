@@ -1779,6 +1779,7 @@ files = [
     {file = "orjson-3.10.14-cp39-cp39-win32.whl", hash = "sha256:eee4bc767f348fba485ed9dc576ca58b0a9eac237f0e160f7a59bce628ed06b3"},
     {file = "orjson-3.10.14-cp39-cp39-win_amd64.whl", hash = "sha256:96a1c0ee30fb113b3ae3c748fd75ca74a157ff4c58476c47db4d61518962a011"},
     {file = "orjson-3.10.14.tar.gz", hash = "sha256:cf31f6f071a6b8e7aa1ead1fa27b935b48d00fbfa6a28ce856cfff2d5dd68eed"},
+
 ]
 
 [[package]]
