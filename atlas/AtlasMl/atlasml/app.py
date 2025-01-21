@@ -1,14 +1,10 @@
 from fastapi import FastAPI
 import os 
 
+from atlasml.routers import health_router
+
 ENV = os.getenv("ENV", "dev")
 
-app = FastAPI()
+app = FastAPI(title="AtlasML API")
 
-@app.get("/")
-def index():
-    return {"message": f"HELLO {ENV}"}
-
-@app.get("/health")
-def health():
-    return {"status": "ok"}
+app.include_router(health_router)
