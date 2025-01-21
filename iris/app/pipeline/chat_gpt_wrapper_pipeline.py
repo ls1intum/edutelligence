@@ -56,17 +56,12 @@ class ChatGPTWrapperPipeline(Pipeline):
     def __init__(self, callback: Optional[ExerciseChatStatusCallback] = None):
         super().__init__(implementation_id="chat_gpt_wrapper_pipeline_reference_impl")
         self.callback = callback
-        request_handler = CapabilityRequestHandler(
+        self.request_handler = CapabilityRequestHandler(
             requirements=RequirementList(
                 gpt_version_equivalent=4.5,
                 context_length=16385,
             )
         )
-        completion_args = CompletionArguments(temperature=0.5, max_tokens=2000)
-        self.llm = IrisLangchainChatModel(
-            request_handler=request_handler, completion_args=completion_args
-        )
-        self.pipeline = self.llm | StrOutputParser()
         self.tokens = []
 
     def __call__(
@@ -79,24 +74,6 @@ class ChatGPTWrapperPipeline(Pipeline):
         Run the ChatGPT wrapper pipeline.
         This consists of a single response generation step.
         """
-        query = dto.chat_history[-1] if dto.chat_history else None
-        if query and query.sender != IrisMessageRole.USER:
-            query = None
-
-        chat_history = (
-            dto.chat_history[-5:] if query is None else dto.chat_history[-6:-1]
-        )
-
-        chat_history_messages = convert_chat_history_to_str(chat_history)
-
-        prompt = ChatPromptTemplate.from_messages(
-            [
-                SystemMessage(chat_gpt_initial_system_prompt),
-                HumanMessage(chat_history_messages),
-                convert_iris_message_to_langchain_human_message(query),
-            ]
-        )
-
-        response = (prompt | self.pipeline).invoke({})
+        response = self.request_handler.chat(dto.chat_history, CompletionArguments(temperature=0.5, max_tokens=2000))
         self.callback.done()
         self.callback.done(final_result=response)
