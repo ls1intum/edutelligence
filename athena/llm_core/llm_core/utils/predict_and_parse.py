@@ -6,6 +6,8 @@ from langchain_core.runnables import RunnableSequence
 from athena import get_experiment_environment
 from langchain_community.chat_models import ChatOllama # type: ignore
 from langchain.output_parsers import PydanticOutputParser
+from langchain_openai import ChatOpenAI
+
 T = TypeVar("T", bound=BaseModel)
 
 def isOllama(model: BaseLanguageModel) -> bool:
@@ -66,8 +68,24 @@ async def predict_and_parse(
     if isOllama(model):
         try:
             outputParser = PydanticOutputParser(pydantic_object = pydantic_object)
-            chain = chat_prompt | model | outputParser
-            return await chain.ainvoke(prompt_input, config={"tags": tags})
+            chain = chat_prompt | model
+            llm_output = await chain.ainvoke(prompt_input, config={"tags": tags})
+            try:
+                result = outputParser.parse(llm_output.content)
+                return result
+            except:
+                outputModel = ChatOpenAI(model="gpt-4o-mini")
+                structured_output_llm = outputModel.with_structured_output(pydantic_object, method = "json_mode")
+                chat_prompt = ChatPromptTemplate.from_messages(
+            [
+                ("system", "Your only task is to format the following output into json:"),
+                ("human", "{output}"),
+            ])
+                chain = RunnableSequence(
+                    chat_prompt,
+                    structured_output_llm
+                )
+                return await chain.ainvoke(input = {"output": llm_output.content}, config={"tags": tags})
         except ValidationError as e:
             raise ValueError(f"Could not parse output: {e}") from e
         

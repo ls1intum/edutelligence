@@ -113,18 +113,6 @@ def get_simple_chat_prompt(
         system_message: str, 
         human_message: str,
         ) -> ChatPromptTemplate:
-    
-        sys = """ 
-        You are an AI Tutor. You are tasked with grading a student submission based on this problem statement and grading instructions. You must not excede the maximum amount of points. Take time to think, which points on the grading instructions are relevant for the students submission.
-        Further more, if a feedback is specific to a sentence in the student submission, that specify this as well on your feedback. Also specify, when possible, which grading instruction you are refering to.
-        # Problem statement
-        {problem_statement}
-
-        # Grading instructions
-        {grading_instructions}
-        Max points: {max_points}
-            """
-            
         system_message_prompt = SystemMessagePromptTemplate.from_template(system_message)
         human_message_prompt = HumanMessagePromptTemplate.from_template(human_message)
         return ChatPromptTemplate.from_messages([system_message_prompt, human_message_prompt])
