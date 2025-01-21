@@ -8,13 +8,13 @@ def load_indices(index_file):
             return json.load(f)
     else:
         return {}
-    
+
 def store_embedding_index(exercise_id, submission_id,feedback):
     """ Store a new submission and exercise ID with an auto-incrementing index. """
     index_file = f"indices_{exercise_id}.json"
     indices = load_indices(index_file)
     next_index = len(indices)
-    
+    print(feedback)
     indices[next_index] = {
         "exercise_id": exercise_id,
         "submission_id": submission_id,

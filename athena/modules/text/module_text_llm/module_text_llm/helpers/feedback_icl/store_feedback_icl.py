@@ -4,14 +4,14 @@ import os
 from athena.text import Submission, Exercise, Feedback
 from typing import List
 from athena.logger import logger
-from module_text_llm.helpers.feedback_icl.generate_embeddings import embed_bert
+from module_text_llm.helpers.feedback_icl.generate_embeddings import embed_text
 from module_text_llm.helpers.feedback_icl.store_indices_icl import store_embedding_index
 
 def store_feedback_icl(submission: Submission, exercise: Exercise, feedbacks: List[Feedback]):
     logger.info("Storing feedback for submission %d of exercise %d.", submission.id, exercise.id)
     for feedback in feedbacks:
         chunk = get_reference(feedback, submission.text)
-        embedding = embed_bert(chunk) 
+        embedding = embed_text(chunk) 
         save_embedding(embedding, exercise.id)
         store_embedding_index(exercise.id, submission.id, feedback)
         
