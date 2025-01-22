@@ -5,8 +5,8 @@ from athena import config_schema_provider
 from module_text_llm.chain_of_thought_approach import ChainOfThoughtConfig
 from module_text_llm.basic_approach import BasicApproachConfig
 from module_text_llm.ollama_chain_of_thought_approach import OllamaChainOfThoughtConfig
-
-ApproachConfigUnion = Union[BasicApproachConfig, ChainOfThoughtConfig, OllamaChainOfThoughtConfig]
+from module_text_llm.few_shot_chain_of_thought_approach import FewShotChainOfThoughtConfig
+ApproachConfigUnion = Union[BasicApproachConfig, ChainOfThoughtConfig, FewShotChainOfThoughtConfig]
 
 @config_schema_provider
 class Configuration(BaseModel):
