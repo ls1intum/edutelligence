@@ -78,7 +78,7 @@ async def predict_and_parse(
                 structured_output_llm = outputModel.with_structured_output(pydantic_object, method = "json_mode")
                 chat_prompt = ChatPromptTemplate.from_messages(
             [
-                ("system", "Your only task is to format the following output into json:"),
+                ("system", "Your only task is to format the following output into json. Line_start and Line_end are only integer or None"),
                 ("human", "{output}"),
             ])
                 chain = RunnableSequence(

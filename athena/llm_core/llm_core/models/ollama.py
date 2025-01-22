@@ -37,7 +37,7 @@ if os.environ.get('GPU_USER') and os.environ.get('GPU_PASSWORD') and os.environ.
                 ) for name in ollama_models
             } 
 
-        default_model_name = "llama3.1:70b"
+        default_model_name = "llama3.3:latest"
         LlamaModel = Enum('LlamaModel', {name: name for name in available_models}) # type: ignore
         class OllamaModelConfig(ModelConfig):
                 """Ollama LLM configuration."""
@@ -46,7 +46,7 @@ if os.environ.get('GPU_USER') and os.environ.get('GPU_PASSWORD') and os.environ.
                 model_name: LlamaModel = Field(default=default_model_name,  # type: ignore
                                                 description="The name of the model to use.")
                 
-                fromat : str = Field(default = "json" , description="The format to respond with")
+                format : str = Field(default = "json" , description="The format to respond with")
                 
                 max_tokens: PositiveInt = Field(1000, description="")
 
