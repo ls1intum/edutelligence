@@ -6,7 +6,11 @@ from module_text_llm.chain_of_thought_approach import ChainOfThoughtConfig
 from module_text_llm.basic_approach import BasicApproachConfig
 from module_text_llm.ollama_chain_of_thought_approach import OllamaChainOfThoughtConfig
 from module_text_llm.few_shot_chain_of_thought_approach import FewShotChainOfThoughtConfig
-ApproachConfigUnion = Union[BasicApproachConfig, ChainOfThoughtConfig, FewShotChainOfThoughtConfig]
+from module_text_llm.basic_COT import BasicCOTApproachConfig
+
+
+
+ApproachConfigUnion = Union[BasicApproachConfig, FewShotChainOfThoughtConfig,BasicCOTApproachConfig ]
 
 @config_schema_provider
 class Configuration(BaseModel):
