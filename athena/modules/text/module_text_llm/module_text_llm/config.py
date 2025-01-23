@@ -7,15 +7,15 @@ from module_text_llm.basic_approach import BasicApproachConfig
 from module_text_llm.ollama_chain_of_thought_approach import OllamaChainOfThoughtConfig
 from module_text_llm.few_shot_chain_of_thought_approach import FewShotChainOfThoughtConfig
 from module_text_llm.basic_COT import BasicCOTApproachConfig
+from module_text_llm.icl_rag import ICLRAGConfig
 
 
-
-ApproachConfigUnion = Union[BasicApproachConfig, FewShotChainOfThoughtConfig,BasicCOTApproachConfig ]
+ApproachConfigUnion = Union[ICLRAGConfig, BasicApproachConfig, FewShotChainOfThoughtConfig,BasicCOTApproachConfig ]
 
 @config_schema_provider
 class Configuration(BaseModel):
     debug: bool = Field(default=False, description="Enable debug mode.")
-    approach: ApproachConfigUnion = Field(default_factory=BasicApproachConfig)  # Default to BasicApproach
+    approach: ApproachConfigUnion = Field(default_factory=ICLRAGConfig)  # Default to BasicApproach
 
     class Config:
         smart_union = True 

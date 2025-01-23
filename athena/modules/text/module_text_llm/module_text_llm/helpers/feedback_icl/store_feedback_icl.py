@@ -4,60 +4,117 @@ from athena.text import Submission, Exercise, Feedback
 from typing import List
 from athena.logger import logger
 from module_text_llm.helpers.feedback_icl.generate_embeddings import embed_text
-from module_text_llm.helpers.feedback_icl.store_indices_icl import store_embedding_index
+# from module_text_llm.helpers.feedback_icl.store_indices_icl import store_embedding_index
 from sklearn.metrics.pairwise import cosine_similarity
 
 def store_feedback_icl(submission: Submission, exercise: Exercise, feedbacks: List[Feedback]):
     logger.info("Storing feedback for submission %d of exercise %d.", submission.id, exercise.id)
     for feedback in feedbacks:
+        logger.info("Storing 1 ")
         chunk = get_reference(feedback, submission.text)
+        logger.info(chunk)
         embedding = embed_text(chunk)
-        save_embedding(embedding, exercise.id, submission.id, feedback)
+        logger.info(embedding)
+        save_embedding_with_metadata(embedding,submission, exercise.id, feedback.dict())
+        # save_embeddings_to_file([embedding], f"embeddings_{exercise.id}.npy")
+        # save_embeddings_to_file(embedding, exercise.id, submission.id, feedback)
 
-def save_embedding(embedding, exercise_id):
+def save_embedding_with_metadata(embedding,submission, exercise_id, metadata):
     embeddings_file = f"embeddings_{exercise_id}.npy"
-
+    full_return = []
+    print("inside reference")
+    print(type(metadata))
+    print(metadata.keys())
+    # print()
+    # print(metadata["feedbacks"])
+    # for data in metadata["feedbacks"]:
+    # if "index_start" in metadata.keys() and "index_end" in metadata.keys():
+    #     print(metadata["index_start"])
+    #     print(metadata["index_end"])
+        
+    if metadata["index_start"] is not None and metadata["index_end"] is not None:
+        reference = submission.text[metadata["index_start"]:metadata["index_end"]]
+        metadata["text_reference"] = reference
+    #     print(reference)
+    #     full_return.append(metadata)
+    print(full_return)
     try:
-        # Check if the embeddings file already exists
+        print("inside try")
         if os.path.exists(embeddings_file):
-            # Load existing embeddings
-            existing_embeddings = np.load(embeddings_file)
-            # Append the new embedding
-            updated_embeddings = np.vstack((existing_embeddings, embedding))
+            # Load existing data
+            existing_data = np.load(embeddings_file, allow_pickle=True).item()
+            # Append the new embedding and metadata
+            existing_data['embeddings'] = np.vstack((existing_data['embeddings'], embedding))
+            existing_data['metadata'].append(metadata)
         else:
-            # Create a new array for the embedding
-            updated_embeddings = np.array([embedding], dtype=np.float32)
-
-        # Save the updated embeddings back to the file
-        np.save(embeddings_file, updated_embeddings)
+            # Create a new dictionary with embeddings and metadata
+            existing_data = {
+                'embeddings': np.array([embedding], dtype=np.float32),
+                'metadata': [metadata]
+            }
+        
+        # Save the updated data
+        np.save(embeddings_file, existing_data)
     except Exception as e:
-        logger.error(f"Error while saving embedding for exercise {exercise_id}: {e}")
+        print(f"Error while saving embedding with metadata: {e}")
+
+def load_embeddings_with_metadata(exercise_id):
+    embeddings_file = f"embeddings_{exercise_id}.npy"
+    if os.path.exists(embeddings_file):
+        data = np.load(embeddings_file, allow_pickle=True).item()
+        return data['embeddings'], data['metadata']
+    else:
+        print(f"Error: File '{embeddings_file}' does not exist.")
+        return None, None
+    
+def save_embeddings_to_file(embeddings, filename="keyword_embeddings.npy"):
+    """
+    Save embeddings to a .npy file.
+    Parameters:
+        embeddings (np.ndarray): The embeddings to save.
+        filename (str): The filename where embeddings will be saved.
+    """
+    np.save(filename, embeddings)
+    print(f"Embeddings saved to {filename}")
     
     
 def query_embedding(query_embedding, exercise_id, k=5):
-    # Define the path to the embedding file
-    embeddings_file = os.path.abspath(f"embeddings_{exercise_id}.npy")
+    """
+    Query the top-k most similar embeddings to the provided query_embedding
+    for a given exercise ID. Return the corresponding metadata for these embeddings.
+
+    Parameters:
+    - query_embedding: A NumPy array representing the query embedding.
+    - exercise_id: The ID of the exercise (used to locate the embeddings file).
+    - k: The number of top similar embeddings to retrieve.
+
+    Returns:
+    - A list of metadata corresponding to the top-k most similar embeddings.
+    """
+    embeddings_file = f"embeddings_{exercise_id}.npy"
     
     # Check if the embeddings file exists
     if not os.path.exists(embeddings_file):
-        print(f"Error: The embeddings file '{embeddings_file}' does not exist.")
+        logger.error(f"The embeddings file '{embeddings_file}' does not exist.")
         return None
-    
+
     try:
-        # Load the embeddings from the file
-        all_embeddings = np.load(embeddings_file)
+        # Load the data (embeddings and metadata)
+        data = np.load(embeddings_file, allow_pickle=True).item()
+        all_embeddings = data['embeddings']
+        all_metadata = data['metadata']
     except Exception as e:
-        print(f"Error while loading the embeddings file: {e}")
+        logger.error(f"Error while loading the embeddings file: {e}")
         return None
 
     try:
         # Ensure the query embedding has the correct shape
         query_embedding = np.array([query_embedding], dtype=np.float32)
         if query_embedding.ndim != 2 or query_embedding.shape[1] != all_embeddings.shape[1]:
-            print("Error: Query embedding shape does not match the embeddings' dimensions.")
+            logger.error("Query embedding shape does not match the embeddings' dimensions.")
             return None
     except Exception as e:
-        print(f"Error with query embedding format: {e}")
+        logger.error(f"Error with query embedding format: {e}")
         return None
 
     try:
@@ -66,10 +123,13 @@ def query_embedding(query_embedding, exercise_id, k=5):
         
         # Get the indices of the top-k most similar embeddings
         top_k_indices = np.argsort(similarities)[::-1][:k]
-
-        return top_k_indices
+        
+        # Retrieve the metadata corresponding to the top-k indices
+        top_k_metadata = [all_metadata[i] for i in top_k_indices]
+        print(top_k_metadata)
+        return top_k_metadata
     except Exception as e:
-        print(f"Error during similarity computation: {e}")
+        logger.error(f"Error during similarity computation: {e}")
         return None
     
 def get_reference(feedback, submission_text):
@@ -78,4 +138,4 @@ def get_reference(feedback, submission_text):
     return submission_text
     
 def check_if_embedding_exists(exercise_id):
-    return os.path.exists(f"embeddings_{exercise_id}.index")
+    return os.path.exists(f"embeddings_{exercise_id}.npy")
