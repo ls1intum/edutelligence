@@ -16,7 +16,7 @@ from module_text_llm.helpers.detect_suspicios_submission import hybrid_suspicion
 def receive_submissions(exercise: Exercise, submissions: List[Submission]):
     logger.info("receive_submissions: Received %d submissions for exercise %d", len(submissions), exercise.id)
 
-
+#test
 @submission_selector
 def select_submission(exercise: Exercise, submissions: List[Submission]) -> Submission:
     logger.info("select_submission: Received %d, submissions for exercise %d", len(submissions), exercise.id)
