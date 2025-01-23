@@ -149,6 +149,8 @@ Following the output schema, the result is therefore:
 }}
 # End of Examples
 Remember to be extra caution and careful not to reveal the solution. Your feedback should be constructive and helpful to guide and encourage the student to improve, but without telling them what to write.
+You are allowed to use the examples above as inspiration, but make sure to adapt them to the student's submission. Furthermore, you may deviate on the feedback content in order to be more assisting to the student.
+You may also explain things which the student seem to have misconceptions about. However you should not give away the solution.
 # Your Assessment
 Now its your turn. Here is student the submission (with sentence numbers <number>: <sentence>):
 \"\"\"

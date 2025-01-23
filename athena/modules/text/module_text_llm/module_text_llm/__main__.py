@@ -54,7 +54,8 @@ async def suggest_feedback(exercise: Exercise, submission: Submission, is_graded
         module_config.approach = FewShotChainOfThoughtConfig()
         return await generate_suggestions(exercise, submission, module_config.approach, module_config.debug, is_graded)
 
-    
+    module_config.approach = FewShotChainOfThoughtConfig()
+
     return await generate_suggestions(exercise, submission, module_config.approach, module_config.debug, is_graded)
 
 
