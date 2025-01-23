@@ -21,33 +21,17 @@ def store_feedback_icl(submission: Submission, exercise: Exercise, feedbacks: Li
 
 def save_embedding_with_metadata(embedding,submission, exercise_id, metadata):
     embeddings_file = f"embeddings_{exercise_id}.npy"
-    full_return = []
-    print("inside reference")
-    print(type(metadata))
-    print(metadata.keys())
-    # print()
-    # print(metadata["feedbacks"])
-    # for data in metadata["feedbacks"]:
-    # if "index_start" in metadata.keys() and "index_end" in metadata.keys():
-    #     print(metadata["index_start"])
-    #     print(metadata["index_end"])
-        
+
     if metadata["index_start"] is not None and metadata["index_end"] is not None:
         reference = submission.text[metadata["index_start"]:metadata["index_end"]]
         metadata["text_reference"] = reference
-    #     print(reference)
-    #     full_return.append(metadata)
-    print(full_return)
+
     try:
-        print("inside try")
         if os.path.exists(embeddings_file):
-            # Load existing data
             existing_data = np.load(embeddings_file, allow_pickle=True).item()
-            # Append the new embedding and metadata
             existing_data['embeddings'] = np.vstack((existing_data['embeddings'], embedding))
             existing_data['metadata'].append(metadata)
         else:
-            # Create a new dictionary with embeddings and metadata
             existing_data = {
                 'embeddings': np.array([embedding], dtype=np.float32),
                 'metadata': [metadata]
@@ -78,7 +62,7 @@ def save_embeddings_to_file(embeddings, filename="keyword_embeddings.npy"):
     print(f"Embeddings saved to {filename}")
     
     
-def query_embedding(query_embedding, exercise_id, k=5):
+def query_embedding(query_embedding, exercise_id, k=1):
     """
     Query the top-k most similar embeddings to the provided query_embedding
     for a given exercise ID. Return the corresponding metadata for these embeddings.
