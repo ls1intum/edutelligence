@@ -16,7 +16,7 @@ nltk = "3.9.1"
 python-dotenv = "1.0.0"
 tiktoken = "0.7.0"
 faiss-cpu = "1.9.0.post1"
-sentence-transformers="3.3.1"
+
 [tool.poetry.dev-dependencies]
 pydantic = "1.10.17"
 prospector = "^1.10.2"
