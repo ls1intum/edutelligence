@@ -3,7 +3,7 @@ from typing import List, Any
 
 import nltk
 import tiktoken
-from athena import app, submission_selector, submissions_consumer, feedback_consumer, feedback_provider, evaluation_provider
+from athena import app, submission_selector, submissions_consumer, feedback_consumer, feedback_provider, evaluation_provider,feedback_storer
 from athena.text import Exercise, Submission, Feedback
 from athena.logger import logger
 
@@ -12,6 +12,7 @@ from module_text_llm.evaluation import get_feedback_statistics, get_llm_statisti
 from module_text_llm.generate_evaluation import generate_evaluation
 from module_text_llm.approach_controller import generate_suggestions
 from module_text_llm.helpers.detect_suspicios_submission import hybrid_suspicion_score, llm_check
+from module_text_llm.helpers.feedback_icl.store_feedback_icl import store_feedback_icl
 
 #Test Demo
 @submissions_consumer
@@ -25,10 +26,18 @@ def select_submission(exercise: Exercise, submissions: List[Submission]) -> Subm
     return submissions[0]
 
 
-@feedback_consumer
+@feedback_storer # used for playground
+def do_thing(exercise: Exercise, submission: Submission, feedbacks: List[Feedback]):
+    logger.info("process_feedback: Received %d feedbacks for submission %d of exercise %d.", len(feedbacks), submission.id, exercise.id)
+    store_feedback_icl(submission, exercise, feedbacks)
+    logger.info("Embedding saved for submission %d of exercise %d.", submission.id, exercise.id)
+    
+@feedback_consumer # used for Artemis
 def process_incoming_feedback(exercise: Exercise, submission: Submission, feedbacks: List[Feedback]):
     logger.info("process_feedback: Received %d feedbacks for submission %d of exercise %d.", len(feedbacks), submission.id, exercise.id)
-
+    store_feedback_icl(submission, exercise, feedbacks)
+    logger.info("Embedding saved for submission %d of exercise %d.", submission.id, exercise.id)
+    
 @feedback_provider
 async def suggest_feedback(exercise: Exercise, submission: Submission, is_graded: bool, module_config: Configuration) -> List[Feedback]:
     logger.info("suggest_feedback: %s suggestions for submission %d of exercise %d were requested, with approach: %s",
