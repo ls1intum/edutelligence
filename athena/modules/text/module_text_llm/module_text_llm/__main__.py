@@ -10,7 +10,7 @@ from module_text_llm.config import Configuration
 from module_text_llm.evaluation import get_feedback_statistics, get_llm_statistics
 from module_text_llm.generate_evaluation import generate_evaluation
 from module_text_llm.approach_controller import generate_suggestions
-from module_text_llm.analytics.pre_processing import run_evaluation
+from module_text_llm.analytics.compile import compile
 
 @submissions_consumer
 def receive_submissions(exercise: Exercise, submissions: List[Submission]):
@@ -30,7 +30,7 @@ def process_incoming_feedback(exercise: Exercise, submission: Submission, feedba
 @generate_statistics
 async def compile_analytics(results: dict):
     logger.info("generate_statistics: Generating statistics")
-    return run_evaluation(results)
+    return compile(results)
 
 @feedback_provider
 async def suggest_feedback(exercise: Exercise, submission: Submission, is_graded: bool, module_config: Configuration) -> List[Feedback]:

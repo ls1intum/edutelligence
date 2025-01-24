@@ -202,13 +202,7 @@ def generate_statistics(func):
     async def wrapper(request: Request):
         try:
             results = await request.json()
-            await func(results)
-            file_path = "interactive_chart.html"
-            with open("interactive_chart.html", "r", encoding="utf-8") as file:
-                html_content = file.read()
-            # Return the HTML content as a response
-            return html_content #HTMLResponse(content=html_content,media_type="text/html", status_code=200)
-            
+            return await func(results)
         except Exception as e:
             return {"error": str(e)}
 

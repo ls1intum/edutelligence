@@ -47,34 +47,35 @@ export default function ConductExperiment({
     []
   );
 
-  // I have no idea how to use React.
-  // Data for analytics is aggregated and send to the last Ref to send to the backend because i cannot call the fetcher here.
   const handleAnalysis = async () => {
-    setIsCompilingAnalyticsReport(true); // Start loading state
+    setIsCompilingAnalyticsReport(true);
   
     try {
       let aggregatedData: any[] = [];
       let lastRef;
-  
-      // Collect data and determine the last reference
+      let index = 0 
       for (const moduleViewRef of moduleViewRefs.current) {
         const data = moduleViewRef?.getResults();
+        if(data){
+          data["results"]["name"] = moduleConfigurations[index].name
+        }
         console.log(data);
         aggregatedData.push(data);
         lastRef = moduleViewRef;
+        index++;
       }
   
       if (lastRef) {
-        const report = await lastRef.analyseData(aggregatedData); // Await the analysis
+        const report = await lastRef.analyseData(aggregatedData);
         console.log("Analysis completed successfully:", report);
       }
     } catch (error) {
       console.error("Error during analysis:", error);
     } finally {
-      setIsCompilingAnalyticsReport(false); // Reset loading state
+      setIsCompilingAnalyticsReport(false);
     }
   };
-  
+
   const handleExport = () => {
     downloadJSONFiles(
       moduleViewRefs.current.flatMap((moduleViewRef, index) => {

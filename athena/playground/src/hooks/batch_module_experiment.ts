@@ -94,10 +94,15 @@ export default function useBatchModuleExperiment(experiment: Experiment, moduleC
         { exercise, tutor_feedbacks, results },
         {
           onSuccess: (response) => {
-            const newWindow = window.open("", "_blank", "width=900,height=900");
+            // const newWindow = window.open("", "_blank", "width=900,height=900");
             const htmlContent = response[0].data;
   
-            newWindow!.document.title = "Analytics Report";
+            const width = 800;
+            const height = 600;
+            const left = (window.innerWidth - width) / 2;
+            const top = (window.innerHeight - height) / 2;
+            
+            const newWindow = window.open('', '', `width=${width},height=${height},left=${left},top=${top}`);
             newWindow!.document.open();
             newWindow!.document.write(htmlContent);
             newWindow!.document.close();
@@ -115,7 +120,7 @@ export default function useBatchModuleExperiment(experiment: Experiment, moduleC
   };
 
   const getResults = () => {
-    return { 
+    return {
       results: {
         type: "results",
         runId: data.runId,
@@ -125,10 +130,13 @@ export default function useBatchModuleExperiment(experiment: Experiment, moduleC
         didSendSubmissions: data.didSendSubmissions,
         sentTrainingSubmissions: data.sentTrainingSubmissions,
         submissionsWithFeedbackSuggestions: Object.fromEntries(
-          data.submissionsWithFeedbackSuggestions
+          Array.from(data.submissionsWithFeedbackSuggestions.entries()).map(([key, value]) => [
+            key,
+            { suggestions: value.suggestions }, // Exclude `meta` here
+          ])
         ),
-      }
-  }}
+      },
+    };}
   
   const exportData = () => {
     return { 
