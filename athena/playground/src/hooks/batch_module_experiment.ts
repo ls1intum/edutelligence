@@ -7,6 +7,7 @@ import type { ModuleConfiguration } from "@/components/view_mode/evaluation_mode
 import { v4 as uuidv4 } from "uuid";
 import { useEffect, useRef, useState } from "react";
 import { useSendFeedbacks } from "./athena/send_feedbacks";
+import { useSendResults } from "./athena/send_results";
 import useRequestSubmissionSelection from "./athena/request_submission_selection";
 import useRequestFeedbackSuggestions from "./athena/request_feedback_suggestions";
 import useSendSubmissions from "./athena/send_submissions";
@@ -56,6 +57,7 @@ export default function useBatchModuleExperiment(experiment: Experiment, moduleC
   const [submissionsWithAutomaticEvaluation, setSubmissionsWithAutomaticEvaluation] = useState<
     Map<number, AutomaticEvaluation> | undefined
   >(undefined);
+  const { mutate: sendResultsMutate } = useSendResults();
 
   const [processingStep, setProcessingStep] = useState<
     ExperimentStep | undefined
@@ -74,7 +76,50 @@ export default function useBatchModuleExperiment(experiment: Experiment, moduleC
       step: "sendingSubmissions",
     }));
   };
+const analyseData = (results:any) => {
+      console.log("Analyzing data...");
+      const exercise = experiment.exercise
 
+      console.log(
+        "Analyzing data and preparing to send results to the backend...",
+        results
+      );
+    
+       sendResultsMutate({exercise, results}, {
+        onSuccess: (response) => {
+          const newWindow = window.open("", "_blank", "width=900,height=900");
+          // Get the HTML data and show it 
+          const htmlContent = response[0].data;
+          newWindow!.document.open();
+          newWindow!.document.write(htmlContent);
+          newWindow!.document.close();
+
+          console.log("Data analysis sent successfully!");
+        },
+        onError: (error) => {
+          console.error("Error sending data analysis to the backend:", error);
+        },
+      });
+    
+      return results; // Return the payload for reference
+    };
+
+  const getResults = () => {
+    return { 
+      results: {
+        type: "results",
+        runId: data.runId,
+        experimentId: experiment.id,
+        moduleConfigurationId: moduleConfiguration.id,
+        step: data.step,
+        didSendSubmissions: data.didSendSubmissions,
+        sentTrainingSubmissions: data.sentTrainingSubmissions,
+        submissionsWithFeedbackSuggestions: Object.fromEntries(
+          data.submissionsWithFeedbackSuggestions
+        ),
+      }
+  }}
+  
   const exportData = () => {
     return { 
       results: {
@@ -202,7 +247,7 @@ export default function useBatchModuleExperiment(experiment: Experiment, moduleC
   const requestSubmissionSelection = useRequestSubmissionSelection({ retry: 3 });
   const requestFeedbackSuggestions = useRequestFeedbackSuggestions({ retry: 3 });
   const requestEvaluation = useRequestEvaluation({ retry: 3 });
-
+  const sendResult = useSendResults({ retry: 3 });
   // 1. Send submissions to Athena
   const stepSendSubmissions = () => {
     setProcessingStep("sendingSubmissions");
@@ -490,6 +535,8 @@ export default function useBatchModuleExperiment(experiment: Experiment, moduleC
     continueWithAutomaticEvaluation,
     exportData,
     importData,
+    analyseData,
+    getResults,
     moduleRequests: {
       sendSubmissions,
       sendFeedbacks,

@@ -37,7 +37,6 @@ export default function ConductExperiment({
 
   const [didStartExperiment, setDidStartExperiment] = useState(false);
   const [modulesStep, setModulesStep] = useState<ExperimentStep[]>([]);
-
   const [viewSubmissionIndex, setViewSubmissionIndex] = useState(0);
   const [moduleRenderOrder, setModuleRenderOrder] = useState<number[]>(
     moduleConfigurations.map((_, index) => index)
@@ -46,6 +45,21 @@ export default function ConductExperiment({
   const moduleViewRefs = useRef<(ConductBatchModuleExperimentHandles | null)[]>(
     []
   );
+
+  // I have no idea how to use React.
+  // Data for analytics is aggregated and send to the last Ref to send to the backend because i cannot call the fetcher here.
+  const handleAnalysis = () => {
+    let aggregatedData: any[] = []
+    let lastRef
+    moduleViewRefs.current.flatMap((moduleViewRef, index) => {
+      const data = moduleViewRef?.getResults();
+
+      console.log(data)
+      aggregatedData.push(data)
+      lastRef = moduleViewRef
+    })
+    lastRef!.analyseData(aggregatedData)
+  }
 
   const handleExport = () => {
     downloadJSONFiles(
@@ -186,7 +200,7 @@ export default function ConductExperiment({
               onClick={handleExport}
             >
               Export
-            </button>
+            </button> 
             <label className="rounded-md p-2 text-primary-500 hover:text-primary-600 hover:bg-gray-100 cursor-pointer">
               Import
               <input
@@ -238,6 +252,13 @@ export default function ConductExperiment({
             </label>
           </div>
         </div>
+        <button
+              disabled={modulesStep.every((step) => step === "notStarted")}
+              className="rounded-md p-2 text-primary-500 hover:text-primary-600 hover:bg-gray-100 hover:no-underline disabled:text-gray-500 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+              onClick={handleAnalysis}
+            >
+              Compile Analytics
+            </button>
         <div className="flex flex-col gap-1 xl:flex-row xl:items-center xl:gap-4">
           {/* Submission switcher */}
           <div className="flex gap-2 items-center">
