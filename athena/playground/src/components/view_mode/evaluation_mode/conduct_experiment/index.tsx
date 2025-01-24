@@ -57,7 +57,7 @@ export default function ConductExperiment({
       for (const moduleViewRef of moduleViewRefs.current) {
         const data = moduleViewRef?.getResults();
         if(data){
-          data["results"]["name"] = moduleConfigurations[index].name
+          (data["results"] as any)["name"] = moduleConfigurations[index].name;
         }
         console.log(data);
         aggregatedData.push(data);
