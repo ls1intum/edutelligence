@@ -36,6 +36,7 @@ export default function ConductExperiment({
   }, []);
 
   const [didStartExperiment, setDidStartExperiment] = useState(false);
+  const [isCompilingAnalyticsReport, setIsCompilingAnalyticsReport] = useState(false);
   const [modulesStep, setModulesStep] = useState<ExperimentStep[]>([]);
   const [viewSubmissionIndex, setViewSubmissionIndex] = useState(0);
   const [moduleRenderOrder, setModuleRenderOrder] = useState<number[]>(
@@ -48,19 +49,32 @@ export default function ConductExperiment({
 
   // I have no idea how to use React.
   // Data for analytics is aggregated and send to the last Ref to send to the backend because i cannot call the fetcher here.
-  const handleAnalysis = () => {
-    let aggregatedData: any[] = []
-    let lastRef
-    moduleViewRefs.current.flatMap((moduleViewRef, index) => {
-      const data = moduleViewRef?.getResults();
-
-      console.log(data)
-      aggregatedData.push(data)
-      lastRef = moduleViewRef
-    })
-    lastRef!.analyseData(aggregatedData)
-  }
-
+  const handleAnalysis = async () => {
+    setIsCompilingAnalyticsReport(true); // Start loading state
+  
+    try {
+      let aggregatedData: any[] = [];
+      let lastRef;
+  
+      // Collect data and determine the last reference
+      for (const moduleViewRef of moduleViewRefs.current) {
+        const data = moduleViewRef?.getResults();
+        console.log(data);
+        aggregatedData.push(data);
+        lastRef = moduleViewRef;
+      }
+  
+      if (lastRef) {
+        const report = await lastRef.analyseData(aggregatedData); // Await the analysis
+        console.log("Analysis completed successfully:", report);
+      }
+    } catch (error) {
+      console.error("Error during analysis:", error);
+    } finally {
+      setIsCompilingAnalyticsReport(false); // Reset loading state
+    }
+  };
+  
   const handleExport = () => {
     downloadJSONFiles(
       moduleViewRefs.current.flatMap((moduleViewRef, index) => {
@@ -253,12 +267,40 @@ export default function ConductExperiment({
           </div>
         </div>
         <button
-              disabled={modulesStep.every((step) => step === "notStarted")}
-              className="rounded-md p-2 text-primary-500 hover:text-primary-600 hover:bg-gray-100 hover:no-underline disabled:text-gray-500 disabled:cursor-not-allowed disabled:hover:bg-transparent"
-              onClick={handleAnalysis}
-            >
-              Compile Analytics
-            </button>
+      disabled={isCompilingAnalyticsReport}
+      className={`rounded-md p-2 text-primary-500 hover:text-primary-600 hover:bg-gray-100 hover:no-underline disabled:text-gray-500 disabled:cursor-not-allowed disabled:hover:bg-transparent ${
+        isCompilingAnalyticsReport ? "cursor-wait" : ""
+      }`}
+      onClick={handleAnalysis}
+    >
+      {isCompilingAnalyticsReport ? (
+        <span className="flex items-center">
+          <svg
+            className="animate-spin h-5 w-5 mr-2 text-primary-500"
+            xmlns="http://www.w3.org/2000/svg"
+            fill="none"
+            viewBox="0 0 24 24"
+          >
+            <circle
+              className="opacity-25"
+              cx="12"
+              cy="12"
+              r="10"
+              stroke="currentColor"
+              strokeWidth="4"
+            ></circle>
+            <path
+              className="opacity-75"
+              fill="currentColor"
+              d="M4 12a8 8 0 018-8v8z"
+            ></path>
+          </svg>
+          Compiling Analytics ...
+        </span>
+      ) : (
+        "Compile Analytics Report"
+      )}
+    </button>
         <div className="flex flex-col gap-1 xl:flex-row xl:items-center xl:gap-4">
           {/* Submission switcher */}
           <div className="flex gap-2 items-center">

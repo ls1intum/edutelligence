@@ -4,6 +4,7 @@ import { UseMutationOptions, useMutation } from "react-query";
 import { useModule } from "@/hooks/module_context";
 import useHealth from "@/hooks/health";
 import { Exercise } from "@/model/exercise";
+import { Feedback } from "@/model/feedback";
 
 /**
  * Hook to send results data to the backend.
@@ -19,7 +20,7 @@ export function useSendResults(
     UseMutationOptions<
       ModuleResponse[] | undefined,
       AthenaError,
-      { exercise:Exercise; results: any }
+      { exercise:Exercise;tutor_feedbacks:Feedback[]; results: any }
     >,
     "mutationFn"
   > = {},

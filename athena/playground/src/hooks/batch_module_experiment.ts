@@ -76,33 +76,43 @@ export default function useBatchModuleExperiment(experiment: Experiment, moduleC
       step: "sendingSubmissions",
     }));
   };
-const analyseData = (results:any) => {
-      console.log("Analyzing data...");
-      const exercise = experiment.exercise
 
-      console.log(
-        "Analyzing data and preparing to send results to the backend...",
-        results
+
+  const analyseData = async (results: any) => {
+    const exercise = experiment.exercise
+    const submissions = experiment.evaluationSubmissions
+    const submissionIds = new Set(submissions.map(submission => submission.id));
+    const tutor_feedbacks :any[]= [];
+    for (const feedback of experiment.tutorFeedbacks) {
+      if (submissionIds.has(feedback.submission_id)) {
+        tutor_feedbacks.push(feedback);
+      }
+    }
+  
+    return new Promise((resolve, reject) => {
+      sendResultsMutate(
+        { exercise, tutor_feedbacks, results },
+        {
+          onSuccess: (response) => {
+            const newWindow = window.open("", "_blank", "width=900,height=900");
+            const htmlContent = response[0].data;
+  
+            newWindow!.document.title = "Analytics Report";
+            newWindow!.document.open();
+            newWindow!.document.write(htmlContent);
+            newWindow!.document.close();
+  
+            console.log("Data analysis sent successfully!");
+            resolve(results); // Resolve the promise with results
+          },
+          onError: (error) => {
+            console.error("Error sending data analysis to the backend:", error);
+            reject(error); // Reject the promise with the error
+          },
+        }
       );
-    
-       sendResultsMutate({exercise, results}, {
-        onSuccess: (response) => {
-          const newWindow = window.open("", "_blank", "width=900,height=900");
-          // Get the HTML data and show it 
-          const htmlContent = response[0].data;
-          newWindow!.document.open();
-          newWindow!.document.write(htmlContent);
-          newWindow!.document.close();
-
-          console.log("Data analysis sent successfully!");
-        },
-        onError: (error) => {
-          console.error("Error sending data analysis to the backend:", error);
-        },
-      });
-    
-      return results; // Return the payload for reference
-    };
+    });
+  };
 
   const getResults = () => {
     return { 
