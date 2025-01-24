@@ -84,40 +84,6 @@ const ConductBatchModuleExperiment = React.forwardRef<
     if (didStartExperiment) {
       moduleExperiment.startExperiment();
     }
-    // Function to analyze and send data
-    const analyseData = () => {
-      const payload = {
-        results: {
-          type: "results",
-          runId: moduleExperiment.data.runId,
-          experimentId: experiment.id,
-          moduleConfigurationId: moduleConfiguration.id,
-          step: moduleExperiment.data.step,
-          didSendSubmissions: moduleExperiment.data.didSendSubmissions,
-          sentTrainingSubmissions: moduleExperiment.data.sentTrainingSubmissions,
-          submissionsWithFeedbackSuggestions: Object.fromEntries(
-            moduleExperiment.data.submissionsWithFeedbackSuggestions
-          ),
-        },
-      };
-    
-      console.log(
-        "Analyzing data and preparing to send results to the backend...",
-        payload
-      );
-    
-      // Send the payload directly without wrapping it in an additional object
-      sendResultsMutate(payload, {
-        onSuccess: () => {
-          console.log("Data analysis sent successfully!");
-        },
-        onError: (error) => {
-          console.error("Error sending data analysis to the backend:", error);
-        },
-      });
-    
-      return payload; // Return the payload for reference
-    };
     useImperativeHandle(ref, () => ({
       importData: moduleExperiment.importData,
       exportData: moduleExperiment.exportData,
