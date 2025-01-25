@@ -12,7 +12,10 @@ Through plotly, the figures are embedded in the HTML file and are fully interact
     """
     try:
         credits_per_submission,grading_instructions_used,exercise_id,grading_criteria,max_points,experiment_id = pre_processing(results)
-        output_file = f"module_text_llm/analytics/created_analytics/analytics_{experiment_id}.html"
+        directory = "module_text_llm/analytics/created_analytics"
+        ensure_directory_exists(directory)
+        output_file = f"{directory}/analytics_{experiment_id}.html"
+        
         if file_exists(output_file):
             return get_html_content(output_file)
         
@@ -109,3 +112,9 @@ def get_introduction()->str:
         analaytics on the usage of the grading instructions ids.
     </p>
 """
+
+import os
+
+def ensure_directory_exists(directory_path):
+    if not os.path.exists(directory_path):
+        os.makedirs(directory_path)
