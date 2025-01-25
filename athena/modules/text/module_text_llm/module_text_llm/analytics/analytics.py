@@ -1,4 +1,3 @@
-import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import plotly.figure_factory as ff
@@ -8,21 +7,25 @@ def test_visualization(data):
     html_explanation = """
     <h2 style="text-align: center;">Total Credits awarded by each model on each submission</h2>
     """
-    rows = []
-    for submission_id, approaches in data.items():
-        for approach, credits in approaches.items():
-            rows.append({"submission_id": submission_id, "approach": approach, "total_credits": sum(credits)})
+    submission_ids = []
+    approaches = []
+    total_credits = []
 
-    df = pd.DataFrame(rows)
+    for submission_id, approaches_data in data.items():
+        for approach, credits in approaches_data.items():
+            submission_ids.append(submission_id)
+            approaches.append(approach)
+            total_credits.append(sum(credits))
+
     fig = px.bar(
-        df,
-        x="submission_id",
-        y="total_credits",
-        color="approach",
+        x=submission_ids,
+        y=total_credits,
+        color=approaches,
         barmode="group",
         title="Total Credits by Approach for Each Submission ID",
-        labels={"submission_id": "Submission ID", "total_credits": "Total Credits", "approach": "Approach"}
+        labels={"x": "Submission ID", "y": "Total Credits", "color": "Approach"}
     )
+
     return {"fig": fig, "html_explanation": html_explanation}
     
 
