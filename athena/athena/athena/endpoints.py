@@ -1,9 +1,10 @@
 # type: ignore # too much weird behavior of mypy with decorators
 import inspect
-from fastapi import Depends, BackgroundTasks, Body
+from fastapi import Depends, BackgroundTasks, Body, Request
 from pydantic import BaseModel, ValidationError
 from typing import TypeVar, Callable, List, Union, Any, Coroutine, Type
 
+from fastapi.responses import HTMLResponse
 from athena.app import app
 from athena.authenticate import authenticated
 from athena.metadata import with_meta
@@ -196,6 +197,16 @@ def submission_selector(func: Union[
 
     return wrapper
 
+def generate_statistics(func):
+    @app.post("/generate_statistics", response_class=HTMLResponse)
+    async def wrapper(request: Request):
+        try:
+            results = await request.json()
+            return await func(results)
+        except Exception as e:
+            return {"error": str(e)}
+
+    return wrapper
 
 def feedback_consumer(func: Union[
     Callable[[E, S, List[F]], None],
@@ -234,7 +245,6 @@ def feedback_consumer(func: Union[
     submission_type = inspect.signature(func).parameters["submission"].annotation
     feedback_type = inspect.signature(func).parameters["feedbacks"].annotation.__args__[0]
     module_config_type = inspect.signature(func).parameters["module_config"].annotation if "module_config" in inspect.signature(func).parameters else None
-
     @app.post("/feed_feedbacks", responses=module_responses)
     @authenticated
     @with_meta

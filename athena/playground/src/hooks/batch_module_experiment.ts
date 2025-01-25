@@ -7,6 +7,7 @@ import type { ModuleConfiguration } from "@/components/view_mode/evaluation_mode
 import { v4 as uuidv4 } from "uuid";
 import { useEffect, useRef, useState } from "react";
 import { useSendFeedbacks } from "./athena/send_feedbacks";
+import { useSendResults } from "./athena/send_results";
 import useRequestSubmissionSelection from "./athena/request_submission_selection";
 import useRequestFeedbackSuggestions from "./athena/request_feedback_suggestions";
 import useSendSubmissions from "./athena/send_submissions";
@@ -56,6 +57,7 @@ export default function useBatchModuleExperiment(experiment: Experiment, moduleC
   const [submissionsWithAutomaticEvaluation, setSubmissionsWithAutomaticEvaluation] = useState<
     Map<number, AutomaticEvaluation> | undefined
   >(undefined);
+  const { mutate: sendResultsMutate } = useSendResults();
 
   const [processingStep, setProcessingStep] = useState<
     ExperimentStep | undefined
@@ -75,6 +77,67 @@ export default function useBatchModuleExperiment(experiment: Experiment, moduleC
     }));
   };
 
+
+  const analyseData = async (results: any) => {
+    const exercise = experiment.exercise
+    const submissions = experiment.evaluationSubmissions
+    const submissionIds = new Set(submissions.map(submission => submission.id));
+    const tutor_feedbacks :any[]= [];
+    for (const feedback of experiment.tutorFeedbacks) {
+      if (submissionIds.has(feedback.submission_id)) {
+        tutor_feedbacks.push(feedback);
+      }
+    }
+  
+    return new Promise((resolve, reject) => {
+      sendResultsMutate(
+        { exercise, tutor_feedbacks, results },
+        {
+          onSuccess: (response) => {
+            // const newWindow = window.open("", "_blank", "width=900,height=900");
+            const htmlContent = response[0].data;
+  
+            const width = 800;
+            const height = 600;
+            const left = (window.innerWidth - width) / 2;
+            const top = (window.innerHeight - height) / 2;
+            
+            const newWindow = window.open('', '', `width=${width},height=${height},left=${left},top=${top}`);
+            newWindow!.document.open();
+            newWindow!.document.write(htmlContent);
+            newWindow!.document.close();
+  
+            console.log("Data analysis sent successfully!");
+            resolve(results); // Resolve the promise with results
+          },
+          onError: (error) => {
+            console.error("Error sending data analysis to the backend:", error);
+            reject(error); // Reject the promise with the error
+          },
+        }
+      );
+    });
+  };
+
+  const getResults = () => {
+    return {
+      results: {
+        type: "results",
+        runId: data.runId,
+        experimentId: experiment.id,
+        moduleConfigurationId: moduleConfiguration.id,
+        step: data.step,
+        didSendSubmissions: data.didSendSubmissions,
+        sentTrainingSubmissions: data.sentTrainingSubmissions,
+        submissionsWithFeedbackSuggestions: Object.fromEntries(
+          Array.from(data.submissionsWithFeedbackSuggestions.entries()).map(([key, value]) => [
+            key,
+            { suggestions: value.suggestions }, // Exclude `meta` here
+          ])
+        ),
+      },
+    };}
+  
   const exportData = () => {
     return { 
       results: {
@@ -202,7 +265,7 @@ export default function useBatchModuleExperiment(experiment: Experiment, moduleC
   const requestSubmissionSelection = useRequestSubmissionSelection({ retry: 3 });
   const requestFeedbackSuggestions = useRequestFeedbackSuggestions({ retry: 3 });
   const requestEvaluation = useRequestEvaluation({ retry: 3 });
-
+  const sendResult = useSendResults({ retry: 3 });
   // 1. Send submissions to Athena
   const stepSendSubmissions = () => {
     setProcessingStep("sendingSubmissions");
@@ -490,6 +553,8 @@ export default function useBatchModuleExperiment(experiment: Experiment, moduleC
     continueWithAutomaticEvaluation,
     exportData,
     importData,
+    analyseData,
+    getResults,
     moduleRequests: {
       sendSubmissions,
       sendFeedbacks,

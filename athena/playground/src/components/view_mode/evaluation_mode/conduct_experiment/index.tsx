@@ -36,8 +36,8 @@ export default function ConductExperiment({
   }, []);
 
   const [didStartExperiment, setDidStartExperiment] = useState(false);
+  const [isCompilingAnalyticsReport, setIsCompilingAnalyticsReport] = useState(false);
   const [modulesStep, setModulesStep] = useState<ExperimentStep[]>([]);
-
   const [viewSubmissionIndex, setViewSubmissionIndex] = useState(0);
   const [moduleRenderOrder, setModuleRenderOrder] = useState<number[]>(
     moduleConfigurations.map((_, index) => index)
@@ -46,6 +46,35 @@ export default function ConductExperiment({
   const moduleViewRefs = useRef<(ConductBatchModuleExperimentHandles | null)[]>(
     []
   );
+
+  const handleAnalysis = async () => {
+    setIsCompilingAnalyticsReport(true);
+  
+    try {
+      let aggregatedData: any[] = [];
+      let lastRef;
+      let index = 0 
+      for (const moduleViewRef of moduleViewRefs.current) {
+        const data = moduleViewRef?.getResults();
+        if(data){
+          (data["results"] as any)["name"] = moduleConfigurations[index].name;
+        }
+        console.log(data);
+        aggregatedData.push(data);
+        lastRef = moduleViewRef;
+        index++;
+      }
+  
+      if (lastRef) {
+        const report = await lastRef.analyseData(aggregatedData);
+        console.log("Analysis completed successfully:", report);
+      }
+    } catch (error) {
+      console.error("Error during analysis:", error);
+    } finally {
+      setIsCompilingAnalyticsReport(false);
+    }
+  };
 
   const handleExport = () => {
     downloadJSONFiles(
@@ -186,7 +215,7 @@ export default function ConductExperiment({
               onClick={handleExport}
             >
               Export
-            </button>
+            </button> 
             <label className="rounded-md p-2 text-primary-500 hover:text-primary-600 hover:bg-gray-100 cursor-pointer">
               Import
               <input
@@ -238,6 +267,41 @@ export default function ConductExperiment({
             </label>
           </div>
         </div>
+        <button
+      disabled={isCompilingAnalyticsReport}
+      className={`rounded-md p-2 text-primary-500 hover:text-primary-600 hover:bg-gray-100 hover:no-underline disabled:text-gray-500 disabled:cursor-not-allowed disabled:hover:bg-transparent ${
+        isCompilingAnalyticsReport ? "cursor-wait" : ""
+      }`}
+      onClick={handleAnalysis}
+    >
+      {isCompilingAnalyticsReport ? (
+        <span className="flex items-center">
+          <svg
+            className="animate-spin h-5 w-5 mr-2 text-primary-500"
+            xmlns="http://www.w3.org/2000/svg"
+            fill="none"
+            viewBox="0 0 24 24"
+          >
+            <circle
+              className="opacity-25"
+              cx="12"
+              cy="12"
+              r="10"
+              stroke="currentColor"
+              strokeWidth="4"
+            ></circle>
+            <path
+              className="opacity-75"
+              fill="currentColor"
+              d="M4 12a8 8 0 018-8v8z"
+            ></path>
+          </svg>
+          Compiling Analytics ...
+        </span>
+      ) : (
+        "Compile Analytics Report"
+      )}
+    </button>
         <div className="flex flex-col gap-1 xl:flex-row xl:items-center xl:gap-4">
           {/* Submission switcher */}
           <div className="flex gap-2 items-center">
