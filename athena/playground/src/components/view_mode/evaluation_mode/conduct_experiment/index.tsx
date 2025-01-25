@@ -265,10 +265,8 @@ export default function ConductExperiment({
                 }}
               />
             </label>
-          </div>
-        </div>
-        <button
-      disabled={isCompilingAnalyticsReport}
+            <button
+      disabled={isCompilingAnalyticsReport || modulesStep.every((step) => step === "notStarted")}
       className={`rounded-md p-2 text-primary-500 hover:text-primary-600 hover:bg-gray-100 hover:no-underline disabled:text-gray-500 disabled:cursor-not-allowed disabled:hover:bg-transparent ${
         isCompilingAnalyticsReport ? "cursor-wait" : ""
       }`}
@@ -299,9 +297,12 @@ export default function ConductExperiment({
           Compiling Analytics ...
         </span>
       ) : (
-        "Compile Analytics Report"
+        "Export Analytics Report"
       )}
     </button>
+          </div>
+        </div>
+
         <div className="flex flex-col gap-1 xl:flex-row xl:items-center xl:gap-4">
           {/* Submission switcher */}
           <div className="flex gap-2 items-center">
