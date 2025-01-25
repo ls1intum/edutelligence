@@ -15,7 +15,11 @@ def pre_processing(data):
     return credits_per_submission,grading_instructions_used,exercise_id,grading_criteria,max_points,experiment_id
 def process_exercise(exercise):
     exercise_id = exercise["id"]
-    grading_criteria = exercise["grading_criteria"]
+    
+    grading_criteria = []
+    if "grading_criteria" in exercise:
+        grading_criteria = exercise["grading_criteria"]
+        
     max_points = exercise["max_points"]    
     return exercise_id,grading_criteria,max_points
 
