@@ -2,6 +2,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 import plotly.figure_factory as ff
 import numpy as np
+
 def test_visualization(data):
     html_explanation = """
     <h2 style="text-align: center;">Total Credits awarded by each model on each submission</h2>
@@ -56,14 +57,9 @@ def visualize_histogram_kde_percentages(credit_data,max_points):
     fig.update_layout(
     title='Distribution of Score Percentages',
     xaxis_title='Percentage of Maximum Credits',
-    yaxis_title='Frequency/Density**')
-    fig.add_annotation(
-    text="** Density referes to the estimated probability density of the data at each X-axis value by the KDE smoothing, intuitively its like frequency",
-    x=0, y=-0.2,  # Position below the plot
-    showarrow=False,
-    font={"size": 12, "color": 'gray'},
-    align="center")
-    return {"fig": fig, "html_explanation": html_explanation}       
+    yaxis_title='Frequency')
+    return {"fig": fig, "html_explanation": html_explanation}  
+     
 def visualize_differences_histogram(credit_data,max_points):
     html_explanation = """
     <h1 style="text-align: center; font-size: 32px;">Distribution of Score Disparity Between LLM and Tutor</h1>
@@ -91,14 +87,7 @@ def visualize_differences_histogram(credit_data,max_points):
     fig.update_layout(
     title='Distribution of Score Differences',
     xaxis_title='Score Difference (LLM - Tutor)',
-    yaxis_title='Frequency/Density**')
-    
-    fig.add_annotation(
-    text="** Density referes to the estimated probability density of the data at each X-axis value by the KDE smoothing, intuitively its like frequency",
-    x=0, y=-0.2,  # Position below the plot
-    showarrow=False,
-    font={"size": 12, "color": 'gray'},
-    align="center")
+    yaxis_title='Frequency')
 
     return {"fig": fig, "html_explanation": html_explanation}
 
