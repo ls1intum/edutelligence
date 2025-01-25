@@ -36,9 +36,9 @@ def process_results(results):
                 if submission_id not in grading_instructions_used:
                     grading_instructions_used[submission_id] = {}
                 for suggestion in feedbackSuggestions: 
-                    if(approach) not in credits_per_submission[submission_id]:
+                    if (approach) not in credits_per_submission[submission_id]:
                         credits_per_submission[submission_id][approach] = []
-                    if(approach) not in grading_instructions_used[submission_id]:
+                    if (approach) not in grading_instructions_used[submission_id]:
                         grading_instructions_used[submission_id][approach] = []
                     credits_per_submission[submission_id][approach].append(suggestion["credits"])
                     grading_instructions_used[submission_id][approach].append(suggestion["structured_grading_instruction_id"])
@@ -52,6 +52,6 @@ def process_tutor_feedback(credits_per_submission,grading_instructions_used,subm
         
         if "Tutor" not in grading_instructions_used[str(tutor_feedback["submission_id"])]:
             grading_instructions_used[str(tutor_feedback["submission_id"])]["Tutor"] = []
-        if("structured_grading_instruction_id" in tutor_feedback):
+        if ("structured_grading_instruction_id" in tutor_feedback):
             grading_instructions_used[str(tutor_feedback["submission_id"])]["Tutor"].append(tutor_feedback["structured_grading_instruction_id"])
     return credits_per_submission,grading_instructions_used

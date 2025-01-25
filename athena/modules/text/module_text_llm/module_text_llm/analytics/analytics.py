@@ -26,7 +26,7 @@ def test_visualization(data):
     return {"fig": fig, "html_explanation": html_explanation}
     
 
-def visualize_histogram_kde_percentages(credits,max_points):
+def visualize_histogram_kde_percentages(credit_data,max_points):
     html_explanation = """ 
 <h1 style="text-align: center; font-size: 32px;">Distribution of Score Percentages Awarded by LLM and Tutor</h1>
 <h2 style="text-align: center; font-size: 24px; color: #555;">Insights into Assessment Skew and Distribution Comparison</h2>
@@ -41,7 +41,7 @@ def visualize_histogram_kde_percentages(credits,max_points):
     x = []
     group_labels = []
     approach_credits = {}
-    for submission_id, approaches in credits.items():
+    for submission_id, approaches in credit_data.items():
         for approach, credits in approaches.items():
             if approach not in approach_credits:
                 approach_credits[approach] = []
@@ -62,7 +62,7 @@ def visualize_histogram_kde_percentages(credits,max_points):
     font=dict(size=12, color="gray"),
     align="center")
     return {"fig": fig, "html_explanation": html_explanation}       
-def visualize_differences_histogram(credits,max_points):
+def visualize_differences_histogram(credit_data,max_points):
     html_explanation = """
     <h1 style="text-align: center; font-size: 32px;">Distribution of Score Disparity Between LLM and Tutor</h1>
     <p style="text-align: center; font-size: 18px; max-width: 800px; margin: 20px auto; line-height: 1.6;">
@@ -79,7 +79,7 @@ def visualize_differences_histogram(credits,max_points):
         to align more closely with tutor assessments.
     </p>
     """
-    differences_data = differences(credits)
+    differences_data = differences(credit_data)
     x = [] 
     group_labels = [] 
     for approach, credits in differences_data.items():
@@ -95,7 +95,7 @@ def visualize_differences_histogram(credits,max_points):
     text="** Density referes to the estimated probability density of the data at each X-axis value by the KDE smoothing, intuitively its like frequency",
     x=0, y=-0.2,  # Position below the plot
     showarrow=False,
-    font=dict(size=12, color="gray"),
+    font={"size": 12, "color": 'gray'},
     align="center")
 
     return {"fig": fig, "html_explanation": html_explanation}
@@ -107,14 +107,12 @@ def normalized_absolute_difference(credits, max_points):
         credits (dict): A dictionary with approaches and their score differences.
         max_points (float): Maximum possible credits for normalization.
     """
-    # Calculate absolute differences and normalize
-    differences_data = differences(credits)  # Returns {approach: [differences], ...}
+    differences_data = differences(credits)
     normalized_differences = {
         approach: sum(abs(d) for d in diff_list) / len(diff_list) / max_points
         for approach, diff_list in differences_data.items()
     }
 
-    # Sort by normalized difference
     sorted_differences = dict(sorted(normalized_differences.items(), key=lambda x: x[1], reverse=True))
 
     fig = go.Figure()
@@ -130,11 +128,11 @@ def normalized_absolute_difference(credits, max_points):
         title='Normalized Absolute Differences Between LLM and Tutor Score',
         xaxis_title='Approaches',
         yaxis_title='Normalized Absolute Difference',
-        xaxis=dict(categoryorder='total descending'),  # Sort bars
-        yaxis=dict(range=[0, 1]),  # Normalized values between 0 and 1
+        xaxis={"categoryorder": 'total descending'},
+        yaxis={"range": [0, 1]},
         template='plotly_white'
     )
-    html_explanation = f""" <h1 style="text-align: center;">Normalized Absolute Differences Between LLM and the Tutor</h1>
+    html_explanation = """ <h1 style="text-align: center;">Normalized Absolute Differences Between LLM and the Tutor</h1>
 <p style="text-align: center; font-size: 18px; max-width: 800px; margin: 20px auto; line-height: 1.6;">
     This bar plot visualizes the <strong>normalized absolute differences</strong> in scores between the LLM and other approaches. 
     Each bar represents an approach, sorted from the highest to the lowest difference, and normalized by dividing the average 
@@ -155,7 +153,7 @@ def normalized_absolute_difference(credits, max_points):
 </p>"""
     return {"fig": fig, "html_explanation": html_explanation}
 
-def differences(credits:dict) -> dict:
+def differences(credits):
     """ Calculates the literal differences between the tutor and the other approaches
     removes the submission id, but keeps the credit differences in order so that 
     values at index 0 are the same submission and so on.
@@ -190,7 +188,6 @@ def analyze_grading_instruction_usage(grading_instructions_used):
     - A Plotly figure object with analytics on matching vs. non-matching grading instruction IDs.
     - An HTML string explanation.
     """
-    # Initialize data structures
     approach_stats = {}
 
     for submission_id, approaches in grading_instructions_used.items():
@@ -205,7 +202,6 @@ def analyze_grading_instruction_usage(grading_instructions_used):
             if approach not in approach_stats:
                 approach_stats[approach] = {"matches": 0, "non_matches": 0}
 
-            # Calculate matching and non-matching grading instructions
             approach_instructions = set(instructions)
             matches = tutor_instructions.intersection(approach_instructions)
             non_matches = approach_instructions - tutor_instructions
@@ -213,12 +209,10 @@ def analyze_grading_instruction_usage(grading_instructions_used):
             approach_stats[approach]["matches"] += len(matches)
             approach_stats[approach]["non_matches"] += len(non_matches)
 
-    # Prepare data for plotting
     approaches = list(approach_stats.keys())
     matches = [approach_stats[approach]["matches"] for approach in approaches]
     non_matches = [approach_stats[approach]["non_matches"] for approach in approaches]
 
-    # Create bar plot
     fig = go.Figure()
     fig.add_trace(go.Bar(
         x=approaches, y=matches, name="Matching Instructions",
@@ -229,7 +223,6 @@ def analyze_grading_instruction_usage(grading_instructions_used):
         marker_color="red"
     ))
 
-    # Update layout
     fig.update_layout(
         barmode="group",
         title="Matching vs. Non-Matching Grading Instructions by Approach",
@@ -238,7 +231,6 @@ def analyze_grading_instruction_usage(grading_instructions_used):
         template="plotly_white",
     )
 
-    # HTML explanation
     html_explanation = """
     <h1 style="text-align: center; font-size: 32px;">Grading Instruction Usage Analysis</h1>
     <p style="text-align: center; font-size: 18px; max-width: 800px; margin: 20px auto; line-height: 1.6;">

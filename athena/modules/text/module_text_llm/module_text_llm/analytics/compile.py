@@ -3,25 +3,26 @@ from module_text_llm.analytics.analytics import test_visualization,analyze_gradi
 import os
 import traceback
 
-"""This function will compile the analytics for the given results
+
+def compile(results):
+    """This function will compile the analytics for the given results
 It first preprocesses the data and then calls multiple functions to generate the analytics.
 All these are put together in an HTML file which is then returned as a string.
 Through plotly, the figures are embedded in the HTML file and are fully interactive.
     """
-def compile(results):
     try:
         credits_per_submission,grading_instructions_used,exercise_id,grading_criteria,max_points,experiment_id = pre_processing(results)
-        output_file = f"module_text_llm/analytics/created_analytics/credits_{experiment_id}.html"
+        output_file = f"module_text_llm/analytics/created_analytics/analytics_{experiment_id}.html"
         if file_exists(output_file):
             return get_html_content(output_file)
         
         ############################# CREDIT BASED ANALYTICS #############################
-        creditPSub = test_visualization(credits_per_submission) # credits_comparison.html
+        creditPSub = test_visualization(credits_per_submission)
         histo = visualize_differences_histogram(credits_per_submission,max_points)
         kde_percent = visualize_histogram_kde_percentages(credits_per_submission,max_points)
         nmda = normalized_absolute_difference(credits_per_submission,max_points)
         
-        with open(output_file, "w") as f:
+        with open(output_file, "w", encoding="utf-8") as f:
             f.write(get_introduction())
             f.write("""
             <h2>Credits Analaytics</h2>
@@ -33,7 +34,7 @@ def compile(results):
                 <h2>Plot {i}</h2>
                 """)
                 f.write(dic["html_explanation"])
-                f.write(dic["fig"].to_html(full_html=False, include_plotlyjs="cdn"))  # Embed the figure
+                f.write(dic["fig"].to_html(full_html=False, include_plotlyjs="cdn"))
             
         ############################# CREDIT BASED ANALYTICS #############################
         ####################### Grading Instruction Based Analytics #######################
@@ -63,8 +64,8 @@ def get_html_content(path):
         with open(path, "r", encoding="utf-8") as file:
             html_content = file.read()
         return html_content
-    else:
-        return getFallbackHtml("File was not found")
+    
+    return getFallbackHtml("File was not found")
     
 def getFallbackHtml(specifics: str):
     return  f"""
