@@ -96,7 +96,13 @@ export default function useBatchModuleExperiment(experiment: Experiment, moduleC
           onSuccess: (response) => {
             // const newWindow = window.open("", "_blank", "width=900,height=900");
             const htmlContent = response[0].data;
-  
+            const blob = new Blob([htmlContent], { type: 'text/html' });
+            const link = document.createElement('a');
+            link.href = URL.createObjectURL(blob);
+            link.download = 'analysis.html';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
             const width = 800;
             const height = 600;
             const left = (window.innerWidth - width) / 2;
