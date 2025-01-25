@@ -61,6 +61,7 @@ async def suggest_feedback(exercise: Exercise, submission: Submission, is_graded
                 return [Feedback(title="Instructors need to review this submission", description="This Submission potentially violates the content policy!", credits=-1.0, exercise_id=exercise.id, submission_id=submission.id, is_graded=is_graded)]
         module_config.approach = FewShotChainOfThoughtConfig()
         return await generate_suggestions(exercise, submission, module_config.approach, module_config.debug, is_graded)
+
     return await generate_suggestions(exercise, submission, module_config.approach, module_config.debug, is_graded)
 
 
