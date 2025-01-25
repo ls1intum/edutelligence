@@ -17,18 +17,18 @@ Through plotly, the figures are embedded in the HTML file and are fully interact
             return get_html_content(output_file)
         
         ############################# CREDIT BASED ANALYTICS #############################
+        # Define them here, must return a dict of type {"fig":fig,"html_explanation":html_explanation}
         creditPSub = test_visualization(credits_per_submission)
         histo = visualize_differences_histogram(credits_per_submission,max_points)
         kde_percent = visualize_histogram_kde_percentages(credits_per_submission,max_points)
         nmda = normalized_absolute_difference(credits_per_submission,max_points)
-        
         with open(output_file, "w", encoding="utf-8") as f:
             f.write(get_introduction())
             f.write("""
             <h2>Credits Analaytics</h2>
             <hr style="border: 3px solid black; margin: 20px 0;" />
             """)
-            for i,dic in enumerate([nmda,kde_percent,histo, creditPSub], start=1):
+            for i,dic in enumerate([nmda,kde_percent,histo, creditPSub], start=1): # and use them here
                 f.write(f"""
                 <hr style="border: 1px solid lightgray; margin: 10px 0;" />
                 <h2>Plot {i}</h2>
