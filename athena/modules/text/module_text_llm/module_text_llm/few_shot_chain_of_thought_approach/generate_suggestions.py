@@ -81,7 +81,7 @@ async def generate_suggestions(exercise: Exercise, submission: Submission, confi
         feedbacks.append(Feedback(
             exercise_id=exercise.id,
             submission_id=submission.id,
-            title=feedback.title,
+            title=feedback.criteria,
             description=feedback.description,
             index_start=index_start,
             index_end=index_end,

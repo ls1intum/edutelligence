@@ -46,7 +46,7 @@ Following the output schema, the result is therefore:
 {{
   "assessment": [
     {{
-      "title": "Difference between Coupling and Cohesion",
+      "criteria": "Difference between Coupling and Cohesion",
       "description": "Great work! Your explanation of the difference between coupling and cohesion is correct.",
       "line_start": 1,
       "line_end": 1,
@@ -54,7 +54,7 @@ Following the output schema, the result is therefore:
       "grading_instruction_id": 6053
     }},
     {{
-      "title": "Example of Coupling and Cohesion",
+      "criteria": "Example of Coupling and Cohesion",
       "description": "Your example is correct and clear. To improve further, consider providing a more creative or unique example.",
       "line_start": 2,
       "line_end": 2,
@@ -62,7 +62,7 @@ Following the output schema, the result is therefore:
       "grading_instruction_id": 6058
     }},
     {{
-      "title": "Importance of Coupling and Cohesion",
+      "criteria": "Importance of Coupling and Cohesion",
       "description": "You have provided a partial explanation of why coupling and cohesion are important. Consider discussing specific aspects like maintainability or lower complexity.",
       "line_start": 3,
       "line_end": 3,
@@ -84,7 +84,7 @@ Following the output schema, the result is therefore:
 {{
   "assessment": [
     {{
-      "title": "Difference between Coupling and Cohesion",
+      "criteria": "Difference between Coupling and Cohesion",
       "description": "Great work! Your explanation of the difference between coupling and cohesion is correct.",
       "line_start": 1,
       "line_end": 1,
@@ -92,7 +92,7 @@ Following the output schema, the result is therefore:
       "grading_instruction_id": 6053
     }},
     {{
-      "title": "Example of Coupling and Cohesion",
+      "criteria": "Example of Coupling and Cohesion",
       "description": "No example provided. Please include an example to demonstrate coupling and cohesion.",
       "line_start": 2,
       "line_end": 2,
@@ -100,7 +100,7 @@ Following the output schema, the result is therefore:
       "grading_instruction_id": 6055
     }},
     {{
-      "title": "Importance of Coupling and Cohesion",
+      "criteria": "Importance of Coupling and Cohesion",
       "description": "Excellent point on reducing complexity. Great work!",
       "line_start": 3,
       "line_end": 3,
@@ -122,7 +122,7 @@ Following the output schema, the result is therefore:
 {{
   "assessment": [
     {{
-      "title": "Difference between Coupling and Cohesion",
+      "criteria": "Difference between Coupling and Cohesion",
       "description": "You have mixed up the definitions of coupling and cohesion. Please review their correct meanings.",
       "line_start": 1,
       "line_end": 1,
@@ -130,7 +130,7 @@ Following the output schema, the result is therefore:
       "grading_instruction_id": 6053
     }},
     {{
-      "title": "Example of Coupling and Cohesion",
+      "criteria": "Example of Coupling and Cohesion",
       "description": "Your example is correct and clear. Great job!",
       "line_start": 2,
       "line_end": 2,
@@ -138,7 +138,7 @@ Following the output schema, the result is therefore:
       "grading_instruction_id": 6053
     }},
     {{
-      "title": "Importance of Coupling and Cohesion",
+      "criteria": "Importance of Coupling and Cohesion",
       "description": "You have correctly highlighted maintainability and reduced complexity. Great work!",
       "line_start": 3,
       "line_end": 3,
@@ -176,7 +176,7 @@ _Note: **{problem_statement}**, **{example_solution}**, or **{grading_instructio
   
 # Output Object
 class FeedbackSuggestion(BaseModel):
-    title: str = Field(description="Very short title, i.e. feedback category or criteria title")
+    criteria: str = Field(description="Very short title, i.e. feedback category or criteria title")
     description: str = Field(description="Feedback description")
     line_start: Optional[int] = Field(description="Referenced line number start, or empty if unreferenced")
     line_end: Optional[int] = Field(description="Referenced line number end, or empty if unreferenced")
