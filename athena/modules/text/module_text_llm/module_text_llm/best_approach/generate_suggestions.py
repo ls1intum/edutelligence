@@ -42,7 +42,11 @@ async def generate_suggestions(exercise: Exercise, submission: Submission, confi
         A sample solution to the problem statement is:
         # Example Solution
         {exercise.example_solution}
-        # End Example Solution"""
+        # End Example Solution
+        # General Instructions
+        # You do not have access to lecture materials, exercise sheet or otherwise. If any criteria or instruction requires you to have this knowledge do not make any assumptions.
+        # End General Instructions"""
+        
         criteria_explanation_prompt += problem_statement
         # print(criteria)
         # print(type(criteria))
