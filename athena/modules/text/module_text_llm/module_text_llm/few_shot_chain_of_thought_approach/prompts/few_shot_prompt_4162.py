@@ -1,4 +1,6 @@
-examples = """Before grading my submission consider how a human tutor thinks with this example:
+examples = 
+
+bla = """Before grading my submission consider how a human tutor thinks with this example:
 After you have finished your initial analysis try to think step by step to create your assessment.
 Here are some examples of reasoning for some ficticious submissions: 
 # Example 1
@@ -14,9 +16,9 @@ These are the only criteria, I do not change or seperate them or create other cr
 Following the output schema, the result is therefore:
 
 {{
-  "feedbacks": [
+  "assessment": [
     {{
-      "title": "Difference between Coupling and Cohesion",
+      "criteria": "Difference between Coupling and Cohesion",
       "description": "Great work! Your explanation of the difference between coupling and cohesion is correct.",
       "line_start": 1,
       "line_end": 1,
@@ -24,7 +26,7 @@ Following the output schema, the result is therefore:
       "grading_instruction_id": 6053
     }},
     {{
-      "title": "Example of Coupling and Cohesion",
+      "criteria": "Example of Coupling and Cohesion",
       "description": "Your example is correct and clear. To improve further, consider providing a more creative or unique example.",
       "line_start": 2,
       "line_end": 2,
@@ -32,7 +34,7 @@ Following the output schema, the result is therefore:
       "grading_instruction_id": 6058
     }},
     {{
-      "title": "Importance of Coupling and Cohesion",
+      "criteria": "Importance of Coupling and Cohesion",
       "description": "You have provided a partial explanation of why coupling and cohesion are important. Consider discussing specific aspects like maintainability or lower complexity.",
       "line_start": 3,
       "line_end": 3,
@@ -54,7 +56,7 @@ Following the output schema, the result is therefore:
 {{
   "feedbacks": [
     {{
-      "title": "Difference between Coupling and Cohesion",
+      "criteria": "Difference between Coupling and Cohesion",
       "description": "Great work! Your explanation of the difference between coupling and cohesion is correct.",
       "line_start": 1,
       "line_end": 1,
@@ -62,7 +64,7 @@ Following the output schema, the result is therefore:
       "grading_instruction_id": 6053
     }},
     {{
-      "title": "Example of Coupling and Cohesion",
+      "criteria": "Example of Coupling and Cohesion",
       "description": "No example provided. Please include an example to demonstrate coupling and cohesion.",
       "line_start": 2,
       "line_end": 2,
@@ -70,7 +72,7 @@ Following the output schema, the result is therefore:
       "grading_instruction_id": 6055
     }},
     {{
-      "title": "Importance of Coupling and Cohesion",
+      "criteria": "Importance of Coupling and Cohesion",
       "description": "Excellent point on reducing complexity. Great work!",
       "line_start": 3,
       "line_end": 3,
@@ -92,7 +94,7 @@ Following the output schema, the result is therefore:
 {{
   "feedbacks": [
     {{
-      "title": "Difference between Coupling and Cohesion",
+      "criteria": "Difference between Coupling and Cohesion",
       "description": "You have mixed up the definitions of coupling and cohesion. Please review their correct meanings.",
       "line_start": 1,
       "line_end": 1,
@@ -100,7 +102,7 @@ Following the output schema, the result is therefore:
       "grading_instruction_id": 6053
     }},
     {{
-      "title": "Example of Coupling and Cohesion",
+      "criteria": "Example of Coupling and Cohesion",
       "description": "Your example is correct and clear. Great job!",
       "line_start": 2,
       "line_end": 2,
@@ -108,7 +110,7 @@ Following the output schema, the result is therefore:
       "grading_instruction_id": 6053
     }},
     {{
-      "title": "Importance of Coupling and Cohesion",
+      "criteria": "Importance of Coupling and Cohesion",
       "description": "You have correctly highlighted maintainability and reduced complexity. Great work!",
       "line_start": 3,
       "line_end": 3,

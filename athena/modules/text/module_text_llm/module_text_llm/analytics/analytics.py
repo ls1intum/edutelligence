@@ -127,14 +127,25 @@ def visualize_differences_histogram(credit_data,max_points):
     differences_data = differences(credit_data)
     x = [] 
     group_labels = [] 
+    # for approach, credits in differences_data.items():
+    #     x.append(credits)
+    #     group_labels.append(approach)
+        
+    fig = go.Figure() 
     for approach, credits in differences_data.items():
-        x.append(credits)
-        group_labels.append(approach)
-    fig = ff.create_distplot(x, group_labels, bin_size=0.5)
+        fig.add_trace(go.Histogram(x=credits, name=approach,xbins=dict(size=0.5)))  
+    # fig = ff.create_distplot(x, group_labels,bin_size=0.5, show_curve=False, show_rug=False, show_hist=True)
     fig.update_layout(
-    title='Distribution of Score Differences',
-    xaxis_title='Score Difference (LLM - Tutor)',
-    yaxis_title='Frequency')
+    title='Histogram of Total Credits Given',
+    xaxis_title='Difference LLM - Tutor',
+    yaxis_title='Count')
+    fig.update_traces(opacity=0.8)
+    
+    # fig = ff.create_distplot(x, group_labels, bin_size=0.5)
+    # fig.update_layout(
+    # title='Distribution of Score Differences',
+    # xaxis_title='Score Difference (LLM - Tutor)',
+    # yaxis_title='Frequency')
 
     return {"fig": fig, "html_explanation": html_explanation}
 
