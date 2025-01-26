@@ -13,8 +13,7 @@ from llm_core.utils.llm_utils import (
 from llm_core.utils.predict_and_parse import predict_and_parse
 
 from module_text_llm.helpers.utils import add_sentence_numbers, get_index_range_from_line_range, format_grading_instructions
-from module_text_llm.few_shot_chain_of_thought_approach.prompt_thinking import InitialAssessmentModel
-from module_text_llm.few_shot_chain_of_thought_approach.prompt_generate_feedback import AssessmentModel
+from module_text_llm.few_shot_chain_of_thought_approach.prompt_thinking import AssessmentModel
 
 
 async def generate_suggestions(exercise: Exercise, submission: Submission, config: ApproachConfig, debug: bool, is_graded: bool) -> List[Feedback]:
@@ -33,7 +32,7 @@ async def generate_suggestions(exercise: Exercise, submission: Submission, confi
         model=model, 
         system_message=config.thinking_prompt.system_message, 
         human_message=config.thinking_prompt.human_message, 
-        pydantic_object=InitialAssessmentModel
+        pydantic_object=AssessmentModel
     )
     
     # Check if the prompt is too long and omit features if necessary (in order of importance)
@@ -58,46 +57,13 @@ async def generate_suggestions(exercise: Exercise, submission: Submission, confi
         model=model, 
         chat_prompt=chat_prompt, 
         prompt_input=prompt_input, 
-        pydantic_object=InitialAssessmentModel,
+        pydantic_object=AssessmentModel,
         tags=[
             f"exercise-{exercise.id}",
             f"submission-{submission.id}",
         ],
         use_function_calling=True
     )
-
-    # second_prompt_input = {
-    #     "problem_statement": exercise.problem_statement or "No problem statement.",
-    #     "grading_instructions": format_grading_instructions(exercise.grading_instructions, exercise.grading_criteria),
-    #     "answer" : initial_result.dict(),
-    #     "submission": add_sentence_numbers(submission.text)
-
-    # }
-    
-    # second_chat_prompt = get_chat_prompt_with_formatting_instructions(     
-    #     model=model, 
-    #     system_message=config.generate_suggestions_prompt.second_system_message, 
-    #     human_message=config.generate_suggestions_prompt.answer_message, 
-    #     pydantic_object=AssessmentModel)
-    
-    # result = await predict_and_parse(
-    # model=model, 
-    # chat_prompt=second_chat_prompt, 
-    # prompt_input=second_prompt_input, 
-    # pydantic_object=AssessmentModel,
-    # tags=[
-    #     f"exercise-{exercise.id}",
-    #     f"submission-{submission.id}",
-    # ],
-    #     use_function_calling=True
-    # )
-        
-    # if debug:
-    #     emit_meta("generate_suggestions", {
-    #         "prompt": chat_prompt.format(**prompt_input),
-    #         "result": result.dict() if result is not None else None
-    #     })
-
 
     if result is None:
         return []
@@ -109,7 +75,7 @@ async def generate_suggestions(exercise: Exercise, submission: Submission, confi
     )
 
     feedbacks = []
-    for feedback in result.feedbacks:
+    for feedback in result.assessment:
         index_start, index_end = get_index_range_from_line_range(feedback.line_start, feedback.line_end, submission.text)
         grading_instruction_id = feedback.grading_instruction_id if feedback.grading_instruction_id in grading_instruction_ids else None
         feedbacks.append(Feedback(

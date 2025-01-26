@@ -44,7 +44,7 @@ These are the only criteria, I do not change or seperate them or create other cr
 Following the output schema, the result is therefore:
 
 {{
-  "feedbacks": [
+  "assessment": [
     {{
       "title": "Difference between Coupling and Cohesion",
       "description": "Great work! Your explanation of the difference between coupling and cohesion is correct.",
@@ -82,7 +82,7 @@ The student has said that they are important for reducing complexity in software
 
 Following the output schema, the result is therefore:
 {{
-  "feedbacks": [
+  "assessment": [
     {{
       "title": "Difference between Coupling and Cohesion",
       "description": "Great work! Your explanation of the difference between coupling and cohesion is correct.",
@@ -120,7 +120,7 @@ The student has mentioned maintainability and reducing complexity as reasons why
 
 Following the output schema, the result is therefore:
 {{
-  "feedbacks": [
+  "assessment": [
     {{
       "title": "Difference between Coupling and Cohesion",
       "description": "You have mixed up the definitions of coupling and cohesion. Please review their correct meanings.",
@@ -152,6 +152,8 @@ Remember to be extra caution and careful not to reveal the solution. Your feedba
 You are allowed to use the examples above as inspiration, but make sure to adapt them to the student's submission. Furthermore, you may deviate on the feedback content in order to be more assisting to the student.
 You may also explain things which the student seem to have misconceptions about. However you should not give away the solution.
 # Your Assessment
+Remember to be on the more generous side on your assessment. If something should be deducted, make sure that its for a strong reason. 
+If a point the student made is correct but could benefit from minor adjustments, give the full credits and add your suggestions for improvement.
 Now its your turn. Here is student the submission (with sentence numbers <number>: <sentence>):
 \"\"\"
 {submission}
@@ -173,7 +175,7 @@ _Note: **{problem_statement}**, **{example_solution}**, or **{grading_instructio
                                description="Message from a human. The input on which the AI is supposed to act.")
   
 # Output Object
-class InitialAssessment(BaseModel):
+class FeedbackSuggestion(BaseModel):
     title: str = Field(description="Very short title, i.e. feedback category or criteria title")
     description: str = Field(description="Feedback description")
     line_start: Optional[int] = Field(description="Referenced line number start, or empty if unreferenced")
@@ -181,12 +183,12 @@ class InitialAssessment(BaseModel):
     credits: float = Field(0.0, description="Number of points received/deducted")
     # reasoning: str = Field(description="Reasoning why the feedback was given")
     # improvment_suggestion: str = Field(description="Suggestion for improvement for the student")
-    grading_instruction_id: int = Field(
+    grading_instruction_id: Optional[int] = Field(
         description="ID of the grading instruction that was used to generate this feedback, or empty if no grading instruction was used"
     )
 
-class InitialAssessmentModel(BaseModel):
+class AssessmentModel(BaseModel):
     """Collection of feedbacks making up an assessment"""
     
-    feedbacks: List[InitialAssessment] = Field(description="Assessment feedbacks")
+    assessment: List[FeedbackSuggestion] = Field(description="Assessment feedbacks")
     

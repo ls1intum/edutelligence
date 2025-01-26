@@ -16,8 +16,8 @@ Through plotly, the figures are embedded in the HTML file and are fully interact
         ensure_directory_exists(directory)
         output_file = f"{directory}/analytics_{experiment_id}.html"
         
-        if file_exists(output_file):
-            return get_html_content(output_file)
+        # if file_exists(output_file):
+        #     return get_html_content(output_file)
         
         ############################# CREDIT BASED ANALYTICS #############################
         # Define them here, must return a dict of type {"fig":fig,"html_explanation":html_explanation}

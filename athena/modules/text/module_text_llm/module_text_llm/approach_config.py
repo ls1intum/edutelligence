@@ -4,7 +4,7 @@ from abc import ABC, abstractmethod
 from athena.text import Exercise, Submission
     
 class ApproachConfig(BaseModel, ABC):
-    max_input_tokens: int = Field(default=3000, description="Maximum number of tokens in the input prompt.")
+    max_input_tokens: int = Field(default=10000, description="Maximum number of tokens in the input prompt.")
     model: ModelConfigType = Field(default=DefaultModelConfig())
     type: str = Field(..., description="The type of approach config")
 
