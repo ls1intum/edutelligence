@@ -8,9 +8,16 @@ from module_text_llm.best_approach.prompt_generate_suggestions import Assessment
 from module_text_llm.approach_config import ApproachConfig
 from module_text_llm.helpers.utils import add_sentence_numbers, get_index_range_from_line_range, format_grading_instructions
 import asyncio
+import re
+def double_curly_braces(input_str):
+    return input_str.replace("{", " ").replace("}", " ")
+    # return re.sub(r"({|})", r"\1\1", input_str)
 
+    # return input_str.replace("{", "{{").replace("}", "}}")
 # Placeholder for generate suggestions logic.
 async def generate_suggestions(exercise: Exercise, submission: Submission, config: ApproachConfig, debug: bool, is_graded: bool):
+    submission_text = double_curly_braces(submission.text)
+    print(submission_text)
     model = config.model.get_model()  # type: ignore[attr-defined]
     prompt_input = {
         # "max_points": exercise.max_points,
@@ -18,7 +25,7 @@ async def generate_suggestions(exercise: Exercise, submission: Submission, confi
         # "grading_instructions": format_grading_instructions(exercise.grading_instructions, exercise.grading_criteria),
         # "problem_statement": exercise.problem_statement or "No problem statement.",
         # "example_solution": exercise.example_solution,
-        "submission": add_sentence_numbers(submission.text)
+        "submission": add_sentence_numbers(submission_text)
     }
     # Let us define our beatiful steps.
     # For now assuming using gpt4o
@@ -72,39 +79,10 @@ async def generate_suggestions(exercise: Exercise, submission: Submission, confi
             criteria_explanation_prompt += f""" 
             Instruction Number {idx+1}: You must award {instruction.credits} credits if the following description applies: "{instruction.instruction_description=}. A possible feedback could be in the likes of "{instruction.feedback}" but you may adjust it as you see fit. Apply grading instruction id {instruction.id} to this segment of the submission. \n
             """
-        # print(criteria_explanation_prompt)
-        # criteria_explanation_prompt += f""" """ 3
+
         chat_prompt = get_simple_chat_prompt(criteria_explanation_prompt,"Here is the submission: {submission}")
-        tasks.append(process_criteria(criteria, model, chat_prompt, prompt_input, exercise, submission, grading_instruction_ids, is_graded))
-        # result = await predict_and_parse(
-        #     model=model, 
-        #     chat_prompt=chat_prompt, 
-        #     prompt_input=prompt_input, 
-        #     pydantic_object=AssessmentModel,
-        #     tags=[
-        #         f"exercise-{exercise.id}",
-        #         f"submission-{submission.id}",
-        #     ],
-        #     use_function_calling=True
-        # )
-        
-        # result_feedbacks = []
-        # for feedback in result.feedbacks:
-        #     index_start, index_end = get_index_range_from_line_range(feedback.line_start, feedback.line_end, submission.text)
-        #     grading_instruction_id = feedback.grading_instruction_id if feedback.grading_instruction_id in grading_instruction_ids else None
-        #     result_feedbacks.append(Feedback(
-        #         exercise_id=exercise.id,
-        #         submission_id=submission.id,
-        #         title=feedback.title,
-        #         description=feedback.description,
-        #         index_start=index_start,
-        #         index_end=index_end,
-        #         credits=feedback.credits,
-        #         is_graded=is_graded,
-        #         structured_grading_instruction_id=grading_instruction_id,
-        #         meta={}
-        #     ))
-        # feedbacks+=result_feedbacks
+        tasks.append(process_criteria(criteria, model, chat_prompt, prompt_input, exercise, submission_text, grading_instruction_ids, is_graded))
+
     results = await asyncio.gather(*tasks)
 
     # Flatten the list of feedbacks
@@ -112,7 +90,7 @@ async def generate_suggestions(exercise: Exercise, submission: Submission, confi
         feedbacks += feedback_list
     return feedbacks
 
-async def process_criteria(criteria, model, chat_prompt, prompt_input, exercise, submission, grading_instruction_ids, is_graded):
+async def process_criteria(criteria, model, chat_prompt, prompt_input, exercise, submission_text, grading_instruction_ids, is_graded):
     # Call the predict_and_parse method
     result = await predict_and_parse(
         model=model, 
@@ -121,16 +99,16 @@ async def process_criteria(criteria, model, chat_prompt, prompt_input, exercise,
         pydantic_object=AssessmentModel,
         tags=[
             f"exercise-{exercise.id}",
-            f"submission-{submission.id}",
+            # f"submission-{submission.id}",
         ],
         use_function_calling=True
     )
     
     # Parse feedbacks
     result_feedbacks = []
-    for feedback in result.feedbacks:
+    for feedback in result.assessment:
         index_start, index_end = get_index_range_from_line_range(
-            feedback.line_start, feedback.line_end, submission.text
+            feedback.line_start, feedback.line_end, submission_text
         )
         grading_instruction_id = (
             feedback.grading_instruction_id 
@@ -140,8 +118,8 @@ async def process_criteria(criteria, model, chat_prompt, prompt_input, exercise,
         result_feedbacks.append(Feedback(
             exercise_id=exercise.id,
             submission_id=submission.id,
-            title=feedback.title,
-            description=feedback.description,
+            title=feedback.criteria,
+            description=feedback.feedback,
             index_start=index_start,
             index_end=index_end,
             credits=feedback.credits,

@@ -39,8 +39,8 @@ _Note: **{problem_statement}**, **{example_solution}**, or **{grading_instructio
 
 # Output Object
 class FeedbackModel(BaseModel):
-    title: str = Field(description="Very short title, i.e. feedback category or similar", example="Logic Error")
-    description: str = Field(description="Feedback description")
+    criteria: str = Field(description="Short Criteria title!")
+    feedback: str = Field(description="The feedback in text form.")
     line_start: Optional[int] = Field(description="Referenced line number start, or empty if unreferenced")
     line_end: Optional[int] = Field(description="Referenced line number end, or empty if unreferenced")
     credits: float = Field(0.0, description="Number of points received/deducted")
@@ -50,4 +50,4 @@ class FeedbackModel(BaseModel):
 
 class AssessmentModel(BaseModel):
     """Collection of feedbacks making up an assessment"""
-    feedbacks: List[FeedbackModel] = Field(description="Assessment feedbacks")
+    assessment: List[FeedbackModel] = Field(description="Assessment feedbacks")
