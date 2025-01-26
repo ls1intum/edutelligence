@@ -3,7 +3,6 @@ import plotly.graph_objects as go
 import plotly.figure_factory as ff
 import numpy as np
 
-
 def failure_success(failures_per_model,submission_ids):
     total_runs = len(submission_ids)
     successes_per_model = {model: total_runs - failures for model, failures in failures_per_model.items()}
