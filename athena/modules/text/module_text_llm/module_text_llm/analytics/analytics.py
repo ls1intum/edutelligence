@@ -3,6 +3,47 @@ import plotly.graph_objects as go
 import plotly.figure_factory as ff
 import numpy as np
 
+def failure_success(failures_per_model,submission_ids):
+    total_runs = len(submission_ids)
+    successes_per_model = {model: total_runs - failures for model, failures in failures_per_model.items()}
+
+    # Extract data for plotting
+    models = list(failures_per_model.keys())
+    failures = list(failures_per_model.values())
+    successes = list(successes_per_model.values())
+
+    # Create the stacked bar plot
+    fig = go.Figure()
+
+    # Add failures (red bars)
+    fig.add_trace(go.Bar(
+        x=models,
+        y=failures,
+        name='Failures',
+        marker_color='red',
+        hovertemplate='%{y} failures<extra></extra>'
+    ))
+
+    # Add successes (green bars)
+    fig.add_trace(go.Bar(
+        x=models,
+        y=successes,
+        name='Successes',
+        marker_color='green',
+        hovertemplate='%{y} successes<extra></extra>'
+    ))
+
+    # Customize layout
+    fig.update_layout(
+        barmode='stack',  # Stacked bars
+        title='Approach/LLM Failure and Success Rates to produce output',
+        xaxis_title='LLM Models',
+        yaxis_title='Number of Calls',
+        legend_title='Outcome',
+        template='plotly_white',
+        hovermode='x unified'
+    )
+    return {"fig": fig, "html_explanation": ""}
 def test_visualization(data):
     html_explanation = """
     <h2 style="text-align: center;">Total Credits awarded by each model on each submission</h2>
@@ -31,13 +72,10 @@ def test_visualization(data):
 
 def visualize_histogram_kde_percentages(credit_data,max_points):
     html_explanation = """ 
-<h1 style="text-align: center; font-size: 32px;">Distribution of Score Percentages Awarded by LLM and Tutor</h1>
-<h2 style="text-align: center; font-size: 24px; color: #555;">Insights into Assessment Skew and Distribution Comparison</h2>
+<h1 style="text-align: center; font-size: 32px;">Histogram of frequency of total credits given</h1>
+<h2 style="text-align: center; font-size: 24px; color: #555;">Insights into Score Distribution</h2>
 <p style="text-align: center; font-size: 18px; max-width: 800px; margin: 20px auto; line-height: 1.6;">
-    This graph illustrates the distribution of score percentages awarded by the LLM and the tutor. 
-    It provides valuable information on the skew of the assessments and allows for a direct comparison 
-    of their distributions. The plot is a smoothed Kernel Density Estimate (KDE), a non-parametric method 
-    for visualizing a distribution without assuming any specific underlying model.
+    Its just a histogram.
 </p>
 
     """
@@ -48,18 +86,27 @@ def visualize_histogram_kde_percentages(credit_data,max_points):
         for approach, credits in approaches.items():
             if approach not in approach_credits:
                 approach_credits[approach] = []
-            approach_credits[approach].append(sum(credits)/max_points*100)
+            if (sum(credits) > max_points):
+                approach_credits[approach].append(max_points)
+            else:
+                approach_credits[approach].append(sum(credits)) # /max_points*100
     for approach, credits in approach_credits.items():
         x.append(credits)
         group_labels.append(approach)
-            
-    fig = ff.create_distplot(x, group_labels, bin_size=0.5)
+    
+    fig = go.Figure() 
+    for approach, credits in approach_credits.items():
+        fig.add_trace(go.Histogram(x=credits, name=approach,xbins=dict(size=0.5)))  
+    # fig = ff.create_distplot(x, group_labels,bin_size=0.5, show_curve=False, show_rug=False, show_hist=True)
     fig.update_layout(
-    title='Distribution of Score Percentages',
-    xaxis_title='Percentage of Maximum Credits',
-    yaxis_title='Frequency')
+    title='Histogram of Total Credits Given',
+    xaxis_title='Total Credits',
+    yaxis_title='Count')
+    fig.update_traces(opacity=0.7)
     return {"fig": fig, "html_explanation": html_explanation}  
-     
+    
+    #The plot is a smoothed Kernel Density Estimate (KDE), a non-parametric method 
+    #for visualizing a distribution without assuming any specific underlying model.
 def visualize_differences_histogram(credit_data,max_points):
     html_explanation = """
     <h1 style="text-align: center; font-size: 32px;">Distribution of Score Disparity Between LLM and Tutor</h1>
