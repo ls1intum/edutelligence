@@ -1,5 +1,5 @@
 from module_text_llm.analytics.pre_processing import pre_processing
-from module_text_llm.analytics.analytics import test_visualization,failure_success,analyze_grading_instruction_usage, visualize_differences_histogram,normalized_absolute_difference,visualize_histogram_kde_percentages
+from module_text_llm.analytics.analytics import create_threshold_bar_plot,percentage_within_range,test_visualization,failure_success,analyze_grading_instruction_usage, visualize_differences_histogram,normalized_absolute_difference,visualize_histogram_kde_percentages
 import os
 import traceback
 
@@ -25,14 +25,16 @@ Through plotly, the figures are embedded in the HTML file and are fully interact
         histo = visualize_differences_histogram(credits_per_submission,max_points)
         kde_percent = visualize_histogram_kde_percentages(credits_per_submission,max_points)
         nmda = normalized_absolute_difference(credits_per_submission,max_points)
-        fail = failure_success(failures,submission_ids)
+        fail = failure_success(credits_per_submission,failures,submission_ids)
+        threshold_bar_plot = create_threshold_bar_plot(credits_per_submission,max_points)
+
         with open(output_file, "w", encoding="utf-8") as f:
             f.write(get_introduction())
             f.write("""
             <h2>Credits Analaytics</h2>
             <hr style="border: 3px solid black; margin: 20px 0;" />
             """)
-            for i,dic in enumerate([fail,nmda,kde_percent,histo, creditPSub], start=1): # and use them here
+            for i,dic in enumerate([threshold_bar_plot,fail,nmda,kde_percent,histo, creditPSub], start=1): # and use them here
                 f.write(f"""
                 <hr style="border: 1px solid lightgray; margin: 10px 0;" />
                 <h2>Plot {i}</h2>
