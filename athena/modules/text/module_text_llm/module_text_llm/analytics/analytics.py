@@ -2,20 +2,27 @@ import plotly.express as px
 import plotly.graph_objects as go
 import plotly.figure_factory as ff
 import numpy as np
+from collections import Counter
 
-def failure_success(failures_per_model,submission_ids):
+def failure_success(credits_per_submission,failures,submission_ids):
+    failures_per_model = {}
+    list_of_models = failures.keys()
     total_runs = len(submission_ids)
+    for submission_id, approaches in credits_per_submission.items():
+        for model in list_of_models:
+            if model not in failures_per_model:
+                failures_per_model[model] = 0
+            if model not in approaches:
+                failures_per_model[model] += 1
+                
     successes_per_model = {model: total_runs - failures for model, failures in failures_per_model.items()}
 
-    # Extract data for plotting
     models = list(failures_per_model.keys())
     failures = list(failures_per_model.values())
     successes = list(successes_per_model.values())
 
-    # Create the stacked bar plot
     fig = go.Figure()
 
-    # Add failures (red bars)
     fig.add_trace(go.Bar(
         x=models,
         y=failures,
@@ -24,7 +31,6 @@ def failure_success(failures_per_model,submission_ids):
         hovertemplate='%{y} failures<extra></extra>'
     ))
 
-    # Add successes (green bars)
     fig.add_trace(go.Bar(
         x=models,
         y=successes,
@@ -33,9 +39,8 @@ def failure_success(failures_per_model,submission_ids):
         hovertemplate='%{y} successes<extra></extra>'
     ))
 
-    # Customize layout
     fig.update_layout(
-        barmode='stack',  # Stacked bars
+        barmode='stack',
         title='Approach/LLM Failure and Success Rates to produce output',
         xaxis_title='LLM Models',
         yaxis_title='Number of Calls',
@@ -97,7 +102,6 @@ def visualize_histogram_kde_percentages(credit_data,max_points):
     fig = go.Figure() 
     for approach, credits in approach_credits.items():
         fig.add_trace(go.Histogram(x=credits, name=approach,xbins=dict(size=0.5)))  
-    # fig = ff.create_distplot(x, group_labels,bin_size=0.5, show_curve=False, show_rug=False, show_hist=True)
     fig.update_layout(
     title='Histogram of Total Credits Given',
     xaxis_title='Total Credits',
@@ -105,8 +109,6 @@ def visualize_histogram_kde_percentages(credit_data,max_points):
     fig.update_traces(opacity=0.7)
     return {"fig": fig, "html_explanation": html_explanation}  
     
-    #The plot is a smoothed Kernel Density Estimate (KDE), a non-parametric method 
-    #for visualizing a distribution without assuming any specific underlying model.
 def visualize_differences_histogram(credit_data,max_points):
     html_explanation = """
     <h1 style="text-align: center; font-size: 32px;">Distribution of Score Disparity Between LLM and Tutor</h1>
@@ -125,28 +127,15 @@ def visualize_differences_histogram(credit_data,max_points):
     </p>
     """
     differences_data = differences(credit_data)
-    x = [] 
-    group_labels = [] 
-    # for approach, credits in differences_data.items():
-    #     x.append(credits)
-    #     group_labels.append(approach)
         
     fig = go.Figure() 
     for approach, credits in differences_data.items():
         fig.add_trace(go.Histogram(x=credits, name=approach,xbins=dict(size=0.5)))  
-    # fig = ff.create_distplot(x, group_labels,bin_size=0.5, show_curve=False, show_rug=False, show_hist=True)
     fig.update_layout(
-    title='Histogram of Total Credits Given',
+    title='Histogram of differences',
     xaxis_title='Difference LLM - Tutor',
     yaxis_title='Count')
     fig.update_traces(opacity=0.8)
-    
-    # fig = ff.create_distplot(x, group_labels, bin_size=0.5)
-    # fig.update_layout(
-    # title='Distribution of Score Differences',
-    # xaxis_title='Score Difference (LLM - Tutor)',
-    # yaxis_title='Frequency')
-
     return {"fig": fig, "html_explanation": html_explanation}
 
 def normalized_absolute_difference(credits, max_points):
@@ -225,7 +214,6 @@ def getAbsoluteDifferences(differences):
         abs_diff[approach] = np.abs(diff_list)
     return abs_diff
 
-
 def analyze_grading_instruction_usage(grading_instructions_used):
     """
     Analyze grading instruction usage for each approach and plot matching vs. non-matching counts.
@@ -242,7 +230,8 @@ def analyze_grading_instruction_usage(grading_instructions_used):
     for submission_id, approaches in grading_instructions_used.items():
         if "Tutor" not in approaches:
             continue
-        tutor_instructions = set(approaches["Tutor"])
+
+        tutor_instructions = Counter(approaches["Tutor"])
 
         for approach, instructions in approaches.items():
             if approach == "Tutor":
@@ -251,17 +240,25 @@ def analyze_grading_instruction_usage(grading_instructions_used):
             if approach not in approach_stats:
                 approach_stats[approach] = {"matches": 0, "non_matches": 0}
 
-            approach_instructions = set(instructions)
-            matches = tutor_instructions.intersection(approach_instructions)
-            non_matches = approach_instructions - tutor_instructions
+            approach_instructions = Counter(instructions)
 
-            approach_stats[approach]["matches"] += len(matches)
-            approach_stats[approach]["non_matches"] += len(non_matches)
+            matches = 0
+            non_matches = 0
+
+            for instruction, count in approach_instructions.items():
+                if instruction in tutor_instructions:
+                    matches += min(count, tutor_instructions[instruction])
+                else:
+                    non_matches += count
+
+            approach_stats[approach]["matches"] += matches
+            approach_stats[approach]["non_matches"] += non_matches
 
     approaches = list(approach_stats.keys())
     matches = [approach_stats[approach]["matches"] for approach in approaches]
     non_matches = [approach_stats[approach]["non_matches"] for approach in approaches]
 
+    import plotly.graph_objects as go
     fig = go.Figure()
     fig.add_trace(go.Bar(
         x=approaches, y=matches, name="Matching Instructions",
@@ -291,3 +288,67 @@ def analyze_grading_instruction_usage(grading_instructions_used):
     """
 
     return fig, html_explanation
+
+def create_threshold_bar_plot(data,max_points):
+    thresholds = [0, 0.1, 0.15, 0.2, 0.25, 0.3]
+    data_dicts = []
+    for threshold in thresholds:
+        data_dicts.append(percentage_within_range(data,max_points, threshold))
+    fig = go.Figure()
+
+    for approach in data_dicts[0].keys():
+        fig.add_trace(go.Bar(
+            name=approach,
+            x=[f"{threshold*100}%" for threshold in thresholds],
+            y=[data[approach] for data in data_dicts],
+            text=[f"{v}%" for v in [data[approach] for data in data_dicts]],
+            textposition='auto'
+        ))
+
+    fig.update_layout(
+        title="Percentage of Counts Within Thresholds by Approach",
+        xaxis_title="Thresholds",
+        yaxis_title="Percentage (%)",
+        barmode='group',
+        legend_title="Approaches",
+        template='plotly'
+    )
+    html_explanation = """
+    <h1 style="text-align: center; font-size: 32px;">Percentage of LLM results, that fall within a range of maximum points difference from the tutor feedback</h1>
+    <p style="text-align: center; font-size: 18px; max-width: 800px; margin: 20px auto; line-height: 1.6;">
+        For example, for threshold 10 per cent. If the max points are 5, it only includes those llm results that are within 0.5 points of the tutor feedback. A bar of 20 per cent
+        would translate to 20 per cent of the llm results being within 0.5 points of the tutor feedback.
+    </p>
+    """
+    return {"fig": fig, "html_explanation": html_explanation}
+
+def percentage_within_range(data,max_points , threshold):
+    """ This method shows the percentage of the data that falls within a certain range difference of the maximum credits from the tutor
+    Args:
+        data (_type_): the credits data
+    """
+    approach_credits = {}
+    for submission_id, approaches in data.items():
+        for approach, credits in approaches.items():
+            if approach not in approach_credits:
+                approach_credits[approach] = []
+            approach_credits[approach].append(sum(credits))
+    
+    results = {}
+    tutor_credits = approach_credits["Tutor"]
+    for approach,credit_total in approach_credits.items():
+        if approach != "Tutor":
+            if approach not in results:
+                results[approach] = 0
+            for idx,credit in enumerate(credit_total):
+                within_range = calculate_within_cutoff(tutor_credits[idx], credit,max_points, threshold)
+                if within_range:
+                    results[approach] += 1
+    for approach, count in results.items():
+        results[approach] = round(count/len(tutor_credits)*100,2)
+    return results
+def calculate_within_cutoff(tutor_value, llm_value,max_points, threshold):
+    upper_credit_cutoff = tutor_value + max_points * threshold
+    lower_credit_cutoff = tutor_value - max_points * threshold
+    within_range = llm_value <= upper_credit_cutoff and llm_value >= lower_credit_cutoff
+    return within_range

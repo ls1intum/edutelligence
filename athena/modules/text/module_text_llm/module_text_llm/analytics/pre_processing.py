@@ -22,10 +22,6 @@ def pre_processing(data):
         for key, value in grading_instructions_used.items()
         if int(key) not in submission_to_exclude
     }
-    print(credits_per_submission)
-    print(submission_to_exclude)
-    
-    print(filtered_credits_per_submission)
 
     # Remove submissions that did not have suggestions from all approaches, this would cause problems with analytics consistency but also failures
     
@@ -52,11 +48,9 @@ def process_results(results,credits_per_submission,grading_instructions_used,sub
             experiment_id = result["experimentId"]
             for submission_id in submission_ids:
                 submission_id = str(submission_id)
-                print("Looking at Submission ID: ",submission_id)  
                 if submission_id not in all_suggestions:
                     submission_to_exclude.append(submission_id)
                     failures[approach] += 1
-                    print(f" {approach} failed to generate suggestions for submission {submission_id}")
                     continue
                 else:
                     suggestions = all_suggestions[str(submission_id)]
