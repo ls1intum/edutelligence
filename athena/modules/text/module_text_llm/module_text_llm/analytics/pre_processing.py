@@ -57,16 +57,15 @@ def process_results(results,credits_per_submission,grading_instructions_used,sub
                     submission_to_exclude.append(submission_id)
                     failures[approach] += 1
                     continue
-                else:
-                    suggestions = all_suggestions[str(submission_id)]
-                    feedbackSuggestions = suggestions["suggestions"]
-                    for suggestion in feedbackSuggestions: 
-                        if (approach) not in credits_per_submission[submission_id]:
-                            credits_per_submission[submission_id][approach] = []
-                        if (approach) not in grading_instructions_used[submission_id]:
-                            grading_instructions_used[submission_id][approach] = []
-                        credits_per_submission[submission_id][approach].append(suggestion["credits"])
-                        grading_instructions_used[submission_id][approach].append(suggestion["structured_grading_instruction_id"])
+                suggestions = all_suggestions[str(submission_id)]
+                feedbackSuggestions = suggestions["suggestions"]
+                for suggestion in feedbackSuggestions: 
+                    if (approach) not in credits_per_submission[submission_id]:
+                        credits_per_submission[submission_id][approach] = []
+                    if (approach) not in grading_instructions_used[submission_id]:
+                        grading_instructions_used[submission_id][approach] = []
+                    credits_per_submission[submission_id][approach].append(suggestion["credits"])
+                    grading_instructions_used[submission_id][approach].append(suggestion["structured_grading_instruction_id"])
                     
     return credits_per_submission,grading_instructions_used,set(submission_to_exclude),experiment_id,failures
 

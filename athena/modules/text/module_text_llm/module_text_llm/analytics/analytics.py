@@ -1,6 +1,5 @@
 import plotly.express as px
 import plotly.graph_objects as go
-import plotly.figure_factory as ff
 import numpy as np
 from collections import Counter
 
@@ -101,7 +100,7 @@ def visualize_histogram_kde_percentages(credit_data,max_points):
     
     fig = go.Figure() 
     for approach, credits in approach_credits.items():
-        fig.add_trace(go.Histogram(x=credits, name=approach,xbins=dict(size=0.5)))  
+        fig.add_trace(go.Histogram(x=credits, name=approach,xbins={"size": 0.5}))  
     fig.update_layout(
     title='Histogram of Total Credits Given',
     xaxis_title='Total Credits',
@@ -130,7 +129,7 @@ def visualize_differences_histogram(credit_data,max_points):
         
     fig = go.Figure() 
     for approach, credits in differences_data.items():
-        fig.add_trace(go.Histogram(x=credits, name=approach,xbins=dict(size=0.5)))  
+        fig.add_trace(go.Histogram(x=credits, name=approach,xbins={"size": 0.5}))  
     fig.update_layout(
     title='Histogram of differences',
     xaxis_title='Difference LLM - Tutor',
@@ -256,7 +255,6 @@ def analyze_grading_instruction_usage(grading_instructions_used):
     matches = [approach_stats[approach]["matches"] for approach in approaches]
     non_matches = [approach_stats[approach]["non_matches"] for approach in approaches]
 
-    import plotly.graph_objects as go
     fig = go.Figure()
     fig.add_trace(go.Bar(
         x=approaches, y=matches, name="Matching Instructions",
@@ -348,5 +346,5 @@ def percentage_within_range(data,max_points , threshold):
 def calculate_within_cutoff(tutor_value, llm_value,max_points, threshold):
     upper_credit_cutoff = tutor_value + max_points * threshold
     lower_credit_cutoff = tutor_value - max_points * threshold
-    within_range = llm_value <= upper_credit_cutoff and llm_value >= lower_credit_cutoff
+    within_range = lower_credit_cutoff <= llm_value <= upper_credit_cutoff
     return within_range
