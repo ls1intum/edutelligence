@@ -9,7 +9,7 @@ def pre_processing(data):
     exercise = data["data"]["exercise"]
     results = data["data"]["results"]
 
-    exercise_id,grading_criteria,max_points = process_exercise(exercise)
+    exercise_id,grading_criteria,max_points,title,problem_statement = process_exercise(exercise)
     credits_per_submission,grading_instructions_used,submission_ids = process_tutor_feedback(tutor_feedback)
     credits_per_submission,grading_instructions_used,submission_to_exclude,experiment_id,failures = process_results(results,credits_per_submission,grading_instructions_used,submission_ids)
     filtered_credits_per_submission = {
@@ -25,16 +25,21 @@ def pre_processing(data):
 
     # Remove submissions that did not have suggestions from all approaches, this would cause problems with analytics consistency but also failures
     
-    return filtered_credits_per_submission,filtered_grading_instructions_used,exercise_id,grading_criteria,max_points,experiment_id,failures,submission_ids
+    return filtered_credits_per_submission,filtered_grading_instructions_used,exercise_id,grading_criteria,max_points,experiment_id,failures,submission_ids,title,problem_statement
 def process_exercise(exercise):
     exercise_id = exercise["id"]
-    
+    title = ""
+    if "title" in exercise:
+        title = exercise["title"]
+    problem_statement = ""
+    if "problem_statement" in exercise:
+        problem_statement = exercise["problem_statement"]
     grading_criteria = []
     if "grading_criteria" in exercise:
         grading_criteria = exercise["grading_criteria"]
         
     max_points = exercise["max_points"]    
-    return exercise_id,grading_criteria,max_points
+    return exercise_id,grading_criteria,max_points,title,problem_statement
 
 def process_results(results,credits_per_submission,grading_instructions_used,submission_ids):
     failures = {}

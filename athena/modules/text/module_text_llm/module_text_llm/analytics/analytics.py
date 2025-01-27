@@ -49,7 +49,7 @@ def failure_success(credits_per_submission,failures,submission_ids):
         hovermode='x unified'
     )
     return {"fig": fig, "html_explanation": ""}
-def test_visualization(data):
+def total_credit_per_submission(data):
     html_explanation = """
     <h2 style="text-align: center;">Total Credits awarded by each model on each submission</h2>
     """
@@ -179,16 +179,14 @@ def normalized_absolute_difference(credits, max_points):
 <h2 style="text-align: center;">Insights: </h2>
 <ul style="text-align: center;">
     <li style="text-align: center;font-size: 18px;"><strong>The height of each bar:</strong> Indicates how far, on average, the scores from a specific approach differ from the tutor's feedback after normalization.</li>
-    <li style="text-align: center;font-size: 18px;"><strong>Lower values:</strong> Suggest better alignment with tutor feedback, reflecting higher agreement.</li>
+    <li style="text-align: center;font-size: 18px;"><strong>Lower values:</strong> Suggests a lower divergence on average from the tutor assessment</li>
     <li style="text-align: center;font-size: 18px;"><strong>Higher values:</strong> Indicate greater deviation, showing approaches that diverge more from tutor assessments.</li>
 </ul>
-<p style="text-align: center;">
-    This visualization allows you to identify which approaches are the most and least consistent with tutor feedback, helping 
-    analyze the effectiveness of LLM scoring.
-</p>
-<p style="text-align: center;" >
-    <em>Note:</em> The data is normalized to allow fair comparisons across different scales of scores and different exercises.
-</p>"""
+
+<p style="text-align: center; font-size: 18px; font-weight: bold; color: #FF0000;"> <em>Note:</em> THIS PLOT IS NOT AN ACCURATE REPRESENTATION OF ALIGNMENT WITH TUTOR FEEDBACK</p>
+<p style="text-align: center; font-size: 18px; font-weight: bold; color: #16a085;"> <em>Note:</em> Refer to the next plot for a better representation of alignment</p>
+
+"""
     return {"fig": fig, "html_explanation": html_explanation}
 
 def differences(credits):

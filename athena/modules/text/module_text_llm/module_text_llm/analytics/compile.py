@@ -1,5 +1,5 @@
 from module_text_llm.analytics.pre_processing import pre_processing
-from module_text_llm.analytics.analytics import create_threshold_bar_plot,percentage_within_range,test_visualization,failure_success,analyze_grading_instruction_usage, visualize_differences_histogram,normalized_absolute_difference,visualize_histogram_kde_percentages
+from module_text_llm.analytics.analytics import create_threshold_bar_plot,total_credit_per_submission,failure_success,analyze_grading_instruction_usage, visualize_differences_histogram,normalized_absolute_difference,visualize_histogram_kde_percentages
 import os
 import traceback
 
@@ -11,7 +11,7 @@ All these are put together in an HTML file which is then returned as a string.
 Through plotly, the figures are embedded in the HTML file and are fully interactive.
     """
     try:
-        credits_per_submission,grading_instructions_used,exercise_id,grading_criteria,max_points,experiment_id,failures,submission_ids = pre_processing(results)
+        credits_per_submission,grading_instructions_used,exercise_id,grading_criteria,max_points,experiment_id,failures,submission_ids,title,problem_statement = pre_processing(results)
         directory = "module_text_llm/analytics/created_analytics"
         ensure_directory_exists(directory)
         output_file = f"{directory}/analytics_{experiment_id}.html"
@@ -21,7 +21,7 @@ Through plotly, the figures are embedded in the HTML file and are fully interact
         
         ############################# CREDIT BASED ANALYTICS #############################
         # Define them here, must return a dict of type {"fig":fig,"html_explanation":html_explanation}
-        creditPSub = test_visualization(credits_per_submission)
+        creditPSub = total_credit_per_submission(credits_per_submission)
         histo = visualize_differences_histogram(credits_per_submission,max_points)
         kde_percent = visualize_histogram_kde_percentages(credits_per_submission,max_points)
         nmda = normalized_absolute_difference(credits_per_submission,max_points)
@@ -30,11 +30,17 @@ Through plotly, the figures are embedded in the HTML file and are fully interact
 
         with open(output_file, "w", encoding="utf-8") as f:
             f.write(get_introduction())
+            
+            f.write("""
+            <h2>Exercise Information</h2>
+            <hr style="border: 3px solid black; margin: 20px 0;" />
+            """)            
+            f.write(get_exercise_details(title, problem_statement, grading_criteria, max_points))
             f.write("""
             <h2>Credits Analaytics</h2>
             <hr style="border: 3px solid black; margin: 20px 0;" />
             """)
-            for i,dic in enumerate([threshold_bar_plot,fail,nmda,kde_percent,histo, creditPSub], start=1): # and use them here
+            for i,dic in enumerate([fail,nmda,threshold_bar_plot,kde_percent,histo, creditPSub], start=1): # and use them here
                 f.write(f"""
                 <hr style="border: 1px solid lightgray; margin: 10px 0;" />
                 <h2>Plot {i}</h2>
@@ -108,16 +114,21 @@ def get_introduction()->str:
     <h1 style="text-align: center; font-size: 36px;">Athena Interactive Analytics of Experiment</h1>
     <p style="text-align: center; font-size: 18px; max-width: 800px; margin: 20px auto;">
         Welcome to the analytics report for the experiments. This report includes fully interactive visuals generated with Plotly. 
-        You can explore the data by turning visuals on or off by clicking items in the legend. Unless otherwise specified, the analysis 
-        presented here is primarily based on tutor feedback, providing insights into the underlying patterns and trends.
-        
-        The first section focuses on analyzing the credits awarded by each model on each submission. The second section provides a 
-        analaytics on the usage of the grading instructions ids.
+        You can explore the data by turning visuals on or off by clicking items in the legend.
     </p>
 """
-
-import os
 
 def ensure_directory_exists(directory_path):
     if not os.path.exists(directory_path):
         os.makedirs(directory_path)
+
+def get_exercise_details(title, problem_statement, grading_criteria, max_points):
+    return f"""
+<div style="font-family: Arial, sans-serif; margin: 20px; padding: 20px; border: 1px solid #ddd; border-radius: 8px; box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);">
+  <h1 style="color: #2c3e50; font-size: 24px; margin-bottom: 10px;">Exercise: { title }</h1>
+  <hr style="border: none; border-top: 1px solid #ccc; margin-bottom: 20px;" />
+  
+  <h2 style="color: #34495e; font-size: 20px; margin-top: 20px; margin-bottom: 10px;">Maximum Points</h2>
+  <p style="font-size: 18px; font-weight: bold; color: #16a085;">{ max_points } points</p>
+</div>
+"""
