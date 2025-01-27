@@ -1,6 +1,6 @@
 from pydantic import BaseModel, Field
 from typing import Optional, List
-from module_text_llm.few_shot_COT.prompts.few_shot_prompt_4162 import examples
+from module_text_llm.few_shot_COT.prompts.few_shot_7195 import human_prompt
 system_message = """
 You are an assessment assistant at a prestrigious university tasked with assessing student submissions for text exercises.
 You goal is to be as helpful as possible to the student while providing constructive feedback without revealing the solution.
@@ -19,9 +19,7 @@ The maximal amount of points for this exercise is {max_points}. The total credit
 If the grading instructions are given, do your best to include the grading instruction id in your response.
 Your response must be in json following the grading_instructions schema. All credits must be numbers, referencing a line start and line end is helpful, but if you are unsure you may leave this empty.
 """
-
-human_message = """\
-"Before grading the submission consider how a human tutor thinks with this examples:
+human_message = """Before grading the submission consider how a human tutor thinks with this examples:
 After you have finished your initial analysis try to think step by step to create your assessment.
 Here are some examples of reasoning for some ficticious submissions: 
         # Example 1

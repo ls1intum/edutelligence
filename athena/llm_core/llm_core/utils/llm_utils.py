@@ -109,6 +109,80 @@ def get_chat_prompt_with_formatting_instructions(
     human_message_prompt = HumanMessagePromptTemplate.from_template(human_message + "\n\nJSON response following the provided schema: ")
     return ChatPromptTemplate.from_messages([system_message_prompt, human_message_prompt])
 
+def get_chat_prompt_with_formatting_instructions(
+            model: BaseLanguageModel,
+            system_message: str, 
+            human_message: str,
+            pydantic_object: Type[T]
+        ) -> ChatPromptTemplate:
+    """Returns a ChatPromptTemplate with formatting instructions (if necessary)
+
+    Note: Does nothing if the model supports function calling
+
+    Args:
+        model (BaseLanguageModel): The model to check if it supports function calling
+        system_message (str): System message
+        human_message (str): Human message
+        pydantic_object (Type[T]): Model to parse the output
+
+    Returns:
+        ChatPromptTemplate: ChatPromptTemplate with formatting instructions (if necessary)
+    """
+    if supports_function_calling(model):
+        system_message_prompt = SystemMessagePromptTemplate.from_template(system_message)
+        human_message_prompt = HumanMessagePromptTemplate.from_template(human_message)
+        return ChatPromptTemplate.from_messages([system_message_prompt, human_message_prompt])
+
+    output_parser = PydanticOutputParser(pydantic_object=pydantic_object)
+    system_message_prompt = SystemMessagePromptTemplate.from_template(system_message + "\n{format_instructions}")
+    system_message_prompt.prompt.partial_variables = {"format_instructions": output_parser.get_format_instructions()}
+    system_message_prompt.prompt.input_variables.remove("format_instructions")
+    human_message_prompt = HumanMessagePromptTemplate.from_template(human_message + "\n\nJSON response following the provided schema: ")
+    return ChatPromptTemplate.from_messages([system_message_prompt, human_message_prompt])
+
+def get_chat_prompt_with_formatting_instructions_2(
+            model: BaseLanguageModel,
+            system_message: str, 
+            human_message: str,
+            pydantic_object: Type[T]
+        ) -> ChatPromptTemplate:
+    """Returns a ChatPromptTemplate with formatting instructions (if necessary)
+
+    Note: Does nothing if the model supports function calling
+
+    Args:
+        model (BaseLanguageModel): The model to check if it supports function calling
+        system_message (str): System message
+        human_message (str): Human message
+        pydantic_object (Type[T]): Model to parse the output
+
+    Returns:
+        ChatPromptTemplate: ChatPromptTemplate with formatting instructions (if necessary)
+    """
+    if supports_function_calling(model):
+        system_message_prompt = SystemMessagePromptTemplate.from_template(system_message)
+        human_message_prompt = HumanMessagePromptTemplate.from_template(human_message)
+        return ChatPromptTemplate.from_messages([system_message_prompt, human_message_prompt])
+
+    human_message_prompt = HumanMessagePromptTemplate.from_template(human_message + "\n\nJSON response following the provided schema: ")
+    output_parser = PydanticOutputParser(pydantic_object=pydantic_object)
+    human_message_prompt = SystemMessagePromptTemplate.from_template(human_message + "\n{format_instructions}")
+    human_message_prompt.prompt.partial_variables = {"format_instructions": output_parser.get_format_instructions()}
+    human_message_prompt.prompt.input_variables.remove("format_instructions")
+    system_message_prompt = HumanMessagePromptTemplate.from_template(system_message + "\n\n Your response must be in JSON, containing the field of an instruction")
+    return ChatPromptTemplate.from_messages([system_message_prompt, human_message_prompt])
+
+def get_human_format_instructions_assessment_model():
+    format_instructions = """
+    
+    """
+    return format_instructions
+def get_human_format_instructions_feedback_model():
+    format_instructions = """
+    
+    """
+    return format_instructions
+
 def get_simple_chat_prompt(
         system_message: str, 
         human_message: str,

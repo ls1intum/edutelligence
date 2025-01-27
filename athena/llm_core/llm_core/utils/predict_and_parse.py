@@ -74,21 +74,7 @@ async def predict_and_parse(
                 result = outputParser.parse(llm_output.content)
                 return result
             except:
-                outputModel = ChatOpenAI(model="gpt-4o-mini")
-                structured_output_llm = outputModel.with_structured_output(pydantic_object, method = "json_mode")
-                chat_prompt = ChatPromptTemplate.from_messages(
-            [
-                ("system", """
-                 A previous LLM was tasked with creating an assessment, however its not as good as you at creating structured output.
-                 This were the prompt inputs {inputs}.
-                 Your only task is to format the following output into json. Line_start and Line_end are only integer or None, A grading_instruction_id can be None if not specified."""),
-                ("human", "Try to only use information from this output, however if neccessary make your own fixes so that the output is in the desired format but still correct:{output}"),
-            ])
-                chain = RunnableSequence(
-                    chat_prompt,
-                    structured_output_llm
-                )
-                return await chain.ainvoke(input = {"inputs":prompt_input,"output": llm_output.content}, config={"tags": tags})
+                return None
         except ValidationError as e:
             raise ValueError(f"Could not parse output: {e}") from e
         
