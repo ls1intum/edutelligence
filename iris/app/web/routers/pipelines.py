@@ -10,6 +10,7 @@ from app.domain import (
     ExerciseChatPipelineExecutionDTO,
     CourseChatPipelineExecutionDTO,
     CompetencyExtractionPipelineExecutionDTO,
+    InconsistencyCheckPipelineExecutionDTO,
 )
 from app.domain.rewriting_pipeline_execution_dto import RewritingPipelineExecutionDTO
 from app.pipeline.chat.exercise_chat_agent_pipeline import ExerciseChatAgentPipeline
@@ -23,6 +24,7 @@ from app.web.status.status_update import (
     ChatGPTWrapperStatusCallback,
     CourseChatStatusCallback,
     CompetencyExtractionCallback,
+    InconsistencyCheckCallback,
     LectureChatCallback,
     RewritingCallback,
 )
@@ -30,6 +32,7 @@ from app.pipeline.chat.course_chat_pipeline import CourseChatPipeline
 from app.dependencies import TokenValidator
 from app.domain import FeatureDTO
 from app.pipeline.competency_extraction_pipeline import CompetencyExtractionPipeline
+from app.pipeline.inconsistency_check_pipeline import InconsistencyCheckPipeline
 from app.domain.text_exercise_chat_pipeline_execution_dto import (
     TextExerciseChatPipelineExecutionDTO,
 )
@@ -63,6 +66,31 @@ def run_exercise_chat_pipeline_worker(
         pipeline(dto=dto)
     except Exception as e:
         logger.error(f"Error running exercise chat pipeline: {e}")
+        logger.error(traceback.format_exc())
+        callback.error("Fatal error.", exception=e)
+
+
+def run_chatgpt_wrapper_pipeline_worker(
+    dto: ExerciseChatPipelineExecutionDTO, _variant: str
+):
+    try:
+        callback = ChatGPTWrapperStatusCallback(
+            run_id=dto.settings.authentication_token,
+            base_url=dto.settings.artemis_base_url,
+            initial_stages=dto.initial_stages,
+        )
+        pipeline = ChatGPTWrapperPipeline(callback=callback)
+    except Exception as e:
+        logger.error(f"Error preparing ChatGPT wrapper pipeline: {e}")
+        logger.error(traceback.format_exc())
+        callback.error("Fatal error.", exception=e)
+        capture_exception(e)
+        return
+
+    try:
+        pipeline(dto=dto)
+    except Exception as e:
+        logger.error(f"Error running ChatGPT wrapper pipeline: {e}")
         logger.error(traceback.format_exc())
         callback.error("Fatal error.", exception=e)
 
@@ -226,6 +254,20 @@ def run_competency_extraction_pipeline_worker(
         callback.error("Fatal error.", exception=e)
 
 
+@router.post(
+    "/competency-extraction/{variant}/run",
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(TokenValidator())],
+)
+def run_competency_extraction_pipeline(
+    variant: str, dto: CompetencyExtractionPipelineExecutionDTO
+):
+    thread = Thread(
+        target=run_competency_extraction_pipeline_worker, args=(dto, variant)
+    )
+    thread.start()
+
+
 def run_rewriting_pipeline_worker(dto: RewritingPipelineExecutionDTO, _variant: str):
     try:
         callback = RewritingCallback(
@@ -249,20 +291,6 @@ def run_rewriting_pipeline_worker(dto: RewritingPipelineExecutionDTO, _variant: 
 
 
 @router.post(
-    "/competency-extraction/{variant}/run",
-    status_code=status.HTTP_202_ACCEPTED,
-    dependencies=[Depends(TokenValidator())],
-)
-def run_competency_extraction_pipeline(
-    variant: str, dto: CompetencyExtractionPipelineExecutionDTO
-):
-    thread = Thread(
-        target=run_competency_extraction_pipeline_worker, args=(dto, variant)
-    )
-    thread.start()
-
-
-@router.post(
     "/rewriting/{variant}/run",
     status_code=status.HTTP_202_ACCEPTED,
     dependencies=[Depends(TokenValidator())],
@@ -273,28 +301,37 @@ def run_rewriting_pipeline(variant: str, dto: RewritingPipelineExecutionDTO):
     thread.start()
 
 
-def run_chatgpt_wrapper_pipeline_worker(
-    dto: ExerciseChatPipelineExecutionDTO, _variant: str
+def run_inconsistency_check_pipeline_worker(
+    dto: InconsistencyCheckPipelineExecutionDTO, _variant: str
 ):
     try:
-        callback = ChatGPTWrapperStatusCallback(
-            run_id=dto.settings.authentication_token,
-            base_url=dto.settings.artemis_base_url,
-            initial_stages=dto.initial_stages,
+        callback = InconsistencyCheckCallback(
+            run_id=dto.execution.settings.authentication_token,
+            base_url=dto.execution.settings.artemis_base_url,
+            initial_stages=dto.execution.initial_stages,
         )
-        pipeline = ChatGPTWrapperPipeline(callback=callback)
+        pipeline = InconsistencyCheckPipeline(callback=callback)
     except Exception as e:
-        logger.error(f"Error preparing ChatGPT wrapper pipeline: {e}")
-        logger.error(traceback.format_exc())
-        capture_exception(e)
-        return
+        logger.error(f"Error preparing inconsistency check pipeline: {e}")
 
     try:
         pipeline(dto=dto)
     except Exception as e:
-        logger.error(f"Error running ChatGPT wrapper pipeline: {e}")
+        logger.error(f"Error running inconsistency check pipeline: {e}")
         logger.error(traceback.format_exc())
         callback.error("Fatal error.", exception=e)
+
+
+@router.post(
+    "/inconsistency-check/{variant}/run",
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(TokenValidator())],
+)
+def run_inconsistency_check_pipeline(
+    variant: str, dto: InconsistencyCheckPipelineExecutionDTO
+):
+    thread = Thread(target=run_inconsistency_check_pipeline_worker, args=(dto, variant))
+    thread.start()
 
 
 @router.get("/{feature}/variants")
@@ -357,6 +394,14 @@ def get_pipeline(feature: str):
                     id="default",
                     name="Default Variant",
                     description="Default lecture chat variant.",
+                )
+            ]
+        case "INCONSISTENCY_CHECK":
+            return [
+                FeatureDTO(
+                    id="default",
+                    name="Default Variant",
+                    description="Default inconsistency check variant.",
                 )
             ]
         case "REWRITING":

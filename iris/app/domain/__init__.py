@@ -6,6 +6,9 @@ from .chat.chat_pipeline_execution_base_data_dto import ChatPipelineExecutionBas
 from .competency_extraction_pipeline_execution_dto import (
     CompetencyExtractionPipelineExecutionDTO,
 )
+from .inconsistency_check_pipeline_execution_dto import (
+    InconsistencyCheckPipelineExecutionDTO,
+)
 from app.domain.chat.exercise_chat.exercise_chat_pipeline_execution_dto import (
     ExerciseChatPipelineExecutionDTO,
 )
