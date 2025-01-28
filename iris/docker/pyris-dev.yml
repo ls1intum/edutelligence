@@ -14,6 +14,8 @@ services:
       - ../llm_config.local.yml:/config/llm_config.yml:ro
     networks:
       - pyris
+    ports:
+          - 8000:8000
 
   weaviate:
     extends:

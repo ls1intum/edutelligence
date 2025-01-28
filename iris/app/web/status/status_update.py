@@ -16,6 +16,7 @@ from app.domain.chat.course_chat.course_chat_status_update_dto import (
 from app.domain.status.lecture_chat_status_update_dto import (
     LectureChatStatusUpdateDTO,
 )
+from app.domain.status.rewriting_status_update_dto import RewritingStatusUpdateDTO
 from app.domain.status.stage_state_dto import StageStateEnum
 from app.domain.status.stage_dto import StageDTO
 from app.domain.status.text_exercise_chat_status_update_dto import (
@@ -291,6 +292,27 @@ class CompetencyExtractionCallback(StatusCallback):
             )
         )
         status = CompetencyExtractionStatusUpdateDTO(stages=stages)
+        stage = stages[-1]
+        super().__init__(url, run_id, status, stage, len(stages) - 1)
+
+
+class RewritingCallback(StatusCallback):
+    def __init__(
+        self,
+        run_id: str,
+        base_url: str,
+        initial_stages: List[StageDTO],
+    ):
+        url = f"{base_url}/api/public/pyris/pipelines/rewriting/runs/{run_id}/status"
+        stages = initial_stages or []
+        stages.append(
+            StageDTO(
+                weight=10,
+                state=StageStateEnum.NOT_STARTED,
+                name="Generating Rewritting",
+            )
+        )
+        status = RewritingStatusUpdateDTO(stages=stages)
         stage = stages[-1]
         super().__init__(url, run_id, status, stage, len(stages) - 1)
 
