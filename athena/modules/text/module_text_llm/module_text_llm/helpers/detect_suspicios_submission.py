@@ -2,15 +2,13 @@ import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
 from rapidfuzz import fuzz
 import os
-from cryptography.fernet import Fernet
-from module_text_llm.helpers.generate_embeddings import embed_text, load_embeddings_from_file
+from module_text_llm.helpers.generate_embeddings import embed_text
 import llm_core.models.openai as openai_config
 from pydantic import BaseModel
 from athena.logger import logger
+from module_text_llm import keywords, keywords_embeddings
 
 def hybrid_suspicion_score(submission, threshold=0.75):
-    keywords_embeddings = load_embeddings_from_file("keywords_embeddings.npy")
-    keywords = decrypt_keywords()
     submission_embedding = embed_text(submission)
     
     submission_embedding = submission_embedding.reshape(1, -1)
@@ -24,16 +22,7 @@ def hybrid_suspicion_score(submission, threshold=0.75):
     score = (max_similarity + (max_fuzzy_score / 100)) / 2
     return score >= threshold, score
 
-def decrypt_keywords(filename="keywords_encrypted.txt"):
-    encryption_key = os.getenv("ENCRYPTION_KEY") 
-    if not encryption_key:
-        return [""]
-    
-    cipher = Fernet(encryption_key)
-    with open(filename, "rb") as f:
-        encrypted_keywords = f.read()
-    decrypted_keywords = cipher.decrypt(encrypted_keywords).decode()
-    return decrypted_keywords.split(", ")
+
 
 class SuspicisionResponse(BaseModel):
     is_suspicious: bool 
