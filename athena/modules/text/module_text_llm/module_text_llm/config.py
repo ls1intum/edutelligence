@@ -10,8 +10,9 @@ from module_text_llm.few_shot_chain_of_thought_approach import FewShotChainOfTho
 from module_text_llm.basic_COT import BasicCOTApproachConfig
 from module_text_llm.icl_rag import ICLRAGConfig
 from module_text_llm.few_shot_COT import FewShotCOT
+from module_text_llm.divide_and_conquer import DivideAndConquerConfig
 
-ApproachConfigUnion = Union[FewShotCOT,ICLRAGConfig, BasicApproachConfig, FewShotChainOfThoughtConfig,BasicCOTApproachConfig, BestApproachConfig]
+ApproachConfigUnion = Union[DivideAndConquerConfig,FewShotCOT,ICLRAGConfig, BasicApproachConfig, FewShotChainOfThoughtConfig,BasicCOTApproachConfig, BestApproachConfig]
 
 @config_schema_provider
 class Configuration(BaseModel):

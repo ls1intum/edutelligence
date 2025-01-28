@@ -13,7 +13,8 @@ from module_text_llm.generate_evaluation import generate_evaluation
 from module_text_llm.approach_controller import generate_suggestions
 from module_text_llm.helpers.detect_suspicios_submission import hybrid_suspicion_score, llm_check
 from module_text_llm.helpers.feedback_icl.store_feedback_icl import store_feedback_icl
-from module_text_llm.few_shot_chain_of_thought_approach import FewShotChainOfThoughtConfig
+from module_text_llm.divide_and_conquer import DivideAndConquerConfig
+from module_text_llm.icl_rag import ICLRAGConfig
 #Test Demo
 from module_text_llm.analytics.compile import compile
 
@@ -51,17 +52,19 @@ async def suggest_feedback(exercise: Exercise, submission: Submission, is_graded
     logger.info("suggest_feedback: %s suggestions for submission %d of exercise %d were requested, with approach: %s and model: %s",
                 "Graded" if is_graded else "Non-graded", submission.id, exercise.id, module_config.approach.__class__.__name__, module_config.approach.model.model_name)
 
-    # if not is_graded:    
-    #     is_sus, score = hybrid_suspicion_score(submission.text, threshold=0.8)
-    #     if is_sus:
-    #         logger.info("Suspicious submission detected with score %f", score)
-    #         is_suspicious,suspicios_text = await llm_check(submission.text)
-    #         if is_suspicious:
-    #             logger.info("Suspicious submission detected by LLM with text %s", suspicios_text)
-    #             return [Feedback(title="Instructors need to review this submission", description="This Submission potentially violates the content policy!", credits=-1.0, exercise_id=exercise.id, submission_id=submission.id, is_graded=is_graded)]
-    #     module_config.approach = FewShotChainOfThoughtConfig()
-    #     return await generate_suggestions(exercise, submission, module_config.approach, module_config.debug, is_graded)
-    # module_config.approach = FewShotChainOfThoughtConfig()
+    # STUDENT
+    if not is_graded:    
+        is_sus, score = hybrid_suspicion_score(submission.text, threshold=0.8)
+        if is_sus:
+            logger.info("Suspicious submission detected with score %f", score)
+            is_suspicious,suspicios_text = await llm_check(submission.text)
+            if is_suspicious:
+                logger.info("Suspicious submission detected by LLM with text %s", suspicios_text)
+                return [Feedback(title="Instructors need to review this submission", description="This Submission potentially violates the content policy!", credits=-1.0, exercise_id=exercise.id, submission_id=submission.id, is_graded=is_graded)]
+        module_config.approach = FewShotChainOfThoughtConfig()
+        return await generate_suggestions(exercise, submission, module_config.approach, module_config.debug, is_graded)
+    # TUTOR
+    module_config.approach = ICLRAGConfig()
     return await generate_suggestions(exercise, submission, module_config.approach, module_config.debug, is_graded)
 
 
