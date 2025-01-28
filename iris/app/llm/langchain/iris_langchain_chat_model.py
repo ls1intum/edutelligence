@@ -12,7 +12,7 @@ from langchain_core.outputs import ChatResult
 from langchain_core.outputs.chat_generation import ChatGeneration
 from langchain_core.runnables import Runnable
 from langchain_core.tools import BaseTool
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.common.PipelineEnum import PipelineEnum
 from app.common.token_usage_dto import TokenUsageDTO
@@ -30,6 +30,9 @@ class IrisLangchainChatModel(BaseChatModel):
     completion_args: CompletionArguments
     tokens: TokenUsageDTO = None
     logger: Logger = logging.getLogger(__name__)
+    tools: Optional[
+        Sequence[Union[Dict[str, Any], Type[BaseModel], Callable, BaseTool]]
+    ] = Field(default_factory=list, alias="tools")
 
     def __init__(
         self,
@@ -65,7 +68,7 @@ class IrisLangchainChatModel(BaseChatModel):
         if not tools:
             raise ValueError("At least one tool must be provided")
 
-        self.request_handler.bind_tools(tools)
+        self.tools = tools
         return self
 
     def _generate(
@@ -77,7 +80,9 @@ class IrisLangchainChatModel(BaseChatModel):
     ) -> ChatResult:
         iris_messages = [convert_langchain_message_to_iris_message(m) for m in messages]
         self.completion_args.stop = stop
-        iris_message = self.request_handler.chat(iris_messages, self.completion_args)
+        iris_message = self.request_handler.chat(
+            iris_messages, self.completion_args, self.tools
+        )
         base_message = convert_iris_message_to_langchain_message(iris_message)
         chat_generation = ChatGeneration(message=base_message)
         self.tokens = TokenUsageDTO(

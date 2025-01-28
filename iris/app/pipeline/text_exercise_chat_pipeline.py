@@ -76,7 +76,7 @@ class TextExerciseChatPipeline(Pipeline):
             contents=[{"text_content": extract_sentiments_prompt}],
         )
         response = self.request_handler.chat(
-            [extract_sentiments_prompt], CompletionArguments()
+            [extract_sentiments_prompt], CompletionArguments(), tools=None
         )
         response = response.contents[0].text_content
         sentiments = ([], [], [])
@@ -135,6 +135,6 @@ class TextExerciseChatPipeline(Pipeline):
         )
 
         response = self.request_handler.chat(
-            prompts, CompletionArguments(temperature=0.4)
+            prompts, CompletionArguments(temperature=0.4), tools=None
         )
         return response.contents[0].text_content

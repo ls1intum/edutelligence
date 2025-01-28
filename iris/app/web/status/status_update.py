@@ -1,5 +1,6 @@
 from typing import Optional, List
 
+
 from sentry_sdk import capture_exception, capture_message
 
 import requests
@@ -216,6 +217,25 @@ class ExerciseChatStatusCallback(StatusCallback):
             ),
             StageDTO(
                 weight=10, state=StageStateEnum.NOT_STARTED, name="Creating suggestions"
+            ),
+        ]
+        status = ExerciseChatStatusUpdateDTO(stages=stages)
+        stage = stages[current_stage_index]
+        super().__init__(url, run_id, status, stage, current_stage_index)
+
+
+class ChatGPTWrapperStatusCallback(StatusCallback):
+    def __init__(
+        self, run_id: str, base_url: str, initial_stages: List[StageDTO] = None
+    ):
+        url = f"{base_url}/api/public/pyris/pipelines/tutor-chat/runs/{run_id}/status"
+        current_stage_index = len(initial_stages) if initial_stages else 0
+        stages = initial_stages or []
+        stages += [
+            StageDTO(
+                weight=30,
+                state=StageStateEnum.NOT_STARTED,
+                name="Generating response",
             ),
         ]
         status = ExerciseChatStatusUpdateDTO(stages=stages)

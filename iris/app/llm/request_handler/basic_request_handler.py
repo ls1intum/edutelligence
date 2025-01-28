@@ -32,10 +32,15 @@ class BasicRequestHandler(RequestHandler):
         return llm.complete(prompt, arguments, image)
 
     def chat(
-        self, messages: list[PyrisMessage], arguments: CompletionArguments
+        self,
+        messages: list[PyrisMessage],
+        arguments: CompletionArguments,
+        tools: Optional[
+            Sequence[Union[Dict[str, Any], Type[BaseModel], Callable, BaseTool]]
+        ],
     ) -> PyrisMessage:
         llm = self.llm_manager.get_llm_by_id(self.model_id)
-        return llm.chat(messages, arguments)
+        return llm.chat(messages, arguments, tools)
 
     def embed(self, text: str) -> list[float]:
         llm = self.llm_manager.get_llm_by_id(self.model_id)

@@ -17,7 +17,7 @@ from openai.lib.azure import AzureOpenAI
 from openai.types import CompletionUsage
 from openai.types.chat import ChatCompletionMessage, ChatCompletionMessageParam
 from openai.types.shared_params import ResponseFormatJSONObject
-from pydantic import Field, BaseModel
+from pydantic import BaseModel
 
 from app.domain.data.text_message_content_dto import TextMessageContentDTO
 from ...common.message_converters import map_role_to_str, map_str_to_role
@@ -200,12 +200,14 @@ def convert_to_iris_message(
 class OpenAIChatModel(ChatModel):
     model: str
     api_key: str
-    tools: Optional[
-        Sequence[Union[Dict[str, Any], Type[BaseModel], Callable, BaseTool]]
-    ] = Field(default_factory=list, alias="tools")
 
     def chat(
-        self, messages: list[PyrisMessage], arguments: CompletionArguments
+        self,
+        messages: list[PyrisMessage],
+        arguments: CompletionArguments,
+        tools: Optional[
+            Sequence[Union[Dict[str, Any], Type[BaseModel], Callable, BaseTool]]
+        ],
     ) -> PyrisMessage:
         # noinspection PyTypeChecker
         retries = 5
@@ -213,6 +215,11 @@ class OpenAIChatModel(ChatModel):
         initial_delay = 1
         client = self.get_client()
         # Maximum wait time: 1 + 2 + 4 + 8 + 16 = 31 seconds
+
+        for message in messages:
+            if message.sender == "SYSTEM":
+                print("SYSTEM MESSAGE: " + message.contents[0].text_content)
+                break
 
         messages = convert_to_open_ai_messages(messages)
 
@@ -230,8 +237,9 @@ class OpenAIChatModel(ChatModel):
                         type="json_object"
                     )
 
-                if self.tools:
-                    params["tools"] = self.tools
+                if tools:
+                    params["tools"] = [convert_to_openai_tool(tool) for tool in tools]
+                    logging.info(f"Using tools: {tools}")
 
                 response = client.chat.completions.create(**params)
                 choice = response.choices[0]
@@ -243,6 +251,20 @@ class OpenAIChatModel(ChatModel):
                     # We don't want to retry because the same message will likely be rejected again.
                     # Raise an exception to trigger the global error handler and report a fatal error to the client.
                     raise ContentFilterFinishReasonError()
+
+                if (
+                    choice.message is None
+                    or choice.message.content is None
+                    or len(choice.message.content) == 0
+                ):
+                    logging.error("Model returned an empty message")
+                    logging.error("Finish reason: " + choice.finish_reason)
+                    if (
+                        choice.message is not None
+                        and choice.message.refusal is not None
+                    ):
+                        logging.error("Refusal: " + choice.message.refusal)
+
                 return convert_to_iris_message(choice.message, usage, model)
             except (
                 APIError,
@@ -254,12 +276,6 @@ class OpenAIChatModel(ChatModel):
                 logging.info(f"Retrying in {wait_time} seconds...")
                 time.sleep(wait_time)
         raise Exception(f"Failed to get response from OpenAI after {retries} retries")
-
-    def bind_tools(
-        self,
-        tools: Sequence[Union[Dict[str, Any], Type[BaseModel], Callable, BaseTool]],
-    ):
-        self.tools = [convert_to_openai_tool(tool) for tool in tools]
 
 
 class DirectOpenAIChatModel(OpenAIChatModel):

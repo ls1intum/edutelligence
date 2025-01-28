@@ -57,7 +57,8 @@ class CitationPipeline(Pipeline):
                 paragraph.get(LectureSchema.LECTURE_NAME.value),
                 paragraph.get(LectureSchema.LECTURE_UNIT_NAME.value),
                 paragraph.get(LectureSchema.PAGE_NUMBER.value),
-                paragraph.get(LectureSchema.LECTURE_UNIT_LINK.value) or "No link available",
+                paragraph.get(LectureSchema.LECTURE_UNIT_LINK.value)
+                or "No link available",
                 paragraph.get(LectureSchema.PAGE_TEXT_CONTENT.value),
             )
             formatted_string += lct

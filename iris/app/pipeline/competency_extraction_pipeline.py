@@ -75,7 +75,7 @@ class CompetencyExtractionPipeline(Pipeline):
         )
 
         response = self.request_handler.chat(
-            [prompt], CompletionArguments(temperature=0.4)
+            [prompt], CompletionArguments(temperature=0.4), tools=None
         )
         self._append_tokens(
             response.token_usage, PipelineEnum.IRIS_COMPETENCY_GENERATION
