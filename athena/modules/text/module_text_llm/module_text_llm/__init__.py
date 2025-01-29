@@ -20,7 +20,9 @@ def decrypt_keywords(filename="keywords_encrypted.txt"):
     decrypted_keywords = cipher.decrypt(encrypted_keywords).decode()
     return decrypted_keywords.split(", ")
 
+
 keywords = decrypt_keywords()
+
 
 def load_embeddings_from_file(filename="keyword_embeddings.npy"):
     """
@@ -39,5 +41,6 @@ def load_embeddings_from_file(filename="keyword_embeddings.npy"):
 
     print(f"{filename} does not exist.")
     return None
+
 
 keywords_embeddings = load_embeddings_from_file("keywords_embeddings.npy")
