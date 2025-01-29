@@ -268,14 +268,18 @@ def run_competency_extraction_pipeline(
     thread.start()
 
 
-def run_rewriting_pipeline_worker(dto: RewritingPipelineExecutionDTO, _variant: str):
+def run_rewriting_pipeline_worker(dto: RewritingPipelineExecutionDTO, variant: str):
     try:
         callback = RewritingCallback(
             run_id=dto.execution.settings.authentication_token,
             base_url=dto.execution.settings.artemis_base_url,
             initial_stages=dto.execution.initial_stages,
         )
-        pipeline = RewritingPipeline(callback=callback)
+        match variant:
+            case "faq" | "problem_statement":
+                pipeline = RewritingPipeline(callback=callback, variant=variant)
+            case _:
+                raise ValueError(f"Unknown variant: {variant}")
     except Exception as e:
         logger.error(f"Error preparing rewriting pipeline: {e}")
         logger.error(traceback.format_exc())
@@ -296,6 +300,7 @@ def run_rewriting_pipeline_worker(dto: RewritingPipelineExecutionDTO, _variant: 
     dependencies=[Depends(TokenValidator())],
 )
 def run_rewriting_pipeline(variant: str, dto: RewritingPipelineExecutionDTO):
+    variant = variant.lower()
     logger.info(f"Rewriting pipeline started with variant: {variant} and dto: {dto}")
     thread = Thread(target=run_rewriting_pipeline_worker, args=(dto, variant))
     thread.start()
@@ -407,10 +412,15 @@ def get_pipeline(feature: str):
         case "REWRITING":
             return [
                 FeatureDTO(
-                    id="rewriting",
-                    name="Default Variant",
-                    description="Default rewriting variant.",
-                )
+                    id="faq",
+                    name="FAQ Variant",
+                    description="FAQ rewriting variant.",
+                ),
+                FeatureDTO(
+                    id="problem_statement",
+                    name="Problem Statement Variant",
+                    description="Problem statement rewriting variant.",
+                ),
             ]
         case "CHAT_GPT_WRAPPER":
             return [

@@ -1,5 +1,5 @@
 import logging
-from typing import Optional
+from typing import Literal, Optional
 
 from langchain.output_parsers import PydanticOutputParser
 from langchain_core.prompts import (
@@ -12,7 +12,10 @@ from app.domain.data.text_message_content_dto import TextMessageContentDTO
 from app.domain.rewriting_pipeline_execution_dto import RewritingPipelineExecutionDTO
 from app.llm import CapabilityRequestHandler, RequirementList, CompletionArguments
 from app.pipeline import Pipeline
-from app.pipeline.prompts.faq_rewriting import system_prompt_faq
+from app.pipeline.prompts.rewriting_prompts import (
+    system_prompt_faq,
+    system_prompt_problem_statement,
+)
 from app.web.status.status_update import RewritingCallback
 
 logger = logging.getLogger(__name__)
@@ -22,8 +25,11 @@ class RewritingPipeline(Pipeline):
     callback: RewritingCallback
     request_handler: CapabilityRequestHandler
     output_parser: PydanticOutputParser
+    variant: Literal["faq", "problem_statement"]
 
-    def __init__(self, callback: Optional[RewritingCallback] = None):
+    def __init__(
+        self, callback: RewritingCallback, variant: Literal["faq", "problem_statement"]
+    ):
         super().__init__(implementation_id="rewriting_pipeline_reference_impl")
         self.callback = callback
         self.request_handler = CapabilityRequestHandler(
@@ -33,6 +39,7 @@ class RewritingPipeline(Pipeline):
             )
         )
         self.tokens = []
+        self.variant = variant
 
     def __call__(
         self,
@@ -43,8 +50,12 @@ class RewritingPipeline(Pipeline):
         if not dto.to_be_rewritten:
             raise ValueError("You need to provide a text to rewrite")
 
-        #
-        prompt = system_prompt_faq.format(
+        variant_prompts = {
+            "faq": system_prompt_faq,
+            "problem_statement": system_prompt_problem_statement,
+        }
+        print(variant_prompts[self.variant])
+        prompt = variant_prompts[self.variant].format(
             rewritten_text=dto.to_be_rewritten,
         )
         prompt = PyrisMessage(
@@ -53,9 +64,17 @@ class RewritingPipeline(Pipeline):
         )
 
         response = self.request_handler.chat(
-            [prompt], CompletionArguments(temperature=0.4)
+            [prompt], CompletionArguments(temperature=0.4), tools=None
         )
         self._append_tokens(response.token_usage, PipelineEnum.IRIS_REWRITING_PIPELINE)
         response = response.contents[0].text_content
+
+        # remove ``` from start and end if exists
+        if response.startswith("```") and response.endswith("```"):
+            response = response[3:-3]
+            if response.startswith("markdown"):
+                response = response[8:]
+            response = response.strip()
+
         final_result = response
         self.callback.done(final_result=final_result, tokens=self.tokens)
