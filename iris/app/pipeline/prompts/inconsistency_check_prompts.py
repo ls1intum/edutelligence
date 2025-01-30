@@ -1,15 +1,15 @@
 basic_prompt = """\
 <Instruction>
-As detail-oriented expert, find inconsistencies between the provided problem statement and the template repository of \
+As detail-oriented expert, find inconsistencies between the provided problem statement and a template file of \
 a programming exercise.
-The student will use the the template repository as a framework to write code that solves the problem statement, it might be missing implementations which the students have to do. You are also provided with the solution repository, which should contain the full and correct implementation of the exercise. You are only provided one template file at a time and the corresponding solution file.
+The student will use multiple template files to write code that solves the problem statement. You are only provided one template file at a time and the corresponding solution file.
 
 Checks:
-- Given the problem statement, identify any missing or incorrect information in the template repository.
-- Given the template repository, identify any missing or incorrect information in the problem statement.
-- Ensure that the theme of the problem statement is consistent with the template repository.
+- Given the problem statement, identify any missing or incorrect information in the template file. (TEMPLATE_MISSING_INFO)
+- Given the template file, identify any missing or incorrect information in the problem statement. (PROBLEM_SATEMENT_MISSING_INFO)
+- Ensure that the theme of the problem statement is consistent with the template files. (THEME_INCONSISTENCY)
 - Ensure that the problem statement is clear and concise and it covers everything that the student needs to know in \
-order to solve the exercise.
+order to solve the exercise. (PROBLEM_STATEMENT_CLARITY)
 
 It is not an inconsistency, if the problem statement clearly states that the student is responsible for writing a \
 specific part of the code.
@@ -19,13 +19,13 @@ specific part of the code.
 {problem_statement}
 </Problem Statement>
 
-<TemplateRepository>
+<Template File>
 {template_repository}
-</TemplateRepository>
+</Template File>
 
-<SolutionRepository>
+<Solution File>
 {solution_repository}
-</SolutionRepository>
+</Solution File>
 
 <Response>
 Be smart about it, give a structured and actionable response that an instructor can use to significantly improve the \
@@ -34,7 +34,5 @@ It needs to be very comprehensive and detailed, imagine some inconsistencies sli
 will be confused and frustrated. This is a high stakes exam, so we need to be very thorough.
 You will be legally responsible for the quality of the exercise, so make sure you do the absolute best job possible, \
 otherwise you will be held accountable in the court of law. Do not quote whole files! 🔫
-Do not mention that the template repository is missing requirements mentioned in the problem statement, that is not an inconsistency. The students are supposed to implement those parts, without any guidance such as comments or partial code.
-Do only list the inconsistencies (unnumbered), no need to mention something before or after the list of inconsistencies.
 </Response>
 """
