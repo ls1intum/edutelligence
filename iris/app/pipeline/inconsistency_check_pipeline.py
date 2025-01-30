@@ -56,21 +56,27 @@ class InconsistencyCheckPipeline(Pipeline):
 
         overall_response: str = ""
 
-        for template_file_path, template_file_content in dto.exercise.template_repository.items():
+        for (
+            template_file_path,
+            template_file_content,
+        ) in dto.exercise.template_repository.items():
             template_repository = "\n".join(
                 f"<File path='{template_file_path}'>\n{template_file_content}</File>"
-                
             )
 
             if template_file_path in dto.exercise.solution_repository.keys():
-                solution_file_content = dto.exercise.solution_repository[template_file_path]
+                solution_file_content = dto.exercise.solution_repository[
+                    template_file_path
+                ]
                 solution_repository = f"<File path='{template_file_path}'>\n{solution_file_content}</File>"
             else:
                 solution_repository = "\n".join(
                     f"<File path='{file_path}'>\n{file_content}</File>"
                     for file_path, file_content in dto.exercise.solution_repository.items()
                 )
-                logging.warning(f"Solution file for {template_file_path} not found, using all solution files: {dto.exercise.solution_repository.keys().join(', ')}")
+                logging.warning(
+                    f"Solution file for {template_file_path} not found, using all solution files: {dto.exercise.solution_repository.keys().join(', ')}"
+                )
 
             response: str = self.pipeline.invoke(
                 {
@@ -80,7 +86,7 @@ class InconsistencyCheckPipeline(Pipeline):
                 }
             )
 
-            overall_response += ('\n' if overall_response else '') + response
+            overall_response += ("\n" if overall_response else "") + response
             self._append_tokens(self.llm.tokens, PipelineEnum.IRIS_INCONSISTENCY_CHECK)
 
         self.callback.done(final_result=overall_response, tokens=self.tokens)
