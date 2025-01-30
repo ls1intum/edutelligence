@@ -1,5 +1,7 @@
 import logging
 import weaviate
+
+from .faq_schema import init_faq_schema
 from .lecture_schema import init_lecture_schema
 from weaviate.classes.query import Filter
 from app.config import settings
@@ -27,6 +29,7 @@ class VectorDatabase:
                 logger.info("Weaviate client initialized")
         self.client = VectorDatabase._client_instance
         self.lectures = init_lecture_schema(self.client)
+        self.faqs = init_faq_schema(self.client)
 
     def delete_collection(self, collection_name):
         """

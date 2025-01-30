@@ -39,6 +39,8 @@ from ...domain.chat.interaction_suggestion_dto import (
 from ...llm import CapabilityRequestHandler, RequirementList
 from ...llm import CompletionArguments
 from ...llm.langchain import IrisLangchainChatModel
+from ...retrieval.faq_retrieval import FaqRetrieval
+from ...retrieval.faq_retrieval_utils import should_allow_faq_tool, format_faqs
 from ...retrieval.lecture_retrieval import LectureRetrieval
 from ...vector_database.database import VectorDatabase
 from ...vector_database.lecture_schema import LectureSchema
@@ -103,6 +105,7 @@ class ExerciseChatAgentPipeline(Pipeline):
     prompt: ChatPromptTemplate
     variant: str
     event: str | None
+    retrieved_faqs: List[dict] = None
 
     def __init__(
         self,
@@ -136,7 +139,8 @@ class ExerciseChatAgentPipeline(Pipeline):
         # Create the pipelines
         self.db = VectorDatabase()
         self.suggestion_pipeline = InteractionSuggestionPipeline(variant="exercise")
-        self.retriever = LectureRetrieval(self.db.client)
+        self.lecture_retriever = LectureRetrieval(self.db.client)
+        self.faq_retriever = FaqRetrieval(self.db.client)
         self.reranker_pipeline = RerankerPipeline()
         self.code_feedback_pipeline = CodeFeedbackPipeline()
         self.pipeline = self.llm_big | JsonOutputParser()
@@ -373,7 +377,7 @@ class ExerciseChatAgentPipeline(Pipeline):
             Only use this once.
             """
             self.callback.in_progress("Retrieving lecture content ...")
-            self.retrieved_paragraphs = self.retriever(
+            self.retrieved_paragraphs = self.lecture_retriever(
                 chat_history=chat_history,
                 student_query=query.contents[0].text_content,
                 result_limit=5,
@@ -391,6 +395,31 @@ class ExerciseChatAgentPipeline(Pipeline):
                     paragraph.get(LectureSchema.PAGE_TEXT_CONTENT.value),
                 )
                 result += lct
+            return result
+
+        def faq_content_retrieval() -> str:
+            """
+            Use this tool to retrieve information from indexed FAQs.
+            It is suitable when no other tool fits, it is a common question or the question is frequently asked,
+            or the question could be effectively answered by an FAQ. Also use this if the question is explicitly
+            organizational and course-related. An organizational question about the course might be
+            "What is the course structure?" or "How do I enroll?" or exam related content like "When is the exam".
+            The tool performs a RAG retrieval based on the chat history to find the most relevant FAQs.
+            Each FAQ follows this format: FAQ ID, FAQ Question, FAQ Answer.
+            Respond to the query concisely and solely using the answer from the relevant FAQs.
+            This tool should only be used once per query.
+            """
+            self.callback.in_progress("Retrieving faq content ...")
+            self.retrieved_faqs = self.faq_retriever(
+                chat_history=chat_history,
+                student_query=query.contents[0].text_content,
+                result_limit=10,
+                course_name=dto.course.name,
+                course_id=dto.course.id,
+                base_url=dto.settings.artemis_base_url,
+            )
+
+            result = format_faqs(self.retrieved_faqs)
             return result
 
         iris_initial_system_prompt = tell_iris_initial_system_prompt
@@ -511,6 +540,10 @@ class ExerciseChatAgentPipeline(Pipeline):
             ]
             if self.should_allow_lecture_tool(dto.course.id):
                 tool_list.append(lecture_content_retrieval)
+
+            if should_allow_faq_tool(self.db, dto.course.id):
+                tool_list.append(faq_content_retrieval)
+
             tools = generate_structured_tools_from_functions(tool_list)
             agent = create_tool_calling_agent(
                 llm=self.llm_big, tools=tools, prompt=self.prompt
