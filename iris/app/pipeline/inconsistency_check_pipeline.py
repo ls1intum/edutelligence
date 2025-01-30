@@ -54,18 +54,33 @@ class InconsistencyCheckPipeline(Pipeline):
         logger.info("Running inconsistency check pipeline...")
         self.callback.in_progress()
 
-        template_repository = "\n".join(
-            f"<File path='{file_path}'>\n{file_content}</File>"
-            for file_path, file_content in dto.exercise.template_repository.items()
-        )
+        overall_response: str = ""
 
-        response: str = self.pipeline.invoke(
-            {
-                "problem_statement": dto.exercise.problem_statement,
-                "template_repository": template_repository,
-            }
-        )
+        for template_file_path, template_file_content in dto.exercise.template_repository.items():
+            template_repository = "\n".join(
+                f"<File path='{template_file_path}'>\n{template_file_content}</File>"
+                
+            )
 
-        self._append_tokens(self.llm.tokens, PipelineEnum.IRIS_INCONSISTENCY_CHECK)
+            if template_file_path in dto.exercise.solution_repository.keys():
+                solution_file_content = dto.exercise.solution_repository[template_file_path]
+                solution_repository = f"<File path='{template_file_path}'>\n{solution_file_content}</File>"
+            else:
+                solution_repository = "\n".join(
+                    f"<File path='{file_path}'>\n{file_content}</File>"
+                    for file_path, file_content in dto.exercise.solution_repository.items()
+                )
+                logging.warning(f"Solution file for {template_file_path} not found, using all solution files: {dto.exercise.solution_repository.keys().join(', ')}")
 
-        self.callback.done(final_result=response, tokens=self.tokens)
+            response: str = self.pipeline.invoke(
+                {
+                    "problem_statement": dto.exercise.problem_statement,
+                    "solution_repository": solution_repository,
+                    "template_repository": template_repository,
+                }
+            )
+
+            overall_response += ('\n' if overall_response else '') + response
+            self._append_tokens(self.llm.tokens, PipelineEnum.IRIS_INCONSISTENCY_CHECK)
+
+        self.callback.done(final_result=overall_response, tokens=self.tokens)
