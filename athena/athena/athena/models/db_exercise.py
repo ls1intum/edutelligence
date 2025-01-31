@@ -17,8 +17,7 @@ class DBExercise(Model, Base):
     problem_statement = Column(String)
     grading_criteria = Column(JSON, nullable=True)
     meta = Column(JSON, nullable=False)
-
-    structured_grading_criterion = relationship("DBStructuredGradingCriterion", back_populates="exercise", uselist=False)  # Use uselist=False for one-to-one
+    structured_grading_criterion = relationship("DBStructuredGradingCriterion", back_populates="exercise", uselist=False)
 
     # Polymorphism, discriminator attribute
     type = Column(SqlEnum(ExerciseType), index=True, nullable=False)

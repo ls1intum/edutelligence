@@ -12,6 +12,5 @@ class DBStructuredGradingCriterion(Base):
     exercise_id = Column(BigIntegerWithAutoincrement, ForeignKey("exercise.id", ondelete="CASCADE"), index=True, unique=True) # Only one cached instruction per exercise
     instructions_hash = Column(String, nullable=False)
     structured_grading_criterion = Column(JSON, nullable=False)
-    lms_url = Column(String, nullable=False)
     
     exercise = relationship("DBExercise", back_populates="structured_grading_criterion")

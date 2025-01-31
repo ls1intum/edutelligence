@@ -8,7 +8,6 @@ from .schema import Schema
 
 class StructuredGradingInstruction(Schema, ABC):
     """Part of a grading criterion (called "GradingInstruction" in LMS)."""
-
     id: int = Field(example=1)
     credits: float = Field(description="The number of credits assigned for this feedback.", example=1.0)
     grading_scale: str = Field(description="The grading outcome for this instruction.", example="Weak example", default="")
@@ -24,3 +23,6 @@ class GradingCriterion(Schema, ABC):
     structured_grading_instructions: List[StructuredGradingInstruction] = Field(
         [], example=[{"credits": 1.0, "gradingScale": "Good", "instructionDescription": "Some instructions", "feedback": "Nicely done!", "usageCount": 1},
                      {"credits": 0.0, "gradingScale": "Bad", "instructionDescription": "Some instructions", "feedback": "Try again!", "usageCount": 0}])
+
+class StructuredGradingCriterion(BaseModel):
+    criteria: List[GradingCriterion]
