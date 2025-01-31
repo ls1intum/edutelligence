@@ -15,3 +15,4 @@ from .db_modeling_submission import DBModelingSubmission
 from .db_programming_feedback import DBProgrammingFeedback
 from .db_text_feedback import DBTextFeedback
 from .db_modeling_feedback import DBModelingFeedback
+from .db_structured_grading_criterion import DBStructuredGradingCriterion
