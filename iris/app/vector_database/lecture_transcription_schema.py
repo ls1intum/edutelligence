@@ -22,6 +22,7 @@ class LectureTranscriptionSchema(Enum):
     SEGMENT_TEXT = "segment_text"
     SEGMENT_LECTURE_UNIT_SLIDES_ID = "segment_lecture_unit_slides_id"
     SEGMENT_LECTURE_UNIT_SLIDE_NUMBER = "segment_lecture_unit_slide_number"
+    SEGMENT_SUMMARY = "segment_summary"
 
 
 def init_lecture_transcription_schema(client: WeaviateClient) -> Collection:
@@ -94,6 +95,12 @@ def init_lecture_transcription_schema(client: WeaviateClient) -> Collection:
                 description="The slide number of the lecture unit of the segment",
                 data_type=DataType.INT,
                 index_searchable=False,
+            ),
+            Property(
+                name=LectureTranscriptionSchema.SEGMENT_SUMMARY.value,
+                description="The summary of the text of the segment",
+                data_type=DataType.TEXT,
+                index_searchable=True,
             ),
         ],
     )

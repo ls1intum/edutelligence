@@ -13,6 +13,7 @@ from app.domain.ingestion.ingestion_pipeline_execution_dto import (
 from ..status.faq_ingestion_status_callback import FaqIngestionStatus
 from ..status.ingestion_status_callback import IngestionStatusCallback
 from ..status.lecture_deletion_status_callback import LecturesDeletionStatusCallback
+from ..status.transcription_ingestion_callback import TranscriptionIngestionStatus
 from ...domain.ingestion.deletionPipelineExecutionDto import (
     LecturesDeletionExecutionDto,
     FaqDeletionExecutionDto,
@@ -83,10 +84,11 @@ def run_transcription_ingestion_pipeline_worker(
     Run the transcription ingestion pipeline in a separate thread
     """
     try:
-        callback = IngestionStatusCallback(
+        callback = TranscriptionIngestionStatus(
             run_id=dto.settings.authentication_token,
             base_url=dto.settings.artemis_base_url,
             initial_stages=dto.initial_stages,
+            lecture_id=dto.transcriptions[0].lecture_id,
         )
         db = VectorDatabase()
         client = db.get_client()
@@ -97,6 +99,7 @@ def run_transcription_ingestion_pipeline_worker(
     except Exception as e:
         logger.error(f"Error while deleting lectures: {e}")
         logger.error(traceback.format_exc())
+
 def run_faq_update_pipeline_worker(dto: FaqIngestionPipelineExecutionDto):
     """
     Run the exercise chat pipeline in a separate thread

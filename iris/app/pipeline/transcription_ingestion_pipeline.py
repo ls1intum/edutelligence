@@ -1,34 +1,50 @@
+import os
 import threading
+from functools import reduce
+from idlelib.pyparse import trans
 from typing import Optional, List, Dict, Any
 
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.runnables import Runnable
+from langchain_experimental.text_splitter import SemanticChunker
+from langchain_openai import AzureOpenAIEmbeddings
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 from weaviate import WeaviateClient
 
 from asyncio.log import logger
 
+from app.common.PipelineEnum import PipelineEnum
 from app.domain.data.metrics.transcription_dto import (
-    TranscriptionWebhookDTO,
+    TranscriptionWebhookDTO, TranscriptionSegmentDTO,
 )
 from app.domain.ingestion.transcription_ingestion.transcription_ingestion_pipeline_execution_dto import (
     TranscriptionIngestionPipelineExecutionDto,
 )
 from app.ingestion.abstract_ingestion import AbstractIngestion
-from app.llm import BasicRequestHandler
+from app.llm import BasicRequestHandler, CapabilityRequestHandler, RequirementList, CompletionArguments
+from app.llm.langchain import IrisLangchainChatModel
 from app.pipeline import Pipeline
+from app.pipeline.prompts.transcription_ingestion_prompts import transcription_summary_prompt
 from app.vector_database.lecture_transcription_schema import (
     init_lecture_transcription_schema,
     LectureTranscriptionSchema,
 )
 from app.web.status.ingestion_status_callback import IngestionStatusCallback
+from app.web.status.transcription_ingestion_callback import TranscriptionIngestionStatus
 
 batch_insert_lock = threading.Lock()
 
 
-class TranscriptionIngestionPipeline(AbstractIngestion, Pipeline):
+class TranscriptionIngestionPipeline(Pipeline):
+    llm: IrisLangchainChatModel
+    pipeline: Runnable
+    prompt: ChatPromptTemplate
     def __init__(
         self,
         client: WeaviateClient,
         dto: Optional[TranscriptionIngestionPipelineExecutionDto],
-        callback: IngestionStatusCallback,
+        callback: TranscriptionIngestionStatus,
     ) -> None:
         super().__init__()
         self.client = client
@@ -37,10 +53,26 @@ class TranscriptionIngestionPipeline(AbstractIngestion, Pipeline):
         self.collection = init_lecture_transcription_schema(client)
         self.llm_embedding = BasicRequestHandler("embedding-small")
 
+        request_handler = CapabilityRequestHandler(
+            requirements=RequirementList(
+                gpt_version_equivalent=4.5,
+                context_length=16385,
+                privacy_compliance=True,
+            )
+        )
+        completion_args = CompletionArguments(temperature=0, max_tokens=2000)
+        self.llm = IrisLangchainChatModel(
+            request_handler=request_handler, completion_args=completion_args
+        )
+        self.pipeline = self.llm | StrOutputParser()
+
     def __call__(self) -> None:
         try:
             self.callback.in_progress("Chunking transcriptions...")
-            chunks = self.chunk_data(self.dto.transcriptions)
+            chunks = self.chunk_transcriptions(self.dto.transcriptions)
+
+            chunks = self.summarize_chunks(chunks)
+
             self.batch_insert(chunks)
             self.callback.done("Transcriptions ingested successfully")
 
@@ -70,11 +102,13 @@ class TranscriptionIngestionPipeline(AbstractIngestion, Pipeline):
                         tokens=self.tokens,
                     )
 
-    def chunk_data(
+
+    def chunk_transcriptions(
         self, transcriptions: List[TranscriptionWebhookDTO]
     ) -> List[Dict[str, Any]]:
-        slide_chunks = {}
+        chunks = []
         for transcription in transcriptions:
+            slide_chunks = {}
             for segment in transcription.transcription.segments:
                 slide_key = f"{transcription.lecture_id}_{segment.lecture_unit_id}_{segment.slide_number}"
 
@@ -100,4 +134,87 @@ class TranscriptionIngestionPipeline(AbstractIngestion, Pipeline):
                     slide_chunks[slide_key][
                         LectureTranscriptionSchema.SEGMENT_END.value
                     ] = segment.end_time
-        return list(slide_chunks.values())
+
+            for i, segment in enumerate(slide_chunks.values()):
+                if len(segment[LectureTranscriptionSchema.SEGMENT_TEXT.value]) < 1200:
+                    chunks.append(segment)
+                    continue
+
+                text_splitter = RecursiveCharacterTextSplitter(
+                    chunk_size=512, chunk_overlap=102
+                )
+
+                semantic_chunks = text_splitter.split_text(segment[LectureTranscriptionSchema.SEGMENT_TEXT.value])
+
+                for j, chunk in enumerate(semantic_chunks):
+                    offset_slide_chunk = reduce(
+                        lambda acc, txt: acc + len(txt),
+                        map(lambda seg: seg[LectureTranscriptionSchema.SEGMENT_TEXT.value], list(slide_chunks.values())[:i]),
+                        0
+                    )
+
+                    offset_semantic_chunk =  reduce(
+                        lambda acc, txt: acc + len(txt),
+                        semantic_chunks[:j],
+                        0
+                    )
+
+                    offset_start = offset_slide_chunk + offset_semantic_chunk
+                    offset_end = offset_start + len(chunk)
+
+                    start_time = self.get_segment_of_char_position(offset_start, transcription.transcription.segments).start_time
+                    end_time = self.get_segment_of_char_position(offset_end, transcription.transcription.segments).end_time
+
+                    chunks.append(
+                        {
+                            **segment,
+                            LectureTranscriptionSchema.SEGMENT_START.value: start_time,
+                            LectureTranscriptionSchema.SEGMENT_END.value: end_time,
+                            LectureTranscriptionSchema.SEGMENT_TEXT.value: chunk,
+                        }
+                    )
+
+        return chunks
+
+    @staticmethod
+    def get_segment_of_char_position(char_position: int, segments: List[TranscriptionSegmentDTO]):
+        offset_lookup_counter = 0
+        segment_index = 0
+        while offset_lookup_counter < char_position and segment_index < len(segments):
+            offset_lookup_counter += len(segments[segment_index].text)
+            segment_index += 1
+
+        if segment_index >= len(segments):
+            return segments[-1]
+        return segments[segment_index]
+
+    def summarize_chunks(self, chunks):
+        chunks_with_summaries = []
+        for chunk in chunks:
+            print(chunk)
+            self.prompt = ChatPromptTemplate.from_messages(
+                [
+                    ("system", transcription_summary_prompt(chunk[LectureTranscriptionSchema.LECTURE_NAME.value],
+                                                            chunk[LectureTranscriptionSchema.SEGMENT_TEXT.value])),
+                ]
+            )
+            prompt_val = self.prompt.format_messages()
+            self.prompt = ChatPromptTemplate.from_messages(prompt_val)
+            try:
+                response = (self.prompt | self.pipeline).invoke({})
+                ### summary for chunk ###
+                print(response)
+
+                # self._append_tokens(self.llm.tokens, PipelineEnum.IRIS_VIDEO_TRANSCRIPTION_INGESTION)
+
+                chunks_with_summaries.append(
+                    {
+                        **chunk,
+                        LectureTranscriptionSchema.SEGMENT_SUMMARY.value: response
+                    }
+                )
+            except Exception as e:
+                raise e
+        return chunks_with_summaries
+
+
