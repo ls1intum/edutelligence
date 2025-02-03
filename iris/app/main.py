@@ -21,6 +21,24 @@ sentry.init()
 app = FastAPI(default_response_class=ORJSONResponse)
 
 
+def custom_openapi():
+    if not app.openapi_schema:
+        openapi_schema = FastAPI.openapi(app)
+        # Add security scheme
+        openapi_schema["components"]["securitySchemes"] = {
+            "bearerAuth": {"type": "apiKey", "in": "header", "name": "Authorization"}
+        }
+        # Apply the security globally
+        for path in openapi_schema["paths"].values():
+            for method in path.values():
+                method.setdefault("security", []).append({"bearerAuth": []})
+        app.openapi_schema = openapi_schema
+    return app.openapi_schema
+
+
+app.openapi = custom_openapi
+
+
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     exc_str = f"{exc}".replace("\n", " ").replace("   ", " ")

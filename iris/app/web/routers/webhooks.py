@@ -8,15 +8,19 @@ from fastapi import APIRouter, status, Depends
 from app.dependencies import TokenValidator
 from app.domain.ingestion.ingestion_pipeline_execution_dto import (
     IngestionPipelineExecutionDto,
+    FaqIngestionPipelineExecutionDto,
 )
+from ..status.faq_ingestion_status_callback import FaqIngestionStatus
 from ..status.ingestion_status_callback import IngestionStatusCallback
 from ..status.lecture_deletion_status_callback import LecturesDeletionStatusCallback
 from ...domain.ingestion.deletionPipelineExecutionDto import (
     LecturesDeletionExecutionDto,
+    FaqDeletionExecutionDto,
 )
 from ...domain.ingestion.transcription_ingestion.transcription_ingestion_pipeline_execution_dto import (
     TranscriptionIngestionPipelineExecutionDto,
 )
+from ...pipeline.faq_ingestion_pipeline import FaqIngestionPipeline
 from ...pipeline.lecture_ingestion_pipeline import LectureIngestionPipeline
 from ...pipeline.transcription_ingestion_pipeline import TranscriptionIngestionPipeline
 from ...vector_database.database import VectorDatabase
@@ -44,6 +48,7 @@ def run_lecture_update_pipeline_worker(dto: IngestionPipelineExecutionDto):
                 client=client, dto=dto, callback=callback
             )
             pipeline()
+
         except Exception as e:
             logger.error(f"Error Ingestion pipeline: {e}")
             logger.error(traceback.format_exc())
@@ -92,6 +97,55 @@ def run_transcription_ingestion_pipeline_worker(
     except Exception as e:
         logger.error(f"Error while deleting lectures: {e}")
         logger.error(traceback.format_exc())
+def run_faq_update_pipeline_worker(dto: FaqIngestionPipelineExecutionDto):
+    """
+    Run the exercise chat pipeline in a separate thread
+    """
+    with semaphore:
+        try:
+            callback = FaqIngestionStatus(
+                run_id=dto.settings.authentication_token,
+                base_url=dto.settings.artemis_base_url,
+                initial_stages=dto.initial_stages,
+                faq_id=dto.faq.faq_id,
+            )
+            db = VectorDatabase()
+            client = db.get_client()
+            pipeline = FaqIngestionPipeline(client=client, dto=dto, callback=callback)
+            pipeline()
+
+        except Exception as e:
+            logger.error(f"Error Faq Ingestion pipeline: {e}")
+            logger.error(traceback.format_exc())
+            capture_exception(e)
+        finally:
+            semaphore.release()
+
+
+def run_faq_delete_pipeline_worker(dto: FaqDeletionExecutionDto):
+    """
+    Run the faq deletion in a separate thread
+    """
+    with semaphore:
+        try:
+            callback = FaqIngestionStatus(
+                run_id=dto.settings.authentication_token,
+                base_url=dto.settings.artemis_base_url,
+                initial_stages=dto.initial_stages,
+                faq_id=dto.faq.faq_id,
+            )
+            db = VectorDatabase()
+            client = db.get_client()
+            # Hier würd dann die Methode zum entfernen aus der Datenbank kommen
+            pipeline = FaqIngestionPipeline(client=client, dto=None, callback=callback)
+            pipeline.delete_faq(dto.faq.faq_id, dto.faq.course_id)
+
+        except Exception as e:
+            logger.error(f"Error Ingestion pipeline: {e}")
+            logger.error(traceback.format_exc())
+            capture_exception(e)
+        finally:
+            semaphore.release()
 
 
 @router.post(
@@ -132,3 +186,30 @@ def transcription_ingestion_webhook(dto: TranscriptionIngestionPipelineExecution
     print(f"transcription ingestion got DTO {dto}")
     thread = Thread(target=run_transcription_ingestion_pipeline_worker, args=(dto,))
     thread.start()
+
+@router.post(
+    "/faqs",
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(TokenValidator())],
+)
+def faq_ingestion_webhook(dto: FaqIngestionPipelineExecutionDto):
+    """
+    Webhook endpoint to trigger the faq ingestion pipeline
+    """
+    thread = Thread(target=run_faq_update_pipeline_worker, args=(dto,))
+    thread.start()
+    return
+
+
+@router.post(
+    "/faqs/delete",
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(TokenValidator())],
+)
+def faq_deletion_webhook(dto: FaqDeletionExecutionDto):
+    """
+    Webhook endpoint to trigger the faq deletion pipeline
+    """
+    thread = Thread(target=run_faq_delete_pipeline_worker, args=(dto,))
+    thread.start()
+    return

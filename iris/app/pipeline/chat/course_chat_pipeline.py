@@ -20,7 +20,7 @@ from .interaction_suggestion_pipeline import (
     InteractionSuggestionPipeline,
 )
 from .lecture_chat_pipeline import LectureChatPipeline
-from ..shared.citation_pipeline import CitationPipeline
+from ..shared.citation_pipeline import CitationPipeline, InformationType
 from ..shared.utils import generate_structured_tools_from_functions
 from ...common.message_converters import convert_iris_message_to_langchain_message
 from ...common.pyris_message import PyrisMessage
@@ -42,6 +42,8 @@ from ..prompts.iris_course_chat_prompts_elicit import (
 )
 from ...domain import CourseChatPipelineExecutionDTO
 from app.common.PipelineEnum import PipelineEnum
+from ...retrieval.faq_retrieval import FaqRetrieval
+from ...retrieval.faq_retrieval_utils import should_allow_faq_tool, format_faqs
 from ...retrieval.lecture_retrieval import LectureRetrieval
 from ...vector_database.database import VectorDatabase
 from ...vector_database.lecture_schema import LectureSchema
@@ -81,6 +83,7 @@ class CourseChatPipeline(Pipeline):
     variant: str
     event: str | None
     retrieved_paragraphs: List[dict] = None
+    retrieved_faqs: List[dict] = None
 
     def __init__(
         self,
@@ -114,7 +117,8 @@ class CourseChatPipeline(Pipeline):
         self.callback = callback
 
         self.db = VectorDatabase()
-        self.retriever = LectureRetrieval(self.db.client)
+        self.lecture_retriever = LectureRetrieval(self.db.client)
+        self.faq_retriever = FaqRetrieval(self.db.client)
         self.suggestion_pipeline = InteractionSuggestionPipeline(variant="course")
         self.citation_pipeline = CitationPipeline()
 
@@ -282,7 +286,7 @@ class CourseChatPipeline(Pipeline):
             Only use this once.
             """
             self.callback.in_progress("Retrieving lecture content ...")
-            self.retrieved_paragraphs = self.retriever(
+            self.retrieved_paragraphs = self.lecture_retriever(
                 chat_history=history,
                 student_query=query.contents[0].text_content,
                 result_limit=5,
@@ -300,6 +304,31 @@ class CourseChatPipeline(Pipeline):
                     paragraph.get(LectureSchema.PAGE_TEXT_CONTENT.value),
                 )
                 result += lct
+            return result
+
+        def faq_content_retrieval() -> str:
+            """
+            Use this tool to retrieve information from indexed FAQs.
+            It is suitable when no other tool fits, it is a common question or the question is frequently asked,
+            or the question could be effectively answered by an FAQ. Also use this if the question is explicitly
+            organizational and course-related. An organizational question about the course might be
+            "What is the course structure?" or "How do I enroll?" or exam related content like "When is the exam".
+            The tool performs a RAG retrieval based on the chat history to find the most relevant FAQs.
+            Each FAQ follows this format: FAQ ID, FAQ Question, FAQ Answer.
+            Respond to the query concisely and solely using the answer from the relevant FAQs.
+            This tool should only be used once per query.
+            """
+            self.callback.in_progress("Retrieving faq content ...")
+            self.retrieved_faqs = self.faq_retriever(
+                chat_history=history,
+                student_query=query.contents[0].text_content,
+                result_limit=10,
+                course_name=dto.course.name,
+                course_id=dto.course.id,
+                base_url=dto.settings.artemis_base_url,
+            )
+
+            result = format_faqs(self.retrieved_faqs)
             return result
 
         if dto.user.id % 3 < 2:
@@ -400,6 +429,9 @@ class CourseChatPipeline(Pipeline):
             if self.should_allow_lecture_tool(dto.course.id):
                 tool_list.append(lecture_content_retrieval)
 
+            if should_allow_faq_tool(self.db, dto.course.id):
+                tool_list.append(faq_content_retrieval)
+
             tools = generate_structured_tools_from_functions(tool_list)
             # No idea why we need this extra contrary to exercise chat agent in this case, but solves the issue.
             params.update({"tools": tools})
@@ -420,9 +452,19 @@ class CourseChatPipeline(Pipeline):
 
             if self.retrieved_paragraphs:
                 self.callback.in_progress("Augmenting response ...")
-                out = self.citation_pipeline(self.retrieved_paragraphs, out)
+                out = self.citation_pipeline(
+                    self.retrieved_paragraphs, out, InformationType.PARAGRAPHS
+                )
             self.tokens.extend(self.citation_pipeline.tokens)
 
+            if self.retrieved_faqs:
+                self.callback.in_progress("Augmenting response ...")
+                out = self.citation_pipeline(
+                    self.retrieved_faqs,
+                    out,
+                    InformationType.FAQS,
+                    base_url=dto.settings.artemis_base_url,
+                )
             self.callback.done("Response created", final_result=out, tokens=self.tokens)
 
             # try:

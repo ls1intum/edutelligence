@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import Sequence, Union, Dict, Any, Type, Callable
+from typing import Sequence, Union, Dict, Any, Type, Callable, Optional
 
 from langchain_core.tools import BaseTool
 from pydantic import ConfigDict
@@ -50,10 +50,15 @@ class CapabilityRequestHandler(RequestHandler):
         return llm.complete(prompt, arguments)
 
     def chat(
-        self, messages: list[PyrisMessage], arguments: CompletionArguments
+        self,
+        messages: list[PyrisMessage],
+        arguments: CompletionArguments,
+        tools: Optional[
+            Sequence[Union[Dict[str, Any], Type[BaseModel], Callable, BaseTool]]
+        ],
     ) -> PyrisMessage:
         llm = self._select_model(ChatModel)
-        message = llm.chat(messages, arguments)
+        message = llm.chat(messages, arguments, tools)
         message.token_usage.cost_per_input_token = llm.capabilities.input_cost.value
         message.token_usage.cost_per_output_token = llm.capabilities.output_cost.value
         return message

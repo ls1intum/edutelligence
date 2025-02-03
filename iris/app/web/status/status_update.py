@@ -1,5 +1,6 @@
 from typing import Optional, List
 
+
 from sentry_sdk import capture_exception, capture_message
 
 import requests
@@ -12,9 +13,13 @@ from app.domain.status.competency_extraction_status_update_dto import (
 from app.domain.chat.course_chat.course_chat_status_update_dto import (
     CourseChatStatusUpdateDTO,
 )
+from app.domain.status.inconsistency_check_status_update_dto import (
+    InconsistencyCheckStatusUpdateDTO,
+)
 from app.domain.status.lecture_chat_status_update_dto import (
     LectureChatStatusUpdateDTO,
 )
+from app.domain.status.rewriting_status_update_dto import RewritingStatusUpdateDTO
 from app.domain.status.stage_state_dto import StageStateEnum
 from app.domain.status.stage_dto import StageDTO
 from app.domain.status.text_exercise_chat_status_update_dto import (
@@ -139,7 +144,8 @@ class StatusCallback(ABC):
         self.stage.state = StageStateEnum.ERROR
         self.stage.message = message
         self.status.result = None
-        self.status.suggestions = None
+        if hasattr(self.status, "suggestions"):
+            self.status.suggestions = None
         self.status.tokens = tokens or self.status.tokens
         # Set all subsequent stages to SKIPPED if an error occurs
         rest_of_index = (
@@ -170,7 +176,8 @@ class StatusCallback(ABC):
         self.stage.state = StageStateEnum.SKIPPED
         self.stage.message = message
         self.status.result = None
-        self.status.suggestions = None
+        if hasattr(self.status, "suggestions"):
+            self.status.suggestions = None
         next_stage = self.get_next_stage()
         if next_stage is not None:
             self.stage = next_stage
@@ -216,6 +223,25 @@ class ExerciseChatStatusCallback(StatusCallback):
             ),
             StageDTO(
                 weight=10, state=StageStateEnum.NOT_STARTED, name="Creating suggestions"
+            ),
+        ]
+        status = ExerciseChatStatusUpdateDTO(stages=stages)
+        stage = stages[current_stage_index]
+        super().__init__(url, run_id, status, stage, current_stage_index)
+
+
+class ChatGPTWrapperStatusCallback(StatusCallback):
+    def __init__(
+        self, run_id: str, base_url: str, initial_stages: List[StageDTO] = None
+    ):
+        url = f"{base_url}/api/public/pyris/pipelines/tutor-chat/runs/{run_id}/status"
+        current_stage_index = len(initial_stages) if initial_stages else 0
+        stages = initial_stages or []
+        stages += [
+            StageDTO(
+                weight=30,
+                state=StageStateEnum.NOT_STARTED,
+                name="Generating response",
             ),
         ]
         status = ExerciseChatStatusUpdateDTO(stages=stages)
@@ -271,6 +297,48 @@ class CompetencyExtractionCallback(StatusCallback):
             )
         )
         status = CompetencyExtractionStatusUpdateDTO(stages=stages)
+        stage = stages[-1]
+        super().__init__(url, run_id, status, stage, len(stages) - 1)
+
+
+class RewritingCallback(StatusCallback):
+    def __init__(
+        self,
+        run_id: str,
+        base_url: str,
+        initial_stages: List[StageDTO],
+    ):
+        url = f"{base_url}/api/public/pyris/pipelines/rewriting/runs/{run_id}/status"
+        stages = initial_stages or []
+        stages.append(
+            StageDTO(
+                weight=10,
+                state=StageStateEnum.NOT_STARTED,
+                name="Generating Rewritting",
+            )
+        )
+        status = RewritingStatusUpdateDTO(stages=stages)
+        stage = stages[-1]
+        super().__init__(url, run_id, status, stage, len(stages) - 1)
+
+
+class InconsistencyCheckCallback(StatusCallback):
+    def __init__(
+        self,
+        run_id: str,
+        base_url: str,
+        initial_stages: List[StageDTO],
+    ):
+        url = f"{base_url}/api/public/pyris/pipelines/inconsistency-check/runs/{run_id}/status"
+        stages = initial_stages or []
+        stages.append(
+            StageDTO(
+                weight=10,
+                state=StageStateEnum.NOT_STARTED,
+                name="Checking for inconsistencies",
+            )
+        )
+        status = InconsistencyCheckStatusUpdateDTO(stages=stages)
         stage = stages[-1]
         super().__init__(url, run_id, status, stage, len(stages) - 1)
 

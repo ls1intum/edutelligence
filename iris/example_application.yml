@@ -1,9 +1,0 @@
-api_keys:
-  - token: "secret"
-
-weaviate:
-  host: "localhost"
-  port: "8001"
-  grpc_port: "50051"
-
-env_vars:

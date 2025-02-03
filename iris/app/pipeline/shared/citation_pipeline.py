@@ -1,5 +1,6 @@
 import os
 from asyncio.log import logger
+from enum import Enum
 from typing import List, Union
 
 from langchain_core.output_parsers import StrOutputParser
@@ -10,8 +11,14 @@ from app.llm import CapabilityRequestHandler, RequirementList, CompletionArgumen
 from app.common.PipelineEnum import PipelineEnum
 from app.llm.langchain import IrisLangchainChatModel
 from app.pipeline import Pipeline
+from app.vector_database.faq_schema import FaqSchema
 
 from app.vector_database.lecture_schema import LectureSchema
+
+
+class InformationType(str, Enum):
+    PARAGRAPHS = "PARAGRAPHS"
+    FAQS = "FAQS"
 
 
 class CitationPipeline(Pipeline):
@@ -37,7 +44,12 @@ class CitationPipeline(Pipeline):
         dirname = os.path.dirname(__file__)
         prompt_file_path = os.path.join(dirname, "..", "prompts", "citation_prompt.txt")
         with open(prompt_file_path, "r") as file:
-            self.prompt_str = file.read()
+            self.lecture_prompt_str = file.read()
+        prompt_file_path = os.path.join(
+            dirname, "..", "prompts", "faq_citation_prompt.txt"
+        )
+        with open(prompt_file_path, "r") as file:
+            self.faq_prompt_str = file.read()
         self.pipeline = self.llm | StrOutputParser()
         self.tokens = []
 
@@ -47,7 +59,7 @@ class CitationPipeline(Pipeline):
     def __str__(self):
         return f"{self.__class__.__name__}(llm={self.llm})"
 
-    def create_formatted_string(self, paragraphs):
+    def create_formatted_lecture_string(self, paragraphs):
         """
         Create a formatted string from the data
         """
@@ -65,19 +77,47 @@ class CitationPipeline(Pipeline):
 
         return formatted_string.replace("{", "{{").replace("}", "}}")
 
+    def create_formatted_faq_string(self, faqs, base_url):
+        """
+        Create a formatted string from the data
+        """
+        formatted_string = ""
+        for i, faq in enumerate(faqs):
+            faq = "FAQ ID {}, CourseId {} , FAQ Question title {} and FAQ Question Answer {} and FAQ link {}".format(
+                faq.get(FaqSchema.FAQ_ID.value),
+                faq.get(FaqSchema.COURSE_ID.value),
+                faq.get(FaqSchema.QUESTION_TITLE.value),
+                faq.get(FaqSchema.QUESTION_ANSWER.value),
+                f"{base_url}/courses/{faq.get(FaqSchema.COURSE_ID.value)}/faq/?faqId={faq.get(FaqSchema.FAQ_ID.value)}",
+            )
+            formatted_string += faq
+
+        return formatted_string.replace("{", "{{").replace("}", "}}")
+
     def __call__(
         self,
-        paragraphs: Union[List[dict], List[str]],
+        information: Union[List[dict], List[str]],
         answer: str,
+        information_type: InformationType = InformationType.PARAGRAPHS,
         **kwargs,
     ) -> str:
         """
         Runs the pipeline
-            :param paragraphs: List of paragraphs which can be list of dicts or list of strings
+            :param information: List of info as list of dicts or strings to augment response
             :param query: The query
+            :param information_type: The type of information provided. can be either lectures or faqs
             :return: Selected file content
         """
-        paras = self.create_formatted_string(paragraphs)
+        paras = ""
+
+        if information_type == InformationType.FAQS:
+            paras = self.create_formatted_faq_string(
+                information, kwargs.get("base_url")
+            )
+            self.prompt_str = self.faq_prompt_str
+        if information_type == InformationType.PARAGRAPHS:
+            paras = self.create_formatted_lecture_string(information)
+            self.prompt_str = self.lecture_prompt_str
 
         try:
             self.default_prompt = PromptTemplate(
@@ -90,7 +130,6 @@ class CitationPipeline(Pipeline):
             self._append_tokens(self.llm.tokens, PipelineEnum.IRIS_CITATION_PIPELINE)
             if response == "!NONE!":
                 return answer
-            print(response)
             return response
         except Exception as e:
             logger.error("citation pipeline failed", e)

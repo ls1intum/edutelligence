@@ -34,7 +34,14 @@ class RequestHandler(BaseModel, metaclass=ABCMeta):
         raise NotImplementedError
 
     @abstractmethod
-    def chat(self, messages: list[any], arguments: CompletionArguments) -> PyrisMessage:
+    def chat(
+        self,
+        messages: list[any],
+        arguments: CompletionArguments,
+        tools: Optional[
+            Sequence[Union[Dict[str, Any], Type[BaseModel], Callable, BaseTool]]
+        ],
+    ) -> PyrisMessage:
         """Create a completion from the chat messages"""
         raise NotImplementedError
 
