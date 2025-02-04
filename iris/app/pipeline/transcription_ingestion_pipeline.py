@@ -76,10 +76,10 @@ class TranscriptionIngestionPipeline(Pipeline):
             chunks = self.chunk_transcriptions(self.dto.transcriptions)
 
             self.callback.in_progress("Summarizing transcriptions")
-            # chunks = self.summarize_chunks(chunks)
+            chunks = self.summarize_chunks(chunks)
 
             self.callback.in_progress("Ingesting transcriptions into vector database")
-            # self.batch_insert(chunks)
+            self.batch_insert(chunks)
             self.callback.done("Transcriptions ingested successfully")
 
         except Exception as e:
