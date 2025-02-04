@@ -40,7 +40,7 @@ def init_lecture_transcription_schema(client: WeaviateClient) -> Collection:
                 name=LectureTranscriptionSchema.COURSE_ID.value,
                 description="The ID of the course",
                 data_type=DataType.INT,
-                index_searable=False,
+                index_searchable=False,
             ),
             Property(
                 name=LectureTranscriptionSchema.COURSE_NAME.value,
