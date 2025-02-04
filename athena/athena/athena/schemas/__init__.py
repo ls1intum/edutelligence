@@ -13,4 +13,5 @@ from .programming_submission import ProgrammingSubmission
 from .modeling_feedback import ModelingFeedback
 from .modeling_exercise import ModelingExercise
 from .modeling_submission import ModelingSubmission
-from .grading_criterion import GradingCriterion, StructuredGradingInstruction, StructuredGradingCriterion
+from .grading_criterion import GradingCriterion, StructuredGradingInstruction
+from .structured_grading_criterion import StructuredGradingCriterion
