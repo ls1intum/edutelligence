@@ -89,7 +89,7 @@ def run_transcription_ingestion_pipeline_worker(
                 run_id=dto.settings.authentication_token,
                 base_url=dto.settings.artemis_base_url,
                 initial_stages=dto.initial_stages,
-                lecture_id=dto.lectureId,
+                lecture_id=dto.lectureUnitId,
             )
             db = VectorDatabase()
             client = db.get_client()
