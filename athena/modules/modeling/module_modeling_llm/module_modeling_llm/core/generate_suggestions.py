@@ -1,5 +1,5 @@
 import base64
-from athena.schemas.grading_criterion import StructuredGradingCriterion
+from athena.schemas.structured_grading_criterion import StructuredGradingCriterion
 from langchain_core.output_parsers import PydanticOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 
