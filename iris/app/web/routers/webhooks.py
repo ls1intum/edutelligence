@@ -83,22 +83,26 @@ def run_transcription_ingestion_pipeline_worker(
     """
     Run the transcription ingestion pipeline in a separate thread
     """
-    try:
-        callback = TranscriptionIngestionStatus(
-            run_id=dto.settings.authentication_token,
-            base_url=dto.settings.artemis_base_url,
-            initial_stages=dto.initial_stages,
-            lecture_id=dto.lectureId,
-        )
-        db = VectorDatabase()
-        client = db.get_client()
-        pipeline = TranscriptionIngestionPipeline(
-            client=client, dto=dto, callback=callback
-        )
-        pipeline()
-    except Exception as e:
-        logger.error(f"Error while deleting lectures: {e}")
-        logger.error(traceback.format_exc())
+    with semaphore:
+        try:
+            callback = TranscriptionIngestionStatus(
+                run_id=dto.settings.authentication_token,
+                base_url=dto.settings.artemis_base_url,
+                initial_stages=dto.initial_stages,
+                lecture_id=dto.lectureId
+            )
+            db = VectorDatabase()
+            client = db.get_client()
+            pipeline = TranscriptionIngestionPipeline(
+                client=client, dto=dto, callback=callback
+            )
+            pipeline()
+        except Exception as e:
+            logger.error(f"Error while deleting lectures: {e}")
+            logger.error(traceback.format_exc())
+            capture_exception(e)
+        finally:
+            semaphore.release()
 
 
 def run_faq_update_pipeline_worker(dto: FaqIngestionPipelineExecutionDto):

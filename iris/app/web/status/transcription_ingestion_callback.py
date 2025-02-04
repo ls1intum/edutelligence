@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 class TranscriptionIngestionStatus(StatusCallback):
     """
-    Callback class for updating the status of a Lecture Transcription ingestion Pipeline run.
+    Callback class for updating the status of a Transcription ingestion Pipeline run.
     """
 
     def __init__(
