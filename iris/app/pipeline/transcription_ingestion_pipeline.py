@@ -67,6 +67,7 @@ class TranscriptionIngestionPipeline(Pipeline):
             request_handler=request_handler, completion_args=completion_args
         )
         self.pipeline = self.llm | StrOutputParser()
+        self.tokens = []
 
     def __call__(self) -> None:
         try:
@@ -221,8 +222,7 @@ class TranscriptionIngestionPipeline(Pipeline):
             self.prompt = ChatPromptTemplate.from_messages(prompt_val)
             try:
                 response = (self.prompt | self.pipeline).invoke({})
-                # self._append_tokens(self.llm.tokens, PipelineEnum.IRIS_VIDEO_TRANSCRIPTION_INGESTION)
-
+                self._append_tokens(self.llm.tokens, PipelineEnum.IRIS_VIDEO_TRANSCRIPTION_INGESTION)
                 chunks_with_summaries.append(
                     {
                         **chunk,
