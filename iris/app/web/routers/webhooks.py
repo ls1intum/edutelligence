@@ -88,7 +88,7 @@ def run_transcription_ingestion_pipeline_worker(
             run_id=dto.settings.authentication_token,
             base_url=dto.settings.artemis_base_url,
             initial_stages=dto.initial_stages,
-            lecture_id=dto.lectureId
+            lecture_id=dto.lectureId,
         )
         db = VectorDatabase()
         client = db.get_client()
@@ -99,6 +99,7 @@ def run_transcription_ingestion_pipeline_worker(
     except Exception as e:
         logger.error(f"Error while deleting lectures: {e}")
         logger.error(traceback.format_exc())
+
 
 def run_faq_update_pipeline_worker(dto: FaqIngestionPipelineExecutionDto):
     """
@@ -189,6 +190,7 @@ def transcription_ingestion_webhook(dto: TranscriptionIngestionPipelineExecution
     print(f"transcription ingestion got DTO {dto}")
     thread = Thread(target=run_transcription_ingestion_pipeline_worker, args=(dto,))
     thread.start()
+
 
 @router.post(
     "/faqs",

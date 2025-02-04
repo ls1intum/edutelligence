@@ -10,6 +10,7 @@ from weaviate import WeaviateClient
 
 from asyncio.log import logger
 
+from app.common.PipelineEnum import PipelineEnum
 from app.domain.data.metrics.transcription_dto import (
     TranscriptionWebhookDTO,
     TranscriptionSegmentDTO,
@@ -112,7 +113,7 @@ class TranscriptionIngestionPipeline(Pipeline):
     ) -> List[Dict[str, Any]]:
         CHUNK_SEPARATOR_CHAR = "\x1F"
         chunks = []
-        
+
         for transcription in transcriptions:
             slide_chunks = {}
             for segment in transcription.transcription.segments:
@@ -143,11 +144,15 @@ class TranscriptionIngestionPipeline(Pipeline):
 
             for i, segment in enumerate(slide_chunks.values()):
                 if len(segment[LectureTranscriptionSchema.SEGMENT_TEXT.value]) < 1200:
-                    segment[LectureTranscriptionSchema.SEGMENT_TEXT.value] = segment[LectureTranscriptionSchema.SEGMENT_TEXT.value].replace(CHUNK_SEPARATOR_CHAR, " ")
+                    segment[LectureTranscriptionSchema.SEGMENT_TEXT.value] = segment[
+                        LectureTranscriptionSchema.SEGMENT_TEXT.value
+                    ].replace(CHUNK_SEPARATOR_CHAR, " ")
                     chunks.append(segment)
                     continue
 
-                text_splitter = RecursiveCharacterTextSplitter(chunk_size=1024, chunk_overlap=0)
+                text_splitter = RecursiveCharacterTextSplitter(
+                    chunk_size=1024, chunk_overlap=0
+                )
 
                 semantic_chunks = text_splitter.split_text(
                     segment[LectureTranscriptionSchema.SEGMENT_TEXT.value]
@@ -155,7 +160,8 @@ class TranscriptionIngestionPipeline(Pipeline):
 
                 for j, chunk in enumerate(semantic_chunks):
                     offset_slide_chunk = reduce(
-                        lambda acc, txt: acc + len(txt.replace(CHUNK_SEPARATOR_CHAR, "")),
+                        lambda acc, txt: acc
+                        + len(txt.replace(CHUNK_SEPARATOR_CHAR, "")),
                         map(
                             lambda seg: seg[
                                 LectureTranscriptionSchema.SEGMENT_TEXT.value
@@ -166,11 +172,16 @@ class TranscriptionIngestionPipeline(Pipeline):
                     )
 
                     offset_semantic_chunk = reduce(
-                        lambda acc, txt: acc + len(txt.replace(CHUNK_SEPARATOR_CHAR, "")), semantic_chunks[:j], 0
+                        lambda acc, txt: acc
+                        + len(txt.replace(CHUNK_SEPARATOR_CHAR, "")),
+                        semantic_chunks[:j],
+                        0,
                     )
 
                     offset_start = offset_slide_chunk + offset_semantic_chunk + 1
-                    offset_end = offset_start + len(chunk.replace(CHUNK_SEPARATOR_CHAR, ""))
+                    offset_end = offset_start + len(
+                        chunk.replace(CHUNK_SEPARATOR_CHAR, "")
+                    )
 
                     start_time = self.get_transcription_segment_of_char_position(
                         offset_start, transcription.transcription.segments
@@ -184,7 +195,9 @@ class TranscriptionIngestionPipeline(Pipeline):
                             **segment,
                             LectureTranscriptionSchema.SEGMENT_START.value: start_time,
                             LectureTranscriptionSchema.SEGMENT_END.value: end_time,
-                            LectureTranscriptionSchema.SEGMENT_TEXT.value: chunk.replace(CHUNK_SEPARATOR_CHAR, " ").strip(),
+                            LectureTranscriptionSchema.SEGMENT_TEXT.value: chunk.replace(
+                                CHUNK_SEPARATOR_CHAR, " "
+                            ).strip(),
                         }
                     )
 
@@ -222,7 +235,9 @@ class TranscriptionIngestionPipeline(Pipeline):
             self.prompt = ChatPromptTemplate.from_messages(prompt_val)
             try:
                 response = (self.prompt | self.pipeline).invoke({})
-                self._append_tokens(self.llm.tokens, PipelineEnum.IRIS_VIDEO_TRANSCRIPTION_INGESTION)
+                self._append_tokens(
+                    self.llm.tokens, PipelineEnum.IRIS_VIDEO_TRANSCRIPTION_INGESTION
+                )
                 chunks_with_summaries.append(
                     {
                         **chunk,
