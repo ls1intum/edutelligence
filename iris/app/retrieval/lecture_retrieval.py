@@ -1,6 +1,7 @@
 from asyncio.log import logger
 from typing import List
 
+from dotenv import load_dotenv
 from langsmith import traceable
 from weaviate import WeaviateClient
 from weaviate.classes.query import Filter
@@ -34,9 +35,13 @@ from ..pipeline.prompts.lecture_retrieval_prompts import (
     write_hypothetical_answer_prompt,
     lecture_retrieval_initial_prompt_with_exercise_context,
     rewrite_student_query_prompt_with_exercise_context,
-    write_hypothetical_answer_with_exercise_context_prompt,
+    write_hypothetical_answer_with_exercise_context_prompt, lecture_retrieval_rewrite_student_query,
 )
 import concurrent.futures
+import cohere
+import os
+
+from ..vector_database.lecture_transcription_schema import LectureTranscriptionSchema
 
 
 def merge_retrieved_chunks(
@@ -87,6 +92,7 @@ class LectureRetrieval(Pipeline):
 
     def __init__(self, client: WeaviateClient, **kwargs):
         super().__init__(implementation_id="lecture_retrieval_pipeline")
+        load_dotenv()
         request_handler = CapabilityRequestHandler(
             requirements=RequirementList(
                 gpt_version_equivalent=4.25,
@@ -103,6 +109,8 @@ class LectureRetrieval(Pipeline):
         self.collection = init_lecture_schema(client)
         self.reranker_pipeline = RerankerPipeline()
         self.tokens = []
+        self.cohere = cohere.ClientV2(base_url="https://rerankv3-multi.swedencentral.models.ai.azure.com",
+                                      api_key=os.getenv("COHERE_API_KEY"))
 
     @traceable(name="Full Lecture Retrieval")
     def __call__(
@@ -145,11 +153,13 @@ class LectureRetrieval(Pipeline):
             basic_retrieved_lecture_chunks, hyde_retrieved_lecture_chunks
         )
         if len(merged_chunks) != 0:
-            selected_chunks_index = self.reranker_pipeline(
-                paragraphs=merged_chunks, query=student_query, chat_history=chat_history
-            )
-            if selected_chunks_index:
-                return [merged_chunks[int(i)] for i in selected_chunks_index]
+            # TODO: add chat history
+            _, reranked_results, _ = self.cohere.rerank(query=student_query,
+                                                        documents=merged_chunks,
+                                                        top_n=5,
+                                                        model='rerank-multilingual-v3.5')
+            if reranked_results:
+                return [merged_chunks[int(i)] for i in reranked_results]
         return []
 
     @traceable(name="Basic Lecture Retrieval")
@@ -226,7 +236,7 @@ class LectureRetrieval(Pipeline):
         """
         prompt = ChatPromptTemplate.from_messages(
             [
-                ("system", lecture_retriever_initial_prompt),
+                ("system", lecture_retrieval_rewrite_student_query),
             ]
         )
         prompt = _add_last_four_messages_to_prompt(prompt, chat_history)
@@ -235,7 +245,7 @@ class LectureRetrieval(Pipeline):
         )
         prompt_val = prompt.format_messages(
             course_language=course_language,
-            course_name=course_name,
+            # course_name=course_name,
             student_query=student_query,
         )
         prompt = ChatPromptTemplate.from_messages(prompt_val)
@@ -376,17 +386,56 @@ class LectureRetrieval(Pipeline):
         hybrid_factor: float,
         result_limit: int,
         course_id: int = None,
+        lecture_id: int = None,
         base_url: str = None,
     ):
         """
         Search the database for the given query.
         """
         logger.info(f"Searching in the database for query: {query}")
+
+
+        slide_results = self.search_in_db_for_lecture_slides(
+            query=query,
+            hybrid_factor=hybrid_factor,
+            result_limit=result_limit,
+            course_id=course_id,
+            lecture_id=lecture_id,
+            base_url=base_url,
+        )
+
+        transcription_results = self.search_in_db_for_lecture_transcriptions(
+            query=query,
+            hybrid_factor=hybrid_factor,
+            result_limit=result_limit,
+            course_id=course_id,
+            lecture_id=lecture_id,
+        )
+
+        return slide_results, transcription_results
+
+
+    @traceable(name="Retrieval: Search in DB for Lecture Slides")
+    def search_in_db_for_lecture_slides(
+        self,
+        query: str,
+        hybrid_factor: float,
+        result_limit: int,
+        course_id: int = None,
+        lecture_id: int = None,
+        base_url: str = None,
+    ):
         # Initialize filter to None by default
         filter_weaviate = None
+        # Check if lecture_id is provided
+        if lecture_id:
+            filter_weaviate = Filter.by_property(LectureSchema.LECTURE_ID.value).equal(
+                lecture_id
+            )
+
 
         # Check if course_id is provided
-        if course_id:
+        elif course_id:
             # Create a filter for course_id
             filter_weaviate = Filter.by_property(LectureSchema.COURSE_ID.value).equal(
                 course_id
@@ -414,6 +463,49 @@ class LectureRetrieval(Pipeline):
             filters=filter_weaviate,
         )
         return return_value
+
+    @traceable(name="Retrieval: Search in DB for Lecture Transcriptions")
+    def search_in_db_for_lecture_transcriptions(
+        self,
+        query: str,
+        hybrid_factor: float,
+        result_limit: int,
+        course_id: int = None,
+        lecture_id: int = None,
+    ):
+        # Initialize filter to None by default
+        filter_weaviate = None
+        # Check if lecture_id is provided
+        if lecture_id:
+            filter_weaviate = Filter.by_property(LectureTranscriptionSchema.LECTURE_ID.value).equal(
+                lecture_id
+            )
+
+
+        # Check if course_id is provided
+        elif course_id:
+            # Create a filter for course_id
+            filter_weaviate = Filter.by_property(LectureTranscriptionSchema.COURSE_ID.value).equal(
+                course_id
+            )
+
+        vec = self.llm_embedding.embed(query)
+        weaviate_results = self.collection.query.hybrid(
+            query=query,
+            alpha=hybrid_factor,
+            vector=vec,
+            return_properties=[
+                LectureTranscriptionSchema.LECTURE_UNIT_ID.value,
+                LectureTranscriptionSchema.SEGMENT_TEXT.value,
+                LectureTranscriptionSchema.SEGMENT_START.value,
+                LectureTranscriptionSchema.SEGMENT_END.value,
+                LectureTranscriptionSchema.SEGMENT_SUMMARY.value,
+            ],
+            limit=result_limit,
+            filters=filter_weaviate,
+        )
+        return weaviate_results
+
 
     @traceable(name="Retrieval: Run Parallel Rewrite Tasks")
     def run_parallel_rewrite_tasks(

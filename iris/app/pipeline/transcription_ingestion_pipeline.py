@@ -125,11 +125,11 @@ class TranscriptionIngestionPipeline(Pipeline):
                         LectureTranscriptionSchema.COURSE_NAME.value: transcription.course_name,
                         LectureTranscriptionSchema.LECTURE_ID.value: transcription.lecture_id,
                         LectureTranscriptionSchema.LECTURE_NAME.value: transcription.lecture_name,
+                        LectureTranscriptionSchema.LECTURE_UNIT_ID.value: transcription.lecture_id,
                         LectureTranscriptionSchema.LANGUAGE.value: transcription.transcription.language,
                         LectureTranscriptionSchema.SEGMENT_START.value: segment.start_time,
                         LectureTranscriptionSchema.SEGMENT_END.value: segment.end_time,
                         LectureTranscriptionSchema.SEGMENT_TEXT.value: segment.text,
-                        LectureTranscriptionSchema.SEGMENT_LECTURE_UNIT_SLIDES_ID.value: segment.lecture_unit_id,
                         LectureTranscriptionSchema.SEGMENT_LECTURE_UNIT_SLIDE_NUMBER.value: segment.slide_number,
                     }
 
