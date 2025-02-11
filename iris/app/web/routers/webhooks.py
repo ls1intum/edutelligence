@@ -191,7 +191,7 @@ def transcription_ingestion_webhook(dto: TranscriptionIngestionPipelineExecution
     """
     Webhook endpoint to trigger the lecture transcription ingestion pipeline
     """
-    print(f"transcription ingestion got DTO {dto}")
+    logger.info(f"transcription ingestion got DTO {dto}")
     thread = Thread(target=run_transcription_ingestion_pipeline_worker, args=(dto,))
     thread.start()
 
