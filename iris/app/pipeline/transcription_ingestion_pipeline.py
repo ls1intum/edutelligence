@@ -118,7 +118,7 @@ class TranscriptionIngestionPipeline(Pipeline):
         for transcription in transcriptions:
             slide_chunks = {}
             for segment in transcription.transcription.segments:
-                slide_key = f"{transcription.lecture_id}_{segment.lecture_unit_id}_{segment.slide_number}"
+                slide_key = f"{transcription.lecture_id}_{transcription.lecture_unit_id}_{segment.slide_number}"
 
                 if slide_key not in slide_chunks:
                     chunk = {
@@ -126,11 +126,11 @@ class TranscriptionIngestionPipeline(Pipeline):
                         LectureTranscriptionSchema.COURSE_NAME.value: transcription.course_name,
                         LectureTranscriptionSchema.LECTURE_ID.value: transcription.lecture_id,
                         LectureTranscriptionSchema.LECTURE_NAME.value: transcription.lecture_name,
+                        LectureTranscriptionSchema.LECTURE_UNIT_ID.value: transcription.lecture_unit_id,
                         LectureTranscriptionSchema.LANGUAGE.value: transcription.transcription.language,
                         LectureTranscriptionSchema.SEGMENT_START_TIME.value: segment.start_time,
                         LectureTranscriptionSchema.SEGMENT_END_TIME.value: segment.end_time,
                         LectureTranscriptionSchema.SEGMENT_TEXT.value: segment.text,
-                        LectureTranscriptionSchema.SEGMENT_LECTURE_UNIT_SLIDES_ID.value: segment.lecture_unit_id,
                         LectureTranscriptionSchema.SEGMENT_LECTURE_UNIT_SLIDE_NUMBER.value: segment.slide_number,
                     }
 

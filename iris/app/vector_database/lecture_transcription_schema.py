@@ -16,11 +16,11 @@ class LectureTranscriptionSchema(Enum):
     COURSE_NAME = "course_name"
     LECTURE_ID = "lecture_id"
     LECTURE_NAME = "lecture_name"
+    LECTURE_UNIT_ID = "lecture_unit_id"
     LANGUAGE = "language"
     SEGMENT_START_TIME = "segment_start_time"
     SEGMENT_END_TIME = "segment_end_time"
     SEGMENT_TEXT = "segment_text"
-    SEGMENT_LECTURE_UNIT_SLIDES_ID = "segment_lecture_unit_slides_id"
     SEGMENT_LECTURE_UNIT_SLIDE_NUMBER = "segment_lecture_unit_slide_number"
     SEGMENT_SUMMARY = "segment_summary"
 
@@ -85,8 +85,8 @@ def init_lecture_transcription_schema(client: WeaviateClient) -> Collection:
                 index_searchable=True,
             ),
             Property(
-                name=LectureTranscriptionSchema.SEGMENT_LECTURE_UNIT_SLIDES_ID.value,
-                description="The id of the lecture unit slides of the segment",
+                name=LectureTranscriptionSchema.LECTURE_UNIT_ID.value,
+                description="The id of the lecture unit of the transcription",
                 data_type=DataType.INT,
                 index_searchable=False,
             ),
