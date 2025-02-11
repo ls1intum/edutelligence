@@ -5,7 +5,6 @@ from typing import Optional, List, Dict, Any
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import Runnable
-from langchain_text_splitters import RecursiveCharacterTextSplitter
 from weaviate import WeaviateClient
 
 from asyncio.log import logger
@@ -36,6 +35,8 @@ from app.vector_database.lecture_transcription_schema import (
 from app.web.status.transcription_ingestion_callback import TranscriptionIngestionStatus
 
 batch_insert_lock = threading.Lock()
+
+CHUNK_SEPARATOR_CHAR = "\31"
 
 
 class TranscriptionIngestionPipeline(Pipeline):
@@ -80,6 +81,7 @@ class TranscriptionIngestionPipeline(Pipeline):
 
             self.callback.in_progress("Ingesting transcriptions into vector database")
             self.batch_insert(chunks)
+
             self.callback.done("Transcriptions ingested successfully")
 
         except Exception as e:
@@ -111,7 +113,6 @@ class TranscriptionIngestionPipeline(Pipeline):
     def chunk_transcriptions(
         self, transcriptions: List[TranscriptionWebhookDTO]
     ) -> List[Dict[str, Any]]:
-        CHUNK_SEPARATOR_CHAR = "\x1F"
         chunks = []
 
         for transcription in transcriptions:
@@ -143,44 +144,38 @@ class TranscriptionIngestionPipeline(Pipeline):
                     ] = segment.end_time
 
             for i, segment in enumerate(slide_chunks.values()):
+                # If the segment is shorter than 1200 characters, we can just add it as is
                 if len(segment[LectureTranscriptionSchema.SEGMENT_TEXT.value]) < 1200:
-                    segment[LectureTranscriptionSchema.SEGMENT_TEXT.value] = segment[
+                    # Add the segment to the chunks list and replace the chunk separator character with a space
+                    segment[LectureTranscriptionSchema.SEGMENT_TEXT.value] = self.replace_seperator_char(segment[
                         LectureTranscriptionSchema.SEGMENT_TEXT.value
-                    ].replace(CHUNK_SEPARATOR_CHAR, " ")
+                    ])
                     chunks.append(segment)
                     continue
 
-                text_splitter = RecursiveCharacterTextSplitter(
-                    chunk_size=1024, chunk_overlap=0
+                semantic_chunks = self.llm_embedding.split_text_semantically(
+                    segment[LectureTranscriptionSchema.SEGMENT_TEXT.value],
+                    breakpoint_threshold_type="gradient",
+                    breakpoint_threshold_amount=60.0,
+                    min_chunk_size=512,
                 )
 
-                semantic_chunks = text_splitter.split_text(
-                    segment[LectureTranscriptionSchema.SEGMENT_TEXT.value]
+                # Calculate the offset of the current slide chunk to the start of the transcript
+                offset_slide_chunk = reduce(
+                    lambda acc, txt: acc
+                                     + len(self.remove_seperator_char(txt)),
+                    map(
+                        lambda seg: seg[
+                            LectureTranscriptionSchema.SEGMENT_TEXT.value
+                        ],
+                        list(slide_chunks.values())[:i],
+                    ),
+                    0,
                 )
-
+                offset_start = offset_slide_chunk
                 for j, chunk in enumerate(semantic_chunks):
-                    offset_slide_chunk = reduce(
-                        lambda acc, txt: acc
-                        + len(txt.replace(CHUNK_SEPARATOR_CHAR, "")),
-                        map(
-                            lambda seg: seg[
-                                LectureTranscriptionSchema.SEGMENT_TEXT.value
-                            ],
-                            list(slide_chunks.values())[:i],
-                        ),
-                        0,
-                    )
-
-                    offset_semantic_chunk = reduce(
-                        lambda acc, txt: acc
-                        + len(txt.replace(CHUNK_SEPARATOR_CHAR, "")),
-                        semantic_chunks[:j],
-                        0,
-                    )
-
-                    offset_start = offset_slide_chunk + offset_semantic_chunk + 1
                     offset_end = offset_start + len(
-                        chunk.replace(CHUNK_SEPARATOR_CHAR, "")
+                        self.remove_seperator_char(chunk)
                     )
 
                     start_time = self.get_transcription_segment_of_char_position(
@@ -195,11 +190,10 @@ class TranscriptionIngestionPipeline(Pipeline):
                             **segment,
                             LectureTranscriptionSchema.SEGMENT_START.value: start_time,
                             LectureTranscriptionSchema.SEGMENT_END.value: end_time,
-                            LectureTranscriptionSchema.SEGMENT_TEXT.value: chunk.replace(
-                                CHUNK_SEPARATOR_CHAR, " "
-                            ).strip(),
+                            LectureTranscriptionSchema.SEGMENT_TEXT.value: self.cleanup_chunk(self.replace_seperator_char(chunk)),
                         }
                     )
+                    offset_start = offset_end + 1
 
         return chunks
 
@@ -209,13 +203,24 @@ class TranscriptionIngestionPipeline(Pipeline):
     ):
         offset_lookup_counter = 0
         segment_index = 0
-        while offset_lookup_counter < char_position and segment_index < len(segments):
+        while offset_lookup_counter + len(segments[segment_index].text) < char_position and segment_index < len(segments):
             offset_lookup_counter += len(segments[segment_index].text)
             segment_index += 1
 
         if segment_index >= len(segments):
             return segments[-1]
         return segments[segment_index]
+
+    @staticmethod
+    def cleanup_chunk(text: str):
+        return text.replace("  ", " ").strip()
+
+    @staticmethod
+    def replace_seperator_char(text: str, replace_with: str = " ") -> str:
+        return text.replace(CHUNK_SEPARATOR_CHAR, replace_with)
+
+    def remove_seperator_char(self, text: str) -> str:
+        return self.replace_seperator_char(text, "")
 
     def summarize_chunks(self, chunks):
         chunks_with_summaries = []

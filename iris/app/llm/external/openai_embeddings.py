@@ -1,13 +1,14 @@
 import logging
 from typing import Literal, Any
+
+from langchain_experimental.text_splitter import SemanticChunker
 from openai import (
-    OpenAI,
     APIError,
     APITimeoutError,
     RateLimitError,
     InternalServerError,
 )
-from openai.lib.azure import AzureOpenAI
+from langchain_openai import AzureOpenAIEmbeddings, OpenAIEmbeddings
 
 from ...llm.external.model import EmbeddingModel
 import time
@@ -16,7 +17,7 @@ import time
 class OpenAIEmbeddingModel(EmbeddingModel):
     model: str
     api_key: str
-    _client: OpenAI
+    _client: OpenAIEmbeddings
 
     def embed(self, text: str) -> list[float]:
         retries = 5
@@ -44,12 +45,30 @@ class OpenAIEmbeddingModel(EmbeddingModel):
                 time.sleep(wait_time)
         raise Exception(f"Failed to get embedding from OpenAI after {retries} retries.")
 
+    def split_text_semantically(
+        self,
+        text: str,
+        breakpoint_threshold_type: Literal[
+            "percentile", "standard_deviation", "interquartile", "gradient"
+        ] = "gradient",
+        breakpoint_threshold_amount: float = 95.0,
+        min_chunk_size: int = 512,
+    ):
+        chunker = SemanticChunker(
+            self._client,
+            breakpoint_threshold_type=breakpoint_threshold_type,
+            breakpoint_threshold_amount=breakpoint_threshold_amount,
+            min_chunk_size=min_chunk_size,
+        )
+
+        return chunker.split_text(text)
+
 
 class DirectOpenAIEmbeddingModel(OpenAIEmbeddingModel):
     type: Literal["openai_embedding"]
 
     def model_post_init(self, __context: Any) -> None:
-        self._client = OpenAI(api_key=self.api_key)
+        self._client = OpenAIEmbeddings(api_key=self.api_key)
 
     def __str__(self):
         return f"OpenAIEmbedding('{self.model}')"
@@ -62,7 +81,7 @@ class AzureOpenAIEmbeddingModel(OpenAIEmbeddingModel):
     api_version: str
 
     def model_post_init(self, __context: Any) -> None:
-        self._client = AzureOpenAI(
+        self._client = AzureOpenAIEmbeddings(
             azure_endpoint=self.endpoint,
             azure_deployment=self.azure_deployment,
             api_version=self.api_version,
