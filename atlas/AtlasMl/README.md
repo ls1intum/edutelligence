@@ -47,6 +47,11 @@ OR
 poetry run uvicorn atlasml.app:app --reload
 ```
 
+4. Run the ML Model Only: 
+```bash
+python AtlasMl/atlasml/ml/ml_runner.py 
+```
+
 ## Development 
 
 
