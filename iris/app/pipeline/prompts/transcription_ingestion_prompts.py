@@ -1,6 +1,7 @@
 def transcription_summary_prompt(lecture_name: str, chunk_content: str):
     return f"""
-        You are an excellent tutor with deep expertise in computer science and practical applications, teaching at the university level.
+        You are an excellent tutor with deep expertise in computer science and practical applications,
+        teaching at the university level.
         A snippet of the spoken content of one lecture of the lecture {lecture_name} will be given to you.
         Please accurately follow the instructions below.
         1. Summarize the information in a clear and accurate manner.
