@@ -26,6 +26,7 @@ from app.llm import (
 )
 from app.llm.langchain import IrisLangchainChatModel
 from app.pipeline import Pipeline
+from app.pipeline.faq_ingestion_pipeline import batch_update_lock
 from app.pipeline.prompts.transcription_ingestion_prompts import (
     transcription_summary_prompt,
 )
@@ -35,7 +36,7 @@ from app.vector_database.lecture_transcription_schema import (
 )
 from app.web.status.transcription_ingestion_callback import TranscriptionIngestionStatus
 
-batch_insert_lock = threading.Lock()
+batch_insert_lock = batch_update_lock
 
 
 class TranscriptionIngestionPipeline(Pipeline):
@@ -74,7 +75,7 @@ class TranscriptionIngestionPipeline(Pipeline):
         try:
             self.callback.in_progress("Chunking transcriptions")
             chunks = self.chunk_transcriptions(self.dto.transcriptions)
-
+            logger.info("chunked data")
             self.callback.in_progress("Summarizing transcriptions")
             chunks = self.summarize_chunks(chunks)
 
@@ -126,8 +127,8 @@ class TranscriptionIngestionPipeline(Pipeline):
                         LectureTranscriptionSchema.LECTURE_ID.value: transcription.lecture_id,
                         LectureTranscriptionSchema.LECTURE_NAME.value: transcription.lecture_name,
                         LectureTranscriptionSchema.LANGUAGE.value: transcription.transcription.language,
-                        LectureTranscriptionSchema.SEGMENT_START.value: segment.start_time,
-                        LectureTranscriptionSchema.SEGMENT_END.value: segment.end_time,
+                        LectureTranscriptionSchema.SEGMENT_START_TIME.value: segment.start_time,
+                        LectureTranscriptionSchema.SEGMENT_END_TIME.value: segment.end_time,
                         LectureTranscriptionSchema.SEGMENT_TEXT.value: segment.text,
                         LectureTranscriptionSchema.SEGMENT_LECTURE_UNIT_SLIDES_ID.value: segment.lecture_unit_id,
                         LectureTranscriptionSchema.SEGMENT_LECTURE_UNIT_SLIDE_NUMBER.value: segment.slide_number,
@@ -139,7 +140,7 @@ class TranscriptionIngestionPipeline(Pipeline):
                         LectureTranscriptionSchema.SEGMENT_TEXT.value
                     ] += (CHUNK_SEPARATOR_CHAR + segment.text)
                     slide_chunks[slide_key][
-                        LectureTranscriptionSchema.SEGMENT_END.value
+                        LectureTranscriptionSchema.SEGMENT_END_TIME.value
                     ] = segment.end_time
 
             for i, segment in enumerate(slide_chunks.values()):
@@ -193,8 +194,8 @@ class TranscriptionIngestionPipeline(Pipeline):
                     chunks.append(
                         {
                             **segment,
-                            LectureTranscriptionSchema.SEGMENT_START.value: start_time,
-                            LectureTranscriptionSchema.SEGMENT_END.value: end_time,
+                            LectureTranscriptionSchema.SEGMENT_START_TIME.value: start_time,
+                            LectureTranscriptionSchema.SEGMENT_END_TIME.value: end_time,
                             LectureTranscriptionSchema.SEGMENT_TEXT.value: chunk.replace(
                                 CHUNK_SEPARATOR_CHAR, " "
                             ).strip(),
