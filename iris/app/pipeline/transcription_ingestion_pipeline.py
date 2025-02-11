@@ -147,9 +147,11 @@ class TranscriptionIngestionPipeline(Pipeline):
                 # If the segment is shorter than 1200 characters, we can just add it as is
                 if len(segment[LectureTranscriptionSchema.SEGMENT_TEXT.value]) < 1200:
                     # Add the segment to the chunks list and replace the chunk separator character with a space
-                    segment[LectureTranscriptionSchema.SEGMENT_TEXT.value] = self.replace_separator_char(segment[
-                        LectureTranscriptionSchema.SEGMENT_TEXT.value
-                    ])
+                    segment[LectureTranscriptionSchema.SEGMENT_TEXT.value] = (
+                        self.replace_separator_char(
+                            segment[LectureTranscriptionSchema.SEGMENT_TEXT.value]
+                        )
+                    )
                     chunks.append(segment)
                     continue
 
@@ -162,21 +164,16 @@ class TranscriptionIngestionPipeline(Pipeline):
 
                 # Calculate the offset of the current slide chunk to the start of the transcript
                 offset_slide_chunk = reduce(
-                    lambda acc, txt: acc
-                                     + len(self.remove_separator_char(txt)),
+                    lambda acc, txt: acc + len(self.remove_separator_char(txt)),
                     map(
-                        lambda seg: seg[
-                            LectureTranscriptionSchema.SEGMENT_TEXT.value
-                        ],
+                        lambda seg: seg[LectureTranscriptionSchema.SEGMENT_TEXT.value],
                         list(slide_chunks.values())[:i],
                     ),
                     0,
                 )
                 offset_start = offset_slide_chunk
                 for j, chunk in enumerate(semantic_chunks):
-                    offset_end = offset_start + len(
-                        self.remove_separator_char(chunk)
-                    )
+                    offset_end = offset_start + len(self.remove_separator_char(chunk))
 
                     start_time = self.get_transcription_segment_of_char_position(
                         offset_start, transcription.transcription.segments
@@ -190,7 +187,9 @@ class TranscriptionIngestionPipeline(Pipeline):
                             **segment,
                             LectureTranscriptionSchema.SEGMENT_START_TIME.value: start_time,
                             LectureTranscriptionSchema.SEGMENT_END_TIME.value: end_time,
-                            LectureTranscriptionSchema.SEGMENT_TEXT.value: self.cleanup_chunk(self.replace_separator_char(chunk)),
+                            LectureTranscriptionSchema.SEGMENT_TEXT.value: self.cleanup_chunk(
+                                self.replace_separator_char(chunk)
+                            ),
                         }
                     )
                     offset_start = offset_end + 1
@@ -203,7 +202,9 @@ class TranscriptionIngestionPipeline(Pipeline):
     ):
         offset_lookup_counter = 0
         segment_index = 0
-        while offset_lookup_counter + len(segments[segment_index].text) < char_position and segment_index < len(segments):
+        while offset_lookup_counter + len(
+            segments[segment_index].text
+        ) < char_position and segment_index < len(segments):
             offset_lookup_counter += len(segments[segment_index].text)
             segment_index += 1
 
