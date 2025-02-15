@@ -21,13 +21,13 @@ def select_submission(exercise: Exercise, submissions: List[Submission]) -> Subm
     logger.info("select_submission: Received %d, submissions for exercise %d", len(submissions), exercise.id)
     return submissions[0]
 
-@feedback_storer # used for playground
+@feedback_storer # used by playground
 def do_thing(exercise: Exercise, submission: Submission, feedbacks: List[Feedback]):
     logger.info("process_feedback: Received %d feedbacks for submission %d of exercise %d.", len(feedbacks), submission.id, exercise.id)
     store_feedback_icl(submission, exercise, feedbacks)
     logger.info("Embedding saved for submission %d of exercise %d.", submission.id, exercise.id)
     
-@feedback_consumer # used for Artemis
+@feedback_consumer # used by Artemis
 def process_incoming_feedback(exercise: Exercise, submission: Submission, feedbacks: List[Feedback]):
     logger.info("process_feedback: Received %d feedbacks for submission %d of exercise %d.", len(feedbacks), submission.id, exercise.id)
     store_feedback_icl(submission, exercise, feedbacks)
