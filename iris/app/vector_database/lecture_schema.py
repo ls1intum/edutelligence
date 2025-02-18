@@ -16,6 +16,7 @@ class LectureSchema(Enum):
     COURSE_LANGUAGE = "course_language"
     LECTURE_ID = "lecture_id"
     LECTURE_NAME = "lecture_name"
+    LECTURE_UNIT_ID = "lecture_unit_id"
     CONTENT = "content"
     SLIDE_NUMBER = "slide_number"
 
@@ -64,6 +65,12 @@ def init_lecture_schema(client: WeaviateClient) -> Collection:
                 name=LectureSchema.LECTURE_NAME.value,
                 description="The name of the lecture",
                 data_type=DataType.TEXT,
+                index_searchable=False,
+            ),
+            Property(
+                name=LectureSchema.LECTURE_UNIT_ID.value,
+                description="The id of the lecture unit",
+                data_type=DataType.INT,
                 index_searchable=False,
             ),
             Property(
