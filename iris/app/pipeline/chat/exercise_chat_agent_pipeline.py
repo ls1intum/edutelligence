@@ -26,7 +26,7 @@ from ..prompts.iris_exercise_chat_agent_prompts import (
     tell_progress_stalled_system_prompt,
 )
 
-from ..shared.citation_pipeline import CitationPipeline
+from ..shared.citation_pipeline import CitationPipeline, InformationType
 from ..shared.reranker_pipeline import RerankerPipeline
 from ..shared.utils import generate_structured_tools_from_functions
 from ...common.PipelineEnum import PipelineEnum
@@ -584,6 +584,15 @@ class ExerciseChatAgentPipeline(Pipeline):
                     out = guide_response
                     print("NEW RESPONSE: " + out)
                     print("Response is rewritten.")
+
+                if self.retrieved_faqs:
+                    self.callback.in_progress("Augmenting response ...")
+                    out = self.citation_pipeline(
+                        self.retrieved_faqs,
+                        out,
+                        InformationType.FAQS,
+                        base_url=dto.settings.artemis_base_url,
+                    )
 
                 self.callback.done(
                     "Response created", final_result=out, tokens=self.tokens
