@@ -19,7 +19,7 @@ from ...llm import CapabilityRequestHandler, RequirementList
 from app.common.PipelineEnum import PipelineEnum
 from ...retrieval.lecture_retrieval import LectureRetrieval
 from ...vector_database.database import VectorDatabase
-from ...vector_database.lecture_schema import LectureSchema
+from ...vector_database.lecture_slide_schema import LectureSlideSchema
 
 from ...llm import CompletionArguments
 from ...llm.langchain import IrisLangchainChatModel
@@ -180,7 +180,7 @@ class LectureChatPipeline(Pipeline):
         )
         for i, chunk in enumerate(retrieved_lecture_chunks):
             text_content_msg = (
-                f" \n {chunk.get(LectureSchema.PAGE_TEXT_CONTENT.value)} \n"
+                f" \n {chunk.get(LectureSlideSchema.PAGE_TEXT_CONTENT.value)} \n"
             )
             text_content_msg = text_content_msg.replace("{", "{{").replace("}", "}}")
             self.prompt += SystemMessagePromptTemplate.from_template(text_content_msg)

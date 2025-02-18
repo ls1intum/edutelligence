@@ -41,7 +41,7 @@ from app.common.PipelineEnum import PipelineEnum
 from ...llm.langchain import IrisLangchainChatModel
 from ...retrieval.lecture_retrieval import LectureRetrieval
 from ...vector_database.database import VectorDatabase
-from ...vector_database.lecture_schema import LectureSchema
+from ...vector_database.lecture_slide_schema import LectureSlideSchema
 from ...web.status.status_update import ExerciseChatStatusCallback
 
 logger = logging.getLogger()
@@ -404,9 +404,9 @@ class ExerciseChatPipeline(Pipeline):
         for chunk in retrieved_lecture_chunks:
             props = chunk.get("properties", {})
             lct = "Lecture: {}, Page: {}\nContent:\n---{}---\n\n".format(
-                props.get(LectureSchema.LECTURE_NAME.value),
-                props.get(LectureSchema.PAGE_NUMBER.value),
-                props.get(LectureSchema.PAGE_TEXT_CONTENT.value),
+                props.get(LectureSlideSchema.LECTURE_NAME.value),
+                props.get(LectureSlideSchema.PAGE_NUMBER.value),
+                props.get(LectureSlideSchema.PAGE_TEXT_CONTENT.value),
             )
             txt += lct
 
@@ -423,11 +423,11 @@ class ExerciseChatPipeline(Pipeline):
         if course_id:
             # Fetch the first object that matches the course ID with the language property
             result = self.db.lectures.query.fetch_objects(
-                filters=Filter.by_property(LectureSchema.COURSE_ID.value).equal(
+                filters=Filter.by_property(LectureSlideSchema.COURSE_ID.value).equal(
                     course_id
                 ),
                 limit=1,
-                return_properties=[LectureSchema.COURSE_NAME.value],
+                return_properties=[LectureSlideSchema.COURSE_NAME.value],
             )
             return len(result.objects) > 0
         return False
