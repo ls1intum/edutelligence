@@ -153,7 +153,7 @@ class LectureSummaryPipeline(Pipeline):
     def _upsert_lecture_object(self, slide_number: int, summary: str):
         lecture_filter = Filter.by_property(LectureSchema.COURSE_ID.value).equal(self.course_id)
         lecture_filter &= Filter.by_property(LectureSchema.LECTURE_ID.value).equal(self.lecture_id)
-        # lecture_filter &= Filter.by_property(LectureSchema.LECTURE_UNIT_ID.value).equal(self.lecture_unit_id) TODO: add lecture unit id to schema
+        lecture_filter &= Filter.by_property(LectureSchema.LECTURE_UNIT_ID.value).equal(self.lecture_unit_id)
         lecture_filter &= Filter.by_property(LectureSchema.SLIDE_NUMBER.value).equal(slide_number)
 
         lectures = self.lecture_collection.query(filter=lecture_filter, limit=1)
