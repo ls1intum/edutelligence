@@ -9,7 +9,7 @@ from langchain_core.prompts import (
 from langchain_core.runnables import Runnable
 from langsmith import traceable
 
-from ..shared.citation_pipeline import CitationPipeline
+from ..shared.citation_pipeline import CitationPipeline, InformationType
 from ...common.message_converters import convert_iris_message_to_langchain_message
 from ...common.pyris_message import PyrisMessage
 from ...domain.chat.lecture_chat.lecture_chat_pipeline_execution_dto import (
@@ -25,6 +25,7 @@ from ...llm import CompletionArguments
 from ...llm.langchain import IrisLangchainChatModel
 
 from ..pipeline import Pipeline
+from ...vector_database.lecture_transcription_schema import LectureTranscriptionSchema
 from ...web.status.status_update import LectureChatCallback
 
 logger = logging.getLogger(__name__)
@@ -115,7 +116,7 @@ class LectureChatPipeline(Pipeline):
 
         self._add_conversation_to_prompt(history, query)
 
-        retrieved_lecture_chunks = self.retriever(
+        retrieved_lecture_slide_chunks, retrieved_lecture_transcriptions_chunks = self.retriever(
             chat_history=history,
             student_query=query.contents[0].text_content,
             result_limit=5,
@@ -124,20 +125,27 @@ class LectureChatPipeline(Pipeline):
             base_url=dto.settings.artemis_base_url,
         )
 
-        self._add_relevant_chunks_to_prompt(retrieved_lecture_chunks)
+        self._add_relevant_lecture_slide_chunks_to_prompt(retrieved_lecture_slide_chunks)
+        self._add_relevant_lecture_transcriptions_chunks_to_prompt(retrieved_lecture_transcriptions_chunks)
+        self.prompt += SystemMessagePromptTemplate.from_template(
+            "USE ONLY THE CONTENT YOU NEED TO ANSWER THE QUESTION\n"
+        )
         prompt_val = self.prompt.format_messages()
         self.prompt = ChatPromptTemplate.from_messages(prompt_val)
         try:
             response = (self.prompt | self.pipeline).invoke({})
             self._append_tokens(self.llm.tokens, PipelineEnum.IRIS_CHAT_LECTURE_MESSAGE)
-            response_with_citation = self.citation_pipeline(
-                retrieved_lecture_chunks, response
+            response_with_lecture_slides_citation = self.citation_pipeline(
+                retrieved_lecture_slide_chunks, response, information_type=InformationType.PARAGRAPHS
+            )
+            response_with_lecture_transcriptions_citation = self.citation_pipeline(
+                retrieved_lecture_transcriptions_chunks, response, information_type=InformationType.LECTURE_TRANSCRIPTIONS
             )
             self.tokens.extend(self.citation_pipeline.tokens)
             logger.info(f"Response from lecture chat pipeline: {response}")
             self.callback.done(
                 "Response created",
-                final_result=response_with_citation,
+                final_result=response_with_lecture_transcriptions_citation,
                 tokens=self.tokens,
             )
         except Exception as e:
@@ -170,20 +178,34 @@ class LectureChatPipeline(Pipeline):
             )
         self.prompt += convert_iris_message_to_langchain_message(user_question)
 
-    def _add_relevant_chunks_to_prompt(self, retrieved_lecture_chunks: List[dict]):
+    def _add_relevant_lecture_slide_chunks_to_prompt(self, lecture_chunks: List[dict]):
         """
-        Adds the relevant chunks of the lecture to the prompt
-        :param retrieved_lecture_chunks: The retrieved lecture chunks
+        Adds the relevant chunks of the lecture slides to the prompt
+        :param lecture_chunks: The retrieved lecture chunks
         """
         self.prompt += SystemMessagePromptTemplate.from_template(
             "Next you will find the relevant lecture content:\n"
         )
-        for i, chunk in enumerate(retrieved_lecture_chunks):
+        for i, chunk in enumerate(lecture_chunks):
             text_content_msg = (
                 f" \n {chunk.get(LectureSchema.PAGE_TEXT_CONTENT.value)} \n"
             )
             text_content_msg = text_content_msg.replace("{", "{{").replace("}", "}}")
             self.prompt += SystemMessagePromptTemplate.from_template(text_content_msg)
+
+    def _add_relevant_lecture_transcriptions_chunks_to_prompt(self, lecture_transcription_chunks: List[dict]):
+        """
+        Adds the relevant chunks of the lecture transcriptions to the prompt
+        :param lecture_transcription_chunks: The retrieved lecture transcription chunks
+        """
+        if len(lecture_transcription_chunks) == 0: return
+
         self.prompt += SystemMessagePromptTemplate.from_template(
-            "USE ONLY THE CONTENT YOU NEED TO ANSWER THE QUESTION:\n"
+            "Next you will find the relevant lecture transcription segments:\n"
         )
+        for i, chunk in enumerate(lecture_transcription_chunks):
+            text_content_msg = (
+                f" \n {chunk.get(LectureTranscriptionSchema.SEGMENT_TEXT.value)} \n"
+            )
+            text_content_msg = text_content_msg.replace("{", "{{").replace("}", "}}")
+            self.prompt += SystemMessagePromptTemplate.from_template(text_content_msg)

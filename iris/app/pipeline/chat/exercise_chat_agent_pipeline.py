@@ -45,6 +45,8 @@ from ...retrieval.lecture_retrieval import LectureRetrieval
 from ...vector_database.database import VectorDatabase
 from ...vector_database.lecture_schema import LectureSchema
 from weaviate.collections.classes.filters import Filter
+
+from ...vector_database.lecture_transcription_schema import LectureTranscriptionSchema
 from ...web.status.status_update import ExerciseChatStatusCallback
 
 logger = logging.getLogger()
@@ -106,6 +108,8 @@ class ExerciseChatAgentPipeline(Pipeline):
     variant: str
     event: str | None
     retrieved_faqs: List[dict] = None
+    retrieved_paragraphs_slides: List[dict] = None
+    retrieved_paragraphs_transcriptions: List[dict] = None
 
     def __init__(
         self,
@@ -367,7 +371,7 @@ class ExerciseChatAgentPipeline(Pipeline):
                 return "{}:\n{}\n".format(file_path, repository[file_path])
             return "File not found or does not exist in the repository."
 
-        def lecture_content_retrieval() -> str:
+        def lecture_content_retrieval() -> dict:
             """
             Retrieve content from indexed lecture slides.
             This will run a RAG retrieval based on the chat history on the indexed lecture slides and return the
@@ -377,7 +381,7 @@ class ExerciseChatAgentPipeline(Pipeline):
             Only use this once.
             """
             self.callback.in_progress("Retrieving lecture content ...")
-            self.retrieved_paragraphs = self.lecture_retriever(
+            self.retrieved_paragraphs_slides, self.retrieved_paragraphs_transcriptions = self.lecture_retriever(
                 chat_history=chat_history,
                 student_query=query.contents[0].text_content,
                 result_limit=5,
@@ -386,16 +390,30 @@ class ExerciseChatAgentPipeline(Pipeline):
                 base_url=dto.settings.artemis_base_url,
             )
 
-            result = ""
-            for paragraph in self.retrieved_paragraphs:
+            result_slides = ""
+            results_transcriptions = ""
+            for paragraph in self.retrieved_paragraphs_slides:
                 lct = "Lecture: {}, Unit: {}, Page: {}\nContent:\n---{}---\n\n".format(
                     paragraph.get(LectureSchema.LECTURE_NAME.value),
                     paragraph.get(LectureSchema.LECTURE_UNIT_NAME.value),
                     paragraph.get(LectureSchema.PAGE_NUMBER.value),
                     paragraph.get(LectureSchema.PAGE_TEXT_CONTENT.value),
                 )
-                result += lct
-            return result
+                result_slides += lct
+            for paragraph in self.retrieved_paragraphs_transcriptions:
+                lct = "Lecture: {}, Slide number: {}, Start time: {}, End time: {}\nContent:\n---{}---\n\n".format(
+                    paragraph.get(LectureTranscriptionSchema.LECTURE_NAME.value),
+                    paragraph.get(LectureTranscriptionSchema.SEGMENT_LECTURE_UNIT_SLIDE_NUMBER.value),
+                    paragraph.get(LectureTranscriptionSchema.SEGMENT_START.value),
+                    paragraph.get(LectureTranscriptionSchema.SEGMENT_END.value),
+                    paragraph.get(LectureTranscriptionSchema.SEGMENT_TEXT.value)
+                )
+                results_transcriptions += lct
+
+            return {
+                "lecture slides": result_slides,
+                "lecture transcriptions": results_transcriptions,
+            }
 
         def faq_content_retrieval() -> str:
             """

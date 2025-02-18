@@ -47,6 +47,7 @@ from ...retrieval.faq_retrieval_utils import should_allow_faq_tool, format_faqs
 from ...retrieval.lecture_retrieval import LectureRetrieval
 from ...vector_database.database import VectorDatabase
 from ...vector_database.lecture_schema import LectureSchema
+from ...vector_database.lecture_transcription_schema import LectureTranscriptionSchema
 from ...web.status.status_update import (
     CourseChatStatusCallback,
 )
@@ -82,7 +83,8 @@ class CourseChatPipeline(Pipeline):
     prompt: ChatPromptTemplate
     variant: str
     event: str | None
-    retrieved_paragraphs: List[dict] = None
+    retrieved_paragraphs_slides: List[dict] = None
+    retrieved_paragraphs_transcriptions: List[dict] = None
     retrieved_faqs: List[dict] = None
 
     def __init__(
@@ -276,7 +278,7 @@ class CourseChatPipeline(Pipeline):
                 for comp in competency_metrics.competency_information
             ]
 
-        def lecture_content_retrieval() -> str:
+        def lecture_content_retrieval() -> dict:
             """
             Retrieve content from indexed lecture slides.
             This will run a RAG retrieval based on the chat history on the indexed lecture slides and return the
@@ -286,7 +288,7 @@ class CourseChatPipeline(Pipeline):
             Only use this once.
             """
             self.callback.in_progress("Retrieving lecture content ...")
-            self.retrieved_paragraphs = self.lecture_retriever(
+            self.retrieved_paragraphs_slides, self.retrieved_paragraphs_transcriptions = self.lecture_retriever(
                 chat_history=history,
                 student_query=query.contents[0].text_content,
                 result_limit=5,
@@ -295,16 +297,30 @@ class CourseChatPipeline(Pipeline):
                 base_url=dto.settings.artemis_base_url,
             )
 
-            result = ""
-            for paragraph in self.retrieved_paragraphs:
+            result_slides = ""
+            results_transcriptions = ""
+            for paragraph in self.retrieved_paragraphs_slides:
                 lct = "Lecture: {}, Unit: {}, Page: {}\nContent:\n---{}---\n\n".format(
                     paragraph.get(LectureSchema.LECTURE_NAME.value),
                     paragraph.get(LectureSchema.LECTURE_UNIT_NAME.value),
                     paragraph.get(LectureSchema.PAGE_NUMBER.value),
                     paragraph.get(LectureSchema.PAGE_TEXT_CONTENT.value),
                 )
-                result += lct
-            return result
+                result_slides += lct
+            for paragraph in self.retrieved_paragraphs_transcriptions:
+                lct = "Lecture: {}, Slide number: {}, Start time: {}, End time: {}\nContent:\n---{}---\n\n".format(
+                    paragraph.get(LectureTranscriptionSchema.LECTURE_NAME.value),
+                    paragraph.get(LectureTranscriptionSchema.SEGMENT_LECTURE_UNIT_SLIDE_NUMBER.value),
+                    paragraph.get(LectureTranscriptionSchema.SEGMENT_START.value),
+                    paragraph.get(LectureTranscriptionSchema.SEGMENT_END.value),
+                    paragraph.get(LectureTranscriptionSchema.SEGMENT_TEXT.value)
+                )
+                results_transcriptions += lct
+
+            return {
+                "lecture slides": result_slides,
+                "lecture transcriptions": results_transcriptions,
+            }
 
         def faq_content_retrieval() -> str:
             """
@@ -450,12 +466,18 @@ class CourseChatPipeline(Pipeline):
                 if step.get("output", None):
                     out = step["output"]
 
-            if self.retrieved_paragraphs:
+            if self.retrieved_paragraphs_slides:
                 self.callback.in_progress("Augmenting response ...")
                 out = self.citation_pipeline(
-                    self.retrieved_paragraphs, out, InformationType.PARAGRAPHS
+                    self.retrieved_paragraphs_slides, out, InformationType.PARAGRAPHS
                 )
             self.tokens.extend(self.citation_pipeline.tokens)
+
+            if self.retrieved_paragraphs_transcriptions:
+                self.callback.in_progress("Augmeting response ...")
+                out = self.citation_pipeline(
+                    self.retrieved_paragraphs_transcriptions, out, InformationType.LECTURE_TRANSCRIPTIONS
+                )
 
             if self.retrieved_faqs:
                 self.callback.in_progress("Augmenting response ...")

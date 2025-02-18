@@ -14,11 +14,13 @@ from app.pipeline import Pipeline
 from app.vector_database.faq_schema import FaqSchema
 
 from app.vector_database.lecture_schema import LectureSchema
+from app.vector_database.lecture_transcription_schema import LectureTranscriptionSchema
 
 
 class InformationType(str, Enum):
     PARAGRAPHS = "PARAGRAPHS"
     FAQS = "FAQS"
+    LECTURE_TRANSCRIPTIONS = "LECTURE_TRANSCRIPTIONS"
 
 
 class CitationPipeline(Pipeline):
@@ -42,14 +44,23 @@ class CitationPipeline(Pipeline):
             completion_args=CompletionArguments(temperature=0, max_tokens=4000),
         )
         dirname = os.path.dirname(__file__)
+
         prompt_file_path = os.path.join(dirname, "..", "prompts", "citation_prompt.txt")
         with open(prompt_file_path, "r") as file:
             self.lecture_prompt_str = file.read()
+
         prompt_file_path = os.path.join(
             dirname, "..", "prompts", "faq_citation_prompt.txt"
         )
         with open(prompt_file_path, "r") as file:
             self.faq_prompt_str = file.read()
+
+        prompt_file_path = os.path.join(
+            dirname, "..", "prompts", "lecture_transcription_citation_prompt.txt"
+        )
+        with open(prompt_file_path, "r") as file:
+            self.lecture_transcription_prompt_str = file.read()
+
         self.pipeline = self.llm | StrOutputParser()
         self.tokens = []
 
@@ -71,6 +82,25 @@ class CitationPipeline(Pipeline):
                 paragraph.get(LectureSchema.PAGE_NUMBER.value),
                 paragraph.get(LectureSchema.LECTURE_UNIT_LINK.value)
                 or "No link available",
+                paragraph.get(LectureSchema.PAGE_TEXT_CONTENT.value),
+            )
+            formatted_string += lct
+
+        return formatted_string.replace("{", "{{").replace("}", "}}")
+
+    def create_formatted_lecture_transcription_string(self, paragraphs):
+        """
+        Create a formatted string from the data
+        """
+        formatted_string = ""
+        for i, paragraph in enumerate(paragraphs):
+            lct = "Lecture: {}, Unit: {}, Page: {}, Link: {}, Start time: {}, End time: {}, \nContent:\n---{}---\n\n".format(
+                paragraph.get(LectureTranscriptionSchema.LECTURE_NAME),
+                "Lecture Unit Name", # TODO: Set real lecture unit name
+                paragraph.get(LectureTranscriptionSchema.SEGMENT_LECTURE_UNIT_SLIDE_NUMBER.value),
+                f"https://artemis.ase.in.tum.de/courses/{LectureTranscriptionSchema.COURSE_ID}/lecture/{LectureTranscriptionSchema.LECTURE_ID}/unit/{LectureTranscriptionSchema.LECTURE_UNIT_ID}", # TODO: Set real link
+                paragraph.get(LectureTranscriptionSchema.SEGMENT_START.value),
+                paragraph.get(LectureTranscriptionSchema.SEGMENT_END.value),
                 paragraph.get(LectureSchema.PAGE_TEXT_CONTENT.value),
             )
             formatted_string += lct
@@ -118,6 +148,10 @@ class CitationPipeline(Pipeline):
         if information_type == InformationType.PARAGRAPHS:
             paras = self.create_formatted_lecture_string(information)
             self.prompt_str = self.lecture_prompt_str
+
+        if information_type == InformationType.LECTURE_TRANSCRIPTIONS:
+            paras = self.create_formatted_lecture_transcription_string(information)
+            self.prompt_str = self.lecture_transcription_prompt_str
 
         try:
             self.default_prompt = PromptTemplate(

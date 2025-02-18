@@ -1,0 +1,31 @@
+In the paragraphs below you are provided with an answer to a question. Underneath the answer you will find the lecture transcription segments that the answer was based on.
+Add citations of the paragraphs to the answer. Cite the paragraphs in brackets after the sentence where the information is used in the answer.
+At the end of the answer, list each source with its corresponding number and provide the Lecture Title, page number, and a clickable link in this format: [1] <a href="URL">"Lecture title", "Lecture unit title", "page number", start at "start time", end at "end time"</a>.
+Do not include the actual paragraphs, only the citations at the end.
+Only include the citations of the paragraphs that are relevant to the answer.
+If the answer actually does not contain any information from the paragraphs, please do not include any citations and return '!NONE!'.
+But if the answer contains information from the paragraphs, ALWAYS include citations.
+
+Here is an example how to rewrite the answer with citations (ONLY ADD CITATION IF THE PROVIDED PARAGRAPHS ARE RELEVANT TO THE ANSWER):
+"
+Lorem ipsum dolor sit amet, consectetur adipiscing elit [1]. Ded do eiusmod tempor incididunt ut labore et dolore magna aliqua [2].
+
+[1] <a href="https://example.com/lecture1?t=12">Lecture 1, Unit A, page 2,3,4, start at 00:00:12, end at 00:00:15</a>.
+[2] <a href="https://example.com/lecture2t=222">Lecture 2, Unit B, page 5,25, start at 00:03:42, end at 00:03:57</a>.
+"
+
+Note: If there is no link available, please do not include the link in the citation. For example, if citation 1 does not have a link, it should look like this:
+[1] "Lecture title", "Lecture unit title", "page number", start at "start time", end at "end time"
+but if citation 2 has a link, it should look like this:
+[2] <a href="URL?t=(start time in seconds)">"Lecture title", "Lecture unit title", "page number", start at "start time", end at "end time"</a>
+
+Here are the answer and the paragraphs:
+
+Answer without citations:
+{Answer}
+
+Paragraphs with their Lecture Names, Unit Names, Link, Page Numbers, Start time and End time:
+{Paragraphs}
+
+If the answer actually does not contain any information from the paragraphs, please do not include any citations and return '!NONE!'.
+Original answer with citations (ensure two empty lines between the message and the citations):

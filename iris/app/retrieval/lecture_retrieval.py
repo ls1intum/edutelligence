@@ -1,5 +1,6 @@
+import string
 from asyncio.log import logger
-from typing import List
+from typing import List, Tuple
 
 from dotenv import load_dotenv
 from langsmith import traceable
@@ -45,7 +46,7 @@ from ..vector_database.lecture_transcription_schema import LectureTranscriptionS
 
 
 def merge_retrieved_chunks(
-    basic_retrieved_lecture_chunks, hyde_retrieved_lecture_chunks
+    basic_retrieved_chunks, hyde_retrieved_chunks
 ) -> List[dict]:
     """
     Merge the retrieved chunks from the basic and hyde retrieval methods. This function ensures that for any
@@ -53,10 +54,10 @@ def merge_retrieved_chunks(
     basic_retrieved_lecture_chunks.
     """
     merged_chunks = {}
-    for chunk in basic_retrieved_lecture_chunks:
+    for chunk in basic_retrieved_chunks:
         merged_chunks[chunk["id"]] = chunk["properties"]
 
-    for chunk in hyde_retrieved_lecture_chunks:
+    for chunk in hyde_retrieved_chunks:
         merged_chunks[chunk["id"]] = chunk["properties"]
 
     return [properties for uuid, properties in merged_chunks.items()]
@@ -81,6 +82,14 @@ def _add_last_four_messages_to_prompt(
         ]
         prompt += chat_history_messages
     return prompt
+
+
+def map_weaviate_results_to_dict(results) -> list[dict[str, dict]]:
+    return [
+        {"id": obj.uuid.int, "properties": obj.properties}
+        for obj in results
+    ]
+
 
 
 class LectureRetrieval(Pipeline):
@@ -123,13 +132,13 @@ class LectureRetrieval(Pipeline):
         base_url: str = None,
         problem_statement: str = None,
         exercise_title: str = None,
-    ) -> List[dict]:
+    ) -> Tuple[List[dict], List[dict]]:
         """
         Retrieve lecture data from the database.
         """
         course_language = self.fetch_course_language(course_id)
 
-        response, response_hyde = self.run_parallel_rewrite_tasks(
+        response_slides, response_transcriptions, response_hyde_slides, response_hyde_transcriptions = self.run_parallel_rewrite_tasks(
             chat_history=chat_history,
             student_query=student_query,
             result_limit=result_limit,
@@ -141,26 +150,23 @@ class LectureRetrieval(Pipeline):
             exercise_title=exercise_title,
         )
 
-        basic_retrieved_lecture_chunks: list[dict[str, dict]] = [
-            {"id": obj.uuid.int, "properties": obj.properties}
-            for obj in response.objects
-        ]
-        hyde_retrieved_lecture_chunks: list[dict[str, dict]] = [
-            {"id": obj.uuid.int, "properties": obj.properties}
-            for obj in response_hyde.objects
-        ]
-        merged_chunks = merge_retrieved_chunks(
+        basic_retrieved_lecture_chunks = map_weaviate_results_to_dict(response_slides.objects)
+        hyde_retrieved_lecture_chunks = map_weaviate_results_to_dict(response_hyde_slides.objects)
+        basic_retrieved_lecture_transcriptions = map_weaviate_results_to_dict(response_transcriptions.objects)
+        hyde_retrieved_lecture_transcriptions = map_weaviate_results_to_dict(response_hyde_transcriptions.objects)
+
+        merged_chunks_slides = merge_retrieved_chunks(
             basic_retrieved_lecture_chunks, hyde_retrieved_lecture_chunks
         )
-        if len(merged_chunks) != 0:
-            # TODO: add chat history
-            _, reranked_results, _ = self.cohere.rerank(query=student_query,
-                                                        documents=merged_chunks,
-                                                        top_n=5,
-                                                        model='rerank-multilingual-v3.5')
-            if reranked_results:
-                return [merged_chunks[int(i)] for i in reranked_results]
-        return []
+
+        merged_chunks_transcriptions = merge_retrieved_chunks(
+            basic_retrieved_lecture_transcriptions, hyde_retrieved_lecture_transcriptions
+        )
+
+        rerank_lecture_slides = self.rerank_results(student_query, [x["properties"][LectureSchema.PAGE_TEXT_CONTENT.value] for x in merged_chunks_slides], 5)
+        rerank_lecture_transcriptions = self.rerank_results(student_query, [x["properties"][LectureTranscriptionSchema.SEGMENT_TEXT.value] for x in merged_chunks_transcriptions], 5)
+
+        return rerank_lecture_slides, rerank_lecture_transcriptions
 
     @traceable(name="Basic Lecture Retrieval")
     def basic_lecture_retrieval(
@@ -173,7 +179,7 @@ class LectureRetrieval(Pipeline):
         base_url: str = None,
     ) -> list[dict[str, dict]]:
         """
-        Basic retrieval for pipelines thaat need performance and fast answers.
+        Basic retrieval for pipelines that need performance and fast answers.
         """
         if not self.assess_question(chat_history, student_query):
             return []
@@ -426,26 +432,26 @@ class LectureRetrieval(Pipeline):
         base_url: str = None,
     ):
         # Initialize filter to None by default
-        filter_weaviate = None
+        filter_weaviate = Filter()
         # Check if lecture_id is provided
         if lecture_id:
-            filter_weaviate = Filter.by_property(LectureSchema.LECTURE_ID.value).equal(
+            filter_weaviate &= Filter.by_property(LectureSchema.LECTURE_ID.value).equal(
                 lecture_id
             )
 
 
         # Check if course_id is provided
-        elif course_id:
+        if course_id:
             # Create a filter for course_id
-            filter_weaviate = Filter.by_property(LectureSchema.COURSE_ID.value).equal(
+            filter_weaviate &= Filter.by_property(LectureSchema.COURSE_ID.value).equal(
                 course_id
             )
 
-            # Extend the filter based on the presence of base_url
-            if base_url:
-                filter_weaviate &= Filter.by_property(
-                    LectureSchema.BASE_URL.value
-                ).equal(base_url)
+        # Extend the filter based on the presence of base_url
+        if base_url:
+            filter_weaviate &= Filter.by_property(
+                LectureSchema.BASE_URL.value
+            ).equal(base_url)
 
         vec = self.llm_embedding.embed(query)
         return_value = self.collection.query.hybrid(
@@ -474,18 +480,18 @@ class LectureRetrieval(Pipeline):
         lecture_id: int = None,
     ):
         # Initialize filter to None by default
-        filter_weaviate = None
+        filter_weaviate = Filter()
         # Check if lecture_id is provided
         if lecture_id:
-            filter_weaviate = Filter.by_property(LectureTranscriptionSchema.LECTURE_ID.value).equal(
+            filter_weaviate &= Filter.by_property(LectureTranscriptionSchema.LECTURE_ID.value).equal(
                 lecture_id
             )
 
 
         # Check if course_id is provided
-        elif course_id:
+        if course_id:
             # Create a filter for course_id
-            filter_weaviate = Filter.by_property(LectureTranscriptionSchema.COURSE_ID.value).equal(
+            filter_weaviate &= Filter.by_property(LectureTranscriptionSchema.COURSE_ID.value).equal(
                 course_id
             )
 
@@ -523,6 +529,8 @@ class LectureRetrieval(Pipeline):
         """
         Run the rewrite tasks in parallel.
         """
+
+        # TODO: Move lecture transcription rewrite to same thread as lecture slides rewrite
         if problem_statement:
             with concurrent.futures.ThreadPoolExecutor() as executor:
                 # Schedule the rewrite tasks to run in parallel
@@ -574,7 +582,7 @@ class LectureRetrieval(Pipeline):
 
             # Execute the database search tasks
         with concurrent.futures.ThreadPoolExecutor() as executor:
-            response_future = executor.submit(
+            response_future_slides, response_future_transcriptions = executor.submit(
                 self.search_in_db,
                 query=rewritten_query,
                 hybrid_factor=0.9,
@@ -582,7 +590,7 @@ class LectureRetrieval(Pipeline):
                 course_id=course_id,
                 base_url=base_url,
             )
-            response_hyde_future = executor.submit(
+            response_hyde_future_slides, response_hyde_future_transcriptions = executor.submit(
                 self.search_in_db,
                 query=hypothetical_answer_query,
                 hybrid_factor=0.9,
@@ -592,10 +600,12 @@ class LectureRetrieval(Pipeline):
             )
 
             # Get the results once both tasks are complete
-            response = response_future.result()
-            response_hyde = response_hyde_future.result()
+            response_slides = response_future_slides.result()
+            response_transcriptions = response_future_transcriptions.result()
+            response_hyde_slides = response_hyde_future_slides.result()
+            response_hyde_transcriptions = response_hyde_future_transcriptions.results()
 
-        return response, response_hyde
+        return response_slides, response_transcriptions, response_hyde_slides, response_hyde_transcriptions
 
     def fetch_course_language(self, course_id):
         """
@@ -623,3 +633,11 @@ class LectureRetrieval(Pipeline):
                     course_language = fetched_language
 
         return course_language
+
+    def rerank_results(self, student_query: string, results: List[string], top_n_results: int):
+        _, reranked_results, _ = self.cohere.rerank(query=student_query,
+                                                    documents=results,
+                                                    top_n=top_n_results,
+                                                    model='rerank-multilingual-v3.5')
+        if reranked_results:
+            return [results[int(i)] for i in reranked_results]
