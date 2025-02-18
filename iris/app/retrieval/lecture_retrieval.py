@@ -574,6 +574,7 @@ class LectureRetrieval(Pipeline):
 
             # Execute the database search tasks
         with concurrent.futures.ThreadPoolExecutor() as executor:
+            #TODO: handle both results (slides & transcriptions)
             response_future = executor.submit(
                 self.search_in_db,
                 query=rewritten_query,
