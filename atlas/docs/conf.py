@@ -18,7 +18,7 @@
 # -- Project information -----------------------------------------------------
 
 project = 'Atlas'
-copyright = '2024, Technical University of Munich, Applied Education Technologies'
+copyright = '2025, Technical University of Munich, Applied Education Technologies'
 author = 'Technical University of Munich, Applied Education Technologies'
 
 
@@ -33,13 +33,20 @@ master_doc = "index"
 # ones.
 extensions = [
     "sphinx_rtd_theme",
-    "sphinxcontrib.bibtex"
+    "sphinxcontrib.bibtex",
+    "myst_parser"
 ]
 
 # List of patterns, relative to source directory, that match files and
 # directories to ignore when looking for source files.
 # This pattern also affects html_static_path and html_extra_path.
-exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store', 'venv']
+exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store', 'venv', 'README.md', 'requirements.txt']
+
+source_suffix = {
+    '.rst': 'restructuredtext',
+    '.txt': 'markdown',
+    '.md': 'markdown',
+}
 
 linkcheck_ignore = [
     r'http(s)?://.*localhost(:\d+)?/?',
