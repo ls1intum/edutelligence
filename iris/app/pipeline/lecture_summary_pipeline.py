@@ -59,7 +59,7 @@ class LectureSummaryPipeline(Pipeline):
 
     def __call__(self) -> None:
         slide_number_start, slide_number_end = self._get_slide_range()
-        for slide_index in [slide_number_start, slide_number_end]:
+        for slide_index in range(slide_number_start, slide_number_end):
             transcriptions = self._get_transcriptions(slide_index)
             slides = self._get_slides(slide_index)
             summary = self.create_summary(transcriptions, slides)
@@ -140,8 +140,8 @@ class LectureSummaryPipeline(Pipeline):
                 ),
             ]
         )
-        prompt_val = self.prompt.format_messages()
-        self.prompt = ChatPromptTemplate.from_messages(prompt_val)
+        formatted_prompt = self.prompt.format_messages()
+        self.prompt = ChatPromptTemplate.from_messages(formatted_prompt)
         try:
             response = (self.prompt | self.pipeline).invoke({})
             self._append_tokens(
