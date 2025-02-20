@@ -4,6 +4,7 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import Runnable
 from weaviate.client import WeaviateClient
+from weaviate.collections.classes.data import DataReference
 
 from app.common.PipelineEnum import PipelineEnum
 from app.llm import BasicRequestHandler, CapabilityRequestHandler, RequirementList, CompletionArguments
@@ -157,6 +158,10 @@ class LectureSummaryPipeline(Pipeline):
         lecture_filter &= Filter.by_property(LectureSchema.SLIDE_NUMBER.value).equal(slide_number)
 
         lectures = self.lecture_collection.query(filter=lecture_filter, limit=1)
+
+        transcriptions = self._get_transcriptions(slide_number)
+        slides = self._get_slides(slide_number)
+
         if len(lectures) == 0:
             course_name, course_description, language, lecture_name  = self._get_lecture_information()
             self.lecture_collection.create(
@@ -171,12 +176,48 @@ class LectureSummaryPipeline(Pipeline):
                     LectureSchema.SLIDE_NUMBER.value: slide_number,
                 }
             )
+            lecture = self.lecture_collection.query(filter=lecture_filter, limit=1)
+            transcription_references = []
+            for transcription in transcriptions.objects:
+                transcription_reference = DataReference(
+                    from_uuid=lecture.objects[0].uuid.int,
+                    from_property=LectureSchema.TRANSCRIPTIONS.value,
+                    to_uuid=transcription.uuid.int
+                )
+                transcription_references.append(transcription_reference)
+            slide_references = []
+            for slide in slides.objects:
+                slide_reference = DataReference(
+                    from_uuid=lecture.objects[0].uuid.int,
+                    from_property=LectureSchema.SLIDES.value,
+                    to_uuid=slide.uuid.int
+                )
+                slide_references.append(slide_reference)
+
+            self.lecture_collection.data.reference_add_many(transcription_references)
+            self.lecture_collection.data.reference_add_many(slide_references)
             return
 
+        transcription_uuids = [t.uuid.int for t in transcriptions.objects]
+        slide_uuids = [s.uuid.int for s in slides.objects]
+        lecture_uuid = lectures.objects[0].uuid.int
+
         self.lecture_collection.update(
-            id=lectures.objects[0].id,
+            id=lecture_uuid,
             properties={
                 LectureSchema.CONTENT.value: summary,
             }
+        )
+
+        self.lecture_collection.data.reference_replace(
+            from_uuid=lecture_uuid,
+            from_property=LectureSchema.TRANSCRIPTIONS.value,
+            to=transcription_uuids
+        )
+
+        self.lecture_collection.data.reference_replace(
+            from_uuid=lecture_uuid,
+            from_property=LectureSchema.SLIDES.value,
+            to=slide_uuids
         )
 

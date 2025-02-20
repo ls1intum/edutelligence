@@ -1,9 +1,13 @@
 from enum import Enum
 
-from weaviate.classes.config import Property
+from weaviate.classes.config import Property, ReferenceProperty
 from weaviate import WeaviateClient
 from weaviate.collections import Collection
 from weaviate.collections.classes.config import Configure, VectorDistances, DataType
+
+from app.vector_database.lecture_slide_schema import LectureSlideSchema
+from app.vector_database.lecture_transcription_schema import LectureTranscriptionSchema
+
 
 class LectureSchema(Enum):
     """
@@ -19,6 +23,8 @@ class LectureSchema(Enum):
     LECTURE_UNIT_ID = "lecture_unit_id"
     CONTENT = "content"
     SLIDE_NUMBER = "slide_number"
+    TRANSCRIPTIONS = "transcriptions"
+    SLIDES = "slides"
 
 def init_lecture_schema(client: WeaviateClient) -> Collection:
     if client.collections.exists(LectureSchema.COLLECTION_NAME.value):
@@ -86,4 +92,14 @@ def init_lecture_schema(client: WeaviateClient) -> Collection:
                 index_searchable=False,
             )
         ],
+        references=[
+            ReferenceProperty(
+                name=LectureSchema.TRANSCRIPTION.value,
+                target_collection=LectureTranscriptionSchema.COLLECTION_NAME.value,
+            ),
+            ReferenceProperty(
+                name=LectureSchema.SLIDE.value,
+                target_collection=LectureSlideSchema.COLLECTION_NAME.value,
+            )
+        ]
     )
