@@ -84,6 +84,7 @@ class RewritingPipeline(Pipeline):
             response = response.strip()
 
         final_result = response
+        inconsistencies = ""
 
         if self.variant == "faq":
             faqs = self.faq_retriever.get_faqs_from_db(
@@ -91,21 +92,17 @@ class RewritingPipeline(Pipeline):
             )
             consistency_result = self.check_faq_consistency(faqs, final_result)
 
+
             if "inconsistent" in consistency_result["type"].lower():
                 logging.warning("Detected inconsistencies in FAQ retrieval.")
                 faq_string = "\n".join(
                     [f"[FAQ: {faq['faq_id']}, Title: {faq['faq_question_title']}, Answer: {faq['faq_question_answer'].rstrip("\n")}]"
                      for faq in consistency_result["faqs"]]
                 )
+                inconsistencies = consistency_result["message"] + "\n"+ faq_string
 
-                final_result += (
-                    "\n\n"
-                    + consistency_result["message"]
-                    + "\n"
-                    + faq_string
-                )
 
-        self.callback.done(final_result=final_result, tokens=self.tokens)
+        self.callback.done(final_result=final_result, tokens=self.tokens, inconsistencies=inconsistencies)
 
     def check_faq_consistency(
         self, faqs: List[dict], final_result: str
