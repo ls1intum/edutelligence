@@ -1,5 +1,6 @@
+import json
 import logging
-from typing import Literal, Optional
+from typing import Literal, Optional, List, Dict
 
 from langchain.output_parsers import PydanticOutputParser
 from langchain_core.prompts import (
@@ -12,10 +13,13 @@ from app.domain.data.text_message_content_dto import TextMessageContentDTO
 from app.domain.rewriting_pipeline_execution_dto import RewritingPipelineExecutionDTO
 from app.llm import CapabilityRequestHandler, RequirementList, CompletionArguments
 from app.pipeline import Pipeline
+from app.pipeline.prompts.faq_consistency_prompt import faq_consistency_prompt
 from app.pipeline.prompts.rewriting_prompts import (
     system_prompt_faq,
     system_prompt_problem_statement,
 )
+from app.retrieval.faq_retrieval import FaqRetrieval
+from app.vector_database.database import VectorDatabase
 from app.web.status.status_update import RewritingCallback
 
 logger = logging.getLogger(__name__)
@@ -38,8 +42,11 @@ class RewritingPipeline(Pipeline):
                 context_length=16385,
             )
         )
+
+        self.db = VectorDatabase()
         self.tokens = []
         self.variant = variant
+        self.faq_retriever = FaqRetrieval(self.db.client)
 
     def __call__(
         self,
@@ -54,10 +61,10 @@ class RewritingPipeline(Pipeline):
             "faq": system_prompt_faq,
             "problem_statement": system_prompt_problem_statement,
         }
-        print(variant_prompts[self.variant])
-        prompt = variant_prompts[self.variant].format(
-            rewritten_text=dto.to_be_rewritten,
-        )
+
+        format_args = {"rewritten_text": dto.to_be_rewritten}
+
+        prompt = variant_prompts[self.variant].format(**format_args)
         prompt = PyrisMessage(
             sender=IrisMessageRole.SYSTEM,
             contents=[TextMessageContentDTO(text_content=prompt)],
@@ -77,4 +84,64 @@ class RewritingPipeline(Pipeline):
             response = response.strip()
 
         final_result = response
+
+        if self.variant == "faq":
+            faqs = self.faq_retriever.get_faqs_from_db(
+                course_id=dto.course_id, search_text=response, result_limit=10
+            )
+            consistency_result = self.check_faq_consistency(faqs, final_result)
+
+            if "inconsistent" in consistency_result["type"].lower():
+                logging.warning("Detected inconsistencies in FAQ retrieval.")
+                faq_string = "\n".join(
+                    [f"[FAQ: {faq['faq_id']}, Title: {faq['faq_question_title']}, Answer: {faq['faq_question_answer'].rstrip("\n")}]"
+                     for faq in consistency_result["faqs"]]
+                )
+
+                final_result += (
+                    "\n\n"
+                    + consistency_result["message"]
+                    + "\n"
+                    + faq_string
+                )
+
         self.callback.done(final_result=final_result, tokens=self.tokens)
+
+    def check_faq_consistency(
+        self, faqs: List[dict], final_result: str
+    ) -> Dict[str, str]:
+        """
+        Checks the consistency of the given FAQs with the provided final_result.
+        Returns "consistent" if there are no inconsistencies, otherwise returns "inconsistent".
+
+        :param faqs: List of retrieved FAQs.
+        :param final_result: The result to compare the FAQs against.
+
+        """
+        properties_list = [entry['properties'] for entry in faqs]
+
+        consistency_prompt = faq_consistency_prompt.format(
+            faqs=properties_list, final_result=final_result
+        )
+
+        prompt = PyrisMessage(
+            sender=IrisMessageRole.SYSTEM,
+            contents=[TextMessageContentDTO(text_content=consistency_prompt)],
+        )
+
+        response = self.request_handler.chat(
+            [prompt], CompletionArguments(temperature=0.0), tools=None
+        )
+
+        self._append_tokens(response.token_usage, PipelineEnum.IRIS_REWRITING_PIPELINE)
+        result = response.contents[0].text_content
+        data = json.loads(result)
+
+        result_dict = {
+            "type": data["type"],
+            "message": data["message"],
+            "faqs": data["faqs"],
+        }
+        logging.info(f"Consistency FAQ consistency check response: {result_dict}")
+
+        return result_dict
