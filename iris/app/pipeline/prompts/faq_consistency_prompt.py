@@ -27,6 +27,7 @@ and reside within properties dict of each list entry.
 
 "message": "The provided text was rephrased, however it contains inconsistent information with existing FAQs."
 -Localize the message to the language of the ###Final Result.
+-Make sure to always insert two new lines after the last character of this sentences.
 The affected FAQs can only contain the faq_id, faq_question_title, and faq_question_answer of inconsistent FAQs.
 Make sure to not include any additional FAQs, that are consistent with the final_result. 
 Insert the faq_id, faq_question_title, and faq_question_answer of the inconsistent FAQ in the placeholder.
