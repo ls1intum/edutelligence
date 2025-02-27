@@ -110,7 +110,8 @@ class StatusCallback(ABC):
         tokens: Optional[List[TokenUsageDTO]] = None,
         next_stage_message: Optional[str] = None,
         start_next_stage: bool = True,
-        inconsistencies : Optional[str] = None
+        inconsistencies : Optional[List[str]] = None,
+        improvement : Optional[str] = None
     ):
         """
         Transition the current stage to DONE and update the status.
@@ -126,6 +127,8 @@ class StatusCallback(ABC):
 
         if hasattr(self.status, "inconsistencies"):
             self.status.inconsistencies = inconsistencies
+        if hasattr(self.status, "improvement"):
+            self.status.improvement = improvement
         next_stage = self.get_next_stage()
         if next_stage is not None:
             self.stage = next_stage

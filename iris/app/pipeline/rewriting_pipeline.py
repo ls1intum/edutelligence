@@ -84,7 +84,9 @@ class RewritingPipeline(Pipeline):
             response = response.strip()
 
         final_result = response
-        inconsistencies = ""
+        inconsistencies = []
+        improvement = ""
+        suggestions = []
 
         if self.variant == "faq":
             faqs = self.faq_retriever.get_faqs_from_db(
@@ -95,14 +97,11 @@ class RewritingPipeline(Pipeline):
 
             if "inconsistent" in consistency_result["type"].lower():
                 logging.warning("Detected inconsistencies in FAQ retrieval.")
-                faq_string = "\n".join(
-                    [f"[FAQ: {faq['faq_id']}, Title: {faq['faq_question_title']}, Answer: {faq['faq_question_answer'].rstrip("\n")}]"
-                     for faq in consistency_result["faqs"]]
-                )
-                inconsistencies = consistency_result["message"] + "\n"+ faq_string
+                inconsistencies = parse_inconsistencies(consistency_result["faqs"])
+                improvement = consistency_result["improved version"]
+                suggestions = consistency_result["suggestion"]
 
-
-        self.callback.done(final_result=final_result, tokens=self.tokens, inconsistencies=inconsistencies)
+        self.callback.done(final_result=final_result, tokens=self.tokens, inconsistencies=inconsistencies, improvement = improvement, suggestions = suggestions)
 
     def check_faq_consistency(
         self, faqs: List[dict], final_result: str
@@ -138,7 +137,19 @@ class RewritingPipeline(Pipeline):
             "type": data["type"],
             "message": data["message"],
             "faqs": data["faqs"],
+            "suggestion": data["suggestion"],
+            "improved version": data["improved version"]
         }
         logging.info(f"Consistency FAQ consistency check response: {result_dict}")
 
         return result_dict
+
+def parse_inconsistencies(inconsistencies: List[Dict[str, str]]) -> List[str]:
+    logging.info("parse consistency")
+    parsed_inconsistencies = [
+        f"FAQ ID: {entry['faq_id']}, Title: {entry['faq_question_title']}, Answer: {entry['faq_question_answer']}"
+        for entry in inconsistencies
+    ]
+    return parsed_inconsistencies
+
+
