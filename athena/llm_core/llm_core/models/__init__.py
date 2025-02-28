@@ -4,9 +4,9 @@ from langchain.base_language import BaseLanguageModel
 
 from llm_core.models.model_config import ModelConfig
 
-
 DefaultModelConfig: Type[ModelConfig]
 MiniModelConfig: ModelConfig
+OllamaModelConfig: ModelConfig
 default_model_name = os.environ.get("LLM_DEFAULT_MODEL")
 evaluation_model_name = os.environ.get("LLM_EVALUATION_MODEL")
 
@@ -24,6 +24,13 @@ try:
 except AttributeError:
     pass
 
+try:
+    import llm_core.models.ollama as ollama_config #type: ignore
+    types.append(ollama_config.OllamaModelConfig)
+    OllamaModelConfig = ollama_config.OllamaModelConfig(model_name="llama3.3:latest",format="json",max_tokens=1000, temperature=0,top_p=1,presence_penalty=0,frequency_penalty=0)
+except AttributeError:
+    pass
+
 if not types:
     raise EnvironmentError(
         "No model configurations available, please set up at least one provider in the environment variables.")
@@ -37,3 +44,4 @@ if len(types) == 1:
 else:
     type1 = types[1]
     ModelConfigType = Union[type0, type1] # type: ignore
+    
