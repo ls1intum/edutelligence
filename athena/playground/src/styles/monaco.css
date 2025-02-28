@@ -1,0 +1,77 @@
+@tailwind components;
+
+@layer components {
+  .monaco-editor .inline-feedback-text {
+    @apply py-0.5 rounded-sm;
+  }
+
+  /* Styling the inline feedback text */
+  .monaco-editor .inline-feedback-text.positive {
+    @apply bg-green-200/50 text-green-800 !important;
+  }
+  .monaco-editor .inline-feedback-text.negative {
+    @apply bg-red-200/50 text-red-800 !important;
+  }
+  .monaco-editor .inline-feedback-text.neutral {
+    @apply bg-yellow-200/50 text-yellow-800 !important;
+  }
+
+  /* bg-green-200/50: rgb(187 247 208 / 0.5) */
+  /* bg-yellow-200/50 rgb(254 240 138 / 0.5) */
+  /* bg-red-200/50: rgb(254 202 202 / 0.5) */
+
+  /* Styling combination of two overlapping inline feedback texts */
+  .monaco-editor .inline-feedback-text.positive.negative:not(.highlighted-positive):not(.highlighted-negative):not(.highlighted-neutral) {
+    background-image: linear-gradient(45deg, rgb(187 247 208 / 0.5) 25%, rgb(254 202 202 / 0.5) 25%, rgb(254 202 202 / 0.5) 50%, rgb(187 247 208 / 0.5) 50%, rgb(187 247 208 / 0.5) 75%, rgb(254 202 202 / 0.5) 75%, rgb(254 202 202 / 0.5));
+    background-size: 8px 8px;
+    background-position: 0 0, 4px 4px;
+  }
+  .monaco-editor .inline-feedback-text.negative.neutral:not(.highlighted-positive):not(.highlighted-negative):not(.highlighted-neutral) {
+    background-image: linear-gradient(45deg, rgb(254 202 202 / 0.5) 25%, rgb(254 240 138 / 0.5) 25%, rgb(254 240 138 / 0.5) 50%, rgb(254 202 202 / 0.5) 50%, rgb(254 202 202 / 0.5) 75%, rgb(254 240 138 / 0.5) 75%, rgb(254 240 138 / 0.5));
+    background-size: 8px 8px;
+    background-position: 0 0, 4px 4px;
+  }
+  .monaco-editor .inline-feedback-text.neutral.positive:not(.highlighted-positive):not(.highlighted-negative):not(.highlighted-neutral) {
+    background-image: linear-gradient(45deg, rgb(254 240 138 / 0.5) 25%, rgb(187 247 208 / 0.5) 25%, rgb(187 247 208 / 0.5) 50%, rgb(254 240 138 / 0.5) 50%, rgb(254 240 138 / 0.5) 75%, rgb(187 247 208 / 0.5) 75%, rgb(187 247 208 / 0.5));
+    background-size: 8px 8px;
+    background-position: 0 0, 4px 4px;
+  }
+
+  /* Styling combination of three overlapping inline feedback texts */
+  .monaco-editor .inline-feedback-text.positive.negative.neutral:not(.highlighted-positive):not(.highlighted-negative):not(.highlighted-neutral) {
+    background-image: linear-gradient(45deg, rgb(187 247 208 / 0.5) 16.666%, rgb(254 240 138 / 0.5) 16.666%, rgb(254 240 138 / 0.5) 33.333%, rgb(254 202 202 / 0.5) 33.333%, rgb(254 202 202 / 0.5) 50%,  rgb(187 247 208 / 0.5) 50%, rgb(187 247 208 / 0.5) 66.666%, rgb(254 240 138 / 0.5) 66.666%, rgb(254 240 138 / 0.5) 83.333%, rgb(254 202 202 / 0.5) 83.333%, rgb(254 202 202 / 0.5));
+    background-size: 12px 12px;
+    background-position: 0 0, 6px 6px;
+  }
+
+  /* Styling the highlighted inline feedback text */
+  .monaco-editor .inline-feedback-text.highlighted-positive {
+    @apply bg-green-400/50 text-green-800 !important;
+  }
+  .monaco-editor .inline-feedback-text.highlighted-negative {
+    @apply bg-red-400/50 text-red-800 !important;
+  }
+  .monaco-editor .inline-feedback-text.highlighted-neutral {
+    @apply bg-yellow-400/50 text-yellow-800 !important;
+  }
+
+  /* Styling the comment range button */
+  /* Plus button */
+  .monaco-editor .comment-range-button::before {
+    margin-left: 1px;
+    content: "\ea60";
+    font-family: codicon;
+    width: 18px !important;
+    height: 18px !important;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    @apply rounded bg-gray-200 text-gray-700 z-10 hover:bg-gray-300 hover:text-gray-800;
+  }
+  /* Line range */
+  .monaco-editor .comment-range {
+    height: 17px !important;
+    transform: translateX(calc(50% - 1px));
+    @apply border-dotted border-l-2 border-gray-300;
+  }
+}

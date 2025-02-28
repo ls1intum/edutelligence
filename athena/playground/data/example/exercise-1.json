@@ -1,0 +1,87 @@
+{
+  "id": 1,
+  "course_id": 1,
+  "title": "Hello World",
+  "type": "programming",
+  "max_points": 10,
+  "bonus_points": 0,
+  "problem_statement": "-> file:problem-statement.md",
+  "grading_instructions": "-> file:grading-instructions.md",
+  "programming_language": "java",
+  "solution_repository_uri": "{{exerciseDataUrl}}/solution.zip",
+  "template_repository_uri": "{{exerciseDataUrl}}/template.zip",
+  "tests_repository_uri": "{{exerciseDataUrl}}/tests.zip",
+  "meta": {},
+
+  "submissions": [
+    {
+      "id": 101,
+      "repository_uri": "{{exerciseDataUrl}}/submissions/101.zip",
+      "meta": {},
+      "feedbacks": [
+        {
+          "id": 101,
+          "title": "File BinarySearch.java at line 20",
+          "description": "Your program does not print \"Hello World\" to the console.",
+          "file_path": "BinarySearch.java",
+          "line_start": 20,
+          "line_end": null,
+          "credits": -2.0,
+          "meta": {}
+        },
+        {
+          "id": 102,
+          "title": "File BinarySearch.java at line 16",
+          "description": "You're missing a semicolon at the end of the line.",
+          "file_path": "BinarySearch.java",
+          "line_start": 16,
+          "line_end": null,
+          "credits": -2.0,
+          "meta": {}
+        }
+      ]
+    },
+    {
+      "id": 102,
+      "repository_uri": "{{exerciseDataUrl}}/submissions/102.zip",
+      "meta": {}
+    },
+    {
+      "id": 103,
+      "repository_uri": "{{exerciseDataUrl}}/submissions/103.zip",
+      "meta": {},
+      "feedbacks": [
+        {
+          "id": 103,
+          "title": "File src/mttpe1/BubbleSort.java at line 13 to 20",
+          "description": "Well done! You are sorting the array correctly.",
+          "file_path": "src/mttpe1/BubbleSort.java",
+          "line_start": 13,
+          "line_end": 20,
+          "credits": 2.0,
+          "meta": {}
+        },
+        {
+          "id": 104,
+          "title": "File src/mttpe1/BubbleSort.java",
+          "description": "Good job! With BubbleSort overall",
+          "file_path": "src/mttpe1/BubbleSort.java",
+          "line_start": null,
+          "line_end": null,
+          "credits": 1.0,
+          "meta": {}
+        },
+        {
+          "id": 105,
+          "title": "Feedback",
+          "description": "Great submission!",
+          "file_path": null,
+          "line_start": null,
+          "line_end": null,
+          "credits": 3.0,
+          "meta": {}
+        }
+      ]
+    }
+  ]
+}

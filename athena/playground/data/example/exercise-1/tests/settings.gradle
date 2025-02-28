@@ -1,0 +1,3 @@
+rootProject.name = 'MT-Test-PE-1-Tests'
+// includeBuild('/path/to/repository-solution')
+// includeBuild('/path/to/repository-exercise')
