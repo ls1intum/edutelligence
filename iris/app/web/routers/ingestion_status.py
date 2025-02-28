@@ -7,7 +7,7 @@ from weaviate.collections.classes.filters import Filter
 
 from app.dependencies import TokenValidator
 from ...vector_database.database import VectorDatabase
-from ...vector_database.lecture_slide_schema import LectureSlideSchema
+from ...vector_database.lecture_slide_schema import LectureUnitPageChunkSchema
 from enum import Enum
 
 router = APIRouter(prefix="/api/v1", tags=["ingestion_status"])
@@ -37,15 +37,15 @@ def get_lecture_unit_ingestion_state(
     decoded_base_url = unquote(base_url)
     result = db.lectures.query.fetch_objects(
         filters=(
-            Filter.by_property(LectureSlideSchema.BASE_URL.value).equal(decoded_base_url)
-            & Filter.by_property(LectureSlideSchema.COURSE_ID.value).equal(course_id)
-            & Filter.by_property(LectureSlideSchema.LECTURE_ID.value).equal(lecture_id)
-            & Filter.by_property(LectureSlideSchema.LECTURE_UNIT_ID.value).equal(
+            Filter.by_property(LectureUnitPageChunkSchema.BASE_URL.value).equal(decoded_base_url)
+            & Filter.by_property(LectureUnitPageChunkSchema.COURSE_ID.value).equal(course_id)
+            & Filter.by_property(LectureUnitPageChunkSchema.LECTURE_ID.value).equal(lecture_id)
+            & Filter.by_property(LectureUnitPageChunkSchema.LECTURE_UNIT_ID.value).equal(
                 lecture_unit_id
             )
         ),
         limit=1,
-        return_properties=[LectureSlideSchema.LECTURE_UNIT_NAME.value],
+        return_properties=[LectureUnitPageChunkSchema.LECTURE_UNIT_NAME.value],
     )
 
     if len(result.objects) > 0:

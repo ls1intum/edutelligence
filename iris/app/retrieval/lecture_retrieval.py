@@ -19,7 +19,7 @@ from app.llm import (
     RequirementList,
 )
 from app.pipeline.shared.reranker_pipeline import RerankerPipeline
-from app.vector_database.lecture_slide_schema import init_lecture_slide_schema, LectureSlideSchema
+from app.vector_database.lecture_slide_schema import init_lecture_slide_schema, LectureUnitPageChunkSchema
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import (
     ChatPromptTemplate,
@@ -388,14 +388,14 @@ class LectureRetrieval(Pipeline):
         # Check if course_id is provided
         if course_id:
             # Create a filter for course_id
-            filter_weaviate = Filter.by_property(LectureSlideSchema.COURSE_ID.value).equal(
+            filter_weaviate = Filter.by_property(LectureUnitPageChunkSchema.COURSE_ID.value).equal(
                 course_id
             )
 
             # Extend the filter based on the presence of base_url
             if base_url:
                 filter_weaviate &= Filter.by_property(
-                    LectureSlideSchema.BASE_URL.value
+                    LectureUnitPageChunkSchema.BASE_URL.value
                 ).equal(base_url)
 
         vec = self.llm_embedding.embed(query)
@@ -404,11 +404,11 @@ class LectureRetrieval(Pipeline):
             alpha=hybrid_factor,
             vector=vec,
             return_properties=[
-                LectureSlideSchema.COURSE_ID.value,
-                LectureSlideSchema.LECTURE_UNIT_NAME.value,
-                LectureSlideSchema.LECTURE_UNIT_LINK.value,
-                LectureSlideSchema.PAGE_NUMBER.value,
-                LectureSlideSchema.PAGE_TEXT_CONTENT.value,
+                LectureUnitPageChunkSchema.COURSE_ID.value,
+                LectureUnitPageChunkSchema.LECTURE_UNIT_NAME.value,
+                LectureUnitPageChunkSchema.LECTURE_UNIT_LINK.value,
+                LectureUnitPageChunkSchema.PAGE_NUMBER.value,
+                LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value,
             ],
             limit=result_limit,
             filters=filter_weaviate,
@@ -515,17 +515,17 @@ class LectureRetrieval(Pipeline):
         if course_id:
             # Fetch the first object that matches the course ID with the language property
             result = self.collection.query.fetch_objects(
-                filters=Filter.by_property(LectureSlideSchema.COURSE_ID.value).equal(
+                filters=Filter.by_property(LectureUnitPageChunkSchema.COURSE_ID.value).equal(
                     course_id
                 ),
                 limit=1,  # We only need one object to check and retrieve the language
-                return_properties=[LectureSlideSchema.COURSE_LANGUAGE.value],
+                return_properties=[LectureUnitPageChunkSchema.COURSE_LANGUAGE.value],
             )
 
             # Check if the result has objects and retrieve the language
             if result.objects:
                 fetched_language = result.objects[0].properties.get(
-                    LectureSlideSchema.COURSE_LANGUAGE.value
+                    LectureUnitPageChunkSchema.COURSE_LANGUAGE.value
                 )
                 if fetched_language:
                     course_language = fetched_language
