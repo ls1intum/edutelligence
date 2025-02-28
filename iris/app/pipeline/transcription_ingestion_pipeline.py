@@ -201,9 +201,11 @@ class TranscriptionIngestionPipeline(Pipeline):
     ):
         offset_lookup_counter = 0
         segment_index = 0
-        while offset_lookup_counter + len(
-            segments[segment_index].text
-        ) < char_position and segment_index < len(segments):
+        while (
+            segment_index < len(segments)
+            and offset_lookup_counter + len(segments[segment_index].text)
+            < char_position
+        ):
             offset_lookup_counter += len(segments[segment_index].text)
             segment_index += 1
 
