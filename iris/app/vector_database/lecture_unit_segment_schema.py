@@ -8,7 +8,7 @@ from weaviate.collections.classes.config import Configure, VectorDistances, Data
 
 class LectureUnitSegmentSchema(Enum):
     """
-    Schema for the lecture transcriptions
+    Schema for the lecture unit segments
     """
 
     COLLECTION_NAME = "LectureUnitSegments"
@@ -19,7 +19,7 @@ class LectureUnitSegmentSchema(Enum):
     SEGMENT_SUMMARY = "segment_summary"
 
 
-def init_lecture_transcription_schema(client: WeaviateClient) -> Collection:
+def init_lecture_unit_segment_schema(client: WeaviateClient) -> Collection:
     if client.collections.exists(LectureUnitSegmentSchema.COLLECTION_NAME.value):
         return client.collections.get(LectureUnitSegmentSchema.COLLECTION_NAME.value)
 
