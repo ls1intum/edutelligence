@@ -131,7 +131,7 @@ class TranscriptionIngestionPipeline(Pipeline):
                         LectureTranscriptionSchema.SEGMENT_START_TIME.value: segment.start_time,
                         LectureTranscriptionSchema.SEGMENT_END_TIME.value: segment.end_time,
                         LectureTranscriptionSchema.SEGMENT_TEXT.value: segment.text,
-                        LectureTranscriptionSchema.SEGMENT_LECTURE_UNIT_SLIDE_NUMBER.value: segment.slide_number,
+                        LectureTranscriptionSchema.PAGE_NUMBER.value: segment.slide_number,
                     }
 
                     slide_chunks[slide_key] = chunk
