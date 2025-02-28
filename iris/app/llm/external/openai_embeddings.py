@@ -27,12 +27,7 @@ class OpenAIEmbeddingModel(EmbeddingModel):
 
         for attempt in range(retries):
             try:
-                response = self._client.embeddings.create(
-                    model=self.model,
-                    input=text,
-                    encoding_format="float",
-                )
-                return response.data[0].embedding
+                return self._client.embed_query(text)
             except (
                 APIError,
                 APITimeoutError,
