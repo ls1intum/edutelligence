@@ -348,6 +348,3 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
         except Exception as e:
             logger.error(f"Error deleting lecture unit: {e}", exc_info=True)
             return False
-
-    def insert_lecture_unit(self):
-
