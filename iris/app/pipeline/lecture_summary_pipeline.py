@@ -4,15 +4,16 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import Runnable
 from weaviate.client import WeaviateClient
+from weaviate.collections.classes.data import DataReference
 
 from app.common.PipelineEnum import PipelineEnum
 from app.llm import BasicRequestHandler, CapabilityRequestHandler, RequirementList, CompletionArguments
 from app.llm.langchain import IrisLangchainChatModel
 from app.pipeline import Pipeline
-from app.vector_database.lecture_schema import init_lecture_schema, LectureSchema
+from app.vector_database.lecture_schema import init_lecture_schema, LectureUnitSegmentSchema
 from weaviate.classes.query import Filter
 
-from app.vector_database.lecture_slide_schema import LectureSlideSchema, init_lecture_slide_schema
+from app.vector_database.lecture_slide_schema import LectureUnitPageChunkSchema, init_lecture_slide_schema
 from app.vector_database.lecture_transcription_schema import LectureTranscriptionSchema, \
     init_lecture_transcription_schema
 from app.pipeline.prompts.lecture_summary_prompt import lecture_summary_prompt
@@ -58,7 +59,7 @@ class LectureSummaryPipeline(Pipeline):
 
     def __call__(self) -> None:
         slide_number_start, slide_number_end = self._get_slide_range()
-        for slide_index in [slide_number_start, slide_number_end]:
+        for slide_index in range(slide_number_start, slide_number_end):
             transcriptions = self._get_transcriptions(slide_index)
             slides = self._get_slides(slide_index)
             summary = self.create_summary(transcriptions, slides)
@@ -74,14 +75,14 @@ class LectureSummaryPipeline(Pipeline):
 
     def _get_slides(self, slide_number: int):
         slide_filter = self._get_lecture_slide_filter()
-        slide_filter &= Filter.by_property(LectureSlideSchema.PAGE_NUMBER.value).equal(slide_number)
+        slide_filter &= Filter.by_property(LectureUnitPageChunkSchema.PAGE_NUMBER.value).equal(slide_number)
         return self.lecture_slide_collection.query(filter=slide_filter)
 
     def _get_slide_range(self) -> Tuple[int, int]:
         slides = self.lecture_slide_collection.query(filter=self._get_lecture_slide_filter())
 
         if len(slides) != 0:
-            slide_numbers = [slide.properties.get(LectureSlideSchema.PAGE_NUMBER.value) for slide in slides.objects]
+            slide_numbers = [slide.properties.get(LectureUnitPageChunkSchema.PAGE_NUMBER.value) for slide in slides.objects]
             return min(slide_numbers), max(slide_numbers)
 
         transcriptions = self.lecture_transcription_collection.query(filter=self._get_lecture_transcription_filter())
@@ -93,9 +94,9 @@ class LectureSummaryPipeline(Pipeline):
         return 0, 0
 
     def _get_lecture_slide_filter(self):
-        slide_filter = Filter.by_property(LectureSlideSchema.COURSE_ID.value).equal(self.course_id)
-        slide_filter &= Filter.by_property(LectureSlideSchema.LECTURE_ID.value).equal(self.lecture_id)
-        slide_filter &= Filter.by_property(LectureSlideSchema.LECTURE_UNIT_ID.value).equal(self.lecture_unit_id)
+        slide_filter = Filter.by_property(LectureUnitPageChunkSchema.COURSE_ID.value).equal(self.course_id)
+        slide_filter &= Filter.by_property(LectureUnitPageChunkSchema.LECTURE_ID.value).equal(self.lecture_id)
+        slide_filter &= Filter.by_property(LectureUnitPageChunkSchema.LECTURE_UNIT_ID.value).equal(self.lecture_unit_id)
         return slide_filter
 
     def _get_lecture_transcription_filter(self):
@@ -108,7 +109,7 @@ class LectureSummaryPipeline(Pipeline):
         slides = self.lecture_slide_collection.query(filter=self._get_lecture_slide_filter(), limit=1)
         if len(slides) > 0:
             slide = slides.objects[0].properties
-            return slide[LectureSlideSchema.COURSE_NAME.value], slide[LectureSlideSchema.COURSE_DESCRIPTION.value], slide[LectureSlideSchema.COURSE_LANGUAGE.value], slide[LectureSlideSchema.LECTURE_NAME.value]
+            return slide[LectureUnitPageChunkSchema.COURSE_NAME.value], slide[LectureUnitPageChunkSchema.COURSE_DESCRIPTION.value], slide[LectureUnitPageChunkSchema.COURSE_LANGUAGE.value], slide[LectureUnitPageChunkSchema.LECTURE_NAME.value]
 
         transcriptions = self.lecture_transcription_collection.query(filter=self._get_lecture_transcription_filter(), limit=1)
         transcription = transcriptions.objects[0].properties
@@ -124,7 +125,7 @@ class LectureSummaryPipeline(Pipeline):
 
         slide_text = ""
         for slide in slides.objects:
-            slide_text += slide.properties[LectureSlideSchema.PAGE_TEXT_CONTENT.value]
+            slide_text += slide.properties[LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value]
         lecture_name, course_name, _, _ = self._get_lecture_information()
         self.prompt = ChatPromptTemplate.from_messages(
             [
@@ -139,8 +140,8 @@ class LectureSummaryPipeline(Pipeline):
                 ),
             ]
         )
-        prompt_val = self.prompt.format_messages()
-        self.prompt = ChatPromptTemplate.from_messages(prompt_val)
+        formatted_prompt = self.prompt.format_messages()
+        self.prompt = ChatPromptTemplate.from_messages(formatted_prompt)
         try:
             response = (self.prompt | self.pipeline).invoke({})
             self._append_tokens(
@@ -151,32 +152,74 @@ class LectureSummaryPipeline(Pipeline):
             raise e
 
     def _upsert_lecture_object(self, slide_number: int, summary: str):
-        lecture_filter = Filter.by_property(LectureSchema.COURSE_ID.value).equal(self.course_id)
-        lecture_filter &= Filter.by_property(LectureSchema.LECTURE_ID.value).equal(self.lecture_id)
-        lecture_filter &= Filter.by_property(LectureSchema.LECTURE_UNIT_ID.value).equal(self.lecture_unit_id)
-        lecture_filter &= Filter.by_property(LectureSchema.SLIDE_NUMBER.value).equal(slide_number)
+        lecture_filter = Filter.by_property(LectureUnitSegmentSchema.COURSE_ID.value).equal(self.course_id)
+        lecture_filter &= Filter.by_property(LectureUnitSegmentSchema.LECTURE_ID.value).equal(self.lecture_id)
+        lecture_filter &= Filter.by_property(LectureUnitSegmentSchema.LECTURE_UNIT_ID.value).equal(self.lecture_unit_id)
+        lecture_filter &= Filter.by_property(LectureUnitSegmentSchema.SLIDE_NUMBER.value).equal(slide_number)
 
         lectures = self.lecture_collection.query(filter=lecture_filter, limit=1)
+
+        transcriptions = self._get_transcriptions(slide_number)
+        slides = self._get_slides(slide_number)
+
         if len(lectures) == 0:
+            #Insert new lecture
             course_name, course_description, language, lecture_name  = self._get_lecture_information()
             self.lecture_collection.create(
                 properties={
-                    LectureSchema.COURSE_ID.value: self.course_id,
-                    LectureSchema.COURSE_NAME.value: course_name,
-                    LectureSchema.COURSE_DESCRIPTION.value: course_description,
-                    LectureSchema.COURSE_LANGUAGE.value: language,
-                    LectureSchema.LECTURE_ID.value: self.lecture_id,
-                    LectureSchema.LECTURE_NAME.value: lecture_name,
-                    LectureSchema.CONTENT.value: summary,
-                    LectureSchema.SLIDE_NUMBER.value: slide_number,
+                    LectureUnitSegmentSchema.COURSE_ID.value: self.course_id,
+                    LectureUnitSegmentSchema.COURSE_NAME.value: course_name,
+                    LectureUnitSegmentSchema.COURSE_DESCRIPTION.value: course_description,
+                    LectureUnitSegmentSchema.COURSE_LANGUAGE.value: language,
+                    LectureUnitSegmentSchema.LECTURE_ID.value: self.lecture_id,
+                    LectureUnitSegmentSchema.LECTURE_NAME.value: lecture_name,
+                    LectureUnitSegmentSchema.CONTENT.value: summary,
+                    LectureUnitSegmentSchema.SLIDE_NUMBER.value: slide_number,
                 }
             )
+            lecture = self.lecture_collection.query(filter=lecture_filter, limit=1)
+            transcription_references = []
+            for transcription in transcriptions.objects:
+                transcription_reference = DataReference(
+                    from_uuid=lecture.objects[0].uuid.int,
+                    from_property=LectureUnitSegmentSchema.TRANSCRIPTIONS.value,
+                    to_uuid=transcription.uuid.int
+                )
+                transcription_references.append(transcription_reference)
+            slide_references = []
+            for slide in slides.objects:
+                slide_reference = DataReference(
+                    from_uuid=lecture.objects[0].uuid.int,
+                    from_property=LectureUnitSegmentSchema.SLIDES.value,
+                    to_uuid=slide.uuid.int
+                )
+                slide_references.append(slide_reference)
+
+            self.lecture_collection.data.reference_add_many(transcription_references)
+            self.lecture_collection.data.reference_add_many(slide_references)
             return
 
+        #update existing lecture
+        transcription_uuids = [t.uuid.int for t in transcriptions.objects]
+        slide_uuids = [s.uuid.int for s in slides.objects]
+        lecture_uuid = lectures.objects[0].uuid.int
+
         self.lecture_collection.update(
-            id=lectures.objects[0].id,
+            id=lecture_uuid,
             properties={
-                LectureSchema.CONTENT.value: summary,
+                LectureUnitSegmentSchema.CONTENT.value: summary,
             }
+        )
+
+        self.lecture_collection.data.reference_replace(
+            from_uuid=lecture_uuid,
+            from_property=LectureUnitSegmentSchema.TRANSCRIPTIONS.value,
+            to=transcription_uuids
+        )
+
+        self.lecture_collection.data.reference_replace(
+            from_uuid=lecture_uuid,
+            from_property=LectureUnitSegmentSchema.SLIDES.value,
+            to=slide_uuids
         )
 
