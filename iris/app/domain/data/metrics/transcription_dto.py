@@ -8,7 +8,6 @@ class TranscriptionSegmentDTO(BaseModel):
     end_time: float = Field(..., alias="endTime")
     text: str = Field(..., alias="text")
     slide_number: int = Field(default=0, alias="slideNumber")
-    # lecture_unit_id: int = Field(..., alias="lectureUnitId")
 
 
 class TranscriptionDTO(BaseModel):
@@ -23,4 +22,4 @@ class TranscriptionWebhookDTO(BaseModel):
     course_id: int = Field(..., alias="courseId")
     course_name: str = Field(..., alias="courseName")
     lecture_unit_id: int = Field(..., alias="lectureUnitId")
-    # course_description: str = Field(..., alias="courseDescription")
+    course_description: str = Field("", alias="courseDescription")
