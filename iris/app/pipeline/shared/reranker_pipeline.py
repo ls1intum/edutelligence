@@ -15,7 +15,7 @@ from app.pipeline import Pipeline
 from app.pipeline.chat.output_models.output_models.selected_paragraphs import (
     SelectedParagraphs,
 )
-from app.vector_database.lecture_slide_schema import LectureUnitPageChunkSchema
+from app.vector_database.lecture_unit_page_chunk_schema import LectureUnitPageChunkSchema
 
 
 class RerankerPipeline(Pipeline):

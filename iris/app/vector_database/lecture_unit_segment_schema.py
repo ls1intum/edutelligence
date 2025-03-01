@@ -3,7 +3,10 @@ from enum import Enum
 from weaviate.classes.config import Property
 from weaviate import WeaviateClient
 from weaviate.collections import Collection
-from weaviate.collections.classes.config import Configure, VectorDistances, DataType
+from weaviate.collections.classes.config import Configure, VectorDistances, DataType, ReferenceProperty
+
+from app.vector_database.lecture_transcription_schema import LectureTranscriptionSchema
+from app.vector_database.lecture_unit_page_chunk_schema import LectureUnitPageChunkSchema
 
 
 class LectureUnitSegmentSchema(Enum):
@@ -17,6 +20,8 @@ class LectureUnitSegmentSchema(Enum):
     LECTURE_UNIT_ID = "lecture_unit_id"
     PAGE_NUMBER = "page_number"
     SEGMENT_SUMMARY = "segment_summary"
+    TRANSCRIPTIONS = "transcriptions"
+    SLIDES = "slides"
 
 
 def init_lecture_unit_segment_schema(client: WeaviateClient) -> Collection:
@@ -61,4 +66,14 @@ def init_lecture_unit_segment_schema(client: WeaviateClient) -> Collection:
                 index_searchable=True,
             ),
         ],
+        references=[
+            ReferenceProperty(
+                name=LectureUnitSegmentSchema.TRANSCRIPTIONS.value,
+                target_collection=LectureTranscriptionSchema.COLLECTION_NAME.value,
+            ),
+            ReferenceProperty(
+                name=LectureUnitSegmentSchema.SLIDES.value,
+                target_collection=LectureUnitPageChunkSchema.COLLECTION_NAME.value,
+            )
+        ]
     )

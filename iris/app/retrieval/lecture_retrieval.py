@@ -19,7 +19,7 @@ from app.llm import (
     RequirementList,
 )
 from app.pipeline.shared.reranker_pipeline import RerankerPipeline
-from app.vector_database.lecture_slide_schema import init_lecture_slide_schema, LectureUnitPageChunkSchema
+from app.vector_database.lecture_unit_page_chunk_schema import init_lecture_unit_page_chunk_schema, LectureUnitPageChunkSchema
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import (
     ChatPromptTemplate,
@@ -100,7 +100,7 @@ class LectureRetrieval(Pipeline):
         )
         self.llm_embedding = BasicRequestHandler("embedding-small")
         self.pipeline = self.llm | StrOutputParser()
-        self.collection = init_lecture_slide_schema(client)
+        self.collection = init_lecture_unit_page_chunk_schema(client)
         self.reranker_pipeline = RerankerPipeline()
         self.tokens = []
 
@@ -393,10 +393,10 @@ class LectureRetrieval(Pipeline):
             )
 
             # Extend the filter based on the presence of base_url
-            if base_url:
-                filter_weaviate &= Filter.by_property(
-                    LectureUnitPageChunkSchema.BASE_URL.value
-                ).equal(base_url)
+            # if base_url:
+            #     filter_weaviate &= Filter.by_property(
+            #         LectureUnitPageChunkSchema.BASE_URL.value
+            #     ).equal(base_url) #TODO: fix filter for Base Url
 
         vec = self.llm_embedding.embed(query)
         return_value = self.collection.query.hybrid(
@@ -405,8 +405,6 @@ class LectureRetrieval(Pipeline):
             vector=vec,
             return_properties=[
                 LectureUnitPageChunkSchema.COURSE_ID.value,
-                LectureUnitPageChunkSchema.LECTURE_UNIT_NAME.value,
-                LectureUnitPageChunkSchema.LECTURE_UNIT_LINK.value,
                 LectureUnitPageChunkSchema.PAGE_NUMBER.value,
                 LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value,
             ],

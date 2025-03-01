@@ -43,7 +43,7 @@ from ...retrieval.faq_retrieval import FaqRetrieval
 from ...retrieval.faq_retrieval_utils import should_allow_faq_tool, format_faqs
 from ...retrieval.lecture_retrieval import LectureRetrieval
 from ...vector_database.database import VectorDatabase
-from ...vector_database.lecture_slide_schema import LectureUnitPageChunkSchema
+from ...vector_database.lecture_unit_page_chunk_schema import LectureUnitPageChunkSchema
 from weaviate.collections.classes.filters import Filter
 from ...web.status.status_update import ExerciseChatStatusCallback
 
@@ -389,8 +389,10 @@ class ExerciseChatAgentPipeline(Pipeline):
             result = ""
             for paragraph in self.retrieved_paragraphs:
                 lct = "Lecture: {}, Unit: {}, Page: {}\nContent:\n---{}---\n\n".format(
-                    paragraph.get(LectureUnitPageChunkSchema.LECTURE_NAME.value),
-                    paragraph.get(LectureUnitPageChunkSchema.LECTURE_UNIT_NAME.value),
+                    # paragraph.get(LectureUnitPageChunkSchema.LECTURE_NAME.value),
+                    # paragraph.get(LectureUnitPageChunkSchema.LECTURE_UNIT_NAME.value),
+                    "",
+                    "",
                     paragraph.get(LectureUnitPageChunkSchema.PAGE_NUMBER.value),
                     paragraph.get(LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value),
                 )

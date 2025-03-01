@@ -7,7 +7,7 @@ from weaviate.collections.classes.filters import Filter
 
 from app.dependencies import TokenValidator
 from ...vector_database.database import VectorDatabase
-from ...vector_database.lecture_slide_schema import LectureUnitPageChunkSchema
+from ...vector_database.lecture_unit_page_chunk_schema import LectureUnitPageChunkSchema
 from enum import Enum
 
 router = APIRouter(prefix="/api/v1", tags=["ingestion_status"])

@@ -2,7 +2,7 @@ import logging
 import weaviate
 
 from .faq_schema import init_faq_schema
-from .lecture_slide_schema import init_lecture_slide_schema
+from .lecture_unit_page_chunk_schema import init_lecture_unit_page_chunk_schema
 from weaviate.classes.query import Filter
 from app.config import settings
 import threading
@@ -28,7 +28,7 @@ class VectorDatabase:
                 )
                 logger.info("Weaviate client initialized")
         self.client = VectorDatabase._client_instance
-        self.lectures = init_lecture_slide_schema(self.client)
+        self.lectures = init_lecture_unit_page_chunk_schema(self.client)
         self.faqs = init_faq_schema(self.client)
 
     def delete_collection(self, collection_name):

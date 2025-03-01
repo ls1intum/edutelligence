@@ -41,7 +41,7 @@ from app.common.PipelineEnum import PipelineEnum
 from ...llm.langchain import IrisLangchainChatModel
 from ...retrieval.lecture_retrieval import LectureRetrieval
 from ...vector_database.database import VectorDatabase
-from ...vector_database.lecture_slide_schema import LectureUnitPageChunkSchema
+from ...vector_database.lecture_unit_page_chunk_schema import LectureUnitPageChunkSchema
 from ...web.status.status_update import ExerciseChatStatusCallback
 
 logger = logging.getLogger()

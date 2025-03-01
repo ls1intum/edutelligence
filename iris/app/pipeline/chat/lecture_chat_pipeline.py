@@ -19,7 +19,7 @@ from ...llm import CapabilityRequestHandler, RequirementList
 from app.common.PipelineEnum import PipelineEnum
 from ...retrieval.lecture_retrieval import LectureRetrieval
 from ...vector_database.database import VectorDatabase
-from ...vector_database.lecture_slide_schema import LectureUnitPageChunkSchema
+from ...vector_database.lecture_unit_page_chunk_schema import LectureUnitPageChunkSchema
 
 from ...llm import CompletionArguments
 from ...llm.langchain import IrisLangchainChatModel

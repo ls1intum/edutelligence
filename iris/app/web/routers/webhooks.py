@@ -22,7 +22,7 @@ from ...domain.ingestion.transcription_ingestion.transcription_ingestion_pipelin
     TranscriptionIngestionPipelineExecutionDto,
 )
 from ...pipeline.faq_ingestion_pipeline import FaqIngestionPipeline
-from ...pipeline.lecture_ingestion_pipeline import LectureIngestionPipeline
+from ...pipeline.lecture_ingestion_pipeline import LectureUnitPageIngestionPipeline
 from ...pipeline.transcription_ingestion_pipeline import TranscriptionIngestionPipeline
 from ...vector_database.database import VectorDatabase
 
@@ -45,7 +45,7 @@ def run_lecture_update_pipeline_worker(dto: IngestionPipelineExecutionDto):
             )
             db = VectorDatabase()
             client = db.get_client()
-            pipeline = LectureIngestionPipeline(
+            pipeline = LectureUnitPageIngestionPipeline(
                 client=client, dto=dto, callback=callback
             )
             pipeline()
@@ -70,7 +70,7 @@ def run_lecture_deletion_pipeline_worker(dto: LecturesDeletionExecutionDto):
         )
         db = VectorDatabase()
         client = db.get_client()
-        pipeline = LectureIngestionPipeline(client=client, dto=None, callback=callback)
+        pipeline = LectureUnitPageIngestionPipeline(client=client, dto=None, callback=callback)
         pipeline.delete_old_lectures(dto.lecture_units, dto.settings.artemis_base_url)
     except Exception as e:
         logger.error(f"Error while deleting lectures: {e}")

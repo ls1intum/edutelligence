@@ -13,7 +13,7 @@ from app.llm.langchain import IrisLangchainChatModel
 from app.pipeline import Pipeline
 from app.vector_database.faq_schema import FaqSchema
 
-from app.vector_database.lecture_slide_schema import LectureUnitPageChunkSchema
+from app.vector_database.lecture_unit_page_chunk_schema import LectureUnitPageChunkSchema
 
 
 class InformationType(str, Enum):
