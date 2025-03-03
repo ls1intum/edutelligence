@@ -15,7 +15,7 @@ on:
 
 jobs:
   generate-api-client:
-    name: Verify API Specs (add autocommit-openapi label to PR to auto-commit changes)
+    name: Verify API Specs (add hyperion:autocommit-openapi label to PR to auto-commit changes)
     runs-on: ubuntu-latest
 
     steps:
@@ -70,7 +70,7 @@ jobs:
           fi
 
       - name: Commit files
-        if: ${{ always() && contains(github.event.pull_request.labels.*.name, 'autocommit-openapi') }}
+        if: ${{ always() && contains(github.event.pull_request.labels.*.name, 'hyperion:autocommit-openapi') }}
         run: |
           echo "Committing and pushing changes..."
           git config --local user.name "github-actions[bot]"
@@ -78,15 +78,15 @@ jobs:
           git commit -a -m "chore: update API specs and client"
 
       - name: Push changes
-        if: ${{ always() && contains(github.event.pull_request.labels.*.name, 'autocommit-openapi') }}
+        if: ${{ always() && contains(github.event.pull_request.labels.*.name, 'hyperion:autocommit-openapi') }}
         uses: ad-m/github-push-action@master
         with:
           github_token: ${{ secrets.GH_PAT }}
           branch: ${{ github.event.pull_request.head.ref  }}
 
-      - name: Remove autocommit-openapi label
-        if: ${{ always() && contains(github.event.pull_request.labels.*.name, 'autocommit-openapi') }}
+      - name: Remove hyperion:autocommit-openapi label
+        if: ${{ always() && contains(github.event.pull_request.labels.*.name, 'hyperion:autocommit-openapi') }}
         run: |
-          echo "Removing the autocommit-openapi label..."
+          echo "Removing the hyperion:autocommit-openapi label..."
           curl --silent --fail-with-body -X DELETE -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-          https://api.github.com/repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/labels/autocommit-openapi
+          https://api.github.com/repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/labels/hyperion:autocommit-openapi
