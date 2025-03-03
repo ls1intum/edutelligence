@@ -12,20 +12,20 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # Add issues/PRs labeled with 'hyperion' to the Hyperion project board
-      - name: Assign Hyperion Project
+      # Add issues/PRs labeled with 'athena' to the Athena project board
+      - name: Assign Athena Project
         if: >
           (github.event_name == 'issues' &&
-            ((github.event.action == 'opened' && contains(github.event.issue.labels.*.name, 'hyperion')) ||
-             (github.event.action == 'labeled' && github.event.label.name == 'hyperion'))
+            ((github.event.action == 'opened' && contains(github.event.issue.labels.*.name, 'athena')) ||
+             (github.event.action == 'labeled' && github.event.label.name == 'athena'))
           ) ||
           (github.event_name == 'pull_request' &&
-            ((github.event.action == 'opened' && contains(github.event.pull_request.labels.*.name, 'hyperion')) ||
-             (github.event.action == 'labeled' && github.event.label.name == 'hyperion'))
+            ((github.event.action == 'opened' && contains(github.event.pull_request.labels.*.name, 'athena')) ||
+             (github.event.action == 'labeled' && github.event.label.name == 'athena'))
           )
         uses: actions/add-to-project@v1.0.2
         with:
-          project-url: https://github.com/orgs/ls1intum/projects/97
+          project-url: https://github.com/orgs/ls1intum/projects/93
           github-token: ${{ secrets.ADD_TO_PROJECT_PAT }}
 
       # Add issues/PRs labeled with 'atlas' to the Atlas project board
@@ -44,18 +44,18 @@ jobs:
           project-url: https://github.com/orgs/ls1intum/projects/38
           github-token: ${{ secrets.ADD_TO_PROJECT_PAT }}
 
-      # Add issues/PRs labeled with 'athena' to the Athena project board
-      - name: Assign Athena Project
+      # Add issues/PRs labeled with 'hyperion' to the Hyperion project board
+      - name: Assign Hyperion Project
         if: >
           (github.event_name == 'issues' &&
-            ((github.event.action == 'opened' && contains(github.event.issue.labels.*.name, 'athena')) ||
-             (github.event.action == 'labeled' && github.event.label.name == 'athena'))
+            ((github.event.action == 'opened' && contains(github.event.issue.labels.*.name, 'hyperion')) ||
+             (github.event.action == 'labeled' && github.event.label.name == 'hyperion'))
           ) ||
           (github.event_name == 'pull_request' &&
-            ((github.event.action == 'opened' && contains(github.event.pull_request.labels.*.name, 'athena')) ||
-             (github.event.action == 'labeled' && github.event.label.name == 'athena'))
+            ((github.event.action == 'opened' && contains(github.event.pull_request.labels.*.name, 'hyperion')) ||
+             (github.event.action == 'labeled' && github.event.label.name == 'hyperion'))
           )
         uses: actions/add-to-project@v1.0.2
         with:
-          project-url: https://github.com/orgs/ls1intum/projects/93
+          project-url: https://github.com/orgs/ls1intum/projects/97
           github-token: ${{ secrets.ADD_TO_PROJECT_PAT }}
