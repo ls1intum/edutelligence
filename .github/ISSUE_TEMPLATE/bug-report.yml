@@ -34,7 +34,7 @@ body:
   - type: input
     attributes:
       label: Which version of Edutelligence are you seeing the problem on?
-      description: The version helps us .
+      description: The version helps us to narrow down the issue?.
     validations:
       required: true
   - type: dropdown
