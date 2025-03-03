@@ -2,19 +2,15 @@ name: Hyperion - OpenAPI
 
 on:
   pull_request:
-    types: [ opened, synchronize, labeled, reopened ]
+    types: [opened, synchronize, labeled, reopened]
     paths:
       - 'hyperion/**'
       - '.github/workflows/hyperion_check-openapi.yml'
-    paths-ignore:
-      - 'hyperion/README.md'
   push:
     paths:
       - 'hyperion/**'
       - '.github/workflows/hyperion_check-openapi.yml'
-    paths-ignore:
-      - 'hyperion/README.md'
-    branches: [ main ]
+    branches: [main]
   workflow_dispatch:
 
 jobs:
