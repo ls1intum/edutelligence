@@ -1,0 +1,39 @@
+name: Hyperion - Build Docker Images
+
+on:
+  pull_request:
+    paths:
+      - 'hyperion/**'
+      - '.github/workflows/hyperion_build-and-push-docker.yml'
+    paths-ignore:
+      - 'hyperion/README.md'
+  push:
+    branches:
+      - main
+      - release/*
+    paths:
+      - 'hyperion/**'
+      - '.github/workflows/hyperion_build-and-push-docker.yml'
+    paths-ignore:
+      - 'hyperion/README.md'
+  release:
+    types:
+      - created
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    if: github.actor != 'dependabot[bot]'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Hyperion
+            dockerfile: ./hyperion/Dockerfile
+            image: ghcr.io/ls1intum/learning-intelligence/hyperion
+            context: ./hyperion
+    uses: ls1intum/.github/.github/workflows/build-and-push-docker-image.yml@feat/minor-build-improvements
+    with:
+      image-name: ${{ matrix.image }}
+      docker-file: ${{ matrix.dockerfile }}
+      docker-context: ${{ matrix.context }}
