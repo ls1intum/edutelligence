@@ -1,6 +1,0 @@
-docker:
-  - docker
-
-documentation:
-  - documentation
-  - docs
