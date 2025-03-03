@@ -1,14 +1,6 @@
 import tomllib
-from typing import Annotated, TypedDict
 from pydantic import BaseModel
 from fastapi import FastAPI, status
-
-from langgraph.graph import StateGraph, START, END
-from langgraph.graph.message import add_messages
-from langfuse.callback import CallbackHandler
-from langchain_core.messages import HumanMessage
-
-from langchain_core.runnables.config import RunnableConfig
 
 from app.settings import settings
 from app.models import get_model
@@ -30,9 +22,6 @@ app = FastAPI(
     contact=contact,
 )
 
-langfuse_handler = CallbackHandler()
-langfuse_handler.auth_check()
-
 
 @app.get(
     "/run",
@@ -42,22 +31,7 @@ langfuse_handler.auth_check()
 def run():
     ChatModel = get_model(settings.MODEL_NAME)
     model = ChatModel()
-    
-    class State(TypedDict):
-        messages: Annotated[list, add_messages]
-        
-    def chatbot(state: State):
-        return {"messages": [model.invoke(state["messages"])]}
-
-    graph_builder = StateGraph(State)
-    graph_builder.add_node("chatbot", chatbot)
-    graph_builder.add_edge(START, "chatbot")
-    graph_builder.add_edge("chatbot", END)
-    graph = graph_builder.compile().with_config(RunnableConfig(callbacks=[langfuse_handler]))
-
-    result = graph.invoke({"messages": [HumanMessage(content = "What is Langfuse?")]})
-    # return model.invoke("Hello, World!").content
-    return result
+    return model.invoke("Hello, World!").content
 
 
 class HealthCheck(BaseModel):
