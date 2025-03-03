@@ -1,0 +1,33 @@
+services:
+  intelligence-service:
+    image: "ghcr.io/ls1intum/edutelligence/hyperion:${IMAGE_TAG}"
+    environment:
+      MODEL_NAME: ${MODEL_NAME}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      OPENAI_API_VERSION: ${OPENAI_API_VERSION}
+      AZURE_OPENAI_ENDPOINT: ${AZURE_OPENAI_ENDPOINT}
+      AZURE_OPENAI_API_KEY: ${AZURE_OPENAI_API_KEY}
+      OLLAMA_BASIC_AUTH_USERNAME: ${OLLAMA_BASIC_AUTH_USERNAME}
+      OLLAMA_BASIC_AUTH_PASSWORD: ${OLLAMA_BASIC_AUTH_PASSWORD}
+      OLLAMA_HOST: ${OLLAMA_HOST}
+    restart: unless-stopped
+    ports:
+      - '8000'
+    networks:
+      - shared-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 5s
+      timeout: 10s
+      retries: 10
+      start_period: 5s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+networks:
+  shared-network:
+    name: shared-network
+    driver: bridge
