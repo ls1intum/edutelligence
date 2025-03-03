@@ -38,7 +38,6 @@ body:
     validations:
       required: true
   - type: dropdown
-    id: service-selection
     attributes:
       label: What service is this bug related to?
       multiple: true
@@ -65,7 +64,6 @@ body:
         - Other (specify in "Additional context")
     validations:
       required: true
-    if: service-selection contains "Athena"
   - type: dropdown
     attributes:
       label: What browsers are you seeing the problem on?
@@ -76,12 +74,10 @@ body:
         - Microsoft Edge
         - Firefox
         - Other (specify in "Additional context")
-    if: service-selection contains "Athena"
   - type: input
     attributes:
       label: Operating System
       description: The operating system you're using. E.g. Windows 11, macOS Sonoma, Ubuntu 20.04, etc.
-    if: service-selection contains "Athena"
   - type: textarea
     id: logs
     attributes:
