@@ -1,13 +1,7 @@
 name: Hyperion - Build Docker Images
 
 on:
-  pull_request:
-    paths:
-      - 'hyperion/**'
-      - '.github/workflows/hyperion_build-and-push-docker.yml'
   push:
-    branches:
-      - main
     paths:
       - 'hyperion/**'
       - '.github/workflows/hyperion_build-and-push-docker.yml'
