@@ -1,6 +1,7 @@
 import tomllib
 from pydantic import BaseModel
 from fastapi import FastAPI, status
+import gradio as gr
 
 from app.settings import settings
 from app.models import get_model
@@ -28,10 +29,10 @@ app = FastAPI(
     status_code=status.HTTP_200_OK,
     response_model=str,
 )
-def run():
+def run(query: str):
     ChatModel = get_model(settings.MODEL_NAME)
     model = ChatModel()
-    return model.invoke("Hello, World!").content
+    return model.invoke(query).content
 
 
 class HealthCheck(BaseModel):
@@ -60,3 +61,7 @@ def get_health() -> HealthCheck:
         HealthCheck: Returns a JSON response with the health status
     """
     return HealthCheck(status="OK", version=version)
+
+
+io = gr.Interface(fn=run, inputs="textbox", outputs="textbox")
+app = gr.mount_gradio_app(app, io, path="/playground")

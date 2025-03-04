@@ -16,6 +16,7 @@ dependencies = [
     "langchain-openai == 0.3.7",
     "langchain-ollama == 0.2.3",
     "langsmith == 0.3.11",
+    "gradio == 5.20.0",
 ]
 
 [tool.poetry]
