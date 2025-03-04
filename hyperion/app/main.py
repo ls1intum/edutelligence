@@ -64,4 +64,4 @@ def get_health() -> HealthCheck:
 
 
 io = gr.Interface(fn=run, inputs="textbox", outputs="textbox")
-app = gr.mount_gradio_app(app, io, path="/playground")
+app = gr.mount_gradio_app(app, io, path="/playground", root_path="/playground")
