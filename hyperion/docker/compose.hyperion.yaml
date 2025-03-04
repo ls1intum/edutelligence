@@ -1,5 +1,5 @@
 services:
-  intelligence-service:
+  hyperion:
     image: "ghcr.io/ls1intum/edutelligence/hyperion:${IMAGE_TAG}"
     environment:
       MODEL_NAME: ${MODEL_NAME}
@@ -26,6 +26,18 @@ services:
       options:
         max-size: "50m"
         max-file: "5"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.middlewares.redirect-to-https.redirectscheme.scheme=https"
+      - "traefik.http.routers.http-application-server.entryPoints=http"
+      - "traefik.http.routers.http-application-server.middlewares=redirect-to-https"
+      - "traefik.http.routers.http-application-server.rule=Host(`${APP_HOSTNAME}`)"
+      - "traefik.http.routers.https-application-server.entryPoints=https"
+      - "traefik.http.routers.https-application-server.rule=Host(`${APP_HOSTNAME}`))"
+      - "traefik.http.routers.https-application-server.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.https-application-server.tls=true"
+      - "traefik.http.routers.http-application-server.priority=5"
+      - "traefik.http.routers.https-application-server.priority=10"
 
 networks:
   shared-network:

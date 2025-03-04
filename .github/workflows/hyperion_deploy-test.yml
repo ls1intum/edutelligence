@@ -31,7 +31,7 @@ jobs:
     if: ${{ inputs.deploy-proxy }}
     uses: ls1intum/.github/.github/workflows/deploy-docker-compose.yml@main
     with:
-      environment: hyperion-test1
+      environment: "Hyperion - Test 1"
       docker-compose-file: "./hyperion/docker/compose.proxy.yaml"
       # We just keep the main-image-name and image-tag as placeholders
       main-image-name: ls1intum/edutelligence/hyperion
