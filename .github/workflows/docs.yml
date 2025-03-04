@@ -5,8 +5,8 @@ on:
     branches:
     - main
     paths:
-    - 'docs/**'
-    - '.github/workflows/docs.yml'
+    - 'atlas/docs/**'
+    - '.github/workflows/atlas_docs.yml'
   workflow_dispatch:
 
 jobs:
@@ -26,13 +26,13 @@ jobs:
     - uses: actions/upload-artifact@v4
       with:
         name: documentation
-        path: docs/_build/html/
+        path: atlas/docs/_build/html/
 
   # Deployment job
   deploy:
     environment:
       name: documentation
-      url: "https://atlas-docs.ase.cit.tum.de"
+      url: "https://docs.atlas.ase.cit.tum.de"
     runs-on: ubuntu-latest
     needs: docs
     steps:
@@ -44,7 +44,7 @@ jobs:
       - name: Copy site to server
         uses: appleboy/scp-action@master
         with:
-          host: atlas-docs.ase.cit.tum.de
+          host: docs.atlas.ase.cit.tum.de
           username: ${{ vars.DOCS_SSH_USER }}
           key: ${{ secrets.DEPLOYMENT_SSH_KEY }}
           proxy_host: ${{ vars.DEPLOYMENT_GATEWAY_HOST }}
@@ -56,7 +56,7 @@ jobs:
       - name: Move site to www
         uses: appleboy/ssh-action@master
         with:
-          host: atlas-docs.ase.cit.tum.de
+          host: docs.atlas.ase.cit.tum.de
           username: ${{ vars.DOCS_SSH_USER }}
           key: ${{ secrets.DEPLOYMENT_SSH_KEY }}
           proxy_host: ${{ vars.DEPLOYMENT_GATEWAY_HOST }}
