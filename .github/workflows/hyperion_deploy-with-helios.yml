@@ -1,4 +1,4 @@
-name: Hyperion - Deploy Service with Helios
+name: Hyperion - Deploy with Helios
 
 on:
   workflow_dispatch:
