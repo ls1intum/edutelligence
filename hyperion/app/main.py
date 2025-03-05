@@ -1,27 +1,20 @@
-import tomllib
+import gradio as gr
 from pydantic import BaseModel
 from fastapi import FastAPI, status
-import gradio as gr
 
-from app.settings import settings
+from app.security import AuthMiddleware, get_openapi_schema_with_security_schema
 from app.models import get_model
-
-
-# Read project metadata from pyproject.toml
-with open("pyproject.toml", "rb") as f:
-    META = tomllib.load(f)
-
-name = META["project"]["name"]
-description = META["project"]["description"]
-version = META["project"]["version"]
-contact = META["project"]["authors"][0]
+from app.settings import settings
+from app.project_meta import project_meta
 
 app = FastAPI(
-    title=name[0].upper() + name[1:],
-    description=description,
-    version=version,
-    contact=contact,
+    title=project_meta.title,
+    description=project_meta.description,
+    version=project_meta.version,
+    contact=project_meta.contact,
 )
+app.add_middleware(AuthMiddleware)
+app.openapi_schema = get_openapi_schema_with_security_schema(app)
 
 
 @app.get(
@@ -60,8 +53,15 @@ def get_health() -> HealthCheck:
     Returns:
         HealthCheck: Returns a JSON response with the health status
     """
-    return HealthCheck(status="OK", version=version)
+    return HealthCheck(status="OK", version=project_meta.version)
 
 
 io = gr.Interface(fn=run, inputs="textbox", outputs="textbox")
-app = gr.mount_gradio_app(app, io, path="/playground", root_path="/playground")
+playground_auth = (
+    (settings.PLAYGROUND_USERNAME, settings.PLAYGROUND_PASSWORD)
+    if settings.PLAYGROUND_PASSWORD
+    else None
+)
+app = gr.mount_gradio_app(
+    app, io, path="/playground", root_path="/playground", auth=playground_auth
+)

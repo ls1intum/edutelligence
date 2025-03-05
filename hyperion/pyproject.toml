@@ -25,7 +25,7 @@ packages = [
 ]
 
 [tool.poetry.scripts]
-openapi = "app.export_openapi_specs:run"
+openapi = "app.openapi:export"
 
 [tool.poetry.group.dev.dependencies]
 black = "25.1.0"
