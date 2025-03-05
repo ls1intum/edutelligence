@@ -1,0 +1,104 @@
+name: Build Docker Images
+
+# Build the Docker images for the assessment module manager, the modules and the playground.
+# Because the Python images depend on the athena Python package, the package is built first.
+
+on:
+  push:
+    branches:
+      - develop
+  pull_request:
+
+# prevent Docker image push conflicts
+concurrency: 
+  group: ${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  find_images_to_build:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+      has_images: ${{ steps.set-matrix.outputs.has_images }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+      - name: Set Matrix
+        id: set-matrix
+        run: |
+          export PR_NUMBER=${{ github.event.pull_request.number }}
+          export GITHUB_TOKEN=${{ secrets.GITHUB_TOKEN }}
+          export GITHUB_REPO=${{ github.repository }}
+          export GITHUB_REF=${{ github.ref }}
+          export ORGANIZATION_NAME=${{ github.repository_owner }}
+          export LAST_REF_BEFORE_PUSH=${{ github.event.before }}
+          chmod +x ./.github/scripts/images-to-build.sh
+          IMAGE_NAMES=$(./.github/scripts/images-to-build.sh)
+          IMAGE_NAMES_JSON=$(echo "$IMAGE_NAMES" | jq -R -s -c 'split("\n")[:-1]')
+          echo "matrix=${IMAGE_NAMES_JSON}" > $GITHUB_OUTPUT
+          echo "has_images=$(if [ -z "$IMAGE_NAMES" ]; then echo false; else echo true; fi)" >> $GITHUB_OUTPUT
+
+  build_image:
+    needs: find_images_to_build
+    if: needs.find_images_to_build.outputs.has_images == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        image: ${{fromJson(needs.find_images_to_build.outputs.matrix)}}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Build athena image
+        id: set-image
+        run: |
+          cd athena
+          docker build -t athena .
+          cd ..
+
+      - name: Build llm_core image
+        id: set-image-core_llm
+        run: |
+          cd ./llm_core
+          docker build -t llm_core .
+          cd ..
+
+      - name: Docker Login
+        id: docker-login
+        run: |
+          docker login -u ${{secrets.DOCKER_USERNAME}} -p ${{secrets.DOCKER_PASSWORD}}
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v2
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set IMAGE_NAME
+        run: echo "IMAGE_NAME=$(basename ${{ matrix.image }})" >> $GITHUB_ENV
+
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v4
+        with:
+          images: |
+            ghcr.io/${{ github.repository_owner }}/Athena/${{ env.IMAGE_NAME }}
+            ls1tum/athena_${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=${{ github.ref == 'refs/heads/develop' && 'develop' || github.sha }}
+            type=raw,value=${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.sha }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v4
+        with:
+          context: ${{ matrix.image }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            ATHENA_IS_DEVELOP=${{ github.ref == 'refs/heads/develop' && 'true' || 'false' }}
+            ATHENA_COMMIT_SHA=${{ github.event.pull_request.head.sha || github.sha }}
+            ATHENA_PR_NUMBER=${{ github.event.pull_request.number }}
+            ATHENA_PR_TITLE=${{ github.event.pull_request.title }}
+            ATHENA_PR_LAST_UPDATE=${{ github.event.pull_request.updated_at }}

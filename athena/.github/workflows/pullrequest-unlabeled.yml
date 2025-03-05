@@ -1,0 +1,33 @@
+name: Pull Request Label Removal
+
+on:
+  pull_request_target:
+    types:
+      - unlabeled
+
+jobs:
+  update_badges:
+    name: Update test server badges
+    runs-on: ubuntu-latest
+    if: startsWith(github.event.label.name, 'lock:athena-test')
+
+    steps:
+      - name: Get badge id
+        id: env
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const labelName = context.payload.label.name;
+            const badge = labelName.replace(/^lock:athena-test/, '');
+            core.setOutput('BADGE', badge);
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update badge
+        uses: RubbaBoy/BYOB@v1.3.0
+        with:
+          NAME: "athena-test${{ steps.env.outputs.BADGE }}"
+          LABEL: "athena-test${{ steps.env.outputs.BADGE }}.ase.cit.tum.de"
+          STATUS: ${{ github.event.pull_request.head.ref }}
+          COLOR: green
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

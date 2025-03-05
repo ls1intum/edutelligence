@@ -1,0 +1,24 @@
+[tool.poetry]
+name = "athena"
+version = "1.0.0"
+description = "This is a helper module for easier development of Athena modules. It provides communication functionality with the Assessment Module manager, as well as helper functions for storage."
+authors = ["Paul Schwind <paul.schwind@tum.de>"]
+license = "MIT"
+
+[tool.poetry.dependencies]
+python = "3.11.*"
+fastapi = "^0.109.1"
+uvicorn = "^0.23.0"
+httpx = "^0.24.1"
+gitpython = "^3.1.41"
+sqlalchemy = {extras = ["mypy"], version = "^2.0.21"}
+psycopg2 = "^2.9.9"
+
+[tool.poetry.group.dev.dependencies]
+types-requests = "^2.31.0.8"
+pydantic = "1.10.17"
+prospector = "^1.10.2"
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"

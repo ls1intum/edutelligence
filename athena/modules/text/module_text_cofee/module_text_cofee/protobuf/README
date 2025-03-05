@@ -1,0 +1,2 @@
+The contents of this folder are .gitignore-d outputs of the protobuf compiler.
+They are required to use the necessary protobuf models in Python.

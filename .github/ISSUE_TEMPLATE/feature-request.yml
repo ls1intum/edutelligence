@@ -1,0 +1,29 @@
+name: "🚀 Feature Request"
+description: Suggest an idea for this project
+labels: [feature]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for suggesting new features or pointing our missing functionality.
+        Please describe your request in detail so we can understand your ideas. Feel free to upload additional material such as mockups, diagrams, or sketches
+  - type: textarea
+    attributes:
+      label: Is your feature request related to a problem?
+      description: Please provide a clear and concise description of the problem.
+      placeholder: Ex. I'm always frustrated when ...
+  - type: textarea
+    attributes:
+      label: "User Story: Describe the solution you'd like"
+      description: Describe the solution you'd like
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Acceptance Criteria
+      description: List specific conditions that the feature must meet to be considered complete and acceptable.
+      placeholder: "- [ ] When I do X, then Y should happen."
+  - type: textarea
+    attributes:
+      label: Describe alternatives you've considered
+      description: A clear and concise description of any alternative solutions or features you've considered.
