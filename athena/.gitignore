@@ -1,0 +1,13 @@
+.DS_Store
+.venv
+__pycache__
+*.pyc
+*.pyo
+dist
+data/*
+!data/.gitkeep
+.idea/*
+!.idea/runConfigurations/
+.env
+**/.env
+**/data/*
