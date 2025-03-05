@@ -2,7 +2,7 @@
 
 ## Supported Versions
 
-Currently, only the latest version of Atlas is supported.  
+Currently, only the latest version of our Suit is supported.  
 We do **not** provide security patches for older versions.
 
 ## Reporting a Vulnerability
