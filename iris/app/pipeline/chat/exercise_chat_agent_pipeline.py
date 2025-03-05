@@ -650,9 +650,9 @@ class ExerciseChatAgentPipeline(Pipeline):
         if course_id:
             # Fetch the first object that matches the course ID with the language property
             result = self.db.lectures.query.fetch_objects(
-                filters=Filter.by_property(LectureUnitPageChunkSchema.COURSE_ID.value).equal(
-                    course_id
-                ),
+                filters=Filter.by_property(
+                    LectureUnitPageChunkSchema.COURSE_ID.value
+                ).equal(course_id),
                 limit=1,
                 return_properties=[LectureUnitPageChunkSchema.COURSE_NAME.value],
             )
