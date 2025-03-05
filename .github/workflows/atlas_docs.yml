@@ -31,7 +31,7 @@ jobs:
   # Deployment job
   deploy:
     environment:
-      name: documentation
+      name: atlas-documentation
       url: "https://docs.atlas.ase.cit.tum.de"
     runs-on: ubuntu-latest
     needs: docs
@@ -39,7 +39,7 @@ jobs:
       - name: Download artifact
         uses: actions/download-artifact@v4
         with:
-          name: documentation
+          name: atlas-documentation
           path: public
       - name: Copy site to server
         uses: appleboy/scp-action@master
