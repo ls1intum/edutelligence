@@ -75,7 +75,7 @@ html_context = {
     "github_user": "ls1intum",
     "github_repo": "Atlas",
     "github_version": "develop",
-    "conf_py_path": "/docs/",
+    "conf_py_path": "/atlas/docs/",
 }
 html_style = 'css/style.css'
 
