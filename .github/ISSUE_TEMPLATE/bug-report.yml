@@ -1,5 +1,6 @@
 name: "🐛 Bug Report"
 description: Something in Edutelligence is not working as expected? Create a report to help us improve.
+type: bug
 labels: [bug]
 body:
   - type: markdown
