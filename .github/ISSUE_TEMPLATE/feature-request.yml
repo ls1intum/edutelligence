@@ -1,5 +1,6 @@
 name: "🚀 Feature Request"
 description: Suggest an idea for this project
+type: feature
 labels: [feature]
 body:
   - type: markdown
