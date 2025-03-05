@@ -70,7 +70,9 @@ def run_lecture_deletion_pipeline_worker(dto: LecturesDeletionExecutionDto):
         )
         db = VectorDatabase()
         client = db.get_client()
-        pipeline = LectureUnitPageIngestionPipeline(client=client, dto=None, callback=callback)
+        pipeline = LectureUnitPageIngestionPipeline(
+            client=client, dto=None, callback=callback
+        )
         pipeline.delete_old_lectures(dto.lecture_units, dto.settings.artemis_base_url)
     except Exception as e:
         logger.error(f"Error while deleting lectures: {e}")

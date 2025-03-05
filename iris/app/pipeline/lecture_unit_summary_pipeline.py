@@ -19,10 +19,10 @@ class LectureUnitSummaryPipeline(Pipeline):
     prompt: ChatPromptTemplate
 
     def __init__(
-            self,
-            client: WeaviateClient,
-            lecture_unit_dto: LectureUnitDTO,
-            lecture_unit_segment_summaries: List[str]
+        self,
+        client: WeaviateClient,
+        lecture_unit_dto: LectureUnitDTO,
+        lecture_unit_segment_summaries: List[str],
     ) -> None:
         super().__init__()
         self.client = client
@@ -53,9 +53,8 @@ class LectureUnitSummaryPipeline(Pipeline):
             [
                 (
                     "system",
-                    lecture_unit_summary_prompt (
-                        self.lecture_unit_dto,
-                        lecture_unit_segment_text
+                    lecture_unit_summary_prompt(
+                        self.lecture_unit_dto, lecture_unit_segment_text
                     ),
                 ),
             ]

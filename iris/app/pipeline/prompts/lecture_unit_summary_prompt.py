@@ -1,7 +1,9 @@
 from app.domain.lecture.lecture_unit_dto import LectureUnitDTO
 
 
-def lecture_unit_summary_prompt(lecture_unit_dto: LectureUnitDTO, lecture_unit_segment_summary: str):
+def lecture_unit_summary_prompt(
+    lecture_unit_dto: LectureUnitDTO, lecture_unit_segment_summary: str
+):
     return f"""
         You are an excellent tutor with deep expertise in computer science and practical applications,
         teaching at the university level.

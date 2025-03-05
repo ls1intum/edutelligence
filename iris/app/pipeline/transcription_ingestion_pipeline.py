@@ -26,18 +26,16 @@ from app.llm import (
 from weaviate.classes.query import Filter
 from app.llm.langchain import IrisLangchainChatModel
 from app.pipeline import Pipeline
-from app.pipeline.faq_ingestion_pipeline import batch_update_lock
+from app.pipeline.lecture_unit_pipeline import LectureUnitPipeline
+from app.vector_database.database import batch_update_lock
 from app.pipeline.prompts.transcription_ingestion_prompts import (
     transcription_summary_prompt,
 )
-from app.service.lecture_unit.lecture_unit_service import LectureUnitService
 from app.vector_database.lecture_transcription_schema import (
     init_lecture_transcription_schema,
     LectureTranscriptionSchema,
 )
 from app.web.status.transcription_ingestion_callback import TranscriptionIngestionStatus
-
-batch_insert_lock = batch_update_lock
 
 CHUNK_SEPARATOR_CHAR = "\31"
 
@@ -48,10 +46,10 @@ class TranscriptionIngestionPipeline(Pipeline):
     prompt: ChatPromptTemplate
 
     def __init__(
-            self,
-            client: WeaviateClient,
-            dto: Optional[TranscriptionIngestionPipelineExecutionDto],
-            callback: TranscriptionIngestionStatus,
+        self,
+        client: WeaviateClient,
+        dto: Optional[TranscriptionIngestionPipelineExecutionDto],
+        callback: TranscriptionIngestionStatus,
     ) -> None:
         super().__init__()
         self.client = client
@@ -59,7 +57,6 @@ class TranscriptionIngestionPipeline(Pipeline):
         self.callback = callback
         self.collection = init_lecture_transcription_schema(client)
         self.llm_embedding = BasicRequestHandler("embedding-small")
-        self.lecture_unit_service = LectureUnitService()
 
         request_handler = CapabilityRequestHandler(
             requirements=RequirementList(
@@ -91,7 +88,9 @@ class TranscriptionIngestionPipeline(Pipeline):
             self.batch_insert(chunks)
             self.callback.done("Transcriptions ingested successfully")
 
-            self.callback.in_progress("Ingesting lecture unit summary into vector database")
+            self.callback.in_progress(
+                "Ingesting lecture unit summary into vector database"
+            )
             lecture_unit_dto = LectureUnitDTO(
                 course_id=self.dto.transcription.course_id,
                 course_name=self.dto.transcription.course_name,
@@ -101,11 +100,14 @@ class TranscriptionIngestionPipeline(Pipeline):
                 lecture_unit_id=self.dto.lectureUnitId,
                 lecture_unit_name="",
                 lecture_unit_link="",
-                base_url="", #TODO: send missing data from Artemis
+                base_url="",  # TODO: send missing data from Artemis
             )
 
-            self.lecture_unit_service.ingest_lecture_unit(lecture_unit=lecture_unit_dto)
-            self.callback.done("Ingested lecture unit summary into vector database", tokens=self.tokens)
+            LectureUnitPipeline()(lecture_unit_dto)
+
+            self.callback.done(
+                "Ingested lecture unit summary into vector database", tokens=self.tokens
+            )
 
         except Exception as e:
             logger.error(f"Error processing transcription ingestion pipeline: {e}")
@@ -115,19 +117,25 @@ class TranscriptionIngestionPipeline(Pipeline):
                 tokens=self.tokens,
             )
 
-    def delete_existing_transcription_data(self, transcription: TranscriptionWebhookDTO):
+    def delete_existing_transcription_data(
+        self, transcription: TranscriptionWebhookDTO
+    ):
         self.collection.data.delete_many(
-            where = Filter.by_property(LectureTranscriptionSchema.COURSE_ID.value).equal(transcription.course_id)
-                  & Filter.by_property(LectureTranscriptionSchema.LECTURE_ID.value).equal(transcription.lecture_id)
-                  & Filter.by_property(LectureTranscriptionSchema.LECTURE_UNIT_ID.value).equal(transcription.lecture_unit_id)
+            where=Filter.by_property(LectureTranscriptionSchema.COURSE_ID.value).equal(
+                transcription.course_id
+            )
+            & Filter.by_property(LectureTranscriptionSchema.LECTURE_ID.value).equal(
+                transcription.lecture_id
+            )
+            & Filter.by_property(
+                LectureTranscriptionSchema.LECTURE_UNIT_ID.value
+            ).equal(transcription.lecture_unit_id)
         )
         # TODO: Add Base Url
 
-
     def batch_insert(self, chunks):
-        global batch_insert_lock
-        with batch_insert_lock:
-            with self.collection.batch.rate_limit(requests_per_minute=600) as batch:
+        with batch_update_lock:
+            with self.collection.batch.dynamic() as batch:
                 try:
                     for chunk in chunks:
                         embed_chunk = self.llm_embedding.embed(
@@ -143,7 +151,7 @@ class TranscriptionIngestionPipeline(Pipeline):
                     )
 
     def chunk_transcription(
-            self, transcription: TranscriptionWebhookDTO
+        self, transcription: TranscriptionWebhookDTO
     ) -> List[Dict[str, Any]]:
         chunks = []
 
@@ -227,14 +235,14 @@ class TranscriptionIngestionPipeline(Pipeline):
 
     @staticmethod
     def get_transcription_segment_of_char_position(
-            char_position: int, segments: List[TranscriptionSegmentDTO]
+        char_position: int, segments: List[TranscriptionSegmentDTO]
     ):
         offset_lookup_counter = 0
         segment_index = 0
         while (
-                segment_index < len(segments)
-                and offset_lookup_counter + len(segments[segment_index].text)
-                < char_position
+            segment_index < len(segments)
+            and offset_lookup_counter + len(segments[segment_index].text)
+            < char_position
         ):
             offset_lookup_counter += len(segments[segment_index].text)
             segment_index += 1

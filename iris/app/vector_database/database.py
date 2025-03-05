@@ -8,6 +8,7 @@ from app.config import settings
 import threading
 
 logger = logging.getLogger(__name__)
+batch_update_lock = threading.Lock()
 
 
 class VectorDatabase:

@@ -25,12 +25,14 @@ def init_lecture_unit_page_chunk_schema(client: WeaviateClient) -> Collection:
     Initialize the schema for the lecture unit page chunks
     """
     if client.collections.exists(LectureUnitPageChunkSchema.COLLECTION_NAME.value):
-        collection = client.collections.get(LectureUnitPageChunkSchema.COLLECTION_NAME.value)
+        collection = client.collections.get(
+            LectureUnitPageChunkSchema.COLLECTION_NAME.value
+        )
         properties = collection.config.get(simple=True).properties
 
         # Check and add 'course_language' property if missing
         if not any(
-                property.name == LectureUnitPageChunkSchema.COURSE_LANGUAGE.value
+            property.name == LectureUnitPageChunkSchema.COURSE_LANGUAGE.value
             for property in properties
         ):
             collection.config.add_property(

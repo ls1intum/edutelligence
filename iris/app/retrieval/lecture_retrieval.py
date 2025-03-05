@@ -19,7 +19,10 @@ from app.llm import (
     RequirementList,
 )
 from app.pipeline.shared.reranker_pipeline import RerankerPipeline
-from app.vector_database.lecture_unit_page_chunk_schema import init_lecture_unit_page_chunk_schema, LectureUnitPageChunkSchema
+from app.vector_database.lecture_unit_page_chunk_schema import (
+    init_lecture_unit_page_chunk_schema,
+    LectureUnitPageChunkSchema,
+)
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import (
     ChatPromptTemplate,
@@ -388,9 +391,9 @@ class LectureRetrieval(Pipeline):
         # Check if course_id is provided
         if course_id:
             # Create a filter for course_id
-            filter_weaviate = Filter.by_property(LectureUnitPageChunkSchema.COURSE_ID.value).equal(
-                course_id
-            )
+            filter_weaviate = Filter.by_property(
+                LectureUnitPageChunkSchema.COURSE_ID.value
+            ).equal(course_id)
 
             # Extend the filter based on the presence of base_url
             # if base_url:
@@ -513,9 +516,9 @@ class LectureRetrieval(Pipeline):
         if course_id:
             # Fetch the first object that matches the course ID with the language property
             result = self.collection.query.fetch_objects(
-                filters=Filter.by_property(LectureUnitPageChunkSchema.COURSE_ID.value).equal(
-                    course_id
-                ),
+                filters=Filter.by_property(
+                    LectureUnitPageChunkSchema.COURSE_ID.value
+                ).equal(course_id),
                 limit=1,  # We only need one object to check and retrieve the language
                 return_properties=[LectureUnitPageChunkSchema.COURSE_LANGUAGE.value],
             )

@@ -37,12 +37,18 @@ def get_lecture_unit_ingestion_state(
     decoded_base_url = unquote(base_url)
     result = db.lectures.query.fetch_objects(
         filters=(
-            Filter.by_property(LectureUnitPageChunkSchema.BASE_URL.value).equal(decoded_base_url)
-            & Filter.by_property(LectureUnitPageChunkSchema.COURSE_ID.value).equal(course_id)
-            & Filter.by_property(LectureUnitPageChunkSchema.LECTURE_ID.value).equal(lecture_id)
-            & Filter.by_property(LectureUnitPageChunkSchema.LECTURE_UNIT_ID.value).equal(
-                lecture_unit_id
+            Filter.by_property(LectureUnitPageChunkSchema.BASE_URL.value).equal(
+                decoded_base_url
             )
+            & Filter.by_property(LectureUnitPageChunkSchema.COURSE_ID.value).equal(
+                course_id
+            )
+            & Filter.by_property(LectureUnitPageChunkSchema.LECTURE_ID.value).equal(
+                lecture_id
+            )
+            & Filter.by_property(
+                LectureUnitPageChunkSchema.LECTURE_UNIT_ID.value
+            ).equal(lecture_unit_id)
         ),
         limit=1,
         return_properties=[LectureUnitPageChunkSchema.LECTURE_UNIT_NAME.value],

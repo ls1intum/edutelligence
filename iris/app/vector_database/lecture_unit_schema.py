@@ -5,10 +5,12 @@ from weaviate import WeaviateClient
 from weaviate.collections import Collection
 from weaviate.collections.classes.config import Configure, VectorDistances, DataType
 
+
 class LectureUnitSchema(Enum):
     """
     Schema for the lectures
     """
+
     COLLECTION_NAME = "LectureUnits"
     COURSE_ID = "course_id"
     COURSE_NAME = "course_name"
@@ -20,6 +22,7 @@ class LectureUnitSchema(Enum):
     LECTURE_UNIT_LINK = "lecture_unit_link"
     BASE_URL = "base_url"
     LECTURE_UNIT_SUMMARY = "lecture_unit_summary"
+
 
 def init_lecture_unit_schema(client: WeaviateClient) -> Collection:
     if client.collections.exists(LectureUnitSchema.COLLECTION_NAME.value):
@@ -90,7 +93,6 @@ def init_lecture_unit_schema(client: WeaviateClient) -> Collection:
                 description="The summary of the lecture unit",
                 data_type=DataType.TEXT,
                 index_searchable=True,
-            )
+            ),
         ],
     )
-

@@ -179,9 +179,7 @@ class LectureChatPipeline(Pipeline):
             "Next you will find the relevant lecture content:\n"
         )
         for i, chunk in enumerate(retrieved_lecture_chunks):
-            text_content_msg = (
-                f" \n {chunk.get(LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value)} \n"
-            )
+            text_content_msg = f" \n {chunk.get(LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value)} \n"
             text_content_msg = text_content_msg.replace("{", "{{").replace("}", "}}")
             self.prompt += SystemMessagePromptTemplate.from_template(text_content_msg)
         self.prompt += SystemMessagePromptTemplate.from_template(
