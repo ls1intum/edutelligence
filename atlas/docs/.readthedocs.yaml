@@ -6,8 +6,8 @@ build:
   tools:
     python: "3.12"
 sphinx:
-  configuration: docs/conf.py
+  configuration: atlas/docs/conf.py
   fail_on_warning: true
 python:
   install:
-    - requirements: docs/requirements.txt
+    - requirements: atlas/docs/requirements.txt
