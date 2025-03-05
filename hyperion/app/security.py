@@ -59,17 +59,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
 
-def get_openapi_schema_with_security_schema(app: FastAPI):
-    if app.openapi_schema:
-        return app.openapi_schema
-
-    openapi_schema = get_openapi(
-        title=app.title,
-        version=app.version,
-        description=app.description,
-        routes=app.routes,
-    )
-
+def transform_openapi_schema(openapi_schema: dict) -> dict:
     # Add API key security scheme
     openapi_schema["components"] = openapi_schema.get("components", {})
     openapi_schema["components"]["securitySchemes"] = {
@@ -90,4 +80,16 @@ def get_openapi_schema_with_security_schema(app: FastAPI):
             for method in methods.values():
                 method["security"] = []
 
-    app.openapi_schema = openapi_schema
+    return openapi_schema
+
+
+def get_openapi_schema_with_security_schema(app: FastAPI):
+    if app.openapi_schema:
+        return app.openapi_schema
+    openapi_schema = get_openapi(
+        title=app.title,
+        version=app.version,
+        description=app.description,
+        routes=app.routes,
+    )
+    return transform_openapi_schema(openapi_schema)

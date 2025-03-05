@@ -24,6 +24,9 @@ class ComponentHealth(BaseModel):
         None, description="Additional details about component health"
     )
 
+    class Config:
+        json_schema_extra = {"properties": {"details": {"nullable": True}}}
+
 
 class HealthCheck(BaseModel):
     """Response model for system health information."""

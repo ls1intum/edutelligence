@@ -4,15 +4,7 @@ components:
       description: Health status of an individual system component.
       properties:
         details:
-          anyOf:
-          - type: object
-          - type: 'null'
-          description: Additional details about component health
-          title: Details
-        status:
-          description: Status of the component (OK, WARNING, ERROR)
-          title: Status
-          type: string
+          nullable: true
       required:
       - status
       title: ComponentHealth
@@ -95,6 +87,12 @@ components:
       - type
       title: ValidationError
       type: object
+  securitySchemes:
+    ApiKeyAuth:
+      description: API key authentication
+      in: header
+      name: X-API-Key
+      type: apiKey
 info:
   contact:
     email: felixtj.dietrich@tum.de
@@ -124,6 +122,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/HealthCheck'
           description: Return HTTP Status Code 200 (OK) with system health information
+      security: []
       summary: Perform a Health Check
       tags:
       - healthcheck
@@ -169,3 +168,5 @@ paths:
                 $ref: '#/components/schemas/HTTPValidationError'
           description: Validation Error
       summary: Run
+security:
+- ApiKeyAuth: []
