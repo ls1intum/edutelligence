@@ -1,8 +1,8 @@
 import gradio as gr
 from fastapi import FastAPI, status
-from fastapi.openapi.utils import get_openapi
 
-from app.security import AuthMiddleware, add_security_schema_to_openapi
+from shared.security import AuthMiddleware, add_security_schema_to_app
+
 from app.models import get_model
 from app.settings import settings
 from app.project_meta import project_meta
@@ -14,25 +14,17 @@ app = FastAPI(
     version=project_meta.version,
     contact=project_meta.contact,
 )
-app.add_middleware(AuthMiddleware)
 
-
-# Custom OpenAPI schema
-def custom_openapi():
-    if app.openapi_schema:
-        return app.openapi_schema
-    openapi_schema = get_openapi(
-        title=app.title,
-        version=app.version,
-        description=app.description,
-        routes=app.routes,
-    )
-    openapi_schema = add_security_schema_to_openapi(openapi_schema)
-    app.openapi_schema = openapi_schema
-    return app.openapi_schema
-
-
-app.openapi = custom_openapi
+exclude_paths = ["/playground"]
+app.add_middleware(
+    AuthMiddleware,
+    api_key=settings.API_KEY,
+    header_name=settings.API_KEY_HEADER,
+    exclude_paths=exclude_paths,
+)
+add_security_schema_to_app(
+    app, header_name=settings.API_KEY_HEADER, exclude_paths=exclude_paths
+)
 
 # Add routers
 app.include_router(health_router)

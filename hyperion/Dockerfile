@@ -6,9 +6,14 @@ RUN apk update && \
 RUN pip install poetry==2.1.1
 
 WORKDIR /app
-COPY pyproject.toml poetry.lock ./
+COPY hyperion/pyproject.toml hyperion/poetry.lock ./
+
+RUN echo "$(ls .. -la)"
+
+COPY ./shared/ .
+
 RUN poetry install --no-root
 
-COPY app/ ./app
+COPY hyperion/app/ .
 
 CMD ["poetry", "run",  "fastapi", "run", "app/main.py", "--port", "8000"]
