@@ -35,7 +35,7 @@ class InconsistencyCheckPipeline(Pipeline):
         self.llm = IrisLangchainChatModel(
             request_handler=CapabilityRequestHandler(
                 requirements=RequirementList(
-                    gpt_version_equivalent=5.5,
+                    gpt_version_equivalent=0.3,
                     context_length=16385,
                 )
             ),
