@@ -2,11 +2,11 @@ import gradio as gr
 from fastapi import FastAPI, status
 
 from shared.security import AuthMiddleware, add_security_schema_to_app
+from shared.health import create_health_router
 
 from app.models import get_model
 from app.settings import settings
 from app.project_meta import project_meta
-from app.health import router as health_router
 
 app = FastAPI(
     title=project_meta.title,
@@ -27,7 +27,8 @@ add_security_schema_to_app(
 )
 
 # Add routers
-app.include_router(health_router)
+app.include_router(create_health_router(app.version))
+
 
 ChatModel = get_model(settings.MODEL_NAME)
 model = ChatModel()
