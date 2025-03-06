@@ -30,12 +30,12 @@ class InconsistencyCheckPipeline(Pipeline):
 
     def __init__(self, callback: Optional[InconsistencyCheckCallback] = None):
         super().__init__(implementation_id="inconsistency_check_pipeline")
-        completion_args = CompletionArguments(temperature=0, max_tokens=2000)
+        completion_args = CompletionArguments()
 
         self.llm = IrisLangchainChatModel(
             request_handler=CapabilityRequestHandler(
                 requirements=RequirementList(
-                    gpt_version_equivalent=4.5,
+                    gpt_version_equivalent=5.5,
                     context_length=16385,
                 )
             ),
