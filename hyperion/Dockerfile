@@ -7,6 +7,9 @@ RUN pip install poetry==2.1.1
 
 WORKDIR /app
 COPY pyproject.toml poetry.lock ./
+
+COPY shared/ /shared/
+
 RUN poetry install --no-root
 
 COPY app/ ./app
