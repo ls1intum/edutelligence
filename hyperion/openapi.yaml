@@ -1,4 +1,14 @@
 components:
+  responses:
+    UnauthorizedError:
+      content:
+        application/json:
+          schema:
+            properties:
+              detail:
+                type: string
+            type: object
+      description: Authentication failed - API key is missing or invalid
   schemas:
     ComponentHealth:
       description: Health status of an individual system component.
@@ -162,6 +172,8 @@ paths:
                 title: Response Run Run Get
                 type: string
           description: Successful Response
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
         '422':
           content:
             application/json:
