@@ -1,7 +1,5 @@
 from typing import Callable, List
-from fastapi import FastAPI
 from fastapi import Request, HTTPException, status
-from fastapi.openapi.utils import get_openapi
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.settings import settings
@@ -59,7 +57,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
 
-def transform_openapi_schema(openapi_schema: dict) -> dict:
+def add_security_schema_to_openapi(openapi_schema: dict) -> dict:
     # Add API key security scheme
     openapi_schema["components"] = openapi_schema.get("components", {})
     openapi_schema["components"]["securitySchemes"] = {
@@ -76,20 +74,8 @@ def transform_openapi_schema(openapi_schema: dict) -> dict:
 
     # Remove security from health endpoint
     for path, methods in openapi_schema.get("paths", {}).items():
-        if path == "/health":
+        if path == "/health" or path == "/health/live":
             for method in methods.values():
                 method["security"] = []
 
     return openapi_schema
-
-
-def get_openapi_schema_with_security_schema(app: FastAPI):
-    if app.openapi_schema:
-        return app.openapi_schema
-    openapi_schema = get_openapi(
-        title=app.title,
-        version=app.version,
-        description=app.description,
-        routes=app.routes,
-    )
-    return transform_openapi_schema(openapi_schema)
