@@ -4,6 +4,8 @@ from requests.auth import _basic_auth_str as basic_auth_str
 from ollama import Client
 from langchain_ollama.chat_models import ChatOllama
 
+from shared.health import register_component
+
 from app.logger import logger
 from app.settings import settings
 from app.models.model_provider import ModelProvider
@@ -17,6 +19,31 @@ client = Client(
         )
     },
 )
+
+
+if (
+    settings.OLLAMA_BASIC_AUTH_USERNAME
+    and settings.OLLAMA_BASIC_AUTH_PASSWORD
+    and settings.OLLAMA_HOST
+):
+
+    @register_component("ollama")
+    def ollama_health_check():
+        ollama_version = client._request(
+            dict,
+            "GET",
+            "/api/version",
+        ).get("version")
+        return {
+            "status": "OK" if ollama_version else "ERROR",
+            "details": (
+                {
+                    "version": ollama_version,
+                }
+                if ollama_version
+                else None
+            ),
+        }
 
 
 class OllamaProvider(ModelProvider):

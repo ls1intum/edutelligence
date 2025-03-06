@@ -2110,6 +2110,23 @@ dev = ["Django (>=1.11)", "check-manifest", "colorama (<=0.4.1) ; python_version
 doc = ["Sphinx", "sphinx-rtd-theme"]
 
 [[package]]
+name = "shared"
+version = "0.1.0"
+description = "Shared python library for EduTelligence"
+optional = false
+python-versions = ">=3.9,<4.0.0"
+groups = ["main"]
+files = []
+develop = true
+
+[package.dependencies]
+fastapi = {version = ">=0.115.9", extras = ["standard"]}
+
+[package.source]
+type = "directory"
+url = "../shared"
+
+[[package]]
 name = "shellingham"
 version = "1.5.4"
 description = "Tool to Detect Surrounding Shell"
@@ -2679,4 +2696,4 @@ cffi = ["cffi (>=1.11)"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.13,<4.0.0"
-content-hash = "73e9440fbab5fd03fcf35acb941e5001679f5142930710617fb5cacb7845b3b1"
+content-hash = "2b5f76a4a3f667059c85afc874c9b0219fe8563f02667ce34e96b70096348f3b"

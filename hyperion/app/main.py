@@ -1,27 +1,37 @@
-import tomllib
-from pydantic import BaseModel
-from fastapi import FastAPI, status
 import gradio as gr
+from fastapi import FastAPI, status
 
-from app.settings import settings
+from shared.security import AuthMiddleware, add_security_schema_to_app
+from shared.health import create_health_router
+
 from app.models import get_model
-
-
-# Read project metadata from pyproject.toml
-with open("pyproject.toml", "rb") as f:
-    META = tomllib.load(f)
-
-name = META["project"]["name"]
-description = META["project"]["description"]
-version = META["project"]["version"]
-contact = META["project"]["authors"][0]
+from app.settings import settings
+from app.project_meta import project_meta
 
 app = FastAPI(
-    title=name[0].upper() + name[1:],
-    description=description,
-    version=version,
-    contact=contact,
+    title=project_meta.title,
+    description=project_meta.description,
+    version=project_meta.version,
+    contact=project_meta.contact,
 )
+
+exclude_paths = ["/playground"]
+app.add_middleware(
+    AuthMiddleware,
+    api_key=settings.API_KEY,
+    header_name=settings.API_KEY_HEADER,
+    exclude_paths=exclude_paths,
+)
+add_security_schema_to_app(
+    app, header_name=settings.API_KEY_HEADER, exclude_paths=exclude_paths
+)
+
+# Add routers
+app.include_router(create_health_router(app.version))
+
+
+ChatModel = get_model(settings.MODEL_NAME)
+model = ChatModel()
 
 
 @app.get(
@@ -30,38 +40,15 @@ app = FastAPI(
     response_model=str,
 )
 def run(query: str):
-    ChatModel = get_model(settings.MODEL_NAME)
-    model = ChatModel()
     return model.invoke(query).content
 
 
-class HealthCheck(BaseModel):
-    """Response model to validate and return when performing a health check."""
-
-    status: str
-    version: str
-
-
-@app.get(
-    "/health",
-    tags=["healthcheck"],
-    summary="Perform a Health Check",
-    response_description="Return HTTP Status Code 200 (OK)",
-    status_code=status.HTTP_200_OK,
-    response_model=HealthCheck,
-)
-def get_health() -> HealthCheck:
-    """
-    ## Perform a Health Check
-    Endpoint to perform a healthcheck on. This endpoint can primarily be used Docker
-    to ensure a robust container orchestration and management is in place. Other
-    services which rely on proper functioning of the API service will not deploy if this
-    endpoint returns any other HTTP status code except 200 (OK).
-    Returns:
-        HealthCheck: Returns a JSON response with the health status
-    """
-    return HealthCheck(status="OK", version=version)
-
-
 io = gr.Interface(fn=run, inputs="textbox", outputs="textbox")
-app = gr.mount_gradio_app(app, io, path="/playground", root_path="/playground")
+playground_auth = (
+    (settings.PLAYGROUND_USERNAME, settings.PLAYGROUND_PASSWORD)
+    if settings.PLAYGROUND_PASSWORD
+    else None
+)
+app = gr.mount_gradio_app(
+    app, io, path="/playground", root_path="/playground", auth=playground_auth
+)

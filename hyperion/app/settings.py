@@ -1,13 +1,24 @@
 import os
+import secrets
 from dotenv import load_dotenv
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from app.logger import logger
 
 load_dotenv(override=True)
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="allow")
+
+    # API Security
+    API_KEY: str = ""
+    API_KEY_HEADER: str = "X-API-Key"
+    DISABLE_AUTH: bool = False
+
+    # Playground Security
+    PLAYGROUND_USERNAME: str = "playground"
+    PLAYGROUND_PASSWORD: str = ""
 
     # Model to use prefixed by provider, i.e. "openai:gpt-4o"
     MODEL_NAME: str = ""
@@ -32,5 +43,19 @@ class Settings(BaseSettings):
             return "fake:model"
         return value
 
+    @field_validator("API_KEY", mode="before")
+    @classmethod
+    def generate_api_key_if_empty(cls, value):
+        if not value:
+            token = secrets.token_hex(32)
+            logger.warning(f"API key not set, generating a random one: {token}")
+            return token
+        return value
+
 
 settings = Settings()
+
+if settings.DISABLE_AUTH:
+    logger.warning(
+        "API authentication is disabled. This is not recommended for production."
+    )
