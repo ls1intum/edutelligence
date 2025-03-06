@@ -40,6 +40,32 @@ app.include_router(health_router)
 ChatModel = get_model(settings.MODEL_NAME)
 model = ChatModel()
 
+app.add_middleware(AuthMiddleware)
+
+
+# Custom OpenAPI schema
+def custom_openapi():
+    if app.openapi_schema:
+        return app.openapi_schema
+    openapi_schema = get_openapi(
+        title=app.title,
+        version=app.version,
+        description=app.description,
+        routes=app.routes,
+    )
+    openapi_schema = add_security_schema_to_openapi(openapi_schema)
+    app.openapi_schema = openapi_schema
+    return app.openapi_schema
+
+
+app.openapi = custom_openapi
+
+# Include Routers
+app.include_router(health_router)
+
+ChatModel = get_model(settings.MODEL_NAME)
+model = ChatModel()
+
 
 @app.get(
     "/run",
@@ -47,7 +73,6 @@ model = ChatModel()
     response_model=str,
 )
 def run(query: str):
-
     return model.invoke(query).content
 
 
