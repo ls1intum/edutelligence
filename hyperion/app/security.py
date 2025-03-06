@@ -1,5 +1,6 @@
 from typing import Callable, List
-from fastapi import Request, HTTPException, status
+from fastapi import Request, status
+from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.settings import settings
@@ -39,18 +40,20 @@ class AuthMiddleware(BaseHTTPMiddleware):
         api_key = request.headers.get(self.header_name)
         if not api_key:
             logger.warning(f"API key missing for {request.url.path}")
-            raise HTTPException(
+            return JSONResponse(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="API key is missing",
+                content={
+                    "detail": f"API key is missing, expected in header: '{settings.API_KEY_HEADER}'"
+                },
                 headers={"WWW-Authenticate": "ApiKey"},
             )
 
         # Validate API key
         if api_key != settings.API_KEY:
             logger.warning(f"Invalid API key for {request.url.path}: {api_key[:5]}...")
-            raise HTTPException(
+            return JSONResponse(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid API key",
+                content={"detail": "Invalid API key"},
                 headers={"WWW-Authenticate": "ApiKey"},
             )
 
