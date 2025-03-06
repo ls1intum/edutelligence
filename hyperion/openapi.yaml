@@ -1,4 +1,14 @@
 components:
+  responses:
+    UnauthorizedError:
+      content:
+        application/json:
+          schema:
+            properties:
+              detail:
+                type: string
+            type: object
+      description: Authentication failed - API key is missing or invalid
   schemas:
     ComponentHealth:
       description: Health status of an individual system component.
@@ -24,13 +34,12 @@ components:
         components:
           system:
             details:
-              platform: Linux-5.15.0-x86_64
+              platform: macOS-14.3.1-arm64
             status: OK
-        environment: production
         status: OK
         timestamp: '2025-03-06T12:00:00'
         uptime_seconds: 3600
-        version: 0.1.0
+        version: 1.0.0
       properties:
         components:
           additionalProperties:
@@ -38,10 +47,6 @@ components:
           description: Status of individual components
           title: Components
           type: object
-        environment:
-          description: Execution environment
-          title: Environment
-          type: string
         status:
           description: Overall system status
           title: Status
@@ -63,7 +68,6 @@ components:
       - status
       - version
       - uptime_seconds
-      - environment
       title: HealthCheck
       type: object
     ValidationError:
@@ -140,6 +144,7 @@ paths:
               schema: {}
           description: Simple liveness check that always returns OK if service is
             running
+      security: []
       summary: Liveness Check
       tags:
       - healthcheck
@@ -161,6 +166,8 @@ paths:
                 title: Response Run Run Get
                 type: string
           description: Successful Response
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
         '422':
           content:
             application/json:

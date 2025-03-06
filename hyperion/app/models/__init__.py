@@ -38,8 +38,9 @@ def get_model(model_name: str):
         if provider.get_name() == provider_name:
             break
     else:
+        model_provider_names = [provider.get_name() for provider in model_providers]
         raise EnvironmentError(
-            f"Model provider '{provider_name}' not found in {model_providers}"
+            f"Model provider '{provider_name}' not found in {model_provider_names}"
         )
 
     provider.validate_provider()

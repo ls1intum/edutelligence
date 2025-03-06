@@ -1,11 +1,12 @@
 import gradio as gr
 from fastapi import FastAPI, status
 
-from app.security import AuthMiddleware, get_openapi_schema_with_security_schema
+from shared.security import AuthMiddleware, add_security_schema_to_app
+from shared.health import create_health_router
+
 from app.models import get_model
 from app.settings import settings
 from app.project_meta import project_meta
-from app.health import router as health_router
 
 app = FastAPI(
     title=project_meta.title,
@@ -13,10 +14,21 @@ app = FastAPI(
     version=project_meta.version,
     contact=project_meta.contact,
 )
-app.add_middleware(AuthMiddleware)
-app.openapi_schema = get_openapi_schema_with_security_schema(app)
 
-app.include_router(health_router)
+exclude_paths = ["/playground"]
+app.add_middleware(
+    AuthMiddleware,
+    api_key=settings.API_KEY,
+    header_name=settings.API_KEY_HEADER,
+    exclude_paths=exclude_paths,
+)
+add_security_schema_to_app(
+    app, header_name=settings.API_KEY_HEADER, exclude_paths=exclude_paths
+)
+
+# Add routers
+app.include_router(create_health_router(app.version))
+
 
 ChatModel = get_model(settings.MODEL_NAME)
 model = ChatModel()
@@ -28,7 +40,6 @@ model = ChatModel()
     response_model=str,
 )
 def run(query: str):
-
     return model.invoke(query).content
 
 

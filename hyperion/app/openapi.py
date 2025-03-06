@@ -1,18 +1,21 @@
 import yaml
 from fastapi.openapi.utils import get_openapi
-from app import main
-from app.security import transform_openapi_schema
+from shared.security import add_security_schema_to_openapi
+from app.main import app
+from app.settings import settings
 
 
 def get_openapi_specs():
     openapi_json = get_openapi(
-        title=main.app.title,
-        version=main.app.version,
-        description=main.app.description,
-        contact=main.app.contact,
-        routes=main.app.routes,
+        title=app.title,
+        version=app.version,
+        description=app.description,
+        contact=app.contact,
+        routes=app.routes,
     )
-    openapi_json = transform_openapi_schema(openapi_json)
+    openapi_json = add_security_schema_to_openapi(
+        openapi_json, header_name=settings.API_KEY_HEADER, exclude_paths=["/playground"]
+    )
     openapi_yaml = yaml.dump(openapi_json, allow_unicode=True)
     return openapi_yaml
 
