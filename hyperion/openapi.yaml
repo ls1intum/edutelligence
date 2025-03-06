@@ -140,6 +140,7 @@ paths:
               schema: {}
           description: Simple liveness check that always returns OK if service is
             running
+      security: []
       summary: Liveness Check
       tags:
       - healthcheck
