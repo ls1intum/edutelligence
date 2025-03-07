@@ -13,10 +13,12 @@ requires-python = ">=3.13,<4.0.0"
 python = ">=3.13,<4.0.0"
 fastapi = {extras = ["standard"], version = "0.115.9"}
 pydantic-settings = "2.8.1"
+langchain = "0.3.19"
 langchain-core = "0.3.40"
 langchain-openai = "0.3.7"
 langchain-ollama = "0.2.3"
 langsmith = "0.3.11"
+langfuse = "2.59.6"
 gradio = "5.20.0"
 shared = { path = "../shared", develop = true }
 
