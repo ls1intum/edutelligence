@@ -2,7 +2,6 @@ import yaml
 from fastapi.openapi.utils import get_openapi
 from shared.security import add_security_schema_to_openapi
 from app.main import app
-from app.settings import settings
 
 
 def get_openapi_specs():
@@ -14,7 +13,7 @@ def get_openapi_specs():
         routes=app.routes,
     )
     openapi_json = add_security_schema_to_openapi(
-        openapi_json, header_name=settings.API_KEY_HEADER, exclude_paths=["/playground"]
+        openapi_json, header_name="X-API-Key", exclude_paths=["/playground"]
     )
     openapi_yaml = yaml.dump(openapi_json, allow_unicode=True)
     return openapi_yaml
