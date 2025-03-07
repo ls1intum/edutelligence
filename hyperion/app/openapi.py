@@ -14,7 +14,7 @@ def get_openapi_specs():
         routes=app.routes,
     )
     openapi_json = add_security_schema_to_openapi(
-        openapi_json, header_name=settings.API_KEY_HEADER, exclude_paths=["/playground"]
+        openapi_json, header_name="X-API-Key", exclude_paths=["/playground"]
     )
     openapi_yaml = yaml.dump(openapi_json, allow_unicode=True)
     return openapi_yaml
