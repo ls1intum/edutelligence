@@ -2,7 +2,6 @@ import yaml
 from fastapi.openapi.utils import get_openapi
 from shared.security import add_security_schema_to_openapi
 from app.main import app
-from app.settings import settings
 
 
 def get_openapi_specs():
