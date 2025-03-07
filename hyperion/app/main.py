@@ -5,6 +5,7 @@ from shared.security import AuthMiddleware, add_security_schema_to_app
 from shared.health import create_health_router
 
 from app.models import get_model
+from app.logger import logger
 from app.settings import settings
 from app.project_meta import project_meta
 
@@ -15,16 +16,22 @@ app = FastAPI(
     contact=project_meta.contact,
 )
 
-exclude_paths = ["/playground"]
-app.add_middleware(
-    AuthMiddleware,
-    api_key=settings.API_KEY,
-    header_name=settings.API_KEY_HEADER,
-    exclude_paths=exclude_paths,
-)
-add_security_schema_to_app(
-    app, header_name=settings.API_KEY_HEADER, exclude_paths=exclude_paths
-)
+# Add security schema to the app, can be disabled for development
+if not settings.DISABLE_AUTH:
+    logger.warning(
+        "API authentication is disabled. This is not recommended for production."
+    )
+
+    exclude_paths = ["/playground"]
+    app.add_middleware(
+        AuthMiddleware,
+        api_key=settings.API_KEY,
+        header_name="X-API-Key",
+        exclude_paths=exclude_paths,
+    )
+    add_security_schema_to_app(
+        app, header_name="X-API-Key", exclude_paths=exclude_paths
+    )
 
 # Add routers
 app.include_router(create_health_router(app.version))

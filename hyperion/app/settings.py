@@ -13,7 +13,6 @@ class Settings(BaseSettings):
 
     # API Security
     API_KEY: str = ""
-    API_KEY_HEADER: str = "X-API-Key"
     DISABLE_AUTH: bool = False
 
     # Playground Security
