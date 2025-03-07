@@ -1,6 +1,11 @@
 import yaml
 from fastapi.openapi.utils import get_openapi
 from shared.security import add_security_schema_to_openapi
+from app.settings import settings
+
+# Needs to be set to True before importing app.main
+settings.IS_GENERATING_OPENAPI = True
+
 from app.main import app
 
 

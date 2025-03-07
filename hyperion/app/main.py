@@ -1,5 +1,6 @@
 import gradio as gr
 from fastapi import FastAPI, status
+from langfuse.callback import CallbackHandler
 
 from shared.security import AuthMiddleware, add_security_schema_to_app
 from shared.health import create_health_router
@@ -36,9 +37,14 @@ if not settings.DISABLE_AUTH:
 # Add routers
 app.include_router(create_health_router(app.version))
 
+callbacks = []
+if settings.langfuse_enabled:
+    langfuse_handler = CallbackHandler()
+    langfuse_handler.auth_check()
+    callbacks.append(langfuse_handler)
 
 ChatModel = get_model(settings.MODEL_NAME)
-model = ChatModel()
+model = ChatModel().with_config(callbacks=callbacks)
 
 
 @app.get(
