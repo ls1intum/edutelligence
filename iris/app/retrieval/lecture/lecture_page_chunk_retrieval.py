@@ -7,10 +7,10 @@ from weaviate.classes.query import Filter
 
 from app.common.token_usage_dto import TokenUsageDTO
 from app.common.PipelineEnum import PipelineEnum
-from ..common.message_converters import convert_iris_message_to_langchain_message
-from ..common.pyris_message import PyrisMessage
-from ..llm.langchain import IrisLangchainChatModel
-from ..pipeline import Pipeline
+from app.common.message_converters import convert_iris_message_to_langchain_message
+from app.common.pyris_message import PyrisMessage
+from app.llm.langchain import IrisLangchainChatModel
+from app.pipeline import Pipeline
 
 from app.llm import (
     BasicRequestHandler,
@@ -29,7 +29,7 @@ from langchain_core.prompts import (
     SystemMessagePromptTemplate,
 )
 
-from ..pipeline.prompts.lecture_retrieval_prompts import (
+from app.pipeline.prompts.lecture_retrieval_prompts import (
     assessment_prompt,
     assessment_prompt_final,
     rewrite_student_query_prompt,
@@ -81,7 +81,7 @@ def _add_last_four_messages_to_prompt(
     return prompt
 
 
-class LectureRetrieval(Pipeline):
+class LecturePageChunkRetrieval(Pipeline):
     """
     Class for retrieving lecture data from the database.
     """

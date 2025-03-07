@@ -117,6 +117,7 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         )
         self.pipeline = self.llm | StrOutputParser()
         self.tokens = []
+        self.course_language = None
 
     def __call__(self) -> bool:
         try:
@@ -148,6 +149,7 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
                 course_id=self.dto.lecture_unit.course_id,
                 course_name=self.dto.lecture_unit.course_name,
                 course_description=self.dto.lecture_unit.course_description,
+                course_language=self.course_language,
                 lecture_id=self.dto.lecture_unit.lecture_id,
                 lecture_name=self.dto.lecture_unit.lecture_name,
                 lecture_unit_id=self.dto.lecture_unit.lecture_unit_id,
@@ -209,7 +211,7 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         Chunk the data from the lecture into smaller pieces
         """
         doc = fitz.open(lecture_pdf)
-        course_language = self.get_course_language(
+        self.course_language = self.get_course_language(
             doc.load_page(min(5, doc.page_count - 1)).get_text()
         )
         data = []
@@ -230,7 +232,7 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
                     img_base64,
                     old_page_text,
                     lecture_unit_slide_dto.lecture_name,
-                    course_language,
+                    self.course_language,
                 )
                 page_text = self.merge_page_content_and_image_interpretation(
                     page_text, image_interpretation
@@ -241,7 +243,7 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
                     page_num,
                     page_splits,
                     lecture_unit_slide_dto,
-                    course_language,
+                    self.course_language,
                     base_url,
                 )
             )

@@ -24,6 +24,7 @@ from ...domain.ingestion.transcription_ingestion.transcription_ingestion_pipelin
 from ...pipeline.faq_ingestion_pipeline import FaqIngestionPipeline
 from ...pipeline.lecture_ingestion_pipeline import LectureUnitPageIngestionPipeline
 from ...pipeline.transcription_ingestion_pipeline import TranscriptionIngestionPipeline
+from ...retrieval.lecture.lecture_retrieval import LectureRetrieval
 from ...vector_database.database import VectorDatabase
 
 router = APIRouter(prefix="/api/v1/webhooks", tags=["webhooks"])
@@ -224,3 +225,19 @@ def faq_deletion_webhook(dto: FaqDeletionExecutionDto):
     thread = Thread(target=run_faq_delete_pipeline_worker, args=(dto,))
     thread.start()
     return
+
+
+@router.get(
+    "/test",
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def test():
+    thread = Thread(
+        target=LectureRetrieval(VectorDatabase().get_client()), args=("Query", 1, [])
+    )
+    thread.start()
+    # LectureRetrieval(VectorDatabase().get_client())(
+    #     query="Query",
+    #     course_id = 1,
+    #     chat_history = [],
+    # )

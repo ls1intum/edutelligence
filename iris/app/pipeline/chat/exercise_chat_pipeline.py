@@ -39,7 +39,7 @@ from ...llm import CapabilityRequestHandler, RequirementList
 from ...llm import CompletionArguments
 from app.common.PipelineEnum import PipelineEnum
 from ...llm.langchain import IrisLangchainChatModel
-from ...retrieval.lecture_retrieval import LectureRetrieval
+from app.retrieval.lecture.lecture_page_chunk_retrieval import LecturePageChunkRetrieval
 from ...vector_database.database import VectorDatabase
 from ...vector_database.lecture_unit_page_chunk_schema import LectureUnitPageChunkSchema
 from ...web.status.status_update import ExerciseChatStatusCallback
@@ -85,7 +85,7 @@ class ExerciseChatPipeline(Pipeline):
         # Create the pipelines
         self.db = VectorDatabase()
         self.suggestion_pipeline = InteractionSuggestionPipeline(variant="exercise")
-        self.retriever = LectureRetrieval(self.db.client)
+        self.retriever = LecturePageChunkRetrieval(self.db.client)
         self.reranker_pipeline = RerankerPipeline()
         self.code_feedback_pipeline = CodeFeedbackPipeline()
         self.pipeline = self.llm | StrOutputParser()

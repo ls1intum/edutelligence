@@ -98,8 +98,9 @@ class TranscriptionIngestionPipeline(Pipeline):
                 lecture_id=self.dto.transcription.lecture_id,
                 lecture_name=self.dto.transcription.lecture_name,
                 lecture_unit_id=self.dto.lectureUnitId,
-                lecture_unit_name="",
-                lecture_unit_link="",
+                lecture_unit_name=self.dto.transcription.lecture_unit_name,
+                lecture_unit_link=self.dto.transcription.lecture_unit_link,
+                course_language=self.dto.transcription.transcription.language,
                 base_url="",  # TODO: send missing data from Artemis
             )
 

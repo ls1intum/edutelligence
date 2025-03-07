@@ -41,7 +41,7 @@ from ...llm import CompletionArguments
 from ...llm.langchain import IrisLangchainChatModel
 from ...retrieval.faq_retrieval import FaqRetrieval
 from ...retrieval.faq_retrieval_utils import should_allow_faq_tool, format_faqs
-from ...retrieval.lecture_retrieval import LectureRetrieval
+from app.retrieval.lecture.lecture_page_chunk_retrieval import LecturePageChunkRetrieval
 from ...vector_database.database import VectorDatabase
 from ...vector_database.lecture_unit_page_chunk_schema import LectureUnitPageChunkSchema
 from weaviate.collections.classes.filters import Filter
@@ -139,7 +139,7 @@ class ExerciseChatAgentPipeline(Pipeline):
         # Create the pipelines
         self.db = VectorDatabase()
         self.suggestion_pipeline = InteractionSuggestionPipeline(variant="exercise")
-        self.lecture_retriever = LectureRetrieval(self.db.client)
+        self.lecture_retriever = LecturePageChunkRetrieval(self.db.client)
         self.faq_retriever = FaqRetrieval(self.db.client)
         self.reranker_pipeline = RerankerPipeline()
         self.code_feedback_pipeline = CodeFeedbackPipeline()

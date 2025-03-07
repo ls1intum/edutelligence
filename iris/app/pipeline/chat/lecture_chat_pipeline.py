@@ -17,7 +17,7 @@ from ...domain.chat.lecture_chat.lecture_chat_pipeline_execution_dto import (
 )
 from ...llm import CapabilityRequestHandler, RequirementList
 from app.common.PipelineEnum import PipelineEnum
-from ...retrieval.lecture_retrieval import LectureRetrieval
+from app.retrieval.lecture.lecture_page_chunk_retrieval import LecturePageChunkRetrieval
 from ...vector_database.database import VectorDatabase
 from ...vector_database.lecture_unit_page_chunk_schema import LectureUnitPageChunkSchema
 
@@ -86,7 +86,7 @@ class LectureChatPipeline(Pipeline):
         )
         # Create the pipelines
         self.db = VectorDatabase()
-        self.retriever = LectureRetrieval(self.db.client)
+        self.retriever = LecturePageChunkRetrieval(self.db.client)
         self.pipeline = self.llm | StrOutputParser()
         self.citation_pipeline = CitationPipeline()
         self.tokens = []
