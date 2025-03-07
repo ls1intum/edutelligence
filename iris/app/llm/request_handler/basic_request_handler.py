@@ -1,4 +1,4 @@
-from typing import Optional, Sequence, Union, Dict, Any, Type, Callable
+from typing import Optional, Sequence, Union, Dict, Any, Type, Callable, Literal
 
 from langchain_core.tools import BaseTool
 from pydantic import ConfigDict
@@ -45,6 +45,21 @@ class BasicRequestHandler(RequestHandler):
     def embed(self, text: str) -> list[float]:
         llm = self.llm_manager.get_llm_by_id(self.model_id)
         return llm.embed(text)
+
+    def split_text_semantically(
+        self,
+        text: str,
+        breakpoint_threshold_type: Literal[
+            "percentile", "standard_deviation", "interquartile", "gradient"
+        ] = "gradient",
+        breakpoint_threshold_amount: float = 95.0,
+        min_chunk_size: int = 512,
+    ):
+        llm = self.llm_manager.get_llm_by_id(self.model_id)
+
+        return llm.split_text_semantically(
+            text, breakpoint_threshold_type, breakpoint_threshold_amount, min_chunk_size
+        )
 
     def bind_tools(
         self,
