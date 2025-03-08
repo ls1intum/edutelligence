@@ -18,6 +18,7 @@ class LectureUnitPageChunkSchema(Enum):
     LECTURE_UNIT_ID = "lecture_unit_id"
     PAGE_TEXT_CONTENT = "page_text_content"
     PAGE_NUMBER = "page_number"
+    BASE_URL = "base_url"
 
 
 def init_lecture_unit_page_chunk_schema(client: WeaviateClient) -> Collection:
@@ -84,6 +85,12 @@ def init_lecture_unit_page_chunk_schema(client: WeaviateClient) -> Collection:
             Property(
                 name=LectureUnitPageChunkSchema.PAGE_NUMBER.value,
                 description="The page number of the slide",
+                data_type=DataType.INT,
+                index_searchable=False,
+            ),
+            Property(
+                name=LectureUnitPageChunkSchema.BASE_URL.value,
+                description="The base url of the website where the lecture unit is hosted",
                 data_type=DataType.INT,
                 index_searchable=False,
             ),

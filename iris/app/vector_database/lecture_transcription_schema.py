@@ -21,6 +21,7 @@ class LectureTranscriptionSchema(Enum):
     PAGE_NUMBER = "page_number"
     SEGMENT_TEXT = "segment_text"
     SEGMENT_SUMMARY = "segment_summary"
+    BASE_URL = "base_url"
 
 
 def init_lecture_transcription_schema(client: WeaviateClient) -> Collection:
@@ -87,6 +88,12 @@ def init_lecture_transcription_schema(client: WeaviateClient) -> Collection:
                 description="The summary of the text of the segment",
                 data_type=DataType.TEXT,
                 index_searchable=True,
+            ),
+            Property(
+                name=LectureTranscriptionSchema.BASE_URL.value,
+                description="The base url of the website where the lecture unit is hosted",
+                data_type=DataType.TEXT,
+                index_searchable=False,
             ),
         ],
     )
