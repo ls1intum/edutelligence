@@ -22,7 +22,7 @@ from app.domain.ingestion.ingestion_pipeline_execution_dto import (
 from ..domain.data.text_message_content_dto import TextMessageContentDTO
 from app.common.PipelineEnum import PipelineEnum
 from ..llm.langchain import IrisLangchainChatModel
-from ..vector_database.lecture_slide_schema import init_lecture_slide_schema, LectureSlideSchema
+from ..vector_database.lecture_unit_page_chunk_schema import init_lecture_unit_page_chunk_schema, LectureUnitPageChunkSchema
 from ..ingestion.abstract_ingestion import AbstractIngestion
 from ..llm import (
     BasicRequestHandler,
@@ -73,18 +73,18 @@ def create_page_data(
     """
     return [
         {
-            LectureSlideSchema.LECTURE_ID.value: lecture_unit_dto.lecture_id,
-            LectureSlideSchema.LECTURE_NAME.value: lecture_unit_dto.lecture_name,
-            LectureSlideSchema.LECTURE_UNIT_ID.value: lecture_unit_dto.lecture_unit_id,
-            LectureSlideSchema.LECTURE_UNIT_NAME.value: lecture_unit_dto.lecture_unit_name,
-            LectureSlideSchema.LECTURE_UNIT_LINK.value: lecture_unit_dto.lecture_unit_link,
-            LectureSlideSchema.COURSE_ID.value: lecture_unit_dto.course_id,
-            LectureSlideSchema.COURSE_NAME.value: lecture_unit_dto.course_name,
-            LectureSlideSchema.COURSE_DESCRIPTION.value: lecture_unit_dto.course_description,
-            LectureSlideSchema.BASE_URL.value: base_url,
-            LectureSlideSchema.COURSE_LANGUAGE.value: course_language,
-            LectureSlideSchema.PAGE_NUMBER.value: page_num + 1,
-            LectureSlideSchema.PAGE_TEXT_CONTENT.value: page_split.page_content,
+            LectureUnitPageChunkSchema.LECTURE_ID.value: lecture_unit_dto.lecture_id,
+            LectureUnitPageChunkSchema.LECTURE_NAME.value: lecture_unit_dto.lecture_name,
+            LectureUnitPageChunkSchema.LECTURE_UNIT_ID.value: lecture_unit_dto.lecture_unit_id,
+            LectureUnitPageChunkSchema.LECTURE_UNIT_NAME.value: lecture_unit_dto.lecture_unit_name,
+            LectureUnitPageChunkSchema.LECTURE_UNIT_LINK.value: lecture_unit_dto.lecture_unit_link,
+            LectureUnitPageChunkSchema.COURSE_ID.value: lecture_unit_dto.course_id,
+            LectureUnitPageChunkSchema.COURSE_NAME.value: lecture_unit_dto.course_name,
+            LectureUnitPageChunkSchema.COURSE_DESCRIPTION.value: lecture_unit_dto.course_description,
+            LectureUnitPageChunkSchema.BASE_URL.value: base_url,
+            LectureUnitPageChunkSchema.COURSE_LANGUAGE.value: course_language,
+            LectureUnitPageChunkSchema.PAGE_NUMBER.value: page_num + 1,
+            LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value: page_split.page_content,
         }
         for page_split in page_splits
     ]
@@ -170,7 +170,7 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
                 try:
                     for index, chunk in enumerate(chunks):
                         embed_chunk = self.llm_embedding.embed(
-                            chunk[LectureSlideSchema.PAGE_TEXT_CONTENT.value]
+                            chunk[LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value]
                         )
                         batch.add_object(properties=chunk, vector=embed_chunk)
                 except Exception as e:
@@ -337,10 +337,10 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
         """
         try:
             self.collection.data.delete_many(
-                where=Filter.by_property(LectureSlideSchema.BASE_URL.value).equal(base_url)
-                & Filter.by_property(LectureSlideSchema.COURSE_ID.value).equal(course_id)
-                & Filter.by_property(LectureSlideSchema.LECTURE_ID.value).equal(lecture_id)
-                & Filter.by_property(LectureSlideSchema.LECTURE_UNIT_ID.value).equal(
+                where=Filter.by_property(LectureUnitPageChunkSchema.BASE_URL.value).equal(base_url)
+                & Filter.by_property(LectureUnitPageChunkSchema.COURSE_ID.value).equal(course_id)
+                & Filter.by_property(LectureUnitPageChunkSchema.LECTURE_ID.value).equal(lecture_id)
+                & Filter.by_property(LectureUnitPageChunkSchema.LECTURE_UNIT_ID.value).equal(
                     lecture_unit_id
                 )
             )
