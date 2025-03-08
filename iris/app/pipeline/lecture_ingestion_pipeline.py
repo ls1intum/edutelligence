@@ -84,6 +84,7 @@ def create_page_data(
             LectureUnitPageChunkSchema.COURSE_LANGUAGE.value: course_language,
             LectureUnitPageChunkSchema.PAGE_NUMBER.value: page_num + 1,
             LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value: page_split.page_content,
+            LectureUnitPageChunkSchema.BASE_URL.value: base_url,
         }
         for page_split in page_splits
     ]
