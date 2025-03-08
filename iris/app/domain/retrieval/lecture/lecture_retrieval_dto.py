@@ -25,6 +25,7 @@ class LectureUnitSegmentRetrievalDTO:
     lecture_unit_id: int
     page_number: int
     segment_summary: str
+    base_url: str
 
 
 @dataclass
