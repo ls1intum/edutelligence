@@ -43,6 +43,7 @@ class LectureTranscriptionRetrievalDTO:
     page_number: int
     segment_summary: str
     segment_text: str
+    base_url: str
 
 
 @dataclass

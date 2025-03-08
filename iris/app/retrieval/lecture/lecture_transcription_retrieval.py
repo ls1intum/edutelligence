@@ -93,11 +93,10 @@ class LectureTranscriptionRetrieval(Pipeline):
             filter_weaviate = Filter.by_property(
                 LectureTranscriptionSchema.LECTURE_ID.value
             ).equal(lecture_unit_dto.lecture_id)
-        #TODO: Fix for Base URL
-        # if lecture_unit_dto.base_url is not None:
-        #     filter_weaviate = Filter.by_property(
-        #         # LectureTranscriptionSchema.
-        #     ).equal(lecture_unit_dto.base_url)
+        if lecture_unit_dto.base_url is not None:
+            filter_weaviate = Filter.by_property(
+                LectureTranscriptionSchema.BASE_URL.value
+            ).equal(lecture_unit_dto.base_url)
 
         vec = self.llm_embedding.embed(query)
         return_value = self.collection.query.hybrid(
@@ -149,5 +148,6 @@ class LectureTranscriptionRetrieval(Pipeline):
                 page_number = lecture_transcription_segment[LectureTranscriptionSchema.PAGE_NUMBER.value],
                 segment_summary = lecture_transcription_segment[LectureTranscriptionSchema.SEGMENT_SUMMARY.value],
                 segment_text = lecture_transcription_segment[LectureTranscriptionSchema.SEGMENT_TEXT.value],
+                base_url=lecture_unit[LectureUnitSchema.BASE_URL.value],
             )
             return lecture_transcription_dto
