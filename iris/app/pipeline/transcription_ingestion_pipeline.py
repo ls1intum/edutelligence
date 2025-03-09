@@ -170,6 +170,7 @@ class TranscriptionIngestionPipeline(Pipeline):
                     LectureTranscriptionSchema.SEGMENT_END_TIME.value: segment.end_time,
                     LectureTranscriptionSchema.SEGMENT_TEXT.value: segment.text,
                     LectureTranscriptionSchema.PAGE_NUMBER.value: segment.slide_number,
+                    LectureTranscriptionSchema.BASE_URL.value: self.dto.settings.artemis_base_url,
                 }
 
                 slide_chunks[slide_key] = chunk
