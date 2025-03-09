@@ -85,3 +85,5 @@ class AzureOpenAIEmbeddingModel(OpenAIEmbeddingModel):
 
     def __str__(self):
         return f"AzureEmbedding('{self.model}')"
+
+

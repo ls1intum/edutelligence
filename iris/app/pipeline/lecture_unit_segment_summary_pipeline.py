@@ -142,6 +142,10 @@ class LectureUnitSegmentSummaryPipeline(Pipeline):
         slide_filter &= Filter.by_property(
             LectureUnitPageChunkSchema.LECTURE_UNIT_ID.value
         ).equal(self.lecture_unit_dto.lecture_unit_id)
+        if self.lecture_unit_dto.base_url is not None:
+            slide_filter &= Filter.by_property(
+                LectureUnitPageChunkSchema.BASE_URL.value
+            ).equal(self.lecture_unit_dto.base_url)
         return slide_filter
 
     def _get_lecture_transcription_filter(self):
@@ -154,6 +158,10 @@ class LectureUnitSegmentSummaryPipeline(Pipeline):
         transcription_filter &= Filter.by_property(
             LectureTranscriptionSchema.LECTURE_UNIT_ID.value
         ).equal(self.lecture_unit_dto.lecture_unit_id)
+        if self.lecture_unit_dto.base_url is not None:
+            transcription_filter &= Filter.by_property(
+                LectureTranscriptionSchema.BASE_URL.value
+            ).equal(self.lecture_unit_dto.base_url)
         return transcription_filter
 
     def _create_summary(self, transcriptions, slides) -> str:
@@ -201,6 +209,10 @@ class LectureUnitSegmentSummaryPipeline(Pipeline):
         lecture_filter &= Filter.by_property(
             LectureUnitSegmentSchema.PAGE_NUMBER.value
         ).equal(slide_number)
+        if self.lecture_unit_dto.base_url is not None:
+            lecture_filter &= Filter.by_property(
+                LectureUnitSegmentSchema.BASE_URL.value
+            ).equal(self.lecture_unit_dto.base_url)
 
         lectures = self.lecture_unit_segment_collection.query.fetch_objects(
             filters=lecture_filter, limit=1
@@ -217,6 +229,7 @@ class LectureUnitSegmentSummaryPipeline(Pipeline):
                     LectureUnitSegmentSchema.LECTURE_ID.value: self.lecture_unit_dto.lecture_id,
                     LectureUnitSegmentSchema.SEGMENT_SUMMARY.value: summary,
                     LectureUnitSegmentSchema.PAGE_NUMBER.value: slide_number,
+                    LectureUnitSegmentSchema.BASE_URL.value: self.lecture_unit_dto.base_url,
                 },
                 vector=self.llm_embedding.embed(summary),
             )

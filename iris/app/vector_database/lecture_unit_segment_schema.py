@@ -29,6 +29,7 @@ class LectureUnitSegmentSchema(Enum):
     SEGMENT_SUMMARY = "segment_summary"
     TRANSCRIPTIONS = "transcriptions"
     SLIDES = "slides"
+    BASE_URL = "base_url"
 
 
 def init_lecture_unit_segment_schema(client: WeaviateClient) -> Collection:
@@ -71,6 +72,12 @@ def init_lecture_unit_segment_schema(client: WeaviateClient) -> Collection:
                 description="The summary of the transcription and the lecture content of the segment",
                 data_type=DataType.TEXT,
                 index_searchable=True,
+            ),
+            Property(
+                name=LectureUnitSegmentSchema.BASE_URL.value,
+                description="The base url of the website where the lecture unit is hosted",
+                data_type=DataType.TEXT,
+                index_searchable=False,
             ),
         ],
         references=[

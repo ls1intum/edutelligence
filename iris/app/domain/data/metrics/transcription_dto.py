@@ -24,4 +24,4 @@ class TranscriptionWebhookDTO(BaseModel):
     course_description: str = Field("", alias="courseDescription")
     lecture_unit_id: int = Field(..., alias="lectureUnitId")
     lecture_unit_name: str = Field("", alias="lectureUnitName")
-    lecture_unit_link: str = Field("", alias="lectureUnitLink") # TODO: Remove default value
+    lecture_unit_link: str = Field("", alias="lectureUnitLink")

@@ -32,6 +32,7 @@ class Settings(BaseModel):
         try:
             with open(file_path, "r") as file:
                 settings_file = yaml.safe_load(file)
+                print(settings_file)
             return cls.model_validate(settings_file)
         except FileNotFoundError as e:
             raise FileNotFoundError(
