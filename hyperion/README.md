@@ -55,6 +55,16 @@ poetry run fastapi dev
 poetry run fastapi run
 ```
 
+### Authentication
+
+Hyperion uses API key authentication for secure access to its endpoints. The API key should be provided in the `X-API-Key` header, if `API_KEY_HEADER` is not set in the environment.
+
+To set up authentication:
+
+1. Set the `API_KEY` environment variable or in your `.env` file
+2. If not provided, a random API key will be generated at startup
+3. Set `DISABLE_AUTH=true` for development if you want to bypass authentication
+
 ## Usage
 
 After running the application, you can access the FastAPI API documentation at `http://127.0.0.1:8000/docs` or `http://127.0.0.1:8000/redoc`.
