@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 @dataclass
 class LectureUnitRetrievalDTO:
+    uuid: str
     course_id: int
     course_name: str
     course_description: str
@@ -19,6 +20,7 @@ class LectureUnitRetrievalDTO:
 
 @dataclass
 class LectureUnitSegmentRetrievalDTO:
+    uuid: str
     course_id: int
     lecture_id: int
     lecture_name: str
@@ -29,6 +31,7 @@ class LectureUnitSegmentRetrievalDTO:
 
 @dataclass
 class LectureTranscriptionRetrievalDTO:
+    uuid: str
     course_id: int
     course_name: str
     course_description: str
@@ -47,6 +50,7 @@ class LectureTranscriptionRetrievalDTO:
 
 @dataclass
 class LectureUnitPageChunkRetrievalDTO:
+    uuid: str
     course_id: int
     course_name: str
     course_description: str

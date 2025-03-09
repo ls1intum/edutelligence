@@ -233,7 +233,7 @@ def faq_deletion_webhook(dto: FaqDeletionExecutionDto):
 )
 def test():
     thread = Thread(
-        target=LectureRetrieval(VectorDatabase().get_client()), args=("Query", 1, [])
+        target=LectureRetrieval(VectorDatabase().get_client()), args=("What is scrum?", 1, [])
     )
     thread.start()
     # LectureRetrieval(VectorDatabase().get_client())(

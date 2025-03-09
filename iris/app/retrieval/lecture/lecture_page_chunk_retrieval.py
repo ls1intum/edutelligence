@@ -33,11 +33,11 @@ from app.pipeline.prompts.lecture_retrieval_prompts import (
     assessment_prompt,
     assessment_prompt_final,
     rewrite_student_query_prompt,
-    lecture_retriever_initial_prompt,
-    write_hypothetical_answer_prompt,
-    lecture_retrieval_initial_prompt_with_exercise_context,
+    lecture_retriever_initial_prompt_lecture_pages,
+    write_hypothetical_lecture_pages_answer_prompt,
+    lecture_retrieval_initial_prompt_lecture_pages_with_exercise_context,
     rewrite_student_query_prompt_with_exercise_context,
-    write_hypothetical_answer_with_exercise_context_prompt,
+    write_hypothetical_lecture_pages_answer_with_exercise_context_prompt,
 )
 import concurrent.futures
 
@@ -229,7 +229,7 @@ class LecturePageChunkRetrieval(Pipeline):
         """
         prompt = ChatPromptTemplate.from_messages(
             [
-                ("system", lecture_retriever_initial_prompt),
+                ("system", lecture_retriever_initial_prompt_lecture_pages),
             ]
         )
         prompt = _add_last_four_messages_to_prompt(prompt, chat_history)
@@ -267,7 +267,7 @@ class LecturePageChunkRetrieval(Pipeline):
         """
         prompt = ChatPromptTemplate.from_messages(
             [
-                ("system", lecture_retrieval_initial_prompt_with_exercise_context),
+                ("system", lecture_retrieval_initial_prompt_lecture_pages_with_exercise_context),
             ]
         )
         prompt = _add_last_four_messages_to_prompt(prompt, chat_history)
@@ -306,7 +306,7 @@ class LecturePageChunkRetrieval(Pipeline):
         """
         prompt = ChatPromptTemplate.from_messages(
             [
-                ("system", write_hypothetical_answer_prompt),
+                ("system", write_hypothetical_lecture_pages_answer_prompt),
             ]
         )
         prompt = _add_last_four_messages_to_prompt(prompt, chat_history)
@@ -346,7 +346,7 @@ class LecturePageChunkRetrieval(Pipeline):
         """
         prompt = ChatPromptTemplate.from_messages(
             [
-                ("system", write_hypothetical_answer_with_exercise_context_prompt),
+                ("system", write_hypothetical_lecture_pages_answer_with_exercise_context_prompt),
             ]
         )
         prompt = _add_last_four_messages_to_prompt(prompt, chat_history)
