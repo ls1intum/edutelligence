@@ -14,6 +14,7 @@ from app.llm.langchain import IrisLangchainChatModel
 from app.pipeline import Pipeline
 from weaviate import WeaviateClient
 
+from app.pipeline.shared.cohere_reranker_pipeline import CohereRerankerPipeline
 from app.pipeline.shared.reranker_pipeline import RerankerPipeline
 from app.vector_database.lecture_transcription_schema import (
     init_lecture_transcription_schema, LectureTranscriptionSchema,
@@ -42,7 +43,7 @@ class LectureTranscriptionRetrieval(Pipeline):
         self.pipeline = self.llm | StrOutputParser()
         self.collection = init_lecture_transcription_schema(client)
         self.lecture_unit_collection = init_lecture_unit_schema(client)
-        self.reranker_pipeline = RerankerPipeline()
+        self.reranker_pipeline = CohereRerankerPipeline()
         self.tokens = []
 
     def __call__(
@@ -66,7 +67,7 @@ class LectureTranscriptionRetrieval(Pipeline):
         results_rewritten_query = self.search_in_db(lecture_unit_dto, rewritten_query, hybrid_factor, result_limit)
         results_hypothetical_answer = self.search_in_db(lecture_unit_dto, hypothetical_answer, hybrid_factor, result_limit)
         merged_answers = merge_retrieved_chunks(results_rewritten_query, results_hypothetical_answer)
-        reranked_answers = self.reranker_pipeline(paragraphs=merged_answers, query=student_query, chat_history=chat_history)
+        reranked_answers = self.reranker_pipeline(query=student_query, documents=merged_answers, top_n=7, content_field_name=LectureTranscriptionSchema.SEGMENT_TEXT.value)
 
         lecture_transcription_retrieval_dtos = []
         for lecture_transcription_segment in reranked_answers:

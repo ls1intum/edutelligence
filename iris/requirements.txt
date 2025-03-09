@@ -21,3 +21,4 @@ langsmith~=0.1.142
 langchain-text-splitters~=0.3.2
 langchain-experimental~=0.3.3
 langchain-openai~=0.3.3
+cohere==5.9.0
