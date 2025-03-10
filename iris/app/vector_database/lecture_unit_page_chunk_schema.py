@@ -93,7 +93,7 @@ def init_lecture_unit_page_chunk_schema(client: WeaviateClient) -> Collection:
             Property(
                 name=LectureUnitPageChunkSchema.BASE_URL.value,
                 description="The base url of the website where the lecture unit is hosted",
-                data_type=DataType.INT,
+                data_type=DataType.TEXT,
                 index_searchable=False,
             ),
         ],

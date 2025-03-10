@@ -1,9 +1,9 @@
-from typing import List
-
 from langchain_core.output_parsers import StrOutputParser
 
-from app.common.pyris_message import PyrisMessage
-from app.domain.retrieval.lecture.lecture_retrieval_dto import LectureUnitRetrievalDTO, LectureTranscriptionRetrievalDTO
+from app.domain.retrieval.lecture.lecture_retrieval_dto import (
+    LectureUnitRetrievalDTO,
+    LectureTranscriptionRetrievalDTO,
+)
 from app.llm import (
     CapabilityRequestHandler,
     RequirementList,
@@ -11,18 +11,20 @@ from app.llm import (
     BasicRequestHandler,
 )
 from app.llm.langchain import IrisLangchainChatModel
+from app.llm.request_handler.rerank_request_handler import RerankRequestHandler
 from app.pipeline import Pipeline
 from weaviate import WeaviateClient
 
-from app.pipeline.shared.cohere_reranker_pipeline import CohereRerankerPipeline
-from app.pipeline.shared.reranker_pipeline import RerankerPipeline
 from app.vector_database.lecture_transcription_schema import (
-    init_lecture_transcription_schema, LectureTranscriptionSchema,
+    init_lecture_transcription_schema,
+    LectureTranscriptionSchema,
 )
 from asyncio.log import logger
 from weaviate.classes.query import Filter
-from app.retrieval.lecture.lecture_retrieval_utils import merge_retrieved_chunks
-from app.vector_database.lecture_unit_schema import LectureUnitSchema, init_lecture_unit_schema
+from app.vector_database.lecture_unit_schema import (
+    LectureUnitSchema,
+    init_lecture_unit_schema,
+)
 
 
 class LectureTranscriptionRetrieval(Pipeline):
@@ -43,40 +45,56 @@ class LectureTranscriptionRetrieval(Pipeline):
         self.pipeline = self.llm | StrOutputParser()
         self.collection = init_lecture_transcription_schema(client)
         self.lecture_unit_collection = init_lecture_unit_schema(client)
-        self.reranker_pipeline = CohereRerankerPipeline()
+        self.cohere_client = RerankRequestHandler("cohere")
         self.tokens = []
 
     def __call__(
         self,
+        student_query: str,
         rewritten_query: str,
         hypothetical_answer: str,
         lecture_unit_dto: LectureUnitRetrievalDTO,
-        student_query: str,
-        result_limit: int,
-        hybrid_factor: float,
-        chat_history: list[PyrisMessage],
+        result_limit: int = 10,
+        hybrid_factor: float = 0.9,
+        top_n_reranked_results: int = 7,
     ):
-        """
-        # 1. Anfrage mit Queries an Weaviate
-        # 2. Merge results in eine Liste
-        # 3. Reranken
-        # 4. DTOs zurückgeben
-        """
-        print("LectureTranscriptionRetrieval is running")
+        results_rewritten_query = self.search_in_db(
+            lecture_unit_dto, rewritten_query, hybrid_factor, result_limit
+        )
+        results_hypothetical_answer = self.search_in_db(
+            lecture_unit_dto, hypothetical_answer, hybrid_factor, result_limit
+        )
 
-        results_rewritten_query = self.search_in_db(lecture_unit_dto, rewritten_query, hybrid_factor, result_limit)
-        results_hypothetical_answer = self.search_in_db(lecture_unit_dto, hypothetical_answer, hybrid_factor, result_limit)
-        merged_answers = merge_retrieved_chunks(results_rewritten_query, results_hypothetical_answer)
-        reranked_answers = self.reranker_pipeline(query=student_query, documents=merged_answers, top_n=7, content_field_name=LectureTranscriptionSchema.SEGMENT_TEXT.value)
-
+        unique = {}
+        for segment in results_hypothetical_answer + results_rewritten_query:
+            unique[segment.uuid] = segment
+        results = list(unique.values())
         lecture_transcription_retrieval_dtos = []
-        for lecture_transcription_segment in reranked_answers:
-            lecture_transcription_retrieval_dto = self.generate_retrieval_dtos(lecture_transcription_segment)
-            lecture_transcription_retrieval_dtos.append(lecture_transcription_retrieval_dto)
-        return lecture_transcription_retrieval_dtos
+        for lecture_transcription_segment in results:
+            lecture_transcription_retrieval_dto = self.generate_retrieval_dtos(
+                lecture_transcription_segment.properties,
+                str(lecture_transcription_segment.uuid),
+            )
+            lecture_transcription_retrieval_dtos.append(
+                lecture_transcription_retrieval_dto
+            )
 
-    def search_in_db(self, lecture_unit_dto: LectureUnitRetrievalDTO, query: str, hybrid_factor: float,
-        result_limit: int):
+        reranked_answers = self.cohere_client.rerank(
+            query=student_query,
+            documents=lecture_transcription_retrieval_dtos,
+            top_n=top_n_reranked_results,
+            content_field_name="segment_text",
+        )
+
+        return reranked_answers
+
+    def search_in_db(
+        self,
+        lecture_unit_dto: LectureUnitRetrievalDTO,
+        query: str,
+        hybrid_factor: float,
+        result_limit: int,
+    ):
         """
         Search the database for the given query.
         """
@@ -104,55 +122,76 @@ class LectureTranscriptionRetrieval(Pipeline):
             query=query,
             alpha=hybrid_factor,
             vector=vec,
-            return_properties=[
-                LectureTranscriptionSchema.COURSE_ID.value,
-                LectureTranscriptionSchema.LECTURE_ID.value,
-                LectureTranscriptionSchema.PAGE_NUMBER.value,
-                LectureTranscriptionSchema.BASE_URL.value,
-                LectureTranscriptionSchema.SEGMENT_START_TIME.value,
-                LectureTranscriptionSchema.SEGMENT_END_TIME.value,
-                LectureTranscriptionSchema.SEGMENT_TEXT.value,
-                LectureTranscriptionSchema.SEGMENT_SUMMARY.value,
-            ],
             limit=result_limit,
             filters=filter_weaviate,
         )
-        return return_value
+        return return_value.objects
 
-    def generate_retrieval_dtos(self, lecture_transcription_segment):
+    def generate_retrieval_dtos(self, lecture_transcription_segment, uuid):
         lecture_unit_filter = Filter.by_property(
             LectureUnitSchema.COURSE_ID.value
-        ).equal(lecture_transcription_segment[LectureTranscriptionSchema.COURSE_ID.value])
+        ).equal(
+            lecture_transcription_segment[LectureTranscriptionSchema.COURSE_ID.value]
+        )
         lecture_unit_filter &= Filter.by_property(
             LectureUnitSchema.LECTURE_ID.value
-        ).equal(lecture_transcription_segment[LectureTranscriptionSchema.LECTURE_ID.value])
+        ).equal(
+            lecture_transcription_segment[LectureTranscriptionSchema.LECTURE_ID.value]
+        )
         lecture_unit_filter &= Filter.by_property(
             LectureUnitSchema.LECTURE_UNIT_ID.value
-        ).equal(lecture_transcription_segment[LectureTranscriptionSchema.LECTURE_UNIT_ID.value])
+        ).equal(
+            lecture_transcription_segment[
+                LectureTranscriptionSchema.LECTURE_UNIT_ID.value
+            ]
+        )
         lecture_unit_filter &= Filter.by_property(
             LectureUnitSchema.BASE_URL.value
-        ).equal(lecture_transcription_segment[LectureTranscriptionSchema.BASE_URL.value])
+        ).equal(
+            lecture_transcription_segment[LectureTranscriptionSchema.BASE_URL.value]
+        )
 
-        lecture_units = self.lecture_unit_collection.query.fetch_objects(filters=lecture_unit_filter).objects
+        lecture_units = self.lecture_unit_collection.query.fetch_objects(
+            filters=lecture_unit_filter
+        ).objects
         if len(lecture_units) == 0:
             return None
         else:
-            lecture_unit = lecture_units[0]
+            lecture_unit = lecture_units[0].properties
             lecture_transcription_dto = LectureTranscriptionRetrievalDTO(
-                course_id = lecture_unit[LectureUnitSchema.COURSE_ID.value],
-                course_name = lecture_unit[LectureUnitSchema.COURSE_NAME.value],
-                course_description = lecture_unit[LectureUnitSchema.COURSE_DESCRIPTION.value],
-                lecture_id = lecture_unit[LectureUnitSchema.LECTURE_ID.value],
-                lecture_name = lecture_unit[LectureUnitSchema.LECTURE_NAME.value],
-                lecture_unit_id = lecture_unit[LectureUnitSchema.LECTURE_UNIT_ID.value],
-                lecture_unit_name = lecture_unit[LectureUnitSchema.LECTURE_UNIT_NAME.value],
-                lecture_unit_link = lecture_unit[LectureUnitSchema.LECTURE_UNIT_LINK.value],
-                language = lecture_transcription_segment[LectureTranscriptionSchema.LANGUAGE.value],
-                segment_start_time = lecture_transcription_segment[LectureTranscriptionSchema.SEGMENT_START_TIME.value],
-                segment_end_time = lecture_transcription_segment[LectureTranscriptionSchema.SEGMENT_END_TIME.value],
-                page_number = lecture_transcription_segment[LectureTranscriptionSchema.PAGE_NUMBER.value],
-                segment_summary = lecture_transcription_segment[LectureTranscriptionSchema.SEGMENT_SUMMARY.value],
-                segment_text = lecture_transcription_segment[LectureTranscriptionSchema.SEGMENT_TEXT.value],
+                uuid=uuid,
+                course_id=lecture_unit[LectureUnitSchema.COURSE_ID.value],
+                course_name=lecture_unit[LectureUnitSchema.COURSE_NAME.value],
+                course_description=lecture_unit[
+                    LectureUnitSchema.COURSE_DESCRIPTION.value
+                ],
+                lecture_id=lecture_unit[LectureUnitSchema.LECTURE_ID.value],
+                lecture_name=lecture_unit[LectureUnitSchema.LECTURE_NAME.value],
+                lecture_unit_id=lecture_unit[LectureUnitSchema.LECTURE_UNIT_ID.value],
+                lecture_unit_name=lecture_unit[
+                    LectureUnitSchema.LECTURE_UNIT_NAME.value
+                ],
+                lecture_unit_link=lecture_unit[
+                    LectureUnitSchema.LECTURE_UNIT_LINK.value
+                ],
+                language=lecture_transcription_segment[
+                    LectureTranscriptionSchema.LANGUAGE.value
+                ],
+                segment_start_time=lecture_transcription_segment[
+                    LectureTranscriptionSchema.SEGMENT_START_TIME.value
+                ],
+                segment_end_time=lecture_transcription_segment[
+                    LectureTranscriptionSchema.SEGMENT_END_TIME.value
+                ],
+                page_number=lecture_transcription_segment[
+                    LectureTranscriptionSchema.PAGE_NUMBER.value
+                ],
+                segment_summary=lecture_transcription_segment[
+                    LectureTranscriptionSchema.SEGMENT_SUMMARY.value
+                ],
+                segment_text=lecture_transcription_segment[
+                    LectureTranscriptionSchema.SEGMENT_TEXT.value
+                ],
                 base_url=lecture_unit[LectureUnitSchema.BASE_URL.value],
             )
             return lecture_transcription_dto

@@ -227,6 +227,7 @@ class LectureUnitSegmentSummaryPipeline(Pipeline):
                 properties={
                     LectureUnitSegmentSchema.COURSE_ID.value: self.lecture_unit_dto.course_id,
                     LectureUnitSegmentSchema.LECTURE_ID.value: self.lecture_unit_dto.lecture_id,
+                    LectureUnitSegmentSchema.LECTURE_UNIT_ID.value: self.lecture_unit_dto.lecture_unit_id,
                     LectureUnitSegmentSchema.SEGMENT_SUMMARY.value: summary,
                     LectureUnitSegmentSchema.PAGE_NUMBER.value: slide_number,
                     LectureUnitSegmentSchema.BASE_URL.value: self.lecture_unit_dto.base_url,
@@ -256,12 +257,12 @@ class LectureUnitSegmentSummaryPipeline(Pipeline):
             return
 
         # Update existing lecture
-        transcription_uuids = [t.uuid.int for t in transcriptions.objects]
-        slide_uuids = [s.uuid.int for s in slides.objects]
-        lecture_uuid = lectures.objects[0].uuid.int
+        transcription_uuids = [t.uuid for t in transcriptions]
+        slide_uuids = [s.uuid for s in slides]
+        lecture_uuid = lectures[0].uuid
 
         self.lecture_unit_segment_collection.data.update(
-            id=lecture_uuid,
+            uuid=lecture_uuid,
             properties={
                 LectureUnitSegmentSchema.SEGMENT_SUMMARY.value: summary,
             },

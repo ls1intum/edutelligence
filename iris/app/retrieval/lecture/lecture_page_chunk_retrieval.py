@@ -6,10 +6,14 @@ from weaviate import WeaviateClient
 from weaviate.classes.query import Filter
 
 from app.common.token_usage_dto import TokenUsageDTO
-from app.common.PipelineEnum import PipelineEnum
 from app.common.message_converters import convert_iris_message_to_langchain_message
 from app.common.pyris_message import PyrisMessage
+from app.domain.retrieval.lecture.lecture_retrieval_dto import (
+    LectureUnitRetrievalDTO,
+    LectureUnitPageChunkRetrievalDTO,
+)
 from app.llm.langchain import IrisLangchainChatModel
+from app.llm.request_handler.rerank_request_handler import RerankRequestHandler
 from app.pipeline import Pipeline
 
 from app.llm import (
@@ -24,23 +28,10 @@ from app.vector_database.lecture_unit_page_chunk_schema import (
     LectureUnitPageChunkSchema,
 )
 from langchain_core.output_parsers import StrOutputParser
-from langchain_core.prompts import (
-    ChatPromptTemplate,
-    SystemMessagePromptTemplate,
+from app.vector_database.lecture_unit_schema import (
+    LectureUnitSchema,
+    init_lecture_unit_schema,
 )
-
-from app.pipeline.prompts.lecture_retrieval_prompts import (
-    assessment_prompt,
-    assessment_prompt_final,
-    rewrite_student_query_prompt,
-    lecture_retriever_initial_prompt_lecture_pages,
-    write_hypothetical_lecture_pages_answer_prompt,
-    lecture_retrieval_initial_prompt_lecture_pages_with_exercise_context,
-    rewrite_student_query_prompt_with_exercise_context,
-    write_hypothetical_lecture_pages_answer_with_exercise_context_prompt,
-)
-import concurrent.futures
-from app.retrieval.lecture.lecture_retrieval_utils import merge_retrieved_chunks
 
 
 def _add_last_four_messages_to_prompt(
@@ -85,275 +76,64 @@ class LecturePageChunkRetrieval(Pipeline):
             request_handler=request_handler, completion_args=completion_args
         )
         self.llm_embedding = BasicRequestHandler("embedding-small")
+        self.cohere_client = RerankRequestHandler("cohere")
+
         self.pipeline = self.llm | StrOutputParser()
-        self.collection = init_lecture_unit_page_chunk_schema(client)
+        self.lecture_unit_page_chunk_collection = init_lecture_unit_page_chunk_schema(
+            client
+        )
+        self.lecture_unit_collection = init_lecture_unit_schema(client)
+
         self.reranker_pipeline = RerankerPipeline()
         self.tokens = []
 
     @traceable(name="Full Lecture Retrieval")
     def __call__(
         self,
-        chat_history: list[PyrisMessage],
         student_query: str,
-        result_limit: int,
-        course_name: str = None,
-        course_id: int = None,
-        base_url: str = None,
-        problem_statement: str = None,
-        exercise_title: str = None,
-    ) -> List[dict]:
+        rewritten_student_query: str,
+        hypothetical_answer: str,
+        lecture_unit: LectureUnitRetrievalDTO,
+        result_limit: int = 10,
+        hybrid_factor: float = 0.9,
+        top_n_reranked_results: int = 7,
+    ) -> list[LectureUnitPageChunkRetrievalDTO]:
         """
         Retrieve lecture data from the database.
         """
-        course_language = self.fetch_course_language(course_id)
 
-        response, response_hyde = self.run_parallel_rewrite_tasks(
-            chat_history=chat_history,
-            student_query=student_query,
-            result_limit=result_limit,
-            course_language=course_language,
-            course_name=course_name,
-            course_id=course_id,
-            base_url=base_url,
-            problem_statement=problem_statement,
-            exercise_title=exercise_title,
-        )
-
-        basic_retrieved_lecture_chunks: list[dict[str, dict]] = [
-            {"id": obj.uuid.int, "properties": obj.properties}
-            for obj in response.objects
-        ]
-        hyde_retrieved_lecture_chunks: list[dict[str, dict]] = [
-            {"id": obj.uuid.int, "properties": obj.properties}
-            for obj in response_hyde.objects
-        ]
-        merged_chunks = merge_retrieved_chunks(
-            basic_retrieved_lecture_chunks, hyde_retrieved_lecture_chunks
-        )
-        if len(merged_chunks) != 0:
-            selected_chunks_index = self.reranker_pipeline(
-                paragraphs=merged_chunks, query=student_query, chat_history=chat_history
-            )
-            if selected_chunks_index:
-                return [merged_chunks[int(i)] for i in selected_chunks_index]
-        return []
-
-    @traceable(name="Basic Lecture Retrieval")
-    def basic_lecture_retrieval(
-        self,
-        chat_history: list[PyrisMessage],
-        student_query: str,
-        result_limit: int,
-        course_name: str = None,
-        course_id: int = None,
-        base_url: str = None,
-    ) -> list[dict[str, dict]]:
-        """
-        Basic retrieval for pipelines thaat need performance and fast answers.
-        """
-        if not self.assess_question(chat_history, student_query):
-            return []
-
-        rewritten_query = self.rewrite_student_query(
-            chat_history, student_query, "course_language", course_name
-        )
-        response = self.search_in_db(
-            query=rewritten_query,
+        basic_lecture_chunks = self.search_in_db(
+            query=rewritten_student_query,
             hybrid_factor=0.9,
             result_limit=result_limit,
-            course_id=course_id,
-            base_url=base_url,
+            course_id=lecture_unit.course_id,
+            lecture_id=lecture_unit.lecture_id,
+            base_url=lecture_unit.base_url,
         )
 
-        basic_retrieved_lecture_chunks: list[dict[str, dict]] = [
-            {"id": obj.uuid.int, "properties": obj.properties}
-            for obj in response.objects
+        hyde_lecture_chunks = self.search_in_db(
+            query=hypothetical_answer,
+            hybrid_factor=0.9,
+            result_limit=result_limit,
+            course_id=lecture_unit.course_id,
+            lecture_id=lecture_unit.lecture_id,
+            base_url=lecture_unit.base_url,
+        )
+
+        unique = {}
+        for segment in basic_lecture_chunks + hyde_lecture_chunks:
+            unique[segment.uuid] = segment
+        results = list(unique.values())
+
+        page_chunks = [
+            self.generate_retrieval_dtos(chunk.properties, str(chunk.uuid))
+            for chunk in results
         ]
-        return basic_retrieved_lecture_chunks
 
-    @traceable(name="Retrieval: Question Assessment")
-    def assess_question(
-        self, chat_history: list[PyrisMessage], student_query: str
-    ) -> bool:
-        prompt = ChatPromptTemplate.from_messages(
-            [
-                ("system", assessment_prompt),
-            ]
+        reranked_page_chunks = self.cohere_client.rerank(
+            student_query, page_chunks, top_n_reranked_results, "page_text_content"
         )
-        prompt = _add_last_four_messages_to_prompt(prompt, chat_history)
-        prompt += ChatPromptTemplate.from_messages(
-            [
-                ("user", student_query),
-            ]
-        )
-        prompt += ChatPromptTemplate.from_messages(
-            [
-                ("system", assessment_prompt_final),
-            ]
-        )
-
-        try:
-            response = (prompt | self.pipeline).invoke({})
-            logger.info(f"Response from assessment pipeline: {response}")
-            return response == "YES"
-        except Exception as e:
-            raise e
-
-    @traceable(name="Retrieval: Rewrite Student Query")
-    def rewrite_student_query(
-        self,
-        chat_history: list[PyrisMessage],
-        student_query: str,
-        course_language: str,
-        course_name: str,
-    ) -> str:
-        """
-        Rewrite the student query.
-        """
-        prompt = ChatPromptTemplate.from_messages(
-            [
-                ("system", lecture_retriever_initial_prompt_lecture_pages),
-            ]
-        )
-        prompt = _add_last_four_messages_to_prompt(prompt, chat_history)
-        prompt += SystemMessagePromptTemplate.from_template(
-            rewrite_student_query_prompt
-        )
-        prompt_val = prompt.format_messages(
-            course_language=course_language,
-            course_name=course_name,
-            student_query=student_query,
-        )
-        prompt = ChatPromptTemplate.from_messages(prompt_val)
-        try:
-            response = (prompt | self.pipeline).invoke({})
-            token_usage = self.llm.tokens
-            token_usage.pipeline = PipelineEnum.IRIS_LECTURE_RETRIEVAL_PIPELINE
-            self.tokens.append(self.llm.tokens)
-            logger.info(f"Response from exercise chat pipeline: {response}")
-            return response
-        except Exception as e:
-            raise e
-
-    @traceable(name="Retrieval: Rewrite Student Query with Exercise Context")
-    def rewrite_student_query_with_exercise_context(
-        self,
-        chat_history: list[PyrisMessage],
-        student_query: str,
-        course_language: str,
-        course_name: str,
-        exercise_name: str,
-        problem_statement: str,
-    ) -> str:
-        """
-        Rewrite the student query to generate fitting lecture content and embed it.
-        """
-        prompt = ChatPromptTemplate.from_messages(
-            [
-                ("system", lecture_retrieval_initial_prompt_lecture_pages_with_exercise_context),
-            ]
-        )
-        prompt = _add_last_four_messages_to_prompt(prompt, chat_history)
-        prompt += SystemMessagePromptTemplate.from_template(
-            rewrite_student_query_prompt_with_exercise_context
-        )
-        prompt_val = prompt.format_messages(
-            course_language=course_language,
-            course_name=course_name,
-            exercise_name=exercise_name,
-            problem_statement=problem_statement,
-            student_query=student_query,
-        )
-        prompt = ChatPromptTemplate.from_messages(prompt_val)
-        try:
-            response = (prompt | self.pipeline).invoke({})
-            token_usage = self.llm.tokens
-            token_usage.pipeline = PipelineEnum.IRIS_LECTURE_RETRIEVAL_PIPELINE
-            self.tokens.append(self.llm.tokens)
-            logger.info(f"Response from exercise chat pipeline: {response}")
-            return response
-        except Exception as e:
-            raise e
-
-    @traceable(name="Retrieval: Rewrite Elaborated Query")
-    def rewrite_elaborated_query(
-        self,
-        chat_history: list[PyrisMessage],
-        student_query: str,
-        course_language: str,
-        course_name: str,
-    ) -> str:
-        """
-        Rewrite the student query to generate fitting lecture content and embed it.
-        To extract more relevant content from the vector database.
-        """
-        prompt = ChatPromptTemplate.from_messages(
-            [
-                ("system", write_hypothetical_lecture_pages_answer_prompt),
-            ]
-        )
-        prompt = _add_last_four_messages_to_prompt(prompt, chat_history)
-        prompt += ChatPromptTemplate.from_messages(
-            [
-                ("user", student_query),
-            ]
-        )
-        prompt_val = prompt.format_messages(
-            course_language=course_language,
-            course_name=course_name,
-        )
-        prompt = ChatPromptTemplate.from_messages(prompt_val)
-        try:
-            response = (prompt | self.pipeline).invoke({})
-            token_usage = self.llm.tokens
-            token_usage.pipeline = PipelineEnum.IRIS_LECTURE_RETRIEVAL_PIPELINE
-            self.tokens.append(self.llm.tokens)
-            logger.info(f"Response from retirval pipeline: {response}")
-            return response
-        except Exception as e:
-            raise e
-
-    @traceable(name="Retrieval: Rewrite Elaborated Query with Exercise Context")
-    def rewrite_elaborated_query_with_exercise_context(
-        self,
-        chat_history: list[PyrisMessage],
-        student_query: str,
-        course_language: str,
-        course_name: str,
-        exercise_name: str,
-        problem_statement: str,
-    ) -> str:
-        """
-        Rewrite the student query to generate fitting lecture content and embed it.
-        To extract more relevant content from the vector database.
-        """
-        prompt = ChatPromptTemplate.from_messages(
-            [
-                ("system", write_hypothetical_lecture_pages_answer_with_exercise_context_prompt),
-            ]
-        )
-        prompt = _add_last_four_messages_to_prompt(prompt, chat_history)
-        prompt_val = prompt.format_messages(
-            course_language=course_language,
-            course_name=course_name,
-            exercise_name=exercise_name,
-            problem_statement=problem_statement,
-        )
-        prompt = ChatPromptTemplate.from_messages(prompt_val)
-        prompt += ChatPromptTemplate.from_messages(
-            [
-                ("user", student_query),
-            ]
-        )
-        try:
-            response = (prompt | self.pipeline).invoke({})
-            token_usage = self.llm.tokens
-            token_usage.pipeline = PipelineEnum.IRIS_LECTURE_RETRIEVAL_PIPELINE
-            self.tokens.append(self.llm.tokens)
-            logger.info(f"Response from exercise chat pipeline: {response}")
-            return response
-        except Exception as e:
-            raise e
+        return reranked_page_chunks
 
     @traceable(name="Retrieval: Search in DB")
     def search_in_db(
@@ -361,7 +141,7 @@ class LecturePageChunkRetrieval(Pipeline):
         query: str,
         hybrid_factor: float,
         result_limit: int,
-        course_id: int = None,
+        lecture_unit_dto: LectureUnitRetrievalDTO,
         base_url: str = None,
     ):
         """
@@ -372,146 +152,81 @@ class LecturePageChunkRetrieval(Pipeline):
         filter_weaviate = None
 
         # Check if course_id is provided
-        if course_id:
+        if lecture_unit_dto.course_id is not None:
             # Create a filter for course_id
             filter_weaviate = Filter.by_property(
                 LectureUnitPageChunkSchema.COURSE_ID.value
-            ).equal(course_id)
-
-            # Extend the filter based on the presence of base_url
-            # if base_url:
-            #     filter_weaviate &= Filter.by_property(
-            #         LectureUnitPageChunkSchema.BASE_URL.value
-            #     ).equal(base_url) #TODO: fix filter for Base Url
+            ).equal(lecture_unit_dto.course_id)
+        if lecture_unit_dto.lecture_id is not None:
+            filter_weaviate = Filter.by_property(
+                LectureUnitPageChunkSchema.LECTURE_ID.value
+            ).equal(lecture_unit_dto.lecture_id)
+        if lecture_unit_dto.base_url is not None:
+            filter_weaviate = Filter.by_property(
+                LectureUnitPageChunkSchema.BASE_URL.value
+            ).equal(lecture_unit_dto.base_url)
 
         vec = self.llm_embedding.embed(query)
-        return_value = self.collection.query.hybrid(
+        return_value = self.lecture_unit_page_chunk_collection.query.hybrid(
             query=query,
             alpha=hybrid_factor,
             vector=vec,
-            return_properties=[
-                LectureUnitPageChunkSchema.COURSE_ID.value,
-                LectureUnitPageChunkSchema.PAGE_NUMBER.value,
-                LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value,
-            ],
             limit=result_limit,
             filters=filter_weaviate,
         )
-        return return_value
+        return return_value.objects
 
-    @traceable(name="Retrieval: Run Parallel Rewrite Tasks")
-    def run_parallel_rewrite_tasks(
-        self,
-        chat_history: list[PyrisMessage],
-        student_query: str,
-        result_limit: int,
-        course_language: str,
-        course_name: str = None,
-        course_id: int = None,
-        base_url: str = None,
-        problem_statement: str = None,
-        exercise_title: str = None,
-    ):
-        """
-        Run the rewrite tasks in parallel.
-        """
-        if problem_statement:
-            with concurrent.futures.ThreadPoolExecutor() as executor:
-                # Schedule the rewrite tasks to run in parallel
-                rewritten_query_future = executor.submit(
-                    self.rewrite_student_query_with_exercise_context,
-                    chat_history,
-                    student_query,
-                    course_language,
-                    course_name,
-                    exercise_title,
-                    problem_statement,
-                )
-                hypothetical_answer_query_future = executor.submit(
-                    self.rewrite_elaborated_query_with_exercise_context,
-                    chat_history,
-                    student_query,
-                    course_language,
-                    course_name,
-                    exercise_title,
-                    problem_statement,
-                )
+    def generate_retrieval_dtos(self, lecture_page_chunk, uuid):
+        print(lecture_page_chunk)
+        lecture_unit_filter = Filter.by_property(
+            LectureUnitSchema.COURSE_ID.value
+        ).equal(lecture_page_chunk[LectureUnitPageChunkSchema.COURSE_ID.value])
+        lecture_unit_filter &= Filter.by_property(
+            LectureUnitSchema.LECTURE_ID.value
+        ).equal(lecture_page_chunk[LectureUnitPageChunkSchema.LECTURE_ID.value])
+        lecture_unit_filter &= Filter.by_property(
+            LectureUnitSchema.LECTURE_UNIT_ID.value
+        ).equal(lecture_page_chunk[LectureUnitPageChunkSchema.LECTURE_UNIT_ID.value])
+        lecture_unit_filter &= Filter.by_property(
+            LectureUnitSchema.BASE_URL.value
+        ).equal(lecture_page_chunk[LectureUnitPageChunkSchema.BASE_URL.value])
 
-                # Get the results once both tasks are complete
-                rewritten_query: str = rewritten_query_future.result()
-                hypothetical_answer_query: str = (
-                    hypothetical_answer_query_future.result()
-                )
+        lecture_units = self.lecture_unit_collection.query.fetch_objects(
+            filters=lecture_unit_filter
+        ).objects
+        if len(lecture_units) == 0:
+            return None
         else:
-            with concurrent.futures.ThreadPoolExecutor() as executor:
-                # Schedule the rewrite tasks to run in parallel
-                rewritten_query_future = executor.submit(
-                    self.rewrite_student_query,
-                    chat_history,
-                    student_query,
-                    course_language,
-                    course_name,
-                )
-                hypothetical_answer_query_future = executor.submit(
-                    self.rewrite_elaborated_query,
-                    chat_history,
-                    student_query,
-                    course_language,
-                    course_name,
-                )
-
-                # Get the results once both tasks are complete
-                rewritten_query = rewritten_query_future.result()
-                hypothetical_answer_query = hypothetical_answer_query_future.result()
-
-            # Execute the database search tasks
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            response_future = executor.submit(
-                self.search_in_db,
-                query=rewritten_query,
-                hybrid_factor=0.9,
-                result_limit=result_limit,
-                course_id=course_id,
-                base_url=base_url,
-            )
-            response_hyde_future = executor.submit(
-                self.search_in_db,
-                query=hypothetical_answer_query,
-                hybrid_factor=0.9,
-                result_limit=result_limit,
-                course_id=course_id,
-                base_url=base_url,
-            )
-
-            # Get the results once both tasks are complete
-            response = response_future.result()
-            response_hyde = response_hyde_future.result()
-
-        return response, response_hyde
-
-    def fetch_course_language(self, course_id):
-        """
-        Fetch the language of the course based on the course ID.
-        If no specific language is set, it defaults to English.
-        """
-        course_language = "english"
-
-        if course_id:
-            # Fetch the first object that matches the course ID with the language property
-            result = self.collection.query.fetch_objects(
-                filters=Filter.by_property(
-                    LectureUnitPageChunkSchema.COURSE_ID.value
-                ).equal(course_id),
-                limit=1,  # We only need one object to check and retrieve the language
-                return_properties=[LectureUnitPageChunkSchema.COURSE_LANGUAGE.value],
-            )
-
-            # Check if the result has objects and retrieve the language
-            if result.objects:
-                fetched_language = result.objects[0].properties.get(
+            lecture_unit = lecture_units[0].properties
+            lecture_transcription_dto = LectureUnitPageChunkRetrievalDTO(
+                uuid=uuid,
+                course_id=lecture_unit[LectureUnitSchema.COURSE_ID.value],
+                course_name=lecture_unit[LectureUnitSchema.COURSE_DESCRIPTION.value],
+                course_description=lecture_unit[
+                    LectureUnitSchema.COURSE_DESCRIPTION.value
+                ],
+                lecture_id=lecture_page_chunk[
+                    LectureUnitPageChunkSchema.LECTURE_ID.value
+                ],
+                lecture_name=lecture_unit[LectureUnitSchema.LECTURE_NAME.value],
+                lecture_unit_id=lecture_page_chunk[
+                    LectureUnitPageChunkSchema.LECTURE_ID.value
+                ],
+                lecture_unit_name=lecture_unit[
+                    LectureUnitSchema.LECTURE_UNIT_NAME.value
+                ],
+                lecture_unit_link=lecture_unit[
+                    LectureUnitSchema.LECTURE_UNIT_LINK.value
+                ],
+                course_language=lecture_page_chunk[
                     LectureUnitPageChunkSchema.COURSE_LANGUAGE.value
-                )
-                if fetched_language:
-                    course_language = fetched_language
-
-        return course_language
+                ],
+                page_number=lecture_page_chunk[
+                    LectureUnitPageChunkSchema.PAGE_NUMBER.value
+                ],
+                page_text_content=lecture_page_chunk[
+                    LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value
+                ],
+                base_url=lecture_page_chunk[LectureUnitPageChunkSchema.BASE_URL.value],
+            )
+            return lecture_transcription_dto

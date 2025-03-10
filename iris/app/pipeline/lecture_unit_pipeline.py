@@ -41,7 +41,10 @@ class LectureUnitPipeline(Pipeline):
             )
             & Filter.by_property(LectureUnitSchema.LECTURE_UNIT_ID.value).equal(
                 lecture_unit.lecture_unit_id
-            ),  # TODO: Add base_url to filter
+            )
+            & Filter.by_property(LectureUnitSchema.BASE_URL.value).equal(
+                lecture_unit.base_url
+            ),
         )
 
         embedding = self.llm_embedding.embed(lecture_unit.lecture_unit_summary)
@@ -62,10 +65,3 @@ class LectureUnitPipeline(Pipeline):
                 },
                 vector=embedding,
             )
-
-        print("Done")
-        print("Lecture Unit Chunks")
-        for lecture_unit_segment_summary in lecture_unit_segment_summaries:
-            print(lecture_unit_segment_summary)
-
-        print("Lecture Unit Summary: ", lecture_unit.lecture_unit_summary)

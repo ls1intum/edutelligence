@@ -22,9 +22,13 @@ class LectureUnitRetrievalDTO:
 class LectureUnitSegmentRetrievalDTO:
     uuid: str
     course_id: int
+    course_name: str
+    course_description: str
     lecture_id: int
     lecture_name: str
     lecture_unit_id: int
+    lecture_unit_name: str
+    lecture_unit_link: str
     page_number: int
     segment_summary: str
     base_url: str
@@ -57,17 +61,18 @@ class LectureUnitPageChunkRetrievalDTO:
     course_name: str
     course_description: str
     lecture_id: int
+    lecture_name: str
     lecture_unit_id: int
     lecture_unit_name: str
     lecture_unit_link: str
     course_language: str
     page_number: int
     page_text_content: str
+    base_url: str
 
 
 @dataclass
 class LectureRetrievalDTO:
-    lecture_units: List[LectureUnitRetrievalDTO]
     lecture_unit_segments: List[LectureUnitSegmentRetrievalDTO]
     lecture_transcriptions: List[LectureTranscriptionRetrievalDTO]
     lecture_unit_page_chunks: List[LectureUnitPageChunkRetrievalDTO]

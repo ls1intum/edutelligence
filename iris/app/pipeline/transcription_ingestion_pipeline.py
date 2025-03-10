@@ -69,6 +69,7 @@ class TranscriptionIngestionPipeline(Pipeline):
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler, completion_args=completion_args
         )
+
         self.pipeline = self.llm | StrOutputParser()
         self.tokens = []
 
@@ -101,7 +102,7 @@ class TranscriptionIngestionPipeline(Pipeline):
                 lecture_unit_name=self.dto.transcription.lecture_unit_name,
                 lecture_unit_link=self.dto.transcription.lecture_unit_link,
                 course_language=self.dto.transcription.transcription.language,
-                base_url="",  # TODO: send missing data from Artemis
+                base_url=self.dto.settings.artemis_base_url,
             )
 
             LectureUnitPipeline()(lecture_unit_dto)

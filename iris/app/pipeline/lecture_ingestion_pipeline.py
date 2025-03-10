@@ -102,7 +102,7 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         self.collection = init_lecture_unit_page_chunk_schema(client)
         self.dto = dto
         self.llm_vision = BasicRequestHandler("azure-gpt-4-omni")
-        self.llm_chat = BasicRequestHandler("azure-gpt-35-turbo")
+        self.llm_chat = BasicRequestHandler("azure-gpt-4-omni")
         self.llm_embedding = BasicRequestHandler("embedding-small")
         self.callback = callback
         request_handler = CapabilityRequestHandler(
@@ -136,7 +136,7 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
             chunks.extend(
                 self.chunk_data(
                     lecture_pdf=pdf_path,
-                    lecture_unit_dto=self.dto.lecture_unit,
+                    lecture_unit_slide_dto=self.dto.lecture_unit,
                     base_url=self.dto.settings.artemis_base_url,
                 )
             )
@@ -276,7 +276,9 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         )
         try:
             response = self.llm_vision.chat(
-                [iris_message], CompletionArguments(temperature=0, max_tokens=512)
+                [iris_message],
+                CompletionArguments(temperature=0, max_tokens=512),
+                tools=[],
             )
             self._append_tokens(
                 response.token_usage, PipelineEnum.IRIS_LECTURE_INGESTION
@@ -328,7 +330,7 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
             contents=[TextMessageContentDTO(text_content=prompt)],
         )
         response = self.llm_chat.chat(
-            [iris_message], CompletionArguments(temperature=0, max_tokens=20)
+            [iris_message], CompletionArguments(temperature=0, max_tokens=20), tools=[]
         )
         self._append_tokens(response.token_usage, PipelineEnum.IRIS_LECTURE_INGESTION)
         return response.contents[0].text_content
@@ -362,10 +364,12 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         """
         try:
             self.collection.data.delete_many(
-                # where=Filter.by_property(LectureUnitPageChunkSchema.BASE_URL.value).equal(base_url) #TODO: fix filter for base url
                 where=Filter.by_property(
-                    LectureUnitPageChunkSchema.COURSE_ID.value
-                ).equal(course_id)
+                    LectureUnitPageChunkSchema.BASE_URL.value
+                ).equal(base_url)
+                & Filter.by_property(LectureUnitPageChunkSchema.COURSE_ID.value).equal(
+                    course_id
+                )
                 & Filter.by_property(LectureUnitPageChunkSchema.LECTURE_ID.value).equal(
                     lecture_id
                 )
