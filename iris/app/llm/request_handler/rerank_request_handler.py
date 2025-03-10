@@ -2,7 +2,6 @@ from typing import Sequence, Union, Dict, Any, Type, Callable, Optional
 
 from pydantic import ConfigDict, BaseModel
 from langchain_core.tools import BaseTool
-from sqlalchemy.util.queue import Empty
 
 from app.common.pyris_message import PyrisMessage
 from app.domain.data.image_message_content_dto import ImageMessageContentDTO
