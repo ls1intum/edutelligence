@@ -13,6 +13,12 @@ fastapi = "^0.115.5"
 [tool.poetry.group.dev.dependencies]
 uvicorn = "^0.32.1"
 
+
+[tool.poetry.group.test.dependencies]
+pytest = "^8.3.5"
+pytest-asyncio = "^0.25.3"
+httpx = "^0.28.1"
+
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
