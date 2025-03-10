@@ -111,7 +111,7 @@ class LectureRetrieval(Pipeline):
         lecture_id: int = None,
         lecture_unit_id: int = None,
         base_url: str = None,
-    ):
+    ) -> LectureRetrievalDTO:
         lecture_unit = self.get_lecture_unit(course_id, lecture_id, lecture_unit_id)
         if lecture_unit is None:
             raise ValueError("The lecture unit is not indexed")

@@ -21,5 +21,5 @@ class CohereAzureClient(BaseModel):
 
     def rerank(self, query, documents, top_n: int):
         return self._client.rerank(
-            query=query, documents=documents, top_n=top_n, model= self.model
+            query=query, documents=documents, top_n=top_n, model=self.model
         )
