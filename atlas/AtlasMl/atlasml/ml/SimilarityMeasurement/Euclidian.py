@@ -27,9 +27,3 @@ def compute_euclidean_distance(embedding_vector, model: ModelDimension, comparis
     # Calculate Euclidean distance
     distance = euclidean(vec1, vec2)
     return distance
-
-
-# Sanity Check
-example_vec1 = [1, 2, 3]
-example_vec2 = [4, 5, 6]
-computed_distance = compute_euclidean_distance(example_vec1, ModelDimension.text_embedding_three_small, example_vec2)

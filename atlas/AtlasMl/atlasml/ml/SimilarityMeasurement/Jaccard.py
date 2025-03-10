@@ -28,9 +28,3 @@ def compute_jaccard_similarity(embedding_vector, model: ModelDimension, comparis
     distance = jaccard(vec1, vec2)
     similarity = 1.0 - distance
     return similarity
-
-
-# Sanity Check
-example_vec1 = [1, 2, 3]
-example_vec2 = [4, 5, 6]
-computed_distance = compute_jaccard_similarity(example_vec1, ModelDimension.text_embedding_three_small, example_vec2)

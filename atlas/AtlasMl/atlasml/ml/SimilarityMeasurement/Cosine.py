@@ -27,9 +27,3 @@ def compute_cosine_similarity(embedding_vector, model: ModelDimension, compariso
     # Calculate cosine similarity
     similarity = 1.0 - cosine(emb1, emb2)
     return similarity
-
-
-# Sanity Check
-example_vec1 = [1, 2, 3]
-example_vec2 = [4, 5, 6]
-computed_distance = compute_cosine_similarity(example_vec1, ModelDimension.text_embedding_three_small, example_vec2)
