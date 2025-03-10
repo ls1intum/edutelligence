@@ -61,7 +61,6 @@ class RerankRequestHandler(RequestHandler):
             query=query,
             documents=mapped_responses,
             top_n=top_n,
-            model="rerank-multilingual-v3.5",
         )
         ranked_documents = []
         for result in reranked_results[1]:

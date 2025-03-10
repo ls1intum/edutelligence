@@ -106,18 +106,14 @@ class LecturePageChunkRetrieval(Pipeline):
             query=rewritten_student_query,
             hybrid_factor=0.9,
             result_limit=result_limit,
-            course_id=lecture_unit.course_id,
-            lecture_id=lecture_unit.lecture_id,
-            base_url=lecture_unit.base_url,
+            lecture_unit_dto=lecture_unit,
         )
 
         hyde_lecture_chunks = self.search_in_db(
             query=hypothetical_answer,
             hybrid_factor=0.9,
             result_limit=result_limit,
-            course_id=lecture_unit.course_id,
-            lecture_id=lecture_unit.lecture_id,
-            base_url=lecture_unit.base_url,
+            lecture_unit_dto=lecture_unit,
         )
 
         unique = {}
@@ -142,7 +138,6 @@ class LecturePageChunkRetrieval(Pipeline):
         hybrid_factor: float,
         result_limit: int,
         lecture_unit_dto: LectureUnitRetrievalDTO,
-        base_url: str = None,
     ):
         """
         Search the database for the given query.
