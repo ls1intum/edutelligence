@@ -15,7 +15,7 @@ return 'NO'.
 Do not answer the question. Only return 'YES' or 'NO'.
 """
 
-lecture_retriever_initial_prompt = """
+lecture_retriever_initial_prompt_lecture_pages = """
 You write good and performant vector database queries, in particular for Weaviate,
 from chat histories between an AI tutor and a student.
 The query should be designed to retrieve context information from indexed lecture slides so the AI tutor
@@ -26,7 +26,18 @@ It is not an instruction to the database, but a question to the database.
 The chat history between the AI tutor and the student is provided to you in the next messages.
 """
 
-lecture_retrieval_initial_prompt_with_exercise_context = """
+lecture_retriever_initial_prompt_lecture_transcriptions = """
+You write good and performant vector database queries, in particular for Weaviate,
+from chat histories between an AI tutor and a student.
+The query should be designed to retrieve context information from lecture transcriptions so the AI tutor
+can use the context information to give a better answer. Apply accepted norms when querying vector databases.
+Query the database so it returns answers for the latest student query.
+A good vector database query is formulated in natural language, just like a student would ask a question.
+It is not an instruction to the database, but a question to the database.
+The chat history between the AI tutor and the student is provided to you in the next messages.
+"""
+
+lecture_retrieval_initial_prompt_lecture_pages_with_exercise_context = """
 You write good and performant vector database queries, in particular for Weaviate,
 from chat histories between an AI tutor and a student.
 The student has sent a query in the context of the lecture {course_name} and the exercise {exercise_name}.
@@ -35,6 +46,22 @@ For more exercise context here is the problem statement:
 {problem_statement}
 ---
 The query should be designed to retrieve context information from indexed lecture slides so the AI tutor
+can use the context information to give a better answer. Apply accepted norms when querying vector databases.
+Query the database so it returns answers for the latest student query.
+A good vector database query is formulated in natural language, just like a student would ask a question.
+It is not an instruction to the database, but a question to the database.
+The chat history between the AI tutor and the student is provided to you in the next messages.
+"""
+
+lecture_retrieval_initial_prompt_lecture_transcriptions_with_exercise_context = """
+You write good and performant vector database queries, in particular for Weaviate,
+from chat histories between an AI tutor and a student.
+The student has sent a query in the context of the lecture {course_name} and the exercise {exercise_name}.
+For more exercise context here is the problem statement:
+---
+{problem_statement}
+---
+The query should be designed to retrieve context information from lecture transcriptions so the AI tutor
 can use the context information to give a better answer. Apply accepted norms when querying vector databases.
 Query the database so it returns answers for the latest student query.
 A good vector database query is formulated in natural language, just like a student would ask a question.
@@ -58,7 +85,7 @@ Translate the rewritten message into {course_language} if it's not already in {c
 ANSWER ONLY WITH THE REWRITTEN MESSAGE. DO NOT ADD ANY ADDITIONAL INFORMATION.
 """
 
-write_hypothetical_answer_prompt = """
+write_hypothetical_lecture_pages_answer_prompt = """
 A student has sent a query in the context of the lecture {course_name}.
 The chat history between the AI tutor and the student is provided to you in the next messages.
 Please provide a response in {course_language}.
@@ -67,8 +94,17 @@ Craft your response to closely reflect the style and content of typical universi
 Do not exceed 350 words. Add keywords and phrases that are relevant to student intent.
 """
 
+write_hypothetical_lecture_transcriptions_answer_prompt = """
+A student has sent a query in the context of the lecture {course_name}.
+The chat history between the AI tutor and the student is provided to you in the next messages.
+Please provide a response in {course_language}.
+You should create a response that looks like spoken content from a lecture video transcription.
+Answer just with the spoken text.
+Do not exceed 350 words. Add keywords and phrases that are relevant to student intent.
+"""
 
-write_hypothetical_answer_with_exercise_context_prompt = """
+
+write_hypothetical_lecture_pages_answer_with_exercise_context_prompt = """
 A student has sent a query in the context of the lecture {course_name} and the exercise {exercise_name}.
 Here is the problem statement of the exercise:
 ---
@@ -78,5 +114,18 @@ The chat history between the AI tutor and the student is provided to you in the 
 Please provide a response in {course_language}.
 You should create a response that looks like a lecture slide.
 Craft your response to closely reflect the style and content of typical university lecture materials.
+Do not exceed 350 words. Add keywords and phrases that are relevant to student intent.
+"""
+
+write_hypothetical_lecture_transcriptions_answer_with_exercise_context_prompt = """
+A student has sent a query in the context of the lecture {course_name} and the exercise {exercise_name}.
+Here is the problem statement of the exercise:
+---
+{problem_statement}
+---
+The chat history between the AI tutor and the student is provided to you in the next messages.
+Please provide a response in {course_language}.
+You should create a response that look like spoken content from a lecture video transcription.
+Answer just with the spoken text.
 Do not exceed 350 words. Add keywords and phrases that are relevant to student intent.
 """

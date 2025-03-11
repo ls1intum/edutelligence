@@ -4,7 +4,7 @@ from langchain_core.output_parsers import StrOutputParser
 from weaviate import WeaviateClient
 from weaviate.classes.query import Filter
 from . import Pipeline
-from .lecture_ingestion_pipeline import batch_update_lock
+from app.vector_database.database import batch_update_lock
 from ..domain.data.faq_dto import FaqDTO
 
 from app.domain.ingestion.ingestion_pipeline_execution_dto import (
@@ -20,9 +20,6 @@ from ..llm import (
     RequirementList,
 )
 from ..web.status.faq_ingestion_status_callback import FaqIngestionStatus
-
-# we use the same lock as the lecture ingestion pipeline
-batch_update_lock = batch_update_lock
 
 
 class FaqIngestionPipeline(AbstractIngestion, Pipeline):
@@ -83,7 +80,6 @@ class FaqIngestionPipeline(AbstractIngestion, Pipeline):
         This method is thread-safe and can only be executed by one thread at a time.
         Weaviate limitation.
         """
-        global batch_update_lock
         with batch_update_lock:
             with self.collection.batch.rate_limit(requests_per_minute=600) as batch:
                 try:

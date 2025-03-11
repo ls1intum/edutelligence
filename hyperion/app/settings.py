@@ -1,5 +1,4 @@
 import os
-import secrets
 from dotenv import load_dotenv
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -13,7 +12,6 @@ class Settings(BaseSettings):
 
     # API Security
     API_KEY: str = ""
-    API_KEY_HEADER: str = "X-API-Key"
     DISABLE_AUTH: bool = False
 
     # Playground Security
@@ -36,20 +34,27 @@ class Settings(BaseSettings):
     OLLAMA_BASIC_AUTH_PASSWORD: str = ""
     OLLAMA_HOST: str = ""
 
+    LANGFUSE_PUBLIC_KEY: str = ""
+    LANGFUSE_SECRET_KEY: str = ""
+    LANGFUSE_HOST: str = ""
+
+    # Add a flag for OpenAPI generation mode
+    IS_GENERATING_OPENAPI: bool = False
+
+    @property
+    def langfuse_enabled(self):
+        return bool(
+            self.LANGFUSE_PUBLIC_KEY
+            and self.LANGFUSE_SECRET_KEY
+            and self.LANGFUSE_HOST
+            and not self.IS_GENERATING_OPENAPI
+        )
+
     @field_validator("MODEL_NAME", mode="before")
     @classmethod
     def override_model_name(cls, value):
         if os.getenv("GITHUB_ACTIONS", "").lower() == "true":
             return "fake:model"
-        return value
-
-    @field_validator("API_KEY", mode="before")
-    @classmethod
-    def generate_api_key_if_empty(cls, value):
-        if not value:
-            token = secrets.token_hex(32)
-            logger.warning(f"API key not set, generating a random one: {token}")
-            return token
         return value
 
 
