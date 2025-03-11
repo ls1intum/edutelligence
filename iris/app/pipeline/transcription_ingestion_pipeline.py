@@ -16,15 +16,18 @@ from app.domain.data.metrics.transcription_dto import (
 from app.domain.ingestion.transcription_ingestion.transcription_ingestion_pipeline_execution_dto import (
     TranscriptionIngestionPipelineExecutionDto,
 )
+from app.domain.lecture.lecture_unit_dto import LectureUnitDTO
 from app.llm import (
     BasicRequestHandler,
     CapabilityRequestHandler,
     RequirementList,
     CompletionArguments,
 )
+from weaviate.classes.query import Filter
 from app.llm.langchain import IrisLangchainChatModel
 from app.pipeline import Pipeline
-from app.pipeline.faq_ingestion_pipeline import batch_update_lock
+from app.pipeline.lecture_unit_pipeline import LectureUnitPipeline
+from app.vector_database.database import batch_update_lock
 from app.pipeline.prompts.transcription_ingestion_prompts import (
     transcription_summary_prompt,
 )
@@ -33,8 +36,6 @@ from app.vector_database.lecture_transcription_schema import (
     LectureTranscriptionSchema,
 )
 from app.web.status.transcription_ingestion_callback import TranscriptionIngestionStatus
-
-batch_insert_lock = batch_update_lock
 
 CHUNK_SEPARATOR_CHAR = "\31"
 
@@ -73,16 +74,41 @@ class TranscriptionIngestionPipeline(Pipeline):
 
     def __call__(self) -> None:
         try:
+            self.callback.in_progress("Deleting existing transcription data")
+            self.delete_existing_transcription_data(self.dto.transcription)
             self.callback.in_progress("Chunking transcription")
             chunks = self.chunk_transcription(self.dto.transcription)
+            self.callback.done("Chunked transcription")
             logger.info("chunked data")
             self.callback.in_progress("Summarizing transcription")
             chunks = self.summarize_chunks(chunks)
+            self.callback.done("Summarized transcription")
 
             self.callback.in_progress("Ingesting transcription into vector database")
             self.batch_insert(chunks)
-
             self.callback.done("Transcriptions ingested successfully")
+
+            self.callback.in_progress(
+                "Ingesting lecture unit summary into vector database"
+            )
+            lecture_unit_dto = LectureUnitDTO(
+                course_id=self.dto.transcription.course_id,
+                course_name=self.dto.transcription.course_name,
+                course_description=self.dto.transcription.course_description,
+                lecture_id=self.dto.transcription.lecture_id,
+                lecture_name=self.dto.transcription.lecture_name,
+                lecture_unit_id=self.dto.lectureUnitId,
+                lecture_unit_name=self.dto.transcription.lecture_unit_name,
+                lecture_unit_link=self.dto.transcription.lecture_unit_link,
+                course_language=self.dto.transcription.transcription.language,
+                base_url=self.dto.settings.artemis_base_url,
+            )
+
+            LectureUnitPipeline()(lecture_unit_dto)
+
+            self.callback.done(
+                "Ingested lecture unit summary into vector database", tokens=self.tokens
+            )
 
         except Exception as e:
             logger.error(f"Error processing transcription ingestion pipeline: {e}")
@@ -92,10 +118,25 @@ class TranscriptionIngestionPipeline(Pipeline):
                 tokens=self.tokens,
             )
 
+    def delete_existing_transcription_data(
+        self, transcription: TranscriptionWebhookDTO
+    ):
+        self.collection.data.delete_many(
+            where=Filter.by_property(LectureTranscriptionSchema.COURSE_ID.value).equal(
+                transcription.course_id
+            )
+            & Filter.by_property(LectureTranscriptionSchema.LECTURE_ID.value).equal(
+                transcription.lecture_id
+            )
+            & Filter.by_property(
+                LectureTranscriptionSchema.LECTURE_UNIT_ID.value
+            ).equal(transcription.lecture_unit_id)
+        )
+        # TODO: Add Base Url
+
     def batch_insert(self, chunks):
-        global batch_insert_lock
-        with batch_insert_lock:
-            with self.collection.batch.rate_limit(requests_per_minute=600) as batch:
+        with batch_update_lock:
+            with self.collection.batch.dynamic() as batch:
                 try:
                     for chunk in chunks:
                         embed_chunk = self.llm_embedding.embed(
@@ -122,15 +163,14 @@ class TranscriptionIngestionPipeline(Pipeline):
             if slide_key not in slide_chunks:
                 chunk = {
                     LectureTranscriptionSchema.COURSE_ID.value: transcription.course_id,
-                    LectureTranscriptionSchema.COURSE_NAME.value: transcription.course_name,
                     LectureTranscriptionSchema.LECTURE_ID.value: transcription.lecture_id,
-                    LectureTranscriptionSchema.LECTURE_NAME.value: transcription.lecture_name,
                     LectureTranscriptionSchema.LECTURE_UNIT_ID.value: transcription.lecture_unit_id,
                     LectureTranscriptionSchema.LANGUAGE.value: transcription.transcription.language,
                     LectureTranscriptionSchema.SEGMENT_START_TIME.value: segment.start_time,
                     LectureTranscriptionSchema.SEGMENT_END_TIME.value: segment.end_time,
                     LectureTranscriptionSchema.SEGMENT_TEXT.value: segment.text,
-                    LectureTranscriptionSchema.SEGMENT_LECTURE_UNIT_SLIDE_NUMBER.value: segment.slide_number,
+                    LectureTranscriptionSchema.PAGE_NUMBER.value: segment.slide_number,
+                    LectureTranscriptionSchema.BASE_URL.value: self.dto.settings.artemis_base_url,
                 }
 
                 slide_chunks[slide_key] = chunk
@@ -224,7 +264,7 @@ class TranscriptionIngestionPipeline(Pipeline):
     def remove_separator_char(self, text: str) -> str:
         return self.replace_separator_char(text, "")
 
-    def summarize_chunks(self, chunks):
+    def summarize_chunks(self, chunks: List[Dict[str, Any]]):
         chunks_with_summaries = []
         for chunk in chunks:
             self.prompt = ChatPromptTemplate.from_messages(
@@ -232,7 +272,7 @@ class TranscriptionIngestionPipeline(Pipeline):
                     (
                         "system",
                         transcription_summary_prompt(
-                            chunk[LectureTranscriptionSchema.LECTURE_NAME.value],
+                            self.dto.transcription.lecture_name,
                             chunk[LectureTranscriptionSchema.SEGMENT_TEXT.value],
                         ),
                     ),

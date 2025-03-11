@@ -13,7 +13,9 @@ from app.llm.langchain import IrisLangchainChatModel
 from app.pipeline import Pipeline
 from app.vector_database.faq_schema import FaqSchema
 
-from app.vector_database.lecture_schema import LectureSchema
+from app.vector_database.lecture_unit_page_chunk_schema import (
+    LectureUnitPageChunkSchema,
+)
 
 
 class InformationType(str, Enum):
@@ -66,12 +68,12 @@ class CitationPipeline(Pipeline):
         formatted_string = ""
         for i, paragraph in enumerate(paragraphs):
             lct = "Lecture: {}, Unit: {}, Page: {}, Link: {},\nContent:\n---{}---\n\n".format(
-                paragraph.get(LectureSchema.LECTURE_NAME.value),
-                paragraph.get(LectureSchema.LECTURE_UNIT_NAME.value),
-                paragraph.get(LectureSchema.PAGE_NUMBER.value),
-                paragraph.get(LectureSchema.LECTURE_UNIT_LINK.value)
+                paragraph.get(LectureUnitPageChunkSchema.LECTURE_NAME.value),
+                paragraph.get(LectureUnitPageChunkSchema.LECTURE_UNIT_NAME.value),
+                paragraph.get(LectureUnitPageChunkSchema.PAGE_NUMBER.value),
+                paragraph.get(LectureUnitPageChunkSchema.LECTURE_UNIT_LINK.value)
                 or "No link available",
-                paragraph.get(LectureSchema.PAGE_TEXT_CONTENT.value),
+                paragraph.get(LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value),
             )
             formatted_string += lct
 
