@@ -1,4 +1,6 @@
 ---
+name: Iris - Test
+
 on:
   push:
     branches:
