@@ -6,7 +6,7 @@ on:
       - develop
     paths:
       - "iris/**"
-      - ".github/workflows/test.yml"
+      - ".github/workflows/iris_test.yml"
       - ".pre-commit-config.yaml"
   pull_request:
     branches:
@@ -14,7 +14,7 @@ on:
       - develop
     paths:
       - "iris/**"
-      - ".github/workflows/test.yml"
+      - ".github/workflows/iris_test.yml"
       - ".pre-commit-config.yaml"
 
 jobs:
