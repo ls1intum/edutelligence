@@ -1,12 +1,16 @@
 {
 	"folders": [
 		{
-			"name": "Edutelligence",
+			"name": "EduTelligence",
 			"path": "./",
 		},
 		{
 			"name": "Hyperion",
 			"path": "./hyperion"
+		},
+		{
+			"name": "Shared",
+			"path": "./shared"
 		}
 	],
 	"settings": {

@@ -69,7 +69,6 @@ class TranscriptionIngestionPipeline(Pipeline):
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler, completion_args=completion_args
         )
-
         self.pipeline = self.llm | StrOutputParser()
         self.tokens = []
 
