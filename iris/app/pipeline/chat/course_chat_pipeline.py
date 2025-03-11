@@ -475,12 +475,12 @@ class CourseChatPipeline(Pipeline):
                 if step.get("output", None):
                     out = step["output"]
 
-            # if self.lecture_content:
-            #     self.callback.in_progress("Augmenting response ...")
-            #     out = self.citation_pipeline(
-            #         self.lecture_content, out, InformationType.PARAGRAPHS
-            #     )
-            # self.tokens.extend(self.citation_pipeline.tokens) #TODO: fix
+            if self.lecture_content:
+                self.callback.in_progress("Augmenting response ...")
+                out = self.citation_pipeline(
+                    self.lecture_content, out, InformationType.PARAGRAPHS
+                )
+            self.tokens.extend(self.citation_pipeline.tokens) #TODO: fix
 
             if self.retrieved_faqs:
                 self.callback.in_progress("Augmenting response ...")

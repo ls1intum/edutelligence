@@ -7,6 +7,7 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate, PromptTemplate
 from langchain_core.runnables import Runnable
 
+from app.domain.retrieval.lecture.lecture_retrieval_dto import LectureRetrievalDTO
 from app.llm import CapabilityRequestHandler, RequirementList, CompletionArguments
 from app.common.PipelineEnum import PipelineEnum
 from app.llm.langchain import IrisLangchainChatModel
@@ -61,21 +62,39 @@ class CitationPipeline(Pipeline):
     def __str__(self):
         return f"{self.__class__.__name__}(llm={self.llm})"
 
-    def create_formatted_lecture_string(self, paragraphs):
+    def create_formatted_lecture_string(self, lecture_retrieval_dto: LectureRetrievalDTO):
         """
         Create a formatted string from the data
         """
+
+        print("Lecture string!!!")
+        print(f"retireval: {lecture_retrieval_dto}")
         formatted_string = ""
-        for i, paragraph in enumerate(paragraphs):
+        for i, paragraph in enumerate(lecture_retrieval_dto.lecture_unit_page_chunks):
             lct = "Lecture: {}, Unit: {}, Page: {}, Link: {},\nContent:\n---{}---\n\n".format(
-                paragraph.get(LectureUnitPageChunkSchema.LECTURE_NAME.value),
-                paragraph.get(LectureUnitPageChunkSchema.LECTURE_UNIT_NAME.value),
-                paragraph.get(LectureUnitPageChunkSchema.PAGE_NUMBER.value),
-                paragraph.get(LectureUnitPageChunkSchema.LECTURE_UNIT_LINK.value)
+                paragraph.lecture_name,
+                paragraph.lecture_unit_name,
+                paragraph.page_number,
+                paragraph.lecture_unit_link
                 or "No link available",
-                paragraph.get(LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value),
+                paragraph.page_text_content,
             )
             formatted_string += lct
+
+        for i, paragraph in enumerate(lecture_retrieval_dto.lecture_transcriptions):
+            lct = "Lecture: {}, Unit: {}, Page: {}, Link: {}, Start Time: {}, End Time: {},\nContent:\n---{}---\n\n".format(
+                paragraph.lecture_name,
+                paragraph.lecture_unit_name,
+                paragraph.page_number,
+                paragraph.lecture_unit_link
+                or "No link available",
+                paragraph.segment_start_time,
+                paragraph.segment_end_time,
+                paragraph.segment_text
+            )
+            formatted_string += lct
+
+        print(f"Formatted string: {formatted_string}")
 
         return formatted_string.replace("{", "{{").replace("}", "}}")
 
@@ -98,7 +117,7 @@ class CitationPipeline(Pipeline):
 
     def __call__(
         self,
-        information: Union[List[dict], List[str]],
+        information,#: #Union[List[dict], List[str]],
         answer: str,
         information_type: InformationType = InformationType.PARAGRAPHS,
         **kwargs,
@@ -112,6 +131,8 @@ class CitationPipeline(Pipeline):
         """
         paras = ""
 
+        print("--------------CITATION PIPELINE CALLED!!! --------------")
+
         if information_type == InformationType.FAQS:
             paras = self.create_formatted_faq_string(
                 information, kwargs.get("base_url")
@@ -119,6 +140,7 @@ class CitationPipeline(Pipeline):
             self.prompt_str = self.faq_prompt_str
         if information_type == InformationType.PARAGRAPHS:
             paras = self.create_formatted_lecture_string(information)
+            print(f"prarms  2222 : {paras}")
             self.prompt_str = self.lecture_prompt_str
 
         try:
@@ -126,6 +148,7 @@ class CitationPipeline(Pipeline):
                 template=self.prompt_str,
                 input_variables=["Answer", "Paragraphs"],
             )
+            print(f"params: {paras}")
             response = (self.default_prompt | self.pipeline).invoke(
                 {"Answer": answer, "Paragraphs": paras}
             )

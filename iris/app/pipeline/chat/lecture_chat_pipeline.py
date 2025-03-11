@@ -119,7 +119,7 @@ class LectureChatPipeline(Pipeline):
 
         self._add_conversation_to_prompt(history, query)
 
-        lecture_content = self.retriever(
+        self.lecture_content = self.retriever(
             query=query.contents[0].text_content,
             course_id=dto.course_id,
             chat_history=history,
@@ -127,21 +127,22 @@ class LectureChatPipeline(Pipeline):
             lecture_unit_id=dto.lecture_unit_id,
             base_url=dto.settings.artemis_base_url,
         )
-
-        self._add_lecture_content_to_prompt(lecture_content)
+        print(f"content retrieved: {self.lecture_content}")
+        self._add_lecture_content_to_prompt(self.lecture_content)
         prompt_val = self.prompt.format_messages()
         self.prompt = ChatPromptTemplate.from_messages(prompt_val)
         try:
             response = (self.prompt | self.pipeline).invoke({})
             self._append_tokens(self.llm.tokens, PipelineEnum.IRIS_CHAT_LECTURE_MESSAGE)
-            # response_with_citation = self.citation_pipeline( TODO: Adapt citation pipeline
-            #     retrieved_lecture_chunks, response
-            # )
+            print(f"conetnet: {self.lecture_content}")
+            response_with_citation = self.citation_pipeline( #TODO: Adapt citation pipeline
+                self.lecture_content, response
+            )
             self.tokens.extend(self.citation_pipeline.tokens)
-            logger.info(f"Response from lecture chat pipeline: {response}")
+            logger.info(f"Response from lecture chat pipeline: {response_with_citation}")
             self.callback.done(
                 "Response created",
-                final_result=response,
+                final_result=response_with_citation,
                 tokens=self.tokens,
             )
         except Exception as e:
