@@ -480,7 +480,7 @@ class CourseChatPipeline(Pipeline):
                 out = self.citation_pipeline(
                     self.lecture_content, out, InformationType.PARAGRAPHS
                 )
-            self.tokens.extend(self.citation_pipeline.tokens) #TODO: fix
+            self.tokens.extend(self.citation_pipeline.tokens)
 
             if self.retrieved_faqs:
                 self.callback.in_progress("Augmenting response ...")

@@ -36,6 +36,7 @@ from ...domain import ExerciseChatPipelineExecutionDTO
 from ...domain.chat.interaction_suggestion_dto import (
     InteractionSuggestionPipelineExecutionDTO,
 )
+from ...domain.retrieval.lecture.lecture_retrieval_dto import LectureRetrievalDTO
 from ...llm import CapabilityRequestHandler, RequirementList
 from ...llm import CompletionArguments
 from ...llm.langchain import IrisLangchainChatModel
@@ -109,6 +110,7 @@ class ExerciseChatAgentPipeline(Pipeline):
     variant: str
     event: str | None
     retrieved_faqs: List[dict] = None
+    lecture_content: LectureRetrievalDTO = None
 
     def __init__(
         self,
@@ -618,6 +620,13 @@ class ExerciseChatAgentPipeline(Pipeline):
                         InformationType.FAQS,
                         base_url=dto.settings.artemis_base_url,
                     )
+
+                if self.lecture_content:
+                    self.callback.in_progress("Augmenting response ...")
+                    out = self.citation_pipeline(
+                        self.lecture_content, out, InformationType.PARAGRAPHS
+                    )
+                self.tokens.extend(self.citation_pipeline.tokens)
 
                 self.callback.done(
                     "Response created", final_result=out, tokens=self.tokens
