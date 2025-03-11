@@ -350,7 +350,7 @@ class LectureChatCallback(StatusCallback):
         base_url: str,
         initial_stages: List[StageDTO],
     ):
-        url = f"{base_url}/api/public/pyris/pipelines/lecture-chat/runs/{run_id}/status"
+        url = f"{base_url}/api/iris/public/pyris/pipelines/lecture-chat/runs/{run_id}/status"
         stages = initial_stages or []
         stage = len(stages)
         stages += [
