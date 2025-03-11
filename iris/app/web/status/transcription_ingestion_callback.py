@@ -32,12 +32,12 @@ class TranscriptionIngestionStatus(StatusCallback):
                 name="Remove old transcription",
             ),
             StageDTO(
-                weight=20,
+                weight=10,
                 state=StageStateEnum.NOT_STARTED,
                 name="Chunk transcription",
             ),
             StageDTO(
-                weight=50,
+                weight=40,
                 state=StageStateEnum.NOT_STARTED,
                 name="Summarize transcription",
             ),
@@ -45,6 +45,11 @@ class TranscriptionIngestionStatus(StatusCallback):
                 weight=20,
                 state=StageStateEnum.NOT_STARTED,
                 name="Ingest transcription",
+            ),
+            StageDTO(
+                weight=20,
+                state=StageStateEnum.NOT_STARTED,
+                name="Ingest lecture unit summary",
             ),
         ]
         status = IngestionStatusUpdateDTO(stages=stages, id=lecture_id)

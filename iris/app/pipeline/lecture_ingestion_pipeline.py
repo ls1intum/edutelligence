@@ -12,17 +12,22 @@ from unstructured.cleaners.core import clean
 from weaviate import WeaviateClient
 from weaviate.classes.query import Filter
 from . import Pipeline
+from .lecture_unit_pipeline import LectureUnitPipeline
 from ..common.pyris_message import PyrisMessage, IrisMessageRole
 from ..domain.data.image_message_content_dto import ImageMessageContentDTO
 
-from ..domain.data.lecture_unit_dto import LectureUnitDTO
+from ..domain.data.lecture_unit_dto import LectureUnitDTO as LectureUnitSlideDTO
+from ..domain.lecture.lecture_unit_dto import LectureUnitDTO
 from app.domain.ingestion.ingestion_pipeline_execution_dto import (
     IngestionPipelineExecutionDto,
 )
 from ..domain.data.text_message_content_dto import TextMessageContentDTO
 from app.common.PipelineEnum import PipelineEnum
 from ..llm.langchain import IrisLangchainChatModel
-from ..vector_database.lecture_schema import init_lecture_schema, LectureSchema
+from ..vector_database.lecture_unit_page_chunk_schema import (
+    init_lecture_unit_page_chunk_schema,
+    LectureUnitPageChunkSchema,
+)
 from ..ingestion.abstract_ingestion import AbstractIngestion
 from ..llm import (
     BasicRequestHandler,
@@ -73,24 +78,19 @@ def create_page_data(
     """
     return [
         {
-            LectureSchema.LECTURE_ID.value: lecture_unit_dto.lecture_id,
-            LectureSchema.LECTURE_NAME.value: lecture_unit_dto.lecture_name,
-            LectureSchema.LECTURE_UNIT_ID.value: lecture_unit_dto.lecture_unit_id,
-            LectureSchema.LECTURE_UNIT_NAME.value: lecture_unit_dto.lecture_unit_name,
-            LectureSchema.LECTURE_UNIT_LINK.value: lecture_unit_dto.lecture_unit_link,
-            LectureSchema.COURSE_ID.value: lecture_unit_dto.course_id,
-            LectureSchema.COURSE_NAME.value: lecture_unit_dto.course_name,
-            LectureSchema.COURSE_DESCRIPTION.value: lecture_unit_dto.course_description,
-            LectureSchema.BASE_URL.value: base_url,
-            LectureSchema.COURSE_LANGUAGE.value: course_language,
-            LectureSchema.PAGE_NUMBER.value: page_num + 1,
-            LectureSchema.PAGE_TEXT_CONTENT.value: page_split.page_content,
+            LectureUnitPageChunkSchema.LECTURE_ID.value: lecture_unit_dto.lecture_id,
+            LectureUnitPageChunkSchema.LECTURE_UNIT_ID.value: lecture_unit_dto.lecture_unit_id,
+            LectureUnitPageChunkSchema.COURSE_ID.value: lecture_unit_dto.course_id,
+            LectureUnitPageChunkSchema.COURSE_LANGUAGE.value: course_language,
+            LectureUnitPageChunkSchema.PAGE_NUMBER.value: page_num + 1,
+            LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value: page_split.page_content,
+            LectureUnitPageChunkSchema.BASE_URL.value: base_url,
         }
         for page_split in page_splits
     ]
 
 
-class LectureIngestionPipeline(AbstractIngestion, Pipeline):
+class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
 
     def __init__(
         self,
@@ -99,10 +99,10 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
         callback: ingestion_status_callback,
     ):
         super().__init__()
-        self.collection = init_lecture_schema(client)
+        self.collection = init_lecture_unit_page_chunk_schema(client)
         self.dto = dto
         self.llm_vision = BasicRequestHandler("azure-gpt-4-omni")
-        self.llm_chat = BasicRequestHandler("azure-gpt-35-turbo")
+        self.llm_chat = BasicRequestHandler("azure-gpt-4-omni")
         self.llm_embedding = BasicRequestHandler("embedding-small")
         self.callback = callback
         request_handler = CapabilityRequestHandler(
@@ -118,6 +118,7 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
         )
         self.pipeline = self.llm | StrOutputParser()
         self.tokens = []
+        self.course_language = None
 
     def __call__(self) -> bool:
         try:
@@ -135,7 +136,7 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
             chunks.extend(
                 self.chunk_data(
                     lecture_pdf=pdf_path,
-                    lecture_unit_dto=self.dto.lecture_unit,
+                    lecture_unit_slide_dto=self.dto.lecture_unit,
                     base_url=self.dto.settings.artemis_base_url,
                 )
             )
@@ -143,7 +144,27 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
             self.callback.done("Lecture Chunking and interpretation Finished")
             self.callback.in_progress("Ingesting lecture chunks into database...")
             self.batch_update(chunks)
+
             self.callback.done("Lecture Ingestion Finished", tokens=self.tokens)
+            lecture_unit_dto = LectureUnitDTO(
+                course_id=self.dto.lecture_unit.course_id,
+                course_name=self.dto.lecture_unit.course_name,
+                course_description=self.dto.lecture_unit.course_description,
+                course_language=self.course_language,
+                lecture_id=self.dto.lecture_unit.lecture_id,
+                lecture_name=self.dto.lecture_unit.lecture_name,
+                lecture_unit_id=self.dto.lecture_unit.lecture_unit_id,
+                lecture_unit_name=self.dto.lecture_unit.lecture_unit_name,
+                lecture_unit_link=self.dto.lecture_unit.lecture_unit_link,
+                base_url=self.dto.settings.artemis_base_url,
+            )
+
+            LectureUnitPipeline()(lecture_unit=lecture_unit_dto)
+
+            self.callback.done(
+                "Lecture Unit Summary Ingestion Finished", tokens=self.tokens
+            )
+
             logger.info(
                 f"Lecture ingestion pipeline finished Successfully for course "
                 f"{self.dto.lecture_unit.course_name}"
@@ -170,7 +191,7 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
                 try:
                     for index, chunk in enumerate(chunks):
                         embed_chunk = self.llm_embedding.embed(
-                            chunk[LectureSchema.PAGE_TEXT_CONTENT.value]
+                            chunk[LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value]
                         )
                         batch.add_object(properties=chunk, vector=embed_chunk)
                 except Exception as e:
@@ -184,14 +205,14 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
     def chunk_data(
         self,
         lecture_pdf: str,
-        lecture_unit_dto: LectureUnitDTO = None,
+        lecture_unit_slide_dto: LectureUnitSlideDTO = None,
         base_url: str = None,
     ):
         """
         Chunk the data from the lecture into smaller pieces
         """
         doc = fitz.open(lecture_pdf)
-        course_language = self.get_course_language(
+        self.course_language = self.get_course_language(
             doc.load_page(min(5, doc.page_count - 1)).get_text()
         )
         data = []
@@ -211,8 +232,8 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
                 image_interpretation = self.interpret_image(
                     img_base64,
                     old_page_text,
-                    lecture_unit_dto.lecture_name,
-                    course_language,
+                    lecture_unit_slide_dto.lecture_name,
+                    self.course_language,
                 )
                 page_text = self.merge_page_content_and_image_interpretation(
                     page_text, image_interpretation
@@ -220,7 +241,11 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
             page_splits = text_splitter.create_documents([page_text])
             data.extend(
                 create_page_data(
-                    page_num, page_splits, lecture_unit_dto, course_language, base_url
+                    page_num,
+                    page_splits,
+                    lecture_unit_slide_dto,
+                    self.course_language,
+                    base_url,
                 )
             )
             old_page_text = page_text
@@ -251,7 +276,9 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
         )
         try:
             response = self.llm_vision.chat(
-                [iris_message], CompletionArguments(temperature=0, max_tokens=512)
+                [iris_message],
+                CompletionArguments(temperature=0, max_tokens=512),
+                tools=[],
             )
             self._append_tokens(
                 response.token_usage, PipelineEnum.IRIS_LECTURE_INGESTION
@@ -303,19 +330,19 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
             contents=[TextMessageContentDTO(text_content=prompt)],
         )
         response = self.llm_chat.chat(
-            [iris_message], CompletionArguments(temperature=0, max_tokens=20)
+            [iris_message], CompletionArguments(temperature=0, max_tokens=20), tools=[]
         )
         self._append_tokens(response.token_usage, PipelineEnum.IRIS_LECTURE_INGESTION)
         return response.contents[0].text_content
 
     def delete_old_lectures(
-        self, lecture_units: list[LectureUnitDTO], artemis_base_url: str
+        self, lecture_units_slides: list[LectureUnitSlideDTO], artemis_base_url: str
     ):
         """
         Delete the lecture unit from the database
         """
         try:
-            for lecture_unit in lecture_units:
+            for lecture_unit in lecture_units_slides:
                 if self.delete_lecture_unit(
                     lecture_unit.course_id,
                     lecture_unit.lecture_id,
@@ -337,12 +364,18 @@ class LectureIngestionPipeline(AbstractIngestion, Pipeline):
         """
         try:
             self.collection.data.delete_many(
-                where=Filter.by_property(LectureSchema.BASE_URL.value).equal(base_url)
-                & Filter.by_property(LectureSchema.COURSE_ID.value).equal(course_id)
-                & Filter.by_property(LectureSchema.LECTURE_ID.value).equal(lecture_id)
-                & Filter.by_property(LectureSchema.LECTURE_UNIT_ID.value).equal(
-                    lecture_unit_id
+                where=Filter.by_property(
+                    LectureUnitPageChunkSchema.BASE_URL.value
+                ).equal(base_url)
+                & Filter.by_property(LectureUnitPageChunkSchema.COURSE_ID.value).equal(
+                    course_id
                 )
+                & Filter.by_property(LectureUnitPageChunkSchema.LECTURE_ID.value).equal(
+                    lecture_id
+                )
+                & Filter.by_property(
+                    LectureUnitPageChunkSchema.LECTURE_UNIT_ID.value
+                ).equal(lecture_unit_id)
             )
             return True
         except Exception as e:

@@ -22,8 +22,9 @@ from ...domain.ingestion.transcription_ingestion.transcription_ingestion_pipelin
     TranscriptionIngestionPipelineExecutionDto,
 )
 from ...pipeline.faq_ingestion_pipeline import FaqIngestionPipeline
-from ...pipeline.lecture_ingestion_pipeline import LectureIngestionPipeline
+from ...pipeline.lecture_ingestion_pipeline import LectureUnitPageIngestionPipeline
 from ...pipeline.transcription_ingestion_pipeline import TranscriptionIngestionPipeline
+from ...retrieval.lecture.lecture_retrieval import LectureRetrieval
 from ...vector_database.database import VectorDatabase
 
 router = APIRouter(prefix="/api/v1/webhooks", tags=["webhooks"])
@@ -45,7 +46,7 @@ def run_lecture_update_pipeline_worker(dto: IngestionPipelineExecutionDto):
             )
             db = VectorDatabase()
             client = db.get_client()
-            pipeline = LectureIngestionPipeline(
+            pipeline = LectureUnitPageIngestionPipeline(
                 client=client, dto=dto, callback=callback
             )
             pipeline()
@@ -70,7 +71,9 @@ def run_lecture_deletion_pipeline_worker(dto: LecturesDeletionExecutionDto):
         )
         db = VectorDatabase()
         client = db.get_client()
-        pipeline = LectureIngestionPipeline(client=client, dto=None, callback=callback)
+        pipeline = LectureUnitPageIngestionPipeline(
+            client=client, dto=None, callback=callback
+        )
         pipeline.delete_old_lectures(dto.lecture_units, dto.settings.artemis_base_url)
     except Exception as e:
         logger.error(f"Error while deleting lectures: {e}")
@@ -222,3 +225,19 @@ def faq_deletion_webhook(dto: FaqDeletionExecutionDto):
     thread = Thread(target=run_faq_delete_pipeline_worker, args=(dto,))
     thread.start()
     return
+
+@router.get(
+    "/test",
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def test():
+    thread = Thread(
+        target=LectureRetrieval(VectorDatabase().get_client()),
+        args=("What is scrum?", 1, []),
+    )
+    thread.start()
+    # LectureRetrieval(VectorDatabase().get_client())(
+    #     query="Query",
+    #     course_id = 1,
+    #     chat_history = [],
+    # )
