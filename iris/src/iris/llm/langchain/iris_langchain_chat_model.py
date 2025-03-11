@@ -14,8 +14,8 @@ from langchain_core.runnables import Runnable
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, Field
 
-from src.iris.common.PipelineEnum import PipelineEnum
-from src.iris.common.token_usage_dto import TokenUsageDTO
+from iris.common.PipelineEnum import PipelineEnum
+from iris.common.token_usage_dto import TokenUsageDTO
 
 from ...common.message_converters import (
     convert_iris_message_to_langchain_message,

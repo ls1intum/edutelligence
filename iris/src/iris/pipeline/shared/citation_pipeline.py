@@ -3,18 +3,16 @@ from asyncio.log import logger
 from enum import Enum
 from typing import List, Union
 
-from app import (
-    LectureUnitPageChunkSchema,
-)
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate, PromptTemplate
 from langchain_core.runnables import Runnable
 
-from src.iris.common.PipelineEnum import PipelineEnum
-from src.iris.llm import CapabilityRequestHandler, CompletionArguments, RequirementList
-from src.iris.llm.langchain import IrisLangchainChatModel
-from src.iris.pipeline import Pipeline
-from src.iris.vector_database.faq_schema import FaqSchema
+from iris.common.PipelineEnum import PipelineEnum
+from iris.llm import CapabilityRequestHandler, CompletionArguments, RequirementList
+from iris.llm.langchain import IrisLangchainChatModel
+from iris.pipeline import Pipeline
+from iris.vector_database.faq_schema import FaqSchema
+from iris.vector_database.lecture_unit_page_chunk_schema import LectureUnitPageChunkSchema
 
 
 class InformationType(str, Enum):

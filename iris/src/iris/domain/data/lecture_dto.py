@@ -3,7 +3,7 @@ from typing import List, Optional
 
 from pydantic import BaseModel, Field
 
-from src.iris.domain.data.lecture_unit_dto import LectureUnitDTO
+from iris.domain.data.lecture_unit_dto import LectureUnitDTO
 
 
 class PyrisLectureDTO(BaseModel):

@@ -2,18 +2,18 @@ import logging
 from datetime import datetime
 from typing import List, Optional, Tuple
 
-from src.iris.common.pyris_message import IrisMessageRole, PyrisMessage
-from src.iris.domain.text_exercise_chat_pipeline_execution_dto import (
+from iris.common.pyris_message import IrisMessageRole, PyrisMessage
+from iris.domain.text_exercise_chat_pipeline_execution_dto import (
     TextExerciseChatPipelineExecutionDTO,
 )
-from src.iris.llm import CapabilityRequestHandler, CompletionArguments, RequirementList
-from src.iris.pipeline import Pipeline
-from src.iris.pipeline.prompts.text_exercise_chat_prompts import (
+from iris.llm import CapabilityRequestHandler, CompletionArguments, RequirementList
+from iris.pipeline import Pipeline
+from iris.pipeline.prompts.text_exercise_chat_prompts import (
     fmt_extract_sentiments_prompt,
     fmt_sentiment_analysis_prompt,
     fmt_system_prompt,
 )
-from src.iris.web.status.status_update import TextExerciseChatCallback
+from iris.web.status.status_update import TextExerciseChatCallback
 
 logger = logging.getLogger(__name__)
 

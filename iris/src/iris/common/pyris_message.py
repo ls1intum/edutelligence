@@ -4,10 +4,10 @@ from typing import List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from src.iris.common.token_usage_dto import TokenUsageDTO
-from src.iris.domain.data.message_content_dto import MessageContentDTO
-from src.iris.domain.data.tool_call_dto import ToolCallDTO
-from src.iris.domain.data.tool_message_content_dto import ToolMessageContentDTO
+from iris.common.token_usage_dto import TokenUsageDTO
+from iris.domain.data.message_content_dto import MessageContentDTO
+from iris.domain.data.tool_call_dto import ToolCallDTO
+from iris.domain.data.tool_message_content_dto import ToolMessageContentDTO
 
 
 class IrisMessageRole(str, Enum):

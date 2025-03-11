@@ -6,16 +6,16 @@ from langchain_core.prompts import PromptTemplate
 from langchain_core.runnables import Runnable
 from langsmith import traceable
 
-from src.iris.common.PipelineEnum import PipelineEnum
-from src.iris.domain import InconsistencyCheckPipelineExecutionDTO
-from src.iris.llm import CapabilityRequestHandler, CompletionArguments, RequirementList
-from src.iris.llm.langchain.iris_langchain_chat_model import IrisLangchainChatModel
-from src.iris.pipeline import Pipeline
-from src.iris.pipeline.prompts.inconsistency_check_prompts import (
+from iris.common.PipelineEnum import PipelineEnum
+from iris.domain import InconsistencyCheckPipelineExecutionDTO
+from iris.llm import CapabilityRequestHandler, CompletionArguments, RequirementList
+from iris.llm.langchain.iris_langchain_chat_model import IrisLangchainChatModel
+from iris.pipeline import Pipeline
+from iris.pipeline.prompts.inconsistency_check_prompts import (
     prettify_prompt,
     solver_prompt,
 )
-from src.iris.web.status.status_update import InconsistencyCheckCallback
+from iris.web.status.status_update import InconsistencyCheckCallback
 
 logger = logging.getLogger(__name__)
 

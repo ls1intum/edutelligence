@@ -2,7 +2,7 @@ from typing import Dict, Optional, Set
 
 from pydantic import BaseModel, Field
 
-from src.iris.domain.data.metrics.lecture_unit_information_dto import (
+from iris.domain.data.metrics.lecture_unit_information_dto import (
     LectureUnitInformationDTO,
 )
 

@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, Response, status
 from fastapi.params import Query
 from weaviate.collections.classes.filters import Filter
 
-from src.iris.dependencies import TokenValidator
+from iris.dependencies import TokenValidator
 
 from ...vector_database.database import VectorDatabase
 from ...vector_database.lecture_unit_page_chunk_schema import LectureUnitPageChunkSchema

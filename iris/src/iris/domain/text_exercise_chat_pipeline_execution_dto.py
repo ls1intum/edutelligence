@@ -1,8 +1,8 @@
 from pydantic import BaseModel, Field
 
-from src.iris.common.pyris_message import PyrisMessage
-from src.iris.domain import PipelineExecutionDTO
-from src.iris.domain.data.text_exercise_dto import TextExerciseDTO
+from iris.common.pyris_message import PyrisMessage
+from iris.domain import PipelineExecutionDTO
+from iris.domain.data.text_exercise_dto import TextExerciseDTO
 
 
 class TextExerciseChatPipelineExecutionDTO(BaseModel):

@@ -19,7 +19,7 @@ from openai.types.chat import ChatCompletionMessage, ChatCompletionMessageParam
 from openai.types.shared_params import ResponseFormatJSONObject
 from pydantic import BaseModel
 
-from src.iris.domain.data.text_message_content_dto import TextMessageContentDTO
+from iris.domain.data.text_message_content_dto import TextMessageContentDTO
 
 from ...common.message_converters import map_role_to_str, map_str_to_role
 from ...common.pyris_message import PyrisAIMessage, PyrisMessage

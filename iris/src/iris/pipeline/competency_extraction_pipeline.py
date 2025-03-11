@@ -6,17 +6,17 @@ from langchain_core.prompts import (
     ChatPromptTemplate,
 )
 
-from src.iris.common.PipelineEnum import PipelineEnum
-from src.iris.common.pyris_message import IrisMessageRole, PyrisMessage
-from src.iris.domain import (
+from iris.common.PipelineEnum import PipelineEnum
+from iris.common.pyris_message import IrisMessageRole, PyrisMessage
+from iris.domain import (
     CompetencyExtractionPipelineExecutionDTO,
 )
-from src.iris.domain.data.competency_dto import Competency
-from src.iris.domain.data.text_message_content_dto import TextMessageContentDTO
-from src.iris.llm import CapabilityRequestHandler, CompletionArguments, RequirementList
-from src.iris.pipeline import Pipeline
-from src.iris.pipeline.prompts.competency_extraction import system_prompt
-from src.iris.web.status.status_update import CompetencyExtractionCallback
+from iris.domain.data.competency_dto import Competency
+from iris.domain.data.text_message_content_dto import TextMessageContentDTO
+from iris.llm import CapabilityRequestHandler, CompletionArguments, RequirementList
+from iris.pipeline import Pipeline
+from iris.pipeline.prompts.competency_extraction import system_prompt
+from iris.web.status.status_update import CompetencyExtractionCallback
 
 logger = logging.getLogger(__name__)
 

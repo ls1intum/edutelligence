@@ -13,7 +13,7 @@ from weaviate.collections.classes.config import (
     VectorDistances,
 )
 
-from src.iris.vector_database.lecture_transcription_schema import (
+from iris.vector_database.lecture_transcription_schema import (
     LectureTranscriptionSchema,
 )
 

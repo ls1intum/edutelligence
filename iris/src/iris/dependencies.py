@@ -1,11 +1,11 @@
 from fastapi import Depends
 from fastapi.requests import Request
 
-from src.iris.common.custom_exceptions import (
+from iris.common.custom_exceptions import (
     PermissionDeniedException,
     RequiresAuthenticationException,
 )
-from src.iris.config import APIKeyConfig, settings
+from iris.config import APIKeyConfig, settings
 
 
 def _get_api_key(request: Request) -> str:

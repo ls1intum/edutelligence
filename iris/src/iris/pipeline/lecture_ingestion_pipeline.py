@@ -13,8 +13,8 @@ from unstructured.cleaners.core import clean
 from weaviate import WeaviateClient
 from weaviate.classes.query import Filter
 
-from src.iris.common.PipelineEnum import PipelineEnum
-from src.iris.domain.ingestion.ingestion_pipeline_execution_dto import (
+from iris.common.PipelineEnum import PipelineEnum
+from iris.domain.ingestion.ingestion_pipeline_execution_dto import (
     IngestionPipelineExecutionDto,
 )
 

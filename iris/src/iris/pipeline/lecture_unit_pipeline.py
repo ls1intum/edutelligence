@@ -1,14 +1,14 @@
-from app import VectorDatabase, batch_update_lock
 from weaviate.classes.query import Filter
 
-from src.iris.domain.lecture.lecture_unit_dto import LectureUnitDTO
-from src.iris.llm import BasicRequestHandler
-from src.iris.pipeline import Pipeline
-from src.iris.pipeline.lecture_unit_segment_summary_pipeline import (
+from iris.domain.lecture.lecture_unit_dto import LectureUnitDTO
+from iris.llm import BasicRequestHandler
+from iris.pipeline import Pipeline
+from iris.pipeline.lecture_unit_segment_summary_pipeline import (
     LectureUnitSegmentSummaryPipeline,
 )
-from src.iris.pipeline.lecture_unit_summary_pipeline import LectureUnitSummaryPipeline
-from src.iris.vector_database.lecture_unit_schema import (
+from iris.pipeline.lecture_unit_summary_pipeline import LectureUnitSummaryPipeline
+from iris.vector_database.database import VectorDatabase, batch_update_lock
+from iris.vector_database.lecture_unit_schema import (
     LectureUnitSchema,
     init_lecture_unit_schema,
 )

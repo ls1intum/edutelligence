@@ -4,7 +4,7 @@ from typing import List, Optional
 
 from pydantic import BaseModel, Field
 
-from src.iris.domain.data.simple_submission_dto import SimpleSubmissionDTO
+from iris.domain.data.simple_submission_dto import SimpleSubmissionDTO
 
 
 class ExerciseType(str, Enum):

@@ -2,10 +2,10 @@ from typing import List, Optional
 
 from pydantic import Field
 
-from src.iris.domain import PipelineExecutionDTO, PipelineExecutionSettingsDTO
-from src.iris.domain.data.faq_dto import FaqDTO
-from src.iris.domain.data.lecture_unit_dto import LectureUnitDTO
-from src.iris.domain.status.stage_dto import StageDTO
+from iris.domain import PipelineExecutionDTO, PipelineExecutionSettingsDTO
+from iris.domain.data.faq_dto import FaqDTO
+from iris.domain.data.lecture_unit_dto import LectureUnitDTO
+from iris.domain.status.stage_dto import StageDTO
 
 
 class IngestionPipelineExecutionDto(PipelineExecutionDTO):

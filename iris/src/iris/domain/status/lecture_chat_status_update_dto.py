@@ -1,4 +1,4 @@
-from src.iris.domain.status.status_update_dto import StatusUpdateDTO
+from iris.domain.status.status_update_dto import StatusUpdateDTO
 
 
 class LectureChatStatusUpdateDTO(StatusUpdateDTO):

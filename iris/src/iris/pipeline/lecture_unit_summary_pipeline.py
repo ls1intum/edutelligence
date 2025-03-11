@@ -5,12 +5,12 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import Runnable
 from weaviate import WeaviateClient
 
-from src.iris.common.PipelineEnum import PipelineEnum
-from src.iris.domain.lecture.lecture_unit_dto import LectureUnitDTO
-from src.iris.llm import CapabilityRequestHandler, CompletionArguments, RequirementList
-from src.iris.llm.langchain import IrisLangchainChatModel
-from src.iris.pipeline import Pipeline
-from src.iris.pipeline.prompts.lecture_unit_summary_prompt import (
+from iris.common.PipelineEnum import PipelineEnum
+from iris.domain.lecture.lecture_unit_dto import LectureUnitDTO
+from iris.llm import CapabilityRequestHandler, CompletionArguments, RequirementList
+from iris.llm.langchain import IrisLangchainChatModel
+from iris.pipeline import Pipeline
+from iris.pipeline.prompts.lecture_unit_summary_prompt import (
     lecture_unit_summary_prompt,
 )
 

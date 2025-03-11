@@ -2,8 +2,8 @@ from typing import Optional
 
 from pydantic import BaseModel, Field
 
-from src.iris.domain.pipeline_execution_settings_dto import PipelineExecutionSettingsDTO
-from src.iris.domain.status.stage_dto import StageDTO
+from iris.domain.pipeline_execution_settings_dto import PipelineExecutionSettingsDTO
+from iris.domain.status.stage_dto import StageDTO
 
 
 class PipelineExecutionDTO(BaseModel):

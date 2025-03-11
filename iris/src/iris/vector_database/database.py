@@ -4,7 +4,7 @@ import threading
 import weaviate
 from weaviate.classes.query import Filter
 
-from src.iris.config import settings
+from iris.config import settings
 
 from .faq_schema import init_faq_schema
 from .lecture_unit_page_chunk_schema import init_lecture_unit_page_chunk_schema

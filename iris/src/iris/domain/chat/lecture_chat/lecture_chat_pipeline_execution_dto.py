@@ -1,5 +1,5 @@
-from src.iris.domain import ChatPipelineExecutionDTO
-from src.iris.domain.data.course_dto import CourseDTO
+from iris.domain import ChatPipelineExecutionDTO
+from iris.domain.data.course_dto import CourseDTO
 
 
 class LectureChatPipelineExecutionDTO(ChatPipelineExecutionDTO):

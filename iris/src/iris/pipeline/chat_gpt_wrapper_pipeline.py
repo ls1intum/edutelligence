@@ -1,21 +1,21 @@
 import logging
 from typing import List, Optional
 
-from app import chat_gpt_initial_system_prompt
 from langchain_core.prompts import (
     ChatPromptTemplate,
 )
 from langchain_core.runnables import Runnable
 
-from src.iris.common.pyris_message import IrisMessageRole, PyrisMessage
-from src.iris.domain.chat.exercise_chat.exercise_chat_pipeline_execution_dto import (
+from iris.common.pyris_message import IrisMessageRole, PyrisMessage
+from iris.domain.chat.exercise_chat.exercise_chat_pipeline_execution_dto import (
     ExerciseChatPipelineExecutionDTO,
 )
-from src.iris.domain.data.text_message_content_dto import TextMessageContentDTO
-from src.iris.llm import CapabilityRequestHandler, CompletionArguments, RequirementList
-from src.iris.llm.langchain.iris_langchain_chat_model import IrisLangchainChatModel
-from src.iris.pipeline import Pipeline
-from src.iris.web.status.status_update import ChatGPTWrapperStatusCallback
+from iris.domain.data.text_message_content_dto import TextMessageContentDTO
+from iris.llm import CapabilityRequestHandler, CompletionArguments, RequirementList
+from iris.llm.langchain.iris_langchain_chat_model import IrisLangchainChatModel
+from iris.pipeline import Pipeline
+from iris.pipeline.prompts.chat_gpt_wrapper_prompts import chat_gpt_initial_system_prompt
+from iris.web.status.status_update import ChatGPTWrapperStatusCallback
 
 logger = logging.getLogger(__name__)
 

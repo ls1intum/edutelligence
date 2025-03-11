@@ -4,7 +4,7 @@ from typing import List
 from langsmith import traceable
 from weaviate import WeaviateClient
 
-from src.iris.common.PipelineEnum import PipelineEnum
+from iris.common.PipelineEnum import PipelineEnum
 
 from ..common.pyris_message import PyrisMessage
 from ..pipeline.prompts.faq_retrieval_prompts import (

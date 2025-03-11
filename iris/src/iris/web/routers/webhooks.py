@@ -5,8 +5,8 @@ from threading import Semaphore, Thread
 from fastapi import APIRouter, Depends, status
 from sentry_sdk import capture_exception
 
-from src.iris.dependencies import TokenValidator
-from src.iris.domain.ingestion.ingestion_pipeline_execution_dto import (
+from iris.dependencies import TokenValidator
+from iris.domain.ingestion.ingestion_pipeline_execution_dto import (
     FaqIngestionPipelineExecutionDto,
     IngestionPipelineExecutionDto,
 )

@@ -2,13 +2,13 @@ from typing import Optional
 
 from pydantic import BaseModel, Field
 
-from src.iris.domain.data.metrics.competency_student_metrics_dto import (
+from iris.domain.data.metrics.competency_student_metrics_dto import (
     CompetencyStudentMetricsDTO,
 )
-from src.iris.domain.data.metrics.exercise_student_metrics_dto import (
+from iris.domain.data.metrics.exercise_student_metrics_dto import (
     ExerciseStudentMetricsDTO,
 )
-from src.iris.domain.data.metrics.lecture_unit_student_metrics_dto import (
+from iris.domain.data.metrics.lecture_unit_student_metrics_dto import (
     LectureUnitStudentMetricsDTO,
 )
 

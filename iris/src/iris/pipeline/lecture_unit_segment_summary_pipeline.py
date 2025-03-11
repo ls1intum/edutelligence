@@ -1,34 +1,31 @@
 from typing import Tuple
 
-from app import (
-    LectureUnitPageChunkSchema,
-    init_lecture_unit_page_chunk_schema,
-)
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import Runnable
 from weaviate.classes.query import Filter
 from weaviate.client import WeaviateClient
-from weaviate.collections.classes.data import DataReference
 
-from src.iris.common.PipelineEnum import PipelineEnum
-from src.iris.domain.lecture.lecture_unit_dto import LectureUnitDTO
-from src.iris.llm import (
+from iris.common.PipelineEnum import PipelineEnum
+from iris.domain.lecture.lecture_unit_dto import LectureUnitDTO
+from iris.llm import (
     BasicRequestHandler,
     CapabilityRequestHandler,
     CompletionArguments,
     RequirementList,
 )
-from src.iris.llm.langchain import IrisLangchainChatModel
-from src.iris.pipeline import Pipeline
-from src.iris.pipeline.prompts.lecture_unit_segment_summary_prompt import (
+from iris.llm.langchain import IrisLangchainChatModel
+from iris.pipeline import Pipeline
+from iris.pipeline.prompts.lecture_unit_segment_summary_prompt import (
     lecture_unit_segment_summary_prompt,
 )
-from src.iris.vector_database.lecture_transcription_schema import (
+from iris.vector_database.lecture_transcription_schema import (
     LectureTranscriptionSchema,
     init_lecture_transcription_schema,
 )
-from src.iris.vector_database.lecture_unit_segment_schema import (
+from iris.vector_database.lecture_unit_page_chunk_schema import init_lecture_unit_page_chunk_schema, \
+    LectureUnitPageChunkSchema
+from iris.vector_database.lecture_unit_segment_schema import (
     LectureUnitSegmentSchema,
     init_lecture_unit_segment_schema,
 )
@@ -217,8 +214,8 @@ class LectureUnitSegmentSummaryPipeline(Pipeline):
             filters=lecture_filter, limit=1
         ).objects
 
-        transcriptions = self._get_transcriptions(slide_number)
-        slides = self._get_slides(slide_number)
+        # transcriptions = self._get_transcriptions(slide_number)
+        # slides = self._get_slides(slide_number)
 
         if len(lectures) == 0:
             # Insert new lecture
@@ -233,7 +230,8 @@ class LectureUnitSegmentSummaryPipeline(Pipeline):
                 },
                 vector=self.llm_embedding.embed(summary),
             )
-            # lecture = self.lecture_unit_segment_collection.query.fetch_objects(filters=lecture_filter, limit=1).objects[0]
+            # lecture = self.lecture_unit_segment_collection.query
+            # .fetch_objects(filters=lecture_filter, limit=1).objects[0]
             # transcription_references = []
             # for transcription in transcriptions.objects:
             #     transcription_reference = DataReference(
@@ -256,8 +254,8 @@ class LectureUnitSegmentSummaryPipeline(Pipeline):
             return
 
         # Update existing lecture
-        transcription_uuids = [t.uuid for t in transcriptions]
-        slide_uuids = [s.uuid for s in slides]
+        # transcription_uuids = [t.uuid for t in transcriptions]
+        # slide_uuids = [s.uuid for s in slides]
         lecture_uuid = lectures[0].uuid
 
         self.lecture_unit_segment_collection.data.update(

@@ -30,6 +30,8 @@ langchain-text-splitters="^0.3.2"
 langchain-experimental="^0.3.3"
 langchain-openai="^0.3.3"
 cohere = "5.9.0"
+types-pyyaml = "^6.0.12.20241230"
+types-pytz = "^2025.1.0.20250204"
 
 [tool.poetry.group.dev.dependencies]
 mypy = "^1.10.0"

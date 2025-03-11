@@ -3,10 +3,10 @@ from typing import Any, Callable, Dict, Optional, Sequence, Type, Union
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, ConfigDict
 
-from src.iris.common.pyris_message import PyrisMessage
-from src.iris.domain.data.image_message_content_dto import ImageMessageContentDTO
-from src.iris.llm import CompletionArguments, LanguageModel, RequestHandler
-from src.iris.llm.llm_manager import LlmManager
+from iris.common.pyris_message import PyrisMessage
+from iris.domain.data.image_message_content_dto import ImageMessageContentDTO
+from iris.llm import CompletionArguments, LanguageModel, RequestHandler
+from iris.llm.llm_manager import LlmManager
 
 
 class RerankRequestHandler(RequestHandler):

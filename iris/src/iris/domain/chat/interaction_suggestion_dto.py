@@ -2,7 +2,7 @@ from typing import List, Optional
 
 from pydantic import BaseModel, Field
 
-from src.iris.common.pyris_message import PyrisMessage
+from iris.common.pyris_message import PyrisMessage
 
 
 class InteractionSuggestionPipelineExecutionDTO(BaseModel):

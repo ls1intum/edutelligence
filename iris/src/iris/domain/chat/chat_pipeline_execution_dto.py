@@ -2,9 +2,9 @@ from typing import List, Optional
 
 from pydantic import Field
 
-from src.iris.common.pyris_message import PyrisMessage
-from src.iris.domain import PipelineExecutionDTO
-from src.iris.domain.data.user_dto import UserDTO
+from iris.common.pyris_message import PyrisMessage
+from iris.domain import PipelineExecutionDTO
+from iris.domain.data.user_dto import UserDTO
 
 
 class ChatPipelineExecutionDTO(PipelineExecutionDTO):

@@ -2,22 +2,20 @@ import os
 from asyncio.log import logger
 from typing import List, Optional, Union
 
-from app import (
-    LectureUnitPageChunkSchema,
-)
 from langchain_core.output_parsers import PydanticOutputParser
 from langchain_core.prompts import ChatPromptTemplate, PromptTemplate
 from langchain_core.runnables import Runnable
 from langsmith import traceable
 
-from src.iris.common.PipelineEnum import PipelineEnum
-from src.iris.common.pyris_message import PyrisMessage
-from src.iris.llm import CapabilityRequestHandler, CompletionArguments, RequirementList
-from src.iris.llm.langchain import IrisLangchainChatModel
-from src.iris.pipeline import Pipeline
-from src.iris.pipeline.chat.output_models.output_models.selected_paragraphs import (
+from iris.common.PipelineEnum import PipelineEnum
+from iris.common.pyris_message import PyrisMessage
+from iris.llm import CapabilityRequestHandler, CompletionArguments, RequirementList
+from iris.llm.langchain import IrisLangchainChatModel
+from iris.pipeline import Pipeline
+from iris.pipeline.chat.output_models.output_models.selected_paragraphs import (
     SelectedParagraphs,
 )
+from iris.vector_database.lecture_unit_page_chunk_schema import LectureUnitPageChunkSchema
 
 
 class RerankerPipeline(Pipeline):

@@ -3,12 +3,12 @@ from typing import Any, Callable, Dict, Literal, Optional, Sequence, Type, Union
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, ConfigDict
 
-from src.iris.common.pyris_message import PyrisMessage
-from src.iris.domain.data.image_message_content_dto import ImageMessageContentDTO
-from src.iris.llm import LanguageModel
-from src.iris.llm.completion_arguments import CompletionArguments
-from src.iris.llm.llm_manager import LlmManager
-from src.iris.llm.request_handler import RequestHandler
+from iris.common.pyris_message import PyrisMessage
+from iris.domain.data.image_message_content_dto import ImageMessageContentDTO
+from iris.llm import LanguageModel
+from iris.llm.completion_arguments import CompletionArguments
+from iris.llm.llm_manager import LlmManager
+from iris.llm.request_handler import RequestHandler
 
 
 class BasicRequestHandler(RequestHandler):

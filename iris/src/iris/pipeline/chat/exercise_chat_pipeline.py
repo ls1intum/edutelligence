@@ -12,8 +12,8 @@ from langchain_core.runnables import Runnable
 from langsmith import get_current_run_tree, traceable
 from weaviate.collections.classes.filters import Filter
 
-from src.iris.common.PipelineEnum import PipelineEnum
-from src.iris.retrieval.lecture.lecture_page_chunk_retrieval import (
+from iris.common.PipelineEnum import PipelineEnum
+from iris.retrieval.lecture.lecture_page_chunk_retrieval import (
     LecturePageChunkRetrieval,
 )
 

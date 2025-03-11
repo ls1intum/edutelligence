@@ -1,7 +1,7 @@
-from app import VectorDatabase
 from weaviate.collections.classes.filters import Filter
 
-from src.iris.vector_database.faq_schema import FaqSchema
+from iris.vector_database.database import VectorDatabase
+from iris.vector_database.faq_schema import FaqSchema
 
 
 def should_allow_faq_tool(db: VectorDatabase, course_id: int) -> bool:

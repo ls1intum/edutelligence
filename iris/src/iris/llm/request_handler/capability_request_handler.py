@@ -4,17 +4,17 @@ from typing import Any, Callable, Dict, Optional, Sequence, Type, Union
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, ConfigDict
 
-from src.iris.common.pyris_message import PyrisMessage
-from src.iris.llm.capability import RequirementList
-from src.iris.llm.completion_arguments import CompletionArguments
-from src.iris.llm.external.model import (
+from iris.common.pyris_message import PyrisMessage
+from iris.llm.capability import RequirementList
+from iris.llm.completion_arguments import CompletionArguments
+from iris.llm.external.model import (
     ChatModel,
     CompletionModel,
     EmbeddingModel,
     LanguageModel,
 )
-from src.iris.llm.llm_manager import LlmManager
-from src.iris.llm.request_handler import RequestHandler
+from iris.llm.llm_manager import LlmManager
+from iris.llm.request_handler import RequestHandler
 
 
 class CapabilityRequestHandlerSelectionMode(Enum):

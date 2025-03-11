@@ -3,34 +3,27 @@ from asyncio.log import logger
 from enum import Enum
 from typing import List
 
-from app import (
-    LectureRetrievalDTO,
-    LectureTranscriptionRetrievalDTO,
-    LectureUnitPageChunkRetrievalDTO,
-    LectureUnitPageChunkSchema,
-    LectureUnitRetrievalDTO,
-    LectureUnitSegmentRetrievalDTO,
-    init_lecture_unit_page_chunk_schema,
-)
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate, SystemMessagePromptTemplate
 from langsmith import traceable
 from weaviate import WeaviateClient
 from weaviate.classes.query import Filter
 
-from src.iris.common.message_converters import convert_iris_message_to_langchain_message
-from src.iris.common.PipelineEnum import PipelineEnum
-from src.iris.common.pyris_message import PyrisMessage
-from src.iris.llm import (
+from iris.common.message_converters import convert_iris_message_to_langchain_message
+from iris.common.PipelineEnum import PipelineEnum
+from iris.common.pyris_message import PyrisMessage
+from iris.domain.retrieval.lecture.lecture_retrieval_dto import LectureRetrievalDTO, LectureUnitRetrievalDTO, \
+    LectureUnitPageChunkRetrievalDTO, LectureUnitSegmentRetrievalDTO, LectureTranscriptionRetrievalDTO
+from iris.llm import (
     BasicRequestHandler,
     CapabilityRequestHandler,
     CompletionArguments,
     RequirementList,
 )
-from src.iris.llm.langchain import IrisLangchainChatModel
-from src.iris.llm.request_handler.rerank_request_handler import RerankRequestHandler
-from src.iris.pipeline import Pipeline
-from src.iris.pipeline.prompts.lecture_retrieval_prompts import (
+from iris.llm.langchain import IrisLangchainChatModel
+from iris.llm.request_handler.rerank_request_handler import RerankRequestHandler
+from iris.pipeline import Pipeline
+from iris.pipeline.prompts.lecture_retrieval_prompts import (
     lecture_retrieval_initial_prompt_lecture_pages_with_exercise_context,
     lecture_retrieval_initial_prompt_lecture_transcriptions_with_exercise_context,
     lecture_retriever_initial_prompt_lecture_pages,
@@ -40,21 +33,23 @@ from src.iris.pipeline.prompts.lecture_retrieval_prompts import (
     write_hypothetical_lecture_pages_answer_prompt,
     write_hypothetical_lecture_transcriptions_answer_prompt,
 )
-from src.iris.pipeline.shared.reranker_pipeline import RerankerPipeline
-from src.iris.retrieval.lecture.lecture_page_chunk_retrieval import (
+from iris.pipeline.shared.reranker_pipeline import RerankerPipeline
+from iris.retrieval.lecture.lecture_page_chunk_retrieval import (
     LecturePageChunkRetrieval,
 )
-from src.iris.retrieval.lecture.lecture_transcription_retrieval import (
+from iris.retrieval.lecture.lecture_transcription_retrieval import (
     LectureTranscriptionRetrieval,
 )
-from src.iris.retrieval.lecture.lecture_unit_segment_retrieval import (
+from iris.retrieval.lecture.lecture_unit_segment_retrieval import (
     LectureUnitSegmentRetrieval,
 )
-from src.iris.vector_database.lecture_transcription_schema import (
+from iris.vector_database.lecture_transcription_schema import (
     LectureTranscriptionSchema,
     init_lecture_transcription_schema,
 )
-from src.iris.vector_database.lecture_unit_schema import (
+from iris.vector_database.lecture_unit_page_chunk_schema import init_lecture_unit_page_chunk_schema, \
+    LectureUnitPageChunkSchema
+from iris.vector_database.lecture_unit_schema import (
     LectureUnitSchema,
     init_lecture_unit_schema,
 )

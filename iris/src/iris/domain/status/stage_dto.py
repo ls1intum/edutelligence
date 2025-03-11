@@ -2,7 +2,7 @@ from typing import Optional
 
 from pydantic import BaseModel
 
-from src.iris.domain.status.stage_state_dto import StageStateEnum
+from iris.domain.status.stage_state_dto import StageStateEnum
 
 
 class StageDTO(BaseModel):

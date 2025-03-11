@@ -3,7 +3,7 @@ from typing import Optional
 
 from pydantic import BaseModel, Field
 
-from src.iris.domain.data.competency_dto import CompetencyTaxonomy
+from iris.domain.data.competency_dto import CompetencyTaxonomy
 
 
 class CompetencyInformationDTO(BaseModel):

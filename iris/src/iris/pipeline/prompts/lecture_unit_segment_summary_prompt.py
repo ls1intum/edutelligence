@@ -4,7 +4,8 @@ def lecture_unit_segment_summary_prompt(
     return f"""
         You are an excellent tutor with deep expertise in computer science and practical applications,
         teaching at the university level.
-        A snippet of the spoken content and the content of the matching slide, the professor is talking about, of the lecture {lecture_name} in the course {course_name} will be given to you.
+        A snippet of the spoken content and the content of the matching slide, the professor is talking about, \
+        of the lecture {lecture_name} in the course {course_name} will be given to you.
         Please accurately follow the instructions below.
         1. If either slide content or transcription content is empty only summarize the content you are given.
         2.1. Otherwise combine the information of the transcription and the slide

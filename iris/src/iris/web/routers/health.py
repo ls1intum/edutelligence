@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, Response, status
 
-from src.iris.dependencies import TokenValidator
+from iris.dependencies import TokenValidator
 
 router = APIRouter(prefix="/api/v1/health", tags=["health"])
 

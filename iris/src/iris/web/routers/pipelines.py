@@ -6,35 +6,35 @@ from app import RewritingPipeline
 from fastapi import APIRouter, Body, Depends, Query, Response, status
 from sentry_sdk import capture_exception
 
-from src.iris.dependencies import TokenValidator
-from src.iris.domain import (
+from iris.dependencies import TokenValidator
+from iris.domain import (
     CompetencyExtractionPipelineExecutionDTO,
     CourseChatPipelineExecutionDTO,
     ExerciseChatPipelineExecutionDTO,
     FeatureDTO,
     InconsistencyCheckPipelineExecutionDTO,
 )
-from src.iris.domain.chat.lecture_chat.lecture_chat_pipeline_execution_dto import (
+from iris.domain.chat.lecture_chat.lecture_chat_pipeline_execution_dto import (
     LectureChatPipelineExecutionDTO,
 )
-from src.iris.domain.rewriting_pipeline_execution_dto import (
+from iris.domain.rewriting_pipeline_execution_dto import (
     RewritingPipelineExecutionDTO,
 )
-from src.iris.domain.text_exercise_chat_pipeline_execution_dto import (
+from iris.domain.text_exercise_chat_pipeline_execution_dto import (
     TextExerciseChatPipelineExecutionDTO,
 )
-from src.iris.pipeline.chat.course_chat_pipeline import CourseChatPipeline
-from src.iris.pipeline.chat.exercise_chat_agent_pipeline import (
+from iris.pipeline.chat.course_chat_pipeline import CourseChatPipeline
+from iris.pipeline.chat.exercise_chat_agent_pipeline import (
     ExerciseChatAgentPipeline,
 )
-from src.iris.pipeline.chat.lecture_chat_pipeline import LectureChatPipeline
-from src.iris.pipeline.chat_gpt_wrapper_pipeline import ChatGPTWrapperPipeline
-from src.iris.pipeline.competency_extraction_pipeline import (
+from iris.pipeline.chat.lecture_chat_pipeline import LectureChatPipeline
+from iris.pipeline.chat_gpt_wrapper_pipeline import ChatGPTWrapperPipeline
+from iris.pipeline.competency_extraction_pipeline import (
     CompetencyExtractionPipeline,
 )
-from src.iris.pipeline.inconsistency_check_pipeline import InconsistencyCheckPipeline
-from src.iris.pipeline.text_exercise_chat_pipeline import TextExerciseChatPipeline
-from src.iris.web.status.status_update import (
+from iris.pipeline.inconsistency_check_pipeline import InconsistencyCheckPipeline
+from iris.pipeline.text_exercise_chat_pipeline import TextExerciseChatPipeline
+from iris.web.status.status_update import (
     ChatGPTWrapperStatusCallback,
     CompetencyExtractionCallback,
     CourseChatStatusCallback,

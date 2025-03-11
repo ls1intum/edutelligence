@@ -1,17 +1,17 @@
 import logging
 
-from app import router as pipelines_router
+from iris.web.routers.pipelines import router as pipelines_router
 from fastapi import FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, ORJSONResponse
 from starlette.background import BackgroundTask
 from starlette.responses import Response
 
-import src.iris.sentry as sentry
-from src.iris.config import settings
-from src.iris.web.routers.health import router as health_router
-from src.iris.web.routers.ingestion_status import router as ingestion_status_router
-from src.iris.web.routers.webhooks import router as webhooks_router
+import iris.sentry as sentry
+from iris.config import settings
+from iris.web.routers.health import router as health_router
+from iris.web.routers.ingestion_status import router as ingestion_status_router
+from iris.web.routers.webhooks import router as webhooks_router
 
 settings.set_env_vars()
 

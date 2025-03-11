@@ -2,10 +2,10 @@ from typing import List, Optional
 
 from pydantic import BaseModel, Field
 
-from src.iris.common.pyris_message import PyrisMessage
-from src.iris.domain import PipelineExecutionSettingsDTO
-from src.iris.domain.data.user_dto import UserDTO
-from src.iris.domain.status.stage_dto import StageDTO
+from iris.common.pyris_message import PyrisMessage
+from iris.domain import PipelineExecutionSettingsDTO
+from iris.domain.data.user_dto import UserDTO
+from iris.domain.status.stage_dto import StageDTO
 
 
 class ChatPipelineExecutionBaseDataDTO(BaseModel):

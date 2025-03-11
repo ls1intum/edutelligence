@@ -1,1 +1,1 @@
-from src.iris.pipeline.pipeline import Pipeline
+from iris.pipeline.pipeline import Pipeline

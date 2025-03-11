@@ -1,31 +1,29 @@
 from asyncio.log import logger
 from typing import List
 
-from app import (
-    LectureUnitPageChunkRetrievalDTO,
-    LectureUnitPageChunkSchema,
-    LectureUnitRetrievalDTO,
-    init_lecture_unit_page_chunk_schema,
-)
 from langchain_core.output_parsers import StrOutputParser
 from langsmith import traceable
 from weaviate import WeaviateClient
 from weaviate.classes.query import Filter
 
-from src.iris.common.message_converters import convert_iris_message_to_langchain_message
-from src.iris.common.pyris_message import PyrisMessage
-from src.iris.common.token_usage_dto import TokenUsageDTO
-from src.iris.llm import (
+from iris.common.message_converters import convert_iris_message_to_langchain_message
+from iris.common.pyris_message import PyrisMessage
+from iris.common.token_usage_dto import TokenUsageDTO
+from iris.domain.retrieval.lecture.lecture_retrieval_dto import LectureUnitRetrievalDTO, \
+    LectureUnitPageChunkRetrievalDTO
+from iris.llm import (
     BasicRequestHandler,
     CapabilityRequestHandler,
     CompletionArguments,
     RequirementList,
 )
-from src.iris.llm.langchain import IrisLangchainChatModel
-from src.iris.llm.request_handler.rerank_request_handler import RerankRequestHandler
-from src.iris.pipeline import Pipeline
-from src.iris.pipeline.shared.reranker_pipeline import RerankerPipeline
-from src.iris.vector_database.lecture_unit_schema import (
+from iris.llm.langchain import IrisLangchainChatModel
+from iris.llm.request_handler.rerank_request_handler import RerankRequestHandler
+from iris.pipeline import Pipeline
+from iris.pipeline.shared.reranker_pipeline import RerankerPipeline
+from iris.vector_database.lecture_unit_page_chunk_schema import init_lecture_unit_page_chunk_schema, \
+    LectureUnitPageChunkSchema
+from iris.vector_database.lecture_unit_schema import (
     LectureUnitSchema,
     init_lecture_unit_schema,
 )

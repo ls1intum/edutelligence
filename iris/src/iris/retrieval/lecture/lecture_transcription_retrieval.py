@@ -1,27 +1,25 @@
 from asyncio.log import logger
 
-from app import (
-    LectureTranscriptionRetrievalDTO,
-    LectureUnitRetrievalDTO,
-)
 from langchain_core.output_parsers import StrOutputParser
 from weaviate import WeaviateClient
 from weaviate.classes.query import Filter
 
-from src.iris.llm import (
+from iris.domain.retrieval.lecture.lecture_retrieval_dto import LectureUnitRetrievalDTO, \
+    LectureTranscriptionRetrievalDTO
+from iris.llm import (
     BasicRequestHandler,
     CapabilityRequestHandler,
     CompletionArguments,
     RequirementList,
 )
-from src.iris.llm.langchain import IrisLangchainChatModel
-from src.iris.llm.request_handler.rerank_request_handler import RerankRequestHandler
-from src.iris.pipeline import Pipeline
-from src.iris.vector_database.lecture_transcription_schema import (
+from iris.llm.langchain import IrisLangchainChatModel
+from iris.llm.request_handler.rerank_request_handler import RerankRequestHandler
+from iris.pipeline import Pipeline
+from iris.vector_database.lecture_transcription_schema import (
     LectureTranscriptionSchema,
     init_lecture_transcription_schema,
 )
-from src.iris.vector_database.lecture_unit_schema import (
+from iris.vector_database.lecture_unit_schema import (
     LectureUnitSchema,
     init_lecture_unit_schema,
 )

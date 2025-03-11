@@ -1,10 +1,10 @@
-from src.iris.domain.chat.course_chat.course_chat_pipeline_execution_dto import (
+from iris.domain.chat.course_chat.course_chat_pipeline_execution_dto import (
     CourseChatPipelineExecutionDTO,
 )
-from src.iris.domain.chat.exercise_chat.exercise_chat_pipeline_execution_dto import (
+from iris.domain.chat.exercise_chat.exercise_chat_pipeline_execution_dto import (
     ExerciseChatPipelineExecutionDTO,
 )
-from src.iris.domain.feature_dto import FeatureDTO
+from iris.domain.feature_dto import FeatureDTO
 
 from .chat.chat_pipeline_execution_base_data_dto import ChatPipelineExecutionBaseDataDTO
 from .chat.chat_pipeline_execution_dto import ChatPipelineExecutionDTO

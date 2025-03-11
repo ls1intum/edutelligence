@@ -1,12 +1,11 @@
 from asyncio.log import logger
 from typing import Dict, List, Optional
 
-from app import batch_update_lock
 from langchain_core.output_parsers import StrOutputParser
 from weaviate import WeaviateClient
 from weaviate.classes.query import Filter
 
-from src.iris.domain.ingestion.ingestion_pipeline_execution_dto import (
+from iris.domain.ingestion.ingestion_pipeline_execution_dto import (
     FaqIngestionPipelineExecutionDto,
 )
 
@@ -19,6 +18,7 @@ from ..llm import (
     RequirementList,
 )
 from ..llm.langchain import IrisLangchainChatModel
+from ..vector_database.database import batch_update_lock
 from ..vector_database.faq_schema import FaqSchema, init_faq_schema
 from ..web.status.faq_ingestion_status_callback import FaqIngestionStatus
 from . import Pipeline

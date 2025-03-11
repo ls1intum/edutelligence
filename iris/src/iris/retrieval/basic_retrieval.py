@@ -9,9 +9,9 @@ from langsmith import traceable
 from weaviate import WeaviateClient
 from weaviate.classes.query import Filter
 
-from src.iris.common.PipelineEnum import PipelineEnum
-from src.iris.common.token_usage_dto import TokenUsageDTO
-from src.iris.llm import (
+from iris.common.PipelineEnum import PipelineEnum
+from iris.common.token_usage_dto import TokenUsageDTO
+from iris.llm import (
     BasicRequestHandler,
     CapabilityRequestHandler,
     CompletionArguments,

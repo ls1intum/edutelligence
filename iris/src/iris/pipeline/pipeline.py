@@ -1,8 +1,8 @@
 from abc import ABCMeta
 from typing import List
 
-from src.iris.common.PipelineEnum import PipelineEnum
-from src.iris.common.token_usage_dto import TokenUsageDTO
+from iris.common.PipelineEnum import PipelineEnum
+from iris.common.token_usage_dto import TokenUsageDTO
 
 
 class Pipeline(metaclass=ABCMeta):

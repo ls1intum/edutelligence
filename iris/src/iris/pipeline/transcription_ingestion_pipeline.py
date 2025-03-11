@@ -2,38 +2,39 @@ from asyncio.log import logger
 from functools import reduce
 from typing import Any, Dict, List, Optional
 
-from app import TranscriptionIngestionStatus, batch_update_lock
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import Runnable
 from weaviate import WeaviateClient
 from weaviate.classes.query import Filter
 
-from src.iris.common.PipelineEnum import PipelineEnum
-from src.iris.domain.data.metrics.transcription_dto import (
+from iris.common.PipelineEnum import PipelineEnum
+from iris.domain.data.metrics.transcription_dto import (
     TranscriptionSegmentDTO,
     TranscriptionWebhookDTO,
 )
-from src.iris.domain.ingestion.transcription_ingestion.transcription_ingestion_pipeline_execution_dto import (
+from iris.domain.ingestion.transcription_ingestion.transcription_ingestion_pipeline_execution_dto import (
     TranscriptionIngestionPipelineExecutionDto,
 )
-from src.iris.domain.lecture.lecture_unit_dto import LectureUnitDTO
-from src.iris.llm import (
+from iris.domain.lecture.lecture_unit_dto import LectureUnitDTO
+from iris.llm import (
     BasicRequestHandler,
     CapabilityRequestHandler,
     CompletionArguments,
     RequirementList,
 )
-from src.iris.llm.langchain import IrisLangchainChatModel
-from src.iris.pipeline import Pipeline
-from src.iris.pipeline.lecture_unit_pipeline import LectureUnitPipeline
-from src.iris.pipeline.prompts.transcription_ingestion_prompts import (
+from iris.llm.langchain import IrisLangchainChatModel
+from iris.pipeline import Pipeline
+from iris.pipeline.lecture_unit_pipeline import LectureUnitPipeline
+from iris.pipeline.prompts.transcription_ingestion_prompts import (
     transcription_summary_prompt,
 )
-from src.iris.vector_database.lecture_transcription_schema import (
+from iris.vector_database.database import batch_update_lock
+from iris.vector_database.lecture_transcription_schema import (
     LectureTranscriptionSchema,
     init_lecture_transcription_schema,
 )
+from iris.web.status.transcription_ingestion_callback import TranscriptionIngestionStatus
 
 CHUNK_SEPARATOR_CHAR = "\31"
 

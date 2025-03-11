@@ -3,7 +3,7 @@ from typing import List, Literal
 
 import requests
 
-from src.iris.domain.data.image_message_content_dto import ImageMessageContentDTO
+from iris.domain.data.image_message_content_dto import ImageMessageContentDTO
 
 
 def generate_images(

@@ -9,8 +9,8 @@ from langchain_core.prompts import (
 from langchain_core.runnables import Runnable
 from langsmith import traceable
 
-from src.iris.common.PipelineEnum import PipelineEnum
-from src.iris.retrieval.lecture.lecture_page_chunk_retrieval import (
+from iris.common.PipelineEnum import PipelineEnum
+from iris.retrieval.lecture.lecture_page_chunk_retrieval import (
     LecturePageChunkRetrieval,
 )
 

@@ -11,15 +11,15 @@ from langchain_core.messages import (
     ToolMessage,
 )
 
-from src.iris.common.pyris_message import (
+from iris.common.pyris_message import (
     IrisMessageRole,
     PyrisAIMessage,
     PyrisMessage,
     PyrisToolMessage,
 )
-from src.iris.domain.data.text_message_content_dto import TextMessageContentDTO
-from src.iris.domain.data.tool_call_dto import FunctionDTO, ToolCallDTO
-from src.iris.domain.data.tool_message_content_dto import ToolMessageContentDTO
+from iris.domain.data.text_message_content_dto import TextMessageContentDTO
+from iris.domain.data.tool_call_dto import FunctionDTO, ToolCallDTO
+from iris.domain.data.tool_message_content_dto import ToolMessageContentDTO
 
 
 def convert_iris_message_to_langchain_message(
