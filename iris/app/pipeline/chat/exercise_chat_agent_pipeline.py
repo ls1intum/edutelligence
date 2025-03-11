@@ -42,9 +42,12 @@ from ...llm.langchain import IrisLangchainChatModel
 from ...retrieval.faq_retrieval import FaqRetrieval
 from ...retrieval.faq_retrieval_utils import should_allow_faq_tool, format_faqs
 from app.retrieval.lecture.lecture_page_chunk_retrieval import LecturePageChunkRetrieval
+from ...retrieval.lecture.lecture_retrieval import LectureRetrieval
 from ...vector_database.database import VectorDatabase
 from ...vector_database.lecture_unit_page_chunk_schema import LectureUnitPageChunkSchema
 from weaviate.collections.classes.filters import Filter
+
+from ...vector_database.lecture_unit_schema import LectureUnitSchema
 from ...web.status.status_update import ExerciseChatStatusCallback
 
 logger = logging.getLogger()
@@ -139,7 +142,7 @@ class ExerciseChatAgentPipeline(Pipeline):
         # Create the pipelines
         self.db = VectorDatabase()
         self.suggestion_pipeline = InteractionSuggestionPipeline(variant="exercise")
-        self.lecture_retriever = LecturePageChunkRetrieval(self.db.client)
+        self.lecture_retriever = LectureRetrieval(self.db.client)
         self.faq_retriever = FaqRetrieval(self.db.client)
         self.reranker_pipeline = RerankerPipeline()
         self.code_feedback_pipeline = CodeFeedbackPipeline()
@@ -369,34 +372,54 @@ class ExerciseChatAgentPipeline(Pipeline):
 
         def lecture_content_retrieval() -> str:
             """
-            Retrieve content from indexed lecture slides.
-            This will run a RAG retrieval based on the chat history on the indexed lecture slides and return the
-            most relevant paragraphs.
+            Retrieve content from indexed lecture content.
+            This will run a RAG retrieval based on the chat history on the indexed lecture slides,
+            the indexed lecture transcriptions and the indexed lecture segments,
+            which are summaries of the lecture slide content and lecture transcription content from one slide a
+            nd return the most relevant paragraphs.
             Use this if you think it can be useful to answer the student's question, or if the student explicitly asks
             a question about the lecture content or slides.
             Only use this once.
             """
             self.callback.in_progress("Retrieving lecture content ...")
-            self.retrieved_paragraphs = self.lecture_retriever(
-                chat_history=chat_history,
-                student_query=query.contents[0].text_content,
-                result_limit=5,
-                course_name=dto.course.name,
+            self.lecture_content = self.lecture_retriever(
+                query=query.contents[0].text_content,
                 course_id=dto.course.id,
+                chat_history=chat_history,
+                lecture_id=None,
+                lecture_unit_id=None,
                 base_url=dto.settings.artemis_base_url,
             )
 
-            result = ""
-            for paragraph in self.retrieved_paragraphs:
+            result = "Lecture slide content:\n"
+            for paragraph in self.lecture_content.lecture_unit_page_chunks:
                 lct = "Lecture: {}, Unit: {}, Page: {}\nContent:\n---{}---\n\n".format(
-                    # paragraph.get(LectureUnitPageChunkSchema.LECTURE_NAME.value),
-                    # paragraph.get(LectureUnitPageChunkSchema.LECTURE_UNIT_NAME.value),
-                    "",
-                    "",
-                    paragraph.get(LectureUnitPageChunkSchema.PAGE_NUMBER.value),
-                    paragraph.get(LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value),
+                    paragraph.lecture_name,
+                    paragraph.lecture_unit_name,
+                    paragraph.page_number,
+                    paragraph.page_text_content,
                 )
                 result += lct
+
+            result += "Lecture transcription content:\n"
+            for paragraph in self.lecture_content.lecture_transcriptions:
+                transcription = "Lecture: {}, Unit: {}, Page: {}\nContent:\n---{}---\n\n".format(
+                    paragraph.lecture_name,
+                    paragraph.lecture_unit_name,
+                    paragraph.page_number,
+                    paragraph.segment_text,
+                )
+                result += transcription
+
+            result += "Lecture segment content:\n"
+            for paragraph in self.lecture_content.lecture_unit_segments:
+                segment = "Lecture: {}, Unit: {}, Page: {}\nContent:\n---{}---\n\n".format(
+                    paragraph.lecture_name,
+                    paragraph.lecture_unit_name,
+                    paragraph.page_number,
+                    paragraph.segment_summary,
+                )
+                result += segment
             return result
 
         def faq_content_retrieval() -> str:
@@ -649,12 +672,12 @@ class ExerciseChatAgentPipeline(Pipeline):
         """
         if course_id:
             # Fetch the first object that matches the course ID with the language property
-            result = self.db.lectures.query.fetch_objects(
+            result = self.db.lecture_units.query.fetch_objects(
                 filters=Filter.by_property(
-                    LectureUnitPageChunkSchema.COURSE_ID.value
+                    LectureUnitSchema.COURSE_ID.value
                 ).equal(course_id),
                 limit=1,
-                return_properties=[LectureUnitPageChunkSchema.COURSE_NAME.value],
+                return_properties=[LectureUnitSchema.COURSE_NAME.value],
             )
             return len(result.objects) > 0
         return False

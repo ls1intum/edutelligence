@@ -150,10 +150,17 @@ class LectureTranscriptionRetrieval(Pipeline):
         ).equal(
             lecture_transcription_segment[LectureTranscriptionSchema.BASE_URL.value]
         )
+        print(f"course id {lecture_transcription_segment[LectureTranscriptionSchema.COURSE_ID.value]}")
+        print(f"lecture id {lecture_transcription_segment[LectureTranscriptionSchema.LECTURE_ID.value]}")
+        print(f"lecture unit id {lecture_transcription_segment[LectureTranscriptionSchema.LECTURE_UNIT_ID.value]}")
+        print(f"base url {lecture_transcription_segment[LectureTranscriptionSchema.BASE_URL.value]}")
+
 
         lecture_units = self.lecture_unit_collection.query.fetch_objects(
             filters=lecture_unit_filter
         ).objects
+
+        print(lecture_units)
         if len(lecture_units) == 0:
             return None
         else:
