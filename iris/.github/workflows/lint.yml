@@ -11,20 +11,20 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout repo
-      uses: actions/checkout@v3
+      - name: Checkout repo
+        uses: actions/checkout@v3
 
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: "3.12"
-        cache: 'pip'
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
 
-    - name: Install Dependencies from requirements.txt
-      run: pip install -r requirements.txt
+      - name: Install Dependencies from requirements.txt
+        run: pip install -r requirements.txt
 
-    - name: Execute black
-      run: black . --check
+      - name: Execute black
+        run: black . --check
 
-    - name: Execute flake8
-      run: flake8 .
+      - name: Execute flake8
+        run: flake8 .

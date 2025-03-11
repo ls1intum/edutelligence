@@ -5,6 +5,7 @@ Pyris is an intermediary system that connects the [Artemis](https://github.com/l
 Currently, Pyris powers [Iris](https://artemis.cit.tum.de/about-iris), a virtual AI tutor that assists students with their programming exercises on Artemis in a pedagogically meaningful way.
 
 ## Table of Contents
+
 - [Pyris V2](#pyris-v2)
   - [Table of Contents](#table-of-contents)
   - [Features](#features)
@@ -139,7 +140,7 @@ Currently, Pyris powers [Iris](https://artemis.cit.tum.de/about-iris), a virtual
        capabilities:
          input_cost: 6
          output_cost: 16
-         gpt_version_equivalent: 4.5  # Equivalent GPT version of the model
+         gpt_version_equivalent: 4.5 # Equivalent GPT version of the model
          context_length: 128000
          vendor: "OpenAI"
          privacy_compliance: true
@@ -179,10 +180,11 @@ Currently, Pyris powers [Iris](https://artemis.cit.tum.de/about-iris), a virtual
      - `tools`: The tools supported by the model.
 
      > **Notes on `gpt_version_equivalent`:** The `gpt_version_equivalent` field is subjective and used to compare capabilities of different models using GPT models as a reference. For example:
-     >- GPT-4 Omni equivalent: 4.5
-     >- GPT-4 Omni Mini equivalent: 4.25
-     >- GPT-4 equivalent: 4
-     >- GPT-3.5 Turbo equivalent: 3.5
+     >
+     > - GPT-4 Omni equivalent: 4.5
+     > - GPT-4 Omni Mini equivalent: 4.25
+     > - GPT-4 equivalent: 4
+     > - GPT-3.5 Turbo equivalent: 3.5
 
      > **Warning:** Most existing pipelines in Pyris require a model with a `gpt_version_equivalent` of **4.5 or higher**. It is advised to define models in the `llm_config.local.yml` file with a `gpt_version_equivalent` of 4.5 or higher.
 
