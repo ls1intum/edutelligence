@@ -44,7 +44,7 @@ jobs:
         run: |
           # Activate poetry env
           cd iris
-          poetry env use
+          poetry env use python
           # Run pre-commit hooks
           cd ..
           pre-commit run --all-files --hook-stage manual
