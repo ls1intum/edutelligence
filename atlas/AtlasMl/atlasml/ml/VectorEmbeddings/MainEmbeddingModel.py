@@ -7,6 +7,3 @@ response = client.embeddings.create(
     input="Task Text",
     model="text-embedding-3-small"
 )
-
-# Sanity check
-print(response.data[0].embedding)
