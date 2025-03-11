@@ -121,7 +121,7 @@ class LectureChatPipeline(Pipeline):
 
         lecture_content = self.retriever(
             query=query.contents[0].text_content,
-            course_id=dto.course.id,
+            course_id=dto.course_id,
             chat_history=history,
             lecture_id=dto.lecture_id,
             lecture_unit_id=dto.lecture_unit_id,
