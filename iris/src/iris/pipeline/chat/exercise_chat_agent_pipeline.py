@@ -13,26 +13,23 @@ from langchain_core.runnables import Runnable
 from langsmith import traceable
 from weaviate.collections.classes.filters import Filter
 
-from iris.retrieval.lecture.lecture_page_chunk_retrieval import (
-    LecturePageChunkRetrieval,
+from iris.common.message_converters import (
+    convert_iris_message_to_langchain_human_message,
 )
-
-from ...common.message_converters import convert_iris_message_to_langchain_human_message
-from ...common.PipelineEnum import PipelineEnum
-from ...common.pyris_message import IrisMessageRole, PyrisMessage
-from ...domain import ExerciseChatPipelineExecutionDTO
-from ...domain.chat.interaction_suggestion_dto import (
+from iris.common.PipelineEnum import PipelineEnum
+from iris.common.pyris_message import IrisMessageRole, PyrisMessage
+from iris.domain import ExerciseChatPipelineExecutionDTO
+from iris.domain.chat.interaction_suggestion_dto import (
     InteractionSuggestionPipelineExecutionDTO,
 )
-from ...llm import CapabilityRequestHandler, CompletionArguments, RequirementList
-from ...llm.langchain import IrisLangchainChatModel
-from ...retrieval.faq_retrieval import FaqRetrieval
-from ...retrieval.faq_retrieval_utils import format_faqs, should_allow_faq_tool
-from ...vector_database.database import VectorDatabase
-from ...vector_database.lecture_unit_page_chunk_schema import LectureUnitPageChunkSchema
-from ...web.status.status_update import ExerciseChatStatusCallback
-from ..pipeline import Pipeline
-from ..prompts.iris_exercise_chat_agent_prompts import (
+from iris.llm import CapabilityRequestHandler, CompletionArguments, RequirementList
+from iris.llm.langchain import IrisLangchainChatModel
+from iris.pipeline import Pipeline
+from iris.pipeline.chat.code_feedback_pipeline import CodeFeedbackPipeline
+from iris.pipeline.chat.interaction_suggestion_pipeline import (
+    InteractionSuggestionPipeline,
+)
+from iris.pipeline.prompts.iris_exercise_chat_agent_prompts import (
     guide_system_prompt,
     tell_begin_agent_prompt,
     tell_build_failed_system_prompt,
@@ -42,11 +39,19 @@ from ..prompts.iris_exercise_chat_agent_prompts import (
     tell_no_chat_history_prompt,
     tell_progress_stalled_system_prompt,
 )
-from ..shared.citation_pipeline import CitationPipeline, InformationType
-from ..shared.reranker_pipeline import RerankerPipeline
-from ..shared.utils import generate_structured_tools_from_functions
-from .code_feedback_pipeline import CodeFeedbackPipeline
-from .interaction_suggestion_pipeline import InteractionSuggestionPipeline
+from iris.pipeline.shared.citation_pipeline import CitationPipeline, InformationType
+from iris.pipeline.shared.reranker_pipeline import RerankerPipeline
+from iris.pipeline.shared.utils import generate_structured_tools_from_functions
+from iris.retrieval.faq_retrieval import FaqRetrieval
+from iris.retrieval.faq_retrieval_utils import format_faqs, should_allow_faq_tool
+from iris.retrieval.lecture.lecture_page_chunk_retrieval import (
+    LecturePageChunkRetrieval,
+)
+from iris.vector_database.database import VectorDatabase
+from iris.vector_database.lecture_unit_page_chunk_schema import (
+    LectureUnitPageChunkSchema,
+)
+from iris.web.status.status_update import ExerciseChatStatusCallback
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
