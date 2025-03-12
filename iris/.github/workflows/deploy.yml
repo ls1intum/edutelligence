@@ -24,7 +24,6 @@ concurrency: deploy
 env:
   RAW_URL: https://raw.githubusercontent.com/${{ github.repository }}/${{ github.sha }}
 
-
 jobs:
   deploy:
     runs-on: ubuntu-latest

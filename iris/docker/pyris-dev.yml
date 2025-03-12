@@ -15,7 +15,7 @@ services:
     networks:
       - pyris
     ports:
-          - 8000:8000
+      - 8000:8000
 
   weaviate:
     extends:
@@ -31,4 +31,3 @@ networks:
   pyris:
     driver: "bridge"
     name: pyris
-

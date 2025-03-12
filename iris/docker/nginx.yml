@@ -3,33 +3,33 @@
 # ----------------------------------------------------------------------------------------------------------------------
 
 services:
-    nginx:
-        container_name: pyris-nginx
-        image: nginx:1.23
-        pull_policy: always
-        volumes:
-            - ./nginx/timeouts.conf:/etc/nginx/conf.d/timeouts.conf:ro
-            - ./nginx/pyris-nginx.conf:/etc/nginx/conf.d/pyris-nginx.conf:ro
-            - ./nginx/pyris-server.conf:/etc/nginx/includes/pyris-server.conf:ro
-            - ./nginx/dhparam.pem:/etc/nginx/dhparam.pem:ro
-            - ./nginx/nginx_502.html:/usr/share/nginx/html/502.html:ro
-            - ./nginx/70-pyris-setup.sh:/docker-entrypoint.d/70-pyris-setup.sh
-            - ./nginx/certs/pyris-nginx+4.pem:/certs/fullchain.pem:ro
-            - ./nginx/certs/pyris-nginx+4-key.pem:/certs/priv_key.pem:ro
-        ports:
-            - "80:80"
-            - "443:443"
-        # expose the port to make it reachable docker internally even if the external port mapping changes
-        expose:
-            - "80"
-            - "443"
-        healthcheck:
-            test: service nginx status || exit 1
-            start_period: 60s
-        networks:
-            - pyris
+  nginx:
+    container_name: pyris-nginx
+    image: nginx:1.23
+    pull_policy: always
+    volumes:
+      - ./nginx/timeouts.conf:/etc/nginx/conf.d/timeouts.conf:ro
+      - ./nginx/pyris-nginx.conf:/etc/nginx/conf.d/pyris-nginx.conf:ro
+      - ./nginx/pyris-server.conf:/etc/nginx/includes/pyris-server.conf:ro
+      - ./nginx/dhparam.pem:/etc/nginx/dhparam.pem:ro
+      - ./nginx/nginx_502.html:/usr/share/nginx/html/502.html:ro
+      - ./nginx/70-pyris-setup.sh:/docker-entrypoint.d/70-pyris-setup.sh
+      - ./nginx/certs/pyris-nginx+4.pem:/certs/fullchain.pem:ro
+      - ./nginx/certs/pyris-nginx+4-key.pem:/certs/priv_key.pem:ro
+    ports:
+      - "80:80"
+      - "443:443"
+    # expose the port to make it reachable docker internally even if the external port mapping changes
+    expose:
+      - "80"
+      - "443"
+    healthcheck:
+      test: service nginx status || exit 1
+      start_period: 60s
+    networks:
+      - pyris
 
 networks:
-    pyris:
-        driver: "bridge"
-        name: pyris
+  pyris:
+    driver: "bridge"
+    name: pyris

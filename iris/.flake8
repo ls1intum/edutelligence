@@ -10,4 +10,3 @@ per-file-ignores =
     open_ai_chat_wrapper.py: F811
     open_ai_completion_wrapper.py: F811
     open_ai_embedding_wrapper.py: F811
-
