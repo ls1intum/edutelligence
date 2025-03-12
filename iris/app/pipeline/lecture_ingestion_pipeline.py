@@ -79,11 +79,7 @@ def create_page_data(
     return [
         {
             LectureUnitPageChunkSchema.LECTURE_ID.value: lecture_unit_dto.lecture_id,
-<<<<<<< HEAD
             LectureUnitPageChunkSchema.ATTACHMENT_UNIT_ID.value: lecture_unit_dto.lecture_unit_id,
-=======
-            LectureUnitPageChunkSchema.LECTURE_UNIT_ID.value: lecture_unit_dto.lecture_unit_id,
->>>>>>> iris/feature/transcription/adapt-citation-pipeline
             LectureUnitPageChunkSchema.COURSE_ID.value: lecture_unit_dto.course_id,
             LectureUnitPageChunkSchema.COURSE_LANGUAGE.value: course_language,
             LectureUnitPageChunkSchema.PAGE_NUMBER.value: page_num + 1,
@@ -140,11 +136,7 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
             chunks.extend(
                 self.chunk_data(
                     lecture_pdf=pdf_path,
-<<<<<<< HEAD
                     lecture_unit_slide_dto=self.dto.attachment_unit,
-=======
-                    lecture_unit_slide_dto=self.dto.lecture_unit,
->>>>>>> iris/feature/transcription/adapt-citation-pipeline
                     base_url=self.dto.settings.artemis_base_url,
                 )
             )
@@ -154,7 +146,6 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
             self.batch_update(chunks)
 
             self.callback.done("Lecture Ingestion Finished", tokens=self.tokens)
-<<<<<<< HEAD
             self.callback.in_progress("Lecture Unit Summary Ingestion In Progress")
             lecture_unit_dto = LectureUnitDTO(
                 course_id=self.dto.attachment_unit.course_id,
@@ -169,18 +160,6 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
                 video_unit_id=self.dto.video_unit_id,
                 video_unit_name=None,
                 video_unit_link=None,
-=======
-            lecture_unit_dto = LectureUnitDTO(
-                course_id=self.dto.lecture_unit.course_id,
-                course_name=self.dto.lecture_unit.course_name,
-                course_description=self.dto.lecture_unit.course_description,
-                course_language=self.course_language,
-                lecture_id=self.dto.lecture_unit.lecture_id,
-                lecture_name=self.dto.lecture_unit.lecture_name,
-                lecture_unit_id=self.dto.lecture_unit.lecture_unit_id,
-                lecture_unit_name=self.dto.lecture_unit.lecture_unit_name,
-                lecture_unit_link=self.dto.lecture_unit.lecture_unit_link,
->>>>>>> iris/feature/transcription/adapt-citation-pipeline
                 base_url=self.dto.settings.artemis_base_url,
             )
 
