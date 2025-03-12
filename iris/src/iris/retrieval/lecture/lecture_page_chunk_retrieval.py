@@ -9,8 +9,10 @@ from weaviate.classes.query import Filter
 from iris.common.message_converters import convert_iris_message_to_langchain_message
 from iris.common.pyris_message import PyrisMessage
 from iris.common.token_usage_dto import TokenUsageDTO
-from iris.domain.retrieval.lecture.lecture_retrieval_dto import LectureUnitRetrievalDTO, \
-    LectureUnitPageChunkRetrievalDTO
+from iris.domain.retrieval.lecture.lecture_retrieval_dto import (
+    LectureUnitPageChunkRetrievalDTO,
+    LectureUnitRetrievalDTO,
+)
 from iris.llm import (
     BasicRequestHandler,
     CapabilityRequestHandler,
@@ -21,8 +23,10 @@ from iris.llm.langchain import IrisLangchainChatModel
 from iris.llm.request_handler.rerank_request_handler import RerankRequestHandler
 from iris.pipeline import Pipeline
 from iris.pipeline.shared.reranker_pipeline import RerankerPipeline
-from iris.vector_database.lecture_unit_page_chunk_schema import init_lecture_unit_page_chunk_schema, \
-    LectureUnitPageChunkSchema
+from iris.vector_database.lecture_unit_page_chunk_schema import (
+    LectureUnitPageChunkSchema,
+    init_lecture_unit_page_chunk_schema,
+)
 from iris.vector_database.lecture_unit_schema import (
     LectureUnitSchema,
     init_lecture_unit_schema,

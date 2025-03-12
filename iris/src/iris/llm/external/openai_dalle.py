@@ -42,7 +42,7 @@ def generate_images(
         base64_data = image.b64_json
         if base64_data is None:
             try:
-                image_response = requests.get(image.url)
+                image_response = requests.get(image.url, timeout=60)
                 image_response.raise_for_status()
                 base64_data = base64.b64encode(image_response.content).decode("utf-8")
             except requests.RequestException as e:

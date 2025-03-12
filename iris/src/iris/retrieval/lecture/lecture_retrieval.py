@@ -12,8 +12,13 @@ from weaviate.classes.query import Filter
 from iris.common.message_converters import convert_iris_message_to_langchain_message
 from iris.common.PipelineEnum import PipelineEnum
 from iris.common.pyris_message import PyrisMessage
-from iris.domain.retrieval.lecture.lecture_retrieval_dto import LectureRetrievalDTO, LectureUnitRetrievalDTO, \
-    LectureUnitPageChunkRetrievalDTO, LectureUnitSegmentRetrievalDTO, LectureTranscriptionRetrievalDTO
+from iris.domain.retrieval.lecture.lecture_retrieval_dto import (
+    LectureRetrievalDTO,
+    LectureTranscriptionRetrievalDTO,
+    LectureUnitPageChunkRetrievalDTO,
+    LectureUnitRetrievalDTO,
+    LectureUnitSegmentRetrievalDTO,
+)
 from iris.llm import (
     BasicRequestHandler,
     CapabilityRequestHandler,
@@ -47,8 +52,10 @@ from iris.vector_database.lecture_transcription_schema import (
     LectureTranscriptionSchema,
     init_lecture_transcription_schema,
 )
-from iris.vector_database.lecture_unit_page_chunk_schema import init_lecture_unit_page_chunk_schema, \
-    LectureUnitPageChunkSchema
+from iris.vector_database.lecture_unit_page_chunk_schema import (
+    LectureUnitPageChunkSchema,
+    init_lecture_unit_page_chunk_schema,
+)
 from iris.vector_database.lecture_unit_schema import (
     LectureUnitSchema,
     init_lecture_unit_schema,

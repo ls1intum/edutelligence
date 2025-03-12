@@ -23,8 +23,10 @@ from iris.vector_database.lecture_transcription_schema import (
     LectureTranscriptionSchema,
     init_lecture_transcription_schema,
 )
-from iris.vector_database.lecture_unit_page_chunk_schema import init_lecture_unit_page_chunk_schema, \
-    LectureUnitPageChunkSchema
+from iris.vector_database.lecture_unit_page_chunk_schema import (
+    LectureUnitPageChunkSchema,
+    init_lecture_unit_page_chunk_schema,
+)
 from iris.vector_database.lecture_unit_segment_schema import (
     LectureUnitSegmentSchema,
     init_lecture_unit_segment_schema,

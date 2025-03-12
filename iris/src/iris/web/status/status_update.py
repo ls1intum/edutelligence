@@ -68,6 +68,7 @@ class StatusCallback(ABC):
                     "Authorization": f"Bearer {self.run_id}",
                 },
                 json=self.status.model_dump(by_alias=True),
+                timeout=5,
             ).raise_for_status()
         except requests.exceptions.RequestException as e:
             logger.error(f"Error sending status update: {e}")

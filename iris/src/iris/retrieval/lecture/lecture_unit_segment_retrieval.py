@@ -4,7 +4,10 @@ from langchain_core.output_parsers import StrOutputParser
 from weaviate import WeaviateClient
 from weaviate.classes.query import Filter
 
-from iris.domain.retrieval.lecture.lecture_retrieval_dto import LectureUnitRetrievalDTO, LectureUnitSegmentRetrievalDTO
+from iris.domain.retrieval.lecture.lecture_retrieval_dto import (
+    LectureUnitRetrievalDTO,
+    LectureUnitSegmentRetrievalDTO,
+)
 from iris.llm import (
     BasicRequestHandler,
     CapabilityRequestHandler,

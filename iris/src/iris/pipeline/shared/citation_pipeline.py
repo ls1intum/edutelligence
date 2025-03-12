@@ -12,7 +12,9 @@ from iris.llm import CapabilityRequestHandler, CompletionArguments, RequirementL
 from iris.llm.langchain import IrisLangchainChatModel
 from iris.pipeline import Pipeline
 from iris.vector_database.faq_schema import FaqSchema
-from iris.vector_database.lecture_unit_page_chunk_schema import LectureUnitPageChunkSchema
+from iris.vector_database.lecture_unit_page_chunk_schema import (
+    LectureUnitPageChunkSchema,
+)
 
 
 class InformationType(str, Enum):

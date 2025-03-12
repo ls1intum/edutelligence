@@ -34,7 +34,9 @@ from iris.vector_database.lecture_transcription_schema import (
     LectureTranscriptionSchema,
     init_lecture_transcription_schema,
 )
-from iris.web.status.transcription_ingestion_callback import TranscriptionIngestionStatus
+from iris.web.status.transcription_ingestion_callback import (
+    TranscriptionIngestionStatus,
+)
 
 CHUNK_SEPARATOR_CHAR = "\31"
 
