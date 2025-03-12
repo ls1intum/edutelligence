@@ -132,9 +132,14 @@ class LectureUnitSegmentRetrieval(Pipeline):
         lecture_unit_filter &= Filter.by_property(
             LectureUnitSchema.LECTURE_ID.value
         ).equal(lecture_unit_segment[LectureUnitSegmentSchema.LECTURE_ID.value])
-        lecture_unit_filter &= Filter.by_property(
-            LectureUnitSchema.VIDEO_UNIT_ID.value
-        ).equal(lecture_unit_segment[LectureUnitSegmentSchema.LECTURE_UNIT_ID.value])
+        if lecture_unit_segment[LectureUnitSegmentSchema.VIDEO_UNIT_ID.value] is not None:
+            lecture_unit_filter &= Filter.by_property(
+                LectureUnitSchema.VIDEO_UNIT_ID.value
+            ).equal(lecture_unit_segment[LectureUnitSegmentSchema.VIDEO_UNIT_ID.value])
+        if lecture_unit_segment[LectureUnitSegmentSchema.ATTACHMENT_UNIT_ID.value] is not None:
+            lecture_unit_filter &= Filter.by_property(
+                LectureUnitSchema.ATTACHMENT_UNIT_ID.value
+            ).equal(lecture_unit_segment[LectureUnitSchema.ATTACHMENT_UNIT_ID.value])
 
         lecture_units = self.lecture_unit_collection.query.fetch_objects(
             filters=lecture_unit_filter
@@ -150,11 +155,14 @@ class LectureUnitSegmentRetrieval(Pipeline):
             course_description=lecture_unit[LectureUnitSchema.COURSE_DESCRIPTION.value],
             lecture_id=lecture_unit_segment[LectureUnitSegmentSchema.LECTURE_ID.value],
             lecture_name=lecture_unit[LectureUnitSchema.LECTURE_NAME.value],
-            lecture_unit_id=lecture_unit_segment[
-                LectureUnitSegmentSchema.LECTURE_UNIT_ID.value
+            video_unit_id=lecture_unit_segment[
+                LectureUnitSegmentSchema.VIDEO_UNIT_ID.value
             ],
-            lecture_unit_name=lecture_unit[LectureUnitSchema.LECTURE_UNIT_NAME.value],
-            lecture_unit_link=lecture_unit[LectureUnitSchema.VIDEO_UNIT_LINK.value],
+            video_unit_name=lecture_unit[LectureUnitSchema.VIDEO_UNIT_NAME.value],
+            video_unit_link=lecture_unit[LectureUnitSchema.VIDEO_UNIT_LINK.value],
+            attachment_unit_id=lecture_unit_segment[LectureUnitSchema.ATTACHMENT_UNIT_ID.value],
+            attachment_unit_name=lecture_unit_segment[LectureUnitSchema.ATTACHMENT_UNIT_NAME.value],
+            attachment_unit_link=lecture_unit_segment[LectureUnitSchema.ATTACHMENT_UNIT_LINK.value],
             page_number=lecture_unit_segment[
                 LectureUnitSegmentSchema.PAGE_NUMBER.value
             ],

@@ -109,10 +109,10 @@ class LectureRetrieval(Pipeline):
         problem_statement: str = None,
         exercise_title: str = None,
         lecture_id: int = None,
-        lecture_unit_id: int = None,
+        video_unit_id: int = None,
         base_url: str = None,
     ):
-        lecture_unit = self.get_lecture_unit(course_id, lecture_id, lecture_unit_id)
+        lecture_unit = self.get_lecture_unit(course_id, lecture_id, video_unit_id)
         if lecture_unit is None:
             raise ValueError("The lecture unit is not indexed")
 
@@ -181,7 +181,7 @@ class LectureRetrieval(Pipeline):
         self,
         course_id: int,
         lecture_id: int = None,
-        lecture_unit_id: int = None,
+        video_unit_id: int = None,
         base_url: str = None,
     ):
         lecture_filter = Filter.by_property(LectureUnitSchema.COURSE_ID.value).equal(
@@ -193,13 +193,13 @@ class LectureRetrieval(Pipeline):
                 LectureUnitSchema.BASE_URL.value
             ).equal(base_url)
 
-        if lecture_id is not None and lecture_unit_id is not None:
+        if lecture_id is not None and video_unit_id is not None:
             lecture_filter &= Filter.by_property(
                 LectureUnitSchema.LECTURE_ID.value
             ).equal(lecture_id)
             lecture_filter &= Filter.by_property(
                 LectureUnitSchema.VIDEO_UNIT_ID.value
-            ).equal(lecture_unit_id)
+            ).equal(video_unit_id)
 
             lecture_units = self.lecture_unit_collection.query.fetch_objects(
                 filters=lecture_filter
@@ -210,17 +210,25 @@ class LectureRetrieval(Pipeline):
             lecture_unit = lecture_units[0].properties
 
             return LectureUnitRetrievalDTO(
-                course_id=lecture_unit.course_id,
-                course_name=lecture_unit.course_name,
-                course_description=lecture_unit.course_description,
-                course_language=lecture_unit.course_language,
-                lecture_id=lecture_unit.lecture_id,
-                lecture_name=lecture_unit.lecture_name,
-                lecture_unit_id=lecture_unit.lecture_unit_id,
-                lecture_unit_name=lecture_unit.lecture_unit_name,
-                lecture_unit_link=lecture_unit.lecture_unit_link,
-                base_url=lecture_unit.base_url,
-                lecture_unit_summary=lecture_unit.lecture_unit_summary,
+                uuid=lecture_unit.uuid,
+                course_id=lecture_unit[LectureUnitSchema.COURSE_ID.value],
+                course_name=lecture_unit[LectureUnitSchema.COURSE_NAME.value],
+                course_description=lecture_unit[
+                    LectureUnitSchema.COURSE_DESCRIPTION.value
+                ],
+                course_language=lecture_unit[LectureUnitSchema.COURSE_LANGUAGE.value],
+                lecture_id=lecture_unit[LectureUnitSchema.LECTURE_ID.value],
+                lecture_name=lecture_unit[LectureUnitSchema.LECTURE_NAME.value],
+                video_unit_id=lecture_unit[LectureUnitSchema.VIDEO_UNIT_ID.value],
+                video_unit_name=lecture_unit[LectureUnitSchema.VIDEO_UNIT_NAME.value],
+                video_unit_link=lecture_unit[LectureUnitSchema.VIDEO_UNIT_LINK.value],
+                attachment_unit_id=lecture_unit[LectureUnitSchema.ATTACHMENT_UNIT_ID.value],
+                attachment_unit_name=lecture_unit[LectureUnitSchema.ATTACHMENT_UNIT_NAME.value],
+                attachment_unit_link=lecture_unit[LectureUnitSchema.ATTACHMENT_UNIT_LINK.value],
+                base_url=base_url,
+                lecture_unit_summary=lecture_unit[
+                    LectureUnitSchema.LECTURE_UNIT_SUMMARY.value
+                ],
             )
 
         elif lecture_id is not None:
@@ -237,17 +245,21 @@ class LectureRetrieval(Pipeline):
             lecture_unit = lecture_units[0].properties
 
             return LectureUnitRetrievalDTO(
+                uuid=lecture_unit.uuid,
                 course_id=lecture_unit[LectureUnitSchema.COURSE_ID.value],
                 course_name=lecture_unit[LectureUnitSchema.COURSE_NAME.value],
                 course_description=lecture_unit[
                     LectureUnitSchema.COURSE_DESCRIPTION.value
                 ],
                 course_language=lecture_unit[LectureUnitSchema.COURSE_LANGUAGE.value],
-                lecture_id=lecture_unit[LectureUnitSchema.VIDEO_UNIT_ID.value],
-                lecture_name=lecture_unit[LectureUnitSchema.LECTURE_UNIT_NAME.value],
-                lecture_unit_id=None,
-                lecture_unit_name=None,
-                lecture_unit_link=None,
+                lecture_id=lecture_unit[LectureUnitSchema.LECTURE_ID.value],
+                lecture_name=lecture_unit[LectureUnitSchema.LECTURE_NAME.value],
+                video_unit_id=None,
+                video_unit_name=None,
+                video_unit_link=None,
+                attachment_unit_id=None,
+                attachment_unit_name=None,
+                attachment_unit_link=None,
                 base_url=base_url,
                 lecture_unit_summary=lecture_unit[
                     LectureUnitSchema.LECTURE_UNIT_SUMMARY.value
@@ -274,9 +286,12 @@ class LectureRetrieval(Pipeline):
                 course_language=lecture_unit[LectureUnitSchema.COURSE_LANGUAGE.value],
                 lecture_id=None,
                 lecture_name=None,
-                lecture_unit_id=None,
-                lecture_unit_name=None,
-                lecture_unit_link=None,
+                video_unit_id=None,
+                video_unit_name=None,
+                video_unit_link=None,
+                attachment_unit_id=None,
+                attachment_unit_name=None,
+                attachment_unit_link=None,
                 base_url=base_url,
                 lecture_unit_summary=lecture_unit[
                     LectureUnitSchema.LECTURE_UNIT_SUMMARY.value
@@ -684,7 +699,7 @@ class LectureRetrieval(Pipeline):
         ).equal(lecture_unit_segment.lecture_id)
         transcription_filter &= Filter.by_property(
             LectureTranscriptionSchema.VIDEO_UNIT_ID.value
-        ).equal(lecture_unit_segment.lecture_unit_id)
+        ).equal(lecture_unit_segment.video_unit_id)
         transcription_filter &= Filter.by_property(
             LectureTranscriptionSchema.PAGE_NUMBER.value
         ).equal(lecture_unit_segment.page_number)
@@ -706,9 +721,9 @@ class LectureRetrieval(Pipeline):
                 lecture_unit_segment.course_description,
                 lecture_unit_segment.lecture_id,
                 lecture_unit_segment.lecture_name,
-                lecture_unit_segment.lecture_unit_id,
-                lecture_unit_segment.lecture_unit_name,
-                lecture_unit_segment.lecture_unit_link,
+                lecture_unit_segment.video_unit_id,
+                lecture_unit_segment.video_unit_name,
+                lecture_unit_segment.video_unit_link,
                 transcription.properties[LectureTranscriptionSchema.LANGUAGE.value],
                 transcription.properties[
                     LectureTranscriptionSchema.SEGMENT_START_TIME.value
@@ -737,7 +752,7 @@ class LectureRetrieval(Pipeline):
         ).equal(lecture_unit_segment.lecture_id)
         page_chunk_filter &= Filter.by_property(
             LectureUnitPageChunkSchema.ATTACHMENT_UNIT_ID.value
-        ).equal(lecture_unit_segment.lecture_unit_id)
+        ).equal(lecture_unit_segment.attachment_unit_id)
         page_chunk_filter &= Filter.by_property(
             LectureUnitPageChunkSchema.PAGE_NUMBER.value
         ).equal(lecture_unit_segment.page_number)
@@ -759,9 +774,9 @@ class LectureRetrieval(Pipeline):
                 lecture_unit_segment.course_description,
                 lecture_unit_segment.lecture_id,
                 lecture_unit_segment.lecture_name,
-                lecture_unit_segment.lecture_unit_id,
-                lecture_unit_segment.lecture_unit_name,
-                lecture_unit_segment.lecture_unit_link,
+                lecture_unit_segment.attachment_unit_id,
+                lecture_unit_segment.attachment_unit_name,
+                lecture_unit_segment.attachment_unit_link,
                 chunk.properties[LectureUnitPageChunkSchema.COURSE_LANGUAGE.value],
                 chunk.properties[LectureUnitPageChunkSchema.PAGE_NUMBER.value],
                 chunk.properties[LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value],

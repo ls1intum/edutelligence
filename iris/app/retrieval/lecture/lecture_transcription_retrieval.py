@@ -167,11 +167,11 @@ class LectureTranscriptionRetrieval(Pipeline):
                 ],
                 lecture_id=lecture_unit[LectureUnitSchema.LECTURE_ID.value],
                 lecture_name=lecture_unit[LectureUnitSchema.LECTURE_NAME.value],
-                lecture_unit_id=lecture_unit[LectureUnitSchema.VIDEO_UNIT_ID.value],
-                lecture_unit_name=lecture_unit[
-                    LectureUnitSchema.VIDEO_UNIT_ID.value
+                video_unit_id=lecture_unit[LectureUnitSchema.VIDEO_UNIT_ID.value],
+                video_unit_name=lecture_unit[
+                    LectureUnitSchema.VIDEO_UNIT_NAME.value
                 ],
-                lecture_unit_link=lecture_unit[
+                video_unit_link=lecture_unit[
                     LectureUnitSchema.VIDEO_UNIT_LINK.value
                 ],
                 language=lecture_transcription_segment[

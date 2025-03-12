@@ -204,14 +204,14 @@ class LecturePageChunkRetrieval(Pipeline):
                     LectureUnitPageChunkSchema.LECTURE_ID.value
                 ],
                 lecture_name=lecture_unit[LectureUnitSchema.LECTURE_NAME.value],
-                lecture_unit_id=lecture_page_chunk[
+                attachment_unit_id=lecture_page_chunk[
                     LectureUnitPageChunkSchema.LECTURE_ID.value
                 ],
-                lecture_unit_name=lecture_unit[
-                    LectureUnitSchema.LECTURE_UNIT_NAME.value
+                attachment_unit_name=lecture_unit[
+                    LectureUnitSchema.ATTACHMENT_UNIT_NAME.value
                 ],
-                lecture_unit_link=lecture_unit[
-                    LectureUnitSchema.VIDEO_UNIT_LINK.value
+                attachment_unit_link=lecture_unit[
+                    LectureUnitSchema.ATTACHMENT_UNIT_LINK.value
                 ],
                 course_language=lecture_page_chunk[
                     LectureUnitPageChunkSchema.COURSE_LANGUAGE.value

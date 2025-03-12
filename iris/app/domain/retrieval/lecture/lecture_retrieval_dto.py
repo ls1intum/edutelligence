@@ -11,9 +11,12 @@ class LectureUnitRetrievalDTO:
     course_language: str
     lecture_id: Optional[int]
     lecture_name: Optional[str]
-    lecture_unit_id: Optional[int]
-    lecture_unit_name: Optional[str]
-    lecture_unit_link: Optional[str]
+    video_unit_id: Optional[int]
+    video_unit_name: Optional[str]
+    video_unit_link: Optional[str]
+    attachment_unit_id: Optional[int]
+    attachment_unit_name: Optional[str]
+    attachment_unit_link: Optional[str]
     base_url: str
     lecture_unit_summary: str
 
@@ -26,9 +29,12 @@ class LectureUnitSegmentRetrievalDTO:
     course_description: str
     lecture_id: int
     lecture_name: str
-    lecture_unit_id: int
-    lecture_unit_name: str
-    lecture_unit_link: str
+    video_unit_id: int
+    video_unit_name: str
+    video_unit_link: str
+    attachment_unit_id: int
+    attachment_unit_name: str
+    attachment_unit_link: str
     page_number: int
     segment_summary: str
     base_url: str
@@ -42,9 +48,9 @@ class LectureTranscriptionRetrievalDTO:
     course_description: str
     lecture_id: int
     lecture_name: str
-    lecture_unit_id: int
-    lecture_unit_name: str
-    lecture_unit_link: str
+    video_unit_id: int
+    video_unit_name: str
+    video_unit_link: str
     language: str
     segment_start_time: float
     segment_end_time: float
@@ -62,9 +68,9 @@ class LectureUnitPageChunkRetrievalDTO:
     course_description: str
     lecture_id: int
     lecture_name: str
-    lecture_unit_id: int
-    lecture_unit_name: str
-    lecture_unit_link: str
+    attachment_unit_id: int
+    attachment_unit_name: str
+    attachment_unit_link: str
     course_language: str
     page_number: int
     page_text_content: str
