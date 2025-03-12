@@ -11,7 +11,7 @@ COPY pyproject.toml poetry.lock ./
 RUN pip install poetry
 
 # Install any dependencies
-RUN poetry install --no-dev
+RUN poetry install --only main
 
 # Copy the content of the local src directory to the working directory
 COPY src/ ./src
