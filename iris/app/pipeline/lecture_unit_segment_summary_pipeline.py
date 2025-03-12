@@ -210,6 +210,9 @@ class LectureUnitSegmentSummaryPipeline(Pipeline):
             LectureUnitSegmentSchema.LECTURE_ID.value
         ).equal(self.lecture_unit_dto.lecture_id)
         lecture_filter &= Filter.by_property(
+            LectureUnitSegmentSchema.LECTURE_UNIT_ID.value
+        ).equal(self.lecture_unit_dto.lecture_unit_id)
+        lecture_filter &= Filter.by_property(
             LectureUnitSegmentSchema.PAGE_NUMBER.value
         ).equal(slide_number)
         if self.lecture_unit_dto.base_url is not None:

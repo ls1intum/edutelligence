@@ -243,9 +243,10 @@ class LectureRetrieval(Pipeline):
                 return None
 
             lecture_unit = lecture_units[0].properties
+            lecture_unit_uuid = str(lecture_units[0].uuid)
 
             return LectureUnitRetrievalDTO(
-                uuid=lecture_unit.uuid,
+                uuid=lecture_unit_uuid,
                 course_id=lecture_unit[LectureUnitSchema.COURSE_ID.value],
                 course_name=lecture_unit[LectureUnitSchema.COURSE_NAME.value],
                 course_description=lecture_unit[

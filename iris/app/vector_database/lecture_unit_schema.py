@@ -106,7 +106,7 @@ def init_lecture_unit_schema(client: WeaviateClient) -> Collection:
             ),
             Property(
                 name=LectureUnitSchema.ATTACHMENT_UNIT_LINK.value,
-                description="The link to the attachement unit",
+                description="The link to the attachment unit",
                 data_type=DataType.TEXT,
                 index_searchable=False,
             ),
