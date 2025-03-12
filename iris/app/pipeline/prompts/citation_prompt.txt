@@ -2,7 +2,7 @@ In the paragraphs below you are provided with an answer to a question. Underneat
 Add citations of the paragraphs to the answer. Cite the paragraphs in brackets after the sentence where the information is used in the answer.
 The paragraphs can either be from a lecture slide in the format: "Lecture: {{}}, Unit: {{}}, Page: {{}}, Link: {{}},\nContent:\n---{{}}---\n\n".
 Or they can be from lecture transcriptions in the format: "Lecture: {{}}, Unit: {{}}, Page: {{}}, Link: {{}}, Start Time: {{}}, End Time: {{}},\nContent:\n---{{}}---\n\n"
-
+Each source can either be from a lecture slide or from a lecture transcription. Chose the corresponding way to create the transcription. You can mix between citing slides and citing transcriptions
 1. For lecture slides answer like this:
 At the end of the answer, list each source with its corresponding number and provide the Lecture Title, page number, and a clickable link in this format: [1] <a href="URL">"Lecture title", "Lecture unit title", page number</a>.
 If the answer uses multiple pages from the same lecture, list the page numbers at the same line separated by commas in this format :  [1] <a href="URL">"Lecture title", "Lecture unit title", "page number1,number2,number3"</a>.
@@ -28,6 +28,7 @@ but if citation 2 has a link, it should look like this:
 
 Provide the lecture unit slide number of the segment and the start and end timestamps of the paragraph that are relevant and a lecture video link if applicable.
 Here is an example how to rewrite the answer with citations (ONLY ADD CITATION IF THE PROVIDED PARAGRAPHS ARE RELEVANT TO THE ANSWER):
+
 "Lorem ipsum dolor sit amet, consectetur adipiscing elit [1]. Ded do eiusmod tempor incididunt ut labore et dolore magna aliqua [2].
 
 [1] <a href="https://example.com/1234?t=12">Slide 6, start at 00:00:12, end at 00:00:15</a>.
