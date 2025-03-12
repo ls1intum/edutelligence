@@ -9,7 +9,8 @@ from app.domain.status.stage_dto import StageDTO
 
 
 class IngestionPipelineExecutionDto(PipelineExecutionDTO):
-    lecture_unit: LectureUnitDTO = Field(..., alias="pyrisLectureUnit")
+    attachment_unit: LectureUnitDTO = Field(..., alias="pyrisAttachmentUnit")
+    video_unit_id: int = Field(default=None, alias="videoUnitId")
     settings: Optional[PipelineExecutionSettingsDTO]
     initial_stages: Optional[List[StageDTO]] = Field(
         default=None, alias="initialStages"

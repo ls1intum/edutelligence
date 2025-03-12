@@ -47,7 +47,7 @@ def get_lecture_unit_ingestion_state(
                 lecture_id
             )
             & Filter.by_property(
-                LectureUnitPageChunkSchema.LECTURE_UNIT_ID.value
+                LectureUnitPageChunkSchema.ATTACHMENT_UNIT_ID.value
             ).equal(lecture_unit_id)
         ),
         limit=1,

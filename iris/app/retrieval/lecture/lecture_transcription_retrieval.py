@@ -139,10 +139,10 @@ class LectureTranscriptionRetrieval(Pipeline):
             lecture_transcription_segment[LectureTranscriptionSchema.LECTURE_ID.value]
         )
         lecture_unit_filter &= Filter.by_property(
-            LectureUnitSchema.LECTURE_UNIT_ID.value
+            LectureUnitSchema.VIDEO_UNIT_ID.value
         ).equal(
             lecture_transcription_segment[
-                LectureTranscriptionSchema.LECTURE_UNIT_ID.value
+                LectureTranscriptionSchema.VIDEO_UNIT_ID.value
             ]
         )
         lecture_unit_filter &= Filter.by_property(
@@ -167,12 +167,12 @@ class LectureTranscriptionRetrieval(Pipeline):
                 ],
                 lecture_id=lecture_unit[LectureUnitSchema.LECTURE_ID.value],
                 lecture_name=lecture_unit[LectureUnitSchema.LECTURE_NAME.value],
-                lecture_unit_id=lecture_unit[LectureUnitSchema.LECTURE_UNIT_ID.value],
+                lecture_unit_id=lecture_unit[LectureUnitSchema.VIDEO_UNIT_ID.value],
                 lecture_unit_name=lecture_unit[
-                    LectureUnitSchema.LECTURE_UNIT_NAME.value
+                    LectureUnitSchema.VIDEO_UNIT_ID.value
                 ],
                 lecture_unit_link=lecture_unit[
-                    LectureUnitSchema.LECTURE_UNIT_LINK.value
+                    LectureUnitSchema.VIDEO_UNIT_LINK.value
                 ],
                 language=lecture_transcription_segment[
                     LectureTranscriptionSchema.LANGUAGE.value

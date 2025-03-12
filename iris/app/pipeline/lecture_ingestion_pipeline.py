@@ -79,7 +79,7 @@ def create_page_data(
     return [
         {
             LectureUnitPageChunkSchema.LECTURE_ID.value: lecture_unit_dto.lecture_id,
-            LectureUnitPageChunkSchema.LECTURE_UNIT_ID.value: lecture_unit_dto.lecture_unit_id,
+            LectureUnitPageChunkSchema.ATTACHMENT_UNIT_ID.value: lecture_unit_dto.lecture_unit_id,
             LectureUnitPageChunkSchema.COURSE_ID.value: lecture_unit_dto.course_id,
             LectureUnitPageChunkSchema.COURSE_LANGUAGE.value: course_language,
             LectureUnitPageChunkSchema.PAGE_NUMBER.value: page_num + 1,
@@ -124,19 +124,19 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         try:
             self.callback.in_progress("Deleting old slides from database...")
             self.delete_lecture_unit(
-                self.dto.lecture_unit.course_id,
-                self.dto.lecture_unit.lecture_id,
-                self.dto.lecture_unit.lecture_unit_id,
+                self.dto.attachment_unit.course_id,
+                self.dto.attachment_unit.lecture_id,
+                self.dto.attachment_unit.lecture_unit_id,
                 self.dto.settings.artemis_base_url,
             )
             self.callback.done("Old slides removed")
             self.callback.in_progress("Chunking and interpreting lecture...")
             chunks = []
-            pdf_path = save_pdf(self.dto.lecture_unit.pdf_file_base64)
+            pdf_path = save_pdf(self.dto.attachment_unit.pdf_file_base64)
             chunks.extend(
                 self.chunk_data(
                     lecture_pdf=pdf_path,
-                    lecture_unit_slide_dto=self.dto.lecture_unit,
+                    lecture_unit_slide_dto=self.dto.attachment_unit,
                     base_url=self.dto.settings.artemis_base_url,
                 )
             )
@@ -144,18 +144,21 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
             self.callback.done("Lecture Chunking and interpretation Finished")
             self.callback.in_progress("Ingesting lecture chunks into database...")
             self.batch_update(chunks)
-
             self.callback.done("Lecture Ingestion Finished", tokens=self.tokens)
+            self.callback.in_progress("Lecture Unit Summary Ingestion In Progress")
             lecture_unit_dto = LectureUnitDTO(
-                course_id=self.dto.lecture_unit.course_id,
-                course_name=self.dto.lecture_unit.course_name,
-                course_description=self.dto.lecture_unit.course_description,
+                course_id=self.dto.attachment_unit.course_id,
+                course_name=self.dto.attachment_unit.course_name,
+                course_description=self.dto.attachment_unit.course_description,
                 course_language=self.course_language,
-                lecture_id=self.dto.lecture_unit.lecture_id,
-                lecture_name=self.dto.lecture_unit.lecture_name,
-                lecture_unit_id=self.dto.lecture_unit.lecture_unit_id,
-                lecture_unit_name=self.dto.lecture_unit.lecture_unit_name,
-                lecture_unit_link=self.dto.lecture_unit.lecture_unit_link,
+                lecture_id=self.dto.attachment_unit.lecture_id,
+                lecture_name=self.dto.attachment_unit.lecture_name,
+                attachment_unit_id=self.dto.attachment_unit.lecture_unit_id,
+                attachment_unit_name=self.dto.attachment_unit.lecture_unit_name,
+                attachment_unit_link=self.dto.attachment_unit.lecture_unit_link,
+                video_unit_id=self.dto.video_unit_id,
+                video_unit_name=None,
+                video_unit_link=None,
                 base_url=self.dto.settings.artemis_base_url,
             )
 
@@ -167,7 +170,7 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
 
             logger.info(
                 f"Lecture ingestion pipeline finished Successfully for course "
-                f"{self.dto.lecture_unit.course_name}"
+                f"{self.dto.attachment_unit.course_name}"
             )
             return True
         except Exception as e:
@@ -374,7 +377,7 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
                     lecture_id
                 )
                 & Filter.by_property(
-                    LectureUnitPageChunkSchema.LECTURE_UNIT_ID.value
+                    LectureUnitPageChunkSchema.ATTACHMENT_UNIT_ID.value
                 ).equal(lecture_unit_id)
             )
             return True

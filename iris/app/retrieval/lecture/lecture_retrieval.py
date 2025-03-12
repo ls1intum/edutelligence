@@ -198,7 +198,7 @@ class LectureRetrieval(Pipeline):
                 LectureUnitSchema.LECTURE_ID.value
             ).equal(lecture_id)
             lecture_filter &= Filter.by_property(
-                LectureUnitSchema.LECTURE_UNIT_ID.value
+                LectureUnitSchema.VIDEO_UNIT_ID.value
             ).equal(lecture_unit_id)
 
             lecture_units = self.lecture_unit_collection.query.fetch_objects(
@@ -243,7 +243,7 @@ class LectureRetrieval(Pipeline):
                     LectureUnitSchema.COURSE_DESCRIPTION.value
                 ],
                 course_language=lecture_unit[LectureUnitSchema.COURSE_LANGUAGE.value],
-                lecture_id=lecture_unit[LectureUnitSchema.LECTURE_UNIT_ID.value],
+                lecture_id=lecture_unit[LectureUnitSchema.VIDEO_UNIT_ID.value],
                 lecture_name=lecture_unit[LectureUnitSchema.LECTURE_UNIT_NAME.value],
                 lecture_unit_id=None,
                 lecture_unit_name=None,
@@ -683,7 +683,7 @@ class LectureRetrieval(Pipeline):
             LectureTranscriptionSchema.LECTURE_ID.value
         ).equal(lecture_unit_segment.lecture_id)
         transcription_filter &= Filter.by_property(
-            LectureTranscriptionSchema.LECTURE_UNIT_ID.value
+            LectureTranscriptionSchema.VIDEO_UNIT_ID.value
         ).equal(lecture_unit_segment.lecture_unit_id)
         transcription_filter &= Filter.by_property(
             LectureTranscriptionSchema.PAGE_NUMBER.value
@@ -736,7 +736,7 @@ class LectureRetrieval(Pipeline):
             LectureUnitPageChunkSchema.LECTURE_ID.value
         ).equal(lecture_unit_segment.lecture_id)
         page_chunk_filter &= Filter.by_property(
-            LectureUnitPageChunkSchema.LECTURE_UNIT_ID.value
+            LectureUnitPageChunkSchema.ATTACHMENT_UNIT_ID.value
         ).equal(lecture_unit_segment.lecture_unit_id)
         page_chunk_filter &= Filter.by_property(
             LectureUnitPageChunkSchema.PAGE_NUMBER.value

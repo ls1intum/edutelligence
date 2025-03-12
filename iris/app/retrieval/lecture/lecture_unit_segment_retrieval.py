@@ -133,7 +133,7 @@ class LectureUnitSegmentRetrieval(Pipeline):
             LectureUnitSchema.LECTURE_ID.value
         ).equal(lecture_unit_segment[LectureUnitSegmentSchema.LECTURE_ID.value])
         lecture_unit_filter &= Filter.by_property(
-            LectureUnitSchema.LECTURE_UNIT_ID.value
+            LectureUnitSchema.VIDEO_UNIT_ID.value
         ).equal(lecture_unit_segment[LectureUnitSegmentSchema.LECTURE_UNIT_ID.value])
 
         lecture_units = self.lecture_unit_collection.query.fetch_objects(
@@ -154,7 +154,7 @@ class LectureUnitSegmentRetrieval(Pipeline):
                 LectureUnitSegmentSchema.LECTURE_UNIT_ID.value
             ],
             lecture_unit_name=lecture_unit[LectureUnitSchema.LECTURE_UNIT_NAME.value],
-            lecture_unit_link=lecture_unit[LectureUnitSchema.LECTURE_UNIT_LINK.value],
+            lecture_unit_link=lecture_unit[LectureUnitSchema.VIDEO_UNIT_LINK.value],
             page_number=lecture_unit_segment[
                 LectureUnitSegmentSchema.PAGE_NUMBER.value
             ],

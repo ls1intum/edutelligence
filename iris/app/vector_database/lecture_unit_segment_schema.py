@@ -24,7 +24,8 @@ class LectureUnitSegmentSchema(Enum):
     COLLECTION_NAME = "LectureUnitSegments"
     COURSE_ID = "course_id"
     LECTURE_ID = "lecture_id"
-    LECTURE_UNIT_ID = "lecture_unit_id"
+    VIDEO_UNIT_ID = "video_unit_id"
+    ATTACHMENT_UNIT_ID = "attachment_unit_id"
     PAGE_NUMBER = "page_number"
     SEGMENT_SUMMARY = "segment_summary"
     TRANSCRIPTIONS = "transcriptions"
@@ -56,8 +57,14 @@ def init_lecture_unit_segment_schema(client: WeaviateClient) -> Collection:
                 index_searchable=False,
             ),
             Property(
-                name=LectureUnitSegmentSchema.LECTURE_UNIT_ID.value,
-                description="The id of the lecture unit",
+                name=LectureUnitSegmentSchema.VIDEO_UNIT_ID.value,
+                description="The id of the video unit",
+                data_type=DataType.INT,
+                index_searchable=False,
+            ),
+            Property(
+                name=LectureUnitSegmentSchema.ATTACHMENT_UNIT_ID.value,
+                description="The id of the attachment unit",
                 data_type=DataType.INT,
                 index_searchable=False,
             ),

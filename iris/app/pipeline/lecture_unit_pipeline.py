@@ -30,23 +30,37 @@ class LectureUnitPipeline(Pipeline):
         lecture_unit.lecture_unit_summary = LectureUnitSummaryPipeline(
             self.weaviate_client, lecture_unit, lecture_unit_segment_summaries
         )()
-
         # Delete existing lecture unit
-        self.lecture_unit_collection.data.delete_many(
-            where=Filter.by_property(LectureUnitSchema.COURSE_ID.value).equal(
-                lecture_unit.course_id
+        if lecture_unit.video_unit_id is not None:
+            self.lecture_unit_collection.data.delete_many(
+                where=Filter.by_property(LectureUnitSchema.COURSE_ID.value).equal(
+                    lecture_unit.course_id
+                )
+                & Filter.by_property(LectureUnitSchema.LECTURE_ID.value).equal(
+                    lecture_unit.lecture_id
+                )
+                & Filter.by_property(LectureUnitSchema.VIDEO_UNIT_ID.value).equal(
+                    lecture_unit.video_unit_id
+                )
+                & Filter.by_property(LectureUnitSchema.BASE_URL.value).equal(
+                    lecture_unit.base_url
+                ),
             )
-            & Filter.by_property(LectureUnitSchema.LECTURE_ID.value).equal(
-                lecture_unit.lecture_id
+        if lecture_unit.attachment_unit_id is not None:
+            self.lecture_unit_collection.data.delete_many(
+                where=Filter.by_property(LectureUnitSchema.COURSE_ID.value).equal(
+                    lecture_unit.course_id
+                )
+                      & Filter.by_property(LectureUnitSchema.LECTURE_ID.value).equal(
+                    lecture_unit.lecture_id
+                )
+                & Filter.by_property(LectureUnitSchema.ATTACHMENT_UNIT_ID.value).equal(
+                    lecture_unit.attachment_unit_id
+                )
+                      & Filter.by_property(LectureUnitSchema.BASE_URL.value).equal(
+                    lecture_unit.base_url
+                ),
             )
-            & Filter.by_property(LectureUnitSchema.LECTURE_UNIT_ID.value).equal(
-                lecture_unit.lecture_unit_id
-            )
-            & Filter.by_property(LectureUnitSchema.BASE_URL.value).equal(
-                lecture_unit.base_url
-            ),
-        )
-
         embedding = self.llm_embedding.embed(lecture_unit.lecture_unit_summary)
 
         with batch_update_lock:
@@ -57,9 +71,12 @@ class LectureUnitPipeline(Pipeline):
                     LectureUnitSchema.COURSE_DESCRIPTION.value: lecture_unit.course_description,
                     LectureUnitSchema.LECTURE_ID.value: lecture_unit.lecture_id,
                     LectureUnitSchema.LECTURE_NAME.value: lecture_unit.lecture_name,
-                    LectureUnitSchema.LECTURE_UNIT_ID.value: lecture_unit.lecture_unit_id,
-                    LectureUnitSchema.LECTURE_UNIT_NAME.value: lecture_unit.lecture_unit_name,
-                    LectureUnitSchema.LECTURE_UNIT_LINK.value: lecture_unit.lecture_unit_link,
+                    LectureUnitSchema.VIDEO_UNIT_ID.value: lecture_unit.video_unit_id,
+                    LectureUnitSchema.VIDEO_UNIT_NAME.value: lecture_unit.video_unit_name,
+                    LectureUnitSchema.VIDEO_UNIT_LINK.value: lecture_unit.video_unit_link,
+                    LectureUnitSchema.ATTACHMENT_UNIT_ID.value: lecture_unit.attachment_unit_id,
+                    LectureUnitSchema.ATTACHMENT_UNIT_NAME.value: lecture_unit.attachment_unit_name,
+                    LectureUnitSchema.ATTACHMENT_UNIT_LINK.value: lecture_unit.attachment_unit_link,
                     LectureUnitSchema.BASE_URL.value: lecture_unit.base_url,
                     LectureUnitSchema.LECTURE_UNIT_SUMMARY.value: lecture_unit.lecture_unit_summary,
                 },

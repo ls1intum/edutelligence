@@ -14,7 +14,7 @@ class LectureTranscriptionSchema(Enum):
     COLLECTION_NAME = "LectureTranscriptions"
     COURSE_ID = "course_id"
     LECTURE_ID = "lecture_id"
-    LECTURE_UNIT_ID = "lecture_unit_id"
+    VIDEO_UNIT_ID = "video_unit_id"
     LANGUAGE = "language"
     SEGMENT_START_TIME = "segment_start_time"
     SEGMENT_END_TIME = "segment_end_time"
@@ -66,14 +66,14 @@ def init_lecture_transcription_schema(client: WeaviateClient) -> Collection:
                 index_searchable=False,
             ),
             Property(
-                name=LectureTranscriptionSchema.LECTURE_UNIT_ID.value,
+                name=LectureTranscriptionSchema.VIDEO_UNIT_ID.value,
                 description="The id of the lecture unit of the transcription",
                 data_type=DataType.INT,
                 index_searchable=False,
             ),
             Property(
                 name=LectureTranscriptionSchema.PAGE_NUMBER.value,
-                description="The page number of the lecture unit of the segment",
+                description="The page number of the transcription unit of the segment",
                 data_type=DataType.INT,
                 index_searchable=False,
             ),

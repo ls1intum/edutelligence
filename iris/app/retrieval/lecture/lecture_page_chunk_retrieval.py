@@ -180,8 +180,8 @@ class LecturePageChunkRetrieval(Pipeline):
             LectureUnitSchema.LECTURE_ID.value
         ).equal(lecture_page_chunk[LectureUnitPageChunkSchema.LECTURE_ID.value])
         lecture_unit_filter &= Filter.by_property(
-            LectureUnitSchema.LECTURE_UNIT_ID.value
-        ).equal(lecture_page_chunk[LectureUnitPageChunkSchema.LECTURE_UNIT_ID.value])
+            LectureUnitSchema.VIDEO_UNIT_ID.value
+        ).equal(lecture_page_chunk[LectureUnitPageChunkSchema.ATTACHMENT_UNIT_ID.value])
         lecture_unit_filter &= Filter.by_property(
             LectureUnitSchema.BASE_URL.value
         ).equal(lecture_page_chunk[LectureUnitPageChunkSchema.BASE_URL.value])
@@ -211,7 +211,7 @@ class LecturePageChunkRetrieval(Pipeline):
                     LectureUnitSchema.LECTURE_UNIT_NAME.value
                 ],
                 lecture_unit_link=lecture_unit[
-                    LectureUnitSchema.LECTURE_UNIT_LINK.value
+                    LectureUnitSchema.VIDEO_UNIT_LINK.value
                 ],
                 course_language=lecture_page_chunk[
                     LectureUnitPageChunkSchema.COURSE_LANGUAGE.value

@@ -1,5 +1,6 @@
 from typing import Tuple
 
+from filetype import video_match
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import Runnable
@@ -86,6 +87,9 @@ class LectureUnitSegmentSummaryPipeline(Pipeline):
         return summaries
 
     def _get_transcriptions(self, slide_number: int):
+        if self.lecture_unit_dto.video_unit_id is None:
+            return []
+        print("gettranscriptions")
         transcription_filter = self._get_lecture_transcription_filter()
         transcription_filter &= Filter.by_property(
             LectureTranscriptionSchema.PAGE_NUMBER.value
@@ -95,6 +99,8 @@ class LectureUnitSegmentSummaryPipeline(Pipeline):
         ).objects
 
     def _get_slides(self, slide_number: int):
+        if self.lecture_unit_dto.attachment_unit_id is None:
+            return []
         slide_filter = self._get_lecture_slide_filter()
         slide_filter &= Filter.by_property(
             LectureUnitPageChunkSchema.PAGE_NUMBER.value
@@ -104,31 +110,32 @@ class LectureUnitSegmentSummaryPipeline(Pipeline):
         ).objects
 
     def _get_slide_range(self) -> Tuple[int, int]:
-        slides = self.lecture_unit_page_chunk_collection.query.fetch_objects(
-            filters=self._get_lecture_slide_filter()
-        ).objects
+        if self.lecture_unit_dto.attachment_unit_id is not None:
+            slides = self.lecture_unit_page_chunk_collection.query.fetch_objects(
+                filters=self._get_lecture_slide_filter()
+            ).objects
 
-        if len(slides) != 0:
-            slide_numbers = [
-                int(slide.properties.get(LectureUnitPageChunkSchema.PAGE_NUMBER.value))
-                for slide in slides
-            ]
-            return min(slide_numbers), max(slide_numbers)
+            if len(slides) != 0:
+                slide_numbers = [
+                    int(slide.properties.get(LectureUnitPageChunkSchema.PAGE_NUMBER.value))
+                    for slide in slides
+                ]
+                return min(slide_numbers), max(slide_numbers)
+        if self.lecture_unit_dto.video_unit_id is not None:
+            transcriptions = self.lecture_transcription_collection.query.fetch_objects(
+                filters=self._get_lecture_transcription_filter()
+            ).objects
 
-        transcriptions = self.lecture_transcription_collection.query.fetch_objects(
-            filters=self._get_lecture_transcription_filter()
-        ).objects
-
-        if len(transcriptions) != 0:
-            slide_numbers = [
-                int(
-                    transcription.properties.get(
-                        LectureTranscriptionSchema.PAGE_NUMBER.value
+            if len(transcriptions) != 0:
+                slide_numbers = [
+                    int(
+                        transcription.properties.get(
+                            LectureTranscriptionSchema.PAGE_NUMBER.value
+                        )
                     )
-                )
-                for transcription in transcriptions
-            ]
-            return min(slide_numbers), max(slide_numbers)
+                    for transcription in transcriptions
+                ]
+                return min(slide_numbers), max(slide_numbers)
 
         return 0, 0
 
@@ -140,8 +147,8 @@ class LectureUnitSegmentSummaryPipeline(Pipeline):
             LectureUnitPageChunkSchema.LECTURE_ID.value
         ).equal(self.lecture_unit_dto.lecture_id)
         slide_filter &= Filter.by_property(
-            LectureUnitPageChunkSchema.LECTURE_UNIT_ID.value
-        ).equal(self.lecture_unit_dto.lecture_unit_id)
+            LectureUnitPageChunkSchema.ATTACHMENT_UNIT_ID.value
+        ).equal(self.lecture_unit_dto.attachment_unit_id)
         if self.lecture_unit_dto.base_url is not None:
             slide_filter &= Filter.by_property(
                 LectureUnitPageChunkSchema.BASE_URL.value
@@ -156,8 +163,8 @@ class LectureUnitSegmentSummaryPipeline(Pipeline):
             LectureTranscriptionSchema.LECTURE_ID.value
         ).equal(self.lecture_unit_dto.lecture_id)
         transcription_filter &= Filter.by_property(
-            LectureTranscriptionSchema.LECTURE_UNIT_ID.value
-        ).equal(self.lecture_unit_dto.lecture_unit_id)
+            LectureTranscriptionSchema.VIDEO_UNIT_ID.value
+        ).equal(self.lecture_unit_dto.video_unit_id)
         if self.lecture_unit_dto.base_url is not None:
             transcription_filter &= Filter.by_property(
                 LectureTranscriptionSchema.BASE_URL.value
@@ -204,9 +211,6 @@ class LectureUnitSegmentSummaryPipeline(Pipeline):
             LectureUnitSegmentSchema.LECTURE_ID.value
         ).equal(self.lecture_unit_dto.lecture_id)
         lecture_filter &= Filter.by_property(
-            LectureUnitSegmentSchema.LECTURE_UNIT_ID.value
-        ).equal(self.lecture_unit_dto.lecture_unit_id)
-        lecture_filter &= Filter.by_property(
             LectureUnitSegmentSchema.PAGE_NUMBER.value
         ).equal(slide_number)
         if self.lecture_unit_dto.base_url is not None:
@@ -214,12 +218,29 @@ class LectureUnitSegmentSummaryPipeline(Pipeline):
                 LectureUnitSegmentSchema.BASE_URL.value
             ).equal(self.lecture_unit_dto.base_url)
 
-        lectures = self.lecture_unit_segment_collection.query.fetch_objects(
-            filters=lecture_filter, limit=1
-        ).objects
+        video_filter = lecture_filter & Filter.by_property(
+            LectureUnitSegmentSchema.VIDEO_UNIT_ID.value
+        ).equal(self.lecture_unit_dto.video_unit_id)
+        attachment_filter = lecture_filter & Filter.by_property(
+            LectureUnitSegmentSchema.ATTACHMENT_UNIT_ID.value
+        ).equal(self.lecture_unit_dto.attachment_unit_id)
+
+        if self.lecture_unit_dto.video_unit_id is not None:
+            video_unit_lectures = self.lecture_unit_segment_collection.query.fetch_objects(
+                filters=video_filter, limit=1
+            ).objects
+        else: video_unit_lectures = []
+
+        if self.lecture_unit_dto.attachment_unit_id is not None:
+            attachment_unit_lectures = self.lecture_unit_segment_collection.query.fetch_objects(
+                filters=attachment_filter, limit=1
+            ).objects
+        else: attachment_unit_lectures = []
 
         transcriptions = self._get_transcriptions(slide_number)
         slides = self._get_slides(slide_number)
+
+        lectures = video_unit_lectures + [x for x in attachment_unit_lectures if x not in video_unit_lectures]
 
         if len(lectures) == 0:
             # Insert new lecture
@@ -227,7 +248,8 @@ class LectureUnitSegmentSummaryPipeline(Pipeline):
                 properties={
                     LectureUnitSegmentSchema.COURSE_ID.value: self.lecture_unit_dto.course_id,
                     LectureUnitSegmentSchema.LECTURE_ID.value: self.lecture_unit_dto.lecture_id,
-                    LectureUnitSegmentSchema.LECTURE_UNIT_ID.value: self.lecture_unit_dto.lecture_unit_id,
+                    LectureUnitSegmentSchema.ATTACHMENT_UNIT_ID.value: self.lecture_unit_dto.attachment_unit_id,
+                    LectureUnitSegmentSchema.VIDEO_UNIT_ID.value: self.lecture_unit_dto.video_unit_id,
                     LectureUnitSegmentSchema.SEGMENT_SUMMARY.value: summary,
                     LectureUnitSegmentSchema.PAGE_NUMBER.value: slide_number,
                     LectureUnitSegmentSchema.BASE_URL.value: self.lecture_unit_dto.base_url,

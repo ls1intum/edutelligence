@@ -97,13 +97,15 @@ class TranscriptionIngestionPipeline(Pipeline):
                 course_description=self.dto.transcription.course_description,
                 lecture_id=self.dto.transcription.lecture_id,
                 lecture_name=self.dto.transcription.lecture_name,
-                lecture_unit_id=self.dto.lectureUnitId,
-                lecture_unit_name=self.dto.transcription.lecture_unit_name,
-                lecture_unit_link=self.dto.transcription.lecture_unit_link,
+                video_unit_id=self.dto.videoUnitId,
+                video_unit_name=self.dto.transcription.lecture_unit_name,
+                video_unit_link=self.dto.transcription.lecture_unit_link,
+                attachment_unit_id=getattr(self.dto, 'attachment_unit_id', None),
+                attachment_unit_name=None,
+                attachment_unit_link=None,
                 course_language=self.dto.transcription.transcription.language,
                 base_url=self.dto.settings.artemis_base_url,
             )
-
             LectureUnitPipeline()(lecture_unit_dto)
 
             self.callback.done(
@@ -129,10 +131,12 @@ class TranscriptionIngestionPipeline(Pipeline):
                 transcription.lecture_id
             )
             & Filter.by_property(
-                LectureTranscriptionSchema.LECTURE_UNIT_ID.value
+                LectureTranscriptionSchema.VIDEO_UNIT_ID.value
             ).equal(transcription.lecture_unit_id)
+            & Filter.by_property(
+                LectureTranscriptionSchema.BASE_URL.value
+            ).equal(self.dto.settings.artemis_base_url)
         )
-        # TODO: Add Base Url
 
     def batch_insert(self, chunks):
         with batch_update_lock:
@@ -164,7 +168,7 @@ class TranscriptionIngestionPipeline(Pipeline):
                 chunk = {
                     LectureTranscriptionSchema.COURSE_ID.value: transcription.course_id,
                     LectureTranscriptionSchema.LECTURE_ID.value: transcription.lecture_id,
-                    LectureTranscriptionSchema.LECTURE_UNIT_ID.value: transcription.lecture_unit_id,
+                    LectureTranscriptionSchema.VIDEO_UNIT_ID.value: transcription.lecture_unit_id,
                     LectureTranscriptionSchema.LANGUAGE.value: transcription.transcription.language,
                     LectureTranscriptionSchema.SEGMENT_START_TIME.value: segment.start_time,
                     LectureTranscriptionSchema.SEGMENT_END_TIME.value: segment.end_time,

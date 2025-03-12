@@ -15,7 +15,7 @@ class LectureUnitPageChunkSchema(Enum):
     COURSE_ID = "course_id"
     COURSE_LANGUAGE = "course_language"
     LECTURE_ID = "lecture_id"
-    LECTURE_UNIT_ID = "lecture_unit_id"
+    ATTACHMENT_UNIT_ID = "attachment_unit_id"
     PAGE_TEXT_CONTENT = "page_text_content"
     PAGE_NUMBER = "page_number"
     BASE_URL = "base_url"
@@ -73,8 +73,8 @@ def init_lecture_unit_page_chunk_schema(client: WeaviateClient) -> Collection:
                 index_searchable=False,
             ),
             Property(
-                name=LectureUnitPageChunkSchema.LECTURE_UNIT_ID.value,
-                description="The ID of the lecture unit",
+                name=LectureUnitPageChunkSchema.ATTACHMENT_UNIT_ID.value,
+                description="The ID of the attachment unit",
                 data_type=DataType.INT,
                 index_searchable=False,
             ),

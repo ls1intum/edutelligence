@@ -9,7 +9,8 @@ from app.domain.status.stage_dto import StageDTO
 
 class TranscriptionIngestionPipelineExecutionDto(PipelineExecutionDTO):
     transcription: TranscriptionWebhookDTO
-    lectureUnitId: int
+    videoUnitId: int
+    attachmentUnitId: int = Field(default=None, alias="attachmentUnitId")
     settings: Optional[PipelineExecutionSettingsDTO]
     initial_stages: Optional[List[StageDTO]] = Field(
         default=None, alias="initialStages"
