@@ -5,7 +5,7 @@ FROM python:3.12.3-slim
 WORKDIR /app
 
 # Copy the dependencies file to the working directory
-COPY iris/pyproject.toml poetry.lock ./
+COPY iris/pyproject.toml iris/poetry.lock ./
 
 # Install poetry
 RUN pip install poetry
