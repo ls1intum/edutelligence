@@ -62,7 +62,7 @@ jobs:
         if: ${{ steps.compute-tag.outputs.result != 'FALSE' }}
         with:
           platforms: amd64, arm64
-          file: ./Dockerfile
-          context: .
+          file: ./iris/Dockerfile
+          context: ./iris
           tags: ghcr.io/ls1intum/edutelligence:${{ steps.compute-tag.outputs.result }}
           push: true
