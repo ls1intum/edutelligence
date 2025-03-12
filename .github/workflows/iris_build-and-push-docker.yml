@@ -55,4 +55,5 @@ jobs:
     with:
       image-name: ls1intum/edutelligence
       docker-file: ./iris/Dockerfile
+      docker-context: .
       tags: ghcr.io/ls1intum/edutelligence:${{ needs.compute-tag.outputs.result }}
