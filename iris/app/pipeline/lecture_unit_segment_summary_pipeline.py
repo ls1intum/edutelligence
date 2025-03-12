@@ -89,7 +89,6 @@ class LectureUnitSegmentSummaryPipeline(Pipeline):
     def _get_transcriptions(self, slide_number: int):
         if self.lecture_unit_dto.video_unit_id is None:
             return []
-        print("gettranscriptions")
         transcription_filter = self._get_lecture_transcription_filter()
         transcription_filter &= Filter.by_property(
             LectureTranscriptionSchema.PAGE_NUMBER.value

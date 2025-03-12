@@ -100,7 +100,7 @@ class TranscriptionIngestionPipeline(Pipeline):
                 video_unit_id=self.dto.videoUnitId,
                 video_unit_name=self.dto.transcription.lecture_unit_name,
                 video_unit_link=self.dto.transcription.lecture_unit_link,
-                attachment_unit_id=getattr(self.dto, 'attachment_unit_id', None),
+                attachment_unit_id=self.dto.attachmentUnitId if self.dto.attachmentUnitId else None,
                 attachment_unit_name=None,
                 attachment_unit_link=None,
                 course_language=self.dto.transcription.transcription.language,
