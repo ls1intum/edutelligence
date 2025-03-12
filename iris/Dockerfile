@@ -5,7 +5,7 @@ FROM python:3.12.3-slim
 WORKDIR /app
 
 # Copy the dependencies file to the working directory
-COPY pyproject.toml poetry.lock ./
+COPY iris/pyproject.toml poetry.lock ./
 
 # Install poetry
 RUN pip install poetry
@@ -14,7 +14,7 @@ RUN pip install poetry
 RUN poetry install --only main
 
 # Copy the content of the local src directory to the working directory
-COPY src/ ./src
+COPY iris/src/ ./src
 
 # Specify the command to run on container start
 CMD ["uvicorn", "src.iris.main:app", "--host", "0.0.0.0", "--port", "8000"]
