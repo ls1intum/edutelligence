@@ -19,10 +19,12 @@ on:
       - created
 
 jobs:
-  docker:
-    name: Build and Push Docker Image
+  compute-tag:
+    name: Compute tag
     if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'ls1intum/edutelligence' }}
     runs-on: ubuntu-latest
+    outputs:
+      result: ${{ steps.compute-tag.outputs.result }}
     steps:
       - name: Compute Tag
         uses: actions/github-script@v7
@@ -46,9 +48,11 @@ jobs:
             }
             return "FALSE";
 
-      - name: Build and Push to GitHub Container Registry
-        uses: ls1intum/.github/.github/workflows/build-and-push-docker-image.yml@main
-        with:
-          image-name: ls1intum/edutelligence
-          docker-file: ./iris/Dockerfile
-          tags: ghcr.io/ls1intum/edutelligence:${{ steps.compute-tag.outputs.result }}
+  build-and-push:
+    name: Build and Push to GitHub Container Registry
+    needs: [ compute-tag ]
+    uses: ls1intum/.github/.github/workflows/build-and-push-docker-image.yml@main
+    with:
+      image-name: ls1intum/edutelligence
+      docker-file: ./iris/Dockerfile
+      tags: ghcr.io/ls1intum/edutelligence:${{ needs.compute-tag.outputs.result }}
