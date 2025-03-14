@@ -1,0 +1,105 @@
+[
+  {
+    "class": {
+      "name": "SortStrategy",
+      "package": "mttpe1",
+      "isInterface": true
+    },
+    "methods": [
+      {
+        "name": "performSort",
+        "modifiers": ["public", "abstract"],
+        "parameters": ["List"],
+        "returnType": "void"
+      }
+    ]
+  },
+  {
+    "class": {
+      "name": "Context",
+      "package": "mttpe1"
+    },
+    "methods": [
+      {
+        "name": "getDates",
+        "modifiers": ["public"],
+        "returnType": "List"
+      },
+      {
+        "name": "setDates",
+        "modifiers": ["public"],
+        "parameters": ["List"],
+        "returnType": "void"
+      },
+      {
+        "name": "setSortAlgorithm",
+        "modifiers": ["public"],
+        "parameters": ["SortStrategy"],
+        "returnType": "void"
+      },
+      {
+        "name": "getSortAlgorithm",
+        "modifiers": ["public"],
+        "returnType": "SortStrategy"
+      },
+      {
+        "name": "sort",
+        "modifiers": ["public"],
+        "returnType": "void"
+      }
+    ],
+    "attributes": [
+      {
+        "name": "sortAlgorithm",
+        "modifiers": ["private"],
+        "type": "SortStrategy"
+      },
+      {
+        "name": "dates",
+        "modifiers": ["private"],
+        "type": "List"
+      }
+    ]
+  },
+  {
+    "class": {
+      "name": "BubbleSort",
+      "package": "mttpe1",
+      "interfaces": ["SortStrategy"]
+    }
+  },
+  {
+    "class": {
+      "name": "Policy",
+      "package": "mttpe1"
+    },
+    "methods": [
+      {
+        "name": "configure",
+        "modifiers": ["public"],
+        "returnType": "void"
+      }
+    ],
+    "attributes": [
+      {
+        "name": "context",
+        "modifiers": ["private"],
+        "type": "Context"
+      }
+    ],
+    "constructors": [
+      {
+        "modifiers": ["public"],
+        "parameters": ["Context"]
+      }
+    ]
+  },
+  {
+    "class": {
+      "name": "MergeSort",
+      "package": "mttpe1",
+      "interfaces": ["SortStrategy"]
+    },
+    "methods": []
+  }
+]

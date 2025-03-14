@@ -1,0 +1,129 @@
+{
+  "id": 4,
+  "course_id": 39,
+  "title": "Patterns in Software Engineering",
+  "type": "text",
+  "max_points": 3.0,
+  "bonus_points": 0,
+  "grading_instructions": "For every correct pattern, give 1 point.",
+  "problem_statement": "Name three patterns in software engineering",
+  "example_solution": "SE Patterns include for example: MVC, Proxy, Command, Adapter, Bridge, Strategy, Composite, State, Observer, Abstract Factory, Repository, Blackboard, Layered Architecture, Client-Server...",
+  "meta": {},
+  "submissions": [
+    {
+      "id": 401,
+      "text": "MVC test",
+      "meta": {}
+    },
+    {
+      "id": 402,
+      "text": "Bridge Pattern\nState Pattern\nComposite Pattern",
+      "meta": {}
+    },
+    {
+      "id": 403,
+      "text": "Bridge pattern, Strategy pattern, Singleton pattern",
+      "meta": {}
+    },
+    {
+      "id": 404,
+      "text": "Builder\nPrototype\nScheduler",
+      "meta": {}
+    },
+    {
+      "id": 405,
+      "text": "singleton pattern\nbuilder pattern\nobserver pattern\ncontainer pattern\n\n-----------\n\ncreational patterns\nstructural patterns\nbehavioral patterns",
+      "meta": {}
+    },
+    {
+      "id": 406,
+      "text": "Visitor\nFactory\nInterpreter",
+      "meta": {}
+    },
+    {
+      "id": 407,
+      "text": "Creational pattern\nStructural pattern\nBehavioral pattern",
+      "meta": {}
+    },
+    {
+      "id": 408,
+      "text": "visitor pattern\ninterceptor pattern\ninterpreter pattern",
+      "meta": {}
+    },
+    {
+      "id": 409,
+      "text": "The three major categories are: structural, behavioral and creational patterns.",
+      "meta": {}
+    },
+    {
+      "id": 410,
+      "text": "kjhkjhkjhkjhiuhbhhkhuhuh",
+      "meta": {}
+    },
+    {
+      "id": 411,
+      "text": "observer pattern, visitor pattern, interpreter pattern",
+      "meta": {}
+    },
+    {
+      "id": 412,
+      "text": "Behavioral, creational and structural.",
+      "meta": {}
+    },
+    {
+      "id": 413,
+      "text": "- Visitor pattern\n- Composite Pattern\n- Model View Controller (Presentator)",
+      "meta": {}
+    },
+    {
+      "id": 414,
+      "text": "strategy, command, composite",
+      "meta": {}
+    },
+    {
+      "id": 415,
+      "text": "- Visitor pattern\n- Singleton pattern\n- Decorator pattern",
+      "meta": {}
+    },
+    {
+      "id": 416,
+      "text": "Observer Pattern\nFacade Pattern\nDecorator Pattern",
+      "meta": {}
+    },
+    {
+      "id": 417,
+      "text": "Observer Pattern\nAbstract Factory Pattern\nAdapter Pattern",
+      "meta": {}
+    },
+    {
+      "id": 418,
+      "text": "Singleton\nObserver\nFactory",
+      "meta": {}
+    },
+    {
+      "id": 419,
+      "text": "Kompositum-Pattern\nMVC-Pattern(Model-View-Controller)\nObserver-Pattern\n",
+      "meta": {}
+    },
+    {
+      "id": 420,
+      "text": "Proxy Pattern, Bridge Pattern, Observer Pattern",
+      "meta": {}
+    },
+    {
+      "id": 1085082,
+      "text": "Visitor Pattern, Decorator Pattern, Dependency Injection",
+      "meta": {}
+    },
+    {
+      "id": 1085103,
+      "text": "- Creational patterns\n- Structural patterns\n- Behavioral patterns",
+      "meta": {}
+    },
+    {
+      "id": 1085105,
+      "text": "MVC, Blackboard, Bridge",
+      "meta": {}
+    }
+  ]
+}

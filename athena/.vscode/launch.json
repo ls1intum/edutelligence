@@ -1,0 +1,69 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Assessment Module manager",
+            "type": "python",
+            "request": "launch",
+            "cwd": "${workspaceFolder}/assessment_module_manager",
+            "module": "assessment_module_manager",
+            "justMyCode": true
+        },
+        {
+            "name": "Module Example",
+            "type": "python",
+            "request": "launch",
+            "cwd": "${workspaceFolder}/modules/programming/module_example",
+            "module": "module_example",
+            "justMyCode": true
+        },
+        {
+            "name": "Module Programming LLM",
+            "type": "python",
+            "request": "launch",
+            "cwd": "${workspaceFolder}/modules/programming/module_programming_llm",
+            "module": "module_programming_llm",
+            "justMyCode": false
+        },
+        {
+            "name": "Module Programming ThemisML",
+            "type": "python",
+            "request": "launch",
+            "cwd": "${workspaceFolder}/modules/programming/module_programming_themisml",
+            "module": "module_programming_themisml"
+        },
+        {
+            "name": "Module Programming APTED",
+            "type": "python",
+            "request": "launch",
+            "cwd": "${workspaceFolder}/modules/programming/module_programming_apted",
+            "module": "module_programming_apted"
+        },
+        {
+            "name": "Module Text LLM",
+            "type": "python",
+            "request": "launch",
+            "cwd": "${workspaceFolder}/modules/text/module_text_llm",
+            "module": "module_text_llm",
+            "justMyCode": true
+        },
+        {
+            "name": "Module Text CoFee",
+            "type": "python",
+            "request": "launch",
+            "cwd": "${workspaceFolder}/modules/text/module_text_cofee",
+            "module": "module_text_cofee"
+        },
+        {
+            "name": "Module Modeling LLM",
+            "type": "python",
+            "request": "launch",
+            "cwd": "${workspaceFolder}/modules/modeling/module_modeling_llm",
+            "module": "module_modeling_llm"
+        }
+    ]
+}
+

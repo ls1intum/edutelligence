@@ -44,9 +44,9 @@ from ...domain import CourseChatPipelineExecutionDTO
 from app.common.PipelineEnum import PipelineEnum
 from ...retrieval.faq_retrieval import FaqRetrieval
 from ...retrieval.faq_retrieval_utils import should_allow_faq_tool, format_faqs
-from ...retrieval.lecture_retrieval import LectureRetrieval
+from app.retrieval.lecture.lecture_page_chunk_retrieval import LecturePageChunkRetrieval
 from ...vector_database.database import VectorDatabase
-from ...vector_database.lecture_schema import LectureSchema
+from ...vector_database.lecture_unit_page_chunk_schema import LectureUnitPageChunkSchema
 from ...web.status.status_update import (
     CourseChatStatusCallback,
 )
@@ -117,7 +117,7 @@ class CourseChatPipeline(Pipeline):
         self.callback = callback
 
         self.db = VectorDatabase()
-        self.lecture_retriever = LectureRetrieval(self.db.client)
+        self.lecture_retriever = LecturePageChunkRetrieval(self.db.client)
         self.faq_retriever = FaqRetrieval(self.db.client)
         self.suggestion_pipeline = InteractionSuggestionPipeline(variant="course")
         self.citation_pipeline = CitationPipeline()
@@ -298,10 +298,10 @@ class CourseChatPipeline(Pipeline):
             result = ""
             for paragraph in self.retrieved_paragraphs:
                 lct = "Lecture: {}, Unit: {}, Page: {}\nContent:\n---{}---\n\n".format(
-                    paragraph.get(LectureSchema.LECTURE_NAME.value),
-                    paragraph.get(LectureSchema.LECTURE_UNIT_NAME.value),
-                    paragraph.get(LectureSchema.PAGE_NUMBER.value),
-                    paragraph.get(LectureSchema.PAGE_TEXT_CONTENT.value),
+                    paragraph.get(LectureUnitPageChunkSchema.LECTURE_NAME.value),
+                    paragraph.get(LectureUnitPageChunkSchema.LECTURE_UNIT_NAME.value),
+                    paragraph.get(LectureUnitPageChunkSchema.PAGE_NUMBER.value),
+                    paragraph.get(LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value),
                 )
                 result += lct
             return result
@@ -507,11 +507,11 @@ class CourseChatPipeline(Pipeline):
         if course_id:
             # Fetch the first object that matches the course ID with the language property
             result = self.db.lectures.query.fetch_objects(
-                filters=Filter.by_property(LectureSchema.COURSE_ID.value).equal(
-                    course_id
-                ),
+                filters=Filter.by_property(
+                    LectureUnitPageChunkSchema.COURSE_ID.value
+                ).equal(course_id),
                 limit=1,
-                return_properties=[LectureSchema.COURSE_NAME.value],
+                return_properties=[LectureUnitPageChunkSchema.COURSE_NAME.value],
             )
             return len(result.objects) > 0
         return False
