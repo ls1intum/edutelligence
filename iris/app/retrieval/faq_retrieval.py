@@ -2,6 +2,8 @@ import logging
 from typing import List
 from langsmith import traceable
 from weaviate import WeaviateClient
+from weaviate.collections.classes.filters import Filter
+
 from app.common.PipelineEnum import PipelineEnum
 from .basic_retrieval import BaseRetrieval, merge_retrieved_chunks
 from ..common.pyris_message import PyrisMessage
@@ -44,7 +46,6 @@ class FaqRetrieval(BaseRetrieval):
         base_url: str = None,
     ) -> List[dict]:
         course_language = self.fetch_course_language(course_id)
-
         response, response_hyde = self.run_parallel_rewrite_tasks(
             chat_history=chat_history,
             student_query=student_query,
@@ -67,3 +68,46 @@ class FaqRetrieval(BaseRetrieval):
             for obj in response_hyde.objects
         ]
         return merge_retrieved_chunks(basic_retrieved_faqs, hyde_retrieved_faqs)
+
+    def get_faqs_from_db(
+        self,
+        course_id: int,
+        search_text: str = None,
+        result_limit: int = 10,
+        hybrid_factor: float = 0.75,
+    ) -> List[dict]:
+        """
+        Retrieves FAQs directly from the database, optionally with a similarity search on question_title and question_answer.
+
+        :param course_id: ID of the course to fetch FAQs for a specific course.
+        :param search_text: Optional search text used for semantic search.
+        :param result_limit: Number of FAQs to return.
+        :param hybrid_factor: Weighting between vector-based and keyword-based results.
+        :return: List of retrieved FAQs.
+        """
+        filter_weaviate = Filter.by_property("course_id").equal(course_id)
+
+        if search_text:
+            vec = self.llm_embedding.embed(search_text)
+
+            response = self.collection.query.hybrid(
+                query=search_text,
+                vector=vec,
+                alpha=hybrid_factor,
+                return_properties=self.get_schema_properties(),
+                limit=result_limit,
+                filters=filter_weaviate,
+            )
+        else:
+
+            response = self.collection.query.fetch_objects(
+                filters=filter_weaviate,
+                limit=result_limit,
+                return_properties=self.get_schema_properties(),
+            )
+
+        faqs = [
+            {"id": obj.uuid.int, "properties": obj.properties}
+            for obj in response.objects
+        ]
+        return faqs
