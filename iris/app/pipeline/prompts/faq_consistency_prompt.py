@@ -41,7 +41,7 @@ Both should have the same amount of entries.
 
 -"improved version": This entry should be a string that represents the improved version of the final result.
 
-For each of the fields, make sure that the output is in the same language as the course language. 
+For each of the fields, make sure that the output is in the same language as the course language.
 
 
 Do NOT provide any explanations or additional text.
