@@ -94,14 +94,19 @@ class RewritingPipeline(Pipeline):
             )
             consistency_result = self.check_faq_consistency(faqs, final_result)
 
-
             if "inconsistent" in consistency_result["type"].lower():
                 logging.warning("Detected inconsistencies in FAQ retrieval.")
                 inconsistencies = parse_inconsistencies(consistency_result["faqs"])
                 improvement = consistency_result["improved version"]
                 suggestions = consistency_result["suggestion"]
 
-        self.callback.done(final_result=final_result, tokens=self.tokens, inconsistencies=inconsistencies, improvement = improvement, suggestions = suggestions)
+        self.callback.done(
+            final_result=final_result,
+            tokens=self.tokens,
+            inconsistencies=inconsistencies,
+            improvement=improvement,
+            suggestions=suggestions,
+        )
 
     def check_faq_consistency(
         self, faqs: List[dict], final_result: str
@@ -114,7 +119,7 @@ class RewritingPipeline(Pipeline):
         :param final_result: The result to compare the FAQs against.
 
         """
-        properties_list = [entry['properties'] for entry in faqs]
+        properties_list = [entry["properties"] for entry in faqs]
 
         consistency_prompt = faq_consistency_prompt.format(
             faqs=properties_list, final_result=final_result
@@ -133,16 +138,18 @@ class RewritingPipeline(Pipeline):
         result = response.contents[0].text_content
         data = json.loads(result)
 
-        result_dict = {
-            "type": data["type"],
-            "message": data["message"],
-            "faqs": data["faqs"],
-            "suggestion": data["suggestion"],
-            "improved version": data["improved version"]
-        }
+        result_dict = {}
+
+        keys_to_check = ["type", "message", "faqs", "suggestion", "improved version"]
+
+        for key in keys_to_check:
+            if key in data:
+                result_dict[key] = data[key]
+
         logging.info(f"Consistency FAQ consistency check response: {result_dict}")
 
         return result_dict
+
 
 def parse_inconsistencies(inconsistencies: List[Dict[str, str]]) -> List[str]:
     logging.info("parse consistency")
@@ -151,5 +158,3 @@ def parse_inconsistencies(inconsistencies: List[Dict[str, str]]) -> List[str]:
         for entry in inconsistencies
     ]
     return parsed_inconsistencies
-
-

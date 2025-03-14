@@ -74,33 +74,32 @@ class FaqRetrieval(BaseRetrieval):
         course_id: int,
         search_text: str = None,
         result_limit: int = 10,
-        hybrid_factor: float = 0.75,  # Gewichtung zwischen Vektor- und Textsuche
+        hybrid_factor: float = 0.75,
     ) -> List[dict]:
         """
-        Holt FAQs direkt aus der Datenbank, optional mit einer Ähnlichkeitssuche auf question_title und question_answer.
+        Retrieves FAQs directly from the database, optionally with a similarity search on question_title and question_answer.
 
-        :param course_id: ID des Kurses, um nur FAQs eines bestimmten Kurses zu holen.
-        :param search_text: Optionaler Suchtext, der für eine semantische Suche verwendet wird.
-        :param result_limit: Anzahl der gewünschten Ergebnisse.
-        :param hybrid_factor: Gewichtung zwischen vektorbasierten und keywordbasierten Ergebnissen (0 = nur Vektor, 1 = nur Keywords).
-        :return: Liste der gefundenen FAQs.
+        :param course_id: ID of the course to fetch FAQs for a specific course.
+        :param search_text: Optional search text used for semantic search.
+        :param result_limit: Number of FAQs to return.
+        :param hybrid_factor: Weighting between vector-based and keyword-based results.
+        :return: List of retrieved FAQs.
         """
-        # Filter für den Kurs
         filter_weaviate = Filter.by_property("course_id").equal(course_id)
 
         if search_text:
             vec = self.llm_embedding.embed(search_text)
 
             response = self.collection.query.hybrid(
-                query=search_text,  # Keyword-Suche
-                vector=vec,  # Vektorbasierte Ähnlichkeitssuche
-                alpha=hybrid_factor,  # Mischung aus Vektor- und Textsuche
+                query=search_text,
+                vector=vec,
+                alpha=hybrid_factor,
                 return_properties=self.get_schema_properties(),
                 limit=result_limit,
                 filters=filter_weaviate,
             )
         else:
-            # Falls keine Suchanfrage, einfach nur nach Kurs filtern
+
             response = self.collection.query.fetch_objects(
                 filters=filter_weaviate,
                 limit=result_limit,
