@@ -1,0 +1,28 @@
+[project]
+name = "logos"
+version = "0.1.0"
+description = "Logos is an LLM Engineering Platform that includes usage logging, billing, central resouce management, policy-based model selection, scheduling, and monitoring."
+authors = [
+    {name = "Tobias Wasner",email = "tobias.wasner@tum.de"}
+]
+readme = "README.md"
+requires-python = ">=3.13,<4.0.0"
+
+[tool.poetry.dependencies]
+python = ">=3.13,<4.0.0"
+fastapi = {extras = ["standard"], version = "0.115.9"}
+shared = { path = "../shared", develop = true }
+
+[tool.poetry]
+packages = [{include = "logos", from = "src"}]
+
+[tool.poetry.scripts]
+openapi = "app.openapi:export"
+
+[tool.poetry.group.dev.dependencies]
+black = "25.1.0"
+flake8 = "7.1.2"
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
