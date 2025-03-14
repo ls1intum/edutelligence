@@ -3,7 +3,7 @@ fastapi==0.115.5
 flake8==7.1.1
 langchain==0.3.8
 ollama==0.3.3
-openai==1.54.4
+openai==1.60.2
 pre-commit==4.0.1
 psutil==6.1.0
 pydantic==2.9.2
@@ -19,3 +19,6 @@ langchain-core~=0.3.17
 starlette~=0.41.2
 langsmith~=0.1.142
 langchain-text-splitters~=0.3.2
+langchain-experimental~=0.3.3
+langchain-openai~=0.3.3
+cohere==5.9.0

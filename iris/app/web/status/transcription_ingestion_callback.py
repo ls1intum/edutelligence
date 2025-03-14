@@ -9,9 +9,9 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-class IngestionStatusCallback(StatusCallback):
+class TranscriptionIngestionStatus(StatusCallback):
     """
-    Callback class for updating the status of a Lecture ingestion Pipeline run.
+    Callback class for updating the status of a Transcription ingestion Pipeline run.
     """
 
     def __init__(
@@ -19,32 +19,39 @@ class IngestionStatusCallback(StatusCallback):
         run_id: str,
         base_url: str,
         initial_stages: List[StageDTO] = None,
-        lecture_unit_id: int = None,
+        lecture_id: int = None,
     ):
-        url = f"{base_url}/api/public/pyris/webhooks/ingestion/runs/{run_id}/status"
+        url = f"{base_url}/api/public/pyris/webhooks/ingestion/transcriptions/runs/{run_id}/status"
 
         current_stage_index = len(initial_stages) if initial_stages else 0
         stages = initial_stages or []
         stages += [
             StageDTO(
-                weight=10, state=StageStateEnum.NOT_STARTED, name="Old slides removal"
+                weight=10,
+                state=StageStateEnum.NOT_STARTED,
+                name="Remove old transcription",
+            ),
+            StageDTO(
+                weight=10,
+                state=StageStateEnum.NOT_STARTED,
+                name="Chunk transcription",
             ),
             StageDTO(
                 weight=40,
                 state=StageStateEnum.NOT_STARTED,
-                name="Slides Interpretation",
+                name="Summarize transcription",
             ),
             StageDTO(
                 weight=20,
                 state=StageStateEnum.NOT_STARTED,
-                name="Slides ingestion",
+                name="Ingest transcription",
             ),
             StageDTO(
-                weight=30,
+                weight=20,
                 state=StageStateEnum.NOT_STARTED,
-                name="Lecture unit summary ingestion",
+                name="Ingest lecture unit summary",
             ),
         ]
-        status = IngestionStatusUpdateDTO(stages=stages, id=lecture_unit_id)
+        status = IngestionStatusUpdateDTO(stages=stages, id=lecture_id)
         stage = stages[current_stage_index]
         super().__init__(url, run_id, status, stage, current_stage_index)
