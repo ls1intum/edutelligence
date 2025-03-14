@@ -22,7 +22,7 @@ class FaqIngestionStatus(StatusCallback):
         faq_id: int = None,
     ):
         url = (
-            f"{base_url}/api/public/pyris/webhooks/ingestion/faqs/runs/{run_id}/status"
+            f"{base_url}/api/iris/public/pyris/webhooks/ingestion/faqs/runs/{run_id}/status"
         )
 
         current_stage_index = len(initial_stages) if initial_stages else 0
