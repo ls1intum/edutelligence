@@ -131,6 +131,7 @@ disable=R,
         wrong-import-position,
         xrange-builtin,
         zip-builtin-not-iterating,
+        broad-exception-caught,
 
 
 [REPORTS]
