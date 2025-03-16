@@ -15,6 +15,10 @@ from iris.vector_database.lecture_unit_schema import (
 
 
 class LectureUnitPipeline(Pipeline):
+    """LectureUnitPipeline processes lecture unit data by generating summaries and embeddings,
+    then updating the vector database with the processed lecture unit information.
+    """
+
     def __init__(self):
         super().__init__()
         vector_database = VectorDatabase()

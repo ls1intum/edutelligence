@@ -16,6 +16,8 @@ class WeaviateSettings(BaseModel):
 
 
 class Settings(BaseModel):
+    """Settings represents application configuration settings loaded from a YAML file."""
+
     api_keys: list[APIKeyConfig]
     env_vars: dict[str, str]
     weaviate: WeaviateSettings
@@ -31,7 +33,7 @@ class Settings(BaseModel):
 
         file_path = Path(file_path_env)
         try:
-            with open(file_path, "r") as file:
+            with open(file_path, "r", encoding="utf-8") as file:
                 settings_file = yaml.safe_load(file)
             return cls.model_validate(settings_file)
         except FileNotFoundError as e:

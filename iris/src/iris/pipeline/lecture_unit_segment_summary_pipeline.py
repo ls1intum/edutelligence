@@ -6,7 +6,7 @@ from langchain_core.runnables import Runnable
 from weaviate.classes.query import Filter
 from weaviate.client import WeaviateClient
 
-from iris.common.PipelineEnum import PipelineEnum
+from iris.common.pipeline_enum import PipelineEnum
 from iris.domain.lecture.lecture_unit_dto import LectureUnitDTO
 from iris.llm import (
     BasicRequestHandler,
@@ -34,6 +34,13 @@ from iris.vector_database.lecture_unit_segment_schema import (
 
 
 class LectureUnitSegmentSummaryPipeline(Pipeline):
+    """LectureUnitSegmentSummaryPipeline processes lecture unit segments by summarizing the transcription and slide
+     content.
+
+    It combines lecture transcriptions and slide text to generate a summary that is then used for further processing or
+     storage.
+    """
+
     llm: IrisLangchainChatModel
     pipeline: Runnable
     prompt: ChatPromptTemplate

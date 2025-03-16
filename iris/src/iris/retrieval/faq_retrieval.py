@@ -4,7 +4,7 @@ from typing import List
 from langsmith import traceable
 from weaviate import WeaviateClient
 
-from iris.common.PipelineEnum import PipelineEnum
+from iris.common.pipeline_enum import PipelineEnum
 
 from ..common.pyris_message import PyrisMessage
 from ..pipeline.prompts.faq_retrieval_prompts import (
@@ -21,6 +21,12 @@ logger = logging.getLogger(__name__)
 
 
 class FaqRetrieval(BaseRetrieval):
+    """FaqRetrieval handles FAQ retrieval operations using a Weaviate client.
+
+    It retrieves FAQ data based on a student's query, processes the results through multiple
+    retrieval pipelines (basic and hypothetical), and merges them to return the final FAQ list.
+    """
+
     def __init__(self, client: WeaviateClient, **kwargs):
         super().__init__(
             client, init_faq_schema, implementation_id="faq_retrieval_pipeline"

@@ -5,7 +5,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import Runnable
 from weaviate import WeaviateClient
 
-from iris.common.PipelineEnum import PipelineEnum
+from iris.common.pipeline_enum import PipelineEnum
 from iris.domain.lecture.lecture_unit_dto import LectureUnitDTO
 from iris.llm import CapabilityRequestHandler, CompletionArguments, RequirementList
 from iris.llm.langchain import IrisLangchainChatModel
@@ -16,6 +16,10 @@ from iris.pipeline.prompts.lecture_unit_summary_prompt import (
 
 
 class LectureUnitSummaryPipeline(Pipeline):
+    """LectureUnitSummaryPipeline summarizes lecture unit segments into a cohesive summary
+    by constructing and invoking a language model pipeline with a custom prompt.
+    """
+
     llm: IrisLangchainChatModel
     pipeline: Runnable
     prompt: ChatPromptTemplate

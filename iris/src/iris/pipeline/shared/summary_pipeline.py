@@ -34,7 +34,11 @@ class SummaryPipeline(Pipeline):
         )
         # Load the prompt from a file
         dirname = os.path.dirname(__file__)
-        with open(os.path.join(dirname, "../prompts/summary_prompt.txt"), "r") as file:
+        with open(
+            os.path.join(dirname, "../prompts/summary_prompt.txt"),
+            "r",
+            encoding="utf-8",
+        ) as file:
             logger.info("Loading summary prompt...")
             self.prompt_str = file.read()
         # Create the prompt
@@ -64,5 +68,5 @@ class SummaryPipeline(Pipeline):
             raise ValueError("Query must not be None")
         logger.info("Running summary pipeline...")
         response: str = self.pipeline.invoke({"text": query})
-        logger.info(f"Response from summary pipeline: {response[:20]}...")
+        logger.info("Response from summary pipeline: %s...", response[:20])
         return response

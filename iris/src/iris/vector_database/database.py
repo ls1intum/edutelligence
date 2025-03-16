@@ -40,9 +40,9 @@ class VectorDatabase:
         """
         if self.client.collections.exists(collection_name):
             if self.client.collections.delete(collection_name):
-                logger.info(f"Collection {collection_name} deleted")
+                logger.info("Collection %s deleted", collection_name)
             else:
-                logger.error(f"Collection {collection_name} failed to delete")
+                logger.error("Collection %s failed to delete", collection_name)
 
     def delete_object(self, collection_name, property_name, object_property):
         """

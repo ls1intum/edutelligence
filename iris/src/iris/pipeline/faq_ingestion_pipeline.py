@@ -25,6 +25,11 @@ from . import Pipeline
 
 
 class FaqIngestionPipeline(AbstractIngestion, Pipeline):
+    """FaqIngestionPipeline handles the ingestion of FAQs into the database.
+
+    It deletes old FAQs, processes new FAQ data using the language model pipeline,
+    batches the updates, and reports the ingestion status via a callback.
+    """
 
     def __init__(
         self,
@@ -64,11 +69,12 @@ class FaqIngestionPipeline(AbstractIngestion, Pipeline):
             self.batch_update(self.dto.faq)
             self.callback.done("Faq Ingestion Finished", tokens=self.tokens)
             logger.info(
-                f"Faq ingestion pipeline finished Successfully for faq: {self.dto.faq.faq_id}"
+                "Faq ingestion pipeline finished Successfully for faq: %s",
+                self.dto.faq.faq_id,
             )
             return True
         except Exception as e:
-            logger.error(f"Error updating faq: {e}")
+            logger.error("Error updating faq: %s", e)
             self.callback.error(
                 f"Failed to faq into the database: {e}",
                 exception=e,
@@ -93,7 +99,7 @@ class FaqIngestionPipeline(AbstractIngestion, Pipeline):
                     batch.add_object(properties=faq_dict, vector=embed_chunk)
 
                 except Exception as e:
-                    logger.error(f"Error updating faq: {e}")
+                    logger.error("Error updating faq: %s", e)
                     self.callback.error(
                         f"Failed to ingest faqs into the database: {e}",
                         exception=e,
@@ -112,7 +118,7 @@ class FaqIngestionPipeline(AbstractIngestion, Pipeline):
                     logger.error("Failed to delete faq")
             self.callback.done("Old faqs removed")
         except Exception as e:
-            logger.error(f"Error deleting faqs: {e}")
+            logger.error("Error deleting faqs: %s", e)
             self.callback.error("Error while removing old faqs")
             return False
 
@@ -125,10 +131,10 @@ class FaqIngestionPipeline(AbstractIngestion, Pipeline):
                 where=Filter.by_property(FaqSchema.FAQ_ID.value).equal(faq_id)
                 & Filter.by_property(FaqSchema.COURSE_ID.value).equal(course_id)
             )
-            logger.info(f"successfully deleted faq with id {faq_id}")
+            logger.info("successfully deleted faq with id %s", faq_id)
             return True
         except Exception as e:
-            logger.error(f"Error deleting faq: {e}", exc_info=True)
+            logger.error("Error deleting faq: %s", e, exc_info=True)
             return False
 
     def chunk_data(self, path: str) -> List[Dict[str, str]]:

@@ -3,8 +3,8 @@ from typing import List, Optional
 from pydantic import BaseModel, Field
 
 from iris.common.pyris_message import PyrisMessage
-from iris.domain import PipelineExecutionSettingsDTO
 from iris.domain.data.user_dto import UserDTO
+from iris.domain.pipeline_execution_dto import PipelineExecutionSettingsDTO
 from iris.domain.status.stage_dto import StageDTO
 
 

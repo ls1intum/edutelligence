@@ -26,6 +26,11 @@ class CompetencyDTO(BaseModel):
 
 
 class Competency(BaseModel):
+    """Represents a competency with a title, description, and taxonomy level.
+
+    Validates that the title contains no more than 4 words and that the selected taxonomy is valid.
+    """
+
     title: str = Field(
         description="Title of the competency that contains no more than 4 words",
     )
@@ -37,14 +42,14 @@ class Competency(BaseModel):
     )
 
     @validator("title")
-    def validate_title(cls, field):
+    def validate_title(cls, field):  # pylint: disable=no-self-argument
         """Validate the subject of the competency."""
         if len(field.split()) > 4:
             raise ValueError("Title must contain no more than 4 words")
         return field
 
     @validator("taxonomy")
-    def validate_selected_taxonomy(cls, field):
+    def validate_selected_taxonomy(cls, field):  # pylint: disable=no-self-argument
         """Validate the selected taxonomy."""
         if field not in CompetencyTaxonomy.__members__:
             raise ValueError(f"Invalid taxonomy: {field}")

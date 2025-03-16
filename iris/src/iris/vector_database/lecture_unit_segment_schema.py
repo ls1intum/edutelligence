@@ -1,8 +1,5 @@
 from enum import Enum
 
-from app import (
-    LectureUnitPageChunkSchema,
-)
 from weaviate import WeaviateClient
 from weaviate.classes.config import Property
 from weaviate.collections import Collection
@@ -15,6 +12,9 @@ from weaviate.collections.classes.config import (
 
 from iris.vector_database.lecture_transcription_schema import (
     LectureTranscriptionSchema,
+)
+from iris.vector_database.lecture_unit_page_chunk_schema import (
+    LectureUnitPageChunkSchema,
 )
 
 

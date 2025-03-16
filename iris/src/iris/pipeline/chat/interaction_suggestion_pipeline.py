@@ -12,7 +12,7 @@ from langchain_core.runnables import Runnable
 from langsmith import traceable
 from pydantic.v1 import BaseModel, Field
 
-from iris.common.PipelineEnum import PipelineEnum
+from iris.common.pipeline_enum import PipelineEnum
 from iris.common.token_usage_dto import TokenUsageDTO
 from iris.domain.chat.interaction_suggestion_dto import (
     InteractionSuggestionPipelineExecutionDTO,

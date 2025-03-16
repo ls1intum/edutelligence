@@ -1,6 +1,6 @@
 from pydantic import BaseModel, Field
 
-from iris.common.PipelineEnum import PipelineEnum
+from iris.common.pipeline_enum import PipelineEnum
 
 
 class TokenUsageDTO(BaseModel):

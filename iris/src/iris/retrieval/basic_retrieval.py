@@ -9,7 +9,7 @@ from langsmith import traceable
 from weaviate import WeaviateClient
 from weaviate.classes.query import Filter
 
-from iris.common.PipelineEnum import PipelineEnum
+from iris.common.pipeline_enum import PipelineEnum
 from iris.common.token_usage_dto import TokenUsageDTO
 from iris.llm import (
     BasicRequestHandler,
@@ -124,7 +124,7 @@ class BaseRetrieval(Pipeline, ABC):
 
         try:
             response = (prompt | self.pipeline).invoke({})
-            logger.info(f"Response from assessment pipeline: {response}")
+            logger.info("Response from assessment pipeline: %s", response)
             return response == "YES"
         except Exception as e:
             raise e
@@ -180,7 +180,7 @@ class BaseRetrieval(Pipeline, ABC):
         """
         Search the database for the given query.
         """
-        logger.info(f"Searching in the database for query: {query}")
+        logger.info("Searching in the database for query: %s", query)
         filter_weaviate = None
 
         if course_id:
@@ -212,8 +212,8 @@ class BaseRetrieval(Pipeline, ABC):
         course_name: Optional[str] = None,
         course_id: Optional[int] = None,
         base_url: Optional[str] = None,
-        problem_statement: Optional[str] = None,
-        exercise_title: Optional[str] = None,
+        # problem_statement: Optional[str] = None,
+        # exercise_title: Optional[str] = None,
     ):
         """
         Run the rewrite tasks in parallel.

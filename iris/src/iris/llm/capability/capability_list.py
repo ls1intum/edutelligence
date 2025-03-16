@@ -106,7 +106,7 @@ class CapabilityList(BaseModel):
     def from_dict(cls, data: dict[str, any]):
         """Prepare the data for handling by Pydantic"""
         for key, value in data.items():
-            if type(value) is not dict:
+            if not isinstance(value, dict):
                 data[key] = {"value": value}
         return data
 

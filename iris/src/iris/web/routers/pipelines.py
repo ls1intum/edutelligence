@@ -2,7 +2,6 @@ import logging
 import traceback
 from threading import Thread
 
-from app import RewritingPipeline
 from fastapi import APIRouter, Body, Depends, Query, Response, status
 from sentry_sdk import capture_exception
 
@@ -33,6 +32,7 @@ from iris.pipeline.competency_extraction_pipeline import (
     CompetencyExtractionPipeline,
 )
 from iris.pipeline.inconsistency_check_pipeline import InconsistencyCheckPipeline
+from iris.pipeline.rewriting_pipeline import RewritingPipeline
 from iris.pipeline.text_exercise_chat_pipeline import TextExerciseChatPipeline
 from iris.web.status.status_update import (
     ChatGPTWrapperStatusCallback,
@@ -62,7 +62,7 @@ def run_exercise_chat_pipeline_worker(
             callback=callback, variant=variant, event=event
         )
     except Exception as e:
-        logger.error(f"Error preparing exercise chat pipeline: {e}")
+        logger.error("Error preparing exercise chat pipeline: %s", e)
         logger.error(traceback.format_exc())
         capture_exception(e)
         return
@@ -70,14 +70,14 @@ def run_exercise_chat_pipeline_worker(
     try:
         pipeline(dto=dto)
     except Exception as e:
-        logger.error(f"Error running exercise chat pipeline: {e}")
+        logger.error("Error running exercise chat pipeline: %s", e)
         logger.error(traceback.format_exc())
         callback.error("Fatal error.", exception=e)
 
 
 def run_chatgpt_wrapper_pipeline_worker(
     dto: ExerciseChatPipelineExecutionDTO, _variant: str
-):
+):  # pylint: disable=invalid-name
     try:
         callback = ChatGPTWrapperStatusCallback(
             run_id=dto.settings.authentication_token,
@@ -86,7 +86,7 @@ def run_chatgpt_wrapper_pipeline_worker(
         )
         pipeline = ChatGPTWrapperPipeline(callback=callback)
     except Exception as e:
-        logger.error(f"Error preparing ChatGPT wrapper pipeline: {e}")
+        logger.error("Error preparing ChatGPT wrapper pipeline: %s", e)
         logger.error(traceback.format_exc())
         callback.error("Fatal error.", exception=e)
         capture_exception(e)
@@ -95,7 +95,7 @@ def run_chatgpt_wrapper_pipeline_worker(
     try:
         pipeline(dto=dto)
     except Exception as e:
-        logger.error(f"Error running ChatGPT wrapper pipeline: {e}")
+        logger.error("Error running ChatGPT wrapper pipeline: %s", e)
         logger.error(traceback.format_exc())
         callback.error("Fatal error.", exception=e)
 
@@ -130,7 +130,7 @@ def run_course_chat_pipeline_worker(dto, variant, event):
         )
         pipeline = CourseChatPipeline(callback=callback, variant=variant, event=event)
     except Exception as e:
-        logger.error(f"Error preparing exercise chat pipeline: {e}")
+        logger.error("Error preparing exercise chat pipeline: %s", e)
         logger.error(traceback.format_exc())
         capture_exception(e)
         return
@@ -138,7 +138,7 @@ def run_course_chat_pipeline_worker(dto, variant, event):
     try:
         pipeline(dto=dto)
     except Exception as e:
-        logger.error(f"Error running exercise chat pipeline: {e}")
+        logger.error("Error running exercise chat pipeline: %s", e)
         logger.error(traceback.format_exc())
         callback.error("Fatal error.", exception=e)
 
@@ -172,7 +172,7 @@ def run_text_exercise_chat_pipeline_worker(dto, variant):
             case _:
                 raise ValueError(f"Unknown variant: {variant}")
     except Exception as e:
-        logger.error(f"Error preparing text exercise chat pipeline: {e}")
+        logger.error("Error preparing text exercise chat pipeline: %s", e)
         logger.error(traceback.format_exc())
         capture_exception(e)
         return
@@ -180,7 +180,7 @@ def run_text_exercise_chat_pipeline_worker(dto, variant):
     try:
         pipeline(dto=dto)
     except Exception as e:
-        logger.error(f"Error running text exercise chat pipeline: {e}")
+        logger.error("Error running text exercise chat pipeline: %s", e)
         logger.error(traceback.format_exc())
         callback.error("Fatal error.", exception=e)
 
@@ -200,7 +200,7 @@ def run_lecture_chat_pipeline_worker(dto, variant):
             case _:
                 raise ValueError(f"Unknown variant: {variant}")
     except Exception as e:
-        logger.error(f"Error preparing lecture chat pipeline: {e}")
+        logger.error("Error preparing lecture chat pipeline: %s", e)
         logger.error(traceback.format_exc())
         capture_exception(e)
         return
@@ -208,7 +208,7 @@ def run_lecture_chat_pipeline_worker(dto, variant):
     try:
         pipeline(dto=dto)
     except Exception as e:
-        logger.error(f"Error running lecture chat pipeline: {e}")
+        logger.error("Error running lecture chat pipeline: %s", e)
         logger.error(traceback.format_exc())
         callback.error("Fatal error.", exception=e)
 
@@ -237,7 +237,7 @@ def run_lecture_chat_pipeline(variant: str, dto: LectureChatPipelineExecutionDTO
 
 def run_competency_extraction_pipeline_worker(
     dto: CompetencyExtractionPipelineExecutionDTO, _variant: str
-):
+):  # pylint: disable=invalid-name
     try:
         callback = CompetencyExtractionCallback(
             run_id=dto.execution.settings.authentication_token,
@@ -246,7 +246,7 @@ def run_competency_extraction_pipeline_worker(
         )
         pipeline = CompetencyExtractionPipeline(callback=callback)
     except Exception as e:
-        logger.error(f"Error preparing competency extraction pipeline: {e}")
+        logger.error("Error preparing competency extraction pipeline: %s", e)
         logger.error(traceback.format_exc())
         capture_exception(e)
         return
@@ -254,7 +254,7 @@ def run_competency_extraction_pipeline_worker(
     try:
         pipeline(dto=dto)
     except Exception as e:
-        logger.error(f"Error running competency extraction pipeline: {e}")
+        logger.error("Error running competency extraction pipeline: %s", e)
         logger.error(traceback.format_exc())
         callback.error("Fatal error.", exception=e)
 
@@ -286,7 +286,7 @@ def run_rewriting_pipeline_worker(dto: RewritingPipelineExecutionDTO, variant: s
             case _:
                 raise ValueError(f"Unknown variant: {variant}")
     except Exception as e:
-        logger.error(f"Error preparing rewriting pipeline: {e}")
+        logger.error("Error preparing rewriting pipeline: %s", e)
         logger.error(traceback.format_exc())
         capture_exception(e)
         return
@@ -294,7 +294,7 @@ def run_rewriting_pipeline_worker(dto: RewritingPipelineExecutionDTO, variant: s
     try:
         pipeline(dto=dto)
     except Exception as e:
-        logger.error(f"Error running rewriting extraction pipeline: {e}")
+        logger.error("Error running rewriting extraction pipeline: %s", e)
         logger.error(traceback.format_exc())
         callback.error("Fatal error.", exception=e)
 
@@ -306,14 +306,14 @@ def run_rewriting_pipeline_worker(dto: RewritingPipelineExecutionDTO, variant: s
 )
 def run_rewriting_pipeline(variant: str, dto: RewritingPipelineExecutionDTO):
     variant = variant.lower()
-    logger.info(f"Rewriting pipeline started with variant: {variant} and dto: {dto}")
+    logger.info("Rewriting pipeline started with variant: %s and dto: %s", variant, dto)
     thread = Thread(target=run_rewriting_pipeline_worker, args=(dto, variant))
     thread.start()
 
 
 def run_inconsistency_check_pipeline_worker(
     dto: InconsistencyCheckPipelineExecutionDTO, _variant: str
-):
+):  # pylint: disable=invalid-name
     try:
         callback = InconsistencyCheckCallback(
             run_id=dto.execution.settings.authentication_token,
@@ -322,12 +322,12 @@ def run_inconsistency_check_pipeline_worker(
         )
         pipeline = InconsistencyCheckPipeline(callback=callback)
     except Exception as e:
-        logger.error(f"Error preparing inconsistency check pipeline: {e}")
+        logger.error("Error preparing inconsistency check pipeline: %s", e)
 
     try:
         pipeline(dto=dto)
     except Exception as e:
-        logger.error(f"Error running inconsistency check pipeline: {e}")
+        logger.error("Error running inconsistency check pipeline: %s", e)
         logger.error(traceback.format_exc())
         callback.error("Fatal error.", exception=e)
 

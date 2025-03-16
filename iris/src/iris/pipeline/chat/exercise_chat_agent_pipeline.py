@@ -16,7 +16,7 @@ from weaviate.collections.classes.filters import Filter
 from iris.common.message_converters import (
     convert_iris_message_to_langchain_human_message,
 )
-from iris.common.PipelineEnum import PipelineEnum
+from iris.common.pipeline_enum import PipelineEnum
 from iris.common.pyris_message import IrisMessageRole, PyrisMessage
 from iris.domain import ExerciseChatPipelineExecutionDTO
 from iris.domain.chat.interaction_suggestion_dto import (
@@ -185,7 +185,7 @@ class ExerciseChatAgentPipeline(Pipeline):
             self.callback.in_progress("Reading submission details...")
             if not dto.submission:
                 return {
-                    field: f"No {field.replace('_', ' ')} is provided"
+                    field: f"No {field.replace("_", " ")} is provided"
                     for field in [
                         "submission_date",
                         "is_practice",
@@ -202,7 +202,7 @@ class ExerciseChatAgentPipeline(Pipeline):
                 key: (
                     str(value)
                     if value is not None
-                    else f"No {key.replace('_', ' ')} is provided"
+                    else f"No {key.replace("_", " ")} is provided"
                 )
                 for key, value in zip(keys, values)
             }
@@ -291,9 +291,7 @@ class ExerciseChatAgentPipeline(Pipeline):
             feedback_list = (
                 "\n".join(
                     [
-                        "Case: {}. Credits: {}. Info: {}".format(
-                            feedback.test_case_name, feedback.credits, feedback.text
-                        )
+                        f"Case: {feedback.test_case_name}. Credits: {feedback.credits}. Info: {feedback.text}"
                         for feedback in feedbacks
                     ]
                 )
@@ -330,7 +328,7 @@ class ExerciseChatAgentPipeline(Pipeline):
                 return "No repository content available."
             repository = dto.submission.repository
             file_list = "\n------------\n".join(
-                ["- {}".format(file_name) for (file_name, _) in repository.items()]
+                [f"- {file_name}" for (file_name, _) in repository.items()]
             )
             return file_list
 
@@ -370,7 +368,7 @@ class ExerciseChatAgentPipeline(Pipeline):
 
             repository = dto.submission.repository
             if file_path in repository:
-                return "{}:\n{}\n".format(file_path, repository[file_path])
+                return f"{file_path}:\n{repository[file_path]}\n"
             return "File not found or does not exist in the repository."
 
         def lecture_content_retrieval() -> str:
@@ -394,13 +392,9 @@ class ExerciseChatAgentPipeline(Pipeline):
 
             result = ""
             for paragraph in self.retrieved_paragraphs:
-                lct = "Lecture: {}, Unit: {}, Page: {}\nContent:\n---{}---\n\n".format(
-                    # paragraph.get(LectureUnitPageChunkSchema.LECTURE_NAME.value),
-                    # paragraph.get(LectureUnitPageChunkSchema.LECTURE_UNIT_NAME.value),
-                    "",
-                    "",
-                    paragraph.get(LectureUnitPageChunkSchema.PAGE_NUMBER.value),
-                    paragraph.get(LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value),
+                lct = (
+                    f"Lecture: , Unit: , Page: {paragraph.get(LectureUnitPageChunkSchema.PAGE_NUMBER.value)}"
+                    f"\nContent:\n---{paragraph.get(LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value)}---\n\n"
                 )
                 result += lct
             return result

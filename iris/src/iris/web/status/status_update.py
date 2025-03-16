@@ -71,7 +71,7 @@ class StatusCallback(ABC):
                 timeout=5,
             ).raise_for_status()
         except requests.exceptions.RequestException as e:
-            logger.error(f"Error sending status update: {e}")
+            logger.error("Error sending status update: %s", e)
             capture_exception(e)
 
     def get_next_stage(self):
@@ -158,7 +158,10 @@ class StatusCallback(ABC):
         self.stage = self.status.stages[-1]
         self.on_status_update()
         logger.error(
-            f"Error occurred in job {self.run_id} in stage {self.stage.name}: {message}"
+            "Error occurred in job %s in stage %s: %s",
+            self.run_id,
+            self.stage.name,
+            message,
         )
         if exception:
             capture_exception(exception)
@@ -186,6 +189,8 @@ class StatusCallback(ABC):
 
 
 class CourseChatStatusCallback(StatusCallback):
+    """Status callback for course chat pipelines."""
+
     def __init__(
         self, run_id: str, base_url: str, initial_stages: List[StageDTO] = None
     ):
@@ -208,6 +213,8 @@ class CourseChatStatusCallback(StatusCallback):
 
 
 class ExerciseChatStatusCallback(StatusCallback):
+    """Status callback for exercise chat pipelines."""
+
     def __init__(
         self, run_id: str, base_url: str, initial_stages: List[StageDTO] = None
     ):
@@ -230,6 +237,8 @@ class ExerciseChatStatusCallback(StatusCallback):
 
 
 class ChatGPTWrapperStatusCallback(StatusCallback):
+    """Status callback for ChatGPT wrapper pipelines."""
+
     def __init__(
         self, run_id: str, base_url: str, initial_stages: List[StageDTO] = None
     ):
@@ -249,6 +258,8 @@ class ChatGPTWrapperStatusCallback(StatusCallback):
 
 
 class TextExerciseChatCallback(StatusCallback):
+    """Status callback for text exercise chat pipelines."""
+
     def __init__(
         self,
         run_id: str,
@@ -280,6 +291,8 @@ class TextExerciseChatCallback(StatusCallback):
 
 
 class CompetencyExtractionCallback(StatusCallback):
+    """Status callback for competency extraction pipelines."""
+
     def __init__(
         self,
         run_id: str,
@@ -301,6 +314,8 @@ class CompetencyExtractionCallback(StatusCallback):
 
 
 class RewritingCallback(StatusCallback):
+    """Status callback for rewriting pipelines."""
+
     def __init__(
         self,
         run_id: str,
@@ -322,6 +337,8 @@ class RewritingCallback(StatusCallback):
 
 
 class InconsistencyCheckCallback(StatusCallback):
+    """Status callback for inconsistency check pipelines."""
+
     def __init__(
         self,
         run_id: str,
@@ -343,6 +360,8 @@ class InconsistencyCheckCallback(StatusCallback):
 
 
 class LectureChatCallback(StatusCallback):
+    """Status callback for lecture chat pipelines."""
+
     def __init__(
         self,
         run_id: str,

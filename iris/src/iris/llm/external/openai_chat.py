@@ -199,6 +199,8 @@ def convert_to_iris_message(
 
 
 class OpenAIChatModel(ChatModel):
+    """A chat model implementation that uses the OpenAI API for generating completions."""
+
     model: str
     api_key: str
 
@@ -240,7 +242,7 @@ class OpenAIChatModel(ChatModel):
 
                 if tools:
                     params["tools"] = [convert_to_openai_tool(tool) for tool in tools]
-                    logging.info(f"Using tools: {tools}")
+                    logging.info("Using tools: %s", tools)
 
                 response = client.chat.completions.create(**params)
                 choice = response.choices[0]
@@ -259,12 +261,12 @@ class OpenAIChatModel(ChatModel):
                     or len(choice.message.content) == 0
                 ):
                     logging.error("Model returned an empty message")
-                    logging.error("Finish reason: " + choice.finish_reason)
+                    logging.error("Finish reason: %s", choice.finish_reason)
                     if (
                         choice.message is not None
                         and choice.message.refusal is not None
                     ):
-                        logging.error("Refusal: " + choice.message.refusal)
+                        logging.error("Refusal: %s", choice.message.refusal)
 
                 return convert_to_iris_message(choice.message, usage, model)
             except (
@@ -273,13 +275,17 @@ class OpenAIChatModel(ChatModel):
                 RateLimitError,
             ):
                 wait_time = initial_delay * (backoff_factor**attempt)
-                logging.exception(f"OpenAI error on attempt {attempt + 1}:")
-                logging.info(f"Retrying in {wait_time} seconds...")
+                logging.exception("OpenAI error on attempt %s:", attempt + 1)
+                logging.info("Retrying in %s seconds...", wait_time)
                 time.sleep(wait_time)
-        raise Exception(f"Failed to get response from OpenAI after {retries} retries")
+        raise RuntimeError(
+            f"Failed to get response from OpenAI after {retries} retries"
+        )
 
 
 class DirectOpenAIChatModel(OpenAIChatModel):
+    """Direct implementation of the OpenAI Chat Model."""
+
     type: Literal["openai_chat"]
 
     def get_client(self) -> OpenAI:
@@ -290,6 +296,8 @@ class DirectOpenAIChatModel(OpenAIChatModel):
 
 
 class AzureOpenAIChatModel(OpenAIChatModel):
+    """Azure OpenAI chat model implementation."""
+
     type: Literal["azure_chat"]
     endpoint: str
     azure_deployment: str

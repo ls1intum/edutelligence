@@ -8,10 +8,14 @@ from iris.domain.data.image_message_content_dto import ImageMessageContentDTO
 from iris.llm import LanguageModel
 from iris.llm.completion_arguments import CompletionArguments
 from iris.llm.llm_manager import LlmManager
-from iris.llm.request_handler import RequestHandler
+from iris.llm.request_handler.request_handler_interface import RequestHandler
 
 
 class BasicRequestHandler(RequestHandler):
+    """BasicRequestHandler is responsible for handling language model requests including text completion, chat,
+    embedding, and semantic text splitting. It delegates operations to a language model via LlmManager.
+    """
+
     model_id: str
     llm_manager: LlmManager | None = None
     model_config = ConfigDict(arbitrary_types_allowed=True)

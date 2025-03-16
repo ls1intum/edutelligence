@@ -8,7 +8,7 @@ from langchain_core.runnables import Runnable
 from langsmith import traceable
 from pydantic import BaseModel
 
-from iris.common.PipelineEnum import PipelineEnum
+from iris.common.pipeline_enum import PipelineEnum
 from iris.common.token_usage_dto import TokenUsageDTO
 
 from ...common.pyris_message import PyrisMessage
@@ -64,7 +64,9 @@ class CodeFeedbackPipeline(Pipeline):
         # Load prompt from file
         dirname = os.path.dirname(__file__)
         with open(
-            os.path.join(dirname, "../prompts/code_feedback_prompt.txt"), "r"
+            os.path.join(dirname, "../prompts/code_feedback_prompt.txt"),
+            "r",
+            encoding="utf-8",
         ) as file:
             prompt_str = file.read()
 
@@ -106,17 +108,12 @@ class CodeFeedbackPipeline(Pipeline):
         )
 
         file_list = "\n------------\n".join(
-            [
-                "{}:\n{}".format(file_name, code)
-                for file_name, code in repository.items()
-            ]
+            [f"{file_name}:\n{code}" for file_name, code in repository.items()]
         )
         feedback_list = (
             "\n".join(
                 [
-                    "Case: {}. Credits: {}. Info: {}".format(
-                        feedback.test_case_name, feedback.credits, feedback.text
-                    )
+                    f"Case: {feedback.test_case_name}. Credits: {feedback.credits}. Info: {feedback.text}"
                     for feedback in feedbacks
                 ]
             )
@@ -124,7 +121,7 @@ class CodeFeedbackPipeline(Pipeline):
             else "No feedbacks."
         )
         chat_history_list = "\n".join(
-            "{}: {}".format(message.sender, message.contents[0].text_content)
+            f"{message.sender}: {message.contents[0].text_content}"
             for message in chat_history
             if message.contents
             and len(message.contents) > 0

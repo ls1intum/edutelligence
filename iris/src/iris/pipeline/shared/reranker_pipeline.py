@@ -7,7 +7,7 @@ from langchain_core.prompts import ChatPromptTemplate, PromptTemplate
 from langchain_core.runnables import Runnable
 from langsmith import traceable
 
-from iris.common.PipelineEnum import PipelineEnum
+from iris.common.pipeline_enum import PipelineEnum
 from iris.common.pyris_message import PyrisMessage
 from iris.llm import CapabilityRequestHandler, CompletionArguments, RequirementList
 from iris.llm.langchain import IrisLangchainChatModel
@@ -42,7 +42,7 @@ class RerankerPipeline(Pipeline):
         )
         dirname = os.path.dirname(__file__)
         prompt_file_path = os.path.join(dirname, "..", "prompts", "reranker_prompt.txt")
-        with open(prompt_file_path, "r") as file:
+        with open(prompt_file_path, "r", encoding="utf-8") as file:
             logger.info("Loading reranker prompt...")
             prompt_str = file.read()
 
@@ -86,15 +86,13 @@ class RerankerPipeline(Pipeline):
         paras = ""
         if paragraphs and isinstance(paragraphs[0], dict):
             for i, paragraph in enumerate(paragraphs):
-                paras += "Paragraph {}:\n{}\n".format(
-                    str(i),
-                    paragraph.get(
-                        LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value, ""
-                    ),
+                paras += (
+                    f"Paragraph {str(i)}:\n"
+                    f"{paragraph.get(LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value, "")}\n"
                 )
         elif paragraphs and isinstance(paragraphs[0], str):
             for i, paragraph in enumerate(paragraphs):
-                paras += "Paragraph {}:\n{}\n".format(str(i), paragraph)
+                paras += f"Paragraph {str(i)}:\n{paragraph}\n"
         else:
             raise ValueError(
                 "Invalid input type for paragraphs. Must be a list of dictionaries or a list of strings."

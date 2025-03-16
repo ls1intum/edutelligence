@@ -13,7 +13,7 @@ from unstructured.cleaners.core import clean
 from weaviate import WeaviateClient
 from weaviate.classes.query import Filter
 
-from iris.common.PipelineEnum import PipelineEnum
+from iris.common.pipeline_enum import PipelineEnum
 from iris.domain.ingestion.ingestion_pipeline_execution_dto import (
     IngestionPipelineExecutionDto,
 )
@@ -49,7 +49,7 @@ def cleanup_temporary_file(file_path):
     try:
         os.remove(file_path)
     except OSError as e:
-        logger.error(f"Failed to remove temporary file {file_path}: {e}")
+        logger.error("Failed to remove temporary file %s: %s", file_path, e)
 
 
 def save_pdf(pdf_file_base64):
@@ -64,7 +64,7 @@ def save_pdf(pdf_file_base64):
             temp_pdf_file.write(binary_data)
         except Exception as e:
             logger.error(
-                f"Failed to write to temporary PDF file {temp_pdf_file_path}: {e}"
+                "Failed to write to temporary PDF file %s: %s", temp_pdf_file_path, e
             )
             raise
     return temp_pdf_file_path
@@ -91,6 +91,8 @@ def create_page_data(
 
 
 class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
+    """LectureUnitPageIngestionPipeline ingests lecture unit pages into the database by chunking lecture PDFs,
+    processing the content, and updating the vector database."""
 
     def __init__(
         self,
@@ -166,12 +168,12 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
             )
 
             logger.info(
-                f"Lecture ingestion pipeline finished Successfully for course "
-                f"{self.dto.lecture_unit.course_name}"
+                "Lecture ingestion pipeline finished Successfully for course %s",
+                self.dto.lecture_unit.course_name,
             )
             return True
         except Exception as e:
-            logger.error(f"Error updating lecture unit: {e}")
+            logger.error("Error updating lecture unit: %s", e)
             self.callback.error(
                 f"Failed to ingest lectures into the database: {e}",
                 exception=e,
@@ -185,17 +187,16 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         This method is thread-safe and can only be executed by one thread at a time.
         Weaviate limitation.
         """
-        global batch_update_lock
         with batch_update_lock:
             with self.collection.batch.rate_limit(requests_per_minute=600) as batch:
                 try:
-                    for index, chunk in enumerate(chunks):
+                    for _, chunk in enumerate(chunks):
                         embed_chunk = self.llm_embedding.embed(
                             chunk[LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value]
                         )
                         batch.add_object(properties=chunk, vector=embed_chunk)
                 except Exception as e:
-                    logger.error(f"Error updating lecture unit: {e}")
+                    logger.error("Error updating lecture unit: %s", e)
                     self.callback.error(
                         f"Failed to ingest lectures into the database: {e}",
                         exception=e,
@@ -207,7 +208,7 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         lecture_pdf: str,
         lecture_unit_slide_dto: LectureUnitSlideDTO = None,
         base_url: str = None,
-    ):
+    ):  # pylint: disable=arguments-renamed
         """
         Chunk the data from the lecture into smaller pieces
         """
@@ -284,7 +285,7 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
                 response.token_usage, PipelineEnum.IRIS_LECTURE_INGESTION
             )
         except Exception as e:
-            logger.error(f"Error interpreting image: {e}")
+            logger.error("Error interpreting image: %s", e)
             return None
         return response.contents[0].text_content
 
@@ -298,7 +299,7 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         prompt_file_path = os.path.join(
             dirname, ".", "prompts", "content_image_interpretation_merge_prompt.txt"
         )
-        with open(prompt_file_path, "r") as file:
+        with open(prompt_file_path, "r", encoding="utf-8") as file:
             logger.info("Loading ingestion prompt...")
             lecture_ingestion_prompt = file.read()
         prompt = ChatPromptTemplate.from_messages(
@@ -354,7 +355,7 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
                     logger.error("Failed to delete lecture")
             self.callback.done("Old slides removed")
         except Exception as e:
-            logger.error(f"Error deleting lecture unit: {e}")
+            logger.error("Error deleting lecture unit: %s", e)
             self.callback.error("Error while removing old slides")
             return False
 
@@ -379,5 +380,5 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
             )
             return True
         except Exception as e:
-            logger.error(f"Error deleting lecture unit: {e}", exc_info=True)
+            logger.error("Error deleting lecture unit: %s", e, exc_info=True)
             return False

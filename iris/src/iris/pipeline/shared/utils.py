@@ -20,4 +20,4 @@ def generate_structured_tools_from_functions(
     :param tools: The list of tool functions
     :return: The list of structured tools
     """
-    return [generate_structured_tool_from_function(_tool) for _tool in tools]
+    return [generate_structured_tool_from_function(tool) for tool in tools]
