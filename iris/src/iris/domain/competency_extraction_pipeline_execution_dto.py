@@ -2,8 +2,8 @@ from typing import List
 
 from pydantic import BaseModel, Field
 
-from .pipeline_execution_dto import PipelineExecutionDTO
 from .data.competency_dto import Competency, CompetencyTaxonomy
+from .pipeline_execution_dto import PipelineExecutionDTO
 
 
 class CompetencyExtractionPipelineExecutionDTO(BaseModel):

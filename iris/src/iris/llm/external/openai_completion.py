@@ -3,8 +3,8 @@ from typing import Any, Literal
 from openai import OpenAI
 from openai.lib.azure import AzureOpenAI
 
-from ..completion_arguments import CompletionArguments
 from ...llm.external.model import CompletionModel
+from ..completion_arguments import CompletionArguments
 
 
 class OpenAICompletionModel(CompletionModel):

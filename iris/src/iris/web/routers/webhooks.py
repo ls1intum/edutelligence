@@ -10,11 +10,11 @@ from iris.domain.ingestion.ingestion_pipeline_execution_dto import (
     FaqIngestionPipelineExecutionDto,
     IngestionPipelineExecutionDto,
 )
+
 from ...domain.ingestion.deletion_pipeline_execution_dto import (
     FaqDeletionExecutionDto,
     LecturesDeletionExecutionDto,
 )
-
 from ...domain.ingestion.transcription_ingestion.transcription_ingestion_pipeline_execution_dto import (
     TranscriptionIngestionPipelineExecutionDto,
 )
