@@ -106,6 +106,17 @@ their programming exercises on Artemis in a pedagogically meaningful way.
    5. Click `OK` and `Apply`
    6. PyCharm should now use the Poetry environment for the project
 
+   You should also configure the IDE to use the correct source directories.
+   Not doing this may mess up the imports your IDE automatically adds in the code.
+   In PyCharm, you can do this like this:
+
+   1. Right-click on the `iris` folder in the project view
+   2. Select `Mark Directory as > Sources Root`
+   3. This will tell PyCharm to use the `iris` folder as the source root
+   4. Right-click on the `tests` folder in the project view
+   5. Select `Mark Directory as > Test Sources Root`
+   6. This will tell PyCharm to use the `tests` folder as the test source root
+
 5. **Create Configuration Files**
 
    - **Create an Application Configuration File**
