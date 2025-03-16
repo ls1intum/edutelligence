@@ -110,12 +110,13 @@ their programming exercises on Artemis in a pedagogically meaningful way.
    Not doing this may mess up the imports your IDE automatically adds in the code.
    In PyCharm, you can do this like this:
 
-   1. Right-click on the `iris` folder in the project view
+   1. Right-click on the `src` folder in the project view
    2. Select `Mark Directory as > Sources Root`
-   3. This will tell PyCharm to use the `iris` folder as the source root
+   3. This will tell PyCharm to use the `src` folder as the source root
    4. Right-click on the `tests` folder in the project view
    5. Select `Mark Directory as > Test Sources Root`
    6. This will tell PyCharm to use the `tests` folder as the test source root
+   7. Now select `File > Invalidate Caches...` and click `Invalidate and Restart`
 
 5. **Create Configuration Files**
 
