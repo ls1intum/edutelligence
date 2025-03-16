@@ -28,6 +28,8 @@ from iris.vector_database.lecture_unit_schema import (
 
 
 class LectureTranscriptionRetrieval(Pipeline):
+    """LectureTranscriptionRetrieval retrieves lecture transcription data from the database by applying search filters
+     and processing the transcription segments."""
     def __init__(self, client: WeaviateClient):
         super().__init__(implementation_id="lecture_transcriptions_retrieval_pipeline")
         request_handler = CapabilityRequestHandler(
@@ -98,7 +100,7 @@ class LectureTranscriptionRetrieval(Pipeline):
         """
         Search the database for the given query.
         """
-        logger.info(f"Searching in the database for query: {query}")
+        logger.info("Searching in the database for query: %s", query)
         # Initialize filter to None by default
         filter_weaviate = None
 

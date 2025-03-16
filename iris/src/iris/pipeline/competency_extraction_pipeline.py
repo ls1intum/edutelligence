@@ -6,7 +6,7 @@ from langchain_core.prompts import (
     ChatPromptTemplate,
 )
 
-from iris.common.PipelineEnum import PipelineEnum
+from iris.common.pipeline_enum import PipelineEnum
 from iris.common.pyris_message import IrisMessageRole, PyrisMessage
 from iris.domain import (
     CompetencyExtractionPipelineExecutionDTO,
@@ -22,6 +22,11 @@ logger = logging.getLogger(__name__)
 
 
 class CompetencyExtractionPipeline(Pipeline):
+    """CompetencyExtractionPipeline extracts and processes competencies from course content.
+
+    It leverages a language model to generate competency JSON, parses the output using a Pydantic output parser,
+    and handles errors during parsing, appending tokens, and final result notification.
+    """
     callback: CompetencyExtractionCallback
     request_handler: CapabilityRequestHandler
     output_parser: PydanticOutputParser
@@ -87,7 +92,7 @@ class CompetencyExtractionPipeline(Pipeline):
         # Find all competencies in the response up to the max_n
         competencies = response.split("\n\n")[: dto.max_n]
         for i, competency in enumerate(competencies):
-            logger.debug(f"Processing competency {i + 1}: {competency}")
+            logger.debug("Processing competency %s: %s", i + 1, competency)
             if "{" not in competency or "}" not in competency:
                 logger.debug("Skipping competency without JSON")
                 continue
@@ -98,8 +103,8 @@ class CompetencyExtractionPipeline(Pipeline):
             try:
                 competency = self.output_parser.parse(competency)
             except Exception as e:
-                logger.debug(f"Error parsing competency: {e}")
+                logger.debug("Error parsing competency: %s", e)
                 continue
-            logger.debug(f"Generated competency: {competency}")
+            logger.debug("Generated competency: %s", competency)
             generated_competencies.append(competency)
         self.callback.done(final_result=generated_competencies, tokens=self.tokens)

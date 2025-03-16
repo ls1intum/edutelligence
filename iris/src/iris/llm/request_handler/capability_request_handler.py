@@ -14,7 +14,7 @@ from iris.llm.external.model import (
     LanguageModel,
 )
 from iris.llm.llm_manager import LlmManager
-from iris.llm.request_handler import RequestHandler
+from iris.llm.request_handler.request_handler_interface import RequestHandler
 
 
 class CapabilityRequestHandlerSelectionMode(Enum):

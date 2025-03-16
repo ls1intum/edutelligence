@@ -111,7 +111,7 @@ class ExerciseChatPipeline(Pipeline):
             should_execute_lecture_pipeline = self.should_execute_lecture_pipeline(
                 dto.course.id
             )
-            self._run_exercise_chat_pipeline(dto, should_execute_lecture_pipeline),
+            self._run_exercise_chat_pipeline(dto, should_execute_lecture_pipeline)
             self.callback.done(
                 "Generated response",
                 final_result=self.exercise_chat_response,
@@ -274,9 +274,7 @@ class ExerciseChatPipeline(Pipeline):
 
         self.callback.done()
 
-        self._add_exercise_context_to_prompt(
-            submission,
-        )
+        self._add_exercise_context_to_prompt()
         # Add the chat history and user question to the prompt
         self._add_conversation_to_prompt(history, query)
 
@@ -372,7 +370,6 @@ class ExerciseChatPipeline(Pipeline):
 
     def _add_exercise_context_to_prompt(
         self,
-        submission: ProgrammingSubmissionDTO,
     ):
         """Adds the exercise context to the prompt
         :param submission: The submission
@@ -400,16 +397,14 @@ class ExerciseChatPipeline(Pipeline):
         Adds the relevant chunks of the lecture to the prompt
         :param retrieved_lecture_chunks: The retrieved lecture chunks
         """
-        txt = "Next you will find the potentially relevant lecture content to answer the student message."
-        "Use this context to enrich your response.\n"
+        txt = ("Next you will find the potentially relevant lecture content to answer the student message. "
+               "Use this context to enrich your response.\n")
 
         for chunk in retrieved_lecture_chunks:
             props = chunk.get("properties", {})
-            lct = "Lecture: {}, Page: {}\nContent:\n---{}---\n\n".format(
-                props.get(LectureUnitPageChunkSchema.LECTURE_NAME.value),
-                props.get(LectureUnitPageChunkSchema.PAGE_NUMBER.value),
-                props.get(LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value),
-            )
+            lct = (f"Lecture: {props.get(LectureUnitPageChunkSchema.LECTURE_NAME.value)}, Page:"
+                   f" {props.get(LectureUnitPageChunkSchema.PAGE_NUMBER.value)}\nContent:\n---"
+                   f"{props.get(LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value)}---\n\n")
             txt += lct
 
         self.prompt += SystemMessagePromptTemplate.from_template(

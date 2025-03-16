@@ -28,6 +28,8 @@ from iris.vector_database.lecture_unit_segment_schema import (
 
 
 class LectureUnitSegmentRetrieval(Pipeline):
+    """LectureUnitSegmentRetrieval retrieves lecture unit segments based on search queries and returns the matching
+     results."""
     def __init__(self, client: WeaviateClient):
         super().__init__(implementation_id="lecture_unit_segment_retrieval_pipeline")
         request_handler = CapabilityRequestHandler(
@@ -96,7 +98,7 @@ class LectureUnitSegmentRetrieval(Pipeline):
         """
         Search the database for the given query.
         """
-        logger.info(f"Searching in the database for query: {query}")
+        logger.info("Searching in the database for query: %s", query)
         # Initialize filter to None by default
         filter_weaviate = None
 

@@ -1,6 +1,6 @@
 from pydantic import BaseModel
 
-from . import PipelineExecutionDTO
+from .pipeline_execution_dto import PipelineExecutionDTO
 from .data.programming_exercise_dto import ProgrammingExerciseDTO
 
 

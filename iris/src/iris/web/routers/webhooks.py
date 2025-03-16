@@ -10,11 +10,8 @@ from iris.domain.ingestion.ingestion_pipeline_execution_dto import (
     FaqIngestionPipelineExecutionDto,
     IngestionPipelineExecutionDto,
 )
+from ...domain.ingestion.deletion_pipeline_execution_dto import FaqDeletionExecutionDto, LecturesDeletionExecutionDto
 
-from ...domain.ingestion.deletionPipelineExecutionDto import (
-    FaqDeletionExecutionDto,
-    LecturesDeletionExecutionDto,
-)
 from ...domain.ingestion.transcription_ingestion.transcription_ingestion_pipeline_execution_dto import (
     TranscriptionIngestionPipelineExecutionDto,
 )
@@ -53,7 +50,7 @@ def run_lecture_update_pipeline_worker(dto: IngestionPipelineExecutionDto):
             pipeline()
 
         except Exception as e:
-            logger.error(f"Error Ingestion pipeline: {e}")
+            logger.error("Error Ingestion pipeline: %s", e)
             logger.error(traceback.format_exc())
             capture_exception(e)
         finally:
@@ -77,7 +74,7 @@ def run_lecture_deletion_pipeline_worker(dto: LecturesDeletionExecutionDto):
         )
         pipeline.delete_old_lectures(dto.lecture_units, dto.settings.artemis_base_url)
     except Exception as e:
-        logger.error(f"Error while deleting lectures: {e}")
+        logger.error("Error while deleting lectures: %s", e)
         logger.error(traceback.format_exc())
 
 
@@ -102,7 +99,7 @@ def run_transcription_ingestion_pipeline_worker(
             )
             pipeline()
         except Exception as e:
-            logger.error(f"Error while deleting lectures: {e}")
+            logger.error("Error while deleting lectures: %s", e)
             logger.error(traceback.format_exc())
             capture_exception(e)
         finally:
@@ -127,7 +124,7 @@ def run_faq_update_pipeline_worker(dto: FaqIngestionPipelineExecutionDto):
             pipeline()
 
         except Exception as e:
-            logger.error(f"Error Faq Ingestion pipeline: {e}")
+            logger.error("Error Faq Ingestion pipeline: %s", e)
             logger.error(traceback.format_exc())
             capture_exception(e)
         finally:
@@ -153,7 +150,7 @@ def run_faq_delete_pipeline_worker(dto: FaqDeletionExecutionDto):
             pipeline.delete_faq(dto.faq.faq_id, dto.faq.course_id)
 
         except Exception as e:
-            logger.error(f"Error Ingestion pipeline: {e}")
+            logger.error("Error Ingestion pipeline: %s", e)
             logger.error(traceback.format_exc())
             capture_exception(e)
         finally:
@@ -195,7 +192,7 @@ def transcription_ingestion_webhook(dto: TranscriptionIngestionPipelineExecution
     """
     Webhook endpoint to trigger the lecture transcription ingestion pipeline
     """
-    logger.info(f"transcription ingestion got DTO {dto}")
+    logger.info("transcription ingestion got DTO %s", dto)
     thread = Thread(target=run_transcription_ingestion_pipeline_worker, args=(dto,))
     thread.start()
 

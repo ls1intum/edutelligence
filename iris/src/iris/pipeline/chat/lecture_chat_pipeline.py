@@ -9,7 +9,7 @@ from langchain_core.prompts import (
 from langchain_core.runnables import Runnable
 from langsmith import traceable
 
-from iris.common.PipelineEnum import PipelineEnum
+from iris.common.pipeline_enum import PipelineEnum
 from iris.retrieval.lecture.lecture_page_chunk_retrieval import (
     LecturePageChunkRetrieval,
 )
@@ -55,6 +55,11 @@ def lecture_initial_prompt():
 
 
 class LectureChatPipeline(Pipeline):
+    """LectureChatPipeline orchestrates the interaction for lecture-based chat queries.
+
+    It uses an IrisLangchainChatModel to generate responses based on a student's question, incorporates chat history and
+    relevant lecture content, and returns a final response enriched with citations.
+    """
     llm: IrisLangchainChatModel
     pipeline: Runnable
     prompt: ChatPromptTemplate
@@ -134,7 +139,7 @@ class LectureChatPipeline(Pipeline):
                 retrieved_lecture_chunks, response
             )
             self.tokens.extend(self.citation_pipeline.tokens)
-            logger.info(f"Response from lecture chat pipeline: {response}")
+            logger.info("Response from lecture chat pipeline: %s", response)
             self.callback.done(
                 "Response created",
                 final_result=response_with_citation,
@@ -178,7 +183,7 @@ class LectureChatPipeline(Pipeline):
         self.prompt += SystemMessagePromptTemplate.from_template(
             "Next you will find the relevant lecture content:\n"
         )
-        for i, chunk in enumerate(retrieved_lecture_chunks):
+        for _, chunk in enumerate(retrieved_lecture_chunks):
             text_content_msg = f" \n {chunk.get(LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value)} \n"
             text_content_msg = text_content_msg.replace("{", "{{").replace("}", "}}")
             self.prompt += SystemMessagePromptTemplate.from_template(text_content_msg)

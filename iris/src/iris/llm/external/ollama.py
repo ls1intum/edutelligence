@@ -84,6 +84,10 @@ class OllamaModel(
     ChatModel,
     EmbeddingModel,
 ):
+    """OllamaModel implements completion, chat, and embedding functionalities using the Ollama API.
+
+    It configures the client with the provided host and model options, and translates responses into PyrisMessages.
+    """
 
     type: Literal["ollama"]
     model: str
@@ -93,7 +97,7 @@ class OllamaModel(
 
     def model_post_init(self, __context: Any) -> None:
         self._client = Client(host=self.host)  # TODO: Add authentication (httpx auth?)
-        self._client._client.base_url = self.host
+        self._client._client.base_url = self.host # pylint: disable=protected-access
 
     def complete(
         self,

@@ -1,7 +1,7 @@
 from abc import ABCMeta
 from typing import List
 
-from iris.common.PipelineEnum import PipelineEnum
+from iris.common.pipeline_enum import PipelineEnum
 from iris.common.token_usage_dto import TokenUsageDTO
 
 
@@ -11,7 +11,7 @@ class Pipeline(metaclass=ABCMeta):
     implementation_id: str
     tokens: List[TokenUsageDTO]
 
-    def __init__(self, implementation_id=None, **kwargs):
+    def __init__(self, implementation_id=None):
         self.implementation_id = implementation_id
 
     def __str__(self):

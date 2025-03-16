@@ -6,7 +6,7 @@ from langchain_core.prompts import PromptTemplate
 from langchain_core.runnables import Runnable
 from langsmith import traceable
 
-from iris.common.PipelineEnum import PipelineEnum
+from iris.common.pipeline_enum import PipelineEnum
 from iris.domain import InconsistencyCheckPipelineExecutionDTO
 from iris.llm import CapabilityRequestHandler, CompletionArguments, RequirementList
 from iris.llm.langchain.iris_langchain_chat_model import IrisLangchainChatModel
@@ -21,6 +21,12 @@ logger = logging.getLogger(__name__)
 
 
 class InconsistencyCheckPipeline(Pipeline):
+    """InconsistencyCheckPipeline checks for consistency issues within an exercise by evaluating files from template
+     and solution repositories.
+
+    It invokes a solver pipeline to identify potential inconsistencies, then uses a prettify pipeline to generate a
+     summary report.
+    """
     llm: IrisLangchainChatModel
     callback: InconsistencyCheckCallback
 

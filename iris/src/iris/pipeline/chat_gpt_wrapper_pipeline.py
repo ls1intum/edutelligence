@@ -49,6 +49,12 @@ def convert_chat_history_to_str(chat_history: List[PyrisMessage]) -> str:
 
 
 class ChatGPTWrapperPipeline(Pipeline):
+    """ChatGPTWrapperPipeline executes a single-step response generation process using ChatGPT.
+
+    It constructs a system prompt along with the chat history, sends the assembled prompts to a capability request
+    handler, and then invokes the callback with the final response. If no valid response is generated, it logs
+    detailed error information.
+    """
     callback: ChatGPTWrapperStatusCallback
     llm: IrisLangchainChatModel
     pipeline: Runnable
@@ -95,7 +101,7 @@ class ChatGPTWrapperPipeline(Pipeline):
             prompts, CompletionArguments(temperature=0.5, max_tokens=2000), tools=None
         )
 
-        logger.info(f"ChatGPTWrapperPipeline response: {response}")
+        logger.info("ChatGPTWrapperPipeline response: %s", response)
 
         if (
             response.contents is None
@@ -105,8 +111,8 @@ class ChatGPTWrapperPipeline(Pipeline):
         ):
             self.callback.error("ChatGPT did not reply. Try resending.")
             # Print lots of debug info for this case
-            logger.error(f"ChatGPTWrapperPipeline response: {response}")
-            logger.error(f"ChatGPTWrapperPipeline request: {prompts}")
+            logger.error("ChatGPTWrapperPipeline response: %s", response)
+            logger.error("ChatGPTWrapperPipeline request: %s", prompts)
             return
 
         self.callback.done(final_result=response.contents[0].text_content)

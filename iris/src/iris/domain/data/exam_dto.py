@@ -5,6 +5,8 @@ from pydantic import BaseModel, Field
 
 
 class ExamDTO(BaseModel):
+    """ExamDTO represents an exam with properties such as title, exam type, start date, end date, publish results date,
+     and exam student review periods."""
     id: int = Field(alias="id")
     title: Optional[str] = Field(alias="title", default=None)
     is_text_exam: bool = Field(alias="isTextExam", default=False)

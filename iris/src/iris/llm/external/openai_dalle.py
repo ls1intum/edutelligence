@@ -20,7 +20,7 @@ def generate_images(
     Generate images from the prompt.
     """
     try:
-        response = self._client.images.generate(
+        response = self._client.images.generate( # pylint: disable=protected-access
             model=self.model,
             prompt=prompt,
             size=size,

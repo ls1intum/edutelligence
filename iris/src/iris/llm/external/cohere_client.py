@@ -7,6 +7,7 @@ from ...llm.capability import CapabilityList
 
 
 class CohereAzureClient(BaseModel):
+    """CohereAzureClient provides an interface to interact with the Cohere API using Azure endpoints."""
     type: Literal["cohere_azure"]
     endpoint: str
     api_key: str

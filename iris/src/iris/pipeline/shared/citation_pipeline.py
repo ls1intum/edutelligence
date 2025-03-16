@@ -7,7 +7,7 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate, PromptTemplate
 from langchain_core.runnables import Runnable
 
-from iris.common.PipelineEnum import PipelineEnum
+from iris.common.pipeline_enum import PipelineEnum
 from iris.llm import CapabilityRequestHandler, CompletionArguments, RequirementList
 from iris.llm.langchain import IrisLangchainChatModel
 from iris.pipeline import Pipeline
@@ -44,12 +44,12 @@ class CitationPipeline(Pipeline):
         )
         dirname = os.path.dirname(__file__)
         prompt_file_path = os.path.join(dirname, "..", "prompts", "citation_prompt.txt")
-        with open(prompt_file_path, "r") as file:
+        with open(prompt_file_path, "r", encoding="utf-8") as file:
             self.lecture_prompt_str = file.read()
         prompt_file_path = os.path.join(
             dirname, "..", "prompts", "faq_citation_prompt.txt"
         )
-        with open(prompt_file_path, "r") as file:
+        with open(prompt_file_path, "r", encoding="utf-8") as file:
             self.faq_prompt_str = file.read()
         self.pipeline = self.llm | StrOutputParser()
         self.tokens = []
@@ -65,15 +65,12 @@ class CitationPipeline(Pipeline):
         Create a formatted string from the data
         """
         formatted_string = ""
-        for i, paragraph in enumerate(paragraphs):
-            lct = "Lecture: {}, Unit: {}, Page: {}, Link: {},\nContent:\n---{}---\n\n".format(
-                paragraph.get(LectureUnitPageChunkSchema.LECTURE_NAME.value),
-                paragraph.get(LectureUnitPageChunkSchema.LECTURE_UNIT_NAME.value),
-                paragraph.get(LectureUnitPageChunkSchema.PAGE_NUMBER.value),
-                paragraph.get(LectureUnitPageChunkSchema.LECTURE_UNIT_LINK.value)
-                or "No link available",
-                paragraph.get(LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value),
-            )
+        for _, paragraph in enumerate(paragraphs):
+            lct = (f"Lecture: {paragraph.get(LectureUnitPageChunkSchema.LECTURE_NAME.value)},"
+                   f" Unit: {paragraph.get(LectureUnitPageChunkSchema.LECTURE_UNIT_NAME.value)},"
+                   f" Page: {paragraph.get(LectureUnitPageChunkSchema.PAGE_NUMBER.value)},"
+                   f" Link: {paragraph.get(LectureUnitPageChunkSchema.LECTURE_UNIT_LINK.value) or "No link available"},"
+                   f"\nContent:\n---{paragraph.get(LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value)}---\n\n")
             formatted_string += lct
 
         return formatted_string.replace("{", "{{").replace("}", "}}")
@@ -83,14 +80,13 @@ class CitationPipeline(Pipeline):
         Create a formatted string from the data
         """
         formatted_string = ""
-        for i, faq in enumerate(faqs):
-            faq = "FAQ ID {}, CourseId {} , FAQ Question title {} and FAQ Question Answer {} and FAQ link {}".format(
-                faq.get(FaqSchema.FAQ_ID.value),
-                faq.get(FaqSchema.COURSE_ID.value),
-                faq.get(FaqSchema.QUESTION_TITLE.value),
-                faq.get(FaqSchema.QUESTION_ANSWER.value),
-                f"{base_url}/courses/{faq.get(FaqSchema.COURSE_ID.value)}/faq/?faqId={faq.get(FaqSchema.FAQ_ID.value)}",
-            )
+        for _, faq in enumerate(faqs):
+            faq = (f"FAQ ID {faq.get(FaqSchema.FAQ_ID.value)},"
+                   f" CourseId {faq.get(FaqSchema.COURSE_ID.value)} ,"
+                   f" FAQ Question title {faq.get(FaqSchema.QUESTION_TITLE.value)} and"
+                   f" FAQ Question Answer {faq.get(FaqSchema.QUESTION_ANSWER.value)} and"
+                   f" FAQ link {base_url}/courses/{faq.get(FaqSchema.COURSE_ID.value)}/faq/?faqId="
+                   f"{faq.get(FaqSchema.FAQ_ID.value)}")
             formatted_string += faq
 
         return formatted_string.replace("{", "{{").replace("}", "}}")
@@ -133,5 +129,5 @@ class CitationPipeline(Pipeline):
                 return answer
             return response
         except Exception as e:
-            logger.error("citation pipeline failed", e)
+            logger.error("citation pipeline failed %s", e)
             raise e

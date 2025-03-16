@@ -61,7 +61,7 @@ class LecturePageChunkRetrieval(Pipeline):
 
     tokens: List[TokenUsageDTO]
 
-    def __init__(self, client: WeaviateClient, **kwargs):
+    def __init__(self, client: WeaviateClient):
         super().__init__(implementation_id="lecture_retrieval_pipeline")
         request_handler = CapabilityRequestHandler(
             requirements=RequirementList(
@@ -141,7 +141,7 @@ class LecturePageChunkRetrieval(Pipeline):
         """
         Search the database for the given query.
         """
-        logger.info(f"Searching in the database for query: {query}")
+        logger.info("Searching in the database for query: %s", query)
         # Initialize filter to None by default
         filter_weaviate = None
 

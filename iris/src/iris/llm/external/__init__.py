@@ -13,7 +13,7 @@ from ...llm.external.openai_embeddings import (
 )
 from .cohere_client import CohereAzureClient
 
-AnyLLM = Union[
+AnyLlm = Union[
     DirectOpenAICompletionModel,
     AzureOpenAICompletionModel,
     DirectOpenAIChatModel,

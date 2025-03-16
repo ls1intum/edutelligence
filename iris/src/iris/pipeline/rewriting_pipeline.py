@@ -6,7 +6,7 @@ from langchain_core.prompts import (
     ChatPromptTemplate,
 )
 
-from iris.common.PipelineEnum import PipelineEnum
+from iris.common.pipeline_enum import PipelineEnum
 from iris.common.pyris_message import IrisMessageRole, PyrisMessage
 from iris.domain.data.text_message_content_dto import TextMessageContentDTO
 from iris.domain.rewriting_pipeline_execution_dto import (
@@ -24,6 +24,12 @@ logger = logging.getLogger(__name__)
 
 
 class RewritingPipeline(Pipeline):
+    """RewritingPipeline processes text rewriting requests by interfacing with a language model via a capability
+     request handler.
+
+    It formats the prompt according to the selected variant, processes the rewriting, and then notifies the callback
+     when complete.
+    """
     callback: RewritingCallback
     request_handler: CapabilityRequestHandler
     output_parser: PydanticOutputParser

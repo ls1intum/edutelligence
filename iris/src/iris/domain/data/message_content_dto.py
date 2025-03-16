@@ -5,7 +5,7 @@ from ...domain.data.json_message_content_dto import JsonMessageContentDTO
 from ...domain.data.text_message_content_dto import TextMessageContentDTO
 from .tool_message_content_dto import ToolMessageContentDTO
 
-MessageContentDTO = Union[
+MessageContentDto = Union[
     TextMessageContentDTO,
     ImageMessageContentDTO,
     JsonMessageContentDTO,

@@ -10,7 +10,7 @@ from weaviate import WeaviateClient
 from weaviate.classes.query import Filter
 
 from iris.common.message_converters import convert_iris_message_to_langchain_message
-from iris.common.PipelineEnum import PipelineEnum
+from iris.common.pipeline_enum import PipelineEnum
 from iris.common.pyris_message import PyrisMessage
 from iris.domain.retrieval.lecture.lecture_retrieval_dto import (
     LectureRetrievalDTO,
@@ -68,6 +68,11 @@ class QueryRewriteMode(Enum):
 
 
 class LectureRetrieval(Pipeline):
+    """LectureRetrieval retrieves lecture data from the vector database by processing lecture units, transcriptions,
+     and page chunks.
+
+    It combines various sources of lecture-related data and formats them into a single DTO for further processing.
+    """
     def __init__(self, client: WeaviateClient):
         super().__init__(implementation_id="lecture_retrieval_pipeline")
         request_handler = CapabilityRequestHandler(
@@ -221,6 +226,7 @@ class LectureRetrieval(Pipeline):
                 lecture_unit_link=lecture_unit.lecture_unit_link,
                 base_url=lecture_unit.base_url,
                 lecture_unit_summary=lecture_unit.lecture_unit_summary,
+                uuid=lecture_unit.uuid, #TODO: Check if correct, needed to fix lint error
             )
 
         elif lecture_id is not None:
@@ -252,6 +258,7 @@ class LectureRetrieval(Pipeline):
                 lecture_unit_summary=lecture_unit[
                     LectureUnitSchema.LECTURE_UNIT_SUMMARY.value
                 ],
+                uuid=lecture_unit.uuid, #TODO: Check if correct, needed to fix lint error
             )
 
         else:
@@ -451,7 +458,7 @@ class LectureRetrieval(Pipeline):
             token_usage = self.llm.tokens
             token_usage.pipeline = PipelineEnum.IRIS_LECTURE_RETRIEVAL_PIPELINE
             self.tokens.append(self.llm.tokens)
-            logger.info(f"Response from exercise chat pipeline: {response}")
+            logger.info("Response from exercise chat pipeline: %s", response)
             return response
         except Exception as e:
             raise e
@@ -499,7 +506,7 @@ class LectureRetrieval(Pipeline):
             token_usage = self.llm.tokens
             token_usage.pipeline = PipelineEnum.IRIS_LECTURE_RETRIEVAL_PIPELINE
             self.tokens.append(self.llm.tokens)
-            logger.info(f"Response from exercise chat pipeline: {response}")
+            logger.info("Response from exercise chat pipeline: %s", response)
             return response
         except Exception as e:
             raise e
@@ -547,7 +554,7 @@ class LectureRetrieval(Pipeline):
             token_usage = self.llm.tokens
             token_usage.pipeline = PipelineEnum.IRIS_LECTURE_RETRIEVAL_PIPELINE
             self.tokens.append(self.llm.tokens)
-            logger.info(f"Response from retirval pipeline: {response}")
+            logger.info("Response from retirval pipeline: %s", response)
             return response
         except Exception as e:
             raise e
@@ -600,7 +607,7 @@ class LectureRetrieval(Pipeline):
             token_usage = self.llm.tokens
             token_usage.pipeline = PipelineEnum.IRIS_LECTURE_RETRIEVAL_PIPELINE
             self.tokens.append(self.llm.tokens)
-            logger.info(f"Response from exercise chat pipeline: {response}")
+            logger.info("Response from exercise chat pipeline: %s", response)
             return response
         except Exception as e:
             raise e

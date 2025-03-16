@@ -16,7 +16,7 @@ from langchain_core.runnables import Runnable
 from langsmith import traceable
 from weaviate.collections.classes.filters import Filter
 
-from iris.common.PipelineEnum import PipelineEnum
+from iris.common.pipeline_enum import PipelineEnum
 from iris.retrieval.lecture.lecture_page_chunk_retrieval import (
     LecturePageChunkRetrieval,
 )
@@ -298,12 +298,10 @@ class CourseChatPipeline(Pipeline):
 
             result = ""
             for paragraph in self.retrieved_paragraphs:
-                lct = "Lecture: {}, Unit: {}, Page: {}\nContent:\n---{}---\n\n".format(
-                    paragraph.get(LectureUnitPageChunkSchema.LECTURE_NAME.value),
-                    paragraph.get(LectureUnitPageChunkSchema.LECTURE_UNIT_NAME.value),
-                    paragraph.get(LectureUnitPageChunkSchema.PAGE_NUMBER.value),
-                    paragraph.get(LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value),
-                )
+                lct = (f"Lecture: {paragraph.get(LectureUnitPageChunkSchema.LECTURE_NAME.value)}, Unit:"
+                       f" {paragraph.get(LectureUnitPageChunkSchema.LECTURE_UNIT_NAME.value)}, Page:"
+                       f" {paragraph.get(LectureUnitPageChunkSchema.PAGE_NUMBER.value)}\nContent:\n---"
+                       f"{paragraph.get(LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value)}---\n\n")
                 result += lct
             return result
 
@@ -360,7 +358,7 @@ class CourseChatPipeline(Pipeline):
 
             if self.event == "jol":
                 event_payload = CompetencyJolDTO.model_validate(dto.event_payload.event)
-                logger.debug(f"Event Payload: {event_payload}")
+                logger.debug("Event Payload: %s", event_payload)
                 comp = next(
                     (
                         c

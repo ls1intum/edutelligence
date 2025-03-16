@@ -12,6 +12,9 @@ from iris.domain.data.programming_exercise_dto import ProgrammingLanguage
 
 
 class ExtendedCourseDTO(BaseModel):
+    """Data Transfer Object for representing extended course information including details such as exercises, exams,
+    and competencies."""
+
     id: int = Field(alias="id")
     name: str = Field(alias="name", default=None)
     description: Optional[str] = Field(alias="description", default=None)

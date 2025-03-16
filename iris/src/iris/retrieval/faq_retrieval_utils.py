@@ -32,10 +32,7 @@ def format_faqs(retrieved_faqs):
     """
     result = ""
     for faq in retrieved_faqs:
-        res = "[FAQ ID: {}, FAQ Question: {}, FAQ Answer: {}]".format(
-            faq.get(FaqSchema.FAQ_ID.value),
-            faq.get(FaqSchema.QUESTION_TITLE.value),
-            faq.get(FaqSchema.QUESTION_ANSWER.value),
-        )
+        res = (f"[FAQ ID: {faq.get(FaqSchema.FAQ_ID.value)}, FAQ Question: {faq.get(FaqSchema.QUESTION_TITLE.value)},"
+               f" FAQ Answer: {faq.get(FaqSchema.QUESTION_ANSWER.value)}]")
         result += res
     return result

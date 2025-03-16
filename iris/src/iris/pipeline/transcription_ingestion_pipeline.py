@@ -8,7 +8,7 @@ from langchain_core.runnables import Runnable
 from weaviate import WeaviateClient
 from weaviate.classes.query import Filter
 
-from iris.common.PipelineEnum import PipelineEnum
+from iris.common.pipeline_enum import PipelineEnum
 from iris.domain.data.metrics.transcription_dto import (
     TranscriptionSegmentDTO,
     TranscriptionWebhookDTO,
@@ -42,6 +42,11 @@ CHUNK_SEPARATOR_CHAR = "\31"
 
 
 class TranscriptionIngestionPipeline(Pipeline):
+    """TranscriptionIngestionPipeline orchestrates the process of ingesting lecture transcription data.
+
+    It deletes existing transcription data, chunks and summarizes the transcription,
+    and ingests the processed transcription into the vector database while updating the relevant callbacks.
+    """
     llm: IrisLangchainChatModel
     pipeline: Runnable
     prompt: ChatPromptTemplate
@@ -112,7 +117,7 @@ class TranscriptionIngestionPipeline(Pipeline):
             )
 
         except Exception as e:
-            logger.error(f"Error processing transcription ingestion pipeline: {e}")
+            logger.error("Error processing transcription ingestion pipeline: %s", e)
             self.callback.error(
                 f"Error processing transcription ingestion pipeline: {e}",
                 exception=e,
@@ -145,7 +150,7 @@ class TranscriptionIngestionPipeline(Pipeline):
                         )
                         batch.add_object(properties=chunk, vector=embed_chunk)
                 except Exception as e:
-                    logger.error(f"Error embedding lecture transcription chunk: {e}")
+                    logger.error("Error embedding lecture transcription chunk: %s", e)
                     self.callback.error(
                         f"Failed to ingest lecture transcriptions into the database: {e}",
                         exception=e,
@@ -212,7 +217,7 @@ class TranscriptionIngestionPipeline(Pipeline):
                 0,
             )
             offset_start = offset_slide_chunk
-            for j, chunk in enumerate(semantic_chunks):
+            for _, chunk in enumerate(semantic_chunks):
                 offset_end = offset_start + len(self.remove_separator_char(chunk))
 
                 start_time = self.get_transcription_segment_of_char_position(
