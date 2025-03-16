@@ -21,6 +21,7 @@ class LlmList(BaseModel):
 class LlmManager(metaclass=Singleton):
     """LlmManager manages language model configurations and operations, including loading models from a configuration
     file and sorting them by capability scores."""
+
     entries: list[LanguageModel]
 
     def __init__(self):

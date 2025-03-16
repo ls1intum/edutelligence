@@ -298,10 +298,12 @@ class CourseChatPipeline(Pipeline):
 
             result = ""
             for paragraph in self.retrieved_paragraphs:
-                lct = (f"Lecture: {paragraph.get(LectureUnitPageChunkSchema.LECTURE_NAME.value)}, Unit:"
-                       f" {paragraph.get(LectureUnitPageChunkSchema.LECTURE_UNIT_NAME.value)}, Page:"
-                       f" {paragraph.get(LectureUnitPageChunkSchema.PAGE_NUMBER.value)}\nContent:\n---"
-                       f"{paragraph.get(LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value)}---\n\n")
+                lct = (
+                    f"Lecture: {paragraph.get(LectureUnitPageChunkSchema.LECTURE_NAME.value)}, Unit:"
+                    f" {paragraph.get(LectureUnitPageChunkSchema.LECTURE_UNIT_NAME.value)}, Page:"
+                    f" {paragraph.get(LectureUnitPageChunkSchema.PAGE_NUMBER.value)}\nContent:\n---"
+                    f"{paragraph.get(LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value)}---\n\n"
+                )
                 result += lct
             return result
 

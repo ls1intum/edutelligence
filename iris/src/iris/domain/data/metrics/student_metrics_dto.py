@@ -15,7 +15,8 @@ from iris.domain.data.metrics.lecture_unit_student_metrics_dto import (
 
 class StudentMetricsDTO(BaseModel):
     """StudentMetricsDTO aggregates various student performance metrics, including exercise, lecture unit, and
-     competency metrics."""
+    competency metrics."""
+
     exercise_metrics: Optional[ExerciseStudentMetricsDTO] = Field(
         None, alias="exerciseMetrics"
     )

@@ -392,8 +392,10 @@ class ExerciseChatAgentPipeline(Pipeline):
 
             result = ""
             for paragraph in self.retrieved_paragraphs:
-                lct = (f"Lecture: , Unit: , Page: {paragraph.get(LectureUnitPageChunkSchema.PAGE_NUMBER.value)}"
-                       f"\nContent:\n---{paragraph.get(LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value)}---\n\n")
+                lct = (
+                    f"Lecture: , Unit: , Page: {paragraph.get(LectureUnitPageChunkSchema.PAGE_NUMBER.value)}"
+                    f"\nContent:\n---{paragraph.get(LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value)}---\n\n"
+                )
                 result += lct
             return result
 

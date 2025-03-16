@@ -55,6 +55,7 @@ class ChatGPTWrapperPipeline(Pipeline):
     handler, and then invokes the callback with the final response. If no valid response is generated, it logs
     detailed error information.
     """
+
     callback: ChatGPTWrapperStatusCallback
     llm: IrisLangchainChatModel
     pipeline: Runnable

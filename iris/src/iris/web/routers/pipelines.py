@@ -77,7 +77,7 @@ def run_exercise_chat_pipeline_worker(
 
 def run_chatgpt_wrapper_pipeline_worker(
     dto: ExerciseChatPipelineExecutionDTO, _variant: str
-): # pylint: disable=invalid-name
+):  # pylint: disable=invalid-name
     try:
         callback = ChatGPTWrapperStatusCallback(
             run_id=dto.settings.authentication_token,
@@ -237,7 +237,7 @@ def run_lecture_chat_pipeline(variant: str, dto: LectureChatPipelineExecutionDTO
 
 def run_competency_extraction_pipeline_worker(
     dto: CompetencyExtractionPipelineExecutionDTO, _variant: str
-): # pylint: disable=invalid-name
+):  # pylint: disable=invalid-name
     try:
         callback = CompetencyExtractionCallback(
             run_id=dto.execution.settings.authentication_token,
@@ -313,7 +313,7 @@ def run_rewriting_pipeline(variant: str, dto: RewritingPipelineExecutionDTO):
 
 def run_inconsistency_check_pipeline_worker(
     dto: InconsistencyCheckPipelineExecutionDTO, _variant: str
-): # pylint: disable=invalid-name
+):  # pylint: disable=invalid-name
     try:
         callback = InconsistencyCheckCallback(
             run_id=dto.execution.settings.authentication_token,

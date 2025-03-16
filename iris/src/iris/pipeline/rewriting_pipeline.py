@@ -30,6 +30,7 @@ class RewritingPipeline(Pipeline):
     It formats the prompt according to the selected variant, processes the rewriting, and then notifies the callback
      when complete.
     """
+
     callback: RewritingCallback
     request_handler: CapabilityRequestHandler
     output_parser: PydanticOutputParser

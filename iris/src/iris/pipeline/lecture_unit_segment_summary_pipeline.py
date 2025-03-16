@@ -40,6 +40,7 @@ class LectureUnitSegmentSummaryPipeline(Pipeline):
     It combines lecture transcriptions and slide text to generate a summary that is then used for further processing or
      storage.
     """
+
     llm: IrisLangchainChatModel
     pipeline: Runnable
     prompt: ChatPromptTemplate

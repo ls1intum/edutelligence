@@ -13,7 +13,8 @@ from iris.llm.request_handler.request_handler_interface import RequestHandler
 
 class BasicRequestHandler(RequestHandler):
     """BasicRequestHandler is responsible for handling language model requests including text completion, chat,
-     embedding, and semantic text splitting. It delegates operations to a language model via LlmManager."""
+    embedding, and semantic text splitting. It delegates operations to a language model via LlmManager.
+    """
 
     model_id: str
     llm_manager: LlmManager | None = None

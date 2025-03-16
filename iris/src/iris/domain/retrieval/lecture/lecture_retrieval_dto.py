@@ -8,6 +8,7 @@ class LectureUnitRetrievalDTO:
 
     Contains course and lecture information along with summaries and identifiers.
     """
+
     uuid: str
     course_id: int
     course_name: str
@@ -28,6 +29,7 @@ class LectureUnitSegmentRetrievalDTO:
 
     Contains details about the course, lecture, unit, and segment summary along with pagination information.
     """
+
     uuid: str
     course_id: int
     course_name: str
@@ -48,6 +50,7 @@ class LectureTranscriptionRetrievalDTO:
 
     Contains transcription timing, textual content, and associated lecture metadata.
     """
+
     uuid: str
     course_id: int
     course_name: str
@@ -72,6 +75,7 @@ class LectureUnitPageChunkRetrievalDTO:
 
     Includes text content of the page and additional metadata about the course and lecture.
     """
+
     uuid: str
     course_id: int
     course_name: str
@@ -93,6 +97,7 @@ class LectureRetrievalDTO:
 
     Aggregates lecture unit segments, transcriptions, and page chunks.
     """
+
     lecture_unit_segments: List[LectureUnitSegmentRetrievalDTO]
     lecture_transcriptions: List[LectureTranscriptionRetrievalDTO]
     lecture_unit_page_chunks: List[LectureUnitPageChunkRetrievalDTO]

@@ -17,8 +17,9 @@ from iris.pipeline.prompts.lecture_unit_summary_prompt import (
 
 class LectureUnitSummaryPipeline(Pipeline):
     """LectureUnitSummaryPipeline summarizes lecture unit segments into a cohesive summary
-        by constructing and invoking a language model pipeline with a custom prompt.
+    by constructing and invoking a language model pipeline with a custom prompt.
     """
+
     llm: IrisLangchainChatModel
     pipeline: Runnable
     prompt: ChatPromptTemplate

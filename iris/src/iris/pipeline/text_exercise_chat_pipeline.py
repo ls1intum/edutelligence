@@ -20,7 +20,8 @@ logger = logging.getLogger(__name__)
 
 class TextExerciseChatPipeline(Pipeline):
     """TextExerciseChatPipeline handles text exercise chat processing by extracting sentiments from user input and
-     generating appropriate responses based on exercise details and conversation context."""
+    generating appropriate responses based on exercise details and conversation context.
+    """
 
     callback: TextExerciseChatCallback
     request_handler: CapabilityRequestHandler

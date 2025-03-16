@@ -19,6 +19,7 @@ class OpenAIEmbeddingModel(EmbeddingModel):
 
     It implements retry logic to handle API errors and supports semantic text splitting.
     """
+
     model: str
     api_key: str
     _client: OpenAIEmbeddings
@@ -42,7 +43,9 @@ class OpenAIEmbeddingModel(EmbeddingModel):
                 logging.exception("OpenAI error on attempt %s", attempt + 1)
                 logging.info("Retrying in %s seconds...", wait_time)
                 time.sleep(wait_time)
-        raise RuntimeError(f"Failed to get embedding from OpenAI after {retries} retries.")
+        raise RuntimeError(
+            f"Failed to get embedding from OpenAI after {retries} retries."
+        )
 
     def split_text_semantically(
         self,
@@ -78,6 +81,7 @@ class AzureOpenAIEmbeddingModel(OpenAIEmbeddingModel):
 
     It sets up the necessary endpoint, deployment, and API version for making embedding requests.
     """
+
     type: Literal["azure_embedding"]
     endpoint: str
     azure_deployment: str

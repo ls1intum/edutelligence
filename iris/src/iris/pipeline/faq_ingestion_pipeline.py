@@ -30,6 +30,7 @@ class FaqIngestionPipeline(AbstractIngestion, Pipeline):
     It deletes old FAQs, processes new FAQ data using the language model pipeline,
     batches the updates, and reports the ingestion status via a callback.
     """
+
     def __init__(
         self,
         client: WeaviateClient,
@@ -68,7 +69,8 @@ class FaqIngestionPipeline(AbstractIngestion, Pipeline):
             self.batch_update(self.dto.faq)
             self.callback.done("Faq Ingestion Finished", tokens=self.tokens)
             logger.info(
-                "Faq ingestion pipeline finished Successfully for faq: %s", self.dto.faq.faq_id
+                "Faq ingestion pipeline finished Successfully for faq: %s",
+                self.dto.faq.faq_id,
             )
             return True
         except Exception as e:

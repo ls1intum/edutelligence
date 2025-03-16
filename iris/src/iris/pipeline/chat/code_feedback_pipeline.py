@@ -64,7 +64,9 @@ class CodeFeedbackPipeline(Pipeline):
         # Load prompt from file
         dirname = os.path.dirname(__file__)
         with open(
-            os.path.join(dirname, "../prompts/code_feedback_prompt.txt"), "r", encoding="utf-8"
+            os.path.join(dirname, "../prompts/code_feedback_prompt.txt"),
+            "r",
+            encoding="utf-8",
         ) as file:
             prompt_str = file.read()
 
@@ -106,10 +108,7 @@ class CodeFeedbackPipeline(Pipeline):
         )
 
         file_list = "\n------------\n".join(
-            [
-                f"{file_name}:\n{code}"
-                for file_name, code in repository.items()
-            ]
+            [f"{file_name}:\n{code}" for file_name, code in repository.items()]
         )
         feedback_list = (
             "\n".join(

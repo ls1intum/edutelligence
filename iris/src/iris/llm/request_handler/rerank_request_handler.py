@@ -11,7 +11,8 @@ from iris.llm.llm_manager import LlmManager
 
 class RerankRequestHandler(RequestHandler):
     """RerankRequestHandler handles document reranking based on a query and a specified content field using a language
-     model. It retrieves a language model from LlmManager and applies a reranking algorithm to reorder documents."""
+    model. It retrieves a language model from LlmManager and applies a reranking algorithm to reorder documents.
+    """
 
     model_id: str
     llm_manager: LlmManager | None = None

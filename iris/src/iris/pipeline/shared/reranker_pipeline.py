@@ -86,8 +86,10 @@ class RerankerPipeline(Pipeline):
         paras = ""
         if paragraphs and isinstance(paragraphs[0], dict):
             for i, paragraph in enumerate(paragraphs):
-                paras += (f"Paragraph {str(i)}:\n"
-                          f"{paragraph.get(LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value, "")}\n")
+                paras += (
+                    f"Paragraph {str(i)}:\n"
+                    f"{paragraph.get(LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value, "")}\n"
+                )
         elif paragraphs and isinstance(paragraphs[0], str):
             for i, paragraph in enumerate(paragraphs):
                 paras += f"Paragraph {str(i)}:\n{paragraph}\n"

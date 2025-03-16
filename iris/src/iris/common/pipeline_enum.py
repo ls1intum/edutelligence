@@ -3,6 +3,7 @@ from enum import Enum
 
 class PipelineEnum(str, Enum):
     """PipelineEnum defines the enumeration of various IRIS pipelines used throughout the application."""
+
     IRIS_CODE_FEEDBACK = "IRIS_CODE_FEEDBACK"
     IRIS_CHAT_COURSE_MESSAGE = "IRIS_CHAT_COURSE_MESSAGE"
     IRIS_CHAT_EXERCISE_MESSAGE = "IRIS_CHAT_EXERCISE_MESSAGE"

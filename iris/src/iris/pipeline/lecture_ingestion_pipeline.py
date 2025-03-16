@@ -51,6 +51,7 @@ def cleanup_temporary_file(file_path):
     except OSError as e:
         logger.error("Failed to remove temporary file %s: %s", file_path, e)
 
+
 def save_pdf(pdf_file_base64):
     """
     Save the pdf file to a temporary file
@@ -62,7 +63,9 @@ def save_pdf(pdf_file_base64):
         try:
             temp_pdf_file.write(binary_data)
         except Exception as e:
-            logger.error("Failed to write to temporary PDF file %s: %s", temp_pdf_file_path, e)
+            logger.error(
+                "Failed to write to temporary PDF file %s: %s", temp_pdf_file_path, e
+            )
             raise
     return temp_pdf_file_path
 
@@ -89,7 +92,8 @@ def create_page_data(
 
 class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
     """LectureUnitPageIngestionPipeline ingests lecture unit pages into the database by chunking lecture PDFs,
-     processing the content, and updating the vector database."""
+    processing the content, and updating the vector database."""
+
     def __init__(
         self,
         client: WeaviateClient,
@@ -163,8 +167,9 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
                 "Lecture Unit Summary Ingestion Finished", tokens=self.tokens
             )
 
-            logger.info("Lecture ingestion pipeline finished Successfully for course %s",
-                        self.dto.lecture_unit.course_name
+            logger.info(
+                "Lecture ingestion pipeline finished Successfully for course %s",
+                self.dto.lecture_unit.course_name,
             )
             return True
         except Exception as e:
@@ -203,7 +208,7 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         lecture_pdf: str,
         lecture_unit_slide_dto: LectureUnitSlideDTO = None,
         base_url: str = None,
-    ): # pylint: disable=arguments-renamed
+    ):  # pylint: disable=arguments-renamed
         """
         Chunk the data from the lecture into smaller pieces
         """

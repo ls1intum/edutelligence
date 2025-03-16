@@ -20,10 +20,11 @@ class ProgrammingLanguage(str, Enum):
 
 class ProgrammingExerciseDTO(BaseModel):
     """Data Transfer Object for representing programming exercises.
-        This DTO includes properties such as the programming language, repositories
-        for templates, solutions, and tests, as well as the problem statement, start and end dates,
-        maximum points, and recent changes (e.g., Git diffs).
-        """
+    This DTO includes properties such as the programming language, repositories
+    for templates, solutions, and tests, as well as the problem statement, start and end dates,
+    maximum points, and recent changes (e.g., Git diffs).
+    """
+
     id: int
     name: str
     programming_language: Optional[str] = Field(

@@ -34,7 +34,11 @@ class SummaryPipeline(Pipeline):
         )
         # Load the prompt from a file
         dirname = os.path.dirname(__file__)
-        with open(os.path.join(dirname, "../prompts/summary_prompt.txt"), "r", encoding="utf-8") as file:
+        with open(
+            os.path.join(dirname, "../prompts/summary_prompt.txt"),
+            "r",
+            encoding="utf-8",
+        ) as file:
             logger.info("Loading summary prompt...")
             self.prompt_str = file.read()
         # Create the prompt

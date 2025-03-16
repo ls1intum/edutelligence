@@ -29,7 +29,8 @@ from iris.vector_database.lecture_unit_segment_schema import (
 
 class LectureUnitSegmentRetrieval(Pipeline):
     """LectureUnitSegmentRetrieval retrieves lecture unit segments based on search queries and returns the matching
-     results."""
+    results."""
+
     def __init__(self, client: WeaviateClient):
         super().__init__(implementation_id="lecture_unit_segment_retrieval_pipeline")
         request_handler = CapabilityRequestHandler(

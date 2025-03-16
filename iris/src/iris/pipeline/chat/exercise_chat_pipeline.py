@@ -397,14 +397,18 @@ class ExerciseChatPipeline(Pipeline):
         Adds the relevant chunks of the lecture to the prompt
         :param retrieved_lecture_chunks: The retrieved lecture chunks
         """
-        txt = ("Next you will find the potentially relevant lecture content to answer the student message. "
-               "Use this context to enrich your response.\n")
+        txt = (
+            "Next you will find the potentially relevant lecture content to answer the student message. "
+            "Use this context to enrich your response.\n"
+        )
 
         for chunk in retrieved_lecture_chunks:
             props = chunk.get("properties", {})
-            lct = (f"Lecture: {props.get(LectureUnitPageChunkSchema.LECTURE_NAME.value)}, Page:"
-                   f" {props.get(LectureUnitPageChunkSchema.PAGE_NUMBER.value)}\nContent:\n---"
-                   f"{props.get(LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value)}---\n\n")
+            lct = (
+                f"Lecture: {props.get(LectureUnitPageChunkSchema.LECTURE_NAME.value)}, Page:"
+                f" {props.get(LectureUnitPageChunkSchema.PAGE_NUMBER.value)}\nContent:\n---"
+                f"{props.get(LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value)}---\n\n"
+            )
             txt += lct
 
         self.prompt += SystemMessagePromptTemplate.from_template(

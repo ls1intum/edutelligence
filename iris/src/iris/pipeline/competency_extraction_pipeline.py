@@ -27,6 +27,7 @@ class CompetencyExtractionPipeline(Pipeline):
     It leverages a language model to generate competency JSON, parses the output using a Pydantic output parser,
     and handles errors during parsing, appending tokens, and final result notification.
     """
+
     callback: CompetencyExtractionCallback
     request_handler: CapabilityRequestHandler
     output_parser: PydanticOutputParser

@@ -200,6 +200,7 @@ def convert_to_iris_message(
 
 class OpenAIChatModel(ChatModel):
     """A chat model implementation that uses the OpenAI API for generating completions."""
+
     model: str
     api_key: str
 
@@ -277,11 +278,14 @@ class OpenAIChatModel(ChatModel):
                 logging.exception("OpenAI error on attempt %s:", attempt + 1)
                 logging.info("Retrying in %s seconds...", wait_time)
                 time.sleep(wait_time)
-        raise RuntimeError(f"Failed to get response from OpenAI after {retries} retries")
+        raise RuntimeError(
+            f"Failed to get response from OpenAI after {retries} retries"
+        )
 
 
 class DirectOpenAIChatModel(OpenAIChatModel):
     """Direct implementation of the OpenAI Chat Model."""
+
     type: Literal["openai_chat"]
 
     def get_client(self) -> OpenAI:
@@ -293,6 +297,7 @@ class DirectOpenAIChatModel(OpenAIChatModel):
 
 class AzureOpenAIChatModel(OpenAIChatModel):
     """Azure OpenAI chat model implementation."""
+
     type: Literal["azure_chat"]
     endpoint: str
     azure_deployment: str

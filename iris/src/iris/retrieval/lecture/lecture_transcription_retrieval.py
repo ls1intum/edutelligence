@@ -29,7 +29,8 @@ from iris.vector_database.lecture_unit_schema import (
 
 class LectureTranscriptionRetrieval(Pipeline):
     """LectureTranscriptionRetrieval retrieves lecture transcription data from the database by applying search filters
-     and processing the transcription segments."""
+    and processing the transcription segments."""
+
     def __init__(self, client: WeaviateClient):
         super().__init__(implementation_id="lecture_transcriptions_retrieval_pipeline")
         request_handler = CapabilityRequestHandler(

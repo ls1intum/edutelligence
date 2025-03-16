@@ -66,11 +66,13 @@ class CitationPipeline(Pipeline):
         """
         formatted_string = ""
         for _, paragraph in enumerate(paragraphs):
-            lct = (f"Lecture: {paragraph.get(LectureUnitPageChunkSchema.LECTURE_NAME.value)},"
-                   f" Unit: {paragraph.get(LectureUnitPageChunkSchema.LECTURE_UNIT_NAME.value)},"
-                   f" Page: {paragraph.get(LectureUnitPageChunkSchema.PAGE_NUMBER.value)},"
-                   f" Link: {paragraph.get(LectureUnitPageChunkSchema.LECTURE_UNIT_LINK.value) or "No link available"},"
-                   f"\nContent:\n---{paragraph.get(LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value)}---\n\n")
+            lct = (
+                f"Lecture: {paragraph.get(LectureUnitPageChunkSchema.LECTURE_NAME.value)},"
+                f" Unit: {paragraph.get(LectureUnitPageChunkSchema.LECTURE_UNIT_NAME.value)},"
+                f" Page: {paragraph.get(LectureUnitPageChunkSchema.PAGE_NUMBER.value)},"
+                f" Link: {paragraph.get(LectureUnitPageChunkSchema.LECTURE_UNIT_LINK.value) or "No link available"},"
+                f"\nContent:\n---{paragraph.get(LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value)}---\n\n"
+            )
             formatted_string += lct
 
         return formatted_string.replace("{", "{{").replace("}", "}}")
@@ -81,12 +83,14 @@ class CitationPipeline(Pipeline):
         """
         formatted_string = ""
         for _, faq in enumerate(faqs):
-            faq = (f"FAQ ID {faq.get(FaqSchema.FAQ_ID.value)},"
-                   f" CourseId {faq.get(FaqSchema.COURSE_ID.value)} ,"
-                   f" FAQ Question title {faq.get(FaqSchema.QUESTION_TITLE.value)} and"
-                   f" FAQ Question Answer {faq.get(FaqSchema.QUESTION_ANSWER.value)} and"
-                   f" FAQ link {base_url}/courses/{faq.get(FaqSchema.COURSE_ID.value)}/faq/?faqId="
-                   f"{faq.get(FaqSchema.FAQ_ID.value)}")
+            faq = (
+                f"FAQ ID {faq.get(FaqSchema.FAQ_ID.value)},"
+                f" CourseId {faq.get(FaqSchema.COURSE_ID.value)} ,"
+                f" FAQ Question title {faq.get(FaqSchema.QUESTION_TITLE.value)} and"
+                f" FAQ Question Answer {faq.get(FaqSchema.QUESTION_ANSWER.value)} and"
+                f" FAQ link {base_url}/courses/{faq.get(FaqSchema.COURSE_ID.value)}/faq/?faqId="
+                f"{faq.get(FaqSchema.FAQ_ID.value)}"
+            )
             formatted_string += faq
 
         return formatted_string.replace("{", "{{").replace("}", "}}")

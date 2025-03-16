@@ -9,7 +9,8 @@ from ...llm.external.model import CompletionModel
 
 class OpenAICompletionModel(CompletionModel):
     """OpenAICompletionModel uses the OpenAI API to generate completions based on a provided prompt and completion
-     arguments."""
+    arguments."""
+
     model: str
     api_key: str
     _client: OpenAI
@@ -37,6 +38,7 @@ class DirectOpenAICompletionModel(OpenAICompletionModel):
 
 class AzureOpenAICompletionModel(OpenAICompletionModel):
     """AzureOpenAICompletionModel configures and utilizes the Azure OpenAI endpoints for generating completions."""
+
     type: Literal["azure_completion"]
     endpoint: str
     azure_deployment: str

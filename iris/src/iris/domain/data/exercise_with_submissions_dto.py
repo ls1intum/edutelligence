@@ -34,7 +34,8 @@ class IncludedInOverallScore(str, Enum):
 
 class ExerciseWithSubmissionsDTO(BaseModel):
     """ExerciseWithSubmissionsDTO represents an exercise along with its associated submissions and key metadata such as
-     type, mode, points, dates, and difficulty level."""
+    type, mode, points, dates, and difficulty level."""
+
     id: int = Field(alias="id")
     url: Optional[str] = Field(alias="url", default=None)
     title: str = Field(alias="title")

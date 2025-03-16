@@ -47,6 +47,7 @@ class TranscriptionIngestionPipeline(Pipeline):
     It deletes existing transcription data, chunks and summarizes the transcription,
     and ingests the processed transcription into the vector database while updating the relevant callbacks.
     """
+
     llm: IrisLangchainChatModel
     pipeline: Runnable
     prompt: ChatPromptTemplate

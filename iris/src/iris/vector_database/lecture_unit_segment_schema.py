@@ -13,7 +13,9 @@ from weaviate.collections.classes.config import (
 from iris.vector_database.lecture_transcription_schema import (
     LectureTranscriptionSchema,
 )
-from iris.vector_database.lecture_unit_page_chunk_schema import LectureUnitPageChunkSchema
+from iris.vector_database.lecture_unit_page_chunk_schema import (
+    LectureUnitPageChunkSchema,
+)
 
 
 class LectureUnitSegmentSchema(Enum):

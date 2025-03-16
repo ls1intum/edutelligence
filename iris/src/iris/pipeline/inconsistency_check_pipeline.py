@@ -27,6 +27,7 @@ class InconsistencyCheckPipeline(Pipeline):
     It invokes a solver pipeline to identify potential inconsistencies, then uses a prettify pipeline to generate a
      summary report.
     """
+
     llm: IrisLangchainChatModel
     callback: InconsistencyCheckCallback
 

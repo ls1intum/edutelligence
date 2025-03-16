@@ -60,6 +60,7 @@ class LectureChatPipeline(Pipeline):
     It uses an IrisLangchainChatModel to generate responses based on a student's question, incorporates chat history and
     relevant lecture content, and returns a final response enriched with citations.
     """
+
     llm: IrisLangchainChatModel
     pipeline: Runnable
     prompt: ChatPromptTemplate

@@ -73,6 +73,7 @@ class LectureRetrieval(Pipeline):
 
     It combines various sources of lecture-related data and formats them into a single DTO for further processing.
     """
+
     def __init__(self, client: WeaviateClient):
         super().__init__(implementation_id="lecture_retrieval_pipeline")
         request_handler = CapabilityRequestHandler(
@@ -226,7 +227,7 @@ class LectureRetrieval(Pipeline):
                 lecture_unit_link=lecture_unit.lecture_unit_link,
                 base_url=lecture_unit.base_url,
                 lecture_unit_summary=lecture_unit.lecture_unit_summary,
-                uuid=lecture_unit.uuid, #TODO: Check if correct, needed to fix lint error
+                uuid=lecture_unit.uuid,  # TODO: Check if correct, needed to fix lint error
             )
 
         elif lecture_id is not None:
@@ -258,7 +259,7 @@ class LectureRetrieval(Pipeline):
                 lecture_unit_summary=lecture_unit[
                     LectureUnitSchema.LECTURE_UNIT_SUMMARY.value
                 ],
-                uuid=lecture_unit.uuid, #TODO: Check if correct, needed to fix lint error
+                uuid=lecture_unit.uuid,  # TODO: Check if correct, needed to fix lint error
             )
 
         else:
