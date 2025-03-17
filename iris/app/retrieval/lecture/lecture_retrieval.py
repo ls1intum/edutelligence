@@ -249,7 +249,7 @@ class LectureRetrieval(Pipeline):
                     LectureUnitSchema.COURSE_DESCRIPTION.value
                 ],
                 course_language=lecture_unit[LectureUnitSchema.COURSE_LANGUAGE.value],
-                lecture_id=lecture_unit[LectureUnitSchema.LECTURE_UNIT_ID.value],
+                lecture_id=lecture_unit[LectureUnitSchema.LECTURE_ID.value],
                 lecture_name=lecture_unit[LectureUnitSchema.LECTURE_UNIT_NAME.value],
                 lecture_unit_id=None,
                 lecture_unit_name=None,

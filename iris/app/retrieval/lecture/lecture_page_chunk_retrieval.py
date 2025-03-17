@@ -122,8 +122,8 @@ class LecturePageChunkRetrieval(Pipeline):
         results = list(unique.values())
 
         page_chunks = [
-            self.generate_retrieval_dtos(chunk.properties, str(chunk.uuid))
-            for chunk in results
+            dto for chunk in results
+            if (dto := self.generate_retrieval_dtos(chunk.properties, str(chunk.uuid))) is not None
         ]
 
         reranked_page_chunks = self.cohere_client.rerank(
@@ -172,7 +172,6 @@ class LecturePageChunkRetrieval(Pipeline):
         return return_value.objects
 
     def generate_retrieval_dtos(self, lecture_page_chunk, uuid):
-        print(lecture_page_chunk)
         lecture_unit_filter = Filter.by_property(
             LectureUnitSchema.COURSE_ID.value
         ).equal(lecture_page_chunk[LectureUnitPageChunkSchema.COURSE_ID.value])

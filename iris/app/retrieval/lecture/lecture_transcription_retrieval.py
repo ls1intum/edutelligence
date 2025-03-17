@@ -75,9 +75,10 @@ class LectureTranscriptionRetrieval(Pipeline):
                 lecture_transcription_segment.properties,
                 str(lecture_transcription_segment.uuid),
             )
-            lecture_transcription_retrieval_dtos.append(
-                lecture_transcription_retrieval_dto
-            )
+            if lecture_transcription_retrieval_dto is not None:
+                lecture_transcription_retrieval_dtos.append(
+                    lecture_transcription_retrieval_dto
+                )
 
         reranked_answers = self.cohere_client.rerank(
             query=student_query,

@@ -51,7 +51,7 @@ def get_lecture_unit_ingestion_state(
             ).equal(lecture_unit_id)
         ),
         limit=1,
-        return_properties=[LectureUnitPageChunkSchema.LECTURE_UNIT_NAME.value],
+        return_properties=[LectureUnitPageChunkSchema.LECTURE_UNIT_ID.value],
     )
 
     if len(result.objects) > 0:
