@@ -1,13 +1,19 @@
-name: Code Coverage
+name: AtlasML Code Coverage
 
 on:
   pull_request:
+    paths:
+      - 'atlas/AtlasMl/**'
+      - '.github/workflows/atlasml_code-coverage.yml'
     branches:
       - main
 
 jobs:
   test:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./atlas/AtlasMl
 
     steps:
       - name: Checkout repository
