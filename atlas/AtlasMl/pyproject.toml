@@ -12,6 +12,8 @@ fastapi = "^0.115.5"
 
 [tool.poetry.group.dev.dependencies]
 uvicorn = "^0.32.1"
+pytest = "^8.3.5"
+pytest-cov = "^6.0.0"
 
 
 [tool.poetry.group.test.dependencies]
