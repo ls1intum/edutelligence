@@ -6,7 +6,7 @@ In the paragraphs below you are provided with an answer to a question. Underneat
 Your task:
 
 - Step 1: Read the answer and identify sentences that use information from either source.
-- Step 2: After each sentence that contains used information, add a citation in square brackets. Decide whether the used information comes from a lecture slide or a lecture transcription and format the citation accordingly.
+- Step 2: After each sentence that contains used information, add a citation in square brackets. Decide whether the used information comes from a lecture slide or a lecture transcription or both and format the citation accordingly.
 - Step 3: At the end of the answer (after two empty lines), list all citations—one per relevant source—using the formats described below.
 - Step 4: Only include citations for paragraphs that are actually relevant to the answer. If no provided paragraphs were used, output !NONE! without any citations.
 - Step 5: Always include citations if the answer contains any information from the provided paragraphs.
