@@ -1,53 +1,52 @@
-In the paragraphs below you are provided with an answer to a question. Underneath the answer you will find the paragraphs that the answer was based on.
-Add citations of the paragraphs to the answer. Cite the paragraphs in brackets after the sentence where the information is used in the answer.
-The paragraphs can either be from a lecture slide in the format: "Lecture: {{}}, Unit: {{}}, Page: {{}}, Link: {{}},\nContent:\n---{{}}---\n\n".
-Or they can be from lecture transcriptions in the format: "Lecture: {{}}, Unit: {{}}, Page: {{}}, Link: {{}}, Start Time: {{}}, End Time: {{}},\nContent:\n---{{}}---\n\n"
-Each source can either be from a lecture slide or from a lecture transcription. Chose the corresponding way to create the transcription. You can mix between citing slides and citing transcriptions
-1. For lecture slides answer like this:
-At the end of the answer, list each source with its corresponding number and provide the Lecture Title, page number, and a clickable link in this format: [1] <a href="URL">"Lecture title", "Lecture unit title", page number</a>.
-If the answer uses multiple pages from the same lecture, list the page numbers at the same line separated by commas in this format :  [1] <a href="URL">"Lecture title", "Lecture unit title", "page number1,number2,number3"</a>.
-Do not include the actual paragraphs, only the citations at the end.
-Only include the citations of the paragraphs that are relevant to the answer.
-If the answer actually does not contain any information from the paragraphs, please do not include any citations and return '!NONE!'.
-But if the answer contains information from the paragraphs, ALWAYS include citations.
+In the paragraphs below you are provided with an answer to a question. Underneath the answer, you will find two sets of source paragraphs:
 
-Here is an example how to rewrite the answer with citations (ONLY ADD CITATION IF THE PROVIDED PARAGRAPHS ARE RELEVANT TO THE ANSWER):
-"
-Lorem ipsum dolor sit amet, consectetur adipiscing elit [1]. Ded do eiusmod tempor incididunt ut labore et dolore magna aliqua [2].
+1. Lecture Slides: Contains information with Lecture Names, Unit Names, Links, and Page Numbers.
+2. Lecture Transcriptions: Contains information with Lecture Names, Unit Names, Page Numbers, Links, start times, and end times.
 
-[1] <a href="https://example.com/lecture1">Lecture 1, Unit A, page 2,3,4</a>.
-[2] <a href="https://example.com/lecture2">Lecture 2, Unit B, page 5,25</a>.
-"
+Your task:
 
-Note: If there is no link available, please do not include the link in the citation. For example, if citation 1 does not have a link, it should look like this:
-[1] "Lecture title", "Lecture unit title", "page number"
-but if citation 2 has a link, it should look like this:
-[2] <a href="URL">"Lecture title", "Lecture unit title", "page number"</a>
+- Step 1: Read the answer and identify sentences that use information from either source.
+- Step 2: After each sentence that contains used information, add a citation in square brackets. Decide whether the used information comes from a lecture slide or a lecture transcription and format the citation accordingly.
+- Step 3: At the end of the answer (after two empty lines), list all citations—one per relevant source—using the formats described below.
+- Step 4: Only include citations for paragraphs that are actually relevant to the answer. If no provided paragraphs were used, output !NONE! without any citations.
+- Step 5: Always include citations if the answer contains any information from the provided paragraphs.
 
-2. For lecture transcriptions answer like this:
+Citation Formats:
 
-Provide the lecture unit slide number of the segment and the start and end timestamps of the paragraph that are relevant and a lecture video link if applicable.
-Here is an example how to rewrite the answer with citations (ONLY ADD CITATION IF THE PROVIDED PARAGRAPHS ARE RELEVANT TO THE ANSWER):
+1. For Lecture Transcriptions:
+   - Format with a link available:
+     [X] <a href="URL">"Lecture title", "Lecture unit title", page number, start time, end time</a>.
+   - If no link is available, do not include a clickable link; simply output the citation text (e.g., "Lecture title", "Lecture unit title", "page number", start time, end time).
+   start and end times should be displayed in the format hh:mm:ss
 
-"Lorem ipsum dolor sit amet, consectetur adipiscing elit [1]. Ded do eiusmod tempor incididunt ut labore et dolore magna aliqua [2].
+2. For Lecture Slides:
+   - Format with a link available:
+     [X] <a href="URL">Lecture title, Lecture unit title, page number(s)</a>.
+   - If multiple pages from the same lecture slide source are used, list the page numbers separated by commas:
+     [X] <a href="URL">Lecture title, Lecture unit title, page number1, page number2, page number3</a>.
+   - If no link is available, output the citation without a clickable link, e.g.,
+     [X] "Lecture title", "Lecture unit title", "page number(s)".
 
+Example:
+
+If the answer is:
+Lorem ipsum dolor sit amet, consectetur adipiscing elit [1]. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua [2].
+
+Then the citation list at the answer end might be:
 [1] <a href="https://example.com/1234?t=12">Slide 6, start at 00:00:12, end at 00:00:15</a>.
-[2] <a href="https://example.com/1234?t=17">Slide 7, start at 00:00:17, end at 00:01:20</a>.
-"
+[2] <a href="https://example.com/1234?t=17">Lecture Title, Unit Title, page 7</a>.
 
-Note: If there is no lecture video link available, please do not include a link in the citation. For example, if a citation does not have a link, it should look like this:
-[1] Slide "slide number", start at "start time in hh:mm:ss", end at "end time in hh:mm:ss"
-but if the citation does have a lecture video link, it should ALWAYS look like this:
-[2] <a href="lecture video link"?t="start time">Slide "slide number", start at "start time in hh:mm:ss", end at "end time in hh:mm:ss"</a>
+Below the answer, the following information is provided:
 
+- Answer without citations:
+  {Answer}
 
-Here are the answer and the paragraphs:
+- Paragraphs with their Lecture Names, Unit Names, Links and Page Numbers for lecture slides:
+  {Paragraphs}
 
-Answer without citations:
-{Answer}
+- Paragraphs with their Lecture Names, Unit Names, Page Numbers, Links, start times and end times for lecture transcriptions:
+  {TranscriptionParagraphs}
 
-Paragraphs with their Lecture Names, Unit Names, Links and Page Numbers:
-{Paragraphs}
-
-If the answer actually does not contain any information from the paragraphs, or there are no paragraphs, please do not include any citations and return '!NONE!'.
-Original answer with citations (ensure two empty lines between the message and the citations):
+Important:
+- If the answer does not contain any information from the provided paragraphs or if there are no paragraphs, output !NONE! without any citations.
+- Ensure there are two empty lines between the rewritten answer (with in-text citations) and the citation list at the end.
