@@ -160,9 +160,9 @@ class LectureUnitSegmentRetrieval(Pipeline):
             ],
             video_unit_name=lecture_unit[LectureUnitSchema.VIDEO_UNIT_NAME.value],
             video_unit_link=lecture_unit[LectureUnitSchema.VIDEO_UNIT_LINK.value],
-            attachment_unit_id=lecture_unit_segment[LectureUnitSchema.ATTACHMENT_UNIT_ID.value],
-            attachment_unit_name=lecture_unit_segment[LectureUnitSchema.ATTACHMENT_UNIT_NAME.value],
-            attachment_unit_link=lecture_unit_segment[LectureUnitSchema.ATTACHMENT_UNIT_LINK.value],
+            attachment_unit_id=lecture_unit_segment[LectureUnitSegmentSchema.ATTACHMENT_UNIT_ID.value],
+            attachment_unit_name=lecture_unit[LectureUnitSchema.ATTACHMENT_UNIT_NAME.value],
+            attachment_unit_link=lecture_unit[LectureUnitSchema.ATTACHMENT_UNIT_LINK.value],
             page_number=lecture_unit_segment[
                 LectureUnitSegmentSchema.PAGE_NUMBER.value
             ],

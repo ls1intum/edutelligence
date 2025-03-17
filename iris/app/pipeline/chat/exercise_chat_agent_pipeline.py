@@ -144,7 +144,7 @@ class ExerciseChatAgentPipeline(Pipeline):
         # Create the pipelines
         self.db = VectorDatabase()
         self.suggestion_pipeline = InteractionSuggestionPipeline(variant="exercise")
-        self.lecture_retriever = LecturePageChunkRetrieval(self.db.client)
+        self.lecture_retriever = LectureRetrieval(self.db.client)
         self.faq_retriever = FaqRetrieval(self.db.client)
         self.reranker_pipeline = RerankerPipeline()
         self.code_feedback_pipeline = CodeFeedbackPipeline()
@@ -384,12 +384,13 @@ class ExerciseChatAgentPipeline(Pipeline):
             Only use this once.
             """
             self.callback.in_progress("Retrieving lecture content ...")
+            print("---lecture content retrieval ...")
             self.lecture_content = self.lecture_retriever(
                 query=query.contents[0].text_content,
                 course_id=dto.course.id,
                 chat_history=chat_history,
                 lecture_id=None,
-                lecture_unit_id=None,
+                video_unit_id=None,
                 base_url=dto.settings.artemis_base_url,
             )
 
@@ -397,7 +398,7 @@ class ExerciseChatAgentPipeline(Pipeline):
             for paragraph in self.lecture_content.lecture_unit_page_chunks:
                 lct = "Lecture: {}, Unit: {}, Page: {}\nContent:\n---{}---\n\n".format(
                     paragraph.lecture_name,
-                    paragraph.lecture_unit_name,
+                    paragraph.attachment_unit_name,
                     paragraph.page_number,
                     paragraph.page_text_content,
                 )
@@ -407,7 +408,7 @@ class ExerciseChatAgentPipeline(Pipeline):
             for paragraph in self.lecture_content.lecture_transcriptions:
                 transcription = "Lecture: {}, Unit: {}, Page: {}\nContent:\n---{}---\n\n".format(
                     paragraph.lecture_name,
-                    paragraph.lecture_unit_name,
+                    paragraph.video_unit_name,
                     paragraph.page_number,
                     paragraph.segment_text,
                 )
@@ -417,7 +418,7 @@ class ExerciseChatAgentPipeline(Pipeline):
             for paragraph in self.lecture_content.lecture_unit_segments:
                 segment = "Lecture: {}, Unit: {}, Page: {}\nContent:\n---{}---\n\n".format(
                     paragraph.lecture_name,
-                    paragraph.lecture_unit_name,
+                    paragraph.attachment_unit_name,
                     paragraph.page_number,
                     paragraph.segment_summary,
                 )
@@ -672,7 +673,7 @@ class ExerciseChatAgentPipeline(Pipeline):
                 "An error occurred while running the course chat pipeline."
             )
 
-    def should_allow_lecture_tool(self, course_id: int) -> bool:
+    def  should_allow_lecture_tool(self, course_id: int) -> bool:
         """
         Checks if there are indexed lectures for the given course
 

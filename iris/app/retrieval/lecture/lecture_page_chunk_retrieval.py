@@ -127,7 +127,7 @@ class LecturePageChunkRetrieval(Pipeline):
         ]
 
         reranked_page_chunks = self.cohere_client.rerank(
-            student_query, page_chunks, top_n_reranked_results, "page_text_content"
+            student_query, page_chunks, top_n_reranked_results, LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value
         )
         return reranked_page_chunks
 
@@ -180,7 +180,7 @@ class LecturePageChunkRetrieval(Pipeline):
             LectureUnitSchema.LECTURE_ID.value
         ).equal(lecture_page_chunk[LectureUnitPageChunkSchema.LECTURE_ID.value])
         lecture_unit_filter &= Filter.by_property(
-            LectureUnitSchema.VIDEO_UNIT_ID.value
+            LectureUnitSchema.ATTACHMENT_UNIT_ID.value
         ).equal(lecture_page_chunk[LectureUnitPageChunkSchema.ATTACHMENT_UNIT_ID.value])
         lecture_unit_filter &= Filter.by_property(
             LectureUnitSchema.BASE_URL.value

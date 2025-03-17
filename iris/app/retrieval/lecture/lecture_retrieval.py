@@ -692,6 +692,8 @@ class LectureRetrieval(Pipeline):
     def get_lecture_transcription_of_lecture_unit(
         self, lecture_unit_segment: LectureUnitSegmentRetrievalDTO
     ):
+        if lecture_unit_segment.video_unit_id is None:
+            return []
         transcription_filter = Filter.by_property(
             LectureTranscriptionSchema.COURSE_ID.value
         ).equal(lecture_unit_segment.course_id)
@@ -745,6 +747,9 @@ class LectureRetrieval(Pipeline):
     def get_lecture_page_chunks_of_lecture_unit(
         self, lecture_unit_segment: LectureUnitSegmentRetrievalDTO
     ):
+        print(lecture_unit_segment)
+        if lecture_unit_segment.attachment_unit_id is None:
+            return []
         page_chunk_filter = Filter.by_property(
             LectureUnitPageChunkSchema.COURSE_ID.value
         ).equal(lecture_unit_segment.course_id)

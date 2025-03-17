@@ -90,7 +90,7 @@ class LectureChatPipeline(Pipeline):
         )
         # Create the pipelines
         self.db = VectorDatabase()
-        self.retriever = LecturePageChunkRetrieval(self.db.client)
+        self.retriever = LectureRetrieval(self.db.client)
         self.pipeline = self.llm | StrOutputParser()
         self.citation_pipeline = CitationPipeline()
         self.tokens = []
@@ -124,7 +124,6 @@ class LectureChatPipeline(Pipeline):
             course_id=dto.course_id,
             chat_history=history,
             lecture_id=dto.lecture_id,
-            lecture_unit_id=dto.lecture_unit_id,
             base_url=dto.settings.artemis_base_url,
         )
         print(f"content retrieved: {self.lecture_content}")

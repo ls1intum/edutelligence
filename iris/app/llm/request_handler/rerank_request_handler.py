@@ -50,6 +50,7 @@ class RerankRequestHandler(RequestHandler):
     def rerank(self, query, documents: [], top_n: int, content_field_name: str):
         if len(documents) == 0:
             return []
+        print(documents)
         mapped_responses = list(
             map(lambda x: getattr(x, content_field_name), documents)
         )

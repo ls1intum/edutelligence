@@ -120,7 +120,7 @@ class CourseChatPipeline(Pipeline):
         self.callback = callback
 
         self.db = VectorDatabase()
-        self.lecture_retriever = LecturePageChunkRetrieval(self.db.client)
+        self.lecture_retriever = LectureRetrieval(self.db.client)
         self.faq_retriever = FaqRetrieval(self.db.client)
         self.suggestion_pipeline = InteractionSuggestionPipeline(variant="course")
         self.citation_pipeline = CitationPipeline()
@@ -295,8 +295,6 @@ class CourseChatPipeline(Pipeline):
                 query=query.contents[0].text_content,
                 course_id=dto.course.id,
                 chat_history=history,
-                lecture_id=None,
-                lecture_unit_id=None,
                 base_url=dto.settings.artemis_base_url,
             )
 
@@ -304,7 +302,7 @@ class CourseChatPipeline(Pipeline):
             for paragraph in self.lecture_content.lecture_unit_page_chunks:
                 lct = "Lecture: {}, Unit: {}, Page: {}\nContent:\n---{}---\n\n".format(
                     paragraph.lecture_name,
-                    paragraph.lecture_unit_name,
+                    paragraph.lecture_id,
                     paragraph.page_number,
                     paragraph.page_text_content,
                 )
@@ -314,7 +312,7 @@ class CourseChatPipeline(Pipeline):
             for paragraph in self.lecture_content.lecture_transcriptions:
                 transcription = "Lecture: {}, Unit: {}, Page: {}\nContent:\n---{}---\n\n".format(
                     paragraph.lecture_name,
-                    paragraph.lecture_unit_name,
+                    paragraph.video_unit_name,
                     paragraph.page_number,
                     paragraph.segment_text,
                 )
@@ -324,7 +322,7 @@ class CourseChatPipeline(Pipeline):
             for paragraph in self.lecture_content.lecture_unit_segments:
                 segment = "Lecture: {}, Unit: {}, Page: {}\nContent:\n---{}---\n\n".format(
                     paragraph.lecture_name,
-                    paragraph.lecture_unit_name,
+                    paragraph.attachment_unit_name,
                     paragraph.page_number,
                     paragraph.segment_summary,
                 )
