@@ -475,6 +475,7 @@ class CourseChatPipeline(Pipeline):
                 if step.get("output", None):
                     out = step["output"]
 
+            print(f"lecturecontent: {self.lecture_content}")
             if self.lecture_content:
                 self.callback.in_progress("Augmenting response ...")
                 out = self.citation_pipeline(

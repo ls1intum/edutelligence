@@ -73,9 +73,9 @@ class CitationPipeline(Pipeline):
         for i, paragraph in enumerate(lecture_retrieval_dto.lecture_unit_page_chunks):
             lct = "Lecture Slide: {}, Unit: {}, Page: {}, Link: {},\nContent:\n---{}---\n\n".format(
                 paragraph.lecture_name,
-                paragraph.attachment_unit_name,
+                paragraph.lecture_unit_name,
                 paragraph.page_number,
-                paragraph.attachment_unit_link
+                paragraph.lecture_unit_link
                 or "No link available",
                 paragraph.page_text_content,
             )
@@ -86,9 +86,9 @@ class CitationPipeline(Pipeline):
         for i, paragraph in enumerate(lecture_retrieval_dto.lecture_transcriptions):
             lct = "Lecture Transcription: {}, Unit: {}, Page: {}, Link: {}, Start Time: {}, End Time: {},\nContent:\n---{}---\n\n".format(
                 paragraph.lecture_name,
-                paragraph.video_unit_name,
+                paragraph.lecture_unit_name,
                 paragraph.page_number,
-                paragraph.video_unit_link
+                paragraph.lecture_unit_link
                 or "No link available",
                 paragraph.segment_start_time,
                 paragraph.segment_end_time,
