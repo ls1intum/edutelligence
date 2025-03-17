@@ -67,8 +67,6 @@ class CitationPipeline(Pipeline):
         Create a formatted string from the data
         """
 
-        print("Lecture string!!!")
-        print(f"retireval: {lecture_retrieval_dto}")
         formatted_string_lecture_page_chunks = ""
         for i, paragraph in enumerate(lecture_retrieval_dto.lecture_unit_page_chunks):
             lct = "Lecture Slide: {}, Unit: {}, Page: {}, Link: {},\nContent:\n---{}---\n\n".format(
@@ -95,9 +93,6 @@ class CitationPipeline(Pipeline):
                 paragraph.segment_text
             )
             formatted_string_lecture_transcriptions += lct
-
-        print(f"Formatted string page chunks: {formatted_string_lecture_page_chunks}")
-        print(f"Formatted string transcriptions: {formatted_string_lecture_transcriptions}")
 
         return formatted_string_lecture_page_chunks.replace("{", "{{").replace("}", "}}"), formatted_string_lecture_transcriptions.replace("{", "{{").replace("}", "}}")
 
@@ -154,7 +149,6 @@ class CitationPipeline(Pipeline):
                 input_variables=["Answer", "Paragraphs"],
             )
             if information_type == InformationType.FAQS:
-                print(f"params: {paras}")
                 response = (self.default_prompt | self.pipeline).invoke(
                     {"Answer": answer, "Paragraphs": paras}
                 )

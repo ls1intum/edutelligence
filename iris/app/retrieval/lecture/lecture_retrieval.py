@@ -161,8 +161,6 @@ class LectureRetrieval(Pipeline):
             unique_page_chunks[page_chunk.uuid] = page_chunk
         lecture_unit_page_chunks = list(unique_page_chunks.values())
 
-        print(f"lecturiotranscriptiones: {lecture_transcriptions}")
-
         lecture_transcriptions = self.cohere_client.rerank(
             query, lecture_transcriptions, top_n=7, content_field_name="segment_text"
         )
@@ -670,15 +668,12 @@ class LectureRetrieval(Pipeline):
             lecture_unit_segments: List[LectureUnitSegmentRetrievalDTO] = (
                 lecture_unit_segments_future.result()
             )
-            print(f"retrievedlecseg {lecture_unit_segments}")
             lecture_transcriptions: List[LectureTranscriptionRetrievalDTO] = (
                 lecture_transcriptions_future.result()
             )
-            print(f"retrievedlecturetrans {lecture_transcriptions}")
             lecture_unit_page_chunks: List[LectureUnitPageChunkRetrievalDTO] = (
                 lecture_unit_page_chunks_future.result()
             )
-            print(f"retrlecpagch {lecture_unit_page_chunks}")
 
         return lecture_unit_segments, lecture_transcriptions, lecture_unit_page_chunks
 

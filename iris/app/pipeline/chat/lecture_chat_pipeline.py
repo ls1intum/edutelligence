@@ -134,7 +134,6 @@ class LectureChatPipeline(Pipeline):
         try:
             response = (self.prompt | self.pipeline).invoke({})
             self._append_tokens(self.llm.tokens, PipelineEnum.IRIS_CHAT_LECTURE_MESSAGE)
-            print(f"conetnet: {self.lecture_content}")
             response_with_citation = self.citation_pipeline(
                 self.lecture_content, response
             )
