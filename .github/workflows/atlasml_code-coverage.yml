@@ -18,6 +18,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 2 # Fetch base branch for comparison
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -30,20 +32,44 @@ jobs:
           pip install poetry
           poetry install
 
-      - name: Run tests with coverage
+      - name: Run tests with coverage on PR branch
         run: |
-          poetry run pytest --cov=atlasml --cov-report=term --cov-report=xml > coverage.txt
+          poetry run pytest --cov=atlasml --cov-report=xml --cov-report=term > coverage_pr.txt
 
-      - name: Extract coverage percentage
+      - name: Store PR branch coverage
         run: |
-          COVERAGE=$(grep -oP 'TOTAL.*\s+\K\d+(?=%)' coverage.txt)
-          echo "COVERAGE=$COVERAGE" >> $GITHUB_ENV
+          PR_COVERAGE=$(grep -oP 'TOTAL.*\s+\K\d+(?=%)' coverage_pr.txt)
+          echo "PR_COVERAGE=$PR_COVERAGE" >> $GITHUB_ENV
+
+      - name: Checkout target branch (main) and run coverage
+        run: |
+          git checkout origin/main
+          poetry run pytest --cov=atlasml --cov-report=xml --cov-report=term > coverage_main.txt
+
+      - name: Store target branch coverage
+        run: |
+          MAIN_COVERAGE=$(grep -oP 'TOTAL.*\s+\K\d+(?=%)' coverage_main.txt)
+          echo "MAIN_COVERAGE=$MAIN_COVERAGE" >> $GITHUB_ENV
+
+      - name: Compare coverage and post PR comment
+        run: |
+          DIFF=$(echo "$PR_COVERAGE - $MAIN_COVERAGE" | bc)
+          if (( $(echo "$DIFF < 0" | bc -l) )); then
+            STATUS="🔴 Decreased by ${DIFF}%"
+          elif (( $(echo "$DIFF > 0" | bc -l) )); then
+            STATUS="🟢 Increased by ${DIFF}%"
+          else
+            STATUS="🟡 No change"
+          fi
+          echo "COVERAGE_DIFF=$STATUS" >> $GITHUB_ENV
 
       - name: Post Coverage Comment
         uses: thollander/actions-comment-pull-request@v2
         with:
           message: |
             ## 📊 Code Coverage Report
-            - **Coverage:** ${{ env.COVERAGE }}%
+            - **PR Coverage:** ${{ env.PR_COVERAGE }}%
+            - **Target Branch Coverage:** ${{ env.MAIN_COVERAGE }}%
+            - **Coverage Change:** ${{ env.COVERAGE_DIFF }}
           comment_tag: code-coverage
           mode: recreate
