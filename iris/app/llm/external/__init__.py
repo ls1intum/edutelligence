@@ -1,5 +1,6 @@
 from typing import Union
 
+from .cohere_client import CohereAzureClient
 from ...llm.external.model import LanguageModel
 from ...llm.external.openai_completion import (
     DirectOpenAICompletionModel,
@@ -20,4 +21,5 @@ AnyLLM = Union[
     DirectOpenAIEmbeddingModel,
     AzureOpenAIEmbeddingModel,
     OllamaModel,
+    CohereAzureClient,
 ]

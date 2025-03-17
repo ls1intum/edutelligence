@@ -1,20 +1,102 @@
 components:
+  responses:
+    UnauthorizedError:
+      content:
+        application/json:
+          schema:
+            properties:
+              detail:
+                type: string
+            type: object
+      description: Authentication failed - API key is missing or invalid
   schemas:
-    HealthCheck:
-      description: Response model to validate and return when performing a health
-        check.
+    ComponentHealth:
+      description: Health status of an individual system component.
       properties:
+        details:
+          nullable: true
+      required:
+      - status
+      title: ComponentHealth
+      type: object
+    HTTPValidationError:
+      properties:
+        detail:
+          items:
+            $ref: '#/components/schemas/ValidationError'
+          title: Detail
+          type: array
+      title: HTTPValidationError
+      type: object
+    HealthCheck:
+      description: Response model for system health information.
+      example:
+        components:
+          system:
+            details:
+              platform: macOS-14.3.1-arm64
+            status: OK
+        status: OK
+        timestamp: '2025-03-06T12:00:00'
+        uptime_seconds: 3600
+        version: 1.0.0
+      properties:
+        components:
+          additionalProperties:
+            $ref: '#/components/schemas/ComponentHealth'
+          description: Status of individual components
+          title: Components
+          type: object
         status:
+          description: Overall system status
           title: Status
           type: string
+        timestamp:
+          description: Time when health check was performed
+          format: date-time
+          title: Timestamp
+          type: string
+        uptime_seconds:
+          description: Application uptime in seconds
+          title: Uptime Seconds
+          type: integer
         version:
+          description: Application version
           title: Version
           type: string
       required:
       - status
       - version
+      - uptime_seconds
       title: HealthCheck
       type: object
+    ValidationError:
+      properties:
+        loc:
+          items:
+            anyOf:
+            - type: string
+            - type: integer
+          title: Location
+          type: array
+        msg:
+          title: Message
+          type: string
+        type:
+          title: Error Type
+          type: string
+      required:
+      - loc
+      - msg
+      - type
+      title: ValidationError
+      type: object
+  securitySchemes:
+    ApiKeyAuth:
+      description: API key authentication
+      in: header
+      name: X-API-Key
+      type: apiKey
 info:
   contact:
     email: felixtj.dietrich@tum.de
@@ -29,12 +111,13 @@ openapi: 3.1.0
 paths:
   /health:
     get:
-      description: "## Perform a Health Check\nEndpoint to perform a healthcheck on.\
-        \ This endpoint can primarily be used Docker\nto ensure a robust container\
-        \ orchestration and management is in place. Other\nservices which rely on\
-        \ proper functioning of the API service will not deploy if this\nendpoint\
-        \ returns any other HTTP status code except 200 (OK).\nReturns:\n    HealthCheck:\
-        \ Returns a JSON response with the health status"
+      description: "## Perform a Health Check\n\nEndpoint to perform a health check\
+        \ on the service. This endpoint can be used by:\n\n- Container orchestrators\
+        \ like Docker or Kubernetes to ensure service health\n- Load balancers to\
+        \ determine if the service should receive traffic\n- Monitoring tools to track\
+        \ service availability\n\nThe endpoint returns information about system health\
+        \ including uptime and version.\n\nReturns:\n    HealthCheck: Health status\
+        \ information"
       operationId: get_health_health_get
       responses:
         '200':
@@ -42,13 +125,39 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HealthCheck'
-          description: Return HTTP Status Code 200 (OK)
+          description: Return HTTP Status Code 200 (OK) with system health information
+      security: []
       summary: Perform a Health Check
+      tags:
+      - healthcheck
+  /health/live:
+    get:
+      description: 'Simple liveness check endpoint that returns 200 OK when the service
+        is running.
+
+        This endpoint is lightweight and can be called frequently by infrastructure.'
+      operationId: get_liveness_health_live_get
+      responses:
+        '200':
+          content:
+            application/json:
+              schema: {}
+          description: Simple liveness check that always returns OK if service is
+            running
+      security: []
+      summary: Liveness Check
       tags:
       - healthcheck
   /run:
     get:
       operationId: run_run_get
+      parameters:
+      - in: query
+        name: query
+        required: true
+        schema:
+          title: Query
+          type: string
       responses:
         '200':
           content:
@@ -57,4 +166,14 @@ paths:
                 title: Response Run Run Get
                 type: string
           description: Successful Response
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
       summary: Run
+security:
+- ApiKeyAuth: []

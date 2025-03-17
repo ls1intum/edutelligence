@@ -1,0 +1,19 @@
+github:
+  - changed-files:
+    - any-glob-to-any-file: .github/**/*
+
+athena:
+  - changed-files:
+      - any-glob-to-any-file: athena/**/*
+
+atlas:
+  - changed-files:
+      - any-glob-to-any-file: atlas/**/*
+
+hyperion:
+  - changed-files:
+      - any-glob-to-any-file: hyperion/**/*
+
+iris:
+  - changed-files:
+      - any-glob-to-any-file: iris/**/*
