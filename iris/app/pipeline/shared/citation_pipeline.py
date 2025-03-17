@@ -69,34 +69,37 @@ class CitationPipeline(Pipeline):
 
         print("Lecture string!!!")
         print(f"retireval: {lecture_retrieval_dto}")
-        formatted_string = ""
+        formatted_string_lecture_page_chunks = ""
         for i, paragraph in enumerate(lecture_retrieval_dto.lecture_unit_page_chunks):
-            lct = "Lecture: {}, Unit: {}, Page: {}, Link: {},\nContent:\n---{}---\n\n".format(
+            lct = "Lecture Slide: {}, Unit: {}, Page: {}, Link: {},\nContent:\n---{}---\n\n".format(
                 paragraph.lecture_name,
-                paragraph.lecture_unit_name,
+                paragraph.attachment_unit_name,
                 paragraph.page_number,
-                paragraph.lecture_unit_link
+                paragraph.attachment_unit_link
                 or "No link available",
                 paragraph.page_text_content,
             )
-            formatted_string += lct
+            formatted_string_lecture_page_chunks += lct
+
+        formatted_string_lecture_transcriptions = ""
 
         for i, paragraph in enumerate(lecture_retrieval_dto.lecture_transcriptions):
-            lct = "Lecture: {}, Unit: {}, Page: {}, Link: {}, Start Time: {}, End Time: {},\nContent:\n---{}---\n\n".format(
+            lct = "Lecture Transcription: {}, Unit: {}, Page: {}, Link: {}, Start Time: {}, End Time: {},\nContent:\n---{}---\n\n".format(
                 paragraph.lecture_name,
-                paragraph.lecture_unit_name,
+                paragraph.video_unit_name,
                 paragraph.page_number,
-                paragraph.lecture_unit_link
+                paragraph.video_unit_link
                 or "No link available",
                 paragraph.segment_start_time,
                 paragraph.segment_end_time,
                 paragraph.segment_text
             )
-            formatted_string += lct
+            formatted_string_lecture_transcriptions += lct
 
-        print(f"Formatted string: {formatted_string}")
+        print(f"Formatted string page chunks: {formatted_string_lecture_page_chunks}")
+        print(f"Formatted string transcriptions: {formatted_string_lecture_transcriptions}")
 
-        return formatted_string.replace("{", "{{").replace("}", "}}")
+        return formatted_string_lecture_page_chunks.replace("{", "{{").replace("}", "}}"), formatted_string_lecture_transcriptions.replace("{", "{{").replace("}", "}}")
 
     def create_formatted_faq_string(self, faqs, base_url):
         """
@@ -130,6 +133,9 @@ class CitationPipeline(Pipeline):
             :return: Selected file content
         """
         paras = ""
+        paragraphs_page_chunks = ""
+        paragraphs_transcriptions = ""
+
 
         print("--------------CITATION PIPELINE CALLED!!! --------------")
 
@@ -139,8 +145,7 @@ class CitationPipeline(Pipeline):
             )
             self.prompt_str = self.faq_prompt_str
         if information_type == InformationType.PARAGRAPHS:
-            paras = self.create_formatted_lecture_string(information)
-            print(f"prarms  2222 : {paras}")
+            paragraphs_page_chunks, paragraphs_transcriptions = self.create_formatted_lecture_string(information)
             self.prompt_str = self.lecture_prompt_str
 
         try:
@@ -148,10 +153,15 @@ class CitationPipeline(Pipeline):
                 template=self.prompt_str,
                 input_variables=["Answer", "Paragraphs"],
             )
-            print(f"params: {paras}")
-            response = (self.default_prompt | self.pipeline).invoke(
-                {"Answer": answer, "Paragraphs": paras}
-            )
+            if information_type == InformationType.FAQS:
+                print(f"params: {paras}")
+                response = (self.default_prompt | self.pipeline).invoke(
+                    {"Answer": answer, "Paragraphs": paras}
+                )
+            else:
+                response = (self.default_prompt | self.pipeline).invoke(
+                    {"Answer": answer, "Paragraphs": paragraphs_page_chunks, "TranscriptionParagraphs": paragraphs_transcriptions}
+                )
             self._append_tokens(self.llm.tokens, PipelineEnum.IRIS_CITATION_PIPELINE)
             if response == "!NONE!":
                 return answer
