@@ -17,4 +17,4 @@ RUN poetry install --only main --no-root
 COPY nebula/src/ ./src
 
 # Specify the command to run on container start
-CMD ["uvicorn", "src.nebula-app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "src.nebula.main:app", "--host", "0.0.0.0", "--port", "8000"]

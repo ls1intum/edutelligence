@@ -5,24 +5,17 @@ description = "An LLM microservice for the learning platform Artemis"
 authors = ["Timor Morrien <timor.morrien@tum.de>", "Patrick Bassner <patrick.bassner@tum.de>"]
 readme = "README.MD"
 packages = [
-    {include = "nebula-module", from = "src"},
-    {include = "nebula-app", from = "src"},
+    {include = "nebula", from = "src"},
 ]
 include = [
-    "src/nebula-module/py.typed",
-    "src/nebula-app/py.typed",
+    "src/nebula/py.typed",
 ]
 
-# Dependencies for the nebula-module
 [tool.poetry.dependencies]
 python = ">=3.12,<4.0.0"
 requests = "2.32.3"
-
-# Dependencies for the nebula-app
-[tool.poetry.group.app.dependencies]
 fastapi = "0.115.5"
 uvicorn = "0.32.0"
-module = {path = "./src/nebula-module", develop = true}
 
 [tool.poetry.group.dev.dependencies]
 mypy = "^1.10.0"
