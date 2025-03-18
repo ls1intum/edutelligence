@@ -131,9 +131,6 @@ class CitationPipeline(Pipeline):
         paragraphs_page_chunks = ""
         paragraphs_transcriptions = ""
 
-
-        print("--------------CITATION PIPELINE CALLED!!! --------------")
-
         if information_type == InformationType.FAQS:
             paras = self.create_formatted_faq_string(
                 information, kwargs.get("base_url")
