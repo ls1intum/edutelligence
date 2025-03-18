@@ -122,8 +122,10 @@ class LecturePageChunkRetrieval(Pipeline):
         results = list(unique.values())
 
         page_chunks = [
-            dto for chunk in results
-            if (dto := self.generate_retrieval_dtos(chunk.properties, str(chunk.uuid))) is not None
+            dto
+            for chunk in results
+            if (dto := self.generate_retrieval_dtos(chunk.properties, str(chunk.uuid)))
+            is not None
         ]
 
         reranked_page_chunks = self.cohere_client.rerank(

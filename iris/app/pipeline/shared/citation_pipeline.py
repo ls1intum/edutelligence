@@ -62,7 +62,9 @@ class CitationPipeline(Pipeline):
     def __str__(self):
         return f"{self.__class__.__name__}(llm={self.llm})"
 
-    def create_formatted_lecture_string(self, lecture_retrieval_dto: LectureRetrievalDTO):
+    def create_formatted_lecture_string(
+        self, lecture_retrieval_dto: LectureRetrievalDTO
+    ):
         """
         Create a formatted string from the data
         """
@@ -73,8 +75,7 @@ class CitationPipeline(Pipeline):
                 paragraph.lecture_name,
                 paragraph.lecture_unit_name,
                 paragraph.page_number,
-                paragraph.lecture_unit_link
-                or "No link available",
+                paragraph.lecture_unit_link or "No link available",
                 paragraph.page_text_content,
             )
             formatted_string_lecture_page_chunks += lct
@@ -86,15 +87,16 @@ class CitationPipeline(Pipeline):
                 paragraph.lecture_name,
                 paragraph.lecture_unit_name,
                 paragraph.page_number,
-                paragraph.lecture_unit_link
-                or "No link available",
+                paragraph.lecture_unit_link or "No link available",
                 paragraph.segment_start_time,
                 paragraph.segment_end_time,
-                paragraph.segment_text
+                paragraph.segment_text,
             )
             formatted_string_lecture_transcriptions += lct
 
-        return formatted_string_lecture_page_chunks.replace("{", "{{").replace("}", "}}"), formatted_string_lecture_transcriptions.replace("{", "{{").replace("}", "}}")
+        return formatted_string_lecture_page_chunks.replace("{", "{{").replace(
+            "}", "}}"
+        ), formatted_string_lecture_transcriptions.replace("{", "{{").replace("}", "}}")
 
     def create_formatted_faq_string(self, faqs, base_url):
         """
@@ -115,7 +117,7 @@ class CitationPipeline(Pipeline):
 
     def __call__(
         self,
-        information,#: #Union[List[dict], List[str]],
+        information,  #: #Union[List[dict], List[str]],
         answer: str,
         information_type: InformationType = InformationType.PARAGRAPHS,
         **kwargs,
@@ -137,7 +139,9 @@ class CitationPipeline(Pipeline):
             )
             self.prompt_str = self.faq_prompt_str
         if information_type == InformationType.PARAGRAPHS:
-            paragraphs_page_chunks, paragraphs_transcriptions = self.create_formatted_lecture_string(information)
+            paragraphs_page_chunks, paragraphs_transcriptions = (
+                self.create_formatted_lecture_string(information)
+            )
             self.prompt_str = self.lecture_prompt_str
 
         try:
@@ -151,7 +155,11 @@ class CitationPipeline(Pipeline):
                 )
             else:
                 response = (self.default_prompt | self.pipeline).invoke(
-                    {"Answer": answer, "Paragraphs": paragraphs_page_chunks, "TranscriptionParagraphs": paragraphs_transcriptions}
+                    {
+                        "Answer": answer,
+                        "Paragraphs": paragraphs_page_chunks,
+                        "TranscriptionParagraphs": paragraphs_transcriptions,
+                    }
                 )
             self._append_tokens(self.llm.tokens, PipelineEnum.IRIS_CITATION_PIPELINE)
             if response == "!NONE!":

@@ -137,7 +137,9 @@ class LectureChatPipeline(Pipeline):
                 self.lecture_content, response
             )
             self.tokens.extend(self.citation_pipeline.tokens)
-            logger.info(f"Response from lecture chat pipeline: {response_with_citation}")
+            logger.info(
+                f"Response from lecture chat pipeline: {response_with_citation}"
+            )
             self.callback.done(
                 "Response created",
                 final_result=response_with_citation,

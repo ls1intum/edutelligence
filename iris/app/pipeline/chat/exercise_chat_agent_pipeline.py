@@ -405,21 +405,25 @@ class ExerciseChatAgentPipeline(Pipeline):
 
             result += "Lecture transcription content:\n"
             for paragraph in self.lecture_content.lecture_transcriptions:
-                transcription = "Lecture: {}, Unit: {}, Page: {}\nContent:\n---{}---\n\n".format(
-                    paragraph.lecture_name,
-                    paragraph.lecture_unit_name,
-                    paragraph.page_number,
-                    paragraph.segment_text,
+                transcription = (
+                    "Lecture: {}, Unit: {}, Page: {}\nContent:\n---{}---\n\n".format(
+                        paragraph.lecture_name,
+                        paragraph.lecture_unit_name,
+                        paragraph.page_number,
+                        paragraph.segment_text,
+                    )
                 )
                 result += transcription
 
             result += "Lecture segment content:\n"
             for paragraph in self.lecture_content.lecture_unit_segments:
-                segment = "Lecture: {}, Unit: {}, Page: {}\nContent:\n---{}---\n\n".format(
-                    paragraph.lecture_name,
-                    paragraph.lecture_unit_name,
-                    paragraph.page_number,
-                    paragraph.segment_summary,
+                segment = (
+                    "Lecture: {}, Unit: {}, Page: {}\nContent:\n---{}---\n\n".format(
+                        paragraph.lecture_name,
+                        paragraph.lecture_unit_name,
+                        paragraph.page_number,
+                        paragraph.segment_summary,
+                    )
                 )
                 result += segment
             return result
@@ -682,9 +686,9 @@ class ExerciseChatAgentPipeline(Pipeline):
         if course_id:
             # Fetch the first object that matches the course ID with the language property
             result = self.db.lecture_units.query.fetch_objects(
-                filters=Filter.by_property(
-                    LectureUnitSchema.COURSE_ID.value
-                ).equal(course_id),
+                filters=Filter.by_property(LectureUnitSchema.COURSE_ID.value).equal(
+                    course_id
+                ),
                 limit=1,
                 return_properties=[LectureUnitSchema.COURSE_NAME.value],
             )
