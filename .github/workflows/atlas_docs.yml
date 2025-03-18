@@ -20,7 +20,7 @@ jobs:
         python-version: "3.10"
     - name: Build documentation
       run: |
-        cd docs
+        cd atlas/docs
         pip install -r requirements.txt
         make html dirhtml
     - uses: actions/upload-artifact@v4
