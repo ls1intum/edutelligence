@@ -2,12 +2,12 @@
 services:
   weaviate:
     command:
-    - --host
-    - 0.0.0.0
-    - --port
-    - '8001'
-    - --scheme
-    - http
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8001"
+      - --scheme
+      - http
     image: cr.weaviate.io/semitechnologies/weaviate:1.25.3
     expose:
       - 8001
