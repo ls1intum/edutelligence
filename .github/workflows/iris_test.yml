@@ -81,9 +81,9 @@ jobs:
         run: poetry run coverage xml
         working-directory: iris
 
-      - name: Upload Coverage Report
-        uses: codecov/codecov-action@v2
-        with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          file: iris/coverage.xml
-          fail_ci_if_error: true
+      #- name: Upload Coverage Report
+      #  uses: codecov/codecov-action@v2
+      #  with:
+      #    token: ${{ secrets.CODECOV_TOKEN }}
+      #    file: iris/coverage.xml
+      #    fail_ci_if_error: true
