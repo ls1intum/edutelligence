@@ -6,9 +6,22 @@ RUN apk update && \
 RUN pip install poetry==2.1.1
 
 WORKDIR /app
-COPY pyproject.toml poetry.lock ./
+
+# Create the proper directory structure
+RUN mkdir -p /app/hyperion /app/shared
+
+# Copy shared library into the right location
+COPY shared/ /app/shared/
+
+# Copy hyperion files
+COPY hyperion/pyproject.toml hyperion/poetry.lock /app/hyperion/
+COPY hyperion/app/ /app/hyperion/app/
+
+# Set working directory to hyperion folder where the poetry config is
+WORKDIR /app/hyperion
+
+# Install dependencies
 RUN poetry install --no-root
 
-COPY app/ ./app
-
-CMD ["poetry", "run",  "fastapi", "run", "app/main.py", "--port", "8000"]
+# Run the app
+CMD ["poetry", "run", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

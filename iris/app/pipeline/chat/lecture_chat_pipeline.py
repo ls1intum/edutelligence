@@ -90,7 +90,7 @@ class LectureChatPipeline(Pipeline):
         )
         # Create the pipelines
         self.db = VectorDatabase()
-        self.retriever = LectureRetrieval(self.db.client)
+        self.retriever = LecturePageChunkRetrieval(self.db.client)
         self.pipeline = self.llm | StrOutputParser()
         self.citation_pipeline = CitationPipeline()
         self.tokens = []

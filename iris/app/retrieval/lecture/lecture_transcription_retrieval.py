@@ -155,7 +155,6 @@ class LectureTranscriptionRetrieval(Pipeline):
         lecture_units = self.lecture_unit_collection.query.fetch_objects(
             filters=lecture_unit_filter
         ).objects
-
         if len(lecture_units) == 0:
             return None
         else:

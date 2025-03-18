@@ -226,7 +226,6 @@ def faq_deletion_webhook(dto: FaqDeletionExecutionDto):
     thread.start()
     return
 
-
 @router.get(
     "/test",
     status_code=status.HTTP_202_ACCEPTED,

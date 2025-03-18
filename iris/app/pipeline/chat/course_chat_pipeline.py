@@ -120,7 +120,7 @@ class CourseChatPipeline(Pipeline):
         self.callback = callback
 
         self.db = VectorDatabase()
-        self.lecture_retriever = LectureRetrieval(self.db.client)
+        self.lecture_retriever = LecturePageChunkRetrieval(self.db.client)
         self.faq_retriever = FaqRetrieval(self.db.client)
         self.suggestion_pipeline = InteractionSuggestionPipeline(variant="course")
         self.citation_pipeline = CitationPipeline()
