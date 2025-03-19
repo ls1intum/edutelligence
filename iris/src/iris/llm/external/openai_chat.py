@@ -228,10 +228,7 @@ class OpenAIChatModel(ChatModel):
 
         for attempt in range(retries):
             try:
-                params = {
-                    "model": self.model,
-                    "messages": messages
-                }
+                params = {"model": self.model, "messages": messages}
 
                 if arguments.temperature is not None:
                     params["temperature"] = arguments.temperature
