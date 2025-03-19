@@ -1,7 +1,8 @@
 from typing import Optional
 
-from app.domain import ChatPipelineExecutionDTO
 from pydantic import Field
+
+from iris.domain import ChatPipelineExecutionDTO
 
 
 class LectureChatPipelineExecutionDTO(ChatPipelineExecutionDTO):

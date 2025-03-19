@@ -89,7 +89,9 @@ class FaqIngestionPipeline(AbstractIngestion, Pipeline):
         Weaviate limitation.
         """
         with batch_update_lock:
-            with self.collection.batch.rate_limit(requests_per_minute=600) as batch:
+            with self.collection.batch.rate_limit(
+                requests_per_minute=600
+            ) as batch:
                 try:
                     embed_chunk = self.llm_embedding.embed(
                         f"{faq.question_title} : {faq.question_answer}"
@@ -129,7 +131,9 @@ class FaqIngestionPipeline(AbstractIngestion, Pipeline):
         try:
             self.collection.data.delete_many(
                 where=Filter.by_property(FaqSchema.FAQ_ID.value).equal(faq_id)
-                & Filter.by_property(FaqSchema.COURSE_ID.value).equal(course_id)
+                & Filter.by_property(FaqSchema.COURSE_ID.value).equal(
+                    course_id
+                )
             )
             logger.info("successfully deleted faq with id %s", faq_id)
             return True

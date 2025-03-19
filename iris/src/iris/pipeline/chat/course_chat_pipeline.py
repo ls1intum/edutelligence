@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import List, Optional, Union
 
 import pytz
-from langchain.agents import create_tool_calling_agent, AgentExecutor
+from langchain.agents import AgentExecutor, create_tool_calling_agent
 from langchain_core.messages import SystemMessage
 from langchain_core.output_parsers import JsonOutputParser
 from langchain_core.prompts import (
@@ -16,47 +16,53 @@ from langchain_core.runnables import Runnable
 from langsmith import traceable
 from weaviate.collections.classes.filters import Filter
 
-from .interaction_suggestion_pipeline import (
-    InteractionSuggestionPipeline,
+from ...common.message_converters import (
+    convert_iris_message_to_langchain_message,
 )
-from .lecture_chat_pipeline import LectureChatPipeline
-from ..shared.citation_pipeline import CitationPipeline, InformationType
-from ..shared.utils import generate_structured_tools_from_functions
-from ...common.message_converters import convert_iris_message_to_langchain_message
+from ...common.pipeline_enum import PipelineEnum
 from ...common.pyris_message import PyrisMessage
-from ...domain.data.metrics.competency_jol_dto import CompetencyJolDTO
-from ...domain.retrieval.lecture.lecture_retrieval_dto import LectureRetrievalDTO
-from ...llm import CapabilityRequestHandler, RequirementList
-from ..prompts.iris_course_chat_prompts import (
-    tell_iris_initial_system_prompt,
-    tell_begin_agent_prompt,
-    tell_chat_history_exists_prompt,
-    tell_no_chat_history_prompt,
-    tell_begin_agent_jol_prompt,
-)
-from ..prompts.iris_course_chat_prompts_elicit import (
-    elicit_iris_initial_system_prompt,
-    elicit_begin_agent_prompt,
-    elicit_chat_history_exists_prompt,
-    elicit_no_chat_history_prompt,
-    elicit_begin_agent_jol_prompt,
-)
 from ...domain import CourseChatPipelineExecutionDTO
-from app.common.PipelineEnum import PipelineEnum
+from ...domain.data.metrics.competency_jol_dto import CompetencyJolDTO
+from ...domain.retrieval.lecture.lecture_retrieval_dto import (
+    LectureRetrievalDTO,
+)
+from ...llm import (
+    CapabilityRequestHandler,
+    CompletionArguments,
+    RequirementList,
+)
+from ...llm.langchain import IrisLangchainChatModel
 from ...retrieval.faq_retrieval import FaqRetrieval
-from ...retrieval.faq_retrieval_utils import should_allow_faq_tool, format_faqs
-from app.retrieval.lecture.lecture_page_chunk_retrieval import LecturePageChunkRetrieval
-from ...retrieval.lecture.lecture_retrieval import LectureRetrieval
+from ...retrieval.faq_retrieval_utils import format_faqs, should_allow_faq_tool
+from ...retrieval.lecture.lecture_page_chunk_retrieval import (
+    LecturePageChunkRetrieval,
+)
 from ...vector_database.database import VectorDatabase
-from ...vector_database.lecture_unit_page_chunk_schema import LectureUnitPageChunkSchema
 from ...vector_database.lecture_unit_schema import LectureUnitSchema
 from ...web.status.status_update import (
     CourseChatStatusCallback,
 )
-from ...llm import CompletionArguments
-from ...llm.langchain import IrisLangchainChatModel
-
 from ..pipeline import Pipeline
+from ..prompts.iris_course_chat_prompts import (
+    tell_begin_agent_jol_prompt,
+    tell_begin_agent_prompt,
+    tell_chat_history_exists_prompt,
+    tell_iris_initial_system_prompt,
+    tell_no_chat_history_prompt,
+)
+from ..prompts.iris_course_chat_prompts_elicit import (
+    elicit_begin_agent_jol_prompt,
+    elicit_begin_agent_prompt,
+    elicit_chat_history_exists_prompt,
+    elicit_iris_initial_system_prompt,
+    elicit_no_chat_history_prompt,
+)
+from ..shared.citation_pipeline import CitationPipeline, InformationType
+from ..shared.utils import generate_structured_tools_from_functions
+from .interaction_suggestion_pipeline import (
+    InteractionSuggestionPipeline,
+)
+from .lecture_chat_pipeline import LectureChatPipeline
 
 logger = logging.getLogger(__name__)
 
@@ -122,7 +128,9 @@ class CourseChatPipeline(Pipeline):
         self.db = VectorDatabase()
         self.lecture_retriever = LecturePageChunkRetrieval(self.db.client)
         self.faq_retriever = FaqRetrieval(self.db.client)
-        self.suggestion_pipeline = InteractionSuggestionPipeline(variant="course")
+        self.suggestion_pipeline = InteractionSuggestionPipeline(
+            variant="course"
+        )
         self.citation_pipeline = CitationPipeline()
 
         # Create the pipeline
@@ -163,7 +171,9 @@ class CourseChatPipeline(Pipeline):
             for exercise in dto.course.exercises:
                 exercise_dict = exercise.model_dump()
                 exercise_dict["due_date_over"] = (
-                    exercise.due_date < current_time if exercise.due_date else None
+                    exercise.due_date < current_time
+                    if exercise.due_date
+                    else None
                 )
                 exercises.append(exercise_dict)
             return exercises
@@ -221,12 +231,17 @@ class CourseChatPipeline(Pipeline):
                 return "No data available!! Do not requery."
             metrics = dto.metrics.exercise_metrics
             if metrics.average_score and any(
-                exercise_id in metrics.average_score for exercise_id in exercise_ids
+                exercise_id in metrics.average_score
+                for exercise_id in exercise_ids
             ):
                 return {
                     exercise_id: {
-                        "global_average_score": metrics.average_score[exercise_id],
-                        "score_of_student": metrics.score.get(exercise_id, None),
+                        "global_average_score": metrics.average_score[
+                            exercise_id
+                        ],
+                        "score_of_student": metrics.score.get(
+                            exercise_id, None
+                        ),
                         "global_average_latest_submission": metrics.average_latest_submission.get(
                             exercise_id, None
                         ),
@@ -262,7 +277,9 @@ class CourseChatPipeline(Pipeline):
             competency_metrics = dto.metrics.competency_metrics
             return [
                 {
-                    "info": competency_metrics.competency_information.get(comp, None),
+                    "info": competency_metrics.competency_information.get(
+                        comp, None
+                    ),
                     "exercise_ids": competency_metrics.exercises.get(comp, []),
                     "progress": competency_metrics.progress.get(comp, 0),
                     "mastery": get_mastery(
@@ -302,37 +319,25 @@ class CourseChatPipeline(Pipeline):
 
             result = "Lecture slide content:\n"
             for paragraph in self.lecture_content.lecture_unit_page_chunks:
-                lct = "Lecture: {}, Unit: {}, Page: {}\nContent:\n---{}---\n\n".format(
-                    paragraph.lecture_name,
-                    paragraph.lecture_unit_name,
-                    paragraph.page_number,
-                    paragraph.page_text_content,
+                result += (
+                    f"Lecture: {paragraph.lecture_name}, Unit: {paragraph.lecture_unit_name}, "
+                    f"Page: {paragraph.page_number}\nContent:\n---{paragraph.page_text_content}---\n\n"
                 )
-                result += lct
 
             result += "Lecture transcription content:\n"
             for paragraph in self.lecture_content.lecture_transcriptions:
-                transcription = (
-                    "Lecture: {}, Unit: {}, Page: {}\nContent:\n---{}---\n\n".format(
-                        paragraph.lecture_name,
-                        paragraph.lecture_unit_name,
-                        paragraph.page_number,
-                        paragraph.segment_text,
-                    )
+                result += (
+                    f"Lecture: {paragraph.lecture_name}, Unit: {paragraph.lecture_unit_name}, "
+                    f"Page: {paragraph.page_number}\nContent:\n---{paragraph.segment_text}---\n\n"
                 )
-                result += transcription
 
             result += "Lecture segment content:\n"
             for paragraph in self.lecture_content.lecture_unit_segments:
-                segment = (
-                    "Lecture: {}, Unit: {}, Page: {}\nContent:\n---{}---\n\n".format(
-                        paragraph.lecture_name,
-                        paragraph.lecture_unit_name,
-                        paragraph.page_number,
-                        paragraph.segment_summary,
-                    )
+                result += (
+                    f"Lecture: {paragraph.lecture_name}, Unit: {paragraph.lecture_unit_name}, "
+                    f"Page: {paragraph.page_number}\nContent:\n---{paragraph.segment_summary}---\n\n"
                 )
-                result += segment
+
             return result
 
         def faq_content_retrieval() -> str:
@@ -387,8 +392,10 @@ class CourseChatPipeline(Pipeline):
             )
 
             if self.event == "jol":
-                event_payload = CompetencyJolDTO.model_validate(dto.event_payload.event)
-                logger.debug(f"Event Payload: {event_payload}")
+                event_payload = CompetencyJolDTO.model_validate(
+                    dto.event_payload.event
+                )
+                logger.debug("Event Payload: %s", event_payload)
                 comp = next(
                     (
                         c
@@ -412,11 +419,15 @@ class CourseChatPipeline(Pipeline):
                 }
             else:
                 agent_prompt = (
-                    begin_agent_prompt if query is not None else no_chat_history_prompt
+                    begin_agent_prompt
+                    if query is not None
+                    else no_chat_history_prompt
                 )
                 params = {
                     "course_name": (
-                        dto.course.name if dto.course else "<Unknown course name>"
+                        dto.course.name
+                        if dto.course
+                        else "<Unknown course name>"
                     ),
                 }
 
@@ -443,7 +454,10 @@ class CourseChatPipeline(Pipeline):
                 self.prompt = ChatPromptTemplate.from_messages(
                     [
                         SystemMessage(
-                            initial_prompt_with_date + "\n" + agent_prompt + "\n"
+                            initial_prompt_with_date
+                            + "\n"
+                            + agent_prompt
+                            + "\n"
                         ),
                         ("placeholder", "{agent_scratchpad}"),
                     ]
@@ -467,7 +481,9 @@ class CourseChatPipeline(Pipeline):
             agent = create_tool_calling_agent(
                 llm=self.llm_big, tools=tools, prompt=self.prompt
             )
-            agent_executor = AgentExecutor(agent=agent, tools=tools, verbose=False)
+            agent_executor = AgentExecutor(
+                agent=agent, tools=tools, verbose=False
+            )
 
             out = None
             self.callback.in_progress()
@@ -494,7 +510,9 @@ class CourseChatPipeline(Pipeline):
                     InformationType.FAQS,
                     base_url=dto.settings.artemis_base_url,
                 )
-            self.callback.done("Response created", final_result=out, tokens=self.tokens)
+            self.callback.done(
+                "Response created", final_result=out, tokens=self.tokens
+            )
 
             # try:
             #     self.callback.skip("Skipping suggestion generation.")
@@ -518,7 +536,8 @@ class CourseChatPipeline(Pipeline):
             #     self.callback.error("Generating interaction suggestions failed.")
         except Exception as e:
             logger.error(
-                "An error occurred while running the course chat pipeline", exc_info=e
+                "An error occurred while running the course chat pipeline",
+                exc_info=e,
             )
             traceback.print_exc()
             self.callback.error(
@@ -536,9 +555,9 @@ class CourseChatPipeline(Pipeline):
         if course_id:
             # Fetch the first object that matches the course ID with the language property
             result = self.db.lecture_units.query.fetch_objects(
-                filters=Filter.by_property(LectureUnitSchema.COURSE_ID.value).equal(
-                    course_id
-                ),
+                filters=Filter.by_property(
+                    LectureUnitSchema.COURSE_ID.value
+                ).equal(course_id),
                 limit=1,
                 return_properties=[LectureUnitSchema.COURSE_NAME.value],
             )

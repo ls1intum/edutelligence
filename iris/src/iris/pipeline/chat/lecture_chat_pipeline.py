@@ -9,25 +9,28 @@ from langchain_core.prompts import (
 from langchain_core.runnables import Runnable
 from langsmith import traceable
 
-from ..shared.citation_pipeline import CitationPipeline
-from ...common.message_converters import convert_iris_message_to_langchain_message
+from ...common.message_converters import (
+    convert_iris_message_to_langchain_message,
+)
+from ...common.pipeline_enum import PipelineEnum
 from ...common.pyris_message import PyrisMessage
 from ...domain.chat.lecture_chat.lecture_chat_pipeline_execution_dto import (
     LectureChatPipelineExecutionDTO,
 )
-from ...domain.retrieval.lecture.lecture_retrieval_dto import LectureRetrievalDTO
-from ...llm import CapabilityRequestHandler, RequirementList
-from app.common.PipelineEnum import PipelineEnum
-from app.retrieval.lecture.lecture_page_chunk_retrieval import LecturePageChunkRetrieval
+from ...domain.retrieval.lecture.lecture_retrieval_dto import (
+    LectureRetrievalDTO,
+)
+from ...llm import (
+    CapabilityRequestHandler,
+    CompletionArguments,
+    RequirementList,
+)
+from ...llm.langchain import IrisLangchainChatModel
 from ...retrieval.lecture.lecture_retrieval import LectureRetrieval
 from ...vector_database.database import VectorDatabase
-from ...vector_database.lecture_unit_page_chunk_schema import LectureUnitPageChunkSchema
-
-from ...llm import CompletionArguments
-from ...llm.langchain import IrisLangchainChatModel
-
-from ..pipeline import Pipeline
 from ...web.status.status_update import LectureChatCallback
+from ..pipeline import Pipeline
+from ..shared.citation_pipeline import CitationPipeline
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +62,12 @@ def lecture_initial_prompt():
 
 
 class LectureChatPipeline(Pipeline):
+    """LectureChatPipeline orchestrates the interaction for lecture-based chat queries.
+
+    It uses an IrisLangchainChatModel to generate responses based on a student's question, incorporates chat history and
+    relevant lecture content, and returns a final response enriched with citations.
+    """
+
     llm: IrisLangchainChatModel
     pipeline: Runnable
     prompt: ChatPromptTemplate
@@ -132,13 +141,16 @@ class LectureChatPipeline(Pipeline):
         self.prompt = ChatPromptTemplate.from_messages(prompt_val)
         try:
             response = (self.prompt | self.pipeline).invoke({})
-            self._append_tokens(self.llm.tokens, PipelineEnum.IRIS_CHAT_LECTURE_MESSAGE)
+            self._append_tokens(
+                self.llm.tokens, PipelineEnum.IRIS_CHAT_LECTURE_MESSAGE
+            )
             response_with_citation = self.citation_pipeline(
                 self.lecture_content, response
             )
             self.tokens.extend(self.citation_pipeline.tokens)
             logger.info(
-                f"Response from lecture chat pipeline: {response_with_citation}"
+                "Response from lecture chat pipeline: %s",
+                response_with_citation,
             )
             self.callback.done(
                 "Response created",
@@ -175,7 +187,9 @@ class LectureChatPipeline(Pipeline):
             )
         self.prompt += convert_iris_message_to_langchain_message(user_question)
 
-    def _add_lecture_content_to_prompt(self, lecture_content: LectureRetrievalDTO):
+    def _add_lecture_content_to_prompt(
+        self, lecture_content: LectureRetrievalDTO
+    ):
         """
         Adds the relevant chunks of the lecture to the prompt
         :param lecture_content: The retrieved lecture parts
@@ -185,28 +199,41 @@ class LectureChatPipeline(Pipeline):
         self.prompt += SystemMessagePromptTemplate.from_template(
             "Next you will find the relevant lecture slide content:\n"
         )
-        for i, chunk in enumerate(lecture_content.lecture_unit_page_chunks):
+        for chunk in lecture_content.lecture_unit_page_chunks:
             text_content_msg = f" \n {chunk.page_text_content} \n"
-            text_content_msg = text_content_msg.replace("{", "{{").replace("}", "}}")
-            self.prompt += SystemMessagePromptTemplate.from_template(text_content_msg)
+            text_content_msg = text_content_msg.replace("{", "{{").replace(
+                "}", "}}"
+            )
+            self.prompt += SystemMessagePromptTemplate.from_template(
+                text_content_msg
+            )
 
         # Transcription content
         self.prompt += SystemMessagePromptTemplate.from_template(
             "Next you will find the relevant lecture transcription content:\n"
         )
-        for i, chunk in enumerate(lecture_content.lecture_transcriptions):
+        for _, chunk in enumerate(lecture_content.lecture_transcriptions):
             text_content_msg = f" \n {chunk.segment_text} \n"
-            text_content_msg = text_content_msg.replace("{", "{{").replace("}", "}}")
-            self.prompt += SystemMessagePromptTemplate.from_template(text_content_msg)
+            text_content_msg = text_content_msg.replace("{", "{{").replace(
+                "}", "}}"
+            )
+            self.prompt += SystemMessagePromptTemplate.from_template(
+                text_content_msg
+            )
 
         # Segment summaries
         self.prompt += SystemMessagePromptTemplate.from_template(
-            "Next you will find the relevant lecture chunks which are summaries of one lecture slide combined with the corresponding lecture transcription:\n"
+            """Next you will find the relevant lecture chunks which are summaries of one lecture slide combined with the
+            corresponding lecture transcription:\n"""
         )
-        for i, chunk in enumerate(lecture_content.lecture_unit_segments):
+        for chunk in lecture_content.lecture_unit_segments:
             text_content_msg = f" \n {chunk.segment_summary} \n"
-            text_content_msg = text_content_msg.replace("{", "{{").replace("}", "}}")
-            self.prompt += SystemMessagePromptTemplate.from_template(text_content_msg)
+            text_content_msg = text_content_msg.replace("{", "{{").replace(
+                "}", "}}"
+            )
+            self.prompt += SystemMessagePromptTemplate.from_template(
+                text_content_msg
+            )
 
         self.prompt += SystemMessagePromptTemplate.from_template(
             "USE ONLY THE CONTENT YOU NEED TO ANSWER THE QUESTION:\n"

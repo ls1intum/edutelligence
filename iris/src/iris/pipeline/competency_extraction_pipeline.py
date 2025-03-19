@@ -13,7 +13,11 @@ from iris.domain import (
 )
 from iris.domain.data.competency_dto import Competency
 from iris.domain.data.text_message_content_dto import TextMessageContentDTO
-from iris.llm import CapabilityRequestHandler, CompletionArguments, RequirementList
+from iris.llm import (
+    CapabilityRequestHandler,
+    CompletionArguments,
+    RequirementList,
+)
 from iris.pipeline import Pipeline
 from iris.pipeline.prompts.competency_extraction import system_prompt
 from iris.web.status.status_update import CompetencyExtractionCallback
@@ -32,7 +36,9 @@ class CompetencyExtractionPipeline(Pipeline):
     request_handler: CapabilityRequestHandler
     output_parser: PydanticOutputParser
 
-    def __init__(self, callback: Optional[CompetencyExtractionCallback] = None):
+    def __init__(
+        self, callback: Optional[CompetencyExtractionCallback] = None
+    ):
         super().__init__(
             implementation_id="competency_extraction_pipeline_reference_impl"
         )
@@ -108,4 +114,6 @@ class CompetencyExtractionPipeline(Pipeline):
                 continue
             logger.debug("Generated competency: %s", competency)
             generated_competencies.append(competency)
-        self.callback.done(final_result=generated_competencies, tokens=self.tokens)
+        self.callback.done(
+            final_result=generated_competencies, tokens=self.tokens
+        )

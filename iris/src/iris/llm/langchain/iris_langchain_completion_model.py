@@ -29,7 +29,9 @@ class IrisLangchainCompletionModel(BaseLLM):
         if self.max_tokens:
             args.max_tokens = self.max_tokens
         for prompt in prompts:
-            completion = self.request_handler.complete(prompt=prompt, arguments=args)
+            completion = self.request_handler.complete(
+                prompt=prompt, arguments=args
+            )
             generations.append([Generation(text=completion.choices[0].text)])
         return LLMResult(generations=generations)
 

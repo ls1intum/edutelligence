@@ -14,7 +14,11 @@ from iris.common.token_usage_dto import TokenUsageDTO
 from ...common.pyris_message import PyrisMessage
 from ...domain.data.build_log_entry import BuildLogEntryDTO
 from ...domain.data.feedback_dto import FeedbackDTO
-from ...llm import CapabilityRequestHandler, CompletionArguments, RequirementList
+from ...llm import (
+    CapabilityRequestHandler,
+    CompletionArguments,
+    RequirementList,
+)
 from ...llm.langchain import IrisLangchainChatModel
 from ...pipeline import Pipeline
 from ...web.status.status_update import StatusCallback
@@ -45,7 +49,9 @@ class CodeFeedbackPipeline(Pipeline):
     tokens: TokenUsageDTO
 
     def __init__(self, callback: Optional[StatusCallback] = None):
-        super().__init__(implementation_id="code_feedback_pipeline_reference_impl")
+        super().__init__(
+            implementation_id="code_feedback_pipeline_reference_impl"
+        )
         request_handler = CapabilityRequestHandler(
             requirements=RequirementList(
                 gpt_version_equivalent=4.5,
@@ -102,7 +108,9 @@ class CodeFeedbackPipeline(Pipeline):
             if not build_failed
             else (
                 "\n".join(
-                    str(log) for log in build_logs if "~~~~~~~~~" not in log.message
+                    str(log)
+                    for log in build_logs
+                    if "~~~~~~~~~" not in log.message
                 )
             )
         )

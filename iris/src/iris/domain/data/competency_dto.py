@@ -20,9 +20,13 @@ class CompetencyDTO(BaseModel):
     title: Optional[str] = None
     description: Optional[str] = None
     taxonomy: Optional[CompetencyTaxonomy] = None
-    soft_due_date: Optional[datetime] = Field(default=None, alias="softDueDate")
+    soft_due_date: Optional[datetime] = Field(
+        default=None, alias="softDueDate"
+    )
     optional: Optional[bool] = None
-    exercise_list: Optional[List[int]] = Field(default=[], alias="exerciseList")
+    exercise_list: Optional[List[int]] = Field(
+        default=[], alias="exerciseList"
+    )
 
 
 class Competency(BaseModel):
@@ -49,7 +53,9 @@ class Competency(BaseModel):
         return field
 
     @validator("taxonomy")
-    def validate_selected_taxonomy(cls, field):  # pylint: disable=no-self-argument
+    def validate_selected_taxonomy(
+        cls, field
+    ):  # pylint: disable=no-self-argument
         """Validate the selected taxonomy."""
         if field not in CompetencyTaxonomy.__members__:
             raise ValueError(f"Invalid taxonomy: {field}")

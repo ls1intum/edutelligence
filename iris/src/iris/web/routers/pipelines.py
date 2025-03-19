@@ -31,7 +31,9 @@ from iris.pipeline.chat_gpt_wrapper_pipeline import ChatGPTWrapperPipeline
 from iris.pipeline.competency_extraction_pipeline import (
     CompetencyExtractionPipeline,
 )
-from iris.pipeline.inconsistency_check_pipeline import InconsistencyCheckPipeline
+from iris.pipeline.inconsistency_check_pipeline import (
+    InconsistencyCheckPipeline,
+)
 from iris.pipeline.rewriting_pipeline import RewritingPipeline
 from iris.pipeline.text_exercise_chat_pipeline import TextExerciseChatPipeline
 from iris.web.status.status_update import (
@@ -50,7 +52,9 @@ logger = logging.getLogger(__name__)
 
 
 def run_exercise_chat_pipeline_worker(
-    dto: ExerciseChatPipelineExecutionDTO, variant: str, event: str | None = None
+    dto: ExerciseChatPipelineExecutionDTO,
+    variant: str,
+    event: str | None = None,
 ):
     try:
         callback = ExerciseChatStatusCallback(
@@ -113,10 +117,13 @@ def run_exercise_chat_pipeline(
     ),
 ):
     if variant == "chat-gpt-wrapper":
-        thread = Thread(target=run_chatgpt_wrapper_pipeline_worker, args=(dto, variant))
+        thread = Thread(
+            target=run_chatgpt_wrapper_pipeline_worker, args=(dto, variant)
+        )
     else:
         thread = Thread(
-            target=run_exercise_chat_pipeline_worker, args=(dto, variant, event)
+            target=run_exercise_chat_pipeline_worker,
+            args=(dto, variant, event),
         )
     thread.start()
 
@@ -128,7 +135,9 @@ def run_course_chat_pipeline_worker(dto, variant, event):
             base_url=dto.settings.artemis_base_url,
             initial_stages=dto.initial_stages,
         )
-        pipeline = CourseChatPipeline(callback=callback, variant=variant, event=event)
+        pipeline = CourseChatPipeline(
+            callback=callback, variant=variant, event=event
+        )
     except Exception as e:
         logger.error("Error preparing exercise chat pipeline: %s", e)
         logger.error(traceback.format_exc())
@@ -155,7 +164,9 @@ def run_course_chat_pipeline(
         description="Course Chat Pipeline Execution DTO"
     ),
 ):
-    thread = Thread(target=run_course_chat_pipeline_worker, args=(dto, variant, event))
+    thread = Thread(
+        target=run_course_chat_pipeline_worker, args=(dto, variant, event)
+    )
     thread.start()
 
 
@@ -221,7 +232,9 @@ def run_lecture_chat_pipeline_worker(dto, variant):
 def run_text_exercise_chat_pipeline(
     variant: str, dto: TextExerciseChatPipelineExecutionDTO
 ):
-    thread = Thread(target=run_text_exercise_chat_pipeline_worker, args=(dto, variant))
+    thread = Thread(
+        target=run_text_exercise_chat_pipeline_worker, args=(dto, variant)
+    )
     thread.start()
 
 
@@ -230,8 +243,12 @@ def run_text_exercise_chat_pipeline(
     status_code=status.HTTP_202_ACCEPTED,
     dependencies=[Depends(TokenValidator())],
 )
-def run_lecture_chat_pipeline(variant: str, dto: LectureChatPipelineExecutionDTO):
-    thread = Thread(target=run_lecture_chat_pipeline_worker, args=(dto, variant))
+def run_lecture_chat_pipeline(
+    variant: str, dto: LectureChatPipelineExecutionDTO
+):
+    thread = Thread(
+        target=run_lecture_chat_pipeline_worker, args=(dto, variant)
+    )
     thread.start()
 
 
@@ -273,7 +290,9 @@ def run_competency_extraction_pipeline(
     thread.start()
 
 
-def run_rewriting_pipeline_worker(dto: RewritingPipelineExecutionDTO, variant: str):
+def run_rewriting_pipeline_worker(
+    dto: RewritingPipelineExecutionDTO, variant: str
+):
     try:
         callback = RewritingCallback(
             run_id=dto.execution.settings.authentication_token,
@@ -282,7 +301,9 @@ def run_rewriting_pipeline_worker(dto: RewritingPipelineExecutionDTO, variant: s
         )
         match variant:
             case "faq" | "problem_statement":
-                pipeline = RewritingPipeline(callback=callback, variant=variant)
+                pipeline = RewritingPipeline(
+                    callback=callback, variant=variant
+                )
             case _:
                 raise ValueError(f"Unknown variant: {variant}")
     except Exception as e:
@@ -306,7 +327,9 @@ def run_rewriting_pipeline_worker(dto: RewritingPipelineExecutionDTO, variant: s
 )
 def run_rewriting_pipeline(variant: str, dto: RewritingPipelineExecutionDTO):
     variant = variant.lower()
-    logger.info("Rewriting pipeline started with variant: %s and dto: %s", variant, dto)
+    logger.info(
+        "Rewriting pipeline started with variant: %s and dto: %s", variant, dto
+    )
     thread = Thread(target=run_rewriting_pipeline_worker, args=(dto, variant))
     thread.start()
 
@@ -340,7 +363,9 @@ def run_inconsistency_check_pipeline_worker(
 def run_inconsistency_check_pipeline(
     variant: str, dto: InconsistencyCheckPipelineExecutionDTO
 ):
-    thread = Thread(target=run_inconsistency_check_pipeline_worker, args=(dto, variant))
+    thread = Thread(
+        target=run_inconsistency_check_pipeline_worker, args=(dto, variant)
+    )
     thread.start()
 
 

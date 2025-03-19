@@ -6,7 +6,11 @@ from iris.common.pyris_message import IrisMessageRole, PyrisMessage
 from iris.domain.text_exercise_chat_pipeline_execution_dto import (
     TextExerciseChatPipelineExecutionDTO,
 )
-from iris.llm import CapabilityRequestHandler, CompletionArguments, RequirementList
+from iris.llm import (
+    CapabilityRequestHandler,
+    CompletionArguments,
+    RequirementList,
+)
 from iris.pipeline import Pipeline
 from iris.pipeline.prompts.text_exercise_chat_prompts import (
     fmt_extract_sentiments_prompt,
@@ -27,7 +31,9 @@ class TextExerciseChatPipeline(Pipeline):
     request_handler: CapabilityRequestHandler
 
     def __init__(self, callback: Optional[TextExerciseChatCallback] = None):
-        super().__init__(implementation_id="text_exercise_chat_pipeline_reference_impl")
+        super().__init__(
+            implementation_id="text_exercise_chat_pipeline_reference_impl"
+        )
         self.callback = callback
         self.request_handler = CapabilityRequestHandler(
             requirements=RequirementList(context_length=8000)
@@ -45,7 +51,9 @@ class TextExerciseChatPipeline(Pipeline):
         if not dto.exercise:
             raise ValueError("Exercise is required")
         if not dto.conversation:
-            raise ValueError("Conversation with at least one message is required")
+            raise ValueError(
+                "Conversation with at least one message is required"
+            )
 
         sentiments = self.categorize_sentiments_by_relevance(dto)
         self.callback.done("Responding")

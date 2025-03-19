@@ -15,7 +15,9 @@ from iris.llm import (
     RequirementList,
 )
 from iris.llm.langchain import IrisLangchainChatModel
-from iris.llm.request_handler.rerank_request_handler import RerankRequestHandler
+from iris.llm.request_handler.rerank_request_handler import (
+    RerankRequestHandler,
+)
 from iris.pipeline import Pipeline
 from iris.vector_database.lecture_unit_schema import (
     LectureUnitSchema,
@@ -32,7 +34,9 @@ class LectureUnitSegmentRetrieval(Pipeline):
     results."""
 
     def __init__(self, client: WeaviateClient):
-        super().__init__(implementation_id="lecture_unit_segment_retrieval_pipeline")
+        super().__init__(
+            implementation_id="lecture_unit_segment_retrieval_pipeline"
+        )
         request_handler = CapabilityRequestHandler(
             requirements=RequirementList(
                 gpt_version_equivalent=4.25,
@@ -134,10 +138,16 @@ class LectureUnitSegmentRetrieval(Pipeline):
         ).equal(lecture_unit_segment[LectureUnitSegmentSchema.COURSE_ID.value])
         lecture_unit_filter &= Filter.by_property(
             LectureUnitSchema.LECTURE_ID.value
-        ).equal(lecture_unit_segment[LectureUnitSegmentSchema.LECTURE_ID.value])
+        ).equal(
+            lecture_unit_segment[LectureUnitSegmentSchema.LECTURE_ID.value]
+        )
         lecture_unit_filter &= Filter.by_property(
             LectureUnitSchema.LECTURE_UNIT_ID.value
-        ).equal(lecture_unit_segment[LectureUnitSegmentSchema.LECTURE_UNIT_ID.value])
+        ).equal(
+            lecture_unit_segment[
+                LectureUnitSegmentSchema.LECTURE_UNIT_ID.value
+            ]
+        )
 
         lecture_units = self.lecture_unit_collection.query.fetch_objects(
             filters=lecture_unit_filter
@@ -148,22 +158,34 @@ class LectureUnitSegmentRetrieval(Pipeline):
         lecture_unit = lecture_units[0].properties
         lecture_unit_segment_retrieval_dto = LectureUnitSegmentRetrievalDTO(
             uuid=uuid,
-            course_id=lecture_unit_segment[LectureUnitSegmentSchema.COURSE_ID.value],
+            course_id=lecture_unit_segment[
+                LectureUnitSegmentSchema.COURSE_ID.value
+            ],
             course_name=lecture_unit[LectureUnitSchema.COURSE_NAME.value],
-            course_description=lecture_unit[LectureUnitSchema.COURSE_DESCRIPTION.value],
-            lecture_id=lecture_unit_segment[LectureUnitSegmentSchema.LECTURE_ID.value],
+            course_description=lecture_unit[
+                LectureUnitSchema.COURSE_DESCRIPTION.value
+            ],
+            lecture_id=lecture_unit_segment[
+                LectureUnitSegmentSchema.LECTURE_ID.value
+            ],
             lecture_name=lecture_unit[LectureUnitSchema.LECTURE_NAME.value],
             lecture_unit_id=lecture_unit_segment[
                 LectureUnitSegmentSchema.LECTURE_UNIT_ID.value
             ],
-            lecture_unit_name=lecture_unit[LectureUnitSchema.LECTURE_UNIT_NAME.value],
-            lecture_unit_link=lecture_unit[LectureUnitSchema.LECTURE_UNIT_LINK.value],
+            lecture_unit_name=lecture_unit[
+                LectureUnitSchema.LECTURE_UNIT_NAME.value
+            ],
+            lecture_unit_link=lecture_unit[
+                LectureUnitSchema.LECTURE_UNIT_LINK.value
+            ],
             page_number=lecture_unit_segment[
                 LectureUnitSegmentSchema.PAGE_NUMBER.value
             ],
             segment_summary=lecture_unit_segment[
                 LectureUnitSegmentSchema.SEGMENT_SUMMARY.value
             ],
-            base_url=lecture_unit_segment[LectureUnitSegmentSchema.BASE_URL.value],
+            base_url=lecture_unit_segment[
+                LectureUnitSegmentSchema.BASE_URL.value
+            ],
         )
         return lecture_unit_segment_retrieval_dto

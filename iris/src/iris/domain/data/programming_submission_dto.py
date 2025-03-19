@@ -16,4 +16,6 @@ class ProgrammingSubmissionDTO(BaseModel):
     build_log_entries: List[BuildLogEntryDTO] = Field(
         alias="buildLogEntries", default=[]
     )
-    latest_result: Optional[ResultDTO] = Field(alias="latestResult", default=None)
+    latest_result: Optional[ResultDTO] = Field(
+        alias="latestResult", default=None
+    )

@@ -4,7 +4,10 @@ from abc import ABC, abstractmethod
 from typing import List, Optional
 
 from langchain_core.output_parsers import StrOutputParser
-from langchain_core.prompts import ChatPromptTemplate, SystemMessagePromptTemplate
+from langchain_core.prompts import (
+    ChatPromptTemplate,
+    SystemMessagePromptTemplate,
+)
 from langsmith import traceable
 from weaviate import WeaviateClient
 from weaviate.classes.query import Filter
@@ -18,7 +21,9 @@ from iris.llm import (
     RequirementList,
 )
 
-from ..common.message_converters import convert_iris_message_to_langchain_message
+from ..common.message_converters import (
+    convert_iris_message_to_langchain_message,
+)
 from ..common.pyris_message import PyrisMessage
 from ..llm.langchain import IrisLangchainChatModel
 from ..pipeline import Pipeline
@@ -79,7 +84,9 @@ class BaseRetrieval(Pipeline, ABC):
 
     def __init__(self, client: WeaviateClient, schema_init_func, **kwargs):
         super().__init__(
-            implementation_id=kwargs.get("implementation_id", "base_retrieval_pipeline")
+            implementation_id=kwargs.get(
+                "implementation_id", "base_retrieval_pipeline"
+            )
         )
         request_handler = CapabilityRequestHandler(
             requirements=RequirementList(
@@ -184,9 +191,13 @@ class BaseRetrieval(Pipeline, ABC):
         filter_weaviate = None
 
         if course_id:
-            filter_weaviate = Filter.by_property(course_id_property).equal(course_id)
+            filter_weaviate = Filter.by_property(course_id_property).equal(
+                course_id
+            )
             if base_url:
-                filter_weaviate &= Filter.by_property(base_url_property).equal(base_url)
+                filter_weaviate &= Filter.by_property(base_url_property).equal(
+                    base_url
+                )
 
         vec = self.llm_embedding.embed(query)
         return self.collection.query.hybrid(
@@ -241,7 +252,9 @@ class BaseRetrieval(Pipeline, ABC):
             )
 
             rewritten_query = rewritten_query_future.result()
-            hypothetical_answer_query = hypothetical_answer_query_future.result()
+            hypothetical_answer_query = (
+                hypothetical_answer_query_future.result()
+            )
 
         with concurrent.futures.ThreadPoolExecutor() as executor:
             response_future = executor.submit(

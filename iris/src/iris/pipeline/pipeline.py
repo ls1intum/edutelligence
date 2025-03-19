@@ -24,7 +24,9 @@ class Pipeline(metaclass=ABCMeta):
         """
         Extracts the required parameters from the kwargs runs the pipeline.
         """
-        raise NotImplementedError("Subclasses must implement the __call__ method.")
+        raise NotImplementedError(
+            "Subclasses must implement the __call__ method."
+        )
 
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
@@ -33,6 +35,8 @@ class Pipeline(metaclass=ABCMeta):
                 "Subclasses of Pipeline interface must implement the __call__ method."
             )
 
-    def _append_tokens(self, tokens: TokenUsageDTO, pipeline: PipelineEnum) -> None:
+    def _append_tokens(
+        self, tokens: TokenUsageDTO, pipeline: PipelineEnum
+    ) -> None:
         tokens.pipeline = pipeline
         self.tokens.append(tokens)

@@ -38,16 +38,22 @@ class IrisLangchainChatModel(BaseChatModel):
     def __init__(
         self,
         request_handler: RequestHandler,
-        completion_args: Optional[CompletionArguments] = CompletionArguments(stop=None),
+        completion_args: Optional[CompletionArguments] = CompletionArguments(
+            stop=None
+        ),
         **kwargs: Any,
     ) -> None:
         super().__init__(
-            request_handler=request_handler, completion_args=completion_args, **kwargs
+            request_handler=request_handler,
+            completion_args=completion_args,
+            **kwargs,
         )
 
     def bind_tools(
         self,
-        tools: Sequence[Union[Dict[str, Any], Type[BaseModel], Callable, BaseTool]],
+        tools: Sequence[
+            Union[Dict[str, Any], Type[BaseModel], Callable, BaseTool]
+        ],
         **kwargs: Any,
     ) -> Runnable[LanguageModelInput, BaseMessage]:
         """Bind a sequence of tools to the request handler for function calling support.
@@ -79,7 +85,9 @@ class IrisLangchainChatModel(BaseChatModel):
         run_manager: Optional[CallbackManagerForLLMRun] = None,
         **kwargs: Any,
     ) -> ChatResult:
-        iris_messages = [convert_langchain_message_to_iris_message(m) for m in messages]
+        iris_messages = [
+            convert_langchain_message_to_iris_message(m) for m in messages
+        ]
         self.completion_args.stop = stop
         iris_message = self.request_handler.chat(
             iris_messages, self.completion_args, self.tools

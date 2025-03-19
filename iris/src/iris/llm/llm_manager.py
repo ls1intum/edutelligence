@@ -51,10 +51,14 @@ class LlmManager(metaclass=Singleton):
         valid_llms = [
             llm
             for llm in self.entries
-            if capabilities_fulfill_requirements(llm.capabilities, requirements)
+            if capabilities_fulfill_requirements(
+                llm.capabilities, requirements
+            )
         ]
         scores = calculate_capability_scores(
             [llm.capabilities for llm in valid_llms], requirements, invert_cost
         )
-        sorted_llms = sorted(zip(scores, valid_llms), key=lambda pair: -pair[0])
+        sorted_llms = sorted(
+            zip(scores, valid_llms), key=lambda pair: -pair[0]
+        )
         return [llm for _, llm in sorted_llms]

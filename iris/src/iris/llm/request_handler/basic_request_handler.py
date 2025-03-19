@@ -1,4 +1,13 @@
-from typing import Any, Callable, Dict, Literal, Optional, Sequence, Type, Union
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Literal,
+    Optional,
+    Sequence,
+    Type,
+    Union,
+)
 
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, ConfigDict
@@ -39,7 +48,9 @@ class BasicRequestHandler(RequestHandler):
         messages: list[PyrisMessage],
         arguments: CompletionArguments,
         tools: Optional[
-            Sequence[Union[Dict[str, Any], Type[BaseModel], Callable, BaseTool]]
+            Sequence[
+                Union[Dict[str, Any], Type[BaseModel], Callable, BaseTool]
+            ]
         ],
     ) -> PyrisMessage:
         llm = self.llm_manager.get_llm_by_id(self.model_id)
@@ -61,12 +72,17 @@ class BasicRequestHandler(RequestHandler):
         llm = self.llm_manager.get_llm_by_id(self.model_id)
 
         return llm.split_text_semantically(
-            text, breakpoint_threshold_type, breakpoint_threshold_amount, min_chunk_size
+            text,
+            breakpoint_threshold_type,
+            breakpoint_threshold_amount,
+            min_chunk_size,
         )
 
     def bind_tools(
         self,
-        tools: Sequence[Union[Dict[str, Any], Type[BaseModel], Callable, BaseTool]],
+        tools: Sequence[
+            Union[Dict[str, Any], Type[BaseModel], Callable, BaseTool]
+        ],
     ) -> LanguageModel:
         """
         Binds a sequence of tools to the language model.

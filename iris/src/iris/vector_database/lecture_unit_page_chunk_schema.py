@@ -3,7 +3,11 @@ from enum import Enum
 from weaviate import WeaviateClient
 from weaviate.classes.config import Property
 from weaviate.collections import Collection
-from weaviate.collections.classes.config import Configure, DataType, VectorDistances
+from weaviate.collections.classes.config import (
+    Configure,
+    DataType,
+    VectorDistances,
+)
 
 
 class LectureUnitPageChunkSchema(Enum):
@@ -25,7 +29,9 @@ def init_lecture_unit_page_chunk_schema(client: WeaviateClient) -> Collection:
     """
     Initialize the schema for the lecture unit page chunks
     """
-    if client.collections.exists(LectureUnitPageChunkSchema.COLLECTION_NAME.value):
+    if client.collections.exists(
+        LectureUnitPageChunkSchema.COLLECTION_NAME.value
+    ):
         collection = client.collections.get(
             LectureUnitPageChunkSchema.COLLECTION_NAME.value
         )

@@ -20,7 +20,7 @@ from iris.domain.ingestion.ingestion_pipeline_execution_dto import (
 
 from ..common.pyris_message import IrisMessageRole, PyrisMessage
 from ..domain.data.image_message_content_dto import ImageMessageContentDTO
-from ..domain.data.lecture_unit_dto import LectureUnitDTO as LectureUnitSlideDTO
+from ..domain.data.lecture_unit_dto import LectureUnitPageDTO
 from ..domain.data.text_message_content_dto import TextMessageContentDTO
 from ..domain.lecture.lecture_unit_dto import LectureUnitDTO
 from ..ingestion.abstract_ingestion import AbstractIngestion
@@ -64,7 +64,9 @@ def save_pdf(pdf_file_base64):
             temp_pdf_file.write(binary_data)
         except Exception as e:
             logger.error(
-                "Failed to write to temporary PDF file %s: %s", temp_pdf_file_path, e
+                "Failed to write to temporary PDF file %s: %s",
+                temp_pdf_file_path,
+                e,
             )
             raise
     return temp_pdf_file_path
@@ -144,10 +146,14 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
             )
             cleanup_temporary_file(pdf_path)
             self.callback.done("Lecture Chunking and interpretation Finished")
-            self.callback.in_progress("Ingesting lecture chunks into database...")
+            self.callback.in_progress(
+                "Ingesting lecture chunks into database..."
+            )
             self.batch_update(chunks)
 
-            self.callback.done("Lecture Ingestion Finished", tokens=self.tokens)
+            self.callback.done(
+                "Lecture Ingestion Finished", tokens=self.tokens
+            )
             lecture_unit_dto = LectureUnitDTO(
                 course_id=self.dto.lecture_unit.course_id,
                 course_name=self.dto.lecture_unit.course_name,
@@ -188,11 +194,15 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         Weaviate limitation.
         """
         with batch_update_lock:
-            with self.collection.batch.rate_limit(requests_per_minute=600) as batch:
+            with self.collection.batch.rate_limit(
+                requests_per_minute=600
+            ) as batch:
                 try:
                     for _, chunk in enumerate(chunks):
                         embed_chunk = self.llm_embedding.embed(
-                            chunk[LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value]
+                            chunk[
+                                LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value
+                            ]
                         )
                         batch.add_object(properties=chunk, vector=embed_chunk)
                 except Exception as e:
@@ -206,7 +216,7 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
     def chunk_data(
         self,
         lecture_pdf: str,
-        lecture_unit_slide_dto: LectureUnitSlideDTO = None,
+        lecture_unit_slide_dto: LectureUnitPageDTO = None,
         base_url: str = None,
     ):  # pylint: disable=arguments-renamed
         """
@@ -273,7 +283,8 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         )
         image = ImageMessageContentDTO(base64=img_base64)
         iris_message = PyrisMessage(
-            sender=IrisMessageRole.USER, contents=[image_interpretation_prompt, image]
+            sender=IrisMessageRole.USER,
+            contents=[image_interpretation_prompt, image],
         )
         try:
             response = self.llm_vision.chat(
@@ -297,7 +308,10 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         """
         dirname = os.path.dirname(__file__)
         prompt_file_path = os.path.join(
-            dirname, ".", "prompts", "content_image_interpretation_merge_prompt.txt"
+            dirname,
+            ".",
+            "prompts",
+            "content_image_interpretation_merge_prompt.txt",
         )
         with open(prompt_file_path, "r", encoding="utf-8") as file:
             logger.info("Loading ingestion prompt...")
@@ -313,9 +327,13 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         )
         prompt = ChatPromptTemplate.from_messages(prompt_val)
         clean_output = clean(
-            (prompt | self.pipeline).invoke({}), bullets=True, extra_whitespace=True
+            (prompt | self.pipeline).invoke({}),
+            bullets=True,
+            extra_whitespace=True,
         )
-        self._append_tokens(self.llm.tokens, PipelineEnum.IRIS_LECTURE_INGESTION)
+        self._append_tokens(
+            self.llm.tokens, PipelineEnum.IRIS_LECTURE_INGESTION
+        )
         return clean_output
 
     def get_course_language(self, page_content: str) -> str:
@@ -331,13 +349,19 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
             contents=[TextMessageContentDTO(text_content=prompt)],
         )
         response = self.llm_chat.chat(
-            [iris_message], CompletionArguments(temperature=0, max_tokens=20), tools=[]
+            [iris_message],
+            CompletionArguments(temperature=0, max_tokens=20),
+            tools=[],
         )
-        self._append_tokens(response.token_usage, PipelineEnum.IRIS_LECTURE_INGESTION)
+        self._append_tokens(
+            response.token_usage, PipelineEnum.IRIS_LECTURE_INGESTION
+        )
         return response.contents[0].text_content
 
     def delete_old_lectures(
-        self, lecture_units_slides: list[LectureUnitSlideDTO], artemis_base_url: str
+        self,
+        lecture_units_slides: list[LectureUnitPageDTO],
+        artemis_base_url: str,
     ):
         """
         Delete the lecture unit from the database
@@ -359,7 +383,9 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
             self.callback.error("Error while removing old slides")
             return False
 
-    def delete_lecture_unit(self, course_id, lecture_id, lecture_unit_id, base_url):
+    def delete_lecture_unit(
+        self, course_id, lecture_id, lecture_unit_id, base_url
+    ):
         """
         Delete the lecture from the database
         """
@@ -368,12 +394,12 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
                 where=Filter.by_property(
                     LectureUnitPageChunkSchema.BASE_URL.value
                 ).equal(base_url)
-                & Filter.by_property(LectureUnitPageChunkSchema.COURSE_ID.value).equal(
-                    course_id
-                )
-                & Filter.by_property(LectureUnitPageChunkSchema.LECTURE_ID.value).equal(
-                    lecture_id
-                )
+                & Filter.by_property(
+                    LectureUnitPageChunkSchema.COURSE_ID.value
+                ).equal(course_id)
+                & Filter.by_property(
+                    LectureUnitPageChunkSchema.LECTURE_ID.value
+                ).equal(lecture_id)
                 & Filter.by_property(
                     LectureUnitPageChunkSchema.LECTURE_UNIT_ID.value
                 ).equal(lecture_unit_id)

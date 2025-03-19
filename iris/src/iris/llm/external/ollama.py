@@ -1,6 +1,15 @@
 import base64
 from datetime import datetime
-from typing import Any, Callable, Dict, Literal, Optional, Sequence, Type, Union
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Literal,
+    Optional,
+    Sequence,
+    Type,
+    Union,
+)
 
 from langchain_core.tools import BaseTool
 from ollama import Client, Message
@@ -96,8 +105,12 @@ class OllamaModel(
     _client: Client
 
     def model_post_init(self, __context: Any) -> None:
-        self._client = Client(host=self.host)  # TODO: Add authentication (httpx auth?)
-        self._client._client.base_url = self.host  # pylint: disable=protected-access
+        self._client = Client(
+            host=self.host
+        )  # TODO: Add authentication (httpx auth?)
+        self._client._client.base_url = (  # pylint: disable=protected-access
+            self.host
+        )
 
     def complete(
         self,
@@ -119,7 +132,9 @@ class OllamaModel(
         messages: list[PyrisMessage],
         arguments: CompletionArguments,
         tools: Optional[
-            Sequence[Union[Dict[str, Any], Type[BaseModel], Callable, BaseTool]]
+            Sequence[
+                Union[Dict[str, Any], Type[BaseModel], Callable, BaseTool]
+            ]
         ],
     ) -> PyrisMessage:
         response = self._client.chat(

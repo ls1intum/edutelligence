@@ -15,7 +15,9 @@ from iris.llm import (
     RequirementList,
 )
 from iris.llm.langchain import IrisLangchainChatModel
-from iris.llm.request_handler.rerank_request_handler import RerankRequestHandler
+from iris.llm.request_handler.rerank_request_handler import (
+    RerankRequestHandler,
+)
 from iris.pipeline import Pipeline
 from iris.vector_database.lecture_transcription_schema import (
     LectureTranscriptionSchema,
@@ -28,8 +30,13 @@ from iris.vector_database.lecture_unit_schema import (
 
 
 class LectureTranscriptionRetrieval(Pipeline):
+    """LectureTranscriptionRetrieval retrieves lecture transcription data from the database by applying search filters
+    and processing the transcription segments."""
+
     def __init__(self, client: WeaviateClient):
-        super().__init__(implementation_id="lecture_transcriptions_retrieval_pipeline")
+        super().__init__(
+            implementation_id="lecture_transcriptions_retrieval_pipeline"
+        )
         request_handler = CapabilityRequestHandler(
             requirements=RequirementList(
                 gpt_version_equivalent=4.25,
@@ -99,7 +106,7 @@ class LectureTranscriptionRetrieval(Pipeline):
         """
         Search the database for the given query.
         """
-        logger.info(f"Searching in the database for query: {query}")
+        logger.info("Searching in the database for query: %s", query)
         # Initialize filter to None by default
         filter_weaviate = None
 
@@ -132,12 +139,16 @@ class LectureTranscriptionRetrieval(Pipeline):
         lecture_unit_filter = Filter.by_property(
             LectureUnitSchema.COURSE_ID.value
         ).equal(
-            lecture_transcription_segment[LectureTranscriptionSchema.COURSE_ID.value]
+            lecture_transcription_segment[
+                LectureTranscriptionSchema.COURSE_ID.value
+            ]
         )
         lecture_unit_filter &= Filter.by_property(
             LectureUnitSchema.LECTURE_ID.value
         ).equal(
-            lecture_transcription_segment[LectureTranscriptionSchema.LECTURE_ID.value]
+            lecture_transcription_segment[
+                LectureTranscriptionSchema.LECTURE_ID.value
+            ]
         )
         lecture_unit_filter &= Filter.by_property(
             LectureUnitSchema.LECTURE_UNIT_ID.value
@@ -149,7 +160,9 @@ class LectureTranscriptionRetrieval(Pipeline):
         lecture_unit_filter &= Filter.by_property(
             LectureUnitSchema.BASE_URL.value
         ).equal(
-            lecture_transcription_segment[LectureTranscriptionSchema.BASE_URL.value]
+            lecture_transcription_segment[
+                LectureTranscriptionSchema.BASE_URL.value
+            ]
         )
 
         lecture_units = self.lecture_unit_collection.query.fetch_objects(
@@ -167,8 +180,12 @@ class LectureTranscriptionRetrieval(Pipeline):
                     LectureUnitSchema.COURSE_DESCRIPTION.value
                 ],
                 lecture_id=lecture_unit[LectureUnitSchema.LECTURE_ID.value],
-                lecture_name=lecture_unit[LectureUnitSchema.LECTURE_NAME.value],
-                lecture_unit_id=lecture_unit[LectureUnitSchema.LECTURE_UNIT_ID.value],
+                lecture_name=lecture_unit[
+                    LectureUnitSchema.LECTURE_NAME.value
+                ],
+                lecture_unit_id=lecture_unit[
+                    LectureUnitSchema.LECTURE_UNIT_ID.value
+                ],
                 lecture_unit_name=lecture_unit[
                     LectureUnitSchema.LECTURE_UNIT_NAME.value
                 ],

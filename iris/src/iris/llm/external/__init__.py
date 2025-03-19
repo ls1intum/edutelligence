@@ -1,8 +1,10 @@
 from typing import Union
 
-from ...llm.external.model import LanguageModel
 from ...llm.external.ollama import OllamaModel
-from ...llm.external.openai_chat import AzureOpenAIChatModel, DirectOpenAIChatModel
+from ...llm.external.openai_chat import (
+    AzureOpenAIChatModel,
+    DirectOpenAIChatModel,
+)
 from ...llm.external.openai_completion import (
     AzureOpenAICompletionModel,
     DirectOpenAICompletionModel,

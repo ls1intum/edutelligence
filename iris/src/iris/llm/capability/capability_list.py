@@ -83,7 +83,9 @@ class CapabilityList(BaseModel):
         default=OrderedNumberCapability(value=2)
     )
     # The speed of the model in tokens per second
-    speed: OrderedNumberCapability = Field(default=OrderedNumberCapability(value=0))
+    speed: OrderedNumberCapability = Field(
+        default=OrderedNumberCapability(value=0)
+    )
     # The context length of the model in tokens
     context_length: OrderedNumberCapability = Field(
         default=OrderedNumberCapability(value=0)
@@ -95,11 +97,17 @@ class CapabilityList(BaseModel):
         default=BooleanCapability(value=False)
     )
     # Whether the model is self-hosted
-    self_hosted: BooleanCapability = Field(default=BooleanCapability(value=False))
+    self_hosted: BooleanCapability = Field(
+        default=BooleanCapability(value=False)
+    )
     # Whether the model supports image recognition
-    image_recognition: BooleanCapability = Field(default=BooleanCapability(value=False))
+    image_recognition: BooleanCapability = Field(
+        default=BooleanCapability(value=False)
+    )
     # Whether the model supports a JSON mode
-    json_mode: BooleanCapability = Field(default=BooleanCapability(value=False))
+    json_mode: BooleanCapability = Field(
+        default=BooleanCapability(value=False)
+    )
 
     @model_validator(mode="before")
     @classmethod

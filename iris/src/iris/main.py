@@ -25,7 +25,11 @@ def custom_openapi():
         openapi_schema = FastAPI.openapi(app)
         # Add security scheme
         openapi_schema["components"]["securitySchemes"] = {
-            "bearerAuth": {"type": "apiKey", "in": "header", "name": "Authorization"}
+            "bearerAuth": {
+                "type": "apiKey",
+                "in": "header",
+                "name": "Authorization",
+            }
         }
         # Apply the security globally
         for path in openapi_schema["paths"].values():
@@ -39,7 +43,9 @@ app.openapi = custom_openapi
 
 
 @app.exception_handler(RequestValidationError)
-async def validation_exception_handler(request: Request, exc: RequestValidationError):
+async def validation_exception_handler(
+    request: Request, exc: RequestValidationError
+):
     exc_str = f"{exc}".replace("\n", " ").replace("   ", " ")
     logging.error("%s: %s", request, exc_str)
     content = {"status_code": 10422, "message": exc_str, "data": None}

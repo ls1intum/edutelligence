@@ -91,7 +91,9 @@ class TranscriptionIngestionPipeline(Pipeline):
             chunks = self.summarize_chunks(chunks)
             self.callback.done("Summarized transcription")
 
-            self.callback.in_progress("Ingesting transcription into vector database")
+            self.callback.in_progress(
+                "Ingesting transcription into vector database"
+            )
             self.batch_insert(chunks)
             self.callback.done("Transcriptions ingested successfully")
 
@@ -114,11 +116,14 @@ class TranscriptionIngestionPipeline(Pipeline):
             LectureUnitPipeline()(lecture_unit_dto)
 
             self.callback.done(
-                "Ingested lecture unit summary into vector database", tokens=self.tokens
+                "Ingested lecture unit summary into vector database",
+                tokens=self.tokens,
             )
 
         except Exception as e:
-            logger.error("Error processing transcription ingestion pipeline: %s", e)
+            logger.error(
+                "Error processing transcription ingestion pipeline: %s", e
+            )
             self.callback.error(
                 f"Error processing transcription ingestion pipeline: {e}",
                 exception=e,
@@ -129,12 +134,12 @@ class TranscriptionIngestionPipeline(Pipeline):
         self, transcription: TranscriptionWebhookDTO
     ):
         self.collection.data.delete_many(
-            where=Filter.by_property(LectureTranscriptionSchema.COURSE_ID.value).equal(
-                transcription.course_id
-            )
-            & Filter.by_property(LectureTranscriptionSchema.LECTURE_ID.value).equal(
-                transcription.lecture_id
-            )
+            where=Filter.by_property(
+                LectureTranscriptionSchema.COURSE_ID.value
+            ).equal(transcription.course_id)
+            & Filter.by_property(
+                LectureTranscriptionSchema.LECTURE_ID.value
+            ).equal(transcription.lecture_id)
             & Filter.by_property(
                 LectureTranscriptionSchema.LECTURE_UNIT_ID.value
             ).equal(transcription.lecture_unit_id)
@@ -147,11 +152,15 @@ class TranscriptionIngestionPipeline(Pipeline):
                 try:
                     for chunk in chunks:
                         embed_chunk = self.llm_embedding.embed(
-                            chunk[LectureTranscriptionSchema.SEGMENT_TEXT.value]
+                            chunk[
+                                LectureTranscriptionSchema.SEGMENT_TEXT.value
+                            ]
                         )
                         batch.add_object(properties=chunk, vector=embed_chunk)
                 except Exception as e:
-                    logger.error("Error embedding lecture transcription chunk: %s", e)
+                    logger.error(
+                        "Error embedding lecture transcription chunk: %s", e
+                    )
                     self.callback.error(
                         f"Failed to ingest lecture transcriptions into the database: {e}",
                         exception=e,
@@ -191,7 +200,10 @@ class TranscriptionIngestionPipeline(Pipeline):
 
         for i, segment in enumerate(slide_chunks.values()):
             # If the segment is shorter than 1200 characters, we can just add it as is
-            if len(segment[LectureTranscriptionSchema.SEGMENT_TEXT.value]) < 1200:
+            if (
+                len(segment[LectureTranscriptionSchema.SEGMENT_TEXT.value])
+                < 1200
+            ):
                 # Add the segment to the chunks list and replace the chunk separator character with a space
                 segment[LectureTranscriptionSchema.SEGMENT_TEXT.value] = (
                     self.replace_separator_char(
@@ -212,14 +224,18 @@ class TranscriptionIngestionPipeline(Pipeline):
             offset_slide_chunk = reduce(
                 lambda acc, txt: acc + len(self.remove_separator_char(txt)),
                 map(
-                    lambda seg: seg[LectureTranscriptionSchema.SEGMENT_TEXT.value],
+                    lambda seg: seg[
+                        LectureTranscriptionSchema.SEGMENT_TEXT.value
+                    ],
                     list(slide_chunks.values())[:i],
                 ),
                 0,
             )
             offset_start = offset_slide_chunk
             for _, chunk in enumerate(semantic_chunks):
-                offset_end = offset_start + len(self.remove_separator_char(chunk))
+                offset_end = offset_start + len(
+                    self.remove_separator_char(chunk)
+                )
 
                 start_time = self.get_transcription_segment_of_char_position(
                     offset_start, transcription.transcription.segments
@@ -280,7 +296,9 @@ class TranscriptionIngestionPipeline(Pipeline):
                         "system",
                         transcription_summary_prompt(
                             self.dto.transcription.lecture_name,
-                            chunk[LectureTranscriptionSchema.SEGMENT_TEXT.value],
+                            chunk[
+                                LectureTranscriptionSchema.SEGMENT_TEXT.value
+                            ],
                         ),
                     ),
                 ]
@@ -290,7 +308,8 @@ class TranscriptionIngestionPipeline(Pipeline):
             try:
                 response = (self.prompt | self.pipeline).invoke({})
                 self._append_tokens(
-                    self.llm.tokens, PipelineEnum.IRIS_VIDEO_TRANSCRIPTION_INGESTION
+                    self.llm.tokens,
+                    PipelineEnum.IRIS_VIDEO_TRANSCRIPTION_INGESTION,
                 )
                 chunks_with_summaries.append(
                     {

@@ -18,9 +18,15 @@ from iris.domain.chat.interaction_suggestion_dto import (
     InteractionSuggestionPipelineExecutionDTO,
 )
 
-from ...common.message_converters import convert_iris_message_to_langchain_message
+from ...common.message_converters import (
+    convert_iris_message_to_langchain_message,
+)
 from ...common.pyris_message import PyrisMessage
-from ...llm import CapabilityRequestHandler, CompletionArguments, RequirementList
+from ...llm import (
+    CapabilityRequestHandler,
+    CompletionArguments,
+    RequirementList,
+)
 from ...llm.langchain import IrisLangchainChatModel
 from ..pipeline import Pipeline
 from ..prompts.iris_interaction_suggestion_prompts import (
@@ -120,7 +126,9 @@ class InteractionSuggestionPipeline(Pipeline):
             ]
             if dto.last_message:
                 last_message = AIMessage(
-                    content=dto.last_message.replace("{", "{{").replace("}", "}}"),
+                    content=dto.last_message.replace("{", "{{").replace(
+                        "}", "}}"
+                    ),
                 )
                 chat_history_messages.append(last_message)
                 self.prompt = ChatPromptTemplate.from_messages(
@@ -136,8 +144,12 @@ class InteractionSuggestionPipeline(Pipeline):
                     ]
                 )
 
-                prob_st_val = dto.problem_statement or "No problem statement provided."
-                prompt_val = self.prompt.format_messages(problem_statement=prob_st_val)
+                prob_st_val = (
+                    dto.problem_statement or "No problem statement provided."
+                )
+                prompt_val = self.prompt.format_messages(
+                    problem_statement=prob_st_val
+                )
                 self.prompt = ChatPromptTemplate.from_messages(prompt_val)
 
                 response: dict = (self.prompt | self.pipeline).invoke({})
@@ -148,7 +160,8 @@ class InteractionSuggestionPipeline(Pipeline):
                 raise ValueError("No last message provided")
         except Exception as e:
             logger.error(
-                "An error occurred while running the course chat pipeline", exc_info=e
+                "An error occurred while running the course chat pipeline",
+                exc_info=e,
             )
             traceback.print_exc()
             return []

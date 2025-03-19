@@ -1,64 +1,71 @@
-from asyncio.log import logger
-from typing import List
 import concurrent.futures
+from asyncio.log import logger
+from enum import Enum
+from typing import List
 
 from langchain_core.output_parsers import StrOutputParser
-from langchain_core.prompts import ChatPromptTemplate, SystemMessagePromptTemplate
+from langchain_core.prompts import (
+    ChatPromptTemplate,
+    SystemMessagePromptTemplate,
+)
 from langsmith import traceable
 from weaviate import WeaviateClient
 from weaviate.classes.query import Filter
 
-from app.common.PipelineEnum import PipelineEnum
-from app.common.message_converters import convert_iris_message_to_langchain_message
-
-from app.common.pyris_message import PyrisMessage
-from app.domain.retrieval.lecture.lecture_retrieval_dto import (
+from iris.common.message_converters import (
+    convert_iris_message_to_langchain_message,
+)
+from iris.common.pipeline_enum import PipelineEnum
+from iris.common.pyris_message import PyrisMessage
+from iris.domain.retrieval.lecture.lecture_retrieval_dto import (
     LectureRetrievalDTO,
-    LectureUnitRetrievalDTO,
-    LectureUnitSegmentRetrievalDTO,
     LectureTranscriptionRetrievalDTO,
     LectureUnitPageChunkRetrievalDTO,
+    LectureUnitRetrievalDTO,
+    LectureUnitSegmentRetrievalDTO,
 )
-from app.llm import (
-    CapabilityRequestHandler,
-    RequirementList,
-    CompletionArguments,
+from iris.llm import (
     BasicRequestHandler,
+    CapabilityRequestHandler,
+    CompletionArguments,
+    RequirementList,
 )
-from app.llm.langchain import IrisLangchainChatModel
-from app.llm.request_handler.rerank_request_handler import RerankRequestHandler
-from app.pipeline import Pipeline
-from app.pipeline.prompts.lecture_retrieval_prompts import (
-    rewrite_student_query_prompt,
-    rewrite_student_query_prompt_with_exercise_context,
-    lecture_retriever_initial_prompt_lecture_pages,
-    lecture_retriever_initial_prompt_lecture_transcriptions,
+from iris.llm.langchain import IrisLangchainChatModel
+from iris.llm.request_handler.rerank_request_handler import (
+    RerankRequestHandler,
+)
+from iris.pipeline import Pipeline
+from iris.pipeline.prompts.lecture_retrieval_prompts import (
     lecture_retrieval_initial_prompt_lecture_pages_with_exercise_context,
     lecture_retrieval_initial_prompt_lecture_transcriptions_with_exercise_context,
+    lecture_retriever_initial_prompt_lecture_pages,
+    lecture_retriever_initial_prompt_lecture_transcriptions,
+    rewrite_student_query_prompt,
+    rewrite_student_query_prompt_with_exercise_context,
     write_hypothetical_lecture_pages_answer_prompt,
     write_hypothetical_lecture_transcriptions_answer_prompt,
 )
-from app.pipeline.shared.reranker_pipeline import RerankerPipeline
-from enum import Enum
-
-from app.retrieval.lecture.lecture_page_chunk_retrieval import LecturePageChunkRetrieval
-from app.retrieval.lecture.lecture_transcription_retrieval import (
+from iris.pipeline.shared.reranker_pipeline import RerankerPipeline
+from iris.retrieval.lecture.lecture_page_chunk_retrieval import (
+    LecturePageChunkRetrieval,
+)
+from iris.retrieval.lecture.lecture_transcription_retrieval import (
     LectureTranscriptionRetrieval,
 )
-from app.retrieval.lecture.lecture_unit_segment_retrieval import (
+from iris.retrieval.lecture.lecture_unit_segment_retrieval import (
     LectureUnitSegmentRetrieval,
 )
-from app.vector_database.lecture_transcription_schema import (
-    init_lecture_transcription_schema,
+from iris.vector_database.lecture_transcription_schema import (
     LectureTranscriptionSchema,
+    init_lecture_transcription_schema,
 )
-from app.vector_database.lecture_unit_page_chunk_schema import (
-    init_lecture_unit_page_chunk_schema,
+from iris.vector_database.lecture_unit_page_chunk_schema import (
     LectureUnitPageChunkSchema,
+    init_lecture_unit_page_chunk_schema,
 )
-from app.vector_database.lecture_unit_schema import (
-    init_lecture_unit_schema,
+from iris.vector_database.lecture_unit_schema import (
     LectureUnitSchema,
+    init_lecture_unit_schema,
 )
 
 
@@ -68,6 +75,12 @@ class QueryRewriteMode(Enum):
 
 
 class LectureRetrieval(Pipeline):
+    """LectureRetrieval retrieves lecture data from the vector database by processing lecture units, transcriptions,
+     and page chunks.
+
+    It combines various sources of lecture-related data and formats them into a single DTO for further processing.
+    """
+
     def __init__(self, client: WeaviateClient):
         super().__init__(implementation_id="lecture_retrieval_pipeline")
         request_handler = CapabilityRequestHandler(
@@ -85,19 +98,25 @@ class LectureRetrieval(Pipeline):
         self.pipeline = self.llm | StrOutputParser()
 
         self.lecture_unit_collection = init_lecture_unit_schema(client)
-        self.lecture_transcription_collection = init_lecture_transcription_schema(
-            client
+        self.lecture_transcription_collection = (
+            init_lecture_transcription_schema(client)
         )
-        self.lecture_unit_page_chunk_collection = init_lecture_unit_page_chunk_schema(
-            client
+        self.lecture_unit_page_chunk_collection = (
+            init_lecture_unit_page_chunk_schema(client)
         )
 
         self.reranker_pipeline = RerankerPipeline()
         self.tokens = []
 
-        self.lecture_unit_segment_pipeline = LectureUnitSegmentRetrieval(client)
-        self.lecture_transcription_pipeline = LectureTranscriptionRetrieval(client)
-        self.lecture_unit_page_chunk_pipeline = LecturePageChunkRetrieval(client)
+        self.lecture_unit_segment_pipeline = LectureUnitSegmentRetrieval(
+            client
+        )
+        self.lecture_transcription_pipeline = LectureTranscriptionRetrieval(
+            client
+        )
+        self.lecture_unit_page_chunk_pipeline = LecturePageChunkRetrieval(
+            client
+        )
 
         self.cohere_client = RerankRequestHandler("cohere")
 
@@ -112,7 +131,9 @@ class LectureRetrieval(Pipeline):
         lecture_unit_id: int = None,
         base_url: str = None,
     ) -> LectureRetrievalDTO:
-        lecture_unit = self.get_lecture_unit(course_id, lecture_id, lecture_unit_id)
+        lecture_unit = self.get_lecture_unit(
+            course_id, lecture_id, lecture_unit_id
+        )
         if lecture_unit is None:
             raise ValueError("The lecture unit is not indexed")
 
@@ -130,23 +151,29 @@ class LectureRetrieval(Pipeline):
             exercise_title,
         )
 
-        lecture_unit_segments, lecture_transcriptions, lecture_unit_page_chunks = (
-            self.call_lecture_pipelines(
-                lecture_unit,
-                query,
-                rewritten_lecture_pages_query,
-                rewritten_lecture_transcriptions_query,
-                hypothetical_lecture_pages_answer_query,
-                hypothetical_lecture_transcriptions_answer_query,
-            )
+        (
+            lecture_unit_segments,
+            lecture_transcriptions,
+            lecture_unit_page_chunks,
+        ) = self.call_lecture_pipelines(
+            lecture_unit,
+            query,
+            rewritten_lecture_pages_query,
+            rewritten_lecture_transcriptions_query,
+            hypothetical_lecture_pages_answer_query,
+            hypothetical_lecture_transcriptions_answer_query,
         )
 
         for lecture_unit_segment in lecture_unit_segments:
-            lecture_transcriptions += self.get_lecture_transcription_of_lecture_unit(
-                lecture_unit_segment
+            lecture_transcriptions += (
+                self.get_lecture_transcription_of_lecture_unit(
+                    lecture_unit_segment
+                )
             )
-            lecture_unit_page_chunks += self.get_lecture_page_chunks_of_lecture_unit(
-                lecture_unit_segment
+            lecture_unit_page_chunks += (
+                self.get_lecture_page_chunks_of_lecture_unit(
+                    lecture_unit_segment
+                )
             )
 
         # Remove duplicate lecture transcriptions
@@ -162,7 +189,10 @@ class LectureRetrieval(Pipeline):
         lecture_unit_page_chunks = list(unique_page_chunks.values())
 
         lecture_transcriptions = self.cohere_client.rerank(
-            query, lecture_transcriptions, top_n=7, content_field_name="segment_text"
+            query,
+            lecture_transcriptions,
+            top_n=7,
+            content_field_name="segment_text",
         )
         lecture_unit_page_chunks = self.cohere_client.rerank(
             query,
@@ -184,9 +214,9 @@ class LectureRetrieval(Pipeline):
         lecture_unit_id: int = None,
         base_url: str = None,
     ):
-        lecture_filter = Filter.by_property(LectureUnitSchema.COURSE_ID.value).equal(
-            course_id
-        )
+        lecture_filter = Filter.by_property(
+            LectureUnitSchema.COURSE_ID.value
+        ).equal(course_id)
 
         if base_url is not None:
             lecture_filter &= Filter.by_property(
@@ -246,9 +276,13 @@ class LectureRetrieval(Pipeline):
                 course_description=lecture_unit[
                     LectureUnitSchema.COURSE_DESCRIPTION.value
                 ],
-                course_language=lecture_unit[LectureUnitSchema.COURSE_LANGUAGE.value],
+                course_language=lecture_unit[
+                    LectureUnitSchema.COURSE_LANGUAGE.value
+                ],
                 lecture_id=lecture_unit[LectureUnitSchema.LECTURE_ID.value],
-                lecture_name=lecture_unit[LectureUnitSchema.LECTURE_UNIT_NAME.value],
+                lecture_name=lecture_unit[
+                    LectureUnitSchema.LECTURE_UNIT_NAME.value
+                ],
                 lecture_unit_id=None,
                 lecture_unit_name=None,
                 lecture_unit_link=None,
@@ -275,7 +309,9 @@ class LectureRetrieval(Pipeline):
                 course_description=lecture_unit[
                     LectureUnitSchema.COURSE_DESCRIPTION.value
                 ],
-                course_language=lecture_unit[LectureUnitSchema.COURSE_LANGUAGE.value],
+                course_language=lecture_unit[
+                    LectureUnitSchema.COURSE_LANGUAGE.value
+                ],
                 lecture_id=None,
                 lecture_name=None,
                 lecture_unit_id=None,
@@ -313,25 +349,29 @@ class LectureRetrieval(Pipeline):
                     problem_statement,
                     QueryRewriteMode.LECTURE_PAGES,
                 )
-                rewritten_lecture_transcriptions_query_future = executor.submit(
-                    self.rewrite_student_query_with_exercise_context,
-                    chat_history,
-                    student_query,
-                    course_language,
-                    course_name,
-                    exercise_title,
-                    problem_statement,
-                    QueryRewriteMode.LECTURE_TRANSCRIPTIONS,
+                rewritten_lecture_transcriptions_query_future = (
+                    executor.submit(
+                        self.rewrite_student_query_with_exercise_context,
+                        chat_history,
+                        student_query,
+                        course_language,
+                        course_name,
+                        exercise_title,
+                        problem_statement,
+                        QueryRewriteMode.LECTURE_TRANSCRIPTIONS,
+                    )
                 )
-                hypothetical_lecture_pages_answer_query_future = executor.submit(
-                    self.rewrite_elaborated_query_with_exercise_context,
-                    chat_history,
-                    student_query,
-                    course_language,
-                    course_name,
-                    exercise_title,
-                    problem_statement,
-                    QueryRewriteMode.LECTURE_PAGES,
+                hypothetical_lecture_pages_answer_query_future = (
+                    executor.submit(
+                        self.rewrite_elaborated_query_with_exercise_context,
+                        chat_history,
+                        student_query,
+                        course_language,
+                        course_name,
+                        exercise_title,
+                        problem_statement,
+                        QueryRewriteMode.LECTURE_PAGES,
+                    )
                 )
                 hypothetical_lecture_transcriptions_answer_query_future = (
                     executor.submit(
@@ -370,21 +410,25 @@ class LectureRetrieval(Pipeline):
                     course_name,
                     QueryRewriteMode.LECTURE_PAGES,
                 )
-                rewritten_lecture_transcriptions_query_future = executor.submit(
-                    self.rewrite_student_query,
-                    chat_history,
-                    student_query,
-                    course_language,
-                    course_name,
-                    QueryRewriteMode.LECTURE_TRANSCRIPTIONS,
+                rewritten_lecture_transcriptions_query_future = (
+                    executor.submit(
+                        self.rewrite_student_query,
+                        chat_history,
+                        student_query,
+                        course_language,
+                        course_name,
+                        QueryRewriteMode.LECTURE_TRANSCRIPTIONS,
+                    )
                 )
-                hypothetical_lecture_pages_answer_query_future = executor.submit(
-                    self.rewrite_elaborated_query,
-                    chat_history,
-                    student_query,
-                    course_language,
-                    course_name,
-                    QueryRewriteMode.LECTURE_PAGES,
+                hypothetical_lecture_pages_answer_query_future = (
+                    executor.submit(
+                        self.rewrite_elaborated_query,
+                        chat_history,
+                        student_query,
+                        course_language,
+                        course_name,
+                        QueryRewriteMode.LECTURE_PAGES,
+                    )
                 )
                 hypothetical_lecture_transcriptions_answer_query_future = (
                     executor.submit(
@@ -431,7 +475,9 @@ class LectureRetrieval(Pipeline):
         Rewrite the student query.
         """
         if rewrite_mode == QueryRewriteMode.LECTURE_TRANSCRIPTIONS:
-            initial_prompt = lecture_retriever_initial_prompt_lecture_transcriptions
+            initial_prompt = (
+                lecture_retriever_initial_prompt_lecture_transcriptions
+            )
         else:
             initial_prompt = lecture_retriever_initial_prompt_lecture_pages
 
@@ -455,7 +501,7 @@ class LectureRetrieval(Pipeline):
             token_usage = self.llm.tokens
             token_usage.pipeline = PipelineEnum.IRIS_LECTURE_RETRIEVAL_PIPELINE
             self.tokens.append(self.llm.tokens)
-            logger.info(f"Response from exercise chat pipeline: {response}")
+            logger.info("Response from exercise chat pipeline: %s", response)
             return response
         except Exception as e:
             raise e
@@ -477,9 +523,7 @@ class LectureRetrieval(Pipeline):
         if rewrite_mode == QueryRewriteMode.LECTURE_TRANSCRIPTIONS:
             initial_prompt = lecture_retrieval_initial_prompt_lecture_transcriptions_with_exercise_context
         else:
-            initial_prompt = (
-                lecture_retrieval_initial_prompt_lecture_pages_with_exercise_context
-            )
+            initial_prompt = lecture_retrieval_initial_prompt_lecture_pages_with_exercise_context
 
         prompt = ChatPromptTemplate.from_messages(
             [
@@ -503,7 +547,7 @@ class LectureRetrieval(Pipeline):
             token_usage = self.llm.tokens
             token_usage.pipeline = PipelineEnum.IRIS_LECTURE_RETRIEVAL_PIPELINE
             self.tokens.append(self.llm.tokens)
-            logger.info(f"Response from exercise chat pipeline: {response}")
+            logger.info("Response from exercise chat pipeline: %s", response)
             return response
         except Exception as e:
             raise e
@@ -551,12 +595,14 @@ class LectureRetrieval(Pipeline):
             token_usage = self.llm.tokens
             token_usage.pipeline = PipelineEnum.IRIS_LECTURE_RETRIEVAL_PIPELINE
             self.tokens.append(self.llm.tokens)
-            logger.info(f"Response from retirval pipeline: {response}")
+            logger.info("Response from retirval pipeline: %s", response)
             return response
         except Exception as e:
             raise e
 
-    @traceable(name="Retrieval: Rewrite Elaborated Query with Exercise Context")
+    @traceable(
+        name="Retrieval: Rewrite Elaborated Query with Exercise Context"
+    )
     def rewrite_elaborated_query_with_exercise_context(
         self,
         chat_history: list[PyrisMessage],
@@ -604,7 +650,7 @@ class LectureRetrieval(Pipeline):
             token_usage = self.llm.tokens
             token_usage.pipeline = PipelineEnum.IRIS_LECTURE_RETRIEVAL_PIPELINE
             self.tokens.append(self.llm.tokens)
-            logger.info(f"Response from exercise chat pipeline: {response}")
+            logger.info("Response from exercise chat pipeline: %s", response)
             return response
         except Exception as e:
             raise e
@@ -671,11 +717,15 @@ class LectureRetrieval(Pipeline):
             lecture_transcriptions: List[LectureTranscriptionRetrievalDTO] = (
                 lecture_transcriptions_future.result()
             )
-            lecture_unit_page_chunks: List[LectureUnitPageChunkRetrievalDTO] = (
-                lecture_unit_page_chunks_future.result()
-            )
+            lecture_unit_page_chunks: List[
+                LectureUnitPageChunkRetrievalDTO
+            ] = lecture_unit_page_chunks_future.result()
 
-        return lecture_unit_segments, lecture_transcriptions, lecture_unit_page_chunks
+        return (
+            lecture_unit_segments,
+            lecture_transcriptions,
+            lecture_unit_page_chunks,
+        )
 
     def get_lecture_transcription_of_lecture_unit(
         self, lecture_unit_segment: LectureUnitSegmentRetrievalDTO
@@ -713,18 +763,24 @@ class LectureRetrieval(Pipeline):
                 lecture_unit_segment.lecture_unit_id,
                 lecture_unit_segment.lecture_unit_name,
                 lecture_unit_segment.lecture_unit_link,
-                transcription.properties[LectureTranscriptionSchema.LANGUAGE.value],
+                transcription.properties[
+                    LectureTranscriptionSchema.LANGUAGE.value
+                ],
                 transcription.properties[
                     LectureTranscriptionSchema.SEGMENT_START_TIME.value
                 ],
                 transcription.properties[
                     LectureTranscriptionSchema.SEGMENT_END_TIME.value
                 ],
-                transcription.properties[LectureTranscriptionSchema.PAGE_NUMBER.value],
+                transcription.properties[
+                    LectureTranscriptionSchema.PAGE_NUMBER.value
+                ],
                 transcription.properties[
                     LectureTranscriptionSchema.SEGMENT_SUMMARY.value
                 ],
-                transcription.properties[LectureTranscriptionSchema.SEGMENT_TEXT.value],
+                transcription.properties[
+                    LectureTranscriptionSchema.SEGMENT_TEXT.value
+                ],
                 lecture_unit_segment.base_url,
             )
             for transcription in lecture_transcriptions
@@ -766,9 +822,13 @@ class LectureRetrieval(Pipeline):
                 lecture_unit_segment.lecture_unit_id,
                 lecture_unit_segment.lecture_unit_name,
                 lecture_unit_segment.lecture_unit_link,
-                chunk.properties[LectureUnitPageChunkSchema.COURSE_LANGUAGE.value],
+                chunk.properties[
+                    LectureUnitPageChunkSchema.COURSE_LANGUAGE.value
+                ],
                 chunk.properties[LectureUnitPageChunkSchema.PAGE_NUMBER.value],
-                chunk.properties[LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value],
+                chunk.properties[
+                    LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value
+                ],
                 lecture_unit_segment.base_url,
             )
             for chunk in lecture_page_chunks

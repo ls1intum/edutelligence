@@ -5,51 +5,59 @@ from operator import attrgetter
 from typing import List
 
 import pytz
-from langchain.agents import create_tool_calling_agent, AgentExecutor
-from langchain_core.messages import SystemMessage, HumanMessage
-from langchain_core.output_parsers import StrOutputParser, JsonOutputParser
-from langchain_core.prompts import ChatPromptTemplate, SystemMessagePromptTemplate
+from langchain.agents import AgentExecutor, create_tool_calling_agent
+from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.output_parsers import JsonOutputParser, StrOutputParser
+from langchain_core.prompts import (
+    ChatPromptTemplate,
+    SystemMessagePromptTemplate,
+)
 from langchain_core.runnables import Runnable
 from langsmith import traceable
+from weaviate.collections.classes.filters import Filter
 
-from .code_feedback_pipeline import CodeFeedbackPipeline
-from .interaction_suggestion_pipeline import InteractionSuggestionPipeline
-from ..pipeline import Pipeline
-from ..prompts.iris_exercise_chat_agent_prompts import (
-    tell_iris_initial_system_prompt,
-    tell_begin_agent_prompt,
-    tell_chat_history_exists_prompt,
-    tell_no_chat_history_prompt,
-    tell_format_reminder_prompt,
-    guide_system_prompt,
-    tell_build_failed_system_prompt,
-    tell_progress_stalled_system_prompt,
+from ...common.message_converters import (
+    convert_iris_message_to_langchain_human_message,
 )
-
-from ..shared.citation_pipeline import CitationPipeline, InformationType
-from ..shared.reranker_pipeline import RerankerPipeline
-from ..shared.utils import generate_structured_tools_from_functions
-from ...common.PipelineEnum import PipelineEnum
-from ...common.message_converters import convert_iris_message_to_langchain_human_message
-from ...common.pyris_message import PyrisMessage, IrisMessageRole
+from ...common.pipeline_enum import PipelineEnum
+from ...common.pyris_message import IrisMessageRole, PyrisMessage
 from ...domain import ExerciseChatPipelineExecutionDTO
 from ...domain.chat.interaction_suggestion_dto import (
     InteractionSuggestionPipelineExecutionDTO,
 )
-from ...domain.retrieval.lecture.lecture_retrieval_dto import LectureRetrievalDTO
-from ...llm import CapabilityRequestHandler, RequirementList
-from ...llm import CompletionArguments
+from ...domain.retrieval.lecture.lecture_retrieval_dto import (
+    LectureRetrievalDTO,
+)
+from ...llm import (
+    CapabilityRequestHandler,
+    CompletionArguments,
+    RequirementList,
+)
 from ...llm.langchain import IrisLangchainChatModel
 from ...retrieval.faq_retrieval import FaqRetrieval
-from ...retrieval.faq_retrieval_utils import should_allow_faq_tool, format_faqs
-from app.retrieval.lecture.lecture_page_chunk_retrieval import LecturePageChunkRetrieval
-from ...retrieval.lecture.lecture_retrieval import LectureRetrieval
+from ...retrieval.faq_retrieval_utils import format_faqs, should_allow_faq_tool
+from ...retrieval.lecture.lecture_page_chunk_retrieval import (
+    LecturePageChunkRetrieval,
+)
 from ...vector_database.database import VectorDatabase
-from ...vector_database.lecture_unit_page_chunk_schema import LectureUnitPageChunkSchema
-from weaviate.collections.classes.filters import Filter
-
 from ...vector_database.lecture_unit_schema import LectureUnitSchema
 from ...web.status.status_update import ExerciseChatStatusCallback
+from ..pipeline import Pipeline
+from ..prompts.iris_exercise_chat_agent_prompts import (
+    guide_system_prompt,
+    tell_begin_agent_prompt,
+    tell_build_failed_system_prompt,
+    tell_chat_history_exists_prompt,
+    tell_format_reminder_prompt,
+    tell_iris_initial_system_prompt,
+    tell_no_chat_history_prompt,
+    tell_progress_stalled_system_prompt,
+)
+from ..shared.citation_pipeline import CitationPipeline, InformationType
+from ..shared.reranker_pipeline import RerankerPipeline
+from ..shared.utils import generate_structured_tools_from_functions
+from .code_feedback_pipeline import CodeFeedbackPipeline
+from .interaction_suggestion_pipeline import InteractionSuggestionPipeline
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -143,7 +151,9 @@ class ExerciseChatAgentPipeline(Pipeline):
 
         # Create the pipelines
         self.db = VectorDatabase()
-        self.suggestion_pipeline = InteractionSuggestionPipeline(variant="exercise")
+        self.suggestion_pipeline = InteractionSuggestionPipeline(
+            variant="exercise"
+        )
         self.lecture_retriever = LecturePageChunkRetrieval(self.db.client)
         self.faq_retriever = FaqRetrieval(self.db.client)
         self.reranker_pipeline = RerankerPipeline()
@@ -184,7 +194,7 @@ class ExerciseChatAgentPipeline(Pipeline):
             self.callback.in_progress("Reading submission details...")
             if not dto.submission:
                 return {
-                    field: f"No {field.replace('_', ' ')} is provided"
+                    field: f"No {field.replace("_", " ")} is provided"
                     for field in [
                         "submission_date",
                         "is_practice",
@@ -193,15 +203,22 @@ class ExerciseChatAgentPipeline(Pipeline):
                     ]
                 }
 
-            getter = attrgetter("date", "is_practice", "build_failed", "latest_result")
+            getter = attrgetter(
+                "date", "is_practice", "build_failed", "latest_result"
+            )
             values = getter(dto.submission)
-            keys = ["submission_date", "is_practice", "build_failed", "latest_result"]
+            keys = [
+                "submission_date",
+                "is_practice",
+                "build_failed",
+                "latest_result",
+            ]
 
             return {
                 key: (
                     str(value)
                     if value is not None
-                    else f"No {key.replace('_', ' ')} is provided"
+                    else f"No {key.replace("_", " ")} is provided"
                 )
                 for key, value in zip(keys, values)
             }
@@ -228,7 +245,9 @@ class ExerciseChatAgentPipeline(Pipeline):
                     else "No start date provided"
                 ),
                 "end_date": (
-                    dto.exercise.end_date if dto.exercise else "No end date provided"
+                    dto.exercise.end_date
+                    if dto.exercise
+                    else "No end date provided"
                 ),
                 "due_date_over": (
                     dto.exercise.end_date < current_time
@@ -263,7 +282,9 @@ class ExerciseChatAgentPipeline(Pipeline):
                 if not build_failed
                 else (
                     "\n".join(
-                        str(log) for log in build_logs if "~~~~~~~~~" not in log.message
+                        str(log)
+                        for log in build_logs
+                        if "~~~~~~~~~" not in log.message
                     )
                 )
             )
@@ -290,9 +311,7 @@ class ExerciseChatAgentPipeline(Pipeline):
             feedback_list = (
                 "\n".join(
                     [
-                        "Case: {}. Credits: {}. Info: {}".format(
-                            feedback.test_case_name, feedback.credits, feedback.text
-                        )
+                        f"Case: {feedback.test_case_name}. Credits: {feedback.credits}. Info: {feedback.text}"
                         for feedback in feedbacks
                     ]
                 )
@@ -329,7 +348,7 @@ class ExerciseChatAgentPipeline(Pipeline):
                 return "No repository content available."
             repository = dto.submission.repository
             file_list = "\n------------\n".join(
-                ["- {}".format(file_name) for (file_name, _) in repository.items()]
+                [f"- {file_name}" for (file_name, _) in repository.items()]
             )
             return file_list
 
@@ -363,13 +382,11 @@ class ExerciseChatAgentPipeline(Pipeline):
             """
             self.callback.in_progress(f"Looking into file {file_path} ...")
             if not dto.submission:
-                return (
-                    "No repository content available. File content cannot be retrieved."
-                )
+                return "No repository content available. File content cannot be retrieved."
 
             repository = dto.submission.repository
             if file_path in repository:
-                return "{}:\n{}\n".format(file_path, repository[file_path])
+                return f"{file_path}:\n{repository[file_path]}\n"
             return "File not found or does not exist in the repository."
 
         def lecture_content_retrieval() -> str:
@@ -395,35 +412,25 @@ class ExerciseChatAgentPipeline(Pipeline):
 
             result = "Lecture slide content:\n"
             for paragraph in self.lecture_content.lecture_unit_page_chunks:
-                lct = "Lecture: {}, Unit: {}, Page: {}\nContent:\n---{}---\n\n".format(
-                    paragraph.lecture_name,
-                    paragraph.lecture_unit_name,
-                    paragraph.page_number,
-                    paragraph.page_text_content,
+                lct = (
+                    f"Lecture: {paragraph.lecture_name}, Unit: {paragraph.lecture_unit_name}, "
+                    f"Page: {paragraph.page_number}\nContent:\n---{paragraph.page_text_content}---\n\n"
                 )
                 result += lct
 
             result += "Lecture transcription content:\n"
             for paragraph in self.lecture_content.lecture_transcriptions:
                 transcription = (
-                    "Lecture: {}, Unit: {}, Page: {}\nContent:\n---{}---\n\n".format(
-                        paragraph.lecture_name,
-                        paragraph.lecture_unit_name,
-                        paragraph.page_number,
-                        paragraph.segment_text,
-                    )
+                    f"Lecture: {paragraph.lecture_name}, Unit: {paragraph.lecture_unit_name}, "
+                    f"Page: {paragraph.page_number}\nContent:\n---{paragraph.segment_text}---\n\n"
                 )
                 result += transcription
 
             result += "Lecture segment content:\n"
             for paragraph in self.lecture_content.lecture_unit_segments:
                 segment = (
-                    "Lecture: {}, Unit: {}, Page: {}\nContent:\n---{}---\n\n".format(
-                        paragraph.lecture_name,
-                        paragraph.lecture_unit_name,
-                        paragraph.page_number,
-                        paragraph.segment_summary,
-                    )
+                    f"Lecture: {paragraph.lecture_name}, Unit: {paragraph.lecture_unit_name}, "
+                    f"Page: {paragraph.page_number}\nContent:\n---{paragraph.segment_summary}---\n\n"
                 )
                 result += segment
             return result
@@ -469,7 +476,9 @@ class ExerciseChatAgentPipeline(Pipeline):
             # otherwise exclude the latest message from the chat history.
 
             chat_history = (
-                dto.chat_history[-5:] if query is None else dto.chat_history[-6:-1]
+                dto.chat_history[-5:]
+                if query is None
+                else dto.chat_history[-6:-1]
             )
 
             # Set up the initial prompt
@@ -497,16 +506,24 @@ class ExerciseChatAgentPipeline(Pipeline):
 
             params = {}
 
-            if len(chat_history) > 0 and query is not None and self.event is None:
+            if (
+                len(chat_history) > 0
+                and query is not None
+                and self.event is None
+            ):
                 # Add the conversation to the prompt
-                chat_history_messages = convert_chat_history_to_str(chat_history)
+                chat_history_messages = convert_chat_history_to_str(
+                    chat_history
+                )
                 self.prompt = ChatPromptTemplate.from_messages(
                     [
                         SystemMessage(
                             initial_prompt_with_date
                             + "\n"
                             + add_exercise_context_to_prompt(
-                                exercise_title, problem_statement, programming_language
+                                exercise_title,
+                                problem_statement,
+                                programming_language,
                             )
                             + "\n"
                             + agent_prompt
@@ -515,7 +532,9 @@ class ExerciseChatAgentPipeline(Pipeline):
                         ),
                         HumanMessage(chat_history_exists_prompt),
                         HumanMessage(chat_history_messages),
-                        HumanMessage("Consider the student's newest and latest input:"),
+                        HumanMessage(
+                            "Consider the student's newest and latest input:"
+                        ),
                         convert_iris_message_to_langchain_human_message(query),
                         ("placeholder", "{agent_scratchpad}"),
                     ]
@@ -539,7 +558,9 @@ class ExerciseChatAgentPipeline(Pipeline):
                             HumanMessage(
                                 "Consider the student's newest and latest input:"
                             ),
-                            convert_iris_message_to_langchain_human_message(query),
+                            convert_iris_message_to_langchain_human_message(
+                                query
+                            ),
                             ("placeholder", "{agent_scratchpad}"),
                         ]
                     )
@@ -579,12 +600,15 @@ class ExerciseChatAgentPipeline(Pipeline):
             agent = create_tool_calling_agent(
                 llm=self.llm_big, tools=tools, prompt=self.prompt
             )
-            agent_executor = AgentExecutor(agent=agent, tools=tools, verbose=False)
+            agent_executor = AgentExecutor(
+                agent=agent, tools=tools, verbose=False
+            )
             self.callback.in_progress("Thinking ...")
             out = None
             for step in agent_executor.iter(params):
                 self._append_tokens(
-                    self.llm_big.tokens, PipelineEnum.IRIS_CHAT_EXERCISE_AGENT_MESSAGE
+                    self.llm_big.tokens,
+                    PipelineEnum.IRIS_CHAT_EXERCISE_AGENT_MESSAGE,
                 )
                 if step.get("output", None):
                     out = step["output"]
@@ -593,7 +617,9 @@ class ExerciseChatAgentPipeline(Pipeline):
                 self.callback.in_progress("Refining response ...")
                 self.prompt = ChatPromptTemplate.from_messages(
                     [
-                        SystemMessagePromptTemplate.from_template(guide_system_prompt),
+                        SystemMessagePromptTemplate.from_template(
+                            guide_system_prompt
+                        ),
                         HumanMessage(out),
                     ]
                 )
@@ -606,7 +632,8 @@ class ExerciseChatAgentPipeline(Pipeline):
                     }
                 )
                 self._append_tokens(
-                    self.llm_big.tokens, PipelineEnum.IRIS_CHAT_EXERCISE_AGENT_MESSAGE
+                    self.llm_big.tokens,
+                    PipelineEnum.IRIS_CHAT_EXERCISE_AGENT_MESSAGE,
                 )
                 if "!ok!" in guide_response:
                     print("Response is ok and not rewritten!!!")
@@ -644,7 +671,9 @@ class ExerciseChatAgentPipeline(Pipeline):
                 self.callback.error("Error in refining response")
             try:
                 if out:
-                    suggestion_dto = InteractionSuggestionPipelineExecutionDTO()
+                    suggestion_dto = (
+                        InteractionSuggestionPipelineExecutionDTO()
+                    )
                     suggestion_dto.chat_history = dto.chat_history
                     suggestion_dto.last_message = out
                     suggestions = self.suggestion_pipeline(suggestion_dto)
@@ -653,7 +682,9 @@ class ExerciseChatAgentPipeline(Pipeline):
                     else:
                         tokens = []
                     self.callback.done(
-                        final_result=None, suggestions=suggestions, tokens=tokens
+                        final_result=None,
+                        suggestions=suggestions,
+                        tokens=tokens,
                     )
                 else:
                     # This should never happen but whatever
@@ -666,10 +697,13 @@ class ExerciseChatAgentPipeline(Pipeline):
                     exc_info=e,
                 )
                 traceback.print_exc()
-                self.callback.error("Generating interaction suggestions failed.")
+                self.callback.error(
+                    "Generating interaction suggestions failed."
+                )
         except Exception as e:
             logger.error(
-                "An error occurred while running the course chat pipeline", exc_info=e
+                "An error occurred while running the course chat pipeline",
+                exc_info=e,
             )
             traceback.print_exc()
             self.callback.error(
@@ -686,9 +720,9 @@ class ExerciseChatAgentPipeline(Pipeline):
         if course_id:
             # Fetch the first object that matches the course ID with the language property
             result = self.db.lecture_units.query.fetch_objects(
-                filters=Filter.by_property(LectureUnitSchema.COURSE_ID.value).equal(
-                    course_id
-                ),
+                filters=Filter.by_property(
+                    LectureUnitSchema.COURSE_ID.value
+                ).equal(course_id),
                 limit=1,
                 return_properties=[LectureUnitSchema.COURSE_NAME.value],
             )

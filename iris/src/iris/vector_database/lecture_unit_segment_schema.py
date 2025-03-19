@@ -35,8 +35,12 @@ class LectureUnitSegmentSchema(Enum):
 
 
 def init_lecture_unit_segment_schema(client: WeaviateClient) -> Collection:
-    if client.collections.exists(LectureUnitSegmentSchema.COLLECTION_NAME.value):
-        return client.collections.get(LectureUnitSegmentSchema.COLLECTION_NAME.value)
+    if client.collections.exists(
+        LectureUnitSegmentSchema.COLLECTION_NAME.value
+    ):
+        return client.collections.get(
+            LectureUnitSegmentSchema.COLLECTION_NAME.value
+        )
 
     return client.collections.create(
         name=LectureUnitSegmentSchema.COLLECTION_NAME.value,

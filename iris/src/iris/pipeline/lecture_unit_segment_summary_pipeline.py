@@ -54,12 +54,14 @@ class LectureUnitSegmentSummaryPipeline(Pipeline):
         self.client = client
         self.lecture_unit_dto = lecture_unit_dto
 
-        self.lecture_unit_segment_collection = init_lecture_unit_segment_schema(client)
-        self.lecture_transcription_collection = init_lecture_transcription_schema(
-            client
+        self.lecture_unit_segment_collection = (
+            init_lecture_unit_segment_schema(client)
         )
-        self.lecture_unit_page_chunk_collection = init_lecture_unit_page_chunk_schema(
-            client
+        self.lecture_transcription_collection = (
+            init_lecture_transcription_schema(client)
+        )
+        self.lecture_unit_page_chunk_collection = (
+            init_lecture_unit_page_chunk_schema(client)
         )
 
         self.llm_embedding = BasicRequestHandler("embedding-small")
@@ -115,14 +117,20 @@ class LectureUnitSegmentSummaryPipeline(Pipeline):
 
         if len(slides) != 0:
             slide_numbers = [
-                int(slide.properties.get(LectureUnitPageChunkSchema.PAGE_NUMBER.value))
+                int(
+                    slide.properties.get(
+                        LectureUnitPageChunkSchema.PAGE_NUMBER.value
+                    )
+                )
                 for slide in slides
             ]
             return min(slide_numbers), max(slide_numbers)
 
-        transcriptions = self.lecture_transcription_collection.query.fetch_objects(
-            filters=self._get_lecture_transcription_filter()
-        ).objects
+        transcriptions = (
+            self.lecture_transcription_collection.query.fetch_objects(
+                filters=self._get_lecture_transcription_filter()
+            ).objects
+        )
 
         if len(transcriptions) != 0:
             slide_numbers = [

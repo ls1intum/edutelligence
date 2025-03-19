@@ -9,7 +9,9 @@ from weaviate.collections.classes.filters import Filter
 from iris.dependencies import TokenValidator
 
 from ...vector_database.database import VectorDatabase
-from ...vector_database.lecture_unit_page_chunk_schema import LectureUnitPageChunkSchema
+from ...vector_database.lecture_unit_page_chunk_schema import (
+    LectureUnitPageChunkSchema,
+)
 
 router = APIRouter(prefix="/api/v1", tags=["ingestion_status"])
 
@@ -24,7 +26,10 @@ class IngestionState(str, Enum):
     dependencies=[Depends(TokenValidator())],
 )
 def get_lecture_unit_ingestion_state(
-    course_id: int, lecture_id: int, lecture_unit_id: int, base_url: str = Query(...)
+    course_id: int,
+    lecture_id: int,
+    lecture_unit_id: int,
+    base_url: str = Query(...),
 ):
     """
 
@@ -38,15 +43,15 @@ def get_lecture_unit_ingestion_state(
     decoded_base_url = unquote(base_url)
     result = db.lectures.query.fetch_objects(
         filters=(
-            Filter.by_property(LectureUnitPageChunkSchema.BASE_URL.value).equal(
-                decoded_base_url
-            )
-            & Filter.by_property(LectureUnitPageChunkSchema.COURSE_ID.value).equal(
-                course_id
-            )
-            & Filter.by_property(LectureUnitPageChunkSchema.LECTURE_ID.value).equal(
-                lecture_id
-            )
+            Filter.by_property(
+                LectureUnitPageChunkSchema.BASE_URL.value
+            ).equal(decoded_base_url)
+            & Filter.by_property(
+                LectureUnitPageChunkSchema.COURSE_ID.value
+            ).equal(course_id)
+            & Filter.by_property(
+                LectureUnitPageChunkSchema.LECTURE_ID.value
+            ).equal(lecture_id)
             & Filter.by_property(
                 LectureUnitPageChunkSchema.LECTURE_UNIT_ID.value
             ).equal(lecture_unit_id)

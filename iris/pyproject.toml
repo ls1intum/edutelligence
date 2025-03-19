@@ -49,6 +49,9 @@ pre-commit = "^4.1.0"
 profile = "black"
 multi_line_output = 3
 
+[tool.black]
+line-length = 79
+
 [tool.bandit]
 exclude_dirs = ["tests"]
 

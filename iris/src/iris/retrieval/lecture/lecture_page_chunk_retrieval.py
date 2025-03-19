@@ -1,34 +1,37 @@
 from asyncio.log import logger
 from typing import List
 
+from langchain_core.output_parsers import StrOutputParser
 from langsmith import traceable
 from weaviate import WeaviateClient
 from weaviate.classes.query import Filter
 
-from app.common.token_usage_dto import TokenUsageDTO
-from app.common.message_converters import convert_iris_message_to_langchain_message
-from app.common.pyris_message import PyrisMessage
-from app.domain.retrieval.lecture.lecture_retrieval_dto import (
-    LectureUnitRetrievalDTO,
-    LectureUnitPageChunkRetrievalDTO,
+from iris.common.message_converters import (
+    convert_iris_message_to_langchain_message,
 )
-from app.llm.langchain import IrisLangchainChatModel
-from app.llm.request_handler.rerank_request_handler import RerankRequestHandler
-from app.pipeline import Pipeline
-
-from app.llm import (
+from iris.common.pyris_message import PyrisMessage
+from iris.common.token_usage_dto import TokenUsageDTO
+from iris.domain.retrieval.lecture.lecture_retrieval_dto import (
+    LectureUnitPageChunkRetrievalDTO,
+    LectureUnitRetrievalDTO,
+)
+from iris.llm import (
     BasicRequestHandler,
-    CompletionArguments,
     CapabilityRequestHandler,
+    CompletionArguments,
     RequirementList,
 )
-from app.pipeline.shared.reranker_pipeline import RerankerPipeline
-from app.vector_database.lecture_unit_page_chunk_schema import (
-    init_lecture_unit_page_chunk_schema,
-    LectureUnitPageChunkSchema,
+from iris.llm.langchain import IrisLangchainChatModel
+from iris.llm.request_handler.rerank_request_handler import (
+    RerankRequestHandler,
 )
-from langchain_core.output_parsers import StrOutputParser
-from app.vector_database.lecture_unit_schema import (
+from iris.pipeline import Pipeline
+from iris.pipeline.shared.reranker_pipeline import RerankerPipeline
+from iris.vector_database.lecture_unit_page_chunk_schema import (
+    LectureUnitPageChunkSchema,
+    init_lecture_unit_page_chunk_schema,
+)
+from iris.vector_database.lecture_unit_schema import (
     LectureUnitSchema,
     init_lecture_unit_schema,
 )
@@ -62,7 +65,7 @@ class LecturePageChunkRetrieval(Pipeline):
 
     tokens: List[TokenUsageDTO]
 
-    def __init__(self, client: WeaviateClient, **kwargs):
+    def __init__(self, client: WeaviateClient):
         super().__init__(implementation_id="lecture_retrieval_pipeline")
         request_handler = CapabilityRequestHandler(
             requirements=RequirementList(
@@ -79,8 +82,8 @@ class LecturePageChunkRetrieval(Pipeline):
         self.cohere_client = RerankRequestHandler("cohere")
 
         self.pipeline = self.llm | StrOutputParser()
-        self.lecture_unit_page_chunk_collection = init_lecture_unit_page_chunk_schema(
-            client
+        self.lecture_unit_page_chunk_collection = (
+            init_lecture_unit_page_chunk_schema(client)
         )
         self.lecture_unit_collection = init_lecture_unit_schema(client)
 
@@ -124,12 +127,19 @@ class LecturePageChunkRetrieval(Pipeline):
         page_chunks = [
             dto
             for chunk in results
-            if (dto := self.generate_retrieval_dtos(chunk.properties, str(chunk.uuid)))
+            if (
+                dto := self.generate_retrieval_dtos(
+                    chunk.properties, str(chunk.uuid)
+                )
+            )
             is not None
         ]
 
         reranked_page_chunks = self.cohere_client.rerank(
-            student_query, page_chunks, top_n_reranked_results, "page_text_content"
+            student_query,
+            page_chunks,
+            top_n_reranked_results,
+            "page_text_content",
         )
         return reranked_page_chunks
 
@@ -144,7 +154,7 @@ class LecturePageChunkRetrieval(Pipeline):
         """
         Search the database for the given query.
         """
-        logger.info(f"Searching in the database for query: {query}")
+        logger.info("Searching in the database for query: %s", query)
         # Initialize filter to None by default
         filter_weaviate = None
 
@@ -179,10 +189,16 @@ class LecturePageChunkRetrieval(Pipeline):
         ).equal(lecture_page_chunk[LectureUnitPageChunkSchema.COURSE_ID.value])
         lecture_unit_filter &= Filter.by_property(
             LectureUnitSchema.LECTURE_ID.value
-        ).equal(lecture_page_chunk[LectureUnitPageChunkSchema.LECTURE_ID.value])
+        ).equal(
+            lecture_page_chunk[LectureUnitPageChunkSchema.LECTURE_ID.value]
+        )
         lecture_unit_filter &= Filter.by_property(
             LectureUnitSchema.LECTURE_UNIT_ID.value
-        ).equal(lecture_page_chunk[LectureUnitPageChunkSchema.LECTURE_UNIT_ID.value])
+        ).equal(
+            lecture_page_chunk[
+                LectureUnitPageChunkSchema.LECTURE_UNIT_ID.value
+            ]
+        )
         lecture_unit_filter &= Filter.by_property(
             LectureUnitSchema.BASE_URL.value
         ).equal(lecture_page_chunk[LectureUnitPageChunkSchema.BASE_URL.value])
@@ -197,14 +213,18 @@ class LecturePageChunkRetrieval(Pipeline):
             lecture_transcription_dto = LectureUnitPageChunkRetrievalDTO(
                 uuid=uuid,
                 course_id=lecture_unit[LectureUnitSchema.COURSE_ID.value],
-                course_name=lecture_unit[LectureUnitSchema.COURSE_DESCRIPTION.value],
+                course_name=lecture_unit[
+                    LectureUnitSchema.COURSE_DESCRIPTION.value
+                ],
                 course_description=lecture_unit[
                     LectureUnitSchema.COURSE_DESCRIPTION.value
                 ],
                 lecture_id=lecture_page_chunk[
                     LectureUnitPageChunkSchema.LECTURE_ID.value
                 ],
-                lecture_name=lecture_unit[LectureUnitSchema.LECTURE_NAME.value],
+                lecture_name=lecture_unit[
+                    LectureUnitSchema.LECTURE_NAME.value
+                ],
                 lecture_unit_id=lecture_page_chunk[
                     LectureUnitPageChunkSchema.LECTURE_ID.value
                 ],
@@ -223,6 +243,8 @@ class LecturePageChunkRetrieval(Pipeline):
                 page_text_content=lecture_page_chunk[
                     LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value
                 ],
-                base_url=lecture_page_chunk[LectureUnitPageChunkSchema.BASE_URL.value],
+                base_url=lecture_page_chunk[
+                    LectureUnitPageChunkSchema.BASE_URL.value
+                ],
             )
             return lecture_transcription_dto
