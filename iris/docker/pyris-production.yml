@@ -9,7 +9,7 @@ services:
     extends:
       file: ./pyris.yml
       service: pyris-app
-    image: ghcr.io/ls1intum/pyris:${PYRIS_DOCKER_TAG:-latest}
+    image: ghcr.io/ls1intum/edutelligence/iris:${PYRIS_DOCKER_TAG:-latest}
     pull_policy: always
     restart: unless-stopped
     volumes:
