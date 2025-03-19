@@ -228,12 +228,13 @@ class OpenAIChatModel(ChatModel):
 
         for attempt in range(retries):
             try:
-                params = {
-                    "model": self.model,
-                    "messages": messages,
-                    "temperature": arguments.temperature,
-                    "max_tokens": arguments.max_tokens,
-                }
+                params = {"model": self.model, "messages": messages}
+
+                if arguments.temperature is not None:
+                    params["temperature"] = arguments.temperature
+
+                if arguments.max_tokens is not None:
+                    params["max_tokens"] = arguments.max_tokens
 
                 if arguments.response_format == "JSON":
                     params["response_format"] = ResponseFormatJSONObject(
