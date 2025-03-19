@@ -45,6 +45,8 @@ class StatusCallback(ABC):
     stage: StageDTO
     current_stage_index: Optional[int]
 
+    api_url: str = "api/iris/public/pyris/pipelines"
+
     def __init__(
         self,
         url: str,
@@ -199,7 +201,7 @@ class CourseChatStatusCallback(StatusCallback):
     def __init__(
         self, run_id: str, base_url: str, initial_stages: List[StageDTO] = None
     ):
-        url = f"{base_url}/api/iris/public/pyris/pipelines/course-chat/runs/{run_id}/status"
+        url = f"{base_url}/{self.api_url}/course-chat/runs/{run_id}/status"
         current_stage_index = len(initial_stages) if initial_stages else 0
         stages = initial_stages or []
         stages += [
@@ -223,7 +225,7 @@ class ExerciseChatStatusCallback(StatusCallback):
     def __init__(
         self, run_id: str, base_url: str, initial_stages: List[StageDTO] = None
     ):
-        url = f"{base_url}/api/iris/public/pyris/pipelines/tutor-chat/runs/{run_id}/status"
+        url = f"{base_url}/{self.api_url}/tutor-chat/runs/{run_id}/status"
         current_stage_index = len(initial_stages) if initial_stages else 0
         stages = initial_stages or []
         stages += [
@@ -249,7 +251,7 @@ class ChatGPTWrapperStatusCallback(StatusCallback):
     def __init__(
         self, run_id: str, base_url: str, initial_stages: List[StageDTO] = None
     ):
-        url = f"{base_url}/api/public/pyris/pipelines/tutor-chat/runs/{run_id}/status"
+        url = f"{base_url}/{self.api_url}/tutor-chat/runs/{run_id}/status"
         current_stage_index = len(initial_stages) if initial_stages else 0
         stages = initial_stages or []
         stages += [
@@ -273,7 +275,7 @@ class TextExerciseChatCallback(StatusCallback):
         base_url: str,
         initial_stages: List[StageDTO],
     ):
-        url = f"{base_url}/api/iris/public/pyris/pipelines/text-exercise-chat/runs/{run_id}/status"
+        url = f"{base_url}/{self.api_url}/text-exercise-chat/runs/{run_id}/status"
         stages = initial_stages or []
         stage = len(stages)
         stages += [
@@ -306,7 +308,7 @@ class CompetencyExtractionCallback(StatusCallback):
         base_url: str,
         initial_stages: List[StageDTO],
     ):
-        url = f"{base_url}/api/public/pyris/pipelines/competency-extraction/runs/{run_id}/status"
+        url = f"{base_url}/{self.api_url}/competency-extraction/runs/{run_id}/status"
         stages = initial_stages or []
         stages.append(
             StageDTO(
@@ -329,7 +331,7 @@ class RewritingCallback(StatusCallback):
         base_url: str,
         initial_stages: List[StageDTO],
     ):
-        url = f"{base_url}/api/public/pyris/pipelines/rewriting/runs/{run_id}/status"
+        url = f"{base_url}/{self.api_url}/rewriting/runs/{run_id}/status"
         stages = initial_stages or []
         stages.append(
             StageDTO(
@@ -352,7 +354,7 @@ class InconsistencyCheckCallback(StatusCallback):
         base_url: str,
         initial_stages: List[StageDTO],
     ):
-        url = f"{base_url}/api/public/pyris/pipelines/inconsistency-check/runs/{run_id}/status"
+        url = f"{base_url}/{self.api_url}/inconsistency-check/runs/{run_id}/status"
         stages = initial_stages or []
         stages.append(
             StageDTO(
@@ -375,7 +377,7 @@ class LectureChatCallback(StatusCallback):
         base_url: str,
         initial_stages: List[StageDTO],
     ):
-        url = f"{base_url}/api/iris/public/pyris/pipelines/lecture-chat/runs/{run_id}/status"
+        url = f"{base_url}/{self.api_url}/lecture-chat/runs/{run_id}/status"
         stages = initial_stages or []
         stage = len(stages)
         stages += [
