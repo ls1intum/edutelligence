@@ -226,20 +226,3 @@ def faq_deletion_webhook(dto: FaqDeletionExecutionDto):
     thread = Thread(target=run_faq_delete_pipeline_worker, args=(dto,))
     thread.start()
     return
-
-
-@router.get(
-    "/test",
-    status_code=status.HTTP_202_ACCEPTED,
-)
-def test():
-    thread = Thread(
-        target=LectureRetrieval(VectorDatabase().get_client()),
-        args=("What is scrum?", 1, []),
-    )
-    thread.start()
-    # LectureRetrieval(VectorDatabase().get_client())(
-    #     query="Query",
-    #     course_id = 1,
-    #     chat_history = [],
-    # )

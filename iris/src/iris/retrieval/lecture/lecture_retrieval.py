@@ -1,7 +1,6 @@
-import concurrent.futures
 from asyncio.log import logger
-from enum import Enum
 from typing import List
+import concurrent.futures
 
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate, SystemMessagePromptTemplate
@@ -9,56 +8,57 @@ from langsmith import traceable
 from weaviate import WeaviateClient
 from weaviate.classes.query import Filter
 
-from iris.common.message_converters import convert_iris_message_to_langchain_message
-from iris.common.pipeline_enum import PipelineEnum
-from iris.common.pyris_message import PyrisMessage
-from iris.domain.retrieval.lecture.lecture_retrieval_dto import (
+from app.common.PipelineEnum import PipelineEnum
+from app.common.message_converters import convert_iris_message_to_langchain_message
+
+from app.common.pyris_message import PyrisMessage
+from app.domain.retrieval.lecture.lecture_retrieval_dto import (
     LectureRetrievalDTO,
-    LectureTranscriptionRetrievalDTO,
-    LectureUnitPageChunkRetrievalDTO,
     LectureUnitRetrievalDTO,
     LectureUnitSegmentRetrievalDTO,
+    LectureTranscriptionRetrievalDTO,
+    LectureUnitPageChunkRetrievalDTO,
 )
-from iris.llm import (
-    BasicRequestHandler,
+from app.llm import (
     CapabilityRequestHandler,
-    CompletionArguments,
     RequirementList,
+    CompletionArguments,
+    BasicRequestHandler,
 )
-from iris.llm.langchain import IrisLangchainChatModel
-from iris.llm.request_handler.rerank_request_handler import RerankRequestHandler
-from iris.pipeline import Pipeline
-from iris.pipeline.prompts.lecture_retrieval_prompts import (
-    lecture_retrieval_initial_prompt_lecture_pages_with_exercise_context,
-    lecture_retrieval_initial_prompt_lecture_transcriptions_with_exercise_context,
-    lecture_retriever_initial_prompt_lecture_pages,
-    lecture_retriever_initial_prompt_lecture_transcriptions,
+from app.llm.langchain import IrisLangchainChatModel
+from app.llm.request_handler.rerank_request_handler import RerankRequestHandler
+from app.pipeline import Pipeline
+from app.pipeline.prompts.lecture_retrieval_prompts import (
     rewrite_student_query_prompt,
     rewrite_student_query_prompt_with_exercise_context,
+    lecture_retriever_initial_prompt_lecture_pages,
+    lecture_retriever_initial_prompt_lecture_transcriptions,
+    lecture_retrieval_initial_prompt_lecture_pages_with_exercise_context,
+    lecture_retrieval_initial_prompt_lecture_transcriptions_with_exercise_context,
     write_hypothetical_lecture_pages_answer_prompt,
     write_hypothetical_lecture_transcriptions_answer_prompt,
 )
-from iris.pipeline.shared.reranker_pipeline import RerankerPipeline
-from iris.retrieval.lecture.lecture_page_chunk_retrieval import (
-    LecturePageChunkRetrieval,
-)
-from iris.retrieval.lecture.lecture_transcription_retrieval import (
+from app.pipeline.shared.reranker_pipeline import RerankerPipeline
+from enum import Enum
+
+from app.retrieval.lecture.lecture_page_chunk_retrieval import LecturePageChunkRetrieval
+from app.retrieval.lecture.lecture_transcription_retrieval import (
     LectureTranscriptionRetrieval,
 )
-from iris.retrieval.lecture.lecture_unit_segment_retrieval import (
+from app.retrieval.lecture.lecture_unit_segment_retrieval import (
     LectureUnitSegmentRetrieval,
 )
-from iris.vector_database.lecture_transcription_schema import (
-    LectureTranscriptionSchema,
+from app.vector_database.lecture_transcription_schema import (
     init_lecture_transcription_schema,
+    LectureTranscriptionSchema,
 )
-from iris.vector_database.lecture_unit_page_chunk_schema import (
-    LectureUnitPageChunkSchema,
+from app.vector_database.lecture_unit_page_chunk_schema import (
     init_lecture_unit_page_chunk_schema,
+    LectureUnitPageChunkSchema,
 )
-from iris.vector_database.lecture_unit_schema import (
-    LectureUnitSchema,
+from app.vector_database.lecture_unit_schema import (
     init_lecture_unit_schema,
+    LectureUnitSchema,
 )
 
 
@@ -68,12 +68,6 @@ class QueryRewriteMode(Enum):
 
 
 class LectureRetrieval(Pipeline):
-    """LectureRetrieval retrieves lecture data from the vector database by processing lecture units, transcriptions,
-     and page chunks.
-
-    It combines various sources of lecture-related data and formats them into a single DTO for further processing.
-    """
-
     def __init__(self, client: WeaviateClient):
         super().__init__(implementation_id="lecture_retrieval_pipeline")
         request_handler = CapabilityRequestHandler(
@@ -117,7 +111,7 @@ class LectureRetrieval(Pipeline):
         lecture_id: int = None,
         lecture_unit_id: int = None,
         base_url: str = None,
-    ):
+    ) -> LectureRetrievalDTO:
         lecture_unit = self.get_lecture_unit(course_id, lecture_id, lecture_unit_id)
         if lecture_unit is None:
             raise ValueError("The lecture unit is not indexed")
@@ -214,8 +208,10 @@ class LectureRetrieval(Pipeline):
                 return None
 
             lecture_unit = lecture_units[0].properties
+            lecture_unit_uuid = str(lecture_units[0].uuid)
 
             return LectureUnitRetrievalDTO(
+                uuid=lecture_unit_uuid,
                 course_id=lecture_unit.course_id,
                 course_name=lecture_unit.course_name,
                 course_description=lecture_unit.course_description,
@@ -227,7 +223,6 @@ class LectureRetrieval(Pipeline):
                 lecture_unit_link=lecture_unit.lecture_unit_link,
                 base_url=lecture_unit.base_url,
                 lecture_unit_summary=lecture_unit.lecture_unit_summary,
-                uuid=lecture_unit.uuid,  # TODO: Check if correct, needed to fix lint error
             )
 
         elif lecture_id is not None:
@@ -242,15 +237,17 @@ class LectureRetrieval(Pipeline):
                 return None
 
             lecture_unit = lecture_units[0].properties
+            lecture_unit_uuid = str(lecture_units[0].uuid)
 
             return LectureUnitRetrievalDTO(
+                uuid=lecture_unit_uuid,
                 course_id=lecture_unit[LectureUnitSchema.COURSE_ID.value],
                 course_name=lecture_unit[LectureUnitSchema.COURSE_NAME.value],
                 course_description=lecture_unit[
                     LectureUnitSchema.COURSE_DESCRIPTION.value
                 ],
                 course_language=lecture_unit[LectureUnitSchema.COURSE_LANGUAGE.value],
-                lecture_id=lecture_unit[LectureUnitSchema.LECTURE_UNIT_ID.value],
+                lecture_id=lecture_unit[LectureUnitSchema.LECTURE_ID.value],
                 lecture_name=lecture_unit[LectureUnitSchema.LECTURE_UNIT_NAME.value],
                 lecture_unit_id=None,
                 lecture_unit_name=None,
@@ -259,7 +256,6 @@ class LectureRetrieval(Pipeline):
                 lecture_unit_summary=lecture_unit[
                     LectureUnitSchema.LECTURE_UNIT_SUMMARY.value
                 ],
-                uuid=lecture_unit.uuid,  # TODO: Check if correct, needed to fix lint error
             )
 
         else:
@@ -459,7 +455,7 @@ class LectureRetrieval(Pipeline):
             token_usage = self.llm.tokens
             token_usage.pipeline = PipelineEnum.IRIS_LECTURE_RETRIEVAL_PIPELINE
             self.tokens.append(self.llm.tokens)
-            logger.info("Response from exercise chat pipeline: %s", response)
+            logger.info(f"Response from exercise chat pipeline: {response}")
             return response
         except Exception as e:
             raise e
@@ -507,7 +503,7 @@ class LectureRetrieval(Pipeline):
             token_usage = self.llm.tokens
             token_usage.pipeline = PipelineEnum.IRIS_LECTURE_RETRIEVAL_PIPELINE
             self.tokens.append(self.llm.tokens)
-            logger.info("Response from exercise chat pipeline: %s", response)
+            logger.info(f"Response from exercise chat pipeline: {response}")
             return response
         except Exception as e:
             raise e
@@ -555,7 +551,7 @@ class LectureRetrieval(Pipeline):
             token_usage = self.llm.tokens
             token_usage.pipeline = PipelineEnum.IRIS_LECTURE_RETRIEVAL_PIPELINE
             self.tokens.append(self.llm.tokens)
-            logger.info("Response from retirval pipeline: %s", response)
+            logger.info(f"Response from retirval pipeline: {response}")
             return response
         except Exception as e:
             raise e
@@ -608,7 +604,7 @@ class LectureRetrieval(Pipeline):
             token_usage = self.llm.tokens
             token_usage.pipeline = PipelineEnum.IRIS_LECTURE_RETRIEVAL_PIPELINE
             self.tokens.append(self.llm.tokens)
-            logger.info("Response from exercise chat pipeline: %s", response)
+            logger.info(f"Response from exercise chat pipeline: {response}")
             return response
         except Exception as e:
             raise e

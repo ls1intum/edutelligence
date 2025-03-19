@@ -28,9 +28,6 @@ from iris.vector_database.lecture_unit_schema import (
 
 
 class LectureTranscriptionRetrieval(Pipeline):
-    """LectureTranscriptionRetrieval retrieves lecture transcription data from the database by applying search filters
-    and processing the transcription segments."""
-
     def __init__(self, client: WeaviateClient):
         super().__init__(implementation_id="lecture_transcriptions_retrieval_pipeline")
         request_handler = CapabilityRequestHandler(
@@ -78,9 +75,10 @@ class LectureTranscriptionRetrieval(Pipeline):
                 lecture_transcription_segment.properties,
                 str(lecture_transcription_segment.uuid),
             )
-            lecture_transcription_retrieval_dtos.append(
-                lecture_transcription_retrieval_dto
-            )
+            if lecture_transcription_retrieval_dto is not None:
+                lecture_transcription_retrieval_dtos.append(
+                    lecture_transcription_retrieval_dto
+                )
 
         reranked_answers = self.cohere_client.rerank(
             query=student_query,
@@ -101,7 +99,7 @@ class LectureTranscriptionRetrieval(Pipeline):
         """
         Search the database for the given query.
         """
-        logger.info("Searching in the database for query: %s", query)
+        logger.info(f"Searching in the database for query: {query}")
         # Initialize filter to None by default
         filter_weaviate = None
 

@@ -1,33 +1,34 @@
 from asyncio.log import logger
 from typing import List
 
-from langchain_core.output_parsers import StrOutputParser
 from langsmith import traceable
 from weaviate import WeaviateClient
 from weaviate.classes.query import Filter
 
-from iris.common.message_converters import convert_iris_message_to_langchain_message
-from iris.common.pyris_message import PyrisMessage
-from iris.common.token_usage_dto import TokenUsageDTO
-from iris.domain.retrieval.lecture.lecture_retrieval_dto import (
-    LectureUnitPageChunkRetrievalDTO,
+from app.common.token_usage_dto import TokenUsageDTO
+from app.common.message_converters import convert_iris_message_to_langchain_message
+from app.common.pyris_message import PyrisMessage
+from app.domain.retrieval.lecture.lecture_retrieval_dto import (
     LectureUnitRetrievalDTO,
+    LectureUnitPageChunkRetrievalDTO,
 )
-from iris.llm import (
+from app.llm.langchain import IrisLangchainChatModel
+from app.llm.request_handler.rerank_request_handler import RerankRequestHandler
+from app.pipeline import Pipeline
+
+from app.llm import (
     BasicRequestHandler,
-    CapabilityRequestHandler,
     CompletionArguments,
+    CapabilityRequestHandler,
     RequirementList,
 )
-from iris.llm.langchain import IrisLangchainChatModel
-from iris.llm.request_handler.rerank_request_handler import RerankRequestHandler
-from iris.pipeline import Pipeline
-from iris.pipeline.shared.reranker_pipeline import RerankerPipeline
-from iris.vector_database.lecture_unit_page_chunk_schema import (
-    LectureUnitPageChunkSchema,
+from app.pipeline.shared.reranker_pipeline import RerankerPipeline
+from app.vector_database.lecture_unit_page_chunk_schema import (
     init_lecture_unit_page_chunk_schema,
+    LectureUnitPageChunkSchema,
 )
-from iris.vector_database.lecture_unit_schema import (
+from langchain_core.output_parsers import StrOutputParser
+from app.vector_database.lecture_unit_schema import (
     LectureUnitSchema,
     init_lecture_unit_schema,
 )
@@ -61,7 +62,7 @@ class LecturePageChunkRetrieval(Pipeline):
 
     tokens: List[TokenUsageDTO]
 
-    def __init__(self, client: WeaviateClient):
+    def __init__(self, client: WeaviateClient, **kwargs):
         super().__init__(implementation_id="lecture_retrieval_pipeline")
         request_handler = CapabilityRequestHandler(
             requirements=RequirementList(
@@ -121,8 +122,10 @@ class LecturePageChunkRetrieval(Pipeline):
         results = list(unique.values())
 
         page_chunks = [
-            self.generate_retrieval_dtos(chunk.properties, str(chunk.uuid))
+            dto
             for chunk in results
+            if (dto := self.generate_retrieval_dtos(chunk.properties, str(chunk.uuid)))
+            is not None
         ]
 
         reranked_page_chunks = self.cohere_client.rerank(
@@ -141,7 +144,7 @@ class LecturePageChunkRetrieval(Pipeline):
         """
         Search the database for the given query.
         """
-        logger.info("Searching in the database for query: %s", query)
+        logger.info(f"Searching in the database for query: {query}")
         # Initialize filter to None by default
         filter_weaviate = None
 
@@ -171,7 +174,6 @@ class LecturePageChunkRetrieval(Pipeline):
         return return_value.objects
 
     def generate_retrieval_dtos(self, lecture_page_chunk, uuid):
-        print(lecture_page_chunk)
         lecture_unit_filter = Filter.by_property(
             LectureUnitSchema.COURSE_ID.value
         ).equal(lecture_page_chunk[LectureUnitPageChunkSchema.COURSE_ID.value])

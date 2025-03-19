@@ -5,53 +5,51 @@ from operator import attrgetter
 from typing import List
 
 import pytz
-from langchain.agents import AgentExecutor, create_tool_calling_agent
-from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_core.output_parsers import JsonOutputParser, StrOutputParser
+from langchain.agents import create_tool_calling_agent, AgentExecutor
+from langchain_core.messages import SystemMessage, HumanMessage
+from langchain_core.output_parsers import StrOutputParser, JsonOutputParser
 from langchain_core.prompts import ChatPromptTemplate, SystemMessagePromptTemplate
 from langchain_core.runnables import Runnable
 from langsmith import traceable
-from weaviate.collections.classes.filters import Filter
 
-from iris.common.message_converters import (
-    convert_iris_message_to_langchain_human_message,
-)
-from iris.common.pipeline_enum import PipelineEnum
-from iris.common.pyris_message import IrisMessageRole, PyrisMessage
-from iris.domain import ExerciseChatPipelineExecutionDTO
-from iris.domain.chat.interaction_suggestion_dto import (
-    InteractionSuggestionPipelineExecutionDTO,
-)
-from iris.llm import CapabilityRequestHandler, CompletionArguments, RequirementList
-from iris.llm.langchain import IrisLangchainChatModel
-from iris.pipeline import Pipeline
-from iris.pipeline.chat.code_feedback_pipeline import CodeFeedbackPipeline
-from iris.pipeline.chat.interaction_suggestion_pipeline import (
-    InteractionSuggestionPipeline,
-)
-from iris.pipeline.prompts.iris_exercise_chat_agent_prompts import (
-    guide_system_prompt,
-    tell_begin_agent_prompt,
-    tell_build_failed_system_prompt,
-    tell_chat_history_exists_prompt,
-    tell_format_reminder_prompt,
+from .code_feedback_pipeline import CodeFeedbackPipeline
+from .interaction_suggestion_pipeline import InteractionSuggestionPipeline
+from ..pipeline import Pipeline
+from ..prompts.iris_exercise_chat_agent_prompts import (
     tell_iris_initial_system_prompt,
+    tell_begin_agent_prompt,
+    tell_chat_history_exists_prompt,
     tell_no_chat_history_prompt,
+    tell_format_reminder_prompt,
+    guide_system_prompt,
+    tell_build_failed_system_prompt,
     tell_progress_stalled_system_prompt,
 )
-from iris.pipeline.shared.citation_pipeline import CitationPipeline, InformationType
-from iris.pipeline.shared.reranker_pipeline import RerankerPipeline
-from iris.pipeline.shared.utils import generate_structured_tools_from_functions
-from iris.retrieval.faq_retrieval import FaqRetrieval
-from iris.retrieval.faq_retrieval_utils import format_faqs, should_allow_faq_tool
-from iris.retrieval.lecture.lecture_page_chunk_retrieval import (
-    LecturePageChunkRetrieval,
+
+from ..shared.citation_pipeline import CitationPipeline, InformationType
+from ..shared.reranker_pipeline import RerankerPipeline
+from ..shared.utils import generate_structured_tools_from_functions
+from ...common.PipelineEnum import PipelineEnum
+from ...common.message_converters import convert_iris_message_to_langchain_human_message
+from ...common.pyris_message import PyrisMessage, IrisMessageRole
+from ...domain import ExerciseChatPipelineExecutionDTO
+from ...domain.chat.interaction_suggestion_dto import (
+    InteractionSuggestionPipelineExecutionDTO,
 )
-from iris.vector_database.database import VectorDatabase
-from iris.vector_database.lecture_unit_page_chunk_schema import (
-    LectureUnitPageChunkSchema,
-)
-from iris.web.status.status_update import ExerciseChatStatusCallback
+from ...domain.retrieval.lecture.lecture_retrieval_dto import LectureRetrievalDTO
+from ...llm import CapabilityRequestHandler, RequirementList
+from ...llm import CompletionArguments
+from ...llm.langchain import IrisLangchainChatModel
+from ...retrieval.faq_retrieval import FaqRetrieval
+from ...retrieval.faq_retrieval_utils import should_allow_faq_tool, format_faqs
+from app.retrieval.lecture.lecture_page_chunk_retrieval import LecturePageChunkRetrieval
+from ...retrieval.lecture.lecture_retrieval import LectureRetrieval
+from ...vector_database.database import VectorDatabase
+from ...vector_database.lecture_unit_page_chunk_schema import LectureUnitPageChunkSchema
+from weaviate.collections.classes.filters import Filter
+
+from ...vector_database.lecture_unit_schema import LectureUnitSchema
+from ...web.status.status_update import ExerciseChatStatusCallback
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -112,6 +110,7 @@ class ExerciseChatAgentPipeline(Pipeline):
     variant: str
     event: str | None
     retrieved_faqs: List[dict] = None
+    lecture_content: LectureRetrievalDTO = None
 
     def __init__(
         self,
@@ -185,7 +184,7 @@ class ExerciseChatAgentPipeline(Pipeline):
             self.callback.in_progress("Reading submission details...")
             if not dto.submission:
                 return {
-                    field: f"No {field.replace("_", " ")} is provided"
+                    field: f"No {field.replace('_', ' ')} is provided"
                     for field in [
                         "submission_date",
                         "is_practice",
@@ -202,7 +201,7 @@ class ExerciseChatAgentPipeline(Pipeline):
                 key: (
                     str(value)
                     if value is not None
-                    else f"No {key.replace("_", " ")} is provided"
+                    else f"No {key.replace('_', ' ')} is provided"
                 )
                 for key, value in zip(keys, values)
             }
@@ -291,7 +290,9 @@ class ExerciseChatAgentPipeline(Pipeline):
             feedback_list = (
                 "\n".join(
                     [
-                        f"Case: {feedback.test_case_name}. Credits: {feedback.credits}. Info: {feedback.text}"
+                        "Case: {}. Credits: {}. Info: {}".format(
+                            feedback.test_case_name, feedback.credits, feedback.text
+                        )
                         for feedback in feedbacks
                     ]
                 )
@@ -328,7 +329,7 @@ class ExerciseChatAgentPipeline(Pipeline):
                 return "No repository content available."
             repository = dto.submission.repository
             file_list = "\n------------\n".join(
-                [f"- {file_name}" for (file_name, _) in repository.items()]
+                ["- {}".format(file_name) for (file_name, _) in repository.items()]
             )
             return file_list
 
@@ -368,35 +369,63 @@ class ExerciseChatAgentPipeline(Pipeline):
 
             repository = dto.submission.repository
             if file_path in repository:
-                return f"{file_path}:\n{repository[file_path]}\n"
+                return "{}:\n{}\n".format(file_path, repository[file_path])
             return "File not found or does not exist in the repository."
 
         def lecture_content_retrieval() -> str:
             """
-            Retrieve content from indexed lecture slides.
-            This will run a RAG retrieval based on the chat history on the indexed lecture slides and return the
-            most relevant paragraphs.
+            Retrieve content from indexed lecture content.
+            This will run a RAG retrieval based on the chat history on the indexed lecture slides,
+            the indexed lecture transcriptions and the indexed lecture segments,
+            which are summaries of the lecture slide content and lecture transcription content from one slide a
+            nd return the most relevant paragraphs.
             Use this if you think it can be useful to answer the student's question, or if the student explicitly asks
             a question about the lecture content or slides.
             Only use this once.
             """
             self.callback.in_progress("Retrieving lecture content ...")
-            self.retrieved_paragraphs = self.lecture_retriever(
-                chat_history=chat_history,
-                student_query=query.contents[0].text_content,
-                result_limit=5,
-                course_name=dto.course.name,
+            self.lecture_content = self.lecture_retriever(
+                query=query.contents[0].text_content,
                 course_id=dto.course.id,
+                chat_history=chat_history,
+                lecture_id=None,
+                lecture_unit_id=None,
                 base_url=dto.settings.artemis_base_url,
             )
 
-            result = ""
-            for paragraph in self.retrieved_paragraphs:
-                lct = (
-                    f"Lecture: , Unit: , Page: {paragraph.get(LectureUnitPageChunkSchema.PAGE_NUMBER.value)}"
-                    f"\nContent:\n---{paragraph.get(LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value)}---\n\n"
+            result = "Lecture slide content:\n"
+            for paragraph in self.lecture_content.lecture_unit_page_chunks:
+                lct = "Lecture: {}, Unit: {}, Page: {}\nContent:\n---{}---\n\n".format(
+                    paragraph.lecture_name,
+                    paragraph.lecture_unit_name,
+                    paragraph.page_number,
+                    paragraph.page_text_content,
                 )
                 result += lct
+
+            result += "Lecture transcription content:\n"
+            for paragraph in self.lecture_content.lecture_transcriptions:
+                transcription = (
+                    "Lecture: {}, Unit: {}, Page: {}\nContent:\n---{}---\n\n".format(
+                        paragraph.lecture_name,
+                        paragraph.lecture_unit_name,
+                        paragraph.page_number,
+                        paragraph.segment_text,
+                    )
+                )
+                result += transcription
+
+            result += "Lecture segment content:\n"
+            for paragraph in self.lecture_content.lecture_unit_segments:
+                segment = (
+                    "Lecture: {}, Unit: {}, Page: {}\nContent:\n---{}---\n\n".format(
+                        paragraph.lecture_name,
+                        paragraph.lecture_unit_name,
+                        paragraph.page_number,
+                        paragraph.segment_summary,
+                    )
+                )
+                result += segment
             return result
 
         def faq_content_retrieval() -> str:
@@ -596,6 +625,13 @@ class ExerciseChatAgentPipeline(Pipeline):
                         base_url=dto.settings.artemis_base_url,
                     )
 
+                if self.lecture_content:
+                    self.callback.in_progress("Augmenting response ...")
+                    out = self.citation_pipeline(
+                        self.lecture_content, out, InformationType.PARAGRAPHS
+                    )
+                self.tokens.extend(self.citation_pipeline.tokens)
+
                 self.callback.done(
                     "Response created", final_result=out, tokens=self.tokens
                 )
@@ -649,12 +685,12 @@ class ExerciseChatAgentPipeline(Pipeline):
         """
         if course_id:
             # Fetch the first object that matches the course ID with the language property
-            result = self.db.lectures.query.fetch_objects(
-                filters=Filter.by_property(
-                    LectureUnitPageChunkSchema.COURSE_ID.value
-                ).equal(course_id),
+            result = self.db.lecture_units.query.fetch_objects(
+                filters=Filter.by_property(LectureUnitSchema.COURSE_ID.value).equal(
+                    course_id
+                ),
                 limit=1,
-                return_properties=[LectureUnitPageChunkSchema.COURSE_NAME.value],
+                return_properties=[LectureUnitSchema.COURSE_NAME.value],
             )
             return len(result.objects) > 0
         return False

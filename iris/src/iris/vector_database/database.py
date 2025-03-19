@@ -32,6 +32,7 @@ class VectorDatabase:
                 logger.info("Weaviate client initialized")
         self.client = VectorDatabase._client_instance
         self.lectures = init_lecture_unit_page_chunk_schema(self.client)
+        self.lecture_units = init_lecture_unit_schema(self.client)
         self.faqs = init_faq_schema(self.client)
 
     def delete_collection(self, collection_name):
@@ -40,9 +41,9 @@ class VectorDatabase:
         """
         if self.client.collections.exists(collection_name):
             if self.client.collections.delete(collection_name):
-                logger.info("Collection %s deleted", collection_name)
+                logger.info(f"Collection {collection_name} deleted")
             else:
-                logger.error("Collection %s failed to delete", collection_name)
+                logger.error(f"Collection {collection_name} failed to delete")
 
     def delete_object(self, collection_name, property_name, object_property):
         """
