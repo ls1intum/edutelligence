@@ -6,7 +6,9 @@ from langsmith import traceable
 from weaviate import WeaviateClient
 from weaviate.classes.query import Filter
 
-from iris.common.message_converters import convert_iris_message_to_langchain_message
+from iris.common.message_converters import (
+    convert_iris_message_to_langchain_message,
+)
 from iris.common.pyris_message import PyrisMessage
 from iris.common.token_usage_dto import TokenUsageDTO
 from iris.domain.retrieval.lecture.lecture_retrieval_dto import (
@@ -20,7 +22,9 @@ from iris.llm import (
     RequirementList,
 )
 from iris.llm.langchain import IrisLangchainChatModel
-from iris.llm.request_handler.rerank_request_handler import RerankRequestHandler
+from iris.llm.request_handler.rerank_request_handler import (
+    RerankRequestHandler,
+)
 from iris.pipeline import Pipeline
 from iris.pipeline.shared.reranker_pipeline import RerankerPipeline
 from iris.vector_database.lecture_unit_page_chunk_schema import (
@@ -121,12 +125,17 @@ class LecturePageChunkRetrieval(Pipeline):
         results = list(unique.values())
 
         page_chunks = [
-            self.generate_retrieval_dtos(chunk.properties, str(chunk.uuid))
+            dto
             for chunk in results
+            if (dto := self.generate_retrieval_dtos(chunk.properties, str(chunk.uuid)))
+            is not None
         ]
 
         reranked_page_chunks = self.cohere_client.rerank(
-            student_query, page_chunks, top_n_reranked_results, "page_text_content"
+            student_query,
+            page_chunks,
+            top_n_reranked_results,
+            "page_text_content",
         )
         return reranked_page_chunks
 
@@ -171,7 +180,6 @@ class LecturePageChunkRetrieval(Pipeline):
         return return_value.objects
 
     def generate_retrieval_dtos(self, lecture_page_chunk, uuid):
-        print(lecture_page_chunk)
         lecture_unit_filter = Filter.by_property(
             LectureUnitSchema.COURSE_ID.value
         ).equal(lecture_page_chunk[LectureUnitPageChunkSchema.COURSE_ID.value])

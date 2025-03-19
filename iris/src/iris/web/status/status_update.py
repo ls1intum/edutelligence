@@ -21,7 +21,9 @@ from iris.domain.status.inconsistency_check_status_update_dto import (
 from iris.domain.status.lecture_chat_status_update_dto import (
     LectureChatStatusUpdateDTO,
 )
-from iris.domain.status.rewriting_status_update_dto import RewritingStatusUpdateDTO
+from iris.domain.status.rewriting_status_update_dto import (
+    RewritingStatusUpdateDTO,
+)
 from iris.domain.status.stage_dto import StageDTO
 from iris.domain.status.stage_state_dto import StageStateEnum
 from iris.domain.status.status_update_dto import StatusUpdateDTO
@@ -136,7 +138,10 @@ class StatusCallback(ABC):
             self.status.suggestions = None
 
     def error(
-        self, message: str, exception=None, tokens: Optional[List[TokenUsageDTO]] = None
+        self,
+        message: str,
+        exception=None,
+        tokens: Optional[List[TokenUsageDTO]] = None,
     ):
         """
         Transition the current stage to ERROR and update the status.
@@ -230,7 +235,9 @@ class ExerciseChatStatusCallback(StatusCallback):
                 name="Checking available information",
             ),
             StageDTO(
-                weight=10, state=StageStateEnum.NOT_STARTED, name="Creating suggestions"
+                weight=10,
+                state=StageStateEnum.NOT_STARTED,
+                name="Creating suggestions",
             ),
         ]
         status = ExerciseChatStatusUpdateDTO(stages=stages)

@@ -4,12 +4,17 @@ from enum import Enum
 from typing import List
 
 from langchain_core.output_parsers import StrOutputParser
-from langchain_core.prompts import ChatPromptTemplate, SystemMessagePromptTemplate
+from langchain_core.prompts import (
+    ChatPromptTemplate,
+    SystemMessagePromptTemplate,
+)
 from langsmith import traceable
 from weaviate import WeaviateClient
 from weaviate.classes.query import Filter
 
-from iris.common.message_converters import convert_iris_message_to_langchain_message
+from iris.common.message_converters import (
+    convert_iris_message_to_langchain_message,
+)
 from iris.common.pipeline_enum import PipelineEnum
 from iris.common.pyris_message import PyrisMessage
 from iris.domain.retrieval.lecture.lecture_retrieval_dto import (
@@ -26,7 +31,9 @@ from iris.llm import (
     RequirementList,
 )
 from iris.llm.langchain import IrisLangchainChatModel
-from iris.llm.request_handler.rerank_request_handler import RerankRequestHandler
+from iris.llm.request_handler.rerank_request_handler import (
+    RerankRequestHandler,
+)
 from iris.pipeline import Pipeline
 from iris.pipeline.prompts.lecture_retrieval_prompts import (
     lecture_retrieval_initial_prompt_lecture_pages_with_exercise_context,
@@ -117,7 +124,7 @@ class LectureRetrieval(Pipeline):
         lecture_id: int = None,
         lecture_unit_id: int = None,
         base_url: str = None,
-    ):
+    ) -> LectureRetrievalDTO:
         lecture_unit = self.get_lecture_unit(course_id, lecture_id, lecture_unit_id)
         if lecture_unit is None:
             raise ValueError("The lecture unit is not indexed")
@@ -136,15 +143,17 @@ class LectureRetrieval(Pipeline):
             exercise_title,
         )
 
-        lecture_unit_segments, lecture_transcriptions, lecture_unit_page_chunks = (
-            self.call_lecture_pipelines(
-                lecture_unit,
-                query,
-                rewritten_lecture_pages_query,
-                rewritten_lecture_transcriptions_query,
-                hypothetical_lecture_pages_answer_query,
-                hypothetical_lecture_transcriptions_answer_query,
-            )
+        (
+            lecture_unit_segments,
+            lecture_transcriptions,
+            lecture_unit_page_chunks,
+        ) = self.call_lecture_pipelines(
+            lecture_unit,
+            query,
+            rewritten_lecture_pages_query,
+            rewritten_lecture_transcriptions_query,
+            hypothetical_lecture_pages_answer_query,
+            hypothetical_lecture_transcriptions_answer_query,
         )
 
         for lecture_unit_segment in lecture_unit_segments:
@@ -168,7 +177,10 @@ class LectureRetrieval(Pipeline):
         lecture_unit_page_chunks = list(unique_page_chunks.values())
 
         lecture_transcriptions = self.cohere_client.rerank(
-            query, lecture_transcriptions, top_n=7, content_field_name="segment_text"
+            query,
+            lecture_transcriptions,
+            top_n=7,
+            content_field_name="segment_text",
         )
         lecture_unit_page_chunks = self.cohere_client.rerank(
             query,
@@ -214,8 +226,10 @@ class LectureRetrieval(Pipeline):
                 return None
 
             lecture_unit = lecture_units[0].properties
+            lecture_unit_uuid = str(lecture_units[0].uuid)
 
             return LectureUnitRetrievalDTO(
+                uuid=lecture_unit_uuid,
                 course_id=lecture_unit.course_id,
                 course_name=lecture_unit.course_name,
                 course_description=lecture_unit.course_description,
@@ -227,7 +241,6 @@ class LectureRetrieval(Pipeline):
                 lecture_unit_link=lecture_unit.lecture_unit_link,
                 base_url=lecture_unit.base_url,
                 lecture_unit_summary=lecture_unit.lecture_unit_summary,
-                uuid=lecture_unit.uuid,  # TODO: Check if correct, needed to fix lint error
             )
 
         elif lecture_id is not None:
@@ -242,15 +255,17 @@ class LectureRetrieval(Pipeline):
                 return None
 
             lecture_unit = lecture_units[0].properties
+            lecture_unit_uuid = str(lecture_units[0].uuid)
 
             return LectureUnitRetrievalDTO(
+                uuid=lecture_unit_uuid,
                 course_id=lecture_unit[LectureUnitSchema.COURSE_ID.value],
                 course_name=lecture_unit[LectureUnitSchema.COURSE_NAME.value],
                 course_description=lecture_unit[
                     LectureUnitSchema.COURSE_DESCRIPTION.value
                 ],
                 course_language=lecture_unit[LectureUnitSchema.COURSE_LANGUAGE.value],
-                lecture_id=lecture_unit[LectureUnitSchema.LECTURE_UNIT_ID.value],
+                lecture_id=lecture_unit[LectureUnitSchema.LECTURE_ID.value],
                 lecture_name=lecture_unit[LectureUnitSchema.LECTURE_UNIT_NAME.value],
                 lecture_unit_id=None,
                 lecture_unit_name=None,
@@ -259,7 +274,6 @@ class LectureRetrieval(Pipeline):
                 lecture_unit_summary=lecture_unit[
                     LectureUnitSchema.LECTURE_UNIT_SUMMARY.value
                 ],
-                uuid=lecture_unit.uuid,  # TODO: Check if correct, needed to fix lint error
             )
 
         else:
@@ -679,7 +693,11 @@ class LectureRetrieval(Pipeline):
                 lecture_unit_page_chunks_future.result()
             )
 
-        return lecture_unit_segments, lecture_transcriptions, lecture_unit_page_chunks
+        return (
+            lecture_unit_segments,
+            lecture_transcriptions,
+            lecture_unit_page_chunks,
+        )
 
     def get_lecture_transcription_of_lecture_unit(
         self, lecture_unit_segment: LectureUnitSegmentRetrievalDTO

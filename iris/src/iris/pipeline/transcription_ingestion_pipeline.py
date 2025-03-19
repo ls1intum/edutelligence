@@ -114,7 +114,8 @@ class TranscriptionIngestionPipeline(Pipeline):
             LectureUnitPipeline()(lecture_unit_dto)
 
             self.callback.done(
-                "Ingested lecture unit summary into vector database", tokens=self.tokens
+                "Ingested lecture unit summary into vector database",
+                tokens=self.tokens,
             )
 
         except Exception as e:
@@ -290,7 +291,8 @@ class TranscriptionIngestionPipeline(Pipeline):
             try:
                 response = (self.prompt | self.pipeline).invoke({})
                 self._append_tokens(
-                    self.llm.tokens, PipelineEnum.IRIS_VIDEO_TRANSCRIPTION_INGESTION
+                    self.llm.tokens,
+                    PipelineEnum.IRIS_VIDEO_TRANSCRIPTION_INGESTION,
                 )
                 chunks_with_summaries.append(
                     {

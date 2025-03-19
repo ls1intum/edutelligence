@@ -14,7 +14,11 @@ from iris.common.token_usage_dto import TokenUsageDTO
 from ...common.pyris_message import PyrisMessage
 from ...domain.data.build_log_entry import BuildLogEntryDTO
 from ...domain.data.feedback_dto import FeedbackDTO
-from ...llm import CapabilityRequestHandler, CompletionArguments, RequirementList
+from ...llm import (
+    CapabilityRequestHandler,
+    CompletionArguments,
+    RequirementList,
+)
 from ...llm.langchain import IrisLangchainChatModel
 from ...pipeline import Pipeline
 from ...web.status.status_update import StatusCallback

@@ -1,6 +1,11 @@
+from typing import Optional
+
+from pydantic import Field
+
 from iris.domain import ChatPipelineExecutionDTO
-from iris.domain.data.course_dto import CourseDTO
 
 
 class LectureChatPipelineExecutionDTO(ChatPipelineExecutionDTO):
-    course: CourseDTO
+    course_id: int = Field(alias="courseId")
+    lecture_id: Optional[int] = Field(alias="lectureId", default=None)
+    lecture_unit_id: Optional[int] = Field(alias="lectureUnitId", default=None)

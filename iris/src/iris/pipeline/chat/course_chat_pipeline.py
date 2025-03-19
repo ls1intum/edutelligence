@@ -16,21 +16,29 @@ from langchain_core.runnables import Runnable
 from langsmith import traceable
 from weaviate.collections.classes.filters import Filter
 
-from iris.common.pipeline_enum import PipelineEnum
-from iris.retrieval.lecture.lecture_page_chunk_retrieval import (
-    LecturePageChunkRetrieval,
+from ...common.message_converters import (
+    convert_iris_message_to_langchain_message,
 )
-
-from ...common.message_converters import convert_iris_message_to_langchain_message
+from ...common.pipeline_enum import PipelineEnum
 from ...common.pyris_message import PyrisMessage
 from ...domain import CourseChatPipelineExecutionDTO
 from ...domain.data.metrics.competency_jol_dto import CompetencyJolDTO
-from ...llm import CapabilityRequestHandler, CompletionArguments, RequirementList
+from ...domain.retrieval.lecture.lecture_retrieval_dto import (
+    LectureRetrievalDTO,
+)
+from ...llm import (
+    CapabilityRequestHandler,
+    CompletionArguments,
+    RequirementList,
+)
 from ...llm.langchain import IrisLangchainChatModel
 from ...retrieval.faq_retrieval import FaqRetrieval
 from ...retrieval.faq_retrieval_utils import format_faqs, should_allow_faq_tool
+from ...retrieval.lecture.lecture_page_chunk_retrieval import (
+    LecturePageChunkRetrieval,
+)
 from ...vector_database.database import VectorDatabase
-from ...vector_database.lecture_unit_page_chunk_schema import LectureUnitPageChunkSchema
+from ...vector_database.lecture_unit_schema import LectureUnitSchema
 from ...web.status.status_update import (
     CourseChatStatusCallback,
 )
@@ -83,7 +91,7 @@ class CourseChatPipeline(Pipeline):
     prompt: ChatPromptTemplate
     variant: str
     event: str | None
-    retrieved_paragraphs: List[dict] = None
+    lecture_content: LectureRetrievalDTO = None
     retrieved_faqs: List[dict] = None
 
     def __init__(
@@ -279,32 +287,46 @@ class CourseChatPipeline(Pipeline):
 
         def lecture_content_retrieval() -> str:
             """
-            Retrieve content from indexed lecture slides.
-            This will run a RAG retrieval based on the chat history on the indexed lecture slides and return the
-            most relevant paragraphs.
+            Retrieve content from indexed lecture content.
+            This will run a RAG retrieval based on the chat history on the indexed lecture slides,
+            the indexed lecture transcriptions and the indexed lecture segments,
+            which are summaries of the lecture slide content and lecture transcription content from one slide a
+            nd return the most relevant paragraphs.
             Use this if you think it can be useful to answer the student's question, or if the student explicitly asks
             a question about the lecture content or slides.
             Only use this once.
             """
             self.callback.in_progress("Retrieving lecture content ...")
-            self.retrieved_paragraphs = self.lecture_retriever(
-                chat_history=history,
-                student_query=query.contents[0].text_content,
-                result_limit=5,
-                course_name=dto.course.name,
+            self.lecture_content = self.lecture_retriever(
+                query=query.contents[0].text_content,
                 course_id=dto.course.id,
+                chat_history=history,
+                lecture_id=None,
+                lecture_unit_id=None,
                 base_url=dto.settings.artemis_base_url,
             )
 
-            result = ""
-            for paragraph in self.retrieved_paragraphs:
-                lct = (
-                    f"Lecture: {paragraph.get(LectureUnitPageChunkSchema.LECTURE_NAME.value)}, Unit:"
-                    f" {paragraph.get(LectureUnitPageChunkSchema.LECTURE_UNIT_NAME.value)}, Page:"
-                    f" {paragraph.get(LectureUnitPageChunkSchema.PAGE_NUMBER.value)}\nContent:\n---"
-                    f"{paragraph.get(LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value)}---\n\n"
+            result = "Lecture slide content:\n"
+            for paragraph in self.lecture_content.lecture_unit_page_chunks:
+                result += (
+                    f"Lecture: {paragraph.lecture_name}, Unit: {paragraph.lecture_unit_name}, "
+                    f"Page: {paragraph.page_number}\nContent:\n---{paragraph.page_text_content}---\n\n"
                 )
-                result += lct
+
+            result += "Lecture transcription content:\n"
+            for paragraph in self.lecture_content.lecture_transcriptions:
+                result += (
+                    f"Lecture: {paragraph.lecture_name}, Unit: {paragraph.lecture_unit_name}, "
+                    f"Page: {paragraph.page_number}\nContent:\n---{paragraph.segment_text}---\n\n"
+                )
+
+            result += "Lecture segment content:\n"
+            for paragraph in self.lecture_content.lecture_unit_segments:
+                result += (
+                    f"Lecture: {paragraph.lecture_name}, Unit: {paragraph.lecture_unit_name}, "
+                    f"Page: {paragraph.page_number}\nContent:\n---{paragraph.segment_summary}---\n\n"
+                )
+
             return result
 
         def faq_content_retrieval() -> str:
@@ -451,10 +473,10 @@ class CourseChatPipeline(Pipeline):
                 if step.get("output", None):
                     out = step["output"]
 
-            if self.retrieved_paragraphs:
+            if self.lecture_content:
                 self.callback.in_progress("Augmenting response ...")
                 out = self.citation_pipeline(
-                    self.retrieved_paragraphs, out, InformationType.PARAGRAPHS
+                    self.lecture_content, out, InformationType.PARAGRAPHS
                 )
             self.tokens.extend(self.citation_pipeline.tokens)
 
@@ -490,7 +512,8 @@ class CourseChatPipeline(Pipeline):
             #     self.callback.error("Generating interaction suggestions failed.")
         except Exception as e:
             logger.error(
-                "An error occurred while running the course chat pipeline", exc_info=e
+                "An error occurred while running the course chat pipeline",
+                exc_info=e,
             )
             traceback.print_exc()
             self.callback.error(
@@ -507,12 +530,12 @@ class CourseChatPipeline(Pipeline):
         """
         if course_id:
             # Fetch the first object that matches the course ID with the language property
-            result = self.db.lectures.query.fetch_objects(
-                filters=Filter.by_property(
-                    LectureUnitPageChunkSchema.COURSE_ID.value
-                ).equal(course_id),
+            result = self.db.lecture_units.query.fetch_objects(
+                filters=Filter.by_property(LectureUnitSchema.COURSE_ID.value).equal(
+                    course_id
+                ),
                 limit=1,
-                return_properties=[LectureUnitPageChunkSchema.COURSE_NAME.value],
+                return_properties=[LectureUnitSchema.COURSE_NAME.value],
             )
             return len(result.objects) > 0
         return False

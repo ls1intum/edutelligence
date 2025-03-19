@@ -8,6 +8,7 @@ from iris.config import settings
 
 from .faq_schema import init_faq_schema
 from .lecture_unit_page_chunk_schema import init_lecture_unit_page_chunk_schema
+from .lecture_unit_schema import init_lecture_unit_schema
 
 logger = logging.getLogger(__name__)
 batch_update_lock = threading.Lock()
@@ -32,17 +33,17 @@ class VectorDatabase:
                 logger.info("Weaviate client initialized")
         self.client = VectorDatabase._client_instance
         self.lectures = init_lecture_unit_page_chunk_schema(self.client)
+        self.lecture_units = init_lecture_unit_schema(self.client)
         self.faqs = init_faq_schema(self.client)
 
     def delete_collection(self, collection_name):
         """
         Delete a collection from the database
         """
-        if self.client.collections.exists(collection_name):
-            if self.client.collections.delete(collection_name):
-                logger.info("Collection %s deleted", collection_name)
-            else:
-                logger.error("Collection %s failed to delete", collection_name)
+        if self.client.collections.delete(collection_name):
+            logger.info("Collection %s deleted", collection_name)
+        else:
+            logger.error("Collection %s failed to delete", collection_name)
 
     def delete_object(self, collection_name, property_name, object_property):
         """

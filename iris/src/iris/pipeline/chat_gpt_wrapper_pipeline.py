@@ -11,7 +11,11 @@ from iris.domain.chat.exercise_chat.exercise_chat_pipeline_execution_dto import 
     ExerciseChatPipelineExecutionDTO,
 )
 from iris.domain.data.text_message_content_dto import TextMessageContentDTO
-from iris.llm import CapabilityRequestHandler, CompletionArguments, RequirementList
+from iris.llm import (
+    CapabilityRequestHandler,
+    CompletionArguments,
+    RequirementList,
+)
 from iris.llm.langchain.iris_langchain_chat_model import IrisLangchainChatModel
 from iris.pipeline import Pipeline
 from iris.pipeline.prompts.chat_gpt_wrapper_prompts import (
@@ -99,7 +103,9 @@ class ChatGPTWrapperPipeline(Pipeline):
         ]
 
         response = self.request_handler.chat(
-            prompts, CompletionArguments(temperature=0.5, max_tokens=2000), tools=None
+            prompts,
+            CompletionArguments(temperature=0.5, max_tokens=2000),
+            tools=None,
         )
 
         logger.info("ChatGPTWrapperPipeline response: %s", response)
