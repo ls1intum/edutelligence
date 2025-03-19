@@ -8,7 +8,11 @@ from langsmith import traceable
 
 from iris.common.pipeline_enum import PipelineEnum
 from iris.domain import InconsistencyCheckPipelineExecutionDTO
-from iris.llm import CapabilityRequestHandler, CompletionArguments, RequirementList
+from iris.llm import (
+    CapabilityRequestHandler,
+    CompletionArguments,
+    RequirementList,
+)
 from iris.llm.langchain.iris_langchain_chat_model import IrisLangchainChatModel
 from iris.pipeline import Pipeline
 from iris.pipeline.prompts.inconsistency_check_prompts import (

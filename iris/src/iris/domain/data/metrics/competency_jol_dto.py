@@ -5,6 +5,10 @@ from pydantic import BaseModel, Field
 
 
 class CompetencyJolDTO(BaseModel):
+    """
+    A competency JOL data transfer object
+    """
+
     competency_id: Optional[int] = Field(None, alias="competencyId")
     jol_value: Optional[int] = Field(None, alias="jolValue")
     judgement_time: Optional[datetime] = Field(None, alias="judgementTime")

@@ -6,7 +6,9 @@ from iris.pipeline import Pipeline
 from iris.pipeline.lecture_unit_segment_summary_pipeline import (
     LectureUnitSegmentSummaryPipeline,
 )
-from iris.pipeline.lecture_unit_summary_pipeline import LectureUnitSummaryPipeline
+from iris.pipeline.lecture_unit_summary_pipeline import (
+    LectureUnitSummaryPipeline,
+)
 from iris.vector_database.database import VectorDatabase, batch_update_lock
 from iris.vector_database.lecture_unit_schema import (
     LectureUnitSchema,

@@ -1,7 +1,9 @@
 import logging
 from typing import List
 
-from ...domain.ingestion.ingestion_status_update_dto import IngestionStatusUpdateDTO
+from ...domain.ingestion.ingestion_status_update_dto import (
+    IngestionStatusUpdateDTO,
+)
 from ...domain.status.stage_dto import StageDTO
 from ...domain.status.stage_state_dto import StageStateEnum
 from .status_update import StatusCallback
@@ -25,7 +27,9 @@ class LecturesDeletionStatusCallback(StatusCallback):
         stages = initial_stages or []
         stages += [
             StageDTO(
-                weight=100, state=StageStateEnum.NOT_STARTED, name="Slides removal"
+                weight=100,
+                state=StageStateEnum.NOT_STARTED,
+                name="Slides removal",
             ),
         ]
         status = IngestionStatusUpdateDTO(stages=stages)
