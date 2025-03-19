@@ -3,7 +3,11 @@ from enum import Enum
 from weaviate import WeaviateClient
 from weaviate.classes.config import Property
 from weaviate.collections import Collection
-from weaviate.collections.classes.config import Configure, DataType, VectorDistances
+from weaviate.collections.classes.config import (
+    Configure,
+    DataType,
+    VectorDistances,
+)
 
 
 class FaqSchema(Enum):

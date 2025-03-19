@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from ...common.pyris_message import PyrisMessage
 from ...domain.data.image_message_content_dto import ImageMessageContentDTO
 from ...llm import CompletionArguments
-from .. import LanguageModel
+from ..external.model import LanguageModel
 
 
 class RequestHandler(BaseModel, metaclass=ABCMeta):

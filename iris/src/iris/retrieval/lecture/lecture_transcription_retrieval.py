@@ -15,7 +15,9 @@ from iris.llm import (
     RequirementList,
 )
 from iris.llm.langchain import IrisLangchainChatModel
-from iris.llm.request_handler.rerank_request_handler import RerankRequestHandler
+from iris.llm.request_handler.rerank_request_handler import (
+    RerankRequestHandler,
+)
 from iris.pipeline import Pipeline
 from iris.vector_database.lecture_transcription_schema import (
     LectureTranscriptionSchema,
@@ -78,9 +80,10 @@ class LectureTranscriptionRetrieval(Pipeline):
                 lecture_transcription_segment.properties,
                 str(lecture_transcription_segment.uuid),
             )
-            lecture_transcription_retrieval_dtos.append(
-                lecture_transcription_retrieval_dto
-            )
+            if lecture_transcription_retrieval_dto is not None:
+                lecture_transcription_retrieval_dtos.append(
+                    lecture_transcription_retrieval_dto
+                )
 
         reranked_answers = self.cohere_client.rerank(
             query=student_query,

@@ -12,7 +12,11 @@ from iris.domain.data.text_message_content_dto import TextMessageContentDTO
 from iris.domain.rewriting_pipeline_execution_dto import (
     RewritingPipelineExecutionDTO,
 )
-from iris.llm import CapabilityRequestHandler, CompletionArguments, RequirementList
+from iris.llm import (
+    CapabilityRequestHandler,
+    CompletionArguments,
+    RequirementList,
+)
 from iris.pipeline import Pipeline
 from iris.pipeline.prompts.rewriting_prompts import (
     system_prompt_faq,
@@ -37,7 +41,9 @@ class RewritingPipeline(Pipeline):
     variant: Literal["faq", "problem_statement"]
 
     def __init__(
-        self, callback: RewritingCallback, variant: Literal["faq", "problem_statement"]
+        self,
+        callback: RewritingCallback,
+        variant: Literal["faq", "problem_statement"],
     ):
         super().__init__(implementation_id="rewriting_pipeline_reference_impl")
         self.callback = callback

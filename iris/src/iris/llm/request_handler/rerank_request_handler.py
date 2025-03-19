@@ -5,7 +5,8 @@ from pydantic import BaseModel, ConfigDict
 
 from iris.common.pyris_message import PyrisMessage
 from iris.domain.data.image_message_content_dto import ImageMessageContentDTO
-from iris.llm import CompletionArguments, LanguageModel, RequestHandler
+from iris.llm import CompletionArguments, RequestHandler
+from iris.llm.external.model import LanguageModel
 from iris.llm.llm_manager import LlmManager
 
 

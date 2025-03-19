@@ -1,12 +1,21 @@
-from typing import Any, Callable, Dict, Literal, Optional, Sequence, Type, Union
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Literal,
+    Optional,
+    Sequence,
+    Type,
+    Union,
+)
 
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, ConfigDict
 
 from iris.common.pyris_message import PyrisMessage
 from iris.domain.data.image_message_content_dto import ImageMessageContentDTO
-from iris.llm import LanguageModel
 from iris.llm.completion_arguments import CompletionArguments
+from iris.llm.external.model import LanguageModel
 from iris.llm.llm_manager import LlmManager
 from iris.llm.request_handler.request_handler_interface import RequestHandler
 
@@ -61,7 +70,10 @@ class BasicRequestHandler(RequestHandler):
         llm = self.llm_manager.get_llm_by_id(self.model_id)
 
         return llm.split_text_semantically(
-            text, breakpoint_threshold_type, breakpoint_threshold_amount, min_chunk_size
+            text,
+            breakpoint_threshold_type,
+            breakpoint_threshold_amount,
+            min_chunk_size,
         )
 
     def bind_tools(

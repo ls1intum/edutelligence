@@ -9,7 +9,9 @@ from weaviate.collections.classes.filters import Filter
 from iris.dependencies import TokenValidator
 
 from ...vector_database.database import VectorDatabase
-from ...vector_database.lecture_unit_page_chunk_schema import LectureUnitPageChunkSchema
+from ...vector_database.lecture_unit_page_chunk_schema import (
+    LectureUnitPageChunkSchema,
+)
 
 router = APIRouter(prefix="/api/v1", tags=["ingestion_status"])
 
@@ -24,7 +26,10 @@ class IngestionState(str, Enum):
     dependencies=[Depends(TokenValidator())],
 )
 def get_lecture_unit_ingestion_state(
-    course_id: int, lecture_id: int, lecture_unit_id: int, base_url: str = Query(...)
+    course_id: int,
+    lecture_id: int,
+    lecture_unit_id: int,
+    base_url: str = Query(...),
 ):
     """
 
@@ -52,7 +57,7 @@ def get_lecture_unit_ingestion_state(
             ).equal(lecture_unit_id)
         ),
         limit=1,
-        return_properties=[LectureUnitPageChunkSchema.LECTURE_UNIT_NAME.value],
+        return_properties=[LectureUnitPageChunkSchema.LECTURE_UNIT_ID.value],
     )
 
     if len(result.objects) > 0:
