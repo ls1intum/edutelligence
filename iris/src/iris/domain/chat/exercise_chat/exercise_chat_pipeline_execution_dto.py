@@ -17,6 +17,4 @@ class ExerciseChatPipelineExecutionDTO(ChatPipelineExecutionDTO):
     submission: Optional[ProgrammingSubmissionDTO] = None
     exercise: ProgrammingExerciseDTO
     course: CourseDTO
-    event_payload: Optional[PyrisEventDTO[Any]] = Field(
-        None, alias="eventPayload"
-    )
+    event_payload: Optional[PyrisEventDTO[Any]] = Field(None, alias="eventPayload")

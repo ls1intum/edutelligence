@@ -124,11 +124,7 @@ class InconsistencyCheckPipeline(Pipeline):
 
         # Remove first heading or heading containing 'Summary of Consistency Issues'
         result = re.sub(r"^#\s.*?\n", "", result)
-        result = re.sub(
-            r"^#+.*?Summary of Consistency Issues\s*\n", "", result
-        )
+        result = re.sub(r"^#+.*?Summary of Consistency Issues\s*\n", "", result)
 
-        self._append_tokens(
-            self.llm.tokens, PipelineEnum.IRIS_INCONSISTENCY_CHECK
-        )
+        self._append_tokens(self.llm.tokens, PipelineEnum.IRIS_INCONSISTENCY_CHECK)
         self.callback.done(final_result=result, tokens=self.tokens)

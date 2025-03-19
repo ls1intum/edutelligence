@@ -11,6 +11,4 @@ from ..chat_pipeline_execution_dto import ChatPipelineExecutionDTO
 class CourseChatPipelineExecutionDTO(ChatPipelineExecutionDTO):
     course: ExtendedCourseDTO
     metrics: Optional[StudentMetricsDTO]
-    event_payload: Optional[PyrisEventDTO[Any]] = Field(
-        None, alias="eventPayload"
-    )
+    event_payload: Optional[PyrisEventDTO[Any]] = Field(None, alias="eventPayload")

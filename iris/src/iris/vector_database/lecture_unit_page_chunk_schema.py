@@ -29,9 +29,7 @@ def init_lecture_unit_page_chunk_schema(client: WeaviateClient) -> Collection:
     """
     Initialize the schema for the lecture unit page chunks
     """
-    if client.collections.exists(
-        LectureUnitPageChunkSchema.COLLECTION_NAME.value
-    ):
+    if client.collections.exists(LectureUnitPageChunkSchema.COLLECTION_NAME.value):
         collection = client.collections.get(
             LectureUnitPageChunkSchema.COLLECTION_NAME.value
         )

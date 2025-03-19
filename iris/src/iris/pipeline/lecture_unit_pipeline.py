@@ -25,9 +25,7 @@ class LectureUnitPipeline(Pipeline):
         super().__init__()
         vector_database = VectorDatabase()
         self.weaviate_client = vector_database.get_client()
-        self.lecture_unit_collection = init_lecture_unit_schema(
-            self.weaviate_client
-        )
+        self.lecture_unit_collection = init_lecture_unit_schema(self.weaviate_client)
         self.llm_embedding = BasicRequestHandler("embedding-small")
 
     def __call__(self, lecture_unit: LectureUnitDTO):
@@ -46,9 +44,9 @@ class LectureUnitPipeline(Pipeline):
             & Filter.by_property(LectureUnitSchema.LECTURE_ID.value).equal(
                 lecture_unit.lecture_id
             )
-            & Filter.by_property(
-                LectureUnitSchema.LECTURE_UNIT_ID.value
-            ).equal(lecture_unit.lecture_unit_id)
+            & Filter.by_property(LectureUnitSchema.LECTURE_UNIT_ID.value).equal(
+                lecture_unit.lecture_unit_id
+            )
             & Filter.by_property(LectureUnitSchema.BASE_URL.value).equal(
                 lecture_unit.base_url
             ),

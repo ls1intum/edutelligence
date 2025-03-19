@@ -43,9 +43,7 @@ app.openapi = custom_openapi
 
 
 @app.exception_handler(RequestValidationError)
-async def validation_exception_handler(
-    request: Request, exc: RequestValidationError
-):
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
     exc_str = f"{exc}".replace("\n", " ").replace("   ", " ")
     logging.error("%s: %s", request, exc_str)
     content = {"status_code": 10422, "message": exc_str, "data": None}

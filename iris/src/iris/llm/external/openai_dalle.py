@@ -20,16 +20,14 @@ def generate_images(
     Generate images from the prompt.
     """
     try:
-        response = (
-            self._client.images.generate(  # pylint: disable=protected-access
-                model=self.model,
-                prompt=prompt,
-                size=size,
-                quality=quality,
-                n=n,
-                response_format="url",
-                **kwargs,
-            )
+        response = self._client.images.generate(  # pylint: disable=protected-access
+            model=self.model,
+            prompt=prompt,
+            size=size,
+            quality=quality,
+            n=n,
+            response_format="url",
+            **kwargs,
         )
     except Exception as e:
         print(f"Failed to generate images: {e}")
@@ -46,9 +44,7 @@ def generate_images(
             try:
                 image_response = requests.get(image.url, timeout=60)
                 image_response.raise_for_status()
-                base64_data = base64.b64encode(image_response.content).decode(
-                    "utf-8"
-                )
+                base64_data = base64.b64encode(image_response.content).decode("utf-8")
             except requests.RequestException as e:
                 print(f"Failed to download or encode image: {e}")
                 continue

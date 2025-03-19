@@ -34,9 +34,7 @@ class LectureTranscriptionRetrieval(Pipeline):
     and processing the transcription segments."""
 
     def __init__(self, client: WeaviateClient):
-        super().__init__(
-            implementation_id="lecture_transcriptions_retrieval_pipeline"
-        )
+        super().__init__(implementation_id="lecture_transcriptions_retrieval_pipeline")
         request_handler = CapabilityRequestHandler(
             requirements=RequirementList(
                 gpt_version_equivalent=4.25,
@@ -139,16 +137,12 @@ class LectureTranscriptionRetrieval(Pipeline):
         lecture_unit_filter = Filter.by_property(
             LectureUnitSchema.COURSE_ID.value
         ).equal(
-            lecture_transcription_segment[
-                LectureTranscriptionSchema.COURSE_ID.value
-            ]
+            lecture_transcription_segment[LectureTranscriptionSchema.COURSE_ID.value]
         )
         lecture_unit_filter &= Filter.by_property(
             LectureUnitSchema.LECTURE_ID.value
         ).equal(
-            lecture_transcription_segment[
-                LectureTranscriptionSchema.LECTURE_ID.value
-            ]
+            lecture_transcription_segment[LectureTranscriptionSchema.LECTURE_ID.value]
         )
         lecture_unit_filter &= Filter.by_property(
             LectureUnitSchema.LECTURE_UNIT_ID.value
@@ -160,9 +154,7 @@ class LectureTranscriptionRetrieval(Pipeline):
         lecture_unit_filter &= Filter.by_property(
             LectureUnitSchema.BASE_URL.value
         ).equal(
-            lecture_transcription_segment[
-                LectureTranscriptionSchema.BASE_URL.value
-            ]
+            lecture_transcription_segment[LectureTranscriptionSchema.BASE_URL.value]
         )
 
         lecture_units = self.lecture_unit_collection.query.fetch_objects(
@@ -180,12 +172,8 @@ class LectureTranscriptionRetrieval(Pipeline):
                     LectureUnitSchema.COURSE_DESCRIPTION.value
                 ],
                 lecture_id=lecture_unit[LectureUnitSchema.LECTURE_ID.value],
-                lecture_name=lecture_unit[
-                    LectureUnitSchema.LECTURE_NAME.value
-                ],
-                lecture_unit_id=lecture_unit[
-                    LectureUnitSchema.LECTURE_UNIT_ID.value
-                ],
+                lecture_name=lecture_unit[LectureUnitSchema.LECTURE_NAME.value],
+                lecture_unit_id=lecture_unit[LectureUnitSchema.LECTURE_UNIT_ID.value],
                 lecture_unit_name=lecture_unit[
                     LectureUnitSchema.LECTURE_UNIT_NAME.value
                 ],

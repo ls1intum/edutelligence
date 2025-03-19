@@ -92,9 +92,7 @@ class ExerciseChatPipeline(Pipeline):
 
         # Create the pipelines
         self.db = VectorDatabase()
-        self.suggestion_pipeline = InteractionSuggestionPipeline(
-            variant="exercise"
-        )
+        self.suggestion_pipeline = InteractionSuggestionPipeline(variant="exercise")
         self.retriever = LecturePageChunkRetrieval(self.db.client)
         self.reranker_pipeline = RerankerPipeline()
         self.code_feedback_pipeline = CodeFeedbackPipeline()
@@ -116,12 +114,10 @@ class ExerciseChatPipeline(Pipeline):
         :param kwargs: The keyword arguments
         """
         try:
-            should_execute_lecture_pipeline = (
-                self.should_execute_lecture_pipeline(dto.course.id)
+            should_execute_lecture_pipeline = self.should_execute_lecture_pipeline(
+                dto.course.id
             )
-            self._run_exercise_chat_pipeline(
-                dto, should_execute_lecture_pipeline
-            )
+            self._run_exercise_chat_pipeline(dto, should_execute_lecture_pipeline)
             self.callback.done(
                 "Generated response",
                 final_result=self.exercise_chat_response,
@@ -134,14 +130,10 @@ class ExerciseChatPipeline(Pipeline):
                         "Skipping suggestion generation as the course is not supported."
                     )
                 elif self.exercise_chat_response:
-                    suggestion_dto = (
-                        InteractionSuggestionPipelineExecutionDTO()
-                    )
+                    suggestion_dto = InteractionSuggestionPipelineExecutionDTO()
                     suggestion_dto.chat_history = dto.chat_history
                     suggestion_dto.last_message = self.exercise_chat_response
-                    suggestion_dto.problem_statement = (
-                        dto.exercise.problem_statement
-                    )
+                    suggestion_dto.problem_statement = dto.exercise.problem_statement
                     suggestions = self.suggestion_pipeline(suggestion_dto)
                     if self.suggestion_pipeline.tokens is not None:
                         tokens = [self.suggestion_pipeline.tokens]
@@ -325,9 +317,7 @@ class ExerciseChatPipeline(Pipeline):
             self.callback.done()
             self.prompt = ChatPromptTemplate.from_messages(
                 [
-                    SystemMessagePromptTemplate.from_template(
-                        guide_system_prompt
-                    ),
+                    SystemMessagePromptTemplate.from_template(guide_system_prompt),
                 ]
             )
             prompt_val = self.prompt.format_messages(response=response_draft)
@@ -386,9 +376,7 @@ class ExerciseChatPipeline(Pipeline):
             self.prompt += SystemMessagePromptTemplate.from_template(
                 "Consider the student's newest and latest input:"
             )
-            self.prompt += convert_iris_message_to_langchain_message(
-                user_question
-            )
+            self.prompt += convert_iris_message_to_langchain_message(user_question)
 
     def _add_exercise_context_to_prompt(
         self,
@@ -414,9 +402,7 @@ class ExerciseChatPipeline(Pipeline):
             ) % "\n---------\n".join(str(log) for log in feedbacks)
             self.prompt += SystemMessagePromptTemplate.from_template(prompt)
 
-    def _add_relevant_chunks_to_prompt(
-        self, retrieved_lecture_chunks: List[dict]
-    ):
+    def _add_relevant_chunks_to_prompt(self, retrieved_lecture_chunks: List[dict]):
         """
         Adds the relevant chunks of the lecture to the prompt
         :param retrieved_lecture_chunks: The retrieved lecture chunks
@@ -452,9 +438,7 @@ class ExerciseChatPipeline(Pipeline):
                     LectureUnitPageChunkSchema.COURSE_ID.value
                 ).equal(course_id),
                 limit=1,
-                return_properties=[
-                    LectureUnitPageChunkSchema.COURSE_NAME.value
-                ],
+                return_properties=[LectureUnitPageChunkSchema.COURSE_NAME.value],
             )
             return len(result.objects) > 0
         return False

@@ -40,9 +40,7 @@ class RequestHandler(BaseModel, metaclass=ABCMeta):
         messages: list[any],
         arguments: CompletionArguments,
         tools: Optional[
-            Sequence[
-                Union[Dict[str, Any], Type[BaseModel], Callable, BaseTool]
-            ]
+            Sequence[Union[Dict[str, Any], Type[BaseModel], Callable, BaseTool]]
         ],
     ) -> PyrisMessage:
         """Create a completion from the chat messages"""
@@ -56,9 +54,7 @@ class RequestHandler(BaseModel, metaclass=ABCMeta):
     @abstractmethod
     def bind_tools(
         self,
-        tools: Sequence[
-            Union[Dict[str, Any], Type[BaseModel], Callable, BaseTool]
-        ],
+        tools: Sequence[Union[Dict[str, Any], Type[BaseModel], Callable, BaseTool]],
     ) -> LanguageModel:
         """Bind tools"""
         raise NotImplementedError

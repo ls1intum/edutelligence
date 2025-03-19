@@ -64,12 +64,8 @@ class ChatGPTWrapperPipeline(Pipeline):
     llm: IrisLangchainChatModel
     pipeline: Runnable
 
-    def __init__(
-        self, callback: Optional[ChatGPTWrapperStatusCallback] = None
-    ):
-        super().__init__(
-            implementation_id="chat_gpt_wrapper_pipeline_reference_impl"
-        )
+    def __init__(self, callback: Optional[ChatGPTWrapperStatusCallback] = None):
+        super().__init__(implementation_id="chat_gpt_wrapper_pipeline_reference_impl")
         self.callback = callback
         self.request_handler = CapabilityRequestHandler(
             requirements=RequirementList(
@@ -93,9 +89,7 @@ class ChatGPTWrapperPipeline(Pipeline):
         pyris_system_prompt = PyrisMessage(
             sender=IrisMessageRole.SYSTEM,
             contents=[
-                TextMessageContentDTO(
-                    text_content=chat_gpt_initial_system_prompt
-                )
+                TextMessageContentDTO(text_content=chat_gpt_initial_system_prompt)
             ],
         )
 

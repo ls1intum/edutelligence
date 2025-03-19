@@ -29,12 +29,8 @@ class LectureTranscriptionSchema(Enum):
 
 
 def init_lecture_transcription_schema(client: WeaviateClient) -> Collection:
-    if client.collections.exists(
-        LectureTranscriptionSchema.COLLECTION_NAME.value
-    ):
-        return client.collections.get(
-            LectureTranscriptionSchema.COLLECTION_NAME.value
-        )
+    if client.collections.exists(LectureTranscriptionSchema.COLLECTION_NAME.value):
+        return client.collections.get(LectureTranscriptionSchema.COLLECTION_NAME.value)
 
     return client.collections.create(
         name=LectureTranscriptionSchema.COLLECTION_NAME.value,

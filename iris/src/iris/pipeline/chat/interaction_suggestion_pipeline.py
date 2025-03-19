@@ -126,9 +126,7 @@ class InteractionSuggestionPipeline(Pipeline):
             ]
             if dto.last_message:
                 last_message = AIMessage(
-                    content=dto.last_message.replace("{", "{{").replace(
-                        "}", "}}"
-                    ),
+                    content=dto.last_message.replace("{", "{{").replace("}", "}}"),
                 )
                 chat_history_messages.append(last_message)
                 self.prompt = ChatPromptTemplate.from_messages(
@@ -144,12 +142,8 @@ class InteractionSuggestionPipeline(Pipeline):
                     ]
                 )
 
-                prob_st_val = (
-                    dto.problem_statement or "No problem statement provided."
-                )
-                prompt_val = self.prompt.format_messages(
-                    problem_statement=prob_st_val
-                )
+                prob_st_val = dto.problem_statement or "No problem statement provided."
+                prompt_val = self.prompt.format_messages(problem_statement=prob_st_val)
                 self.prompt = ChatPromptTemplate.from_messages(prompt_val)
 
                 response: dict = (self.prompt | self.pipeline).invoke({})

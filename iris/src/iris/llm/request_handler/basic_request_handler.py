@@ -48,9 +48,7 @@ class BasicRequestHandler(RequestHandler):
         messages: list[PyrisMessage],
         arguments: CompletionArguments,
         tools: Optional[
-            Sequence[
-                Union[Dict[str, Any], Type[BaseModel], Callable, BaseTool]
-            ]
+            Sequence[Union[Dict[str, Any], Type[BaseModel], Callable, BaseTool]]
         ],
     ) -> PyrisMessage:
         llm = self.llm_manager.get_llm_by_id(self.model_id)
@@ -80,9 +78,7 @@ class BasicRequestHandler(RequestHandler):
 
     def bind_tools(
         self,
-        tools: Sequence[
-            Union[Dict[str, Any], Type[BaseModel], Callable, BaseTool]
-        ],
+        tools: Sequence[Union[Dict[str, Any], Type[BaseModel], Callable, BaseTool]],
     ) -> LanguageModel:
         """
         Binds a sequence of tools to the language model.

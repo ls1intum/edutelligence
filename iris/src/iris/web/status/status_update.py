@@ -175,9 +175,7 @@ class StatusCallback(ABC):
                 f"Error occurred in job {self.run_id} in stage {self.stage.name}: {message}"
             )
 
-    def skip(
-        self, message: Optional[str] = None, start_next_stage: bool = True
-    ):
+    def skip(self, message: Optional[str] = None, start_next_stage: bool = True):
         """
         Transition the current stage to SKIPPED and update the status.
         If there is a next stage, set the current stage to the next stage.

@@ -81,9 +81,7 @@ class RewritingPipeline(Pipeline):
         response = self.request_handler.chat(
             [prompt], CompletionArguments(temperature=0.4), tools=None
         )
-        self._append_tokens(
-            response.token_usage, PipelineEnum.IRIS_REWRITING_PIPELINE
-        )
+        self._append_tokens(response.token_usage, PipelineEnum.IRIS_REWRITING_PIPELINE)
         response = response.contents[0].text_content
 
         # remove ``` from start and end if exists

@@ -128,9 +128,7 @@ class CourseChatPipeline(Pipeline):
         self.db = VectorDatabase()
         self.lecture_retriever = LecturePageChunkRetrieval(self.db.client)
         self.faq_retriever = FaqRetrieval(self.db.client)
-        self.suggestion_pipeline = InteractionSuggestionPipeline(
-            variant="course"
-        )
+        self.suggestion_pipeline = InteractionSuggestionPipeline(variant="course")
         self.citation_pipeline = CitationPipeline()
 
         # Create the pipeline
@@ -171,9 +169,7 @@ class CourseChatPipeline(Pipeline):
             for exercise in dto.course.exercises:
                 exercise_dict = exercise.model_dump()
                 exercise_dict["due_date_over"] = (
-                    exercise.due_date < current_time
-                    if exercise.due_date
-                    else None
+                    exercise.due_date < current_time if exercise.due_date else None
                 )
                 exercises.append(exercise_dict)
             return exercises
@@ -231,17 +227,12 @@ class CourseChatPipeline(Pipeline):
                 return "No data available!! Do not requery."
             metrics = dto.metrics.exercise_metrics
             if metrics.average_score and any(
-                exercise_id in metrics.average_score
-                for exercise_id in exercise_ids
+                exercise_id in metrics.average_score for exercise_id in exercise_ids
             ):
                 return {
                     exercise_id: {
-                        "global_average_score": metrics.average_score[
-                            exercise_id
-                        ],
-                        "score_of_student": metrics.score.get(
-                            exercise_id, None
-                        ),
+                        "global_average_score": metrics.average_score[exercise_id],
+                        "score_of_student": metrics.score.get(exercise_id, None),
                         "global_average_latest_submission": metrics.average_latest_submission.get(
                             exercise_id, None
                         ),
@@ -277,9 +268,7 @@ class CourseChatPipeline(Pipeline):
             competency_metrics = dto.metrics.competency_metrics
             return [
                 {
-                    "info": competency_metrics.competency_information.get(
-                        comp, None
-                    ),
+                    "info": competency_metrics.competency_information.get(comp, None),
                     "exercise_ids": competency_metrics.exercises.get(comp, []),
                     "progress": competency_metrics.progress.get(comp, 0),
                     "mastery": get_mastery(
@@ -392,9 +381,7 @@ class CourseChatPipeline(Pipeline):
             )
 
             if self.event == "jol":
-                event_payload = CompetencyJolDTO.model_validate(
-                    dto.event_payload.event
-                )
+                event_payload = CompetencyJolDTO.model_validate(dto.event_payload.event)
                 logger.debug("Event Payload: %s", event_payload)
                 comp = next(
                     (
@@ -419,15 +406,11 @@ class CourseChatPipeline(Pipeline):
                 }
             else:
                 agent_prompt = (
-                    begin_agent_prompt
-                    if query is not None
-                    else no_chat_history_prompt
+                    begin_agent_prompt if query is not None else no_chat_history_prompt
                 )
                 params = {
                     "course_name": (
-                        dto.course.name
-                        if dto.course
-                        else "<Unknown course name>"
+                        dto.course.name if dto.course else "<Unknown course name>"
                     ),
                 }
 
@@ -454,10 +437,7 @@ class CourseChatPipeline(Pipeline):
                 self.prompt = ChatPromptTemplate.from_messages(
                     [
                         SystemMessage(
-                            initial_prompt_with_date
-                            + "\n"
-                            + agent_prompt
-                            + "\n"
+                            initial_prompt_with_date + "\n" + agent_prompt + "\n"
                         ),
                         ("placeholder", "{agent_scratchpad}"),
                     ]
@@ -481,9 +461,7 @@ class CourseChatPipeline(Pipeline):
             agent = create_tool_calling_agent(
                 llm=self.llm_big, tools=tools, prompt=self.prompt
             )
-            agent_executor = AgentExecutor(
-                agent=agent, tools=tools, verbose=False
-            )
+            agent_executor = AgentExecutor(agent=agent, tools=tools, verbose=False)
 
             out = None
             self.callback.in_progress()
@@ -510,9 +488,7 @@ class CourseChatPipeline(Pipeline):
                     InformationType.FAQS,
                     base_url=dto.settings.artemis_base_url,
                 )
-            self.callback.done(
-                "Response created", final_result=out, tokens=self.tokens
-            )
+            self.callback.done("Response created", final_result=out, tokens=self.tokens)
 
             # try:
             #     self.callback.skip("Skipping suggestion generation.")
@@ -555,9 +531,9 @@ class CourseChatPipeline(Pipeline):
         if course_id:
             # Fetch the first object that matches the course ID with the language property
             result = self.db.lecture_units.query.fetch_objects(
-                filters=Filter.by_property(
-                    LectureUnitSchema.COURSE_ID.value
-                ).equal(course_id),
+                filters=Filter.by_property(LectureUnitSchema.COURSE_ID.value).equal(
+                    course_id
+                ),
                 limit=1,
                 return_properties=[LectureUnitSchema.COURSE_NAME.value],
             )

@@ -15,9 +15,7 @@ def should_allow_faq_tool(db: VectorDatabase, course_id: int) -> bool:
     if course_id:
         # Fetch the first object that matches the course ID with the language property
         result = db.faqs.query.fetch_objects(
-            filters=Filter.by_property(FaqSchema.COURSE_ID.value).equal(
-                course_id
-            ),
+            filters=Filter.by_property(FaqSchema.COURSE_ID.value).equal(course_id),
             limit=1,
             return_properties=[FaqSchema.COURSE_NAME.value],
         )

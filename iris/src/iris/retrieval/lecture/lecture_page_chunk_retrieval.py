@@ -82,8 +82,8 @@ class LecturePageChunkRetrieval(Pipeline):
         self.cohere_client = RerankRequestHandler("cohere")
 
         self.pipeline = self.llm | StrOutputParser()
-        self.lecture_unit_page_chunk_collection = (
-            init_lecture_unit_page_chunk_schema(client)
+        self.lecture_unit_page_chunk_collection = init_lecture_unit_page_chunk_schema(
+            client
         )
         self.lecture_unit_collection = init_lecture_unit_schema(client)
 
@@ -127,11 +127,7 @@ class LecturePageChunkRetrieval(Pipeline):
         page_chunks = [
             dto
             for chunk in results
-            if (
-                dto := self.generate_retrieval_dtos(
-                    chunk.properties, str(chunk.uuid)
-                )
-            )
+            if (dto := self.generate_retrieval_dtos(chunk.properties, str(chunk.uuid)))
             is not None
         ]
 
@@ -189,16 +185,10 @@ class LecturePageChunkRetrieval(Pipeline):
         ).equal(lecture_page_chunk[LectureUnitPageChunkSchema.COURSE_ID.value])
         lecture_unit_filter &= Filter.by_property(
             LectureUnitSchema.LECTURE_ID.value
-        ).equal(
-            lecture_page_chunk[LectureUnitPageChunkSchema.LECTURE_ID.value]
-        )
+        ).equal(lecture_page_chunk[LectureUnitPageChunkSchema.LECTURE_ID.value])
         lecture_unit_filter &= Filter.by_property(
             LectureUnitSchema.LECTURE_UNIT_ID.value
-        ).equal(
-            lecture_page_chunk[
-                LectureUnitPageChunkSchema.LECTURE_UNIT_ID.value
-            ]
-        )
+        ).equal(lecture_page_chunk[LectureUnitPageChunkSchema.LECTURE_UNIT_ID.value])
         lecture_unit_filter &= Filter.by_property(
             LectureUnitSchema.BASE_URL.value
         ).equal(lecture_page_chunk[LectureUnitPageChunkSchema.BASE_URL.value])
@@ -213,18 +203,14 @@ class LecturePageChunkRetrieval(Pipeline):
             lecture_transcription_dto = LectureUnitPageChunkRetrievalDTO(
                 uuid=uuid,
                 course_id=lecture_unit[LectureUnitSchema.COURSE_ID.value],
-                course_name=lecture_unit[
-                    LectureUnitSchema.COURSE_DESCRIPTION.value
-                ],
+                course_name=lecture_unit[LectureUnitSchema.COURSE_DESCRIPTION.value],
                 course_description=lecture_unit[
                     LectureUnitSchema.COURSE_DESCRIPTION.value
                 ],
                 lecture_id=lecture_page_chunk[
                     LectureUnitPageChunkSchema.LECTURE_ID.value
                 ],
-                lecture_name=lecture_unit[
-                    LectureUnitSchema.LECTURE_NAME.value
-                ],
+                lecture_name=lecture_unit[LectureUnitSchema.LECTURE_NAME.value],
                 lecture_unit_id=lecture_page_chunk[
                     LectureUnitPageChunkSchema.LECTURE_ID.value
                 ],
@@ -243,8 +229,6 @@ class LecturePageChunkRetrieval(Pipeline):
                 page_text_content=lecture_page_chunk[
                     LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value
                 ],
-                base_url=lecture_page_chunk[
-                    LectureUnitPageChunkSchema.BASE_URL.value
-                ],
+                base_url=lecture_page_chunk[LectureUnitPageChunkSchema.BASE_URL.value],
             )
             return lecture_transcription_dto

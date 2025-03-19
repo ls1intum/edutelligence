@@ -105,12 +105,8 @@ class OllamaModel(
     _client: Client
 
     def model_post_init(self, __context: Any) -> None:
-        self._client = Client(
-            host=self.host
-        )  # TODO: Add authentication (httpx auth?)
-        self._client._client.base_url = (  # pylint: disable=protected-access
-            self.host
-        )
+        self._client = Client(host=self.host)  # TODO: Add authentication (httpx auth?)
+        self._client._client.base_url = self.host  # pylint: disable=protected-access
 
     def complete(
         self,
@@ -132,9 +128,7 @@ class OllamaModel(
         messages: list[PyrisMessage],
         arguments: CompletionArguments,
         tools: Optional[
-            Sequence[
-                Union[Dict[str, Any], Type[BaseModel], Callable, BaseTool]
-            ]
+            Sequence[Union[Dict[str, Any], Type[BaseModel], Callable, BaseTool]]
         ],
     ) -> PyrisMessage:
         response = self._client.chat(

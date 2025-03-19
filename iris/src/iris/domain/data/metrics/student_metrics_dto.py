@@ -20,9 +20,9 @@ class StudentMetricsDTO(BaseModel):
     exercise_metrics: Optional[ExerciseStudentMetricsDTO] = Field(
         None, alias="exerciseMetrics"
     )
-    lecture_unit_student_metrics_dto: Optional[
-        LectureUnitStudentMetricsDTO
-    ] = Field(None, alias="lectureUnitStudentMetricsDTO")
+    lecture_unit_student_metrics_dto: Optional[LectureUnitStudentMetricsDTO] = Field(
+        None, alias="lectureUnitStudentMetricsDTO"
+    )
     competency_metrics: Optional[CompetencyStudentMetricsDTO] = Field(
         None, alias="competencyMetrics"
     )

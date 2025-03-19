@@ -82,9 +82,7 @@ def run_lecture_deletion_pipeline_worker(dto: LecturesDeletionExecutionDto):
         pipeline = LectureUnitPageIngestionPipeline(
             client=client, dto=None, callback=callback
         )
-        pipeline.delete_old_lectures(
-            dto.lecture_units, dto.settings.artemis_base_url
-        )
+        pipeline.delete_old_lectures(dto.lecture_units, dto.settings.artemis_base_url)
     except Exception as e:
         logger.error("Error while deleting lectures: %s", e)
         logger.error(traceback.format_exc())
@@ -132,9 +130,7 @@ def run_faq_update_pipeline_worker(dto: FaqIngestionPipelineExecutionDto):
             )
             db = VectorDatabase()
             client = db.get_client()
-            pipeline = FaqIngestionPipeline(
-                client=client, dto=dto, callback=callback
-            )
+            pipeline = FaqIngestionPipeline(client=client, dto=dto, callback=callback)
             pipeline()
 
         except Exception as e:
@@ -160,9 +156,7 @@ def run_faq_delete_pipeline_worker(dto: FaqDeletionExecutionDto):
             db = VectorDatabase()
             client = db.get_client()
             # Hier würd dann die Methode zum entfernen aus der Datenbank kommen
-            pipeline = FaqIngestionPipeline(
-                client=client, dto=None, callback=callback
-            )
+            pipeline = FaqIngestionPipeline(client=client, dto=None, callback=callback)
             pipeline.delete_faq(dto.faq.faq_id, dto.faq.course_id)
 
         except Exception as e:
@@ -211,9 +205,7 @@ def transcription_ingestion_webhook(
     Webhook endpoint to trigger the lecture transcription ingestion pipeline
     """
     logger.info("transcription ingestion got DTO %s", dto)
-    thread = Thread(
-        target=run_transcription_ingestion_pipeline_worker, args=(dto,)
-    )
+    thread = Thread(target=run_transcription_ingestion_pipeline_worker, args=(dto,))
     thread.start()
 
 

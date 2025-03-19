@@ -44,9 +44,7 @@ def convert_iris_message_to_langchain_message(
                     )
                     for tc in iris_message.tool_calls
                 ]
-                return AIMessage(
-                    content=message.text_content, tool_calls=tool_calls
-                )
+                return AIMessage(content=message.text_content, tool_calls=tool_calls)
             return AIMessage(content=message.text_content)
         case IrisMessageRole.SYSTEM:
             return SystemMessage(content=message.text_content)
@@ -109,9 +107,7 @@ def convert_langchain_message_to_iris_message(
         contents = [TextMessageContentDTO(textContent=base_message.content)]
     elif isinstance(base_message, AIMessage):
         if base_message.tool_calls:
-            contents = [
-                TextMessageContentDTO(textContent=base_message.content)
-            ]
+            contents = [TextMessageContentDTO(textContent=base_message.content)]
             tool_calls = convert_langchain_tool_calls_to_iris_tool_calls(
                 base_message.tool_calls
             )
@@ -121,9 +117,7 @@ def convert_langchain_message_to_iris_message(
                 send_at=datetime.now(),
             )
         else:
-            contents = [
-                TextMessageContentDTO(textContent=base_message.content)
-            ]
+            contents = [TextMessageContentDTO(textContent=base_message.content)]
     elif isinstance(base_message, ToolMessage):
         contents = [
             ToolMessageContentDTO(

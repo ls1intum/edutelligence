@@ -129,18 +129,14 @@ def convert_to_open_ai_messages(
 
         # Add tool calls if present
         if isinstance(message, PyrisAIMessage) and message.tool_calls:
-            openai_message["tool_calls"] = create_openai_tool_calls(
-                message.tool_calls
-            )
+            openai_message["tool_calls"] = create_openai_tool_calls(message.tool_calls)
 
         openai_messages.append(openai_message)
 
     return openai_messages
 
 
-def create_token_usage(
-    usage: Optional[CompletionUsage], model: str
-) -> TokenUsageDTO:
+def create_token_usage(usage: Optional[CompletionUsage], model: str) -> TokenUsageDTO:
     """
     Create a TokenUsageDTO from CompletionUsage data.
 
@@ -227,9 +223,7 @@ class OpenAIChatModel(ChatModel):
         messages: list[PyrisMessage],
         arguments: CompletionArguments,
         tools: Optional[
-            Sequence[
-                Union[Dict[str, Any], Type[BaseModel], Callable, BaseTool]
-            ]
+            Sequence[Union[Dict[str, Any], Type[BaseModel], Callable, BaseTool]]
         ],
     ) -> PyrisMessage:
         # noinspection PyTypeChecker
@@ -261,9 +255,7 @@ class OpenAIChatModel(ChatModel):
                     )
 
                 if tools:
-                    params["tools"] = [
-                        convert_to_openai_tool(tool) for tool in tools
-                    ]
+                    params["tools"] = [convert_to_openai_tool(tool) for tool in tools]
                     logging.info("Using tools: %s", tools)
 
                 response = client.chat.completions.create(**params)

@@ -146,14 +146,10 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
             )
             cleanup_temporary_file(pdf_path)
             self.callback.done("Lecture Chunking and interpretation Finished")
-            self.callback.in_progress(
-                "Ingesting lecture chunks into database..."
-            )
+            self.callback.in_progress("Ingesting lecture chunks into database...")
             self.batch_update(chunks)
 
-            self.callback.done(
-                "Lecture Ingestion Finished", tokens=self.tokens
-            )
+            self.callback.done("Lecture Ingestion Finished", tokens=self.tokens)
             lecture_unit_dto = LectureUnitDTO(
                 course_id=self.dto.lecture_unit.course_id,
                 course_name=self.dto.lecture_unit.course_name,
@@ -194,15 +190,11 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         Weaviate limitation.
         """
         with batch_update_lock:
-            with self.collection.batch.rate_limit(
-                requests_per_minute=600
-            ) as batch:
+            with self.collection.batch.rate_limit(requests_per_minute=600) as batch:
                 try:
                     for _, chunk in enumerate(chunks):
                         embed_chunk = self.llm_embedding.embed(
-                            chunk[
-                                LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value
-                            ]
+                            chunk[LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value]
                         )
                         batch.add_object(properties=chunk, vector=embed_chunk)
                 except Exception as e:
@@ -331,9 +323,7 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
             bullets=True,
             extra_whitespace=True,
         )
-        self._append_tokens(
-            self.llm.tokens, PipelineEnum.IRIS_LECTURE_INGESTION
-        )
+        self._append_tokens(self.llm.tokens, PipelineEnum.IRIS_LECTURE_INGESTION)
         return clean_output
 
     def get_course_language(self, page_content: str) -> str:
@@ -353,9 +343,7 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
             CompletionArguments(temperature=0, max_tokens=20),
             tools=[],
         )
-        self._append_tokens(
-            response.token_usage, PipelineEnum.IRIS_LECTURE_INGESTION
-        )
+        self._append_tokens(response.token_usage, PipelineEnum.IRIS_LECTURE_INGESTION)
         return response.contents[0].text_content
 
     def delete_old_lectures(
@@ -383,9 +371,7 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
             self.callback.error("Error while removing old slides")
             return False
 
-    def delete_lecture_unit(
-        self, course_id, lecture_id, lecture_unit_id, base_url
-    ):
+    def delete_lecture_unit(self, course_id, lecture_id, lecture_unit_id, base_url):
         """
         Delete the lecture from the database
         """
@@ -394,12 +380,12 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
                 where=Filter.by_property(
                     LectureUnitPageChunkSchema.BASE_URL.value
                 ).equal(base_url)
-                & Filter.by_property(
-                    LectureUnitPageChunkSchema.COURSE_ID.value
-                ).equal(course_id)
-                & Filter.by_property(
-                    LectureUnitPageChunkSchema.LECTURE_ID.value
-                ).equal(lecture_id)
+                & Filter.by_property(LectureUnitPageChunkSchema.COURSE_ID.value).equal(
+                    course_id
+                )
+                & Filter.by_property(LectureUnitPageChunkSchema.LECTURE_ID.value).equal(
+                    lecture_id
+                )
                 & Filter.by_property(
                     LectureUnitPageChunkSchema.LECTURE_UNIT_ID.value
                 ).equal(lecture_unit_id)
