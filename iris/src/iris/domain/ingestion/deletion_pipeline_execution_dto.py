@@ -4,7 +4,7 @@ from pydantic import Field
 
 from iris.domain import PipelineExecutionDTO, PipelineExecutionSettingsDTO
 from iris.domain.data.faq_dto import FaqDTO
-from iris.domain.data.lecture_unit_dto import LectureUnitPageDTO
+from iris.domain.data.lecture_unit_page_dto import LectureUnitPageDTO
 from iris.domain.status.stage_dto import StageDTO
 
 

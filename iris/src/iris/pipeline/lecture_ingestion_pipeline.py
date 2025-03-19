@@ -20,7 +20,7 @@ from iris.domain.ingestion.ingestion_pipeline_execution_dto import (
 
 from ..common.pyris_message import IrisMessageRole, PyrisMessage
 from ..domain.data.image_message_content_dto import ImageMessageContentDTO
-from ..domain.data.lecture_unit_dto import LectureUnitPageDTO
+from ..domain.data.lecture_unit_page_dto import LectureUnitPageDTO
 from ..domain.data.text_message_content_dto import TextMessageContentDTO
 from ..domain.lecture.lecture_unit_dto import LectureUnitDTO
 from ..ingestion.abstract_ingestion import AbstractIngestion
