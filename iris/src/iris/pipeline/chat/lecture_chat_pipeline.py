@@ -136,14 +136,15 @@ class LectureChatPipeline(Pipeline):
             lecture_unit_id=dto.lecture_unit_id,
             base_url=dto.settings.artemis_base_url,
         )
+
+        print("----------lecture content-----------")
+        print(f"{self.lecture_content.lecture_transcriptions}")
         self._add_lecture_content_to_prompt(self.lecture_content)
         prompt_val = self.prompt.format_messages()
         self.prompt = ChatPromptTemplate.from_messages(prompt_val)
         try:
             response = (self.prompt | self.pipeline).invoke({})
-            self._append_tokens(
-                self.llm.tokens, PipelineEnum.IRIS_CHAT_LECTURE_MESSAGE
-            )
+            self._append_tokens(self.llm.tokens, PipelineEnum.IRIS_CHAT_LECTURE_MESSAGE)
             response_with_citation = self.citation_pipeline(
                 self.lecture_content, response
             )
@@ -187,9 +188,7 @@ class LectureChatPipeline(Pipeline):
             )
         self.prompt += convert_iris_message_to_langchain_message(user_question)
 
-    def _add_lecture_content_to_prompt(
-        self, lecture_content: LectureRetrievalDTO
-    ):
+    def _add_lecture_content_to_prompt(self, lecture_content: LectureRetrievalDTO):
         """
         Adds the relevant chunks of the lecture to the prompt
         :param lecture_content: The retrieved lecture parts
@@ -201,12 +200,8 @@ class LectureChatPipeline(Pipeline):
         )
         for chunk in lecture_content.lecture_unit_page_chunks:
             text_content_msg = f" \n {chunk.page_text_content} \n"
-            text_content_msg = text_content_msg.replace("{", "{{").replace(
-                "}", "}}"
-            )
-            self.prompt += SystemMessagePromptTemplate.from_template(
-                text_content_msg
-            )
+            text_content_msg = text_content_msg.replace("{", "{{").replace("}", "}}")
+            self.prompt += SystemMessagePromptTemplate.from_template(text_content_msg)
 
         # Transcription content
         self.prompt += SystemMessagePromptTemplate.from_template(
@@ -214,12 +209,8 @@ class LectureChatPipeline(Pipeline):
         )
         for _, chunk in enumerate(lecture_content.lecture_transcriptions):
             text_content_msg = f" \n {chunk.segment_text} \n"
-            text_content_msg = text_content_msg.replace("{", "{{").replace(
-                "}", "}}"
-            )
-            self.prompt += SystemMessagePromptTemplate.from_template(
-                text_content_msg
-            )
+            text_content_msg = text_content_msg.replace("{", "{{").replace("}", "}}")
+            self.prompt += SystemMessagePromptTemplate.from_template(text_content_msg)
 
         # Segment summaries
         self.prompt += SystemMessagePromptTemplate.from_template(
@@ -228,12 +219,8 @@ class LectureChatPipeline(Pipeline):
         )
         for chunk in lecture_content.lecture_unit_segments:
             text_content_msg = f" \n {chunk.segment_summary} \n"
-            text_content_msg = text_content_msg.replace("{", "{{").replace(
-                "}", "}}"
-            )
-            self.prompt += SystemMessagePromptTemplate.from_template(
-                text_content_msg
-            )
+            text_content_msg = text_content_msg.replace("{", "{{").replace("}", "}}")
+            self.prompt += SystemMessagePromptTemplate.from_template(text_content_msg)
 
         self.prompt += SystemMessagePromptTemplate.from_template(
             "USE ONLY THE CONTENT YOU NEED TO ANSWER THE QUESTION:\n"

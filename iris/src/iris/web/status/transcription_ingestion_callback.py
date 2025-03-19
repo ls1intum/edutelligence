@@ -21,7 +21,7 @@ class TranscriptionIngestionStatus(StatusCallback):
         run_id: str,
         base_url: str,
         initial_stages: List[StageDTO] = None,
-        lecture_id: int = None,
+        lecture_unit_id: int = None,
     ):
         url = f"{base_url}/api/public/pyris/webhooks/ingestion/transcriptions/runs/{run_id}/status"
 
@@ -54,6 +54,6 @@ class TranscriptionIngestionStatus(StatusCallback):
                 name="Ingest lecture unit summary",
             ),
         ]
-        status = IngestionStatusUpdateDTO(stages=stages, id=lecture_id)
+        status = IngestionStatusUpdateDTO(stages=stages, id=lecture_unit_id)
         stage = stages[current_stage_index]
         super().__init__(url, run_id, status, stage, current_stage_index)

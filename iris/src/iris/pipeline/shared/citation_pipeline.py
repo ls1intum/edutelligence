@@ -43,14 +43,10 @@ class CitationPipeline(Pipeline):
         )
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler,
-            completion_args=CompletionArguments(
-                temperature=0, max_tokens=4000
-            ),
+            completion_args=CompletionArguments(temperature=0, max_tokens=4000),
         )
         dirname = os.path.dirname(__file__)
-        prompt_file_path = os.path.join(
-            dirname, "..", "prompts", "citation_prompt.txt"
-        )
+        prompt_file_path = os.path.join(dirname, "..", "prompts", "citation_prompt.txt")
         with open(prompt_file_path, "r", encoding="utf-8") as file:
             self.lecture_prompt_str = file.read()
         prompt_file_path = os.path.join(
@@ -96,12 +92,11 @@ class CitationPipeline(Pipeline):
                 f"---{paragraph.segment_text}---\n\n"
             )
             formatted_string_lecture_transcriptions += lct
-
+        print("-------formatted string lecture transcriptions-----------")
+        print(formatted_string_lecture_transcriptions)
         return formatted_string_lecture_page_chunks.replace("{", "{{").replace(
             "}", "}}"
-        ), formatted_string_lecture_transcriptions.replace("{", "{{").replace(
-            "}", "}}"
-        )
+        ), formatted_string_lecture_transcriptions.replace("{", "{{").replace("}", "}}")
 
     def create_formatted_faq_string(self, faqs, base_url):
         """
@@ -167,9 +162,7 @@ class CitationPipeline(Pipeline):
                         "TranscriptionParagraphs": paragraphs_transcriptions,
                     }
                 )
-            self._append_tokens(
-                self.llm.tokens, PipelineEnum.IRIS_CITATION_PIPELINE
-            )
+            self._append_tokens(self.llm.tokens, PipelineEnum.IRIS_CITATION_PIPELINE)
             if response == "!NONE!":
                 return answer
             return response
