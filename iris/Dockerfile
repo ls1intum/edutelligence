@@ -11,7 +11,7 @@ COPY iris/pyproject.toml iris/poetry.lock ./
 RUN pip install poetry
 
 # Install any dependencies
-RUN poetry install --only main --no-root
+RUN poetry install --only main
 
 # Copy the content of the local src directory to the working directory
 COPY iris/src/ ./src
