@@ -1,0 +1,59 @@
+---
+name: Iris - Build
+
+on:
+  pull_request:
+    paths:
+      - "iris/**"
+      - ".github/workflows/iris_build-and-push-docker.yml"
+      - "!iris/README.md"
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - "iris/**"
+      - ".github/workflows/iris_build-and-push-docker.yml"
+      - "!iris/README.md"
+  release:
+    types:
+      - created
+
+jobs:
+  compute-tag:
+    name: Compute tag
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'ls1intum/edutelligence' }}
+    runs-on: ubuntu-latest
+    outputs:
+      result: ${{ steps.compute-tag.outputs.result }}
+    steps:
+      - name: Compute Tag
+        uses: actions/github-script@v7
+        id: compute-tag
+        with:
+          result-encoding: string
+          script: |
+            if (context.eventName === "pull_request") {
+              return "iris_pr-" + context.issue.number;
+            }
+            if (context.eventName === "release") {
+              return "iris_latest";
+            }
+            if (context.eventName === "push") {
+              if (context.ref.startsWith("refs/tags/")) {
+                return "iris_" + context.ref.slice(10);
+              }
+              if (context.ref === "refs/heads/main") {
+                return "iris_latest";
+              }
+            }
+            return "FALSE";
+
+  build-and-push:
+    name: Build and Push to GitHub Container Registry
+    needs: [ compute-tag ]
+    uses: ls1intum/.github/.github/workflows/build-and-push-docker-image.yml@main
+    with:
+      image-name: ghcr.io/ls1intum/edutelligence/iris
+      docker-file: ./iris/Dockerfile
+      docker-context: .
+      tags: ghcr.io/ls1intum/edutelligence:${{ needs.compute-tag.outputs.result }}
