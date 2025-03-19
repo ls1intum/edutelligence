@@ -23,15 +23,14 @@ class LectureUnitPageChunkSchema(Enum):
     PAGE_TEXT_CONTENT = "page_text_content"
     PAGE_NUMBER = "page_number"
     BASE_URL = "base_url"
+    PAGE_VERSION = "attachment_version"
 
 
 def init_lecture_unit_page_chunk_schema(client: WeaviateClient) -> Collection:
     """
     Initialize the schema for the lecture unit page chunks
     """
-    if client.collections.exists(
-        LectureUnitPageChunkSchema.COLLECTION_NAME.value
-    ):
+    if client.collections.exists(LectureUnitPageChunkSchema.COLLECTION_NAME.value):
         collection = client.collections.get(
             LectureUnitPageChunkSchema.COLLECTION_NAME.value
         )
@@ -101,6 +100,12 @@ def init_lecture_unit_page_chunk_schema(client: WeaviateClient) -> Collection:
                 description="The base url of the website where the lecture unit is hosted",
                 data_type=DataType.TEXT,
                 index_searchable=False,
+            ),
+            Property(
+                name=LectureUnitPageChunkSchema.PAGE_VERSION.value,
+                description="The version of the page",
+                data_type=DataType.TEXT,
+                index_searchable=True,  # tODO: alles
             ),
         ],
     )

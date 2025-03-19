@@ -22,7 +22,6 @@ from ..common.pyris_message import IrisMessageRole, PyrisMessage
 from ..domain.data.image_message_content_dto import ImageMessageContentDTO
 from ..domain.data.lecture_unit_page_dto import LectureUnitPageDTO
 from ..domain.data.text_message_content_dto import TextMessageContentDTO
-from ..domain.lecture.lecture_unit_dto import LectureUnitDTO
 from ..ingestion.abstract_ingestion import AbstractIngestion
 from ..llm import (
     BasicRequestHandler,
@@ -37,7 +36,6 @@ from ..vector_database.lecture_unit_page_chunk_schema import (
 )
 from ..web.status import ingestion_status_callback
 from . import Pipeline
-from .lecture_unit_pipeline import LectureUnitPipeline
 
 batch_update_lock = threading.Lock()
 
@@ -87,6 +85,7 @@ def create_page_data(
             LectureUnitPageChunkSchema.PAGE_NUMBER.value: page_num + 1,
             LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value: page_split.page_content,
             LectureUnitPageChunkSchema.BASE_URL.value: base_url,
+            LectureUnitPageChunkSchema.PAGE_VERSION.value: lecture_unit_dto.attachment_version,
         }
         for page_split in page_splits
     ]
@@ -124,8 +123,15 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         self.tokens = []
         self.course_language = None
 
-    def __call__(self) -> bool:
+    def __call__(self) -> (str, []):
         try:
+            if not self.check_if_attachment_needs_update():
+                pdf_path = save_pdf(self.dto.lecture_unit.pdf_file_base64)
+                doc = fitz.open(pdf_path)
+                self.course_language = self.get_course_language(
+                    doc.load_page(min(5, doc.page_count - 1)).get_text()
+                )
+                return self.course_language, self.tokens
             self.callback.in_progress("Deleting old slides from database...")
             self.delete_lecture_unit(
                 self.dto.lecture_unit.course_id,
@@ -146,38 +152,16 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
             )
             cleanup_temporary_file(pdf_path)
             self.callback.done("Lecture Chunking and interpretation Finished")
-            self.callback.in_progress(
-                "Ingesting lecture chunks into database..."
-            )
+            self.callback.in_progress("Ingesting lecture chunks into database...")
             self.batch_update(chunks)
 
-            self.callback.done(
-                "Lecture Ingestion Finished", tokens=self.tokens
-            )
-            lecture_unit_dto = LectureUnitDTO(
-                course_id=self.dto.lecture_unit.course_id,
-                course_name=self.dto.lecture_unit.course_name,
-                course_description=self.dto.lecture_unit.course_description,
-                course_language=self.course_language,
-                lecture_id=self.dto.lecture_unit.lecture_id,
-                lecture_name=self.dto.lecture_unit.lecture_name,
-                lecture_unit_id=self.dto.lecture_unit.lecture_unit_id,
-                lecture_unit_name=self.dto.lecture_unit.lecture_unit_name,
-                lecture_unit_link=self.dto.lecture_unit.lecture_unit_link,
-                base_url=self.dto.settings.artemis_base_url,
-            )
-
-            LectureUnitPipeline()(lecture_unit=lecture_unit_dto)
-
-            self.callback.done(
-                "Lecture Unit Summary Ingestion Finished", tokens=self.tokens
-            )
+            self.callback.done("Lecture Ingestion Finished", tokens=self.tokens)
 
             logger.info(
                 "Lecture ingestion pipeline finished Successfully for course %s",
                 self.dto.lecture_unit.course_name,
             )
-            return True
+            return self.course_language, self.tokens
         except Exception as e:
             logger.error("Error updating lecture unit: %s", e)
             self.callback.error(
@@ -185,7 +169,32 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
                 exception=e,
                 tokens=self.tokens,
             )
-            return False
+            return "", []
+
+    def check_if_attachment_needs_update(self) -> bool:
+        page_chunk_filter = Filter.by_property(
+            LectureUnitPageChunkSchema.BASE_URL.value
+        ).equal(self.dto.settings.artemis_base_url)
+        page_chunk_filter &= Filter.by_property(
+            LectureUnitPageChunkSchema.COURSE_ID.value
+        ).equal(self.dto.lecture_unit.course_id)
+        page_chunk_filter &= Filter.by_property(
+            LectureUnitPageChunkSchema.LECTURE_ID.value
+        ).equal(self.dto.lecture_unit.lecture_id)
+        page_chunk_filter &= Filter.by_property(
+            LectureUnitPageChunkSchema.LECTURE_UNIT_ID.value
+        ).equal(self.dto.lecture_unit.lecture_unit_id)
+
+        page_chunk = self.collection.query.fetch_objects(
+            filters=page_chunk_filter, limit=1
+        ).objects
+
+        if len(page_chunk) == 0:
+            return True
+        version = page_chunk[0].properties.get(
+            LectureUnitPageChunkSchema.PAGE_VERSION.value
+        )
+        return version < self.dto.lecture_unit.attachment_version
 
     def batch_update(self, chunks):
         """
@@ -194,15 +203,11 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         Weaviate limitation.
         """
         with batch_update_lock:
-            with self.collection.batch.rate_limit(
-                requests_per_minute=600
-            ) as batch:
+            with self.collection.batch.rate_limit(requests_per_minute=600) as batch:
                 try:
                     for _, chunk in enumerate(chunks):
                         embed_chunk = self.llm_embedding.embed(
-                            chunk[
-                                LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value
-                            ]
+                            chunk[LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value]
                         )
                         batch.add_object(properties=chunk, vector=embed_chunk)
                 except Exception as e:
@@ -331,9 +336,7 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
             bullets=True,
             extra_whitespace=True,
         )
-        self._append_tokens(
-            self.llm.tokens, PipelineEnum.IRIS_LECTURE_INGESTION
-        )
+        self._append_tokens(self.llm.tokens, PipelineEnum.IRIS_LECTURE_INGESTION)
         return clean_output
 
     def get_course_language(self, page_content: str) -> str:
@@ -353,9 +356,7 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
             CompletionArguments(temperature=0, max_tokens=20),
             tools=[],
         )
-        self._append_tokens(
-            response.token_usage, PipelineEnum.IRIS_LECTURE_INGESTION
-        )
+        self._append_tokens(response.token_usage, PipelineEnum.IRIS_LECTURE_INGESTION)
         return response.contents[0].text_content
 
     def delete_old_lectures(
@@ -383,9 +384,7 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
             self.callback.error("Error while removing old slides")
             return False
 
-    def delete_lecture_unit(
-        self, course_id, lecture_id, lecture_unit_id, base_url
-    ):
+    def delete_lecture_unit(self, course_id, lecture_id, lecture_unit_id, base_url):
         """
         Delete the lecture from the database
         """
@@ -394,12 +393,12 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
                 where=Filter.by_property(
                     LectureUnitPageChunkSchema.BASE_URL.value
                 ).equal(base_url)
-                & Filter.by_property(
-                    LectureUnitPageChunkSchema.COURSE_ID.value
-                ).equal(course_id)
-                & Filter.by_property(
-                    LectureUnitPageChunkSchema.LECTURE_ID.value
-                ).equal(lecture_id)
+                & Filter.by_property(LectureUnitPageChunkSchema.COURSE_ID.value).equal(
+                    course_id
+                )
+                & Filter.by_property(LectureUnitPageChunkSchema.LECTURE_ID.value).equal(
+                    lecture_id
+                )
                 & Filter.by_property(
                     LectureUnitPageChunkSchema.LECTURE_UNIT_ID.value
                 ).equal(lecture_unit_id)

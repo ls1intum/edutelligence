@@ -62,7 +62,6 @@ class StatusCallback(ABC):
     def on_status_update(self):
         """Send a status update to the Artemis API."""
         try:
-            print(self.status.dict(by_alias=True))
             requests.post(
                 self.url,
                 headers={
@@ -70,7 +69,7 @@ class StatusCallback(ABC):
                     "Authorization": f"Bearer {self.run_id}",
                 },
                 json=self.status.model_dump(by_alias=True),
-                timeout=5,
+                timeout=200,
             ).raise_for_status()
         except requests.exceptions.RequestException as e:
             logger.error("Error sending status update: %s", e)
@@ -175,9 +174,7 @@ class StatusCallback(ABC):
                 f"Error occurred in job {self.run_id} in stage {self.stage.name}: {message}"
             )
 
-    def skip(
-        self, message: Optional[str] = None, start_next_stage: bool = True
-    ):
+    def skip(self, message: Optional[str] = None, start_next_stage: bool = True):
         """
         Transition the current stage to SKIPPED and update the status.
         If there is a next stage, set the current stage to the next stage.

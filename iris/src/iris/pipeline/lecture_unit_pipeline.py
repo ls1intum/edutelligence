@@ -25,18 +25,18 @@ class LectureUnitPipeline(Pipeline):
         super().__init__()
         vector_database = VectorDatabase()
         self.weaviate_client = vector_database.get_client()
-        self.lecture_unit_collection = init_lecture_unit_schema(
-            self.weaviate_client
-        )
+        self.lecture_unit_collection = init_lecture_unit_schema(self.weaviate_client)
         self.llm_embedding = BasicRequestHandler("embedding-small")
 
     def __call__(self, lecture_unit: LectureUnitDTO):
-        lecture_unit_segment_summaries = LectureUnitSegmentSummaryPipeline(
-            self.weaviate_client, lecture_unit
-        )()
-        lecture_unit.lecture_unit_summary = LectureUnitSummaryPipeline(
-            self.weaviate_client, lecture_unit, lecture_unit_segment_summaries
-        )()
+        lecture_unit_segment_summaries, token_unit_segment_summary = (
+            LectureUnitSegmentSummaryPipeline(self.weaviate_client, lecture_unit)()
+        )
+        lecture_unit.lecture_unit_summary, tokens_unit_summary = (
+            LectureUnitSummaryPipeline(
+                self.weaviate_client, lecture_unit, lecture_unit_segment_summaries
+            )()
+        )
 
         # Delete existing lecture unit
         self.lecture_unit_collection.data.delete_many(
@@ -46,9 +46,9 @@ class LectureUnitPipeline(Pipeline):
             & Filter.by_property(LectureUnitSchema.LECTURE_ID.value).equal(
                 lecture_unit.lecture_id
             )
-            & Filter.by_property(
-                LectureUnitSchema.LECTURE_UNIT_ID.value
-            ).equal(lecture_unit.lecture_unit_id)
+            & Filter.by_property(LectureUnitSchema.LECTURE_UNIT_ID.value).equal(
+                lecture_unit.lecture_unit_id
+            )
             & Filter.by_property(LectureUnitSchema.BASE_URL.value).equal(
                 lecture_unit.base_url
             ),
@@ -72,3 +72,5 @@ class LectureUnitPipeline(Pipeline):
                 },
                 vector=embedding,
             )
+
+        return tokens_unit_summary + token_unit_segment_summary
