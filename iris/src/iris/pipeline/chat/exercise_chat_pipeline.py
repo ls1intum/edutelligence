@@ -26,10 +26,16 @@ from ...domain.chat.interaction_suggestion_dto import (
 from ...domain.data.build_log_entry import BuildLogEntryDTO
 from ...domain.data.feedback_dto import FeedbackDTO
 from ...domain.data.programming_submission_dto import ProgrammingSubmissionDTO
-from ...llm import CapabilityRequestHandler, CompletionArguments, RequirementList
+from ...llm import (
+    CapabilityRequestHandler,
+    CompletionArguments,
+    RequirementList,
+)
 from ...llm.langchain import IrisLangchainChatModel
 from ...vector_database.database import VectorDatabase
-from ...vector_database.lecture_unit_page_chunk_schema import LectureUnitPageChunkSchema
+from ...vector_database.lecture_unit_page_chunk_schema import (
+    LectureUnitPageChunkSchema,
+)
 from ...web.status.status_update import ExerciseChatStatusCallback
 from ..pipeline import Pipeline
 from ..prompts.iris_exercise_chat_prompts import (
@@ -157,7 +163,9 @@ class ExerciseChatPipeline(Pipeline):
         except Exception as e:
             traceback.print_exc()
             self.callback.error(
-                f"Failed to generate response: {e}", exception=e, tokens=self.tokens
+                f"Failed to generate response: {e}",
+                exception=e,
+                tokens=self.tokens,
             )
 
     def _run_exercise_chat_pipeline(
@@ -332,7 +340,9 @@ class ExerciseChatPipeline(Pipeline):
                 self.exercise_chat_response = guide_response
         except Exception as e:
             self.callback.error(
-                f"Failed to create response: {e}", exception=e, tokens=self.tokens
+                f"Failed to create response: {e}",
+                exception=e,
+                tokens=self.tokens,
             )
             # print stack trace
             traceback.print_exc()

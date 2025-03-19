@@ -38,7 +38,9 @@ class CapabilityRequestHandler(RequestHandler):
         selection_mode: CapabilityRequestHandlerSelectionMode = CapabilityRequestHandlerSelectionMode.WORST,
     ) -> None:
         super().__init__(
-            requirements=requirements, selection_mode=selection_mode, llm_manager=None
+            requirements=requirements,
+            selection_mode=selection_mode,
+            llm_manager=None,
         )
         self.requirements = requirements
         self.selection_mode = selection_mode

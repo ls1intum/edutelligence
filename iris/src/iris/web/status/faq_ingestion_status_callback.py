@@ -1,7 +1,9 @@
 import logging
 from typing import List
 
-from ...domain.ingestion.ingestion_status_update_dto import IngestionStatusUpdateDTO
+from ...domain.ingestion.ingestion_status_update_dto import (
+    IngestionStatusUpdateDTO,
+)
 from ...domain.status.stage_dto import StageDTO
 from ...domain.status.stage_state_dto import StageStateEnum
 from .status_update import StatusCallback
@@ -21,15 +23,15 @@ class FaqIngestionStatus(StatusCallback):
         initial_stages: List[StageDTO] = None,
         faq_id: int = None,
     ):
-        url = (
-            f"{base_url}/api/public/pyris/webhooks/ingestion/faqs/runs/{run_id}/status"
-        )
+        url = f"{base_url}/api/iris/public/pyris/webhooks/ingestion/faqs/runs/{run_id}/status"
 
         current_stage_index = len(initial_stages) if initial_stages else 0
         stages = initial_stages or []
         stages += [
             StageDTO(
-                weight=10, state=StageStateEnum.NOT_STARTED, name="Old faq removal"
+                weight=10,
+                state=StageStateEnum.NOT_STARTED,
+                name="Old faq removal",
             ),
             StageDTO(
                 weight=30,

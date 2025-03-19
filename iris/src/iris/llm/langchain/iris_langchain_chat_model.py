@@ -42,7 +42,9 @@ class IrisLangchainChatModel(BaseChatModel):
         **kwargs: Any,
     ) -> None:
         super().__init__(
-            request_handler=request_handler, completion_args=completion_args, **kwargs
+            request_handler=request_handler,
+            completion_args=completion_args,
+            **kwargs,
         )
 
     def bind_tools(

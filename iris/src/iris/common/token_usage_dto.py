@@ -4,6 +4,10 @@ from iris.common.pipeline_enum import PipelineEnum
 
 
 class TokenUsageDTO(BaseModel):
+    """
+    Token usage data transfer object
+    """
+
     model_info: str = Field(alias="model", default="")
     num_input_tokens: int = Field(alias="numInputTokens", default=0)
     cost_per_input_token: float = Field(alias="costPerMillionInputToken", default=0)

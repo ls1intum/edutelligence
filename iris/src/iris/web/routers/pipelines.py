@@ -31,7 +31,9 @@ from iris.pipeline.chat_gpt_wrapper_pipeline import ChatGPTWrapperPipeline
 from iris.pipeline.competency_extraction_pipeline import (
     CompetencyExtractionPipeline,
 )
-from iris.pipeline.inconsistency_check_pipeline import InconsistencyCheckPipeline
+from iris.pipeline.inconsistency_check_pipeline import (
+    InconsistencyCheckPipeline,
+)
 from iris.pipeline.rewriting_pipeline import RewritingPipeline
 from iris.pipeline.text_exercise_chat_pipeline import TextExerciseChatPipeline
 from iris.web.status.status_update import (
@@ -50,7 +52,9 @@ logger = logging.getLogger(__name__)
 
 
 def run_exercise_chat_pipeline_worker(
-    dto: ExerciseChatPipelineExecutionDTO, variant: str, event: str | None = None
+    dto: ExerciseChatPipelineExecutionDTO,
+    variant: str,
+    event: str | None = None,
 ):
     try:
         callback = ExerciseChatStatusCallback(
@@ -116,7 +120,8 @@ def run_exercise_chat_pipeline(
         thread = Thread(target=run_chatgpt_wrapper_pipeline_worker, args=(dto, variant))
     else:
         thread = Thread(
-            target=run_exercise_chat_pipeline_worker, args=(dto, variant, event)
+            target=run_exercise_chat_pipeline_worker,
+            args=(dto, variant, event),
         )
     thread.start()
 
