@@ -12,7 +12,7 @@
     self_hosted: false
     vendor: OpenAI
   description: GPT 3.5 16k on Azure
-  endpoint: '<your-endpoint>'
+  endpoint: "<your-endpoint>"
   id: azure-gpt-35-turbo
   model: gpt-3.5-turbo
   name: GPT 3.5 Turbo
@@ -47,7 +47,7 @@
     self_hosted: false
     vendor: OpenAI
   description: GPT 4 Turbo 128k on Azure
-  endpoint: '<your-endpoint>'
+  endpoint: "<your-endpoint>"
   id: azure-gpt-4-turbo
   model: gpt-4-turbo
   name: GPT 4 Turbo
@@ -66,7 +66,7 @@
     self_hosted: false
     vendor: OpenAI
   description: GPT 4 Omni on Azure
-  endpoint: '<your-endpoint>'
+  endpoint: "<your-endpoint>"
   id: azure-gpt-4-omni
   model: gpt-4o
   name: GPT 4 Omni
@@ -85,13 +85,13 @@
     self_hosted: false
     vendor: OpenAI
   description: GPT 4 Omni Mini on Azure
-  endpoint: '<your-endpoint>'
+  endpoint: "<your-endpoint>"
   id: azure-gpt-4-omni-mini
   model: gpt-4o-mini
   name: GPT 4 Omni Mini
   type: azure_chat
 - api_key:
-  api_version: '2023-05-15T00:00:00.000Z'
+  api_version: "2023-05-15T00:00:00.000Z"
   azure_deployment: te-3-large
   capabilities:
     context_length: 8191
@@ -101,7 +101,7 @@
     self_hosted: false
     vendor: OpenAI
   description: Embedding Large 8k Azure
-  endpoint: '<your-endpoint>'
+  endpoint: "<your-endpoint>"
   id: embedding-large
   model: text-embedding-3-large
   name: Embedding Large
@@ -117,7 +117,7 @@
     self_hosted: false
     vendor: OpenAI
   description: Embedding Small 8k Azure
-  endpoint: '<your-endpoint>'
+  endpoint: "<your-endpoint>"
   id: embedding-small
   model: text-embedding-3-small
   name: Embedding Small
