@@ -104,8 +104,8 @@ def init_lecture_unit_page_chunk_schema(client: WeaviateClient) -> Collection:
             Property(
                 name=LectureUnitPageChunkSchema.PAGE_VERSION.value,
                 description="The version of the page",
-                data_type=DataType.TEXT,
-                index_searchable=True,  # tODO: alles
+                data_type=DataType.INT,
+                index_searchable=False,
             ),
         ],
     )
