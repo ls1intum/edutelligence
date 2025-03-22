@@ -131,6 +131,12 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
                 self.course_language = self.get_course_language(
                     doc.load_page(min(5, doc.page_count - 1)).get_text()
                 )
+                self.callback.in_progress("skipping slide removal")
+                self.callback.done()
+                self.callback.in_progress("skipping slide interpretation")
+                self.callback.done()
+                self.callback.in_progress("skipping slide ingestion")
+                self.callback.done()
                 return self.course_language, self.tokens
             self.callback.in_progress("Deleting old slides from database...")
             self.delete_lecture_unit(
