@@ -27,7 +27,7 @@ class LecturesDeletionStatusCallback(StatusCallback):
             StageDTO(
                 weight=100,
                 state=StageStateEnum.NOT_STARTED,
-                name="Slides removal",
+                name="Lecture unit removal",
             ),
         ]
         status = IngestionStatusUpdateDTO(stages=stages)

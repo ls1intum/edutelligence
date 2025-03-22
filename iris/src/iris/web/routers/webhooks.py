@@ -19,6 +19,7 @@ from ...domain.ingestion.transcription_ingestion.transcription_ingestion_pipelin
     TranscriptionIngestionPipelineExecutionDto,
 )
 from ...domain.lecture.lecture_unit_dto import LectureUnitDTO
+from ...pipeline.delete_lecture_units_pipeline import LectureUnitDeletionPipeline
 from ...pipeline.faq_ingestion_pipeline import FaqIngestionPipeline
 from ...pipeline.lecture_ingestion_pipeline import (
     LectureUnitPageIngestionPipeline,
@@ -62,7 +63,6 @@ def run_lecture_update_pipeline_worker(dto: IngestionPipelineExecutionDto):
                 dto.lecture_unit.pdf_file_base64 is not None
                 or dto.lecture_unit.pdf_file_base64 != ""
             ):
-                print("hello there from the slides")
                 page_content_pipeline = LectureUnitPageIngestionPipeline(
                     client=client, dto=dto, callback=callback
                 )
@@ -77,7 +77,6 @@ def run_lecture_update_pipeline_worker(dto: IngestionPipelineExecutionDto):
                 callback.done()
             print(dto.lecture_unit.transcription)
             if dto.lecture_unit.transcription is not None:
-                print("hello there from the transcriptions?")
                 transcription_pipeline = TranscriptionIngestionPipeline(
                     client=client, dto=dto, callback=callback
                 )
@@ -107,9 +106,7 @@ def run_lecture_update_pipeline_worker(dto: IngestionPipelineExecutionDto):
                 lecture_unit_link=dto.lecture_unit.lecture_unit_link,
                 base_url=dto.settings.artemis_base_url,
             )
-            print(f"tokens before lecture unit pipeline: {tokens}")
             tokens += LectureUnitPipeline()(lecture_unit=lecture_unit_dto)
-            print(f"tokens after lecture unit pipeline: {tokens}")
             callback.done(
                 "Ingested lecture unit summary into vector database",
                 tokens=tokens,
@@ -135,10 +132,13 @@ def run_lecture_deletion_pipeline_worker(dto: LecturesDeletionExecutionDto):
         )
         db = VectorDatabase()
         client = db.get_client()
-        pipeline = LectureUnitPageIngestionPipeline(
-            client=client, dto=None, callback=callback
+        pipeline = LectureUnitDeletionPipeline(
+            client=client,
+            lecture_units=dto.lecture_units,
+            callback=callback,
+            artemis_base_url=dto.settings.artemis_base_url,
         )
-        pipeline.delete_old_lectures(dto.lecture_units, dto.settings.artemis_base_url)
+        pipeline()
     except Exception as e:
         logger.error("Error while deleting lectures: %s", e)
         logger.error(traceback.format_exc())
