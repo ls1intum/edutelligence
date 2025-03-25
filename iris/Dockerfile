@@ -14,7 +14,7 @@ RUN pip install poetry
 RUN poetry install --only main --no-root
 
 # Copy the content of the local src directory to the working directory
-COPY iris/src/ ./src
+COPY iris/src/iris ./iris
 
 # Specify the command to run on container start
 CMD ["poetry", "run", "uvicorn", "iris.main:app", "--host", "0.0.0.0", "--port", "8000"]
