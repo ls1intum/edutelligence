@@ -17,4 +17,4 @@ RUN poetry install --only main --no-root
 COPY iris/src/ ./src
 
 # Specify the command to run on container start
-CMD ["poetry", "run", "uvicorn", "src.iris.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["poetry", "run", "uvicorn", "iris.main:app", "--host", "0.0.0.0", "--port", "8000"]
