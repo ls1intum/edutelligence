@@ -81,9 +81,9 @@ jobs:
         run: poetry run coverage xml
         working-directory: nebula
 
-      - name: Upload Coverage Report
-        uses: codecov/codecov-action@v2
-        with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          file: nebula/coverage.xml
-          fail_ci_if_error: true
+      #- name: Upload Coverage Report
+      #  uses: codecov/codecov-action@v2
+      #  with:
+      #    token: ${{ secrets.CODECOV_TOKEN }}
+      #    file: nebula/coverage.xml
+      #    fail_ci_if_error: true
