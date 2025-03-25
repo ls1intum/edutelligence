@@ -18,9 +18,15 @@ from iris.domain.chat.interaction_suggestion_dto import (
     InteractionSuggestionPipelineExecutionDTO,
 )
 
-from ...common.message_converters import convert_iris_message_to_langchain_message
+from ...common.message_converters import (
+    convert_iris_message_to_langchain_message,
+)
 from ...common.pyris_message import PyrisMessage
-from ...llm import CapabilityRequestHandler, CompletionArguments, RequirementList
+from ...llm import (
+    CapabilityRequestHandler,
+    CompletionArguments,
+    RequirementList,
+)
 from ...llm.langchain import IrisLangchainChatModel
 from ..pipeline import Pipeline
 from ..prompts.iris_interaction_suggestion_prompts import (
@@ -148,7 +154,8 @@ class InteractionSuggestionPipeline(Pipeline):
                 raise ValueError("No last message provided")
         except Exception as e:
             logger.error(
-                "An error occurred while running the course chat pipeline", exc_info=e
+                "An error occurred while running the course chat pipeline",
+                exc_info=e,
             )
             traceback.print_exc()
             return []

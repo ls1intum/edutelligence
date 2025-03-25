@@ -10,7 +10,8 @@ from ..llm.capability.capability_checker import (
     calculate_capability_scores,
     capabilities_fulfill_requirements,
 )
-from ..llm.external import AnyLlm, LanguageModel
+from ..llm.external import AnyLlm
+from .external.model import LanguageModel
 
 
 # Small workaround to get pydantic discriminators working

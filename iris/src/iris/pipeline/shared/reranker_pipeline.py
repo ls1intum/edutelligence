@@ -9,7 +9,11 @@ from langsmith import traceable
 
 from iris.common.pipeline_enum import PipelineEnum
 from iris.common.pyris_message import PyrisMessage
-from iris.llm import CapabilityRequestHandler, CompletionArguments, RequirementList
+from iris.llm import (
+    CapabilityRequestHandler,
+    CompletionArguments,
+    RequirementList,
+)
 from iris.llm.langchain import IrisLangchainChatModel
 from iris.pipeline import Pipeline
 from iris.pipeline.chat.output_models.output_models.selected_paragraphs import (

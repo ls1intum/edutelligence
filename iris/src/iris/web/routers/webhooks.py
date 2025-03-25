@@ -19,14 +19,21 @@ from ...domain.ingestion.transcription_ingestion.transcription_ingestion_pipelin
     TranscriptionIngestionPipelineExecutionDto,
 )
 from ...pipeline.faq_ingestion_pipeline import FaqIngestionPipeline
-from ...pipeline.lecture_ingestion_pipeline import LectureUnitPageIngestionPipeline
-from ...pipeline.transcription_ingestion_pipeline import TranscriptionIngestionPipeline
-from ...retrieval.lecture.lecture_retrieval import LectureRetrieval
+from ...pipeline.lecture_ingestion_pipeline import (
+    LectureUnitPageIngestionPipeline,
+)
+from ...pipeline.transcription_ingestion_pipeline import (
+    TranscriptionIngestionPipeline,
+)
 from ...vector_database.database import VectorDatabase
 from ..status.faq_ingestion_status_callback import FaqIngestionStatus
 from ..status.ingestion_status_callback import IngestionStatusCallback
-from ..status.lecture_deletion_status_callback import LecturesDeletionStatusCallback
-from ..status.transcription_ingestion_callback import TranscriptionIngestionStatus
+from ..status.lecture_deletion_status_callback import (
+    LecturesDeletionStatusCallback,
+)
+from ..status.transcription_ingestion_callback import (
+    TranscriptionIngestionStatus,
+)
 
 router = APIRouter(prefix="/api/v1/webhooks", tags=["webhooks"])
 
@@ -93,7 +100,7 @@ def run_transcription_ingestion_pipeline_worker(
                 run_id=dto.settings.authentication_token,
                 base_url=dto.settings.artemis_base_url,
                 initial_stages=dto.initial_stages,
-                lecture_id=dto.lectureUnitId,
+                lecture_id=dto.lecture_unit_id,
             )
             db = VectorDatabase()
             client = db.get_client()
@@ -191,7 +198,9 @@ def lecture_deletion_webhook(dto: LecturesDeletionExecutionDto):
     status_code=status.HTTP_202_ACCEPTED,
     dependencies=[Depends(TokenValidator())],
 )
-def transcription_ingestion_webhook(dto: TranscriptionIngestionPipelineExecutionDto):
+def transcription_ingestion_webhook(
+    dto: TranscriptionIngestionPipelineExecutionDto,
+):
     """
     Webhook endpoint to trigger the lecture transcription ingestion pipeline
     """
@@ -226,20 +235,3 @@ def faq_deletion_webhook(dto: FaqDeletionExecutionDto):
     thread = Thread(target=run_faq_delete_pipeline_worker, args=(dto,))
     thread.start()
     return
-
-
-@router.get(
-    "/test",
-    status_code=status.HTTP_202_ACCEPTED,
-)
-def test():
-    thread = Thread(
-        target=LectureRetrieval(VectorDatabase().get_client()),
-        args=("What is scrum?", 1, []),
-    )
-    thread.start()
-    # LectureRetrieval(VectorDatabase().get_client())(
-    #     query="Query",
-    #     course_id = 1,
-    #     chat_history = [],
-    # )

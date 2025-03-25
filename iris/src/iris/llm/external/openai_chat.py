@@ -2,7 +2,16 @@ import json
 import logging
 import time
 from datetime import datetime
-from typing import Any, Callable, Dict, Literal, Optional, Sequence, Type, Union
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Literal,
+    Optional,
+    Sequence,
+    Type,
+    Union,
+)
 
 from langchain_core.tools import BaseTool
 from langchain_core.utils.function_calling import convert_to_openai_tool
@@ -42,7 +51,10 @@ def convert_content_to_openai_format(content):
                 "detail": "high",
             },
         },
-        TextMessageContentDTO: lambda c: {"type": "text", "text": c.text_content},
+        TextMessageContentDTO: lambda c: {
+            "type": "text",
+            "text": c.text_content,
+        },
         JsonMessageContentDTO: lambda c: {
             "type": "json_object",
             "json_object": c.json_content,
@@ -166,7 +178,9 @@ def create_iris_tool_calls(message_tool_calls) -> list[ToolCallDTO]:
 
 
 def convert_to_iris_message(
-    message: ChatCompletionMessage, usage: Optional[CompletionUsage], model: str
+    message: ChatCompletionMessage,
+    usage: Optional[CompletionUsage],
+    model: str,
 ) -> PyrisMessage:
     """
     Convert a ChatCompletionMessage to a PyrisMessage.

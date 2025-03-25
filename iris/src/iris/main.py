@@ -25,7 +25,11 @@ def custom_openapi():
         openapi_schema = FastAPI.openapi(app)
         # Add security scheme
         openapi_schema["components"]["securitySchemes"] = {
-            "bearerAuth": {"type": "apiKey", "in": "header", "name": "Authorization"}
+            "bearerAuth": {
+                "type": "apiKey",
+                "in": "header",
+                "name": "Authorization",
+            }
         }
         # Apply the security globally
         for path in openapi_schema["paths"].values():

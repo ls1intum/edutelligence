@@ -1,20 +1,23 @@
 import os
 from asyncio.log import logger
 from enum import Enum
-from typing import List, Union
 
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate, PromptTemplate
 from langchain_core.runnables import Runnable
 
 from iris.common.pipeline_enum import PipelineEnum
-from iris.llm import CapabilityRequestHandler, CompletionArguments, RequirementList
+from iris.domain.retrieval.lecture.lecture_retrieval_dto import (
+    LectureRetrievalDTO,
+)
+from iris.llm import (
+    CapabilityRequestHandler,
+    CompletionArguments,
+    RequirementList,
+)
 from iris.llm.langchain import IrisLangchainChatModel
 from iris.pipeline import Pipeline
 from iris.vector_database.faq_schema import FaqSchema
-from iris.vector_database.lecture_unit_page_chunk_schema import (
-    LectureUnitPageChunkSchema,
-)
 
 
 class InformationType(str, Enum):
@@ -60,29 +63,46 @@ class CitationPipeline(Pipeline):
     def __str__(self):
         return f"{self.__class__.__name__}(llm={self.llm})"
 
-    def create_formatted_lecture_string(self, paragraphs):
+    def create_formatted_lecture_string(
+        self, lecture_retrieval_dto: LectureRetrievalDTO
+    ):
         """
         Create a formatted string from the data
         """
-        formatted_string = ""
-        for _, paragraph in enumerate(paragraphs):
-            lct = (
-                f"Lecture: {paragraph.get(LectureUnitPageChunkSchema.LECTURE_NAME.value)},"
-                f" Unit: {paragraph.get(LectureUnitPageChunkSchema.LECTURE_UNIT_NAME.value)},"
-                f" Page: {paragraph.get(LectureUnitPageChunkSchema.PAGE_NUMBER.value)},"
-                f" Link: {paragraph.get(LectureUnitPageChunkSchema.LECTURE_UNIT_LINK.value) or "No link available"},"
-                f"\nContent:\n---{paragraph.get(LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value)}---\n\n"
-            )
-            formatted_string += lct
 
-        return formatted_string.replace("{", "{{").replace("}", "}}")
+        formatted_string_lecture_page_chunks = ""
+        for paragraph in lecture_retrieval_dto.lecture_unit_page_chunks:
+            lct = (
+                f"Lecture: {paragraph.lecture_name},"
+                f" Unit: {paragraph.lecture_unit_name},"
+                f" Page: {paragraph.page_number},"
+                f" Link: {paragraph.lecture_unit_link or "No link available"},"
+                f"\nContent:\n---{paragraph.page_text_content}---\n\n"
+            )
+            formatted_string_lecture_page_chunks += lct
+
+        formatted_string_lecture_transcriptions = ""
+
+        for paragraph in lecture_retrieval_dto.lecture_transcriptions:
+            lct = (
+                f"Lecture Transcription: {paragraph.lecture_name}, Unit: {paragraph.lecture_unit_name}, "
+                f"Page: {paragraph.page_number}, Link: {paragraph.lecture_unit_link}, "
+                f"Start Time: {paragraph.segment_start_time}, End Time: {paragraph.segment_end_time},\n"
+                f"Content:\n"
+                f"---{paragraph.segment_text}---\n\n"
+            )
+            formatted_string_lecture_transcriptions += lct
+
+        return formatted_string_lecture_page_chunks.replace("{", "{{").replace(
+            "}", "}}"
+        ), formatted_string_lecture_transcriptions.replace("{", "{{").replace("}", "}}")
 
     def create_formatted_faq_string(self, faqs, base_url):
         """
         Create a formatted string from the data
         """
         formatted_string = ""
-        for _, faq in enumerate(faqs):
+        for faq in faqs:
             faq = (
                 f"FAQ ID {faq.get(FaqSchema.FAQ_ID.value)},"
                 f" CourseId {faq.get(FaqSchema.COURSE_ID.value)} ,"
@@ -97,7 +117,7 @@ class CitationPipeline(Pipeline):
 
     def __call__(
         self,
-        information: Union[List[dict], List[str]],
+        information,  #: #Union[List[dict], List[str]],
         answer: str,
         information_type: InformationType = InformationType.PARAGRAPHS,
         **kwargs,
@@ -110,6 +130,8 @@ class CitationPipeline(Pipeline):
             :return: Selected file content
         """
         paras = ""
+        paragraphs_page_chunks = ""
+        paragraphs_transcriptions = ""
 
         if information_type == InformationType.FAQS:
             paras = self.create_formatted_faq_string(
@@ -117,7 +139,9 @@ class CitationPipeline(Pipeline):
             )
             self.prompt_str = self.faq_prompt_str
         if information_type == InformationType.PARAGRAPHS:
-            paras = self.create_formatted_lecture_string(information)
+            paragraphs_page_chunks, paragraphs_transcriptions = (
+                self.create_formatted_lecture_string(information)
+            )
             self.prompt_str = self.lecture_prompt_str
 
         try:
@@ -125,9 +149,18 @@ class CitationPipeline(Pipeline):
                 template=self.prompt_str,
                 input_variables=["Answer", "Paragraphs"],
             )
-            response = (self.default_prompt | self.pipeline).invoke(
-                {"Answer": answer, "Paragraphs": paras}
-            )
+            if information_type == InformationType.FAQS:
+                response = (self.default_prompt | self.pipeline).invoke(
+                    {"Answer": answer, "Paragraphs": paras}
+                )
+            else:
+                response = (self.default_prompt | self.pipeline).invoke(
+                    {
+                        "Answer": answer,
+                        "Paragraphs": paragraphs_page_chunks,
+                        "TranscriptionParagraphs": paragraphs_transcriptions,
+                    }
+                )
             self._append_tokens(self.llm.tokens, PipelineEnum.IRIS_CITATION_PIPELINE)
             if response == "!NONE!":
                 return answer

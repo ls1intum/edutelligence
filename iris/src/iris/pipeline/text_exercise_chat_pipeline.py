@@ -6,7 +6,11 @@ from iris.common.pyris_message import IrisMessageRole, PyrisMessage
 from iris.domain.text_exercise_chat_pipeline_execution_dto import (
     TextExerciseChatPipelineExecutionDTO,
 )
-from iris.llm import CapabilityRequestHandler, CompletionArguments, RequirementList
+from iris.llm import (
+    CapabilityRequestHandler,
+    CompletionArguments,
+    RequirementList,
+)
 from iris.pipeline import Pipeline
 from iris.pipeline.prompts.text_exercise_chat_prompts import (
     fmt_extract_sentiments_prompt,

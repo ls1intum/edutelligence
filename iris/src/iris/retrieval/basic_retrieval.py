@@ -4,7 +4,10 @@ from abc import ABC, abstractmethod
 from typing import List, Optional
 
 from langchain_core.output_parsers import StrOutputParser
-from langchain_core.prompts import ChatPromptTemplate, SystemMessagePromptTemplate
+from langchain_core.prompts import (
+    ChatPromptTemplate,
+    SystemMessagePromptTemplate,
+)
 from langsmith import traceable
 from weaviate import WeaviateClient
 from weaviate.classes.query import Filter
@@ -18,7 +21,9 @@ from iris.llm import (
     RequirementList,
 )
 
-from ..common.message_converters import convert_iris_message_to_langchain_message
+from ..common.message_converters import (
+    convert_iris_message_to_langchain_message,
+)
 from ..common.pyris_message import PyrisMessage
 from ..llm.langchain import IrisLangchainChatModel
 from ..pipeline import Pipeline
