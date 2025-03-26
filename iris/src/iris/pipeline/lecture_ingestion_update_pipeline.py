@@ -80,6 +80,7 @@ class LectureIngestionUpdatePipeline(Pipeline):
                 lecture_unit_id=self.dto.lecture_unit.lecture_unit_id,
                 lecture_unit_name=self.dto.lecture_unit.lecture_unit_name,
                 lecture_unit_link=self.dto.lecture_unit.lecture_unit_link,
+                video_link=self.dto.lecture_unit.video_link,
                 base_url=self.dto.settings.artemis_base_url,
             )
             tokens += LectureUnitPipeline()(lecture_unit=lecture_unit_dto)

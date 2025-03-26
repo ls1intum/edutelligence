@@ -234,17 +234,26 @@ class LectureRetrieval(Pipeline):
 
             return LectureUnitRetrievalDTO(
                 uuid=lecture_unit_uuid,
-                course_id=lecture_unit.course_id,
-                course_name=lecture_unit.course_name,
-                course_description=lecture_unit.course_description,
-                course_language=lecture_unit.course_language,
-                lecture_id=lecture_unit.lecture_id,
-                lecture_name=lecture_unit.lecture_name,
-                lecture_unit_id=lecture_unit.lecture_unit_id,
-                lecture_unit_name=lecture_unit.lecture_unit_name,
-                lecture_unit_link=lecture_unit.lecture_unit_link,
-                base_url=lecture_unit.base_url,
-                lecture_unit_summary=lecture_unit.lecture_unit_summary,
+                course_id=lecture_unit[LectureUnitSchema.COURSE_ID.value],
+                course_name=lecture_unit[LectureUnitSchema.COURSE_NAME.value],
+                course_description=lecture_unit[
+                    LectureUnitSchema.COURSE_DESCRIPTION.value
+                ],
+                course_language=lecture_unit[LectureUnitSchema.COURSE_LANGUAGE.value],
+                lecture_id=lecture_unit[LectureUnitSchema.LECTURE_ID.value],
+                lecture_name=lecture_unit[LectureUnitSchema.LECTURE_UNIT_NAME.value],
+                lecture_unit_id=lecture_unit[LectureUnitSchema.LECTURE_UNIT_ID.value],
+                lecture_unit_name=lecture_unit[
+                    LectureUnitSchema.LECTURE_UNIT_NAME.value
+                ],
+                lecture_unit_link=lecture_unit[
+                    LectureUnitSchema.LECTURE_UNIT_LINK.value
+                ],
+                video_link=lecture_unit[LectureUnitSchema.VIDEO_LINK.value],
+                base_url=base_url,
+                lecture_unit_summary=lecture_unit[
+                    LectureUnitSchema.LECTURE_UNIT_SUMMARY.value
+                ],
             )
 
         elif lecture_id is not None:
@@ -274,6 +283,7 @@ class LectureRetrieval(Pipeline):
                 lecture_unit_id=None,
                 lecture_unit_name=None,
                 lecture_unit_link=None,
+                video_link=None,
                 base_url=base_url,
                 lecture_unit_summary=lecture_unit[
                     LectureUnitSchema.LECTURE_UNIT_SUMMARY.value
@@ -303,6 +313,7 @@ class LectureRetrieval(Pipeline):
                 lecture_unit_id=None,
                 lecture_unit_name=None,
                 lecture_unit_link=None,
+                video_link=None,
                 base_url=base_url,
                 lecture_unit_summary=lecture_unit[
                     LectureUnitSchema.LECTURE_UNIT_SUMMARY.value
