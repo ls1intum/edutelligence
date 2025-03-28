@@ -50,7 +50,7 @@ jobs:
           source $(poetry env info --path)/bin/activate
           # Run pre-commit hooks
           cd ..
-          pre-commit run --all-files --hook-stage manual
+          pre-commit run --all-files --hook-stage manual iris
 
   test:
     name: Test
