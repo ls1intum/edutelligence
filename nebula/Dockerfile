@@ -14,7 +14,7 @@ RUN pip install poetry
 RUN poetry install --only main --no-root
 
 # Copy the content of the local src directory to the working directory
-COPY nebula/src/ ./src
+COPY nebula/src/nebula ./nebula
 
 # Specify the command to run on container start
 CMD ["uvicorn", "nebula.main:app", "--host", "0.0.0.0", "--port", "8000"]
