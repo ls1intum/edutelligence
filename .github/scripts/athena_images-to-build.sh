@@ -32,7 +32,7 @@ ATHENA_CHANGED=$(echo "$CHANGED_FILES" | grep -q "^athena" && echo "true" || ech
 cd athena
 
 # Loop over all root level directories and modules
-for DIR in athena/modules/*/*/ athena/*/; do
+for DIR in modules/*/*/ */; do
     # If a Dockerfile exists in the directory
     if [[ -e "${DIR}Dockerfile" ]]; then
         DIR=${DIR%/} # Remove trailing slash
@@ -64,7 +64,7 @@ for DIR in athena/modules/*/*/ athena/*/; do
         IMAGE_NAME_SUFFIX=$(basename "$DIR")
 
         # Construct Docker image name and tag
-        IMAGE_NAME="athena/$IMAGE_NAME_SUFFIX"
+        IMAGE_NAME="athena_$IMAGE_NAME_SUFFIX"
         IMAGE_TAG="pr-$PR_NUMBER"
 
         # Check if any file has changed in that directory since the pull request was created
