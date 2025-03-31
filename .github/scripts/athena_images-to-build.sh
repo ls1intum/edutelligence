@@ -29,7 +29,7 @@ fi
 ATHENA_CHANGED=$(echo "$CHANGED_FILES" | grep -q "^athena" && echo "true" || echo "false")
 
 # Loop over all root level directories and modules
-for DIR in modules/*/*/ */; do
+for DIR in athena/modules/*/*/ athena/*/; do
     # If a Dockerfile exists in the directory
     if [[ -e "${DIR}Dockerfile" ]]; then
         DIR=${DIR%/} # Remove trailing slash
@@ -46,7 +46,7 @@ for DIR in modules/*/*/ */; do
 
 
         # Build all images on develop branch
-        if [[ "$GITHUB_REF" == "refs/heads/develop" ]]; then
+        if [[ "$GITHUB_REF" == "refs/heads/main" ]]; then
             DIRS+=("$DIR")
             continue
         fi
