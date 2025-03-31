@@ -28,8 +28,11 @@ fi
 # Check if athena folder was changed (then we need to build all module_* images)
 ATHENA_CHANGED=$(echo "$CHANGED_FILES" | grep -q "^athena" && echo "true" || echo "false")
 
+# Go to the athena directory
+cd athena
+
 # Loop over all root level directories and modules
-for DIR in athena/modules/*/*/ athena/*/; do
+for DIR in modules/*/*/ */; do
     # If a Dockerfile exists in the directory
     if [[ -e "${DIR}Dockerfile" ]]; then
         DIR=${DIR%/} # Remove trailing slash
