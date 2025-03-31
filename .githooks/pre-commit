@@ -1,0 +1,12 @@
+#!/bin/sh
+
+TARGET_DIR="athena/evaluation"
+
+# Find staged Jupyter notebooks within the target directory and strip their output
+git diff --cached --name-only --diff-filter=ACM | grep "^$TARGET_DIR/.*\.ipynb$" | while read -r notebook; do
+    [ -f "$notebook" ] || continue
+    jupyter nbconvert --clear-output --inplace "$notebook"
+    git add "$notebook"
+done
+
+exit 0
