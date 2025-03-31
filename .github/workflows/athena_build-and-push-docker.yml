@@ -91,10 +91,10 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: |
-            ghcr.io/${{ github.repository_owner }}/Athena/${{ env.IMAGE_NAME }}
+            ghcr.io/${{ github.repository_owner }}/athena_${{ env.IMAGE_NAME }}
             ls1tum/athena_${{ env.IMAGE_NAME }}
           tags: |
-            type=raw,value=${{ github.ref == 'refs/heads/develop' && 'develop' || github.sha }}
+            type=raw,value=${{ github.ref == 'refs/heads/main' && 'main' || github.sha }}
             type=raw,value=${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.sha }}
 
       - name: Build and push Docker image
@@ -105,7 +105,7 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
-            ATHENA_IS_DEVELOP=${{ github.ref == 'refs/heads/develop' && 'true' || 'false' }}
+            ATHENA_IS_DEVELOP=${{ github.ref == 'refs/heads/main' && 'true' || 'false' }}
             ATHENA_COMMIT_SHA=${{ github.event.pull_request.head.sha || github.sha }}
             ATHENA_PR_NUMBER=${{ github.event.pull_request.number }}
             ATHENA_PR_TITLE=${{ github.event.pull_request.title }}
