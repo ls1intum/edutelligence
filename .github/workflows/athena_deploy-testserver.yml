@@ -251,7 +251,7 @@ jobs:
         uses: RubbaBoy/BYOB@v1.3.0
         with:
             name: ${{ matrix.label-identifier }}
-            label: ${{ env.DEPLOYMENT_HOST }}
+            label: ${{ vars.DEPLOYMENT_HOST }}
             status: ${{ github.event.pull_request.head.ref }}
             color: red
             github_token: ${{ secrets.GITHUB_TOKEN }}
