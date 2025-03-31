@@ -142,9 +142,6 @@ jobs:
       url: ${{ matrix.url }}
 
     env:
-      # DEPLOYMENT_USER: ${{ matrix.user }} --
-      # DEPLOYMENT_HOST: ${{ matrix.hosts }} --
-      # DEPLOYMENT_FOLDER: ${{ matrix.folder }} --
       GATEWAY_USER: "jump"
       GATEWAY_HOST: "gateway.artemis.in.tum.de:2010"
       GATEWAY_HOST_PUBLIC_KEY: "[gateway.artemis.in.tum.de]:2010 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKtTLiKRILjKZ+Qg4ReWKsG7mLDXkzHfeY5nalSQUNQ4"
@@ -251,7 +248,7 @@ jobs:
         uses: RubbaBoy/BYOB@v1.3.0
         with:
             name: ${{ matrix.label-identifier }}
-            label: ${{ matrix.url }}
+            label: ${{ env.DEPLOYMENT_HOST }}
             status: ${{ github.event.pull_request.head.ref }}
             color: red
             github_token: ${{ secrets.GITHUB_TOKEN }}
