@@ -2,8 +2,7 @@ name: Pull Request Label Removal
 
 on:
   pull_request_target:
-    types:
-      - unlabeled
+    types: [unlabeled]
 
 jobs:
   update_badges:
