@@ -1,10 +1,18 @@
-name: Prospector Linting
+name: Athena - Prospector Linting
 
 on:
   push:
     branches:
-      - develop
+      - main
+    paths:
+      - "athena/**"
+      - ".github/workflows/athena_lint.yml"
   pull_request:
+    branches:
+      - main
+    paths:
+      - "athena/**"
+      - ".github/workflows/athena_lint.yml"
 
 jobs:
   prospector:
@@ -12,16 +20,17 @@ jobs:
 
     steps:
     - name: Check out code
-      uses: actions/checkout@v2
+      uses: actions/checkout@v4
 
     - name: Set up Python
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v5
       with:
         python-version: '3.11'
 
     - name: Install Poetry
       run: |
         curl -sSL https://install.python-poetry.org | python3 -
+
     - name: Cache Poetry dependencies
       uses: actions/cache@v2
       with:
@@ -29,10 +38,14 @@ jobs:
         key: ${{ runner.os }}-poetry-${{ hashFiles('**/pyproject.toml') }}
         restore-keys: |
           ${{ runner.os }}-poetry-
+
     - name: Install dependencies
+      working-directory: athena
       run: |
         echo "$HOME/.local/bin" >> $GITHUB_PATH
         poetry install
         poetry run install_all
+
     - name: Run Prospector
+      working-directory: athena
       run: poetry run lint_all

@@ -1,10 +1,18 @@
-name: Tests
+name: Athena - Tests
 
 on:
   push:
     branches:
-      - develop
+      - main
+    paths:
+      - "athena/**"
+      - ".github/workflows/athena_test.yml"
   pull_request:
+    branches:
+      - main
+    paths:
+      - "athena/**"
+      - ".github/workflows/athena_test.yml"
 
 jobs:
   test:
@@ -12,7 +20,7 @@ jobs:
 
     steps:
     - name: Check out code
-      uses: actions/checkout@v2
+      uses: actions/checkout@v4
 
     - name: Set up Python
       uses: actions/setup-python@v4
@@ -22,6 +30,7 @@ jobs:
     - name: Install Poetry
       run: |
         curl -sSL https://install.python-poetry.org | python3 -
+
     - name: Cache Poetry dependencies
       uses: actions/cache@v2
       with:
@@ -29,10 +38,14 @@ jobs:
         key: ${{ runner.os }}-poetry-${{ hashFiles('**/pyproject.toml') }}
         restore-keys: |
           ${{ runner.os }}-poetry-
+
     - name: Install dependencies
+      working-directory: athena
       run: |
         echo "$HOME/.local/bin" >> $GITHUB_PATH
         poetry install
         poetry run install_all
+
     - name: Run tests
+      working-directory: athena
       run: poetry run test_all
