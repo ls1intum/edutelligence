@@ -142,6 +142,9 @@ jobs:
       url: ${{ matrix.url }}
 
     env:
+      DEPLOYMENT_USER: ${{ vars.DEPLOYMENT_USER }}
+      DEPLOYMENT_HOST: ${{ vars.DEPLOYMENT_HOST }}
+      DEPLOYMENT_FOLDER: ${{ vars.DEPLOYMENT_FOLDER }}
       GATEWAY_USER: "jump"
       GATEWAY_HOST: "gateway.artemis.in.tum.de:2010"
       GATEWAY_HOST_PUBLIC_KEY: "[gateway.artemis.in.tum.de]:2010 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKtTLiKRILjKZ+Qg4ReWKsG7mLDXkzHfeY5nalSQUNQ4"
