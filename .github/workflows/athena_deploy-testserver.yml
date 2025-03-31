@@ -7,7 +7,7 @@ on:
 concurrency: test-servers
 
 env:
-  RAW_URL: https://raw.githubusercontent.com/${{ github.repository }}/${{ github.sha }}
+  RAW_URL: https://raw.githubusercontent.com/${{ github.repository }}/${{ github.sha }}/athena
 
 jobs:
   # Get an up to date version of the label list. github.event.pull_request.labels seems to sometimes be outdated
@@ -43,7 +43,7 @@ jobs:
         id: check_build
         uses: octokit/request-action@v2.x
         with:
-          route: GET /repos/${{ github.repository }}/actions/workflows/build.yml/runs?event=pull_request&status=success&head_sha=${{ github.event.pull_request.head.sha }}
+          route: GET /repos/${{ github.repository }}/actions/workflows/athena_build-and-push-docker.yml/runs?event=pull_request&status=success&head_sha=${{ github.event.pull_request.head.sha }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -85,19 +85,13 @@ jobs:
     strategy:
       matrix:
         include:
-          - environment: athena-test1.ase.cit.tum.de
+          - environment: Athena - Test 1
             label-identifier: athena-test1
             url: https://athena-test1.ase.cit.tum.de
-            user: ${{ vars.DEPLOYMENT_USER }}
-            hosts: athena-test1.ase.cit.tum.de
-            folder: ${{ vars.DEPLOYMENT_FOLDER }}
 
-          - environment: athena-test2.ase.cit.tum.de
+          - environment: Athena - Test 2
             label-identifier: athena-test2
             url: https://athena-test2.ase.cit.tum.de
-            user: ${{ vars.DEPLOYMENT_USER }}
-            hosts: athena-test2.ase.cit.tum.de
-            folder: ${{ vars.DEPLOYMENT_FOLDER }}
     outputs:
       TS1: ${{ steps.filter.outputs.athena-test1 || '' }}
       TS2: ${{ steps.filter.outputs.athena-test2 || '' }}
@@ -148,9 +142,9 @@ jobs:
       url: ${{ matrix.url }}
 
     env:
-      DEPLOYMENT_USER: ${{ matrix.user }}
-      DEPLOYMENT_HOST: ${{ matrix.hosts }}
-      DEPLOYMENT_FOLDER: ${{ matrix.folder }}
+      DEPLOYMENT_USER: ${{ vars.DEPLOYMENT_USER }}
+      DEPLOYMENT_HOST: ${{ vars.DEPLOYMENT_HOST }}
+      DEPLOYMENT_FOLDER: ${{ vars.DEPLOYMENT_FOLDER }}
       GATEWAY_USER: "jump"
       GATEWAY_HOST: "gateway.artemis.in.tum.de:2010"
       GATEWAY_HOST_PUBLIC_KEY: "[gateway.artemis.in.tum.de]:2010 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKtTLiKRILjKZ+Qg4ReWKsG7mLDXkzHfeY5nalSQUNQ4"
@@ -178,17 +172,17 @@ jobs:
                 issue_number: context.issue.number,
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                body: `#### ⚠️ Unable to deploy to test server ⚠️\nAthena Testserver "${{ matrix.environment }}" is already in use by PR #${issues[0].number}.`
+                body: `#### ⚠️ Unable to deploy to test server ⚠️\n"${{ matrix.environment }}" is already in use by PR #${issues[0].number}.`
               })
-              core.setFailed(`Athena Testserver "${{ matrix.environment }}" is already in use by PR #${issues[0].number}.`);
+              core.setFailed(`"${{ matrix.environment }}" is already in use by PR #${issues[0].number}.`);
             } else if (issues.length > 1) {
               github.rest.issues.createComment({
                   issue_number: context.issue.number,
                   owner: context.repo.owner,
                   repo: context.repo.repo,
-                  body: '#### ⚠️ Unable to deploy to test server ⚠️\nAthena Testserver "${{ matrix.environment }}" is already in use by multiple PRs. Check PRs with label "lock:${{ matrix.label-identifier }}"!'
+                  body: '#### ⚠️ Unable to deploy to test server ⚠️\n"${{ matrix.environment }}" is already in use by multiple PRs. Check PRs with label "lock:${{ matrix.label-identifier }}"!'
                 })
-              core.setFailed('Athena Testserver "${{ matrix.environment }}" is already in use by multiple PRs. Check PRs with label "lock:${{ matrix.label-identifier }}"!');
+              core.setFailed('"${{ matrix.environment }}" is already in use by multiple PRs. Check PRs with label "lock:${{ matrix.label-identifier }}"!');
             }
 
       - name: Compute Tag
@@ -207,7 +201,7 @@ jobs:
               if (context.ref.startsWith("refs/tags/")) {
                 return context.ref.slice(10);
               }
-              if (context.ref === "refs/heads/develop") {
+              if (context.ref === "refs/heads/main") {
                 return "develop";
               }
             }
@@ -256,11 +250,11 @@ jobs:
       - name: Update badge
         uses: RubbaBoy/BYOB@v1.3.0
         with:
-            NAME: ${{ matrix.label-identifier }}
-            LABEL: ${{ matrix.environment }}
-            STATUS: ${{ github.event.pull_request.head.ref }}
-            COLOR: red
-            GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+            name: ${{ matrix.label-identifier }}
+            label: ${{ vars.DEPLOYMENT_HOST }}
+            status: ${{ github.event.pull_request.head.ref }}
+            color: red
+            github_token: ${{ secrets.GITHUB_TOKEN }}
 
   # Check that the build job has run successfully before deploying, otherwise add an error label
   add-error-label:

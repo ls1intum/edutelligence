@@ -75,8 +75,8 @@ jobs:
       - name: Update badge
         uses: RubbaBoy/BYOB@v1.3.0
         with:
-          NAME: "athena-test${{ matrix.badge }}"
-          LABEL: "athena-test${{ matrix.badge }}.ase.cit.tum.de"
-          STATUS: ${{ github.event.pull_request.head.ref }}
-          COLOR: green
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          name: "athena-test${{ matrix.badge }}"
+          label: "athena-test${{ matrix.badge }}.ase.cit.tum.de"
+          status: ${{ github.event.pull_request.head.ref }}
+          color: green
+          github_token: ${{ secrets.GITHUB_TOKEN }}
