@@ -32,7 +32,7 @@ ATHENA_CHANGED=$(echo "$CHANGED_FILES" | grep -q "^athena" && echo "true" || ech
 cd athena
 
 # Loop over all root level directories and modules
-for DIR in modules/*/*/ */; do
+for DIR in athena/modules/*/*/ athena/*/; do
     # If a Dockerfile exists in the directory
     if [[ -e "${DIR}Dockerfile" ]]; then
         DIR=${DIR%/} # Remove trailing slash
