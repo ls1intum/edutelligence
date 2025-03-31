@@ -22,22 +22,14 @@ jobs:
     - name: Check out code
       uses: actions/checkout@v4
 
+    - name: Install poetry
+      run: pipx install poetry
+  
     - name: Set up Python
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v5
       with:
         python-version: '3.11'
-
-    - name: Install Poetry
-      run: |
-        curl -sSL https://install.python-poetry.org | python3 -
-
-    - name: Cache Poetry dependencies
-      uses: actions/cache@v2
-      with:
-        path: ~/.cache/pypoetry
-        key: ${{ runner.os }}-poetry-${{ hashFiles('**/pyproject.toml') }}
-        restore-keys: |
-          ${{ runner.os }}-poetry-
+        cache: 'poetry'
 
     - name: Install dependencies
       working-directory: athena
