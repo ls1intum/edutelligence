@@ -43,7 +43,7 @@ function docker_deploy {
     ssh -J "$2" -o "StrictHostKeyChecking=no" "$1" << COMMAND
 cd $5
 echo "Downloading docker management script..."
-curl -sSL -o athena-docker.sh https://raw.githubusercontent.com/ls1intum/Athena/$4/athena-docker.sh
+curl -sSL -o athena-docker.sh https://raw.githubusercontent.com/ls1intum/edutelligence/$4/athena/athena-docker.sh
 chmod +x athena-docker.sh
 echo "Executing docker management script"
 ./athena-docker.sh start $3 $4 $hostname
@@ -84,7 +84,7 @@ Usage:
   ./$(basename $0) <command> [options]
 
 Commands:
-  docker-deploy               Deploy to remote Pyris Server.
+  docker-deploy               Deploy to remote Athena Server.
 
 General Options:
   -h                          Show help.
@@ -199,10 +199,10 @@ function docker_deploy_menu {
 ########################################################################################################################
 
 
-# Parse options to the `pyris-server-cli` command
+# Parse options to the `athena-server-cli` command
 extract_help_flag general_help $@
 
-# read subcommand `pyris-server-cli subcommand server` in variable and remove base command from argument list
+# read subcommand `athena-server-cli subcommand server` in variable and remove base command from argument list
 subcommand=$1; shift
 
 # Handle empty subcommand
