@@ -42,6 +42,11 @@ for DIR in modules/*/*/ */; do
             continue
         fi
 
+        # llm_core is always built and does not need to be re-built
+        if [[ "$DIR" == "llm_core" ]]; then
+            continue
+        fi
+
         # no need to build docs
         if [[ "$DIR" == "docs" ]]; then
             continue
@@ -92,5 +97,5 @@ for DIR in modules/*/*/ */; do
     fi
 done
 
-# Print all directories that fulfill the conditions, separated by newlines
-(IFS=$'\n'; echo "${DIRS[*]}")
+# Print all directories that fulfill the conditions, separated by newlines, appending "athena/" to each
+(IFS=$'\n'; printf "%s\n" "${DIRS[@]/#/athena/}")
