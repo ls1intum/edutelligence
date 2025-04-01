@@ -24,9 +24,7 @@ class ExtendedCourseDTO(BaseModel):
         alias="defaultProgrammingLanguage", default=None
     )
     max_complaints: Optional[int] = Field(alias="maxComplaints", default=None)
-    max_team_complaints: Optional[int] = Field(
-        alias="maxTeamComplaints", default=None
-    )
+    max_team_complaints: Optional[int] = Field(alias="maxTeamComplaints", default=None)
     max_complaint_time_days: Optional[int] = Field(
         alias="maxComplaintTimeDays", default=None
     )
@@ -34,11 +32,7 @@ class ExtendedCourseDTO(BaseModel):
         alias="maxRequestMoreFeedbackTimeDays", default=None
     )
     max_points: Optional[int] = Field(alias="maxPoints", default=None)
-    presentation_score: Optional[int] = Field(
-        alias="presentationScore", default=None
-    )
-    exercises: List[ExerciseWithSubmissionsDTO] = Field(
-        alias="exercises", default=[]
-    )
+    presentation_score: Optional[int] = Field(alias="presentationScore", default=None)
+    exercises: List[ExerciseWithSubmissionsDTO] = Field(alias="exercises", default=[])
     exams: List[ExamDTO] = Field(alias="exams", default=[])
     competencies: List[CompetencyDTO] = Field(alias="competencies", default=[])

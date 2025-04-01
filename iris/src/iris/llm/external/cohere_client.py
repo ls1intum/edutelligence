@@ -19,9 +19,7 @@ class CohereAzureClient(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     def model_post_init(self, __context: Any) -> None:
-        self._client = cohere.ClientV2(
-            base_url=self.endpoint, api_key=self.api_key
-        )
+        self._client = cohere.ClientV2(base_url=self.endpoint, api_key=self.api_key)
 
     def rerank(self, query, documents, top_n: int):
         return self._client.rerank(

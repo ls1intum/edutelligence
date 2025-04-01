@@ -41,9 +41,7 @@ class Settings(BaseModel):
                 f"Configuration file not found at {file_path}."
             ) from e
         except yaml.YAMLError as e:
-            raise yaml.YAMLError(
-                f"Error parsing YAML file at {file_path}."
-            ) from e
+            raise yaml.YAMLError(f"Error parsing YAML file at {file_path}.") from e
 
     def set_env_vars(self):
         """Set environment variables from the settings."""

@@ -42,21 +42,15 @@ class RerankerPipeline(Pipeline):
         )
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler,
-            completion_args=CompletionArguments(
-                temperature=0, max_tokens=4000
-            ),
+            completion_args=CompletionArguments(temperature=0, max_tokens=4000),
         )
         dirname = os.path.dirname(__file__)
-        prompt_file_path = os.path.join(
-            dirname, "..", "prompts", "reranker_prompt.txt"
-        )
+        prompt_file_path = os.path.join(dirname, "..", "prompts", "reranker_prompt.txt")
         with open(prompt_file_path, "r", encoding="utf-8") as file:
             logger.info("Loading reranker prompt...")
             prompt_str = file.read()
 
-        self.output_parser = PydanticOutputParser(
-            pydantic_object=SelectedParagraphs
-        )
+        self.output_parser = PydanticOutputParser(pydantic_object=SelectedParagraphs)
         self.default_prompt = PromptTemplate(
             template=prompt_str,
             input_variables=[
@@ -110,9 +104,7 @@ class RerankerPipeline(Pipeline):
 
         text_chat_history = [
             chat_history[-i - 1].contents[0].text_content
-            for i in range(
-                min(4, len(chat_history))
-            )  # Ensure no out-of-bounds error
+            for i in range(min(4, len(chat_history)))  # Ensure no out-of-bounds error
         ][
             ::-1
         ]  # Reverse to get the messages in chronological order of their appearance  data["question"] = query
@@ -125,7 +117,5 @@ class RerankerPipeline(Pipeline):
             prompt = self.default_prompt
 
         response = (prompt | self.pipeline).invoke(data)
-        self._append_tokens(
-            self.llm.tokens, PipelineEnum.IRIS_RERANKER_PIPELINE
-        )
+        self._append_tokens(self.llm.tokens, PipelineEnum.IRIS_RERANKER_PIPELINE)
         return response.selected_paragraphs

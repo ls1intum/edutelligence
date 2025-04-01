@@ -55,19 +55,13 @@ class CapabilityRequestHandler(RequestHandler):
         messages: list[PyrisMessage],
         arguments: CompletionArguments,
         tools: Optional[
-            Sequence[
-                Union[Dict[str, Any], Type[BaseModel], Callable, BaseTool]
-            ]
+            Sequence[Union[Dict[str, Any], Type[BaseModel], Callable, BaseTool]]
         ],
     ) -> PyrisMessage:
         llm = self._select_model(ChatModel)
         message = llm.chat(messages, arguments, tools)
-        message.token_usage.cost_per_input_token = (
-            llm.capabilities.input_cost.value
-        )
-        message.token_usage.cost_per_output_token = (
-            llm.capabilities.output_cost.value
-        )
+        message.token_usage.cost_per_input_token = llm.capabilities.input_cost.value
+        message.token_usage.cost_per_output_token = llm.capabilities.output_cost.value
         return message
 
     def embed(self, text: str) -> list[float]:
@@ -93,9 +87,7 @@ class CapabilityRequestHandler(RequestHandler):
 
     def bind_tools(
         self,
-        tools: Sequence[
-            Union[Dict[str, Any], Type[BaseModel], Callable, BaseTool]
-        ],
+        tools: Sequence[Union[Dict[str, Any], Type[BaseModel], Callable, BaseTool]],
     ) -> LanguageModel:
         """Bind the provided tools to the selected ChatModel.
 

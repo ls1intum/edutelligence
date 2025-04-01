@@ -45,9 +45,7 @@ def calculate_capability_scores(
                     always_considered_capabilities_with_default[requirement]
                 )
             else:
-                score = getattr(capability, requirement).matches(
-                    requirement_value
-                )
+                score = getattr(capability, requirement).matches(requirement_value)
             # Invert the cost if required
             # The cost is a special case, as depending on how you want to use the scores
             # the cost needs to be considered differently
@@ -65,8 +63,7 @@ def calculate_capability_scores(
         sorted_scores = sorted(set(scores))
         weight_modifier = capability_weights[requirement]
         normalized_scores = [
-            ((sorted_scores.index(score) + 1) / len(sorted_scores))
-            * weight_modifier
+            ((sorted_scores.index(score) + 1) / len(sorted_scores)) * weight_modifier
             for score in scores
         ]
         all_scores.append(normalized_scores)

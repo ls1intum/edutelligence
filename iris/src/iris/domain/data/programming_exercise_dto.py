@@ -30,12 +30,8 @@ class ProgrammingExerciseDTO(BaseModel):
     programming_language: Optional[str] = Field(
         alias="programmingLanguage", default=None
     )
-    template_repository: Dict[str, str] = Field(
-        alias="templateRepository", default={}
-    )
-    solution_repository: Dict[str, str] = Field(
-        alias="solutionRepository", default={}
-    )
+    template_repository: Dict[str, str] = Field(alias="templateRepository", default={})
+    solution_repository: Dict[str, str] = Field(alias="solutionRepository", default={})
     test_repository: Dict[str, str] = Field(alias="testRepository", default={})
     problem_statement: str = Field(alias="problemStatement", default=None)
     start_date: Optional[datetime] = Field(alias="startDate", default=None)

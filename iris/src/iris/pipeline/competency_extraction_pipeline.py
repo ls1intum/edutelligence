@@ -36,9 +36,7 @@ class CompetencyExtractionPipeline(Pipeline):
     request_handler: CapabilityRequestHandler
     output_parser: PydanticOutputParser
 
-    def __init__(
-        self, callback: Optional[CompetencyExtractionCallback] = None
-    ):
+    def __init__(self, callback: Optional[CompetencyExtractionCallback] = None):
         super().__init__(
             implementation_id="competency_extraction_pipeline_reference_impl"
         )
@@ -114,6 +112,4 @@ class CompetencyExtractionPipeline(Pipeline):
                 continue
             logger.debug("Generated competency: %s", competency)
             generated_competencies.append(competency)
-        self.callback.done(
-            final_result=generated_competencies, tokens=self.tokens
-        )
+        self.callback.done(final_result=generated_competencies, tokens=self.tokens)

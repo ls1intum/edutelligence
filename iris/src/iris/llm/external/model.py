@@ -30,9 +30,7 @@ class CompletionModel(LanguageModel, metaclass=ABCMeta):
     @abstractmethod
     def complete(self, prompt: str, arguments: CompletionArguments) -> str:
         """Create a completion from the prompt"""
-        raise NotImplementedError(
-            f"The LLM {str(self)} does not support completion"
-        )
+        raise NotImplementedError(f"The LLM {str(self)} does not support completion")
 
 
 class ChatModel(LanguageModel, metaclass=ABCMeta):
@@ -48,9 +46,7 @@ class ChatModel(LanguageModel, metaclass=ABCMeta):
         messages: list[PyrisMessage],
         arguments: CompletionArguments,
         tools: Optional[
-            Sequence[
-                Union[Dict[str, Any], Type[BaseModel], Callable, BaseTool]
-            ]
+            Sequence[Union[Dict[str, Any], Type[BaseModel], Callable, BaseTool]]
         ],
     ) -> ChatCompletionMessage:
         """Create a completion from the chat messages"""
@@ -69,9 +65,7 @@ class EmbeddingModel(LanguageModel, metaclass=ABCMeta):
     @abstractmethod
     def embed(self, text: str) -> list[float]:
         """Create an embedding from the text"""
-        raise NotImplementedError(
-            f"The LLM {str(self)} does not support embeddings"
-        )
+        raise NotImplementedError(f"The LLM {str(self)} does not support embeddings")
 
 
 class ImageGenerationModel(LanguageModel, metaclass=ABCMeta):

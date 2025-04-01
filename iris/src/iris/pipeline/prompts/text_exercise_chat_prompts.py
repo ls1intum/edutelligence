@@ -59,9 +59,7 @@ def fmt_extract_sentiments_prompt(
     )
 
 
-def fmt_sentiment_analysis_prompt(
-    respond_to: list[str], ignore: list[str]
-) -> str:
+def fmt_sentiment_analysis_prompt(respond_to: list[str], ignore: list[str]) -> str:
     prompt = ""
     if respond_to:
         prompt += "Respond helpfully and positively to these sentiments in the user's input:\n"

@@ -37,9 +37,7 @@ class RerankRequestHandler(RequestHandler):
         messages: list[PyrisMessage],
         arguments: CompletionArguments,
         tools: Optional[
-            Sequence[
-                Union[Dict[str, Any], Type[BaseModel], Callable, BaseTool]
-            ]
+            Sequence[Union[Dict[str, Any], Type[BaseModel], Callable, BaseTool]]
         ],
     ) -> PyrisMessage:
         raise NotImplementedError
@@ -49,16 +47,12 @@ class RerankRequestHandler(RequestHandler):
 
     def bind_tools(
         self,
-        tools: Sequence[
-            Union[Dict[str, Any], Type[BaseModel], Callable, BaseTool]
-        ],
+        tools: Sequence[Union[Dict[str, Any], Type[BaseModel], Callable, BaseTool]],
     ) -> LanguageModel:
         """Bind tools"""
         raise NotImplementedError
 
-    def rerank(
-        self, query, documents: [], top_n: int, content_field_name: str
-    ):
+    def rerank(self, query, documents: [], top_n: int, content_field_name: str):
         if len(documents) == 0:
             return []
         mapped_responses = list(

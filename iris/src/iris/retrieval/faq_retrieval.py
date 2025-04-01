@@ -75,6 +75,4 @@ class FaqRetrieval(BaseRetrieval):
             {"id": obj.uuid.int, "properties": obj.properties}
             for obj in response_hyde.objects
         ]
-        return merge_retrieved_chunks(
-            basic_retrieved_faqs, hyde_retrieved_faqs
-        )
+        return merge_retrieved_chunks(basic_retrieved_faqs, hyde_retrieved_faqs)
