@@ -140,7 +140,7 @@ class LectureChatPipeline(Pipeline):
         )
 
         self._add_lecture_content_to_prompt(self.lecture_content)
-        print(f"lecturecontent: {self.lecture_content}")
+
         prompt_val = self.prompt.format_messages()
         self.prompt = ChatPromptTemplate.from_messages(prompt_val)
         try:

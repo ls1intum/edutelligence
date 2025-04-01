@@ -19,7 +19,9 @@ class LecturesDeletionStatusCallback(StatusCallback):
     def __init__(
         self, run_id: str, base_url: str, initial_stages: List[StageDTO] = None
     ):
-        url = f"{base_url}/api/public/pyris/webhooks/ingestion/runs/{run_id}/status"
+        url = (
+            f"{base_url}/api/iris/public/pyris/webhooks/ingestion/runs/{run_id}/status"
+        )
 
         current_stage_index = len(initial_stages) if initial_stages else 0
         stages = initial_stages or []
