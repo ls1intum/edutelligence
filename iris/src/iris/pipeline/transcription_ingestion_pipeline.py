@@ -77,7 +77,6 @@ class TranscriptionIngestionPipeline(Pipeline):
 
     def __call__(self) -> (str, []):
         try:
-            print("hello there")
             self.callback.in_progress("Deleting existing transcription data")
             self.delete_existing_transcription_data(self.dto.lecture_unit)
             self.callback.done("Old slides deleted")

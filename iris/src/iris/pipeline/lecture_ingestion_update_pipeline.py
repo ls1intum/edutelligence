@@ -69,7 +69,6 @@ class LectureIngestionUpdatePipeline(Pipeline):
                 callback.done()
 
             callback.in_progress("Ingesting lecture unit summary into vector database")
-
             lecture_unit_dto = LectureUnitDTO(
                 course_id=self.dto.lecture_unit.course_id,
                 course_name=self.dto.lecture_unit.course_name,
@@ -83,6 +82,7 @@ class LectureIngestionUpdatePipeline(Pipeline):
                 video_link=self.dto.lecture_unit.video_link,
                 base_url=self.dto.settings.artemis_base_url,
             )
+
             tokens += LectureUnitPipeline()(lecture_unit=lecture_unit_dto)
             callback.done(
                 "Ingested lecture unit summary into vector database",

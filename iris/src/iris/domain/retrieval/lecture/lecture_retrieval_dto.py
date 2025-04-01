@@ -40,6 +40,7 @@ class LectureUnitSegmentRetrievalDTO:
     lecture_unit_id: int
     lecture_unit_name: str
     lecture_unit_link: str
+    video_link: str
     page_number: int
     segment_summary: str
     base_url: str

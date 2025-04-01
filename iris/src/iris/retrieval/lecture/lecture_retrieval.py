@@ -160,8 +160,6 @@ class LectureRetrieval(Pipeline):
             lecture_transcriptions += self.get_lecture_transcription_of_lecture_unit(
                 lecture_unit_segment
             )
-            print("------------lecture transcriptions-----------\n")
-            print(lecture_transcriptions)
             lecture_unit_page_chunks += self.get_lecture_page_chunks_of_lecture_unit(
                 lecture_unit_segment
             )
@@ -184,8 +182,6 @@ class LectureRetrieval(Pipeline):
             top_n=7,
             content_field_name="segment_text",
         )
-        print("----------lecture transcriptions reranked-----------\n")
-        print(lecture_transcriptions)
         lecture_unit_page_chunks = self.cohere_client.rerank(
             query,
             lecture_unit_page_chunks,
@@ -741,28 +737,34 @@ class LectureRetrieval(Pipeline):
 
         return [
             LectureTranscriptionRetrievalDTO(
-                str(transcription.uuid),
-                lecture_unit_segment.course_id,
-                lecture_unit_segment.course_name,
-                lecture_unit_segment.course_description,
-                lecture_unit_segment.lecture_id,
-                lecture_unit_segment.lecture_name,
-                lecture_unit_segment.lecture_unit_id,
-                lecture_unit_segment.lecture_unit_name,
-                lecture_unit_segment.lecture_unit_link,
-                transcription.properties[LectureTranscriptionSchema.LANGUAGE.value],
-                transcription.properties[
+                uuid=str(transcription.uuid),
+                course_id=lecture_unit_segment.course_id,
+                course_name=lecture_unit_segment.course_name,
+                course_description=lecture_unit_segment.course_description,
+                lecture_id=lecture_unit_segment.lecture_id,
+                lecture_name=lecture_unit_segment.lecture_name,
+                lecture_unit_id=lecture_unit_segment.lecture_unit_id,
+                lecture_unit_name=lecture_unit_segment.lecture_unit_name,
+                video_link=lecture_unit_segment.video_link,
+                language=transcription.properties[
+                    LectureTranscriptionSchema.LANGUAGE.value
+                ],
+                segment_start_time=transcription.properties[
                     LectureTranscriptionSchema.SEGMENT_START_TIME.value
                 ],
-                transcription.properties[
+                segment_end_time=transcription.properties[
                     LectureTranscriptionSchema.SEGMENT_END_TIME.value
                 ],
-                transcription.properties[LectureTranscriptionSchema.PAGE_NUMBER.value],
-                transcription.properties[
+                page_number=transcription.properties[
+                    LectureTranscriptionSchema.PAGE_NUMBER.value
+                ],
+                segment_summary=transcription.properties[
                     LectureTranscriptionSchema.SEGMENT_SUMMARY.value
                 ],
-                transcription.properties[LectureTranscriptionSchema.SEGMENT_TEXT.value],
-                lecture_unit_segment.base_url,
+                segment_text=transcription.properties[
+                    LectureTranscriptionSchema.SEGMENT_TEXT.value
+                ],
+                base_url=lecture_unit_segment.base_url,
             )
             for transcription in lecture_transcriptions
         ]

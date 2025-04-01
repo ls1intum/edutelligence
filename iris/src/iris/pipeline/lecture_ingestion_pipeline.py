@@ -200,6 +200,7 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         version = page_chunk[0].properties.get(
             LectureUnitPageChunkSchema.PAGE_VERSION.value
         )
+
         return version < self.dto.lecture_unit.attachment_version
 
     def batch_update(self, chunks):

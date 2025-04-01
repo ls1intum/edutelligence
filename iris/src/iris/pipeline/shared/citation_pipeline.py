@@ -86,14 +86,12 @@ class CitationPipeline(Pipeline):
         for paragraph in lecture_retrieval_dto.lecture_transcriptions:
             lct = (
                 f"Lecture Transcription: {paragraph.lecture_name}, Unit: {paragraph.lecture_unit_name}, "
-                f"Page: {paragraph.page_number}, Link: {paragraph.lecture_unit_link}, "
+                f"Page: {paragraph.page_number}, Link: {paragraph.video_link or "No link available"}, "
                 f"Start Time: {paragraph.segment_start_time}, End Time: {paragraph.segment_end_time},\n"
                 f"Content:\n"
                 f"---{paragraph.segment_text}---\n\n"
             )
             formatted_string_lecture_transcriptions += lct
-        print("-------formatted string lecture transcriptions-----------")
-        print(formatted_string_lecture_transcriptions)
         return formatted_string_lecture_page_chunks.replace("{", "{{").replace(
             "}", "}}"
         ), formatted_string_lecture_transcriptions.replace("{", "{{").replace("}", "}}")

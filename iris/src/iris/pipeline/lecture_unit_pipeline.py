@@ -67,7 +67,7 @@ class LectureUnitPipeline(Pipeline):
                     LectureUnitSchema.LECTURE_UNIT_ID.value: lecture_unit.lecture_unit_id,
                     LectureUnitSchema.LECTURE_UNIT_NAME.value: lecture_unit.lecture_unit_name,
                     LectureUnitSchema.LECTURE_UNIT_LINK.value: lecture_unit.lecture_unit_link,
-                    LectureUnitSchema.VIDEO_LINK.value: lecture_unit.video,
+                    LectureUnitSchema.VIDEO_LINK.value: lecture_unit.video_link,
                     LectureUnitSchema.BASE_URL.value: lecture_unit.base_url,
                     LectureUnitSchema.LECTURE_UNIT_SUMMARY.value: lecture_unit.lecture_unit_summary,
                 },

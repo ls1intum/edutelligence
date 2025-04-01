@@ -57,7 +57,9 @@ def lecture_initial_prompt():
      you can simply ask the student to elaborate more on his question. Use only the parts of the context provided for
      you that is relevant to the student's question. If the user greets you greet him back,
       and ask him how you can help.
-     Always formulate your answer in the same language as the user's language.
+     Always reply in the same language the student used in their question.
+     If the student writes in English, reply in English.
+     If they write in German, reply in German. Never switch languages unless asked to.
      """
 
 
@@ -137,13 +139,13 @@ class LectureChatPipeline(Pipeline):
             base_url=dto.settings.artemis_base_url,
         )
 
-        print("----------lecture content-----------")
-        print(f"{self.lecture_content.lecture_transcriptions}")
         self._add_lecture_content_to_prompt(self.lecture_content)
+        print(f"lecturecontent: {self.lecture_content}")
         prompt_val = self.prompt.format_messages()
         self.prompt = ChatPromptTemplate.from_messages(prompt_val)
         try:
             response = (self.prompt | self.pipeline).invoke({})
+            print(response)
             self._append_tokens(self.llm.tokens, PipelineEnum.IRIS_CHAT_LECTURE_MESSAGE)
             response_with_citation = self.citation_pipeline(
                 self.lecture_content, response
