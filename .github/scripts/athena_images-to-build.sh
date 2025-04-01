@@ -98,4 +98,4 @@ for DIR in modules/*/*/ */; do
 done
 
 # Print all directories that fulfill the conditions, separated by newlines, appending "athena/" to each
-(IFS=$'\n'; echo "${DIRS[@]/#/athena/}")
+(IFS=$'\n'; printf "%s\n" "${DIRS[@]/#/athena/}")
