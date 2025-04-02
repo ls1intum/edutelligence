@@ -17,3 +17,6 @@ hyperion:
 iris:
   - changed-files:
       - any-glob-to-any-file: iris/**/*
+nebula:
+  - changed-files:
+      - any-glob-to-any-file: nebula/**/*

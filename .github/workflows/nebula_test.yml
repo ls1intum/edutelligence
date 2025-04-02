@@ -1,5 +1,5 @@
 ---
-name: Iris - Test
+name: Nebula - Test
 
 on:
   push:
@@ -7,16 +7,16 @@ on:
       - main
       - develop
     paths:
-      - "iris/**"
-      - ".github/workflows/iris_test.yml"
+      - "nebula/**"
+      - ".github/workflows/nebula_test.yml"
       - ".pre-commit-config.yaml"
   pull_request:
     branches:
       - main
       - develop
     paths:
-      - "iris/**"
-      - ".github/workflows/iris_test.yml"
+      - "nebula/**"
+      - ".github/workflows/nebula_test.yml"
       - ".pre-commit-config.yaml"
 
 jobs:
@@ -40,17 +40,17 @@ jobs:
 
       - name: Install Dependencies
         run: poetry install
-        working-directory: iris
+        working-directory: nebula
 
       - name: Run pre-commit hooks
         run: |
           # Activate poetry env
-          cd iris
+          cd nebula
           poetry env use python
           source $(poetry env info --path)/bin/activate
           # Run pre-commit hooks
           cd ..
-          pre-commit run --all-files --hook-stage manual iris
+          pre-commit run --all-files --hook-stage manual nebula
 
   test:
     name: Test
@@ -71,19 +71,19 @@ jobs:
 
       - name: Install Dependencies
         run: poetry install
-        working-directory: iris
+        working-directory: nebula
 
       - name: Run Tests
         run: poetry run coverage run -m pytest
-        working-directory: iris
+        working-directory: nebula
 
       - name: Generate Coverage Report
         run: poetry run coverage xml
-        working-directory: iris
+        working-directory: nebula
 
       #- name: Upload Coverage Report
       #  uses: codecov/codecov-action@v2
       #  with:
       #    token: ${{ secrets.CODECOV_TOKEN }}
-      #    file: iris/coverage.xml
+      #    file: nebula/coverage.xml
       #    fail_ci_if_error: true
