@@ -37,7 +37,7 @@ jobs:
         id: check_build
         uses: octokit/request-action@v2.x
         with:
-          route: GET /repos/${{ github.repository }}/actions/workflows/build.yml/runs?event=pull_request&status=success&head_sha=${{ github.event.pull_request.head.sha }}
+          route: GET /repos/${{ github.repository }}/actions/workflows/iris_build-and-push-docker.yml/runs?event=pull_request&status=success&head_sha=${{ github.event.pull_request.head.sha }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -150,7 +150,7 @@ jobs:
   # Deploy to the test servers
   deploy:
     needs: [compute-tag, pre-deployment]
-    uses: ./.github/workflows/deploy.yml
+    uses: ./.github/workflows/iris_deploy.yml
     with:
       docker-tag: ${{ needs.compute-tag.outputs.tag }}
       branch-name: ${{ github.event.pull_request.head.ref }}
