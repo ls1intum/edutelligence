@@ -9,7 +9,7 @@ from iris.domain.status.stage_dto import StageDTO
 
 class TranscriptionIngestionPipelineExecutionDto(PipelineExecutionDTO):
     transcription: TranscriptionWebhookDTO
-    lecture_unit_id: int
+    lecture_unit_id: int = Field(..., alias="lectureUnitId")
     settings: Optional[PipelineExecutionSettingsDTO]
     initial_stages: Optional[List[StageDTO]] = Field(
         default=None, alias="initialStages"

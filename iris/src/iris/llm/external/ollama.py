@@ -1,6 +1,15 @@
 import base64
 from datetime import datetime
-from typing import Any, Callable, Dict, Literal, Optional, Sequence, Type, Union
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Literal,
+    Optional,
+    Sequence,
+    Type,
+    Union,
+)
 
 from langchain_core.tools import BaseTool
 from ollama import Client, Message

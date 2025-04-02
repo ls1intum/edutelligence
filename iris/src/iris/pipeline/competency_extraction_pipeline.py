@@ -13,7 +13,11 @@ from iris.domain import (
 )
 from iris.domain.data.competency_dto import Competency
 from iris.domain.data.text_message_content_dto import TextMessageContentDTO
-from iris.llm import CapabilityRequestHandler, CompletionArguments, RequirementList
+from iris.llm import (
+    CapabilityRequestHandler,
+    CompletionArguments,
+    RequirementList,
+)
 from iris.pipeline import Pipeline
 from iris.pipeline.prompts.competency_extraction import system_prompt
 from iris.web.status.status_update import CompetencyExtractionCallback

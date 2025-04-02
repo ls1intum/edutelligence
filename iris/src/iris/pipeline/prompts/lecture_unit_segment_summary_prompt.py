@@ -1,5 +1,8 @@
 def lecture_unit_segment_summary_prompt(
-    lecture_name: str, course_name: str, transcription_content: str, slide_content: str
+    lecture_name: str,
+    course_name: str,
+    transcription_content: str,
+    slide_content: str,
 ):
     return f"""
         You are an excellent tutor with deep expertise in computer science and practical applications,

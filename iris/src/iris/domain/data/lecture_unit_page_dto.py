@@ -1,7 +1,7 @@
 from pydantic import BaseModel, Field
 
 
-class LectureUnitDTO(BaseModel):
+class LectureUnitPageDTO(BaseModel):
     pdf_file_base64: str = Field(default="", alias="pdfFile")
     lecture_unit_id: int = Field(alias="lectureUnitId")
     lecture_unit_name: str = Field(default="", alias="lectureUnitName")

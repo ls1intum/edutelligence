@@ -3,7 +3,9 @@ from typing import Callable, List
 from langchain_core.tools import StructuredTool
 
 
-def generate_structured_tool_from_function(tool_function: Callable) -> StructuredTool:
+def generate_structured_tool_from_function(
+    tool_function: Callable,
+) -> StructuredTool:
     """
     Generates a structured tool from a function
     :param tool_function: The tool function
