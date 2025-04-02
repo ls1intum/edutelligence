@@ -12,4 +12,4 @@ jobs:
     steps:
       - uses: Slashgear/action-check-pr-title@v4.3.0
         with:
-          regexp: '^`(Development|General|Athena|Atlas|AtlasML|Hyperion|Iris)`:\s[A-Z].*$'
+          regexp: '^`(Development|General|Athena|Atlas|AtlasML|Hyperion|Iris|Logos)`:\s[A-Z].*$'
