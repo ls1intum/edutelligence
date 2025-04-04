@@ -5,12 +5,12 @@ from git.repo import Repo
 from athena.helpers.programming.code_repository import get_repository_zip, get_repository
 from .exercise_type import ExerciseType
 from .exercise import Exercise
-
+from typing import Literal
 
 class ProgrammingExercise(Exercise):
     """A programming exercise that can be solved by students, enhanced with metadata."""
 
-    type: ExerciseType = Field(ExerciseType.programming, const=True)
+    type: ExerciseType = Field(ExerciseType.programming, Literal=True)
 
     programming_language: str = Field(description="The programming language that is used for this exercise.", example="java")
     solution_repository_uri: AnyUrl = Field(description="URL to the solution git repository, which contains the "
