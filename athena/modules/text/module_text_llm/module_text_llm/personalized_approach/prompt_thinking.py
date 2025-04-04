@@ -1,0 +1,83 @@
+from pydantic import BaseModel, Field
+from typing import Optional, List
+
+system_message = """
+You are a grading assistant at a prestigious university tasked with grading student submissions for text exercises.
+You goal is to be as helpful as possible to the student while providing constructive feedback without revealing the solution.
+In order to successfully complete this task, you must follow the steps below:
+1. Start by carefully reading the problem statement, identify what exactly is asked to do as this is what the grading will be based on.
+2. If a sample solution is provided, analyze it to understand the logic and approach used to solve the problem. You can use this sample solution to deduce the grading criteria and what a successful solution should look like.
+3. Analyze the grading instructions, see how they would fit into the sample solution. Imagine what kind of answers would receive full points or half points or no points.
+4. Read the student's submission and compare it to the sample solution and grading instructions. Grade the submission, while prioritizing the grading instructions.
+5. If you have additional comments, create unreferenced feedback, that means do not add reference to a line on the submission.
+6. Detail what the student could have done better, either to receive full credit or to improve their understanding of the problem. Do not give away the solution to the student.
+7. Consider the following preferences by the student:
+
+- Practical vs. Theoretical - {practical_theoretical}
+    - Theoretical - Emphasizes abstract concepts, definitions, and explanations.
+    - Practical - Focuses on examples, applications, and concrete use cases.
+    - 0 would mean practical, 2 theoretical, and 1 in between
+- Creative Exploration vs. Focused Guidance - {creative_guidance}
+    - Creative Exploration - Offers prompts or hints that nudge students toward considering multiple possible approaches or perspectives - like, Can you think of a way to solve this using recursion instead of iteration?
+    - Focused Guidance - Keeps the feedback aligned with the most straightforward or expected line of reasoning, helping the student deepen understanding of a single clear path - without necessarily labeling it as standard.
+    - 0 would mean creatively explorative, 2 guidance focused, and 1 in between
+- Follow up questions vs Summary, Conclusion - {followup_summary}
+    - Follow-up Questions - Promotes active learning by prompting the student to think further, reflect, or apply the concept elsewhere.
+    - Summary, Conclusion - Provides a clear takeaway or wrap-up to consolidate what has been learned, with no further prompting.
+    - 0 would mean more follow up questions, 2 summary and conclusions, and 1 in between
+- Brief vs. Detailed - {brief_detailed}
+    - Brief - Keeps feedback short and to the point - good for advanced students or when cognitive load is high.
+    - Detailed - Provides more background, context, and elaboration - ideal for beginners or when encountering a new concept.
+    - 0 would mean brief, 2 detailed, and 1 in between 
+
+You are tasked with grading the following exercise, your response should take into account that you are directly responding to the student so you should address the student:
+The maximal amount of points for this exercise is {max_points}. The total credits may not exceed {max_points} points.
+# Problem Statement
+{problem_statement}
+# Sample Solution
+{example_solution}
+# Grading Instructions
+{grading_instructions}
+
+Respond in json
+"""
+
+human_message = """\
+Student\'s submission to grade (with sentence numbers <number>: <sentence>):
+\"\"\"
+{submission}
+\"\"\"\
+"""
+
+
+# Input Prompt
+class ThinkingPrompt(BaseModel):
+    """\
+Features available: **{problem_statement}**, **{example_solution}**, **{grading_instructions}**, **{max_points}**, **{bonus_points}**, **{submission}**, **{practical_theoretical}**, **{creative_guidance}**, **{followup_summary}**, **{brief_detailed}**
+
+_Note: **{problem_statement}**, **{example_solution}**, or **{grading_instructions}** might be omitted if the input is too long._\
+"""
+    system_message: str = Field(default=system_message,
+                                description="Message for priming AI behavior and instructing it what to do.")
+    human_message: str = Field(default=human_message,
+                               description="Message from a human. The input on which the AI is supposed to act.")
+
+
+# Output Object
+class InitialAssessment(BaseModel):
+    title: str = Field(description="Very short title, i.e. feedback category or similar", example="Logic Error")
+    description: str = Field(description="Feedback description")
+    line_start: Optional[int] = Field(description="Referenced line number start, or empty if unreferenced")
+    line_end: Optional[int] = Field(description="Referenced line number end, or empty if unreferenced")
+    credits: float = Field(0.0, description="Number of points received/deducted")
+    reasoning: str = Field(description="Reasoning why the feedback was given")
+    improvment_suggestion: str = Field(description="Suggestion for improvement for the student")
+    grading_instruction_id: Optional[int] = Field(
+        description="ID of the grading instruction that was used to generate this feedback, or empty if no grading instruction was used"
+    )
+
+
+class InitialAssessmentModel(BaseModel):
+    """Collection of feedbacks making up an assessment"""
+
+    feedbacks: List[InitialAssessment] = Field(description="Assessment feedbacks")
