@@ -1,4 +1,4 @@
-name: Build Docker Images
+name: Athena - Build Docker Images
 
 # Build the Docker images for the assessment module manager, the modules and the playground.
 # Because the Python images depend on the athena Python package, the package is built first.
@@ -6,8 +6,16 @@ name: Build Docker Images
 on:
   push:
     branches:
-      - develop
+      - main
   pull_request:
+    paths:
+      - "athena/**"
+      - ".github/workflows/athena_build-and-push-docker.yml"
+      - ".github/scripts/athena_images-to-build.sh"
+      - "!athena/README.md"
+  release:
+    types:
+      - created
 
 # prevent Docker image push conflicts
 concurrency: 
@@ -22,18 +30,17 @@ jobs:
       has_images: ${{ steps.set-matrix.outputs.has_images }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
       - name: Set Matrix
         id: set-matrix
         run: |
           export PR_NUMBER=${{ github.event.pull_request.number }}
           export GITHUB_TOKEN=${{ secrets.GITHUB_TOKEN }}
-          export GITHUB_REPO=${{ github.repository }}
           export GITHUB_REF=${{ github.ref }}
           export ORGANIZATION_NAME=${{ github.repository_owner }}
           export LAST_REF_BEFORE_PUSH=${{ github.event.before }}
-          chmod +x ./.github/scripts/images-to-build.sh
-          IMAGE_NAMES=$(./.github/scripts/images-to-build.sh)
+          chmod +x ./.github/scripts/athena_images-to-build.sh
+          IMAGE_NAMES=$(./.github/scripts/athena_images-to-build.sh)
           IMAGE_NAMES_JSON=$(echo "$IMAGE_NAMES" | jq -R -s -c 'split("\n")[:-1]')
           echo "matrix=${IMAGE_NAMES_JSON}" > $GITHUB_OUTPUT
           echo "has_images=$(if [ -z "$IMAGE_NAMES" ]; then echo false; else echo true; fi)" >> $GITHUB_OUTPUT
@@ -47,20 +54,22 @@ jobs:
         image: ${{fromJson(needs.find_images_to_build.outputs.matrix)}}
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Build athena image
         id: set-image
         run: |
-          cd athena
+          cd athena/athena
           docker build -t athena .
+          cd ..
           cd ..
 
       - name: Build llm_core image
         id: set-image-core_llm
         run: |
-          cd ./llm_core
+          cd athena/llm_core
           docker build -t llm_core .
+          cd ..
           cd ..
 
       - name: Docker Login
@@ -69,7 +78,7 @@ jobs:
           docker login -u ${{secrets.DOCKER_USERNAME}} -p ${{secrets.DOCKER_PASSWORD}}
 
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v2
+        uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
@@ -80,24 +89,24 @@ jobs:
 
       - name: Docker meta
         id: meta
-        uses: docker/metadata-action@v4
+        uses: docker/metadata-action@v5
         with:
           images: |
-            ghcr.io/${{ github.repository_owner }}/Athena/${{ env.IMAGE_NAME }}
+            ghcr.io/${{ github.repository_owner }}/athena_${{ env.IMAGE_NAME }}
             ls1tum/athena_${{ env.IMAGE_NAME }}
           tags: |
-            type=raw,value=${{ github.ref == 'refs/heads/develop' && 'develop' || github.sha }}
+            type=raw,value=${{ github.ref == 'refs/heads/main' && 'main' || github.sha }}
             type=raw,value=${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.sha }}
 
       - name: Build and push Docker image
-        uses: docker/build-push-action@v4
+        uses: docker/build-push-action@v6
         with:
           context: ${{ matrix.image }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
-            ATHENA_IS_DEVELOP=${{ github.ref == 'refs/heads/develop' && 'true' || 'false' }}
+            ATHENA_IS_DEVELOP=${{ github.ref == 'refs/heads/main' && 'true' || 'false' }}
             ATHENA_COMMIT_SHA=${{ github.event.pull_request.head.sha || github.sha }}
             ATHENA_PR_NUMBER=${{ github.event.pull_request.number }}
             ATHENA_PR_TITLE=${{ github.event.pull_request.title }}

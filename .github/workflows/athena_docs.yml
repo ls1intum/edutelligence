@@ -1,19 +1,19 @@
-name: Documentation
+name: Athena Documentation
 
 on:
   pull_request:
     paths:
-    - 'docs/**'
-    - '.github/workflows/docs.yml'
+    - 'athena/docs/**'
+    - '.github/workflows/athena_docs.yml'
   push:
     branches:
-    - develop
+    - main
     tags: '[0-9]+.[0-9]+.[0-9]+'
     paths:
-    - 'docs/**'
-    - 'athena/athena/**' # Function docstrings might change
-    - 'assessment_module_manager/assessment_module_manager/**' # Function docstrings might change
-    - '.github/workflows/docs.yml'
+    - 'athena/docs/**'
+    - 'athena/athena/athena/**' # Function docstrings might change
+    - 'athena/assessment_module_manager/assessment_module_manager/**' # Function docstrings might change
+    - '.github/workflows/athena_docs.yml'
   release:
     types:
     - created
@@ -32,19 +32,19 @@ jobs:
     - uses: actions/checkout@v4
     - uses: ammaraskar/sphinx-action@master
       with:
-        docs-folder: "docs/"
+        docs-folder: "athena/docs/"
         build-command: make html dirhtml
     - uses: actions/upload-artifact@v4
       with:
         name: Documentation
-        path: docs/_build/html/
+        path: athena/docs/_build/html/
     - uses: actions/upload-pages-artifact@v3
       with:
-        path: docs/_build/dirhtml/
+        path: athena/docs/_build/dirhtml/
       
   # Deployment job
   deploy:
-    if: github.ref == 'refs/heads/develop'
+    if: github.ref == 'refs/heads/main'
     environment:
       name: github-pages
       url: "https://ls1intum.github.io/Athena"

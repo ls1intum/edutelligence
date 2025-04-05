@@ -1,0 +1,43 @@
+name: Athena - Prospector Linting
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "athena/**"
+      - ".github/workflows/athena_lint.yml"
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "athena/**"
+      - ".github/workflows/athena_lint.yml"
+
+jobs:
+  prospector:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Check out code
+      uses: actions/checkout@v4
+
+    - name: Install poetry
+      run: pipx install poetry
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        cache: 'poetry'
+
+    - name: Install dependencies
+      working-directory: athena
+      run: |
+        echo "$HOME/.local/bin" >> $GITHUB_PATH
+        poetry install
+        poetry run install_all
+
+    - name: Run Prospector
+      working-directory: athena
+      run: poetry run lint_all
