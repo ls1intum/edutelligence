@@ -1,5 +1,5 @@
 <component name="ProjectRunConfigurationManager">
-  <configuration default="false" name="module_programming_winnowing" type="PythonConfigurationType" factoryName="Python" folderName="Programming">
+  <configuration default="false" name="module_modeling_llm" type="PythonConfigurationType" factoryName="Python" folderName="Modeling">
     <module name="athena" />
     <option name="ENV_FILES" value="" />
     <option name="INTERPRETER_OPTIONS" value="" />
@@ -8,12 +8,13 @@
       <env name="PYTHONUNBUFFERED" value="1" />
     </envs>
     <option name="SDK_HOME" value="" />
-    <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$/modules/programming/module_programming_winnowing" />
-    <option name="IS_MODULE_SDK" value="true" />
+    <option name="SDK_NAME" value="Poetry (athena)" />
+    <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$/modules/modeling/module_modeling_llm" />
+    <option name="IS_MODULE_SDK" value="false" />
     <option name="ADD_CONTENT_ROOTS" value="true" />
     <option name="ADD_SOURCE_ROOTS" value="true" />
     <EXTENSION ID="PythonCoverageRunConfigurationExtension" runner="coverage.py" />
-    <option name="SCRIPT_NAME" value="$PROJECT_DIR$/modules/programming/module_programming_winnowing/module_programming_winnowing/__main__.py" />
+    <option name="SCRIPT_NAME" value="$PROJECT_DIR$/modules/modeling/module_modeling_llm/module_modeling_llm/__main__.py" />
     <option name="PARAMETERS" value="" />
     <option name="SHOW_COMMAND_LINE" value="false" />
     <option name="EMULATE_TERMINAL" value="false" />
