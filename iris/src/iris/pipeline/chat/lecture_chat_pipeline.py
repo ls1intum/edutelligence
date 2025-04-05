@@ -57,7 +57,9 @@ def lecture_initial_prompt():
      you can simply ask the student to elaborate more on his question. Use only the parts of the context provided for
      you that is relevant to the student's question. If the user greets you greet him back,
       and ask him how you can help.
-     Always formulate your answer in the same language as the user's language.
+     Always reply in the same language the student used in their question.
+     If the student writes in English, reply in English.
+     If they write in German, reply in German. Never switch languages unless asked to.
      """
 
 
@@ -136,7 +138,9 @@ class LectureChatPipeline(Pipeline):
             lecture_unit_id=dto.lecture_unit_id,
             base_url=dto.settings.artemis_base_url,
         )
+
         self._add_lecture_content_to_prompt(self.lecture_content)
+
         prompt_val = self.prompt.format_messages()
         self.prompt = ChatPromptTemplate.from_messages(prompt_val)
         try:

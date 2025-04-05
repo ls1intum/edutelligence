@@ -9,7 +9,8 @@ from iris.domain.status.stage_dto import StageDTO
 
 
 class IngestionPipelineExecutionDto(PipelineExecutionDTO):
-    lecture_unit: LectureUnitPageDTO = Field(..., alias="pyrisLectureUnit")
+    lecture_unit: Optional[LectureUnitPageDTO] = Field(None, alias="pyrisLectureUnit")
+    lecture_unit_id: int = Field(None, alias="lectureUnitId")
     settings: Optional[PipelineExecutionSettingsDTO]
     initial_stages: Optional[List[StageDTO]] = Field(
         default=None, alias="initialStages"
