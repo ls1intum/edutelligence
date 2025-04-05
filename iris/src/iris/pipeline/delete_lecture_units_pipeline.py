@@ -57,127 +57,86 @@ class LectureUnitDeletionPipeline(Pipeline):
     def delete_entries_for_lecture_units(self):
         try:
             for lecture_unit in self.lecture_units:
-                if self.delete_page_chunk(lecture_unit):
-                    logger.info("Page chunks deleted successfully")
-                else:
-                    logger.error("Failed to delete page chunks")
+                self.delete_page_chunk(lecture_unit)
 
-                if self.delete_transcriptions(lecture_unit):
-                    logger.info("Transcriptions deleted successfully")
-                else:
-                    logger.info("Failed to delete transcriptions")
+                self.delete_transcriptions(lecture_unit)
 
-                if self.delete_lecture_unit_segments(lecture_unit):
-                    logger.info("Lecture unit segments deleted successfully")
-                else:
-                    logger.info("Failed to delete Lecture unit segments")
+                self.delete_lecture_unit_segments(lecture_unit)
 
-                if self.delete_lecture_unit(lecture_unit):
-                    logger.info("Lecture unit deleted successfully")
-                else:
-                    logger.info("Failed to delete lecture unit")
+                self.delete_lecture_unit(lecture_unit)
             self.callback.done("Lecture unit removed")
         except Exception as e:
             logger.error("Error deleting lecture unit: %s", e)
             self.callback.error("Error while removing old slides")
             return False
 
-    def delete_page_chunk(self, lecture_unit: LectureUnitPageDTO):
+    def _delete_with_filter(
+        self, collection, schema, lecture_unit: LectureUnitPageDTO, log_context: str
+    ):
         """
-        Delete the page chunks from the database
+        Delete a collection from the database
         """
         try:
-            self.page_chunk_collection.data.delete_many(
-                where=Filter.by_property(
-                    LectureUnitPageChunkSchema.BASE_URL.value
-                ).equal(self.artemis_base_url)
-                & Filter.by_property(LectureUnitPageChunkSchema.COURSE_ID.value).equal(
+            collection.data.delete_many(
+                where=Filter.by_property(schema.BASE_URL.value).equal(
+                    self.artemis_base_url
+                )
+                & Filter.by_property(schema.COURSE_ID.value).equal(
                     lecture_unit.course_id
                 )
-                & Filter.by_property(LectureUnitPageChunkSchema.LECTURE_ID.value).equal(
+                & Filter.by_property(schema.LECTURE_ID.value).equal(
                     lecture_unit.lecture_id
                 )
-                & Filter.by_property(
-                    LectureUnitPageChunkSchema.LECTURE_UNIT_ID.value
-                ).equal(lecture_unit.lecture_unit_id)
+                & Filter.by_property(schema.LECTURE_UNIT_ID.value).equal(
+                    lecture_unit.lecture_unit_id
+                )
             )
+            logger.info("%s deleted successfully", log_context)
             return True
         except Exception as e:
-            logger.error(
-                "Error deleting lecture unit page chunks: %s", e, exc_info=True
-            )
+            logger.error(f"Error deleting {log_context}: %s", e, exc_info=True)
             return False
+
+    def delete_page_chunk(self, lecture_unit: LectureUnitPageDTO):
+        """
+        Delete a page chunk from the database
+        """
+        return self._delete_with_filter(
+            self.page_chunk_collection,
+            LectureUnitPageChunkSchema,
+            lecture_unit,
+            "Page chunks",
+        )
 
     def delete_transcriptions(self, lecture_unit: LectureUnitPageDTO):
         """
         Delete the transcription from the database
         """
-        try:
-            self.transcription_collection.data.delete_many(
-                where=Filter.by_property(
-                    LectureTranscriptionSchema.BASE_URL.value
-                ).equal(self.artemis_base_url)
-                & Filter.by_property(LectureTranscriptionSchema.COURSE_ID.value).equal(
-                    lecture_unit.course_id
-                )
-                & Filter.by_property(LectureTranscriptionSchema.LECTURE_ID.value).equal(
-                    lecture_unit.lecture_id
-                )
-                & Filter.by_property(
-                    LectureTranscriptionSchema.LECTURE_UNIT_ID.value
-                ).equal(lecture_unit.lecture_unit_id)
-            )
-            return True
-        except Exception as e:
-            logger.error(
-                "Error deleting lecture unit transcriptions: %s", e, exc_info=True
-            )
-            return False
+        return self._delete_with_filter(
+            self.transcription_collection,
+            LectureTranscriptionSchema,
+            lecture_unit,
+            "Transcriptions",
+        )
 
     def delete_lecture_unit_segments(self, lecture_unit: LectureUnitPageDTO):
         """
         Delete the lecture unit segments from the database
         """
-        try:
-            self.lecture_unit_segment_summary_collection.data.delete_many(
-                where=Filter.by_property(LectureUnitSegmentSchema.BASE_URL.value).equal(
-                    self.artemis_base_url
-                )
-                & Filter.by_property(LectureUnitSegmentSchema.COURSE_ID.value).equal(
-                    lecture_unit.course_id
-                )
-                & Filter.by_property(LectureUnitSegmentSchema.LECTURE_ID.value).equal(
-                    lecture_unit.lecture_id
-                )
-                & Filter.by_property(
-                    LectureUnitSegmentSchema.LECTURE_UNIT_ID.value
-                ).equal(lecture_unit.lecture_unit_id)
-            )
-            return True
-        except Exception as e:
-            logger.error("Error deleting lecture unit segments: %s", e, exc_info=True)
-            return False
+        return self._delete_with_filter(
+            self.lecture_unit_segment_summary_collection,
+            LectureUnitSegmentSchema,
+            lecture_unit,
+            "Lecture unit segments",
+        )
 
     def delete_lecture_unit(self, lecture_unit: LectureUnitPageDTO):
         """
         Delete the lecture unit from the database
         """
-        try:
-            self.lecture_unit_segment_summary_collection.data.delete_many(
-                where=Filter.by_property(LectureUnitSchema.BASE_URL.value).equal(
-                    self.artemis_base_url
-                )
-                & Filter.by_property(LectureUnitSchema.COURSE_ID.value).equal(
-                    lecture_unit.course_id
-                )
-                & Filter.by_property(LectureUnitSchema.LECTURE_ID.value).equal(
-                    lecture_unit.lecture_id
-                )
-                & Filter.by_property(LectureUnitSchema.LECTURE_UNIT_ID.value).equal(
-                    lecture_unit.lecture_unit_id
-                )
-            )
-            return True
-        except Exception as e:
-            logger.error("Error deleting lecture unit: %s", e, exc_info=True)
-            return False
+        return self._delete_with_filter(
+            self.lecture_unit_collection,
+            LectureUnitSchema,
+            lecture_unit,
+            "Lecture units",
+        )

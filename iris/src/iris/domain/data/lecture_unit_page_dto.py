@@ -8,7 +8,7 @@ class LectureUnitPageDTO(BaseModel):
 
     pdf_file_base64: str = Field(default="", alias="pdfFile")
     attachment_version: int = Field(default="", alias="attachmentVersion")
-    transcription: TranscriptionDTO = Field(default=None, alias="transcription")
+    transcription: TranscriptionDTO = Field(default=None)
     lecture_unit_id: int = Field(alias="lectureUnitId")
     lecture_unit_name: str = Field(default="", alias="lectureUnitName")
     lecture_unit_link: str = Field(default="", alias="lectureUnitLink")
