@@ -15,6 +15,7 @@ class IrisMessageRole(str, Enum):
     ASSISTANT = "LLM"
     SYSTEM = "SYSTEM"
     TOOL = "TOOL"
+    TUTOR_SUGGESTION = "TUT_SUG"
 
 
 class PyrisMessage(BaseModel):

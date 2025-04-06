@@ -104,9 +104,19 @@ class OllamaModel(
     options: dict[str, Any] = Field(default={})
     _client: Client
 
+    # Auth credentials must be set via environment variables: OLLAMA_USERNAME and OLLAMA_PASSWORD
     def model_post_init(self, __context: Any) -> None:
-        self._client = Client(host=self.host)  # TODO: Add authentication (httpx auth?)
-        self._client._client.base_url = self.host  # pylint: disable=protected-access
+        import os
+        from requests.auth import HTTPBasicAuth
+
+        username = os.environ.get("OLLAMA_USERNAME")
+        password = os.environ.get("OLLAMA_PASSWORD")
+
+        self._client = Client(
+            host=self.host,
+            auth=HTTPBasicAuth(username, password) if username and password else None,
+        )
+        # self._client._client.base_url = self.host  # pylint: disable=protected-access
 
     def complete(
         self,
