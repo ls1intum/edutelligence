@@ -7,3 +7,8 @@ repos:
         name: "pre-commit for iris"
         args: ["-p", "iris"]
         files: "^iris/.*"
+      - id: sub-pre-commit
+        alias: athena
+        name: "pre-commit for athena"
+        args: [ "-p", "athena" ]
+        files: "^athena/.*"
