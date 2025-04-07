@@ -1,9 +1,11 @@
 import json
 import os
+import re
 from typing import List, Dict, Union
 
 import numpy as np
 import pandas as pd
+from pandas import DataFrame
 
 from athena.evaluation.model.model import Exercise, Feedback, Submission, GradingCriterion, StructuredGradingInstruction
 
@@ -328,3 +330,102 @@ def fill_missing_feedback_with_tutor_feedback(data: pd.DataFrame) -> pd.DataFram
     updated_data = pd.concat([data, complete_data], ignore_index=True)
 
     return updated_data
+
+
+def read_expert_evaluation(expert_evaluation_dir: str) -> pd.DataFrame:
+    """
+    Reads expert evaluations and their configuration from JSON files into a DataFrame.
+    Args:
+        expert_evaluation_dir (str): The directory containing JSON files.
+
+    Returns:
+        pd.DataFrame: A DataFrame containing the expert evaluations with added configuration.
+    """
+
+    def load_expert_evaluation() -> pd.DataFrame:
+        def extract_selected_values(data, expert_id):
+            rows = []
+
+            selected_values = data.get("selected_values", {})
+            for exercise_id, submissions in selected_values.items():
+                for submission_id, metrics in submissions.items():
+                    for feedback_type_pseudo, score_dict in metrics.items():
+                        for metric_id, value in score_dict.items():
+                            rows.append({
+                                "expert_id": expert_id,
+                                "exercise_id": exercise_id,
+                                "submission_id": submission_id,
+                                "metric_id": metric_id,
+                                "feedback_type_pseudo": feedback_type_pseudo,
+                                "value": value,
+                                "has_started_evaluating": data.get("has_started_evaluating"),
+                                "is_finished_evaluating": data.get("is_finished_evaluating"),
+                                "current_submission_index": data.get("current_submission_index"),
+                                "current_exercise_index": data.get("current_exercise_index")
+                            })
+            return rows
+
+        data_rows = []
+
+        for file in os.listdir(expert_evaluation_dir):
+            if file.endswith(".json") and file.startswith("evaluation_progress"):
+                with open(os.path.join(expert_evaluation_dir, file), "r") as f:
+                    expert = re.split(r"[_.]", file)[2]
+                    json_data = json.load(f)
+                    data_rows.extend(extract_selected_values(json_data, expert))
+
+        return pd.DataFrame(data_rows)
+
+    def load_expert_evaluation_config() -> tuple[DataFrame, DataFrame]:
+        def extract_metrics_and_mappings(data):
+            metrics_rows = []
+            mappings_rows = []
+
+            # Extract metrics
+            for metric in data.get("metrics", []):
+                metrics_rows.append({
+                    "metric_id": metric.get("id"),
+                    "title": metric.get("title"),
+                    "summary": metric.get("summary"),
+                    "description": metric.get("description")
+                })
+
+            # Extract mappings
+            for feedback_type_pseudo, feedback_type in data.get("mappings", {}).items():
+                mappings_rows.append({
+                    "feedback_type_pseudo": feedback_type_pseudo,
+                    "feedback_type": feedback_type
+                })
+
+            return metrics_rows, mappings_rows
+
+        # Process JSON files
+        metrics_rows = []
+        mappings_rows = []
+        evaluation_config_files = [file for file in os.listdir(expert_evaluation_dir) if
+                                   file.endswith(".json") and file.startswith("evaluation_config")]
+
+        # Check if there is exactly one evaluation_config file
+        if len(evaluation_config_files) != 1:
+            raise ValueError(f"Expected exactly one 'evaluation_config' file, but found {len(evaluation_config_files)}.")
+
+        # Process the single evaluation_config file
+        evaluation_config_file = evaluation_config_files[0]
+        with open(os.path.join(expert_evaluation_dir, evaluation_config_file), "r") as f:
+            json_data = json.load(f)
+            metrics, mappings = extract_metrics_and_mappings(json_data)
+            metrics_rows.extend(metrics)
+            mappings_rows.extend(mappings)
+
+        metrics = pd.DataFrame(metrics_rows)
+        mappings = pd.DataFrame(mappings_rows)
+
+        return metrics, mappings
+
+    expert_evaluations = load_expert_evaluation()
+    metrics, mappings = load_expert_evaluation_config()
+
+    merged_data = pd.merge(expert_evaluations, metrics, on="metric_id", how="left")
+    merged_data = pd.merge(merged_data, mappings, on="feedback_type_pseudo", how="left")
+
+    return merged_data
