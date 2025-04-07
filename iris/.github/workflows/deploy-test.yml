@@ -26,10 +26,9 @@ jobs:
             const labels = response.data
             return labels.map(label => label.name)
 
-
   # Check that the build job has run successfully before deploying
   check-build-status:
-    needs: [ get-labels ]
+    needs: [get-labels]
     runs-on: ubuntu-latest
     # Only run workflow if the added label is a deploy label
     if: contains(needs.get-labels.outputs.labels, 'deploy:pyris-test')
@@ -74,7 +73,7 @@ jobs:
 
   # Compute the tag to use for the docker image
   compute-tag:
-    needs: [ check-build-status ]
+    needs: [check-build-status]
     runs-on: ubuntu-latest
     outputs:
       tag: ${{ steps.compute-tag.outputs.result }}
@@ -103,7 +102,7 @@ jobs:
 
   # Run pre-deployment steps
   pre-deployment:
-    needs: [ compute-tag ]
+    needs: [compute-tag]
     runs-on: ubuntu-latest
     steps:
       - uses: actions-ecosystem/action-remove-labels@v1
@@ -150,7 +149,7 @@ jobs:
 
   # Deploy to the test servers
   deploy:
-    needs: [ compute-tag, pre-deployment ]
+    needs: [compute-tag, pre-deployment]
     uses: ./.github/workflows/deploy.yml
     with:
       docker-tag: ${{ needs.compute-tag.outputs.tag }}
@@ -159,10 +158,9 @@ jobs:
       environment-url: https://iris-test.artemis.cit.tum.de
     secrets: inherit
 
-
   # Check that the build job has run successfully otherwise add an error label
   add-error-label:
-    needs: [ check-build-status, compute-tag, pre-deployment, deploy ]
+    needs: [check-build-status, compute-tag, pre-deployment, deploy]
     runs-on: ubuntu-latest
     if: ${{ failure() }}
     steps:
