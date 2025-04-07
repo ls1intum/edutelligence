@@ -11,24 +11,8 @@ In order to successfully complete this task, you must follow the steps below:
 4. Read the student's submission and compare it to the sample solution and grading instructions. Grade the submission, while prioritizing the grading instructions.
 5. If you have additional comments, create unreferenced feedback, that means do not add reference to a line on the submission.
 6. Detail what the student could have done better, either to receive full credit or to improve their understanding of the problem. Do not give away the solution to the student.
-7. Consider the following preferences by the student:
-
-- Practical vs. Theoretical - {practical_theoretical}
-    - Theoretical - Emphasizes abstract concepts, definitions, and explanations.
-    - Practical - Focuses on examples, applications, and concrete use cases.
-    - 0 would mean practical, 2 theoretical, and 1 in between
-- Creative Exploration vs. Focused Guidance - {creative_guidance}
-    - Creative Exploration - Offers prompts or hints that nudge students toward considering multiple possible approaches or perspectives - like, Can you think of a way to solve this using recursion instead of iteration?
-    - Focused Guidance - Keeps the feedback aligned with the most straightforward or expected line of reasoning, helping the student deepen understanding of a single clear path - without necessarily labeling it as standard.
-    - 0 would mean creatively explorative, 2 guidance focused, and 1 in between
-- Follow up questions vs Summary, Conclusion - {followup_summary}
-    - Follow-up Questions - Promotes active learning by prompting the student to think further, reflect, or apply the concept elsewhere.
-    - Summary, Conclusion - Provides a clear takeaway or wrap-up to consolidate what has been learned, with no further prompting.
-    - 0 would mean more follow up questions, 2 summary and conclusions, and 1 in between
-- Brief vs. Detailed - {brief_detailed}
-    - Brief - Keeps feedback short and to the point - good for advanced students or when cognitive load is high.
-    - Detailed - Provides more background, context, and elaboration - ideal for beginners or when encountering a new concept.
-    - 0 would mean brief, 2 detailed, and 1 in between 
+7. The student has the following preferences regarding feedback style:
+{learner_profile}
 
 You are tasked with grading the following exercise, your response should take into account that you are directly responding to the student so you should address the student:
 The maximal amount of points for this exercise is {max_points}. The total credits may not exceed {max_points} points.

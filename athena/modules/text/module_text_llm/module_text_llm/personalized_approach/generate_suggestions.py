@@ -19,7 +19,6 @@ from module_text_llm.personalized_approach.prompt_thinking import InitialAssessm
 from module_text_llm.personalized_approach.prompt_generate_feedback import AssessmentModel
 
 
-# TODO: This function should also take Feedback Learner Profile as a parameter
 async def generate_suggestions(exercise: Exercise, submission: Submission, config: ApproachConfig, debug: bool,
                                is_graded: bool, learner_profile: Optional[LearnerProfile] = None) -> List[Feedback]:
     model = config.model.get_model()  # type: ignore[attr-defined]
@@ -41,10 +40,7 @@ async def generate_suggestions(exercise: Exercise, submission: Submission, confi
         "problem_statement": exercise.problem_statement or "No problem statement.",
         "example_solution": exercise.example_solution,
         "submission": add_sentence_numbers(submission.text),
-        "practical_theoretical": learner_profile.practical_theoretical,
-        "creative_guidance": learner_profile.creative_guidance,
-        "followup_summary": learner_profile.followup_summary,
-        "brief_detailed": learner_profile.brief_detailed
+        "learner_profile": learner_profile.to_feedback_style_description()
     }
 
     chat_prompt = get_chat_prompt_with_formatting_instructions(
@@ -88,10 +84,7 @@ async def generate_suggestions(exercise: Exercise, submission: Submission, confi
     second_prompt_input = {
         "answer": initial_result.dict(),
         "submission": add_sentence_numbers(submission.text),
-        "practical_theoretical": learner_profile.practical_theoretical,
-        "creative_guidance": learner_profile.creative_guidance,
-        "followup_summary": learner_profile.followup_summary,
-        "brief_detailed": learner_profile.brief_detailed
+        "learner_profile": learner_profile.to_feedback_style_description()
     }
 
     second_chat_prompt = get_chat_prompt_with_formatting_instructions(
