@@ -25,6 +25,8 @@ module = "athena:run_module"
 
 [tool.poetry.group.dev.dependencies]
 types-requests = "^2.31.0.8"
+pytest = "^8.3.5"
+pytest-asyncio = "^0.26.0"
 
 [build-system]
 requires = ["poetry-core>=1.0.0"]
