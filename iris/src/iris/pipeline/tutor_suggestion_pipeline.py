@@ -52,6 +52,7 @@ class TutorSuggestionPipeline(Pipeline):
         :param dto: execution data transfer object
         """
         logger.info('Running TutorSuggestionPipeline')
+        self.callback.in_progress(f"Summarizing post content")
         summary_with_category = self._run_tutor_suggestion_pipeline(dto=dto)
         self.callback.in_progress("Generated summary with context of post")
         logger.info(summary_with_category)
