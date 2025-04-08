@@ -40,8 +40,6 @@ class TutorSuggestionPipeline(Pipeline):
         self.pipeline = self.llm | StrOutputParser()
         self.tokens = []
 
-        logger.info('Initializing TutorSuggestionPipeline')
-
     def __str__(self):
         return f"{self.__class__.__name__}(llm={self.llm})"
 
@@ -51,18 +49,24 @@ class TutorSuggestionPipeline(Pipeline):
         Run the pipeline.
         :param dto: execution data transfer object
         """
-        logger.info('Running TutorSuggestionPipeline')
         self.callback.in_progress(f"Summarizing post content")
         summary_with_category = self._run_tutor_suggestion_pipeline(dto=dto)
         self.callback.in_progress("Generated summary with context of post")
-        logger.info(summary_with_category)
-        post_category = summary_with_category.get("category")
-        post_summary = summary_with_category.get("summary")
+        try:
+            post_category = summary_with_category.get("category")
+        except AttributeError:
+            post_category = None
+        try:
+            post_summary = summary_with_category.get("summary")
+        except AttributeError:
+            post_summary = None
         self.callback.in_progress(f"Message is in category {post_category}")
         if post_category == 'EXERCISE':
             logger.info('Working with exercise')
         elif post_category == 'LECTURE':
             logger.info('Working with lecture')
+        elif post_category == 'EXERCISE_LECTURE':
+            logger.info('Working with exercise and lecture')
         elif post_category == 'ORGANIZATION':
             logger.info('Working with organization')
         elif post_category == 'SPAM':
