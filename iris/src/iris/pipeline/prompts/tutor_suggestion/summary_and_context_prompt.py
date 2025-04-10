@@ -14,7 +14,9 @@ The posts question is: {post.content} by user {post.user_id}
         answers_promt += f"""   
 In the thread of this post there are already {len(post.answers)} answers.
 When summarizing those answers look of answers of the user with id {post.user_id} as
-those answers might add more context to the question asked in the post.
+those answers might add more context to the question asked in the post. If the id differs from {post.user_id} then
+those answers are not written by the author of the question. Use those answers to add context about the post answers by
+other users. In the summary the answers should also be mentioned.
 The answers are:\n
 """
         for i in range(len(post.answers)):
