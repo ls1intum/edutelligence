@@ -1,6 +1,6 @@
+import json
 import logging
 import re
-import json
 from unicodedata import category
 
 from langchain_core.output_parsers import StrOutputParser
@@ -9,15 +9,19 @@ from langchain_core.runnables import Runnable
 from langsmith import traceable
 
 from iris.common.pipeline_enum import PipelineEnum
-from iris.domain.communication.communication_tutor_suggestion_pipeline_execution_dto import \
-    CommunicationTutorSuggestionPipelineExecutionDTO
-from iris.llm import CompletionArguments, RequirementList, CapabilityRequestHandler
+from iris.domain.communication.communication_tutor_suggestion_pipeline_execution_dto import (
+    CommunicationTutorSuggestionPipelineExecutionDTO,
+)
+from iris.llm import CapabilityRequestHandler, CompletionArguments, RequirementList
 from iris.llm.langchain import IrisLangchainChatModel
 from iris.pipeline import Pipeline
-from iris.pipeline.prompts.tutor_suggestion.summary_and_context_prompt import summary_and_context_prompt
+from iris.pipeline.prompts.tutor_suggestion.summary_and_context_prompt import (
+    summary_and_context_prompt,
+)
 from iris.web.status.status_update import TutorSuggestionCallback
 
 logger = logging.getLogger(__name__)
+
 
 class TutorSuggestionPipeline(Pipeline):
     llm: IrisLangchainChatModel
@@ -28,9 +32,7 @@ class TutorSuggestionPipeline(Pipeline):
         super().__init__(implementation_id="tutor_suggestion_pipeline")
         completion_args = CompletionArguments()
         request_handler = CapabilityRequestHandler(
-            requirements=RequirementList(
-                self_hosted=True
-            )
+            requirements=RequirementList(self_hosted=True)
         )
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler,
@@ -61,18 +63,18 @@ class TutorSuggestionPipeline(Pipeline):
         except AttributeError:
             post_summary = None
         self.callback.in_progress(f"Message is in category {post_category}")
-        if post_category == 'EXERCISE':
-            logger.info('Working with exercise')
-        elif post_category == 'LECTURE':
-            logger.info('Working with lecture')
-        elif post_category == 'EXERCISE_LECTURE':
-            logger.info('Working with exercise and lecture')
-        elif post_category == 'ORGANIZATION':
-            logger.info('Working with organization')
-        elif post_category == 'SPAM':
-            logger.info('Working with spam')
+        if post_category == "EXERCISE":
+            logger.info("Working with exercise")
+        elif post_category == "LECTURE":
+            logger.info("Working with lecture")
+        elif post_category == "EXERCISE_LECTURE":
+            logger.info("Working with exercise and lecture")
+        elif post_category == "ORGANIZATION":
+            logger.info("Working with organization")
+        elif post_category == "SPAM":
+            logger.info("Working with spam")
         else:
-            logger.info('Cannot categorize')
+            logger.info("Cannot categorize")
         self.callback.done(
             "Generated tutor suggestions",
             final_result=post_summary,
@@ -101,7 +103,7 @@ class TutorSuggestionPipeline(Pipeline):
     @staticmethod
     def _extract_json_from_text(text: str):
         # Find the first JSON object in the text using a regular expression
-        json_pattern = re.compile(r'\{.*?\}', re.DOTALL)
+        json_pattern = re.compile(r"\{.*?\}", re.DOTALL)
         match = json_pattern.search(text)
 
         if match:
@@ -115,4 +117,3 @@ class TutorSuggestionPipeline(Pipeline):
         else:
             print("No JSON found in text.")
             return None
-

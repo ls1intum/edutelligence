@@ -16,8 +16,9 @@ from iris.domain import (
 from iris.domain.chat.lecture_chat.lecture_chat_pipeline_execution_dto import (
     LectureChatPipelineExecutionDTO,
 )
-from iris.domain.communication.communication_tutor_suggestion_pipeline_execution_dto import \
-    CommunicationTutorSuggestionPipelineExecutionDTO
+from iris.domain.communication.communication_tutor_suggestion_pipeline_execution_dto import (
+    CommunicationTutorSuggestionPipelineExecutionDTO,
+)
 from iris.domain.rewriting_pipeline_execution_dto import (
     RewritingPipelineExecutionDTO,
 )
@@ -47,7 +48,8 @@ from iris.web.status.status_update import (
     InconsistencyCheckCallback,
     LectureChatCallback,
     RewritingCallback,
-    TextExerciseChatCallback, TutorSuggestionCallback,
+    TextExerciseChatCallback,
+    TutorSuggestionCallback,
 )
 
 router = APIRouter(prefix="/api/v1/pipelines", tags=["pipelines"])
@@ -351,6 +353,7 @@ def run_inconsistency_check_pipeline(
     thread = Thread(target=run_inconsistency_check_pipeline_worker, args=(dto, variant))
     thread.start()
 
+
 def run_communication_tutor_suggestions_pipeline_worker(
     dto: CommunicationTutorSuggestionPipelineExecutionDTO, _variant: str
 ):
@@ -372,17 +375,19 @@ def run_communication_tutor_suggestions_pipeline_worker(
         logger.error(traceback.format_exc())
         callback.error("Fatal error.", exception=e)
 
+
 @router.post(
     "/tutor-suggestions/{variant}/run",
     status_code=status.HTTP_202_ACCEPTED,
     dependencies=[Depends(TokenValidator())],
 )
 def run_communication_tutor_suggestions_pipeline(
-        variant: str, dto: CommunicationTutorSuggestionPipelineExecutionDTO
+    variant: str, dto: CommunicationTutorSuggestionPipelineExecutionDTO
 ):
-    thread = Thread(target=run_communication_tutor_suggestions_pipeline_worker, args=(dto, variant))
+    thread = Thread(
+        target=run_communication_tutor_suggestions_pipeline_worker, args=(dto, variant)
+    )
     thread.start()
-
 
 
 @router.get("/{feature}/variants")
