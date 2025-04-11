@@ -12,19 +12,19 @@ class LearnerProfile(BaseModel):
     - 5 represents the opposite extreme (e.g., very theoretical)
     """
 
-    practical_theoretical: Annotated[int, Field(
+    feedback_practical_theoretical: Annotated[int, Field(
         strict=True, ge=1, le=5,
         description="Preference for practical (1) vs theoretical (5) feedback."
     )]
-    creative_guidance: Annotated[int, Field(
+    feedback_creative_guidance: Annotated[int, Field(
         strict=True, ge=1, le=5,
         description="Preference for creative exploration (1) vs focused guidance (5)."
     )]
-    followup_summary: Annotated[int, Field(
+    feedback_followup_summary: Annotated[int, Field(
         strict=True, ge=1, le=5,
         description="Preference for follow-up questions (1) vs summary/conclusion (5)."
     )]
-    brief_detailed: Annotated[int, Field(
+    feedback_brief_detailed: Annotated[int, Field(
         strict=True, ge=1, le=5,
         description="Preference for brief (1) vs detailed (5) feedback."
     )]
@@ -37,7 +37,7 @@ class LearnerProfile(BaseModel):
             4: "Leans toward conceptual clarity, including definitions and abstract reasoning.",
             5: "Strong preference for theoretical insight and abstract conceptual understanding."
         }
-        return mapping[self.practical_theoretical]
+        return mapping[self.feedback_practical_theoretical]
 
     def describe_creative_guidance(self) -> str:
         mapping = {
@@ -47,7 +47,7 @@ class LearnerProfile(BaseModel):
             4: "Appreciates direct guidance and step-by-step reasoning over divergent prompts.",
             5: "Strong preference for focused, structured explanations with minimal deviation from core reasoning."
         }
-        return mapping[self.creative_guidance]
+        return mapping[self.feedback_creative_guidance]
 
     def describe_followup_summary(self) -> str:
         mapping = {
@@ -57,7 +57,7 @@ class LearnerProfile(BaseModel):
             4: "Prefers feedback to conclude with a clear summary rather than additional questions.",
             5: "Strong preference for concise takeaways and wrap-up conclusions without further prompting."
         }
-        return mapping[self.followup_summary]
+        return mapping[self.feedback_followup_summary]
 
     def describe_brief_detailed(self) -> str:
         mapping = {
@@ -67,7 +67,7 @@ class LearnerProfile(BaseModel):
             4: "Prefers thorough, context-rich feedback with elaborated reasoning.",
             5: "Strong preference for highly detailed explanations, background context, and comprehensive coverage."
         }
-        return mapping[self.brief_detailed]
+        return mapping[self.feedback_brief_detailed]
 
     def to_feedback_style_description(self) -> str:
         return (
