@@ -12,7 +12,9 @@ from iris.domain.chat.course_chat.course_chat_status_update_dto import (
 from iris.domain.chat.exercise_chat.exercise_chat_status_update_dto import (
     ExerciseChatStatusUpdateDTO,
 )
-from iris.domain.communication.communication_tutor_suggestion_status_update_dto import TutorSuggestionStatusUpdateDTO
+from iris.domain.communication.communication_tutor_suggestion_status_update_dto import (
+    TutorSuggestionStatusUpdateDTO,
+)
 from iris.domain.status.competency_extraction_status_update_dto import (
     CompetencyExtractionStatusUpdateDTO,
 )
@@ -395,6 +397,7 @@ class LectureChatCallback(StatusCallback):
             stages[stage],
             stage,
         )
+
 
 class TutorSuggestionCallback(StatusCallback):
     """Status callback for tutor suggestion pipelines."""

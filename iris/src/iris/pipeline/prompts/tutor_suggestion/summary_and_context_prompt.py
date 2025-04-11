@@ -88,7 +88,4 @@ Important rules you shall follow:
 3. Your last sentence should be a JSON consisting of the category and the summary of the post.
 """
 
-    return (post_prompt
-            + answers_promt
-            + context_prompt
-            + result_display_prompt)
+    return post_prompt + answers_promt + context_prompt + result_display_prompt

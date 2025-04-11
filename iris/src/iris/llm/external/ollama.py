@@ -107,8 +107,10 @@ class OllamaModel(
     # Auth credentials must be set via environment variables: OLLAMA_USERNAME and OLLAMA_PASSWORD
     def model_post_init(self, __context: Any) -> None:
         import os
+
+        from httpx import Client as HTTPXClient
+        from httpx import HTTPTransport
         from requests.auth import HTTPBasicAuth
-        from httpx import HTTPTransport, Client as HTTPXClient
 
         username = os.environ.get("OLLAMA_USERNAME")
         password = os.environ.get("OLLAMA_PASSWORD")
