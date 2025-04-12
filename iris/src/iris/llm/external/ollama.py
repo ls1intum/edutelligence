@@ -12,7 +12,8 @@ from typing import (
     Union,
 )
 
-from httpx import HTTPTransport, Client as HTTPXClient
+from httpx import Client as HTTPXClient
+from httpx import HTTPTransport
 from langchain_core.tools import BaseTool
 from ollama import Client, Message
 from pydantic import BaseModel, Field
@@ -117,7 +118,7 @@ class OllamaModel(
         # Use custom HTTP transport to speed up request performance and avoid default retry/backoff behavior
         transport = HTTPTransport(retries=1)
         # Override the internal HTTPX client used by Ollama to enable HTTP/2 and ensure consistent authentication
-        self._client._client = HTTPXClient( # pylint: disable=protected-access
+        self._client._client = HTTPXClient(  # pylint: disable=protected-access
             base_url=self.host,
             http2=True,
             transport=transport,
