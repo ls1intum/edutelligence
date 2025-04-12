@@ -11,7 +11,7 @@ The posts question is: {post.content} by user {post.user_id}
 """
     answers_promt: str = ""
     if len(post.answers) != 0:
-        answers_promt += f"""   
+        answers_promt += f"""
 In the thread of this post there are already {len(post.answers)} answers.
 When summarizing those answers look of answers of the user with id {post.user_id} as
 those answers might add more context to the question asked in the post. If the id differs from {post.user_id} then
@@ -23,7 +23,7 @@ The answers are:\n
             answer = post.answers[i]
             if answer is not None:
                 answers_promt += f"{answer.content} by {answer.user_id}\n"
-    context_prompt: str = f"""
+    context_prompt: str = """
 Next, add context to the question asked in the post.
 Your task is to help categorize the question and add meaningful context for better understanding.
 There are five possible categories a post can belong to: EXERCISE, LECTURE, EXERCISE_LECTURE, ORGANIZATION, SPAM.
@@ -50,9 +50,11 @@ Use the following definitions and examples to determine the category.
    • The question refers to an exercise or implementation but also explicitly ties back to concepts from lectures.
    • Often indicates they tried an approach taught in class or are unsure how lecture theory applies to their code.
    Examples:
-   1. "I’m trying to solve Exercise 7 using the greedy algorithm from last week’s lecture, but my output is still incorrect. What might I be missing?"
-   2. "The code from class on Dijkstra’s algorithm isn’t working in the exercise. Could it be because of the graph input?"
- 
+   1. "I’m trying to solve Exercise 7 using the greedy algorithm from last week’s lecture, but my output is still
+   incorrect. What might I be missing?"
+   2. "The code from class on Dijkstra’s algorithm isn’t working in the exercise. Could it be because of the graph
+   input?"
+
  - ORGANIZATION: These are logistical or course-structure related questions.
    Typical characteristics:
    • Mentions deadlines, exam dates, group assignments, or location/timing of classes.
@@ -69,7 +71,7 @@ Use the following definitions and examples to determine the category.
    1. "Hello???"
    2. "asdfghjkl"
    3. "Just testing this."
- 
+
  - NO_CATEGORY: These are rare cases where the post does not clearly fit any of the other categories.
    Typical characteristics:
    • The message might be too vague, ambiguous, or off-topic without being full spam.

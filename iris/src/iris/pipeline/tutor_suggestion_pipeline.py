@@ -1,7 +1,6 @@
 import json
 import logging
 import re
-from unicodedata import category
 
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
@@ -24,6 +23,11 @@ logger = logging.getLogger(__name__)
 
 
 class TutorSuggestionPipeline(Pipeline):
+    """
+    The TutorSuggestionPipeline creates a tutor suggestion
+
+    when called it uses the post received as an argument to create a suggestion based on the conversation
+    """
     llm: IrisLangchainChatModel
     pipeline: Runnable
     callback: TutorSuggestionCallback
@@ -51,7 +55,7 @@ class TutorSuggestionPipeline(Pipeline):
         Run the pipeline.
         :param dto: execution data transfer object
         """
-        self.callback.in_progress(f"Summarizing post content")
+        self.callback.in_progress("Summarizing post content")
         summary_with_category = self._run_tutor_suggestion_pipeline(dto=dto)
         self.callback.in_progress("Generated summary with context of post")
         try:
