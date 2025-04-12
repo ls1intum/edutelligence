@@ -141,6 +141,8 @@ class CitationPipeline(Pipeline):
             paragraphs_page_chunks, paragraphs_transcriptions = (
                 self.create_formatted_lecture_string(information)
             )
+            print("HERE")
+            print(paragraphs_transcriptions)
             self.prompt_str = self.lecture_prompt_str
 
         try:

@@ -19,7 +19,7 @@ Citation Formats:
 1. For Lecture Transcriptions:
    - Format with a link available - with the start time stated in the link; if the link contains "?video_only=1" remove it and add the correct timestamp:
      [X] <a href="URL"?t="start time" target="_blank">"Lecture title", "Lecture unit title", page number, start time, end time</a>.
-   - If no link is available, do not include a clickable link; simply output the citation text (e.g., "Lecture title", "Lecture unit title", "page number", start time, end time). Start and end times should be displayed in the format hh:mm:ss.
+   - ONLY if no link is available, do not include a clickable link; simply output the citation text (e.g., "Lecture title", "Lecture unit title", "page number", start time, end time). Start and end times should be displayed in the format hh:mm:ss.
    - **Important:** Ensure that a start time and an end time are always displayed for lecture transcriptions, regardless of link availability.
 
 2. For Lecture Slides:
