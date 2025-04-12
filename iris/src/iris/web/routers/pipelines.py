@@ -355,9 +355,9 @@ def run_inconsistency_check_pipeline(
 
 
 def run_communication_tutor_suggestions_pipeline_worker(
-    dto: CommunicationTutorSuggestionPipelineExecutionDTO, variant: str
-):
-    logger.info(f"Communication tutor suggestions pipeline started with dto: %s", dto)
+    dto: CommunicationTutorSuggestionPipelineExecutionDTO, _variant: str
+):  # pylint: disable=invalid-name
+    logger.info("Communication tutor suggestions pipeline started with dto: %s", dto)
     try:
         callback = TutorSuggestionCallback(
             run_id=dto.settings.authentication_token,

@@ -28,6 +28,7 @@ class TutorSuggestionPipeline(Pipeline):
 
     when called it uses the post received as an argument to create a suggestion based on the conversation
     """
+
     llm: IrisLangchainChatModel
     pipeline: Runnable
     callback: TutorSuggestionCallback
