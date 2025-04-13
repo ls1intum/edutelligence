@@ -3,8 +3,6 @@ from typing import List
 from enum import Enum
 from fastapi.responses import JSONResponse
 
-class GenerateCompetencyRequest(BaseModel):
-    description: str
 
 class CompetencyTaxonomy(str, Enum):
     REMEMBER = "R"
@@ -15,10 +13,25 @@ class CompetencyTaxonomy(str, Enum):
     CREATE = "C"
 
 class Competency(BaseModel):
+    # id 
     title: str
     description: str
     taxonomy: CompetencyTaxonomy
+    
+class CompetencyRelationType(str, Enum): #TOBE DETERMINED LATER
+    SUPERSET = "SUPERSET"
+    SUBSET = "SUBSET"
 
+
+class CompetencyRelation(BaseModel):
+    tail_competency_id: str
+    head_competency_id: str
+    relation_type: CompetencyRelationType
+
+class GenerateCompetencyRequest(BaseModel):
+    description: str
 
 class GenerateCompetencyResponse(BaseModel):
     competencies: List[Competency]
+    competency_relations: List[CompetencyRelation]
+
