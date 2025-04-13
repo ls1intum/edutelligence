@@ -1,0 +1,29 @@
+[project]
+name = "shared"
+version = "0.1.0"
+description = "Shared python library for EduTelligence"
+authors = [
+    { name = "Felix T.J. Dietrich", email = "felixtj.dietrich@tum.de" },
+    { name = "Patrick Bassner", email = "bassner@tum.de" },
+    { name = "Maximilian Sölch", email = "maximilian.soelch@tum.de" },
+    { name = "Maximilian Anzinger", email = "maximilian.anzinger@tum.de" },
+    { name = "Tobias Wasner", email = "tobias.wasner@tum.de" }
+]
+readme = "README.md"
+requires-python = ">=3.9,<4.0.0"
+
+dependencies = [
+    "fastapi[standard] >= 0.115.9"
+]
+
+[tool.poetry.group.dev.dependencies]
+black = "25.1.0"
+flake8 = "7.1.2"
+
+[virtualenvs]
+create = true
+in-project = true
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

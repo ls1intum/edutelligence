@@ -1,0 +1,34 @@
+cff-version: 1.2.0
+message: "If you cite this project, please use the following citation."
+authors:
+  -
+    affiliation: "Technical University of Munich"
+    family-names: Anzinger
+    given-names: Maximilian
+    orcid: "0009-0000-7378-6292"
+  -
+    affiliation: "Technical University of Munich"
+    family-names: Krusche
+    given-names: Stephan
+    orcid: "0000-0002-4552-644X"
+title: "Atlas: Adaptive Competency-Based Learning"
+version: 0.0.0
+date-released: 2024-11-18
+license: MIT
+repository-code: "https://github.com/ls1intum/atlas"
+preferred-citation:
+  type: data
+  authors:
+    -
+      affiliation: "Technical University of Munich"
+      family-names: Anzinger
+      given-names: Maximilian
+      orcid: "0009-0000-7378-6292"
+    -
+      affiliation: "Technical University of Munich"
+      family-names: Krusche
+      given-names: Stephan
+      orcid: "0000-0002-4552-644X"
+  title: "Atlas: Adaptive Competency-Based Learning"
+  doi: "10.5281/zenodo.14045625"
+  year: 2024

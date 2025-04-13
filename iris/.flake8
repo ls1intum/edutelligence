@@ -1,0 +1,12 @@
+[flake8]
+max-line-length = 120
+exclude =
+    .git,
+    __pycache__,
+    .idea
+per-file-ignores =
+    # imported but unused
+    __init__.py: F401, F403
+    open_ai_chat_wrapper.py: F811
+    open_ai_completion_wrapper.py: F811
+    open_ai_embedding_wrapper.py: F811

@@ -24,7 +24,7 @@ available_models: Dict[str, BaseLanguageModel] = {}
 if openai_available:
     openai.api_type = "openai"
     for model in openai.models.list():
-        if "gpt" in model.id:
+        if "gpt" in model.id and "audio" not in model.id and "realtime" not in model.id:
             available_models[OPENAI_PREFIX + model.id] = ChatOpenAI(model=model.id)
 
 # Load Azure OpenAI models

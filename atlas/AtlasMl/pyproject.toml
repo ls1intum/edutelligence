@@ -1,0 +1,18 @@
+[tool.poetry]
+name = "atlasml"
+version = "0.1.0"
+description = ""
+authors = ["Maximilian Anzinger <anzinger@cit.tum.de>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.13"
+fastapi = "^0.115.5"
+
+
+[tool.poetry.group.dev.dependencies]
+uvicorn = "^0.32.1"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
