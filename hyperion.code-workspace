@@ -1,0 +1,30 @@
+{
+	"folders": [
+		{
+			"name": "EduTelligence",
+			"path": "./",
+		},
+		{
+			"name": "Hyperion",
+			"path": "./hyperion"
+		},
+		{
+			"name": "Shared",
+			"path": "./shared"
+		}
+	],
+	"settings": {
+		"python.terminal.activateEnvironment": true,
+		"python.terminal.activateEnvInCurrentTerminal": true,
+		"python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python"
+	},
+	"extensions": {
+		"recommendations": [
+			"github.vscode-pull-request-github",
+			"ms-python.python",
+			"davidanson.vscode-markdownlint",
+			"streetsidesoftware.code-spell-checker",
+			"njpwerner.autodocstring"
+		]
+	},
+}

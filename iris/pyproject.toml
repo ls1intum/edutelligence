@@ -1,0 +1,74 @@
+[tool.poetry]
+name = "iris"
+version = "3.0.0"
+description = "An LLM microservice for the learning platform Artemis"
+authors = ["Timor Morrien <timor.morrien@tum.de>", "Patrick Bassner <patrick.bassner@tum.de>"]
+readme = "README.MD"
+packages = [{include = "iris", from = "src"}]
+include = ["src/iris/py.typed"]
+
+[tool.poetry.dependencies]
+python = ">=3.12,<4.0.0"
+fastapi = "0.115.5"
+langchain = "0.3.8"
+ollama = "0.3.3"
+openai = "1.60.2"
+psutil = "6.1.0"
+pydantic = "2.9.2"
+PyMuPDF = "1.24.13"
+pytz = "2024.1"
+PyYAML = "6.0.2"
+requests = "2.32.3"
+sentry-sdk = {version = "2.13.0", extras = ["starlette", "fastapi", "openai"]}
+unstructured = "0.16.24"
+uvicorn = "0.32.0"
+weaviate-client = "4.9.3"
+langchain-core="^0.3.17"
+starlette="^0.41.2"
+langsmith="^0.1.142"
+langchain-text-splitters="^0.3.2"
+langchain-experimental="^0.3.3"
+langchain-openai="^0.3.3"
+cohere = "5.9.0"
+types-pyyaml = "^6.0.12.20241230"
+types-pytz = "^2025.1.0.20250204"
+
+[tool.poetry.group.dev.dependencies]
+mypy = "^1.10.0"
+pylint = "^3.2.3"
+black = "^25.1.0"
+isort = "^6.0.1"
+yamllint = "^1.35.1"
+bandit = "^1.8.3"
+pytest = "^8.3.3"
+coverage = "^7.6.1"
+detect-secrets = "^1.5.0"
+pre-commit = "^4.1.0"
+
+[tool.isort]
+profile = "black"
+multi_line_output = 3
+
+[tool.bandit]
+exclude_dirs = ["tests"]
+
+[tool.coverage.run]
+branch = true
+source = ["src"]
+dynamic_context = "test_function"
+
+[tool.coverage.report]
+show_missing = true
+# fail_under = 80
+# omit = ["tests/*", "your_module_name/__init__.py"]
+
+[tool.coverage.html]
+directory = "htmlcov"
+
+[virtualenvs]
+create = true
+in-project = true
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
