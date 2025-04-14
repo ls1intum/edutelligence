@@ -11,7 +11,6 @@ from module_text_llm.config import Configuration
 from module_text_llm.evaluation import get_feedback_statistics, get_llm_statistics
 from module_text_llm.generate_evaluation import generate_evaluation
 from module_text_llm.approach_controller import generate_suggestions
-from module_text_llm.RandomMessage import write_random_message,query_messages,create_minimal_schema
 from module_text_llm.in_context_learning.feedback_icl.store_feedback_icl import store_feedback_icl
 @submissions_consumer
 def receive_submissions(exercise: Exercise, submissions: List[Submission]):

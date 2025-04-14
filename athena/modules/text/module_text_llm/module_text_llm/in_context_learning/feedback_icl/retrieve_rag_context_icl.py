@@ -1,7 +1,4 @@
-from athena.logger import logger
-from module_text_llm.in_context_learning.feedback_icl.store_indices_icl import retrieve_embedding_index, retrieve_feedback
 from module_text_llm.in_context_learning.feedback_icl.store_feedback_icl import query_embedding
-from module_text_llm.in_context_learning.feedback_icl.generate_embeddings import embed_text
 
 def retrieve_rag_context_icl(submission_segment: str ,exercise_id: int) -> str:
     """
@@ -15,40 +12,39 @@ def retrieve_rag_context_icl(submission_segment: str ,exercise_id: int) -> str:
     Returns:
         str: A formatted string of feedbacks which reference text similar to the submission_segment.
     """
-    # query_submission= embed_text(submission_segment)
 
     rag_context = []
     
-    rresult_objects = query_embedding(submission_segment,exercise_id)
-    print(rresult_objects)
-    return " " 
-    # for result in rresult_objects:
-    #     print("result",result)
-    #     print(type(result))
-    
-    # if list_of_indices is not None:
-    #     for index in list_of_indices[0]:
-    #         if index != -1:
-    #             stored_feedback = retrieve_feedback(index,exercise_id)
-    #             print("Stored feedback",stored_feedback)
-    #             rag_context.append({"submission_chunk": submission_segment, "feedback": stored_feedback})
-    #     formatted_rag_context = format_rag_context(rag_context)
-    # else:
-    #     formatted_rag_context = "There are no submission at the moment"
-    # return formatted_rag_context
+    result_objects = query_embedding(submission_segment,exercise_id)
+    for result in result_objects.objects:
+        title = result.properties.get("title")
+        description = result.properties.get("description")
+        credits = result.properties.get("credits")
+        reference = result.properties.get("reference")
+        rag_context.append(format_context(title,description,credits,reference))
+    return format_rag_context(rag_context) 
+
+def format_context(title,description,credits,reference):
+    formatted_string = ""
+    formatted_string += f"""
+    For the reference text in the submission: {reference}**\n
+    The tutor provided the following feedback:\n
+    **Title**: {title}\n
+    **Description**: {description}\n
+    **Credits**: {credits}\n
+    **Reference text**: {reference}**\n
+    **\n"""
+    return formatted_string
 
 def format_rag_context(rag_context):
-    formatted_string = ""
-    
-    for context_item in rag_context:
-        submission_text = context_item["submission_chunk"]
-        feedback = context_item["feedback"]
-        if feedback is not None:
-            formatted_string += "**Tutor provided Feedback from previous submissions of this same exercise:**\n"
-            feedback["text_reference"] = get_reference(feedback, submission_text)
-            clean_feedback = {key: value for key, value in feedback.items() if key not in ["id","index_start","index_end","is_graded","meta"]} 
+    formatted_string = """  **Tutor provided Feedback from previous submissions of this same exercise.
+    This are possible examples that could help with the grading of the current submission. However they are not identical
+    so please be careful when using them. You must carefully decide whether this references are relevant.**\n
+    **\n"""
+    formatted_string += "\n" + "-"*40 + "\n"
 
-            formatted_string += f"{clean_feedback}\n"
+    for context_item in rag_context:
+            formatted_string += f"{context_item}\n"
             formatted_string += "\n" + "-"*40 + "\n"
     
     return formatted_string

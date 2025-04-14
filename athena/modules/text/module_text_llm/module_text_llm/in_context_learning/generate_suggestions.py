@@ -16,7 +16,6 @@ from module_text_llm.in_context_learning.prompt_generate_suggestions import Asse
 # from module_text_llm.in_context_learning.agent import TutorAgent
 from module_text_llm.in_context_learning.ollama_prompt import system_message_segment, human_message_segment, Segmentation, system_message, human_message
 
-from module_text_llm.in_context_learning.feedback_icl.store_feedback_icl import check_if_embedding_exists
 from module_text_llm.in_context_learning.feedback_icl.retrieve_rag_context_icl import retrieve_rag_context_icl
 
 
@@ -62,7 +61,7 @@ async def generate_suggestions(exercise: Exercise, submission: Submission, confi
         return []
     
     if (isOllama):
-        embeddings_exist = check_if_embedding_exists(exercise.id)
+        embeddings_exist = True
         
         if embeddings_exist:
             segmentation_prompt = get_chat_prompt_with_formatting_instructions(
@@ -96,7 +95,7 @@ async def generate_suggestions(exercise: Exercise, submission: Submission, confi
             ],
     )
     else :
-        embeddings_exist = check_if_embedding_exists(exercise.id)
+        embeddings_exist = True
         
         if embeddings_exist:
             segmentation_prompt = get_chat_prompt_with_formatting_instructions(
@@ -112,7 +111,6 @@ async def generate_suggestions(exercise: Exercise, submission: Submission, confi
             }
             chain = segmentation_prompt | model 
             segments = chain.invoke( segmentation_prompt_input)
-            # print("segments ",segments)
             for segment in segments:
                 formatted_rag_context += retrieve_rag_context_icl(segment[0],exercise.id)
             prompt_input["rag_context"] = formatted_rag_context
