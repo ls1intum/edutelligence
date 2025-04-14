@@ -1,7 +1,6 @@
 from dataclasses import dataclass, asdict
 from typing import Optional, List, Union, Dict
 
-
 @dataclass
 class Feedback:
     id: Optional[int]
@@ -86,16 +85,16 @@ class Exercise:
     example_solution: Optional[str]
     submissions: List[Submission]
 
-    def __init__(self, id: int, title: str, max_points: float, bonus_points: float, grading_instructions: str, grading_criteria: List[GradingCriterion], problem_statement: str, example_solution: str, submissions: List[Submission]) -> None:
+    def __init__(self, id: int, title: str, max_points: float, bonus_points: float, grading_instructions: str, grading_criteria: List[GradingCriterion], problem_statement: str, example_solution: str, submissions: List[Submission], type: str = "text", meta: dict = {}) -> None:
         self.id = int(id)
         self.title = title
-        self.type = "text"
+        self.type = type
         self.max_points = float(max_points)
         self.bonus_points = float(bonus_points)
         self.grading_instructions = grading_instructions
         self.grading_criteria = grading_criteria
         self.problem_statement = problem_statement
-        self.meta = {}
+        self.meta = meta
         self.example_solution = example_solution
         self.submissions = submissions
 

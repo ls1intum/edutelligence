@@ -1,38 +1,39 @@
-from typing import List, Optional
+import string
+from typing import List, Any
 
 from langchain_community.callbacks import get_openai_callback
 from langchain.chat_models import AzureChatOpenAI
 from langchain_core.messages import BaseMessage
 from langchain.output_parsers import PydanticOutputParser
-from pydantic.error_wrappers import ValidationError
+from pydantic import ValidationError
 
-from athena.evaluation.model.evaluation_model import Evaluation, MetricEvaluations
+from athena.evaluation.model.evaluation_model import MetricEvaluations
 
 
-def get_logprobs_langchain(prompt: List[BaseMessage], model: AzureChatOpenAI) -> Optional[Evaluation]:
-    # Invoke the model with the formatted prompt
-    with get_openai_callback() as cb:
+def evaluate_feedback_with_model(prompt: List[BaseMessage], model: AzureChatOpenAI, submission_id: int, feedback_type: string) -> dict[str, Any] | None:
+    with (get_openai_callback() as cb):
         response = model.invoke(prompt, max_tokens=100, logprobs=True, top_logprobs=5, temperature=0)
-
-        total_tokens = cb.total_tokens
-        prompt_tokens = cb.prompt_tokens
-        completion_tokens = cb.completion_tokens
-        cost = cb.total_cost
 
         output_parser = PydanticOutputParser(pydantic_object=MetricEvaluations)
 
         try:
-            print(response.content)
             parsed_response = output_parser.parse(response.content)
         except ValidationError as e:
             print(f"Response validation failed: {e}")
             return None
 
-        return Evaluation(
-            response=response,
-            parsed_response=parsed_response,
-            total_tokens=total_tokens,
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-            cost=cost,
-        )
+        flattened_eval = {}
+        for metric_eval in parsed_response.evaluations:
+            flattened_eval[f"{metric_eval.title}_score"] = metric_eval.score
+
+        flattened_eval.update({
+            'submission_id': submission_id,
+            'feedback_type': feedback_type,
+            'total_tokens': cb.total_tokens,
+            'prompt_tokens': cb.prompt_tokens,
+            'completion_tokens': cb.completion_tokens,
+            'cost': cb.total_cost,
+            'raw_response': response,
+        })
+
+        return flattened_eval
