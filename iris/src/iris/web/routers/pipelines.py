@@ -377,7 +377,7 @@ def run_communication_tutor_suggestions_pipeline_worker(
 
 
 @router.post(
-    "/tutor-suggestions/{variant}/run",
+    "/tutor-suggestion/{variant}/run",
     status_code=status.HTTP_202_ACCEPTED,
     dependencies=[Depends(TokenValidator())],
 )
