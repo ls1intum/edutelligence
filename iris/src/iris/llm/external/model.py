@@ -1,7 +1,6 @@
 from abc import ABCMeta, abstractmethod
-from typing import Any, Callable, Dict, Sequence, Type, Union
+from typing import Any, Callable, Dict, Optional, Sequence, Type, Union
 
-from black import Optional
 from langchain_core.tools import BaseTool
 from openai.types.chat import ChatCompletionMessage
 from pydantic import BaseModel
