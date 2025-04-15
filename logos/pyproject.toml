@@ -14,10 +14,14 @@ python = ">=3.13,<4.0.0"
 fastapi = {extras = ["standard"], version = "0.115.9"}
 shared = { path = "../shared", develop = true }
 requests = "^2.32.3"
-py-bcrypt = "^0.4"
+langchain = ">=0.3.23"
+langchain-community = "^0.3.21"
+openai = "^1.74.0"
+pytest = "^8.3.5"
+pytest-asyncio = "^0.26.0"
 
 [tool.poetry]
-packages = [{include = "logos", from = "src"}]
+packages = [{ include = "logos", from = "src" }]
 
 [tool.poetry.scripts]
 openapi = "app.openapi:export"

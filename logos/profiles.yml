@@ -1,0 +1,6 @@
+profiles:
+  alice_profile:
+    llm_keys:
+      openai:
+        api_key:
+    logos_rights: user

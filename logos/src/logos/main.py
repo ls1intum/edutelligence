@@ -1,6 +1,5 @@
 import json
 from json import JSONDecodeError
-
 from fastapi import FastAPI, Request
 import httpx
 
@@ -8,7 +7,7 @@ from logos.constants import *
 from logos.config import KeyManager
 
 
-config = KeyManager("logos.local.yml")
+config = KeyManager()
 
 
 app = FastAPI()
@@ -25,15 +24,22 @@ async def openai_proxy(path: str, request: Request):
     # Read request
     data = await request.body()
     json = request2json(data)
-    # logos-API with password
-    pwd = json.get("password") if "password" in json else None
-    usr = json.get("user") if "user" in json else "default"
+    # logos-API-check
+    if "Authorization" not in request.headers:
+        return {"error": "Missing Authorization Header"}, 401
     try:
-        key = config.get_key(user=usr, model=json.get("model") if "model" in json else "", pwd=pwd)
+        key = request.headers["Authorization"].replace("Bearer ", "")
+        if "provider" not in request.headers:
+            provider = "openai"
+        else:
+            provider = request.headers["provider"]
+        # Check if key is an openai-Key (just for proxy purposes)
+        if not key.startswith("sk-"):
+            key = config.get_llm_key(key, provider)
     except PermissionError as e:
-        return {"error": str(e)}
-    if key is None:
-        return {"error": "Invalid user or model provided"}
+        return {"error": str(e)}, 401
+    except ValueError as e:
+        return {"error": str(e)}, 401
 
     headers = {
         "Authorization": f"Bearer {key}",
