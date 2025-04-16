@@ -41,17 +41,31 @@ async def openai_proxy(path: str, request: Request):
     except ValueError as e:
         return {"error": str(e)}, 401
 
-    headers = {
-        "Authorization": f"Bearer {key}",
-        "Content-Type": "application/json"
-    }
+    if provider == "azure":
+        deployment_name = request.headers["deployment_name"]
+        api_version = request.headers["api_version"]
+
+        forward_url = (
+            f"{AZURE_API_BASE}/{deployment_name}/{path}"
+            f"?api-version={api_version}"
+        )
+
+        headers = {
+            "api-key": key,
+            "Content-Type": "application/json"
+        }
+    else:
+        headers = {
+            "Authorization": f"Bearer {key}",
+            "Content-Type": "application/json"
+        }
+        forward_url = f"{OPENAI_API_BASE}/{path}"
 
     # Forward Request
     async with httpx.AsyncClient() as client:
-        openai_url = f"{OPENAI_API_BASE}/{path}"
         response = await client.request(
             method="POST",
-            url=openai_url,
+            url=forward_url,
             json=json,
             headers=headers,
             timeout=30,

@@ -3,4 +3,6 @@ profiles:
     llm_keys:
       openai:
         api_key:
+      azure:
+        api_key:
     logos_rights: user
