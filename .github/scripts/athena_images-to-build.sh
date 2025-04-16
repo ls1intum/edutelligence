@@ -28,6 +28,9 @@ fi
 # Check if athena folder was changed (then we need to build all module_* images)
 ATHENA_CHANGED=$(echo "$CHANGED_FILES" | grep -q "^athena" && echo "true" || echo "false")
 
+# Go to the athena directory
+cd athena
+
 # Loop over all root level directories and modules
 for DIR in modules/*/*/ */; do
     # If a Dockerfile exists in the directory
@@ -39,6 +42,11 @@ for DIR in modules/*/*/ */; do
             continue
         fi
 
+        # llm_core is always built and does not need to be re-built
+        if [[ "$DIR" == "llm_core" ]]; then
+            continue
+        fi
+
         # no need to build docs
         if [[ "$DIR" == "docs" ]]; then
             continue
@@ -46,7 +54,7 @@ for DIR in modules/*/*/ */; do
 
 
         # Build all images on develop branch
-        if [[ "$GITHUB_REF" == "refs/heads/develop" ]]; then
+        if [[ "$GITHUB_REF" == "refs/heads/main" ]]; then
             DIRS+=("$DIR")
             continue
         fi
@@ -61,7 +69,7 @@ for DIR in modules/*/*/ */; do
         IMAGE_NAME_SUFFIX=$(basename "$DIR")
 
         # Construct Docker image name and tag
-        IMAGE_NAME="athena/$IMAGE_NAME_SUFFIX"
+        IMAGE_NAME="athena_$IMAGE_NAME_SUFFIX"
         IMAGE_TAG="pr-$PR_NUMBER"
 
         # Check if any file has changed in that directory since the pull request was created
@@ -89,5 +97,5 @@ for DIR in modules/*/*/ */; do
     fi
 done
 
-# Print all directories that fulfill the conditions, separated by newlines
-(IFS=$'\n'; echo "${DIRS[*]}")
+# Print all directories that fulfill the conditions, separated by newlines, appending "athena/" to each
+(IFS=$'\n'; printf "%s\n" "${DIRS[@]/#/athena/}")

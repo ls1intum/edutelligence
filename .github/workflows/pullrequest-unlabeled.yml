@@ -2,12 +2,11 @@ name: Pull Request Label Removal
 
 on:
   pull_request_target:
-    types:
-      - unlabeled
+    types: [unlabeled]
 
 jobs:
   update_badges:
-    name: Update test server badges
+    name: Update Athena test server badges
     runs-on: ubuntu-latest
     if: startsWith(github.event.label.name, 'lock:athena-test')
 
@@ -26,8 +25,8 @@ jobs:
       - name: Update badge
         uses: RubbaBoy/BYOB@v1.3.0
         with:
-          NAME: "athena-test${{ steps.env.outputs.BADGE }}"
-          LABEL: "athena-test${{ steps.env.outputs.BADGE }}.ase.cit.tum.de"
-          STATUS: ${{ github.event.pull_request.head.ref }}
-          COLOR: green
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          name: "athena-test${{ steps.env.outputs.BADGE }}"
+          label: "athena-test${{ steps.env.outputs.BADGE }}.ase.cit.tum.de"
+          status: ${{ github.event.pull_request.head.ref }}
+          color: green
+          github_token: ${{ secrets.GITHUB_TOKEN }}
