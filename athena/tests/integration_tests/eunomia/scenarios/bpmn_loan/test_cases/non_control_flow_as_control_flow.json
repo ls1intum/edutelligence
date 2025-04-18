@@ -1,0 +1,940 @@
+{
+    "version": "3.0.0",
+    "type": "BPMN",
+    "size": {
+        "width": 1420,
+        "height": 680
+    },
+    "interactive": {
+        "elements": {},
+        "relationships": {}
+    },
+    "elements": {
+        "57be7ebb-099e-47ec-bf5f-2d728437d987": {
+            "id": "57be7ebb-099e-47ec-bf5f-2d728437d987",
+            "name": "Loan Applicant",
+            "type": "BPMNPool",
+            "owner": null,
+            "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 1370,
+                "height": 160
+            }
+        },
+        "6f8dba39-5d62-47d0-870b-37294b903ae7": {
+            "id": "6f8dba39-5d62-47d0-870b-37294b903ae7",
+            "name": "",
+            "type": "BPMNStartEvent",
+            "owner": "57be7ebb-099e-47ec-bf5f-2d728437d987",
+            "bounds": {
+                "x": 60,
+                "y": 50,
+                "width": 40,
+                "height": 40
+            },
+            "eventType": "default"
+        },
+        "909c768f-284b-42d3-9ec8-fbe7675b0f28": {
+            "id": "909c768f-284b-42d3-9ec8-fbe7675b0f28",
+            "name": "Quote received",
+            "type": "BPMNIntermediateEvent",
+            "owner": "57be7ebb-099e-47ec-bf5f-2d728437d987",
+            "bounds": {
+                "x": 980,
+                "y": 50,
+                "width": 40,
+                "height": 40
+            },
+            "eventType": "message-catch"
+        },
+        "a5506560-9631-448f-85ee-aa42581ac048": {
+            "id": "a5506560-9631-448f-85ee-aa42581ac048",
+            "name": "Review quote",
+            "type": "BPMNTask",
+            "owner": "57be7ebb-099e-47ec-bf5f-2d728437d987",
+            "bounds": {
+                "x": 1080,
+                "y": 40,
+                "width": 160,
+                "height": 60
+            },
+            "taskType": "default",
+            "marker": "none"
+        },
+        "2dcc3930-cc74-41a9-bd7c-8218a2a14686": {
+            "id": "2dcc3930-cc74-41a9-bd7c-8218a2a14686",
+            "name": "",
+            "type": "BPMNEndEvent",
+            "owner": "57be7ebb-099e-47ec-bf5f-2d728437d987",
+            "bounds": {
+                "x": 1310,
+                "y": 50,
+                "width": 40,
+                "height": 40
+            },
+            "eventType": "default"
+        },
+        "9ae6586f-6985-44bd-ad56-cbfed63cdf82": {
+            "id": "9ae6586f-6985-44bd-ad56-cbfed63cdf82",
+            "name": "Send credit request",
+            "type": "BPMNDataObject",
+            "owner": "57be7ebb-099e-47ec-bf5f-2d728437d987",
+            "bounds": {
+                "x": 190,
+                "y": 20,
+                "width": 40,
+                "height": 60
+            }
+        },
+        "e975fb67-ccc1-4373-b214-d3e8742930aa": {
+            "id": "e975fb67-ccc1-4373-b214-d3e8742930aa",
+            "name": "Credit Institute",
+            "type": "BPMNPool",
+            "owner": null,
+            "bounds": {
+                "x": 0,
+                "y": 200,
+                "width": 1370,
+                "height": 430
+            }
+        },
+        "607b811b-ab82-4aad-91c2-6bed096b5cc8": {
+            "id": "607b811b-ab82-4aad-91c2-6bed096b5cc8",
+            "name": "Loan Assessor",
+            "type": "BPMNSwimlane",
+            "owner": "e975fb67-ccc1-4373-b214-d3e8742930aa",
+            "bounds": {
+                "x": 40,
+                "y": 470,
+                "width": 1330,
+                "height": 160
+            }
+        },
+        "a78c7661-7823-4d40-9753-a87a92f3bc93": {
+            "id": "a78c7661-7823-4d40-9753-a87a92f3bc93",
+            "name": "Assess risk",
+            "type": "BPMNTask",
+            "owner": "607b811b-ab82-4aad-91c2-6bed096b5cc8",
+            "bounds": {
+                "x": 530,
+                "y": 520,
+                "width": 160,
+                "height": 60
+            },
+            "taskType": "default",
+            "marker": "none"
+        },
+        "bde0718c-a52d-4141-a6d5-d697398a1ab2": {
+            "id": "bde0718c-a52d-4141-a6d5-d697398a1ab2",
+            "name": "Loan Provider",
+            "type": "BPMNSwimlane",
+            "owner": "e975fb67-ccc1-4373-b214-d3e8742930aa",
+            "bounds": {
+                "x": 40,
+                "y": 200,
+                "width": 1330,
+                "height": 270
+            }
+        },
+        "f108cf07-c22c-4284-b9ba-0b4af908c7ad": {
+            "id": "f108cf07-c22c-4284-b9ba-0b4af908c7ad",
+            "name": "Review request",
+            "type": "BPMNTask",
+            "owner": "bde0718c-a52d-4141-a6d5-d697398a1ab2",
+            "bounds": {
+                "x": 270,
+                "y": 230,
+                "width": 140,
+                "height": 60
+            },
+            "taskType": "default",
+            "marker": "none"
+        },
+        "6ebb416a-1a47-49cf-9ba1-7ffdcb5dea56": {
+            "id": "6ebb416a-1a47-49cf-9ba1-7ffdcb5dea56",
+            "name": "Credit request received",
+            "type": "BPMNStartEvent",
+            "owner": "bde0718c-a52d-4141-a6d5-d697398a1ab2",
+            "bounds": {
+                "x": 190,
+                "y": 240,
+                "width": 40,
+                "height": 40
+            },
+            "eventType": "message"
+        },
+        "ab792872-1b3f-4d7a-afb6-aa01b1d7f785": {
+            "id": "ab792872-1b3f-4d7a-afb6-aa01b1d7f785",
+            "name": "",
+            "type": "BPMNGateway",
+            "owner": "bde0718c-a52d-4141-a6d5-d697398a1ab2",
+            "bounds": {
+                "x": 450,
+                "y": 240,
+                "width": 40,
+                "height": 40
+            },
+            "gatewayType": "parallel"
+        },
+        "e206ad60-29b0-4bfc-8e5d-08eb28c31942": {
+            "id": "e206ad60-29b0-4bfc-8e5d-08eb28c31942",
+            "name": "Standard terms applicable?",
+            "type": "BPMNGateway",
+            "owner": "bde0718c-a52d-4141-a6d5-d697398a1ab2",
+            "bounds": {
+                "x": 530,
+                "y": 240,
+                "width": 40,
+                "height": 40
+            },
+            "gatewayType": "exclusive"
+        },
+        "531d5776-832d-4ab0-b76c-dba85ec2d8a0": {
+            "id": "531d5776-832d-4ab0-b76c-dba85ec2d8a0",
+            "name": "Calculate terms",
+            "type": "BPMNTask",
+            "owner": "bde0718c-a52d-4141-a6d5-d697398a1ab2",
+            "bounds": {
+                "x": 610,
+                "y": 230,
+                "width": 140,
+                "height": 60
+            },
+            "taskType": "default",
+            "marker": "none"
+        },
+        "b31e8aaa-54f2-4a36-8fd0-c374045c836c": {
+            "id": "b31e8aaa-54f2-4a36-8fd0-c374045c836c",
+            "name": "",
+            "type": "BPMNGateway",
+            "owner": "bde0718c-a52d-4141-a6d5-d697398a1ab2",
+            "bounds": {
+                "x": 790,
+                "y": 240,
+                "width": 40,
+                "height": 40
+            },
+            "gatewayType": "exclusive"
+        },
+        "e409e5b5-ab11-45e7-ba78-4266473ecc17": {
+            "id": "e409e5b5-ab11-45e7-ba78-4266473ecc17",
+            "name": "Send quote",
+            "type": "BPMNTask",
+            "owner": "bde0718c-a52d-4141-a6d5-d697398a1ab2",
+            "bounds": {
+                "x": 1130,
+                "y": 230,
+                "width": 140,
+                "height": 60
+            },
+            "taskType": "default",
+            "marker": "none"
+        },
+        "acf010ad-0c8c-4a9a-8949-52e17f13e55c": {
+            "id": "acf010ad-0c8c-4a9a-8949-52e17f13e55c",
+            "name": "Quote sent",
+            "type": "BPMNEndEvent",
+            "owner": "bde0718c-a52d-4141-a6d5-d697398a1ab2",
+            "bounds": {
+                "x": 1310,
+                "y": 240,
+                "width": 40,
+                "height": 40
+            },
+            "eventType": "default"
+        },
+        "bdfce06b-db3e-45c8-9976-4ef57108218b": {
+            "id": "bdfce06b-db3e-45c8-9976-4ef57108218b",
+            "name": "",
+            "type": "BPMNGateway",
+            "owner": "bde0718c-a52d-4141-a6d5-d697398a1ab2",
+            "bounds": {
+                "x": 1050,
+                "y": 240,
+                "width": 40,
+                "height": 40
+            },
+            "gatewayType": "parallel"
+        },
+        "be966228-7ed4-42c4-ad79-432f459f9feb": {
+            "id": "be966228-7ed4-42c4-ad79-432f459f9feb",
+            "name": "Prepare special terms",
+            "type": "BPMNTask",
+            "owner": "bde0718c-a52d-4141-a6d5-d697398a1ab2",
+            "bounds": {
+                "x": 610,
+                "y": 380,
+                "width": 140,
+                "height": 60
+            },
+            "taskType": "default",
+            "marker": "none"
+        },
+        "1acbea80-c430-46f2-b7d2-a44a1bc1639c": {
+            "id": "1acbea80-c430-46f2-b7d2-a44a1bc1639c",
+            "name": "Prepare contract",
+            "type": "BPMNTask",
+            "owner": "bde0718c-a52d-4141-a6d5-d697398a1ab2",
+            "bounds": {
+                "x": 870,
+                "y": 230,
+                "width": 140,
+                "height": 60
+            },
+            "taskType": "default",
+            "marker": "none"
+        }
+    },
+    "relationships": {
+        "ca2e5065-6ee1-4548-8bcd-502077fa3e73": {
+            "id": "ca2e5065-6ee1-4548-8bcd-502077fa3e73",
+            "name": "",
+            "type": "BPMNFlow",
+            "owner": null,
+            "bounds": {
+                "x": 230,
+                "y": 260,
+                "width": 40,
+                "height": 1
+            },
+            "path": [
+                {
+                    "x": 0,
+                    "y": 0
+                },
+                {
+                    "x": 40,
+                    "y": 0
+                }
+            ],
+            "source": {
+                "direction": "Right",
+                "element": "6ebb416a-1a47-49cf-9ba1-7ffdcb5dea56"
+            },
+            "target": {
+                "direction": "Left",
+                "element": "f108cf07-c22c-4284-b9ba-0b4af908c7ad"
+            },
+            "isManuallyLayouted": false,
+            "flowType": "sequence"
+        },
+        "266c4919-88ad-4c2c-a1e4-c14947f44cde": {
+            "id": "266c4919-88ad-4c2c-a1e4-c14947f44cde",
+            "name": "",
+            "type": "BPMNFlow",
+            "owner": null,
+            "bounds": {
+                "x": 470,
+                "y": 280,
+                "width": 60,
+                "height": 270
+            },
+            "path": [
+                {
+                    "x": 0,
+                    "y": 0
+                },
+                {
+                    "x": 0,
+                    "y": 270
+                },
+                {
+                    "x": 60,
+                    "y": 270
+                }
+            ],
+            "source": {
+                "direction": "Down",
+                "element": "ab792872-1b3f-4d7a-afb6-aa01b1d7f785"
+            },
+            "target": {
+                "direction": "Left",
+                "element": "a78c7661-7823-4d40-9753-a87a92f3bc93"
+            },
+            "isManuallyLayouted": false,
+            "flowType": "sequence"
+        },
+        "b605327e-6a48-4f12-a4d4-97665fb7f230": {
+            "id": "b605327e-6a48-4f12-a4d4-97665fb7f230",
+            "name": "",
+            "type": "BPMNFlow",
+            "owner": null,
+            "bounds": {
+                "x": 410,
+                "y": 260,
+                "width": 40,
+                "height": 1
+            },
+            "path": [
+                {
+                    "x": 0,
+                    "y": 0
+                },
+                {
+                    "x": 40,
+                    "y": 0
+                }
+            ],
+            "source": {
+                "direction": "Right",
+                "element": "f108cf07-c22c-4284-b9ba-0b4af908c7ad"
+            },
+            "target": {
+                "direction": "Left",
+                "element": "ab792872-1b3f-4d7a-afb6-aa01b1d7f785"
+            },
+            "isManuallyLayouted": false,
+            "flowType": "sequence"
+        },
+        "33a69e1c-102b-498b-bb3b-c733c17c77bc": {
+            "id": "33a69e1c-102b-498b-bb3b-c733c17c77bc",
+            "name": "",
+            "type": "BPMNFlow",
+            "owner": null,
+            "bounds": {
+                "x": 490,
+                "y": 260,
+                "width": 40,
+                "height": 1
+            },
+            "path": [
+                {
+                    "x": 0,
+                    "y": 0
+                },
+                {
+                    "x": 40,
+                    "y": 0
+                }
+            ],
+            "source": {
+                "direction": "Right",
+                "element": "ab792872-1b3f-4d7a-afb6-aa01b1d7f785"
+            },
+            "target": {
+                "direction": "Left",
+                "element": "e206ad60-29b0-4bfc-8e5d-08eb28c31942"
+            },
+            "isManuallyLayouted": false,
+            "flowType": "sequence"
+        },
+        "66fe2424-b0cc-4e50-988c-f0910dd92aa6": {
+            "id": "66fe2424-b0cc-4e50-988c-f0910dd92aa6",
+            "name": "yes",
+            "type": "BPMNFlow",
+            "owner": null,
+            "bounds": {
+                "x": 570,
+                "y": 220,
+                "width": 40,
+                "height": 41
+            },
+            "path": [
+                {
+                    "x": 0,
+                    "y": 40
+                },
+                {
+                    "x": 40,
+                    "y": 40
+                }
+            ],
+            "source": {
+                "direction": "Right",
+                "element": "e206ad60-29b0-4bfc-8e5d-08eb28c31942"
+            },
+            "target": {
+                "direction": "Left",
+                "element": "531d5776-832d-4ab0-b76c-dba85ec2d8a0"
+            },
+            "isManuallyLayouted": false,
+            "flowType": "sequence"
+        },
+        "8263561f-d70e-4264-8e6e-6d545c9d4d57": {
+            "id": "8263561f-d70e-4264-8e6e-6d545c9d4d57",
+            "name": "",
+            "type": "BPMNFlow",
+            "owner": null,
+            "bounds": {
+                "x": 750,
+                "y": 260,
+                "width": 40,
+                "height": 1
+            },
+            "path": [
+                {
+                    "x": 0,
+                    "y": 0
+                },
+                {
+                    "x": 40,
+                    "y": 0
+                }
+            ],
+            "source": {
+                "direction": "Right",
+                "element": "531d5776-832d-4ab0-b76c-dba85ec2d8a0"
+            },
+            "target": {
+                "direction": "Left",
+                "element": "b31e8aaa-54f2-4a36-8fd0-c374045c836c"
+            },
+            "isManuallyLayouted": false,
+            "flowType": "sequence"
+        },
+        "2c669dc1-ec78-4ce9-af27-6fd58b5f4e17": {
+            "id": "2c669dc1-ec78-4ce9-af27-6fd58b5f4e17",
+            "name": "",
+            "type": "BPMNFlow",
+            "owner": null,
+            "bounds": {
+                "x": 1090,
+                "y": 260,
+                "width": 40,
+                "height": 1
+            },
+            "path": [
+                {
+                    "x": 0,
+                    "y": 0
+                },
+                {
+                    "x": 40,
+                    "y": 0
+                }
+            ],
+            "source": {
+                "direction": "Right",
+                "element": "bdfce06b-db3e-45c8-9976-4ef57108218b"
+            },
+            "target": {
+                "direction": "Left",
+                "element": "e409e5b5-ab11-45e7-ba78-4266473ecc17"
+            },
+            "isManuallyLayouted": false,
+            "flowType": "sequence"
+        },
+        "3eae3c61-5acf-4687-95d0-c5e16bb689b2": {
+            "id": "3eae3c61-5acf-4687-95d0-c5e16bb689b2",
+            "name": "",
+            "type": "BPMNFlow",
+            "owner": null,
+            "bounds": {
+                "x": 830,
+                "y": 260,
+                "width": 40,
+                "height": 1
+            },
+            "path": [
+                {
+                    "x": 0,
+                    "y": 0
+                },
+                {
+                    "x": 40,
+                    "y": 0
+                }
+            ],
+            "source": {
+                "direction": "Right",
+                "element": "b31e8aaa-54f2-4a36-8fd0-c374045c836c"
+            },
+            "target": {
+                "direction": "Left",
+                "element": "1acbea80-c430-46f2-b7d2-a44a1bc1639c"
+            },
+            "isManuallyLayouted": false,
+            "flowType": "sequence"
+        },
+        "c09d469a-0377-47f1-a2b5-6662f2afc0b1": {
+            "id": "c09d469a-0377-47f1-a2b5-6662f2afc0b1",
+            "name": "",
+            "type": "BPMNFlow",
+            "owner": null,
+            "bounds": {
+                "x": 1010,
+                "y": 260,
+                "width": 40,
+                "height": 1
+            },
+            "path": [
+                {
+                    "x": 0,
+                    "y": 0
+                },
+                {
+                    "x": 40,
+                    "y": 0
+                }
+            ],
+            "source": {
+                "direction": "Right",
+                "element": "1acbea80-c430-46f2-b7d2-a44a1bc1639c"
+            },
+            "target": {
+                "direction": "Left",
+                "element": "bdfce06b-db3e-45c8-9976-4ef57108218b"
+            },
+            "isManuallyLayouted": false,
+            "flowType": "sequence"
+        },
+        "a72d62b3-e113-4b90-bfd9-2480861d1186": {
+            "id": "a72d62b3-e113-4b90-bfd9-2480861d1186",
+            "name": "",
+            "type": "BPMNFlow",
+            "owner": null,
+            "bounds": {
+                "x": 1270,
+                "y": 260,
+                "width": 40,
+                "height": 1
+            },
+            "path": [
+                {
+                    "x": 0,
+                    "y": 0
+                },
+                {
+                    "x": 40,
+                    "y": 0
+                }
+            ],
+            "source": {
+                "direction": "Right",
+                "element": "e409e5b5-ab11-45e7-ba78-4266473ecc17"
+            },
+            "target": {
+                "direction": "Left",
+                "element": "acf010ad-0c8c-4a9a-8949-52e17f13e55c"
+            },
+            "isManuallyLayouted": false,
+            "flowType": "sequence"
+        },
+        "70b979b6-32e9-45c7-be45-518507652a30": {
+            "id": "70b979b6-32e9-45c7-be45-518507652a30",
+            "name": "no",
+            "type": "BPMNFlow",
+            "owner": null,
+            "bounds": {
+                "x": 550,
+                "y": 280,
+                "width": 60,
+                "height": 130
+            },
+            "path": [
+                {
+                    "x": 0,
+                    "y": 0
+                },
+                {
+                    "x": 0,
+                    "y": 130
+                },
+                {
+                    "x": 60,
+                    "y": 130
+                }
+            ],
+            "source": {
+                "direction": "Down",
+                "element": "e206ad60-29b0-4bfc-8e5d-08eb28c31942"
+            },
+            "target": {
+                "direction": "Left",
+                "element": "be966228-7ed4-42c4-ad79-432f459f9feb"
+            },
+            "isManuallyLayouted": false,
+            "flowType": "sequence"
+        },
+        "c6ac591f-51fd-4c6e-bdfa-ae74a029d73d": {
+            "id": "c6ac591f-51fd-4c6e-bdfa-ae74a029d73d",
+            "name": "",
+            "type": "BPMNFlow",
+            "owner": null,
+            "bounds": {
+                "x": 750,
+                "y": 280,
+                "width": 60,
+                "height": 130
+            },
+            "path": [
+                {
+                    "x": 0,
+                    "y": 130
+                },
+                {
+                    "x": 60,
+                    "y": 130
+                },
+                {
+                    "x": 60,
+                    "y": 0
+                }
+            ],
+            "source": {
+                "direction": "Right",
+                "element": "be966228-7ed4-42c4-ad79-432f459f9feb"
+            },
+            "target": {
+                "direction": "Down",
+                "element": "b31e8aaa-54f2-4a36-8fd0-c374045c836c"
+            },
+            "isManuallyLayouted": false,
+            "flowType": "sequence"
+        },
+        "60e891d4-0604-45e4-b2c7-b6d6b9f72ba2": {
+            "id": "60e891d4-0604-45e4-b2c7-b6d6b9f72ba2",
+            "name": "",
+            "type": "BPMNFlow",
+            "owner": null,
+            "bounds": {
+                "x": 690,
+                "y": 280,
+                "width": 380,
+                "height": 270
+            },
+            "path": [
+                {
+                    "x": 0,
+                    "y": 270
+                },
+                {
+                    "x": 380,
+                    "y": 270
+                },
+                {
+                    "x": 380,
+                    "y": 0
+                }
+            ],
+            "source": {
+                "direction": "Right",
+                "element": "a78c7661-7823-4d40-9753-a87a92f3bc93"
+            },
+            "target": {
+                "direction": "Down",
+                "element": "bdfce06b-db3e-45c8-9976-4ef57108218b"
+            },
+            "isManuallyLayouted": false,
+            "flowType": "sequence"
+        },
+        "2bcae199-700f-44b9-93e1-2dacb6061bd8": {
+            "id": "2bcae199-700f-44b9-93e1-2dacb6061bd8",
+            "name": "",
+            "type": "BPMNFlow",
+            "owner": null,
+            "bounds": {
+                "x": 1240,
+                "y": 70,
+                "width": 70,
+                "height": 1
+            },
+            "path": [
+                {
+                    "x": 0,
+                    "y": 0
+                },
+                {
+                    "x": 70,
+                    "y": 0
+                }
+            ],
+            "source": {
+                "direction": "Right",
+                "element": "a5506560-9631-448f-85ee-aa42581ac048"
+            },
+            "target": {
+                "direction": "Left",
+                "element": "2dcc3930-cc74-41a9-bd7c-8218a2a14686"
+            },
+            "isManuallyLayouted": false,
+            "flowType": "sequence"
+        },
+        "b409934a-f4ad-4bcb-a157-4457c97e17fb": {
+            "id": "b409934a-f4ad-4bcb-a157-4457c97e17fb",
+            "name": "",
+            "type": "BPMNFlow",
+            "owner": null,
+            "bounds": {
+                "x": 1020,
+                "y": 70,
+                "width": 60,
+                "height": 1
+            },
+            "path": [
+                {
+                    "x": 0,
+                    "y": 0
+                },
+                {
+                    "x": 60,
+                    "y": 0
+                }
+            ],
+            "source": {
+                "direction": "Right",
+                "element": "909c768f-284b-42d3-9ec8-fbe7675b0f28"
+            },
+            "target": {
+                "direction": "Left",
+                "element": "a5506560-9631-448f-85ee-aa42581ac048"
+            },
+            "isManuallyLayouted": false,
+            "flowType": "sequence"
+        },
+        "aec45998-06bb-4213-a615-8e512c05a855": {
+            "id": "aec45998-06bb-4213-a615-8e512c05a855",
+            "name": "",
+            "type": "BPMNFlow",
+            "owner": null,
+            "bounds": {
+                "x": 1000,
+                "y": 90,
+                "width": 200,
+                "height": 140
+            },
+            "path": [
+                {
+                    "x": 200,
+                    "y": 140
+                },
+                {
+                    "x": 200,
+                    "y": 88.39453125
+                },
+                {
+                    "x": 0,
+                    "y": 88.39453125
+                },
+                {
+                    "x": 0,
+                    "y": 0
+                }
+            ],
+            "source": {
+                "direction": "Up",
+                "element": "e409e5b5-ab11-45e7-ba78-4266473ecc17"
+            },
+            "target": {
+                "direction": "Down",
+                "element": "909c768f-284b-42d3-9ec8-fbe7675b0f28"
+            },
+            "isManuallyLayouted": true,
+            "flowType": "message"
+        },
+        "05ca56f8-1861-4558-adbd-ccaf9faaed18": {
+            "id": "05ca56f8-1861-4558-adbd-ccaf9faaed18",
+            "name": "",
+            "type": "BPMNFlow",
+            "owner": null,
+            "bounds": {
+                "x": 100,
+                "y": 50,
+                "width": 90,
+                "height": 20
+            },
+            "path": [
+                {
+                    "x": 0,
+                    "y": 20
+                },
+                {
+                    "x": 45,
+                    "y": 20
+                },
+                {
+                    "x": 45,
+                    "y": 0
+                },
+                {
+                    "x": 90,
+                    "y": 0
+                }
+            ],
+            "source": {
+                "direction": "Right",
+                "element": "6f8dba39-5d62-47d0-870b-37294b903ae7"
+            },
+            "target": {
+                "direction": "Left",
+                "element": "9ae6586f-6985-44bd-ad56-cbfed63cdf82"
+            },
+            "isManuallyLayouted": false,
+            "flowType": "sequence"
+        },
+        "950169bc-3b9a-405b-9d31-53bd4a21e212": {
+            "id": "950169bc-3b9a-405b-9d31-53bd4a21e212",
+            "name": "",
+            "type": "BPMNFlow",
+            "owner": null,
+            "bounds": {
+                "x": 230,
+                "y": 50,
+                "width": 750,
+                "height": 20
+            },
+            "path": [
+                {
+                    "x": 0,
+                    "y": 0
+                },
+                {
+                    "x": 40,
+                    "y": 0
+                },
+                {
+                    "x": 40,
+                    "y": 20
+                },
+                {
+                    "x": 750,
+                    "y": 20
+                }
+            ],
+            "source": {
+                "direction": "Right",
+                "element": "9ae6586f-6985-44bd-ad56-cbfed63cdf82"
+            },
+            "target": {
+                "direction": "Left",
+                "element": "909c768f-284b-42d3-9ec8-fbe7675b0f28"
+            },
+            "isManuallyLayouted": false,
+            "flowType": "sequence"
+        },
+        "2ebb6d42-4764-4c38-b018-d6accc1c8eac": {
+            "id": "2ebb6d42-4764-4c38-b018-d6accc1c8eac",
+            "name": "",
+            "type": "BPMNFlow",
+            "owner": null,
+            "bounds": {
+                "x": 210,
+                "y": 80,
+                "width": 1,
+                "height": 160
+            },
+            "path": [
+                {
+                    "x": 0,
+                    "y": 0
+                },
+                {
+                    "x": 0,
+                    "y": 160
+                }
+            ],
+            "source": {
+                "direction": "Down",
+                "element": "9ae6586f-6985-44bd-ad56-cbfed63cdf82"
+            },
+            "target": {
+                "direction": "Up",
+                "element": "6ebb416a-1a47-49cf-9ba1-7ffdcb5dea56"
+            },
+            "isManuallyLayouted": false,
+            "flowType": "message"
+        }
+    },
+    "assessments": {}
+}
