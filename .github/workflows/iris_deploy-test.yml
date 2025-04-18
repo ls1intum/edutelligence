@@ -14,7 +14,7 @@ jobs:
     steps:
       - name: Get PR labels
         id: get-labels
-        uses: actions/github-script@v6
+        uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
@@ -59,7 +59,7 @@ jobs:
 
       - name: Check if latest push had successful build
         if: fromJSON(steps.check_build.outputs.data).total_count == 0
-        uses: actions/github-script@v6
+        uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
@@ -79,7 +79,7 @@ jobs:
       tag: ${{ steps.compute-tag.outputs.result }}
     steps:
       - name: Compute Tag
-        uses: actions/github-script@v6
+        uses: actions/github-script@v7
         id: compute-tag
         with:
           result-encoding: string
@@ -112,7 +112,7 @@ jobs:
             deploy:pyris-test
 
       - name: Check "lock:pyris-test" label
-        uses: actions/github-script@v6
+        uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
