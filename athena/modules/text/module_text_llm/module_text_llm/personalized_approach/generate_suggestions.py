@@ -26,10 +26,10 @@ async def generate_suggestions(exercise: Exercise, submission: Submission, confi
     # Use default preferences if none provided
     if learner_profile is None:
         learner_profile = LearnerProfile(
-            feedback_practical_theoretical=3,  # Balanced between practical and theoretical
-            feedback_creative_guidance=3,      # Balanced between creative exploration and focused guidance
-            feedback_followup_summary=3,       # Balanced between follow-up questions and summary
-            feedback_brief_detailed=3          # Balanced between brief and detailed
+            feedback_practical_theoretical=1,  # Balanced between practical and theoretical
+            feedback_creative_guidance=1,      # Balanced between creative exploration and focused guidance
+            feedback_followup_summary=1,       # Balanced between follow-up questions and summary
+            feedback_brief_detailed=5          # Balanced between brief and detailed
         )
 
     # Inject student preferences into the prompt

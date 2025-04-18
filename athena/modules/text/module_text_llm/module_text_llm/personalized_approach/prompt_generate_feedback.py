@@ -3,25 +3,28 @@ from typing import List, Optional
 from enum import Enum
 
 system_message = """
-         You gave the following feedback on the first iteration: {answer}
-         On this step you need to refine your feedback. You will recieve the student submission once more.
-         Make sure to follow the following steps to assess and improve your feedback:
-         - Credits given or deducted should be consistent and tracable to the grading instructions and the sample solution, if it doesn't, consider improvements.
-         - If you have your own additional improvements that are not present in the grading instructions, add them in a new feedback with 0 credits and no reference.
-         - Remember that your response is directly seen by students and it should adress them directly.
-         - For each feedback where the student has room for improvement, think about how the student could improve his solution.
-         - Once you have thought how the student can improve the solution, formulate it in a way that guides the student towards the correct solution without revealing it directly.
-         - References should not overlap, that means that no two feedback must have overlaping line_start and line_end.
-         - If the feedback is general and not related to a specific line, leave line_start and line_end empty.
-         - Consider improvements to the feedback if any of this points is not satisfied.
-         - Encourage reflection and critical thinking by asking open-ended follow-up questions.
-         - The student has the following preferences regarding feedback style:
-         {learner_profile}
-    
-         You will be provided once again with the student submission.
-         Respond in json
+You gave the following feedback on the first iteration: {answer}
 
-         """
+Now, refine your feedback by reviewing the student submission once more. In this step:
+
+1. Ensure credits and deductions are consistent with the grading instructions and sample solution.
+2. If additional feedback (not covered by grading instructions) is helpful, include it with 0 credits and no line reference.
+3. Each feedback entry must have unique line references; do not overlap line_start and line_end.
+4. General comments should omit line references.
+5. Feedback must be addressed directly to the student.
+6. Provide actionable suggestions for improvement without revealing the exact solution.
+7. If you include a follow-up question:
+   - Make it clear, specific, and actionable.
+   - Avoid vague or overly broad prompts.
+   - Ask only one question per feedback entry.
+   - Optionally provide a short example before the question to ground it in reality.
+8. Tailor the feedback style to match the students preferences:
+{learner_profile}
+
+Your goal is to help the student reflect and improve. Encourage critical thinking while staying aligned with their learning style.
+
+Respond in JSON.
+"""
 
 human_message = """\
 Student\'s submission to grade (with sentence numbers <number>: <sentence>):
@@ -35,37 +38,19 @@ Student\'s submission to grade (with sentence numbers <number>: <sentence>):
 
 class GenerateSuggestionsPrompt(BaseModel):
     """\
-Features cit available: **{problem_statement}**, **{example_solution}**, **{grading_instructions}**, **{max_points}**, **{bonus_points}**, **{submission}**, **{practical_theoretical}**, **{creative_guidance}**, **{followup_summary}**, **{brief_detailed}**
+Features cit available: **{answer}**, **{submission}**, **{learner_profile}**
 
-_Note: **{problem_statement}**, **{example_solution}**, or **{grading_instructions}** might be omitted if the input is too long._\
 """
     second_system_message: str = Field(default=system_message,
                                        description="Message for priming AI behavior and instructing it what to do.")
     answer_message: str = Field(default=human_message,
                                 description="Message from a human. The input on which the AI is supposed to act.")
 
-
 # Output Object
-
-class FeedbackType(str, Enum):
-    referenced = "referenced"
-    unreferenced = "unreferenced"
-
-
-# TODO: This is not really necessary at this point
-class UnreferencedFeedbackType(str, Enum):
-    follow_up_question = "follow_up_question"
-    alternative_answer = "alternative_answer"
-    hint_for_mistake = "hint_for_mistake"
-
 
 class FeedbackModel(BaseModel):
     title: str = Field(description="Very short title, i.e. feedback category or similar", example="Logic Error")
     description: str = Field(description="Feedback description")
-    feedback_type: FeedbackType = Field(
-        description="Feedback type, if referenced if it reference to a line number start and end, unreferenced otherwise"
-    )
-    unreferenced_feedback_type: Optional[UnreferencedFeedbackType] = Field(description="Type of the unreferenced feedback")
     line_start: Optional[int] = Field(description="Referenced line number start, or empty if unreferenced")
     line_end: Optional[int] = Field(description="Referenced line number end, or empty if unreferenced")
     credits: float = Field(0.0, description="Number of points received/deducted")
