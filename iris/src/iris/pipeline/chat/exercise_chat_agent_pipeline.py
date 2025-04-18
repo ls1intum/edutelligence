@@ -36,9 +36,7 @@ from ...llm import (
 from ...llm.langchain import IrisLangchainChatModel
 from ...retrieval.faq_retrieval import FaqRetrieval
 from ...retrieval.faq_retrieval_utils import format_faqs, should_allow_faq_tool
-from ...retrieval.lecture.lecture_page_chunk_retrieval import (
-    LecturePageChunkRetrieval,
-)
+from ...retrieval.lecture.lecture_retrieval import LectureRetrieval
 from ...vector_database.database import VectorDatabase
 from ...vector_database.lecture_unit_schema import LectureUnitSchema
 from ...web.status.status_update import ExerciseChatStatusCallback
@@ -152,7 +150,7 @@ class ExerciseChatAgentPipeline(Pipeline):
         # Create the pipelines
         self.db = VectorDatabase()
         self.suggestion_pipeline = InteractionSuggestionPipeline(variant="exercise")
-        self.lecture_retriever = LecturePageChunkRetrieval(self.db.client)
+        self.lecture_retriever = LectureRetrieval(self.db.client)
         self.faq_retriever = FaqRetrieval(self.db.client)
         self.reranker_pipeline = RerankerPipeline()
         self.code_feedback_pipeline = CodeFeedbackPipeline()
