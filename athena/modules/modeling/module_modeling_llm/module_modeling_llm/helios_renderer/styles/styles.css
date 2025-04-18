@@ -1,0 +1,46 @@
+
+/* General Styles */
+text {
+    font-family: Arial, sans-serif;
+    font-size: 12px;
+}
+
+.uml-element-name {
+    font-size: 18px;
+    font-weight: bold;
+}
+
+.uml-element-type {
+    font-size: 14px;
+    font-style: italic;
+    font-weight: normal;
+}
+
+.uml-element {
+    fill: white;
+    stroke: black;
+    stroke-width: 1;
+}
+
+.uml-relationship {
+    stroke: black;
+    stroke-width: 1;
+    fill: none;
+}
+
+.relationship-label rect {
+    fill: #ffffff;
+    stroke: #000000;
+    stroke-width: 1px;
+}
+
+.relationship-label text {
+    font-size: 12px;
+    fill: #000000;
+    font-family: Arial, sans-serif;
+}
+
+.uml-element-name.owner {
+    font-size: 20px;
+    font-weight: bold;
+}

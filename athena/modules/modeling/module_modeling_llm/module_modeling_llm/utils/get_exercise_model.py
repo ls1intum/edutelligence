@@ -22,7 +22,6 @@ def get_exercise_model(exercise: Exercise, submission: Submission) -> ExerciseMo
         submission_uml_type=diagram_type,
         transformed_example_solution=serialized_example_solution,
         element_id_mapping=element_id_mapping,
-        id_type_mapping=id_type_mapping
+        id_type_mapping=id_type_mapping,
+        model=submission.model
     )
-
-    

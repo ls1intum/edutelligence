@@ -1,0 +1,27 @@
+<g id="{{ rel.id }}">
+    <path class="uml-relationship" d="{{ path_d }}" />
+
+    {% if rel.name %}
+    <g class="relationship-label">
+        <!-- Center the rectangle so that mid_x, mid_y is the rectangle's center -->
+        <rect 
+            x="{{ mid_x - 20 }}" 
+            y="{{ mid_y - 10 }}" 
+            width="40" 
+            height="20" 
+            rx="4" ry="4"
+            fill="white" stroke="black" stroke-width="1"
+        />
+        
+        <text 
+            x="{{ mid_x }}" 
+            y="{{ mid_y }}" 
+            text-anchor="middle"
+            dominant-baseline="middle"
+            font-size="12" 
+            fill="black">
+            {{ rel.name }}
+        </text>
+    </g>
+    {% endif %}
+</g>
