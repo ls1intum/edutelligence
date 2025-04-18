@@ -1,0 +1,6 @@
+repos:
+  - repo: https://github.com/kynan/nbstripout.git
+    rev: 0.8.1
+    hooks:
+      - id: nbstripout
+        language_version: python3.12
