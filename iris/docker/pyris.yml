@@ -16,7 +16,17 @@ services:
       - "8000"
     networks:
       - pyris
-    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    command:
+      [
+        "poetry",
+        "run",
+        "uvicorn",
+        "iris.main:app",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8000",
+      ]
 
 networks:
   pyris:

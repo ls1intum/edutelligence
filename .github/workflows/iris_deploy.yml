@@ -47,7 +47,7 @@ jobs:
       # Download pyris-server-cli from GH without cloning the Repo
       - name: Fetch Pyris CLI
         run: |
-          wget ${{ env.RAW_URL }}/pyris-server-cli
+          wget ${{ env.RAW_URL }}/iris/pyris-server-cli
           chmod +x pyris-server-cli
 
       # Configure SSH Key
