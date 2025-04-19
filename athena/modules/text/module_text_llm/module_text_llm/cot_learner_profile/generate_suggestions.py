@@ -15,8 +15,8 @@ from llm_core.utils.predict_and_parse import predict_and_parse
 
 from module_text_llm.helpers.utils import add_sentence_numbers, get_index_range_from_line_range, \
     format_grading_instructions
-from module_text_llm.personalized_approach.prompt_thinking import InitialAssessmentModel
-from module_text_llm.personalized_approach.prompt_generate_feedback import AssessmentModel
+from module_text_llm.cot_learner_profile.prompt_thinking import InitialAssessmentModel
+from module_text_llm.cot_learner_profile.prompt_generate_feedback import AssessmentModel
 
 
 async def generate_suggestions(exercise: Exercise, submission: Submission, config: ApproachConfig, debug: bool,
