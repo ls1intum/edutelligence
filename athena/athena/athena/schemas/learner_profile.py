@@ -2,7 +2,6 @@ from typing import Annotated
 
 from pydantic import BaseModel, Field
 
-
 class LearnerProfile(BaseModel):
     """
     Model representing learner profile.
@@ -31,41 +30,41 @@ class LearnerProfile(BaseModel):
 
     def describe_practical_theoretical(self) -> str:
         mapping = {
-            1: "Strong preference for hands-on, example-driven feedback grounded in real-world use cases.",
-            2: "Leans toward practical applications with occasional theoretical support.",
-            3: "Balanced between practical examples and conceptual explanations.",
-            4: "Leans toward conceptual clarity, including definitions and abstract reasoning.",
-            5: "Strong preference for theoretical insight and abstract conceptual understanding."
+            1: "Prefers feedback grounded in real-world programming scenarios, hands-on examples, and direct application of concepts.",
+            2: "Likes feedback with concrete examples, supported by light theoretical reasoning.",
+            3: "Appreciates a mix of practical usage and abstract understanding.",
+            4: "Prefers conceptual clarity and deeper reasoning over concrete examples.",
+            5: "Values theoretical insights, abstract patterns, and high-level generalizations over practical details."
         }
         return mapping[self.feedback_practical_theoretical]
 
     def describe_creative_guidance(self) -> str:
         mapping = {
-            1: "Strong preference for creative prompts, encouragement to explore alternative approaches or perspectives.",
-            2: "Enjoys occasional nudges to think divergently or apply different methods.",
-            3: "Open to both creative thinking and structured guidance.",
-            4: "Appreciates direct guidance and step-by-step reasoning over divergent prompts.",
-            5: "Strong preference for focused, structured explanations with minimal deviation from core reasoning."
+            1: "Enjoys speculative prompts and encouragement to try new or unconventional approaches.",
+            2: "Appreciates occasional nudges to explore alternative methods or think differently.",
+            3: "Open to both creative exploration and structured guidance.",
+            4: "Prefers structured reasoning and step-by-step guidance over creative detours.",
+            5: "Strong preference for direct, focused problem-solving with minimal deviation from known solutions."
         }
         return mapping[self.feedback_creative_guidance]
 
     def describe_followup_summary(self) -> str:
         mapping = {
-            1: "Strong preference for engaging follow-up questions that provoke reflection and deeper thinking.",
-            2: "Enjoys occasional follow-up prompts to extend learning.",
-            3: "Open to both follow-up questions and summary-style conclusions.",
-            4: "Prefers feedback to conclude with a clear summary rather than additional questions.",
-            5: "Strong preference for concise takeaways and wrap-up conclusions without further prompting."
+            1: "Values open-ended follow-up questions that invite reflection and critical thinking.",
+            2: "Likes occasional follow-up prompts to deepen understanding.",
+            3: "Comfortable with both reflective questions and summary-style conclusions.",
+            4: "Prefers feedback to conclude with a clear takeaway, rather than additional questions.",
+            5: "Strong preference for concise summaries and clear conclusions without further prompting."
         }
         return mapping[self.feedback_followup_summary]
 
     def describe_brief_detailed(self) -> str:
         mapping = {
-            1: "Strong preference for concise, no-frills feedback with minimal elaboration.",
-            2: "Prefers mostly brief feedback with occasional explanation.",
-            3: "Comfortable with moderately detailed feedback—clear, but not overwhelming.",
-            4: "Prefers thorough, context-rich feedback with elaborated reasoning.",
-            5: "Strong preference for highly detailed explanations, background context, and comprehensive coverage."
+            1: "Wants short, direct feedback with minimal elaboration — 1–2 sentence max.",
+            2: "Prefers brief feedback with occasional clarifying details.",
+            3: "Comfortable with moderately detailed feedback — clear, but not too lengthy.",
+            4: "Likes context-rich explanations, including rationale or mini-examples.",
+            5: "Expects thorough, multi-sentence feedback with comprehensive reasoning and background."
         }
         return mapping[self.feedback_brief_detailed]
 
