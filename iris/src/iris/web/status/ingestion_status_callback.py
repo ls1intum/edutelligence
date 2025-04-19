@@ -36,14 +36,34 @@ class IngestionStatusCallback(StatusCallback):
                 name="Old slides removal",
             ),
             StageDTO(
-                weight=40,
+                weight=20,
                 state=StageStateEnum.NOT_STARTED,
                 name="Slides Interpretation",
             ),
             StageDTO(
-                weight=20,
+                weight=10,
                 state=StageStateEnum.NOT_STARTED,
                 name="Slides ingestion",
+            ),
+            StageDTO(
+                weight=5,
+                state=StageStateEnum.NOT_STARTED,
+                name="Old transcriptions removal",
+            ),
+            StageDTO(
+                weight=5,
+                state=StageStateEnum.NOT_STARTED,
+                name="Transcription chunking",
+            ),
+            StageDTO(
+                weight=10,
+                state=StageStateEnum.NOT_STARTED,
+                name="Transcription summarization",
+            ),
+            StageDTO(
+                weight=10,
+                state=StageStateEnum.NOT_STARTED,
+                name="Transcription ingestion",
             ),
             StageDTO(
                 weight=30,

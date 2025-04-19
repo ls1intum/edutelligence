@@ -27,6 +27,7 @@ class LectureUnitSchema(Enum):
     LECTURE_UNIT_LINK = "lecture_unit_link"
     BASE_URL = "base_url"
     LECTURE_UNIT_SUMMARY = "lecture_unit_summary"
+    VIDEO_LINK = "video_link"
 
 
 def init_lecture_unit_schema(client: WeaviateClient) -> Collection:
@@ -90,6 +91,12 @@ def init_lecture_unit_schema(client: WeaviateClient) -> Collection:
             Property(
                 name=LectureUnitSchema.LECTURE_UNIT_LINK.value,
                 description="The link to the lecture unit",
+                data_type=DataType.TEXT,
+                index_searchable=False,
+            ),
+            Property(
+                name=LectureUnitSchema.VIDEO_LINK.value,
+                description="The link to the video of the lecture unit",
                 data_type=DataType.TEXT,
                 index_searchable=False,
             ),
