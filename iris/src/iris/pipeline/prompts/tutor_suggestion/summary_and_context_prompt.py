@@ -87,7 +87,7 @@ Your goal is to determine which category fits the post best and to summarize it 
 Important rules you shall follow:
 1. Do NOT add any information that is not asked in the post.
 2. Always be precise with your summary don't forget any information that is need for answering.
-3. Your last sentence should be a JSON consisting of the category and the summary of the post.
+3. You must return your result as a JSON consisting of the category and the summary of the post.
 """
 
     return post_prompt + answers_promt + context_prompt + result_display_prompt

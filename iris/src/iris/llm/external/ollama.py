@@ -106,12 +106,12 @@ class OllamaModel(
     model: str
     host: str
     options: dict[str, Any] = Field(default={})
+    username: str
+    password: str
     _client: Client
 
     # Auth credentials must be set via environment variables: OLLAMA_USERNAME and OLLAMA_PASSWORD
     def model_post_init(self, __context: Any) -> None:
-        username = os.environ.get("OLLAMA_USERNAME")
-        password = os.environ.get("OLLAMA_PASSWORD")
 
         self._client = Client()
 
@@ -122,7 +122,7 @@ class OllamaModel(
             base_url=self.host,
             http2=True,
             transport=transport,
-            auth=HTTPBasicAuth(username, password) if username and password else None,
+            auth=HTTPBasicAuth(self.username, self.password) if self.username and self.password else None,
         )
 
     def complete(

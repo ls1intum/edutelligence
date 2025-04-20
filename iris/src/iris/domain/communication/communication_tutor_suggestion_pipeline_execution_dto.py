@@ -6,6 +6,6 @@ from iris.domain.data.post_dto import PostDTO
 
 
 class CommunicationTutorSuggestionPipelineExecutionDTO(ChatPipelineExecutionDTO):
-    course: Optional[CourseDTO] = None
+    course: CourseDTO
     exercise_id: Optional[int] = None
-    post: PostDTO = None
+    post: PostDTO
