@@ -117,7 +117,7 @@ class TutorSuggestionPipeline(Pipeline):
                 data = json.loads(json_str)
                 return data
             except json.JSONDecodeError as e:
-                logger.error("JSON decoding failed:", e)
+                logger.error("JSON decoding failed: %s", e)
                 return None
         else:
             logger.error("No JSON found in text.")
