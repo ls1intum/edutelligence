@@ -1,0 +1,8 @@
+flask
+flask-cors
+openai
+openai-whisper
+torch
+ffmpeg-python
+opencv-python
+pillow

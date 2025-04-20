@@ -1,0 +1,10 @@
+version: '3.8'
+
+services:
+  transcriber:
+    build:
+      context: ./transcription_docker
+    container_name: nebula-transcriber
+    ports:
+      - "5000:5000"
+    restart: unless-stopped
