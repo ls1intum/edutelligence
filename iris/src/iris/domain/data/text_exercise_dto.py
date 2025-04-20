@@ -11,5 +11,6 @@ class TextExerciseDTO(BaseModel):
     title: str
     course: CourseDTO
     problem_statement: str = Field(alias="problemStatement")
+    example_solution: Optional[str] = None
     start_date: Optional[datetime] = Field(alias="startDate", default=None)
     end_date: Optional[datetime] = Field(alias="endDate", default=None)

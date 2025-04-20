@@ -17,6 +17,7 @@ from iris.pipeline import Pipeline
 from iris.pipeline.prompts.tutor_suggestion.summary_and_context_prompt import (
     summary_and_context_prompt,
 )
+from iris.pipeline.tutor_suggestion_text_exercise_pipeline import TutorSuggestionTextExercisePipeline
 from iris.web.status.status_update import TutorSuggestionCallback
 
 logger = logging.getLogger(__name__)
@@ -56,6 +57,8 @@ class TutorSuggestionPipeline(Pipeline):
         Run the pipeline.
         :param dto: execution data transfer object
         """
+        result = "Error generating tutor suggestion"
+        pipeline_run = False
         self.callback.in_progress("Summarizing post content")
         summary_with_category = self._run_tutor_suggestion_pipeline(dto=dto)
         self.callback.in_progress("Generated summary with context of post")
@@ -69,7 +72,17 @@ class TutorSuggestionPipeline(Pipeline):
             post_summary = None
         self.callback.in_progress(f"Message is in category {post_category}")
         if post_category == "EXERCISE":
-            logger.info("Working with exercise")
+            if dto.programmingExerciseDTO is not None:
+                logger.debug(dto.programmingExerciseDTO.programming_language)
+            elif dto.textExerciseDTO is not None:
+                logger.debug(dto.textExerciseDTO.problem_statement)
+                self.callback.in_progress("Generating suggestions for text exercise")
+                text_exercise_pipeline = TutorSuggestionTextExercisePipeline(callback=self.callback)
+                try:
+                    text_exercise_pipeline(dto=dto.textExerciseDTO, chat_summary=summary_with_category)
+                    pipeline_run = True
+                except AttributeError:
+                    pipeline_run = False
         elif post_category == "LECTURE":
             logger.info("Working with lecture")
         elif post_category == "EXERCISE_LECTURE":
@@ -80,11 +93,16 @@ class TutorSuggestionPipeline(Pipeline):
             logger.info("Working with spam")
         else:
             logger.info("Cannot categorize")
-        self.callback.done(
-            "Generated tutor suggestions",
-            final_result=post_summary,
-            tokens=self.tokens,
-        )
+            if len(dto.post.answers) > 0:
+                result = "Sorry I was not able to categorize this discussion."
+            else:
+                result = "Sorry I was not able to categorize this question."
+        if not pipeline_run:
+            self.callback.done(
+                "Generated tutor suggestions",
+                final_result=result,
+                tokens=self.tokens,
+            )
 
     def _run_tutor_suggestion_pipeline(self, dto):
         self.prompt = ChatPromptTemplate.from_messages(

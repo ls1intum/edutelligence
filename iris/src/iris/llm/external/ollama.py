@@ -13,7 +13,7 @@ from typing import (
 )
 
 from httpx import Client as HTTPXClient
-from httpx import HTTPTransport
+from httpx import HTTPTransport, Timeout
 from langchain_core.tools import BaseTool
 from ollama import Client, Message
 from pydantic import BaseModel, Field
@@ -116,12 +116,17 @@ class OllamaModel(
         self._client = Client()
 
         # Use custom HTTP transport to speed up request performance and avoid default retry/backoff behavior
-        transport = HTTPTransport(retries=1)
+        timeout = Timeout(connect=10.0, read=60.0, write=10.0, pool=5.0)
+
+        transport = HTTPTransport(
+            retries=1
+        )
         # Override the internal HTTPX client used by Ollama to enable HTTP/2 and ensure consistent authentication
         self._client._client = HTTPXClient(  # pylint: disable=protected-access
             base_url=self.host,
             http2=True,
             transport=transport,
+            timeout=timeout,
             auth=HTTPBasicAuth(username, password) if username and password else None,
         )
 
