@@ -1,5 +1,4 @@
 import base64
-import os
 from datetime import datetime
 from typing import (
     Any,
@@ -122,7 +121,11 @@ class OllamaModel(
             base_url=self.host,
             http2=True,
             transport=transport,
-            auth=HTTPBasicAuth(self.username, self.password) if self.username and self.password else None,
+            auth=(
+                HTTPBasicAuth(self.username, self.password)
+                if self.username and self.password
+                else None
+            ),
         )
 
     def complete(
