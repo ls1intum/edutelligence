@@ -44,9 +44,9 @@ def format_rag_context(rag_context):
     formatted_string += "\n" + "-"*40 + "\n"
 
     for context_item in rag_context:
-            formatted_string += f"{context_item}\n"
-            formatted_string += "\n" + "-"*40 + "\n"
-    
+        formatted_string += f"{context_item}\n"
+        formatted_string += "\n" + "-"*40 + "\n"
+
     return formatted_string
 
 def get_reference(feedback, submission_text):

@@ -21,7 +21,6 @@ from module_text_llm.in_context_learning.feedback_icl.retrieve_rag_context_icl i
 
 async def generate_suggestions(exercise: Exercise, submission: Submission, config:ApproachConfig, debug: bool, is_graded :bool) -> List[Feedback]:
     model = config.model.get_model()  # type: ignore[attr-defined]
-    isOllama = isinstance(model, ChatOllama)
         
     formatted_rag_context = ""
     prompt_input = {
@@ -60,74 +59,34 @@ async def generate_suggestions(exercise: Exercise, submission: Submission, confi
             emit_meta("error", f"Input too long {num_tokens_from_prompt(chat_prompt, prompt_input)} > {config.max_input_tokens}")
         return []
     
-    if (isOllama):
-        embeddings_exist = True
-        
-        if embeddings_exist:
-            segmentation_prompt = get_chat_prompt_with_formatting_instructions(
-            model=model, 
-            system_message=system_message_segment, 
-            human_message=human_message_segment, 
-            pydantic_object=Segmentation
-                )
-            segmentation_prompt_input = {
-                "grading_instructions": format_grading_instructions(exercise.grading_instructions, exercise.grading_criteria),
-                "submission": submission.text,
-                "problem_statement": exercise.problem_statement or "No problem statement.",
-            }
-            chain = segmentation_prompt | model 
-            segments = chain.invoke( segmentation_prompt_input)
+    
+    segmentation_prompt = get_chat_prompt_with_formatting_instructions(
+    model=model, 
+    system_message=system_message_segment, 
+    human_message=human_message_segment, 
+    pydantic_object=Segmentation
+        )
+    segmentation_prompt_input = {
+        "grading_instructions": format_grading_instructions(exercise.grading_instructions, exercise.grading_criteria),
+        "submission": submission.text,
+        "problem_statement": exercise.problem_statement or "No problem statement.",
+    }
+    chain = segmentation_prompt | model 
+    segments = chain.invoke( segmentation_prompt_input)
+    for segment in segments:
+        formatted_rag_context += retrieve_rag_context_icl(segment[0],exercise.id)
+    prompt_input["rag_context"] = formatted_rag_context
             
-            for segment in segments:
-                formatted_rag_context += retrieve_rag_context_icl(segment[0],exercise.id)
-            prompt_input["rag_context"] = formatted_rag_context
-        else:
-            prompt_input["rag_context"] = "There are no submission at the moment"
-                
-        result = await predict_and_parse(
-            model=model, 
-            chat_prompt=chat_prompt, 
-            prompt_input=prompt_input, 
-            pydantic_object=AssessmentModel,
-            tags=[
-                f"exercise-{exercise.id}",
-                f"submission-{submission.id}",
-            ],
-    )
-    else :
-        embeddings_exist = True
-        
-        if embeddings_exist:
-            segmentation_prompt = get_chat_prompt_with_formatting_instructions(
-            model=model, 
-            system_message=system_message_segment, 
-            human_message=human_message_segment, 
-            pydantic_object=Segmentation
-                )
-            segmentation_prompt_input = {
-                "grading_instructions": format_grading_instructions(exercise.grading_instructions, exercise.grading_criteria),
-                "submission": submission.text,
-                "problem_statement": exercise.problem_statement or "No problem statement.",
-            }
-            chain = segmentation_prompt | model 
-            segments = chain.invoke( segmentation_prompt_input)
-            for segment in segments:
-                formatted_rag_context += retrieve_rag_context_icl(segment[0],exercise.id)
-            prompt_input["rag_context"] = formatted_rag_context
-        else:
-            prompt_input["rag_context"] = "There are no submission at the moment"
-                
-        result = await predict_and_parse(
-            model=model, 
-            chat_prompt=chat_prompt, 
-            prompt_input=prompt_input, 
-            pydantic_object=AssessmentModel,
-            use_function_calling=True,
-            tags=[
-                f"exercise-{exercise.id}",
-                f"submission-{submission.id}",
-            ],
-    )
+    result = await predict_and_parse(
+        model=model, 
+        chat_prompt=chat_prompt, 
+        prompt_input=prompt_input, 
+        pydantic_object=AssessmentModel,
+        use_function_calling=True,
+        tags=[
+            f"exercise-{exercise.id}",
+            f"submission-{submission.id}",
+        ],)
     if debug:
         emit_meta("generate_suggestions", {
             "prompt": chat_prompt.format(**prompt_input),

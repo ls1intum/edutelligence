@@ -33,14 +33,14 @@ def store_feedback_icl(submission: Submission, exercise: Exercise, feedbacks: Li
         logger.info("Storing feedback for submission %d of exercise %d.", submission.id, exercise.id)
         for feedback in feedbacks:
             chunk = get_reference(feedback, submission.text)
-            embedding = embed_text(chunk) 
-            store_feedback(embedding, exercise.id, submission.id, feedback,chunk, client)
+            store_feedback(exercise.id, submission.id, feedback,chunk, client)
     client.close() 
     
-def store_feedback(embedding, exercise_id, submission_id, feedback,chunk, client):
+def store_feedback(exercise_id, submission_id, feedback, chunk, client):
     """
     Store feedback in the Weaviate database. 
     """
+    embedding = embed_text(chunk) 
     feedback_collection = client.collections.get("Feedback")
     uuid = feedback_collection.data.insert(
         properties={
@@ -54,8 +54,6 @@ def store_feedback(embedding, exercise_id, submission_id, feedback,chunk, client
         },
         vector=embedding, 
     )
-    print(uuid)
-    print("Feedback stored successfully.")
     return uuid
 
 def query_embedding (query,exercise_id,results_limit=1):
