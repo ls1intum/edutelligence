@@ -104,7 +104,7 @@ In this case the feedback can be generated in the Playground
 
 ### 5. LLM-as-a-Judge (`5_llm_as_a_judge.ipynb`)
 
-- Conducts an evaluation where a LLM is used in state of a expert to evaluate feedback based on defined metrics
+- Conducts an evaluation where a LLM is used instead of human experts to evaluate feedback based on defined metrics
 - Measures feedback quality across metrics
 - Generates comparative analysis dataset
 
