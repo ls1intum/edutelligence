@@ -1,0 +1,14 @@
+repos:
+  - repo: https://github.com/ddanier/sub-pre-commit.git
+    rev: v4.1.0
+    hooks:
+      - id: sub-pre-commit
+        alias: iris
+        name: "pre-commit for iris"
+        args: ["-p", "iris"]
+        files: "^iris/.*"
+      - id: sub-pre-commit
+        alias: nebula
+        name: "pre-commit for nebula"
+        args: ["-p", "nebula"]
+        files: "^nebula/.*"
