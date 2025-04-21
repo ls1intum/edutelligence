@@ -8,10 +8,10 @@ from iris.domain.data.text_exercise_dto import TextExerciseDTO
 
 
 class CommunicationTutorSuggestionPipelineExecutionDTO(ChatPipelineExecutionDTO):
-    course: Optional[CourseDTO] = None
+    course: CourseDTO
     exercise_id: Optional[int] = None
     lecture_id: Optional[int] = None
     lecture_unit_id: Optional[int] = None
-    post: PostDTO = None
+    post: PostDTO
     textExerciseDTO: Optional[TextExerciseDTO] = None
     programmingExerciseDTO: Optional[ProgrammingExerciseDTO] = None
