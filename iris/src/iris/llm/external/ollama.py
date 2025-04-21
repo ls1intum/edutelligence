@@ -125,6 +125,7 @@ class OllamaModel(
             base_url=self.host,
             http2=True,
             transport=transport,
+            timeout=timeout,
             auth=(
                 HTTPBasicAuth(self.username, self.password)
                 if self.username and self.password
