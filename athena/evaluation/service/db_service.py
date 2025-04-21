@@ -4,14 +4,15 @@ import mysql.connector
 from dotenv import load_dotenv, find_dotenv
 import os
 
+
 def execute_query(sql_query: str) -> pd.DataFrame:
     def connect_to_database():
         connection = mysql.connector.connect(
-            host=os.getenv('DB_HOST'),
-            user=os.getenv('DB_USER'),
-            password=os.getenv('DB_PASSWORD'),
-            database=os.getenv('DB_NAME'),
-            port=int(os.getenv('DB_PORT'))
+            host=os.getenv("DB_HOST"),
+            user=os.getenv("DB_USER"),
+            password=os.getenv("DB_PASSWORD"),
+            database=os.getenv("DB_NAME"),
+            port=int(os.getenv("DB_PORT")),
         )
         connection_cursor = connection.cursor()
         return connection, connection_cursor
@@ -30,6 +31,7 @@ def execute_query(sql_query: str) -> pd.DataFrame:
     disconnect_from_database(conn, cursor)
 
     return pd.DataFrame(results)
+
 
 def fetch_data_from_db(exercise_ids: List[int]) -> pd.DataFrame:
     """Fetches data from the database for the given exercise IDs."""
@@ -59,6 +61,7 @@ def fetch_data_from_db(exercise_ids: List[int]) -> pd.DataFrame:
     print(f"Fetched {len(data)} records from the database.")
     return data
 
+
 def get_columns(table_name: str, column_names: List[str]) -> str:
     """
     Generate SQL column selection with table name prefixes.
@@ -70,4 +73,6 @@ def get_columns(table_name: str, column_names: List[str]) -> str:
     Returns:
         str: Comma-separated column selections with table name prefixes.
     """
-    return ", ".join([f"{table_name}.{col} AS {table_name}_{col}" for col in column_names])
+    return ", ".join(
+        [f"{table_name}.{col} AS {table_name}_{col}" for col in column_names]
+    )

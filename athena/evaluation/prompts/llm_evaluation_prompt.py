@@ -9,7 +9,12 @@ from langchain_core.messages import BaseMessage
 from langchain.output_parsers import PydanticOutputParser
 
 from athena.evaluation.model.evaluation_model import Metric, MetricEvaluations
-from athena.evaluation.model.model import Exercise, Submission, Feedback, GradingCriterion
+from athena.evaluation.model.model import (
+    Exercise,
+    Submission,
+    Feedback,
+    GradingCriterion,
+)
 
 system_message = """
 You are a computer science professor overseeing multiple tutors who assist in grading student assignments. Your task is to evaluate the quality of feedback provided by these tutors to ensure it meets high standards.
@@ -51,6 +56,7 @@ human_message = """
 {feedbacks}
 """
 
+
 def format_metrics(metrics: List[Metric]) -> str:
     """Formats metrics into a single string.
 
@@ -66,13 +72,17 @@ def format_metrics(metrics: List[Metric]) -> str:
 
     result = ""
     for index, metric in enumerate(metrics, start=1):
-        result += (f'{index}) {metric.title}:\n')
-        result += (f'summary: {{{metric.summary}}}\n')
-        result += f'description: {{\n{metric.description}\n}}\n'
+        result += f"{index}) {metric.title}:\n"
+        result += f"summary: {{{metric.summary}}}\n"
+        result += f"description: {{\n{metric.description}\n}}\n"
 
     return result.strip()
 
-def format_grading_instructions(grading_instructions: Optional[str], grading_criteria: Optional[List[GradingCriterion]]) -> Optional[str]:
+
+def format_grading_instructions(
+    grading_instructions: Optional[str],
+    grading_criteria: Optional[List[GradingCriterion]],
+) -> Optional[str]:
     """Formats grading instructions and the grading criteria with nested structured grading instructions into a single string.
 
     Args:
@@ -92,11 +102,17 @@ def format_grading_instructions(grading_instructions: Optional[str], grading_cri
 
     if grading_criteria:
         for grading_criterion in grading_criteria:
-            result += f'Criterion > "{(grading_criterion.title or "Unnamed criterion")}":\n'
-            for grading_instruction in grading_criterion.structured_grading_instructions:
+            result += (
+                f'Criterion > "{(grading_criterion.title or "Unnamed criterion")}":\n'
+            )
+            for (
+                grading_instruction
+            ) in grading_criterion.structured_grading_instructions:
                 result += f'  - grading_instruction_id={grading_instruction.id} > "{grading_instruction.feedback}": ('
                 if grading_instruction.usage_count > 0:
-                    result += f'can be used {grading_instruction.usage_count} times in total'
+                    result += (
+                        f"can be used {grading_instruction.usage_count} times in total"
+                    )
                 else:
                     result += "can be used unlimited times"
                 result += f', gives {grading_instruction.credits} credits for "{grading_instruction.grading_scale}" grading scale, '
@@ -105,11 +121,19 @@ def format_grading_instructions(grading_instructions: Optional[str], grading_cri
 
     return result.strip()
 
-def get_formatted_prompt(exercise: Exercise, submission: Submission, feedbacks: List[Feedback], metrics: List[Metric]) -> List[BaseMessage]:
+
+def get_formatted_prompt(
+    exercise: Exercise,
+    submission: Submission,
+    feedbacks: List[Feedback],
+    metrics: List[Metric],
+) -> List[BaseMessage]:
     output_parser = PydanticOutputParser(pydantic_object=MetricEvaluations)
 
-    def feedback_to_dict(exercise: Exercise, feedback: Feedback, submission: Submission):
-        referenced_text = submission.text[feedback.index_start:feedback.index_end]
+    def feedback_to_dict(
+        exercise: Exercise, feedback: Feedback, submission: Submission
+    ):
+        referenced_text = submission.text[feedback.index_start : feedback.index_end]
 
         grading_instruction_feedback = ""
         if feedback.structured_grading_instruction_id:
@@ -118,8 +142,12 @@ def get_formatted_prompt(exercise: Exercise, submission: Submission, feedbacks: 
                 for criterion in (exercise.grading_criteria or [])
                 for instruction in (criterion.structured_grading_instructions or [])
             }
-            grading_instruction = grading_instructions.get(feedback.structured_grading_instruction_id)
-            grading_instruction_feedback = grading_instruction.feedback + ": " if grading_instruction else None
+            grading_instruction = grading_instructions.get(
+                feedback.structured_grading_instruction_id
+            )
+            grading_instruction_feedback = (
+                grading_instruction.feedback + ": " if grading_instruction else None
+            )
 
         return {
             "description": f"{grading_instruction_feedback}\n{feedback.description}",
@@ -130,16 +158,22 @@ def get_formatted_prompt(exercise: Exercise, submission: Submission, feedbacks: 
     prompt_input = {
         "problem_statement": exercise.problem_statement or "No problem statement.",
         "example_solution": exercise.example_solution or "No example solution.",
-        "grading_instructions": format_grading_instructions(exercise.grading_instructions, exercise.grading_criteria),
+        "grading_instructions": format_grading_instructions(
+            exercise.grading_instructions, exercise.grading_criteria
+        ),
         "metrics": format_metrics(metrics),
         "format_instructions": output_parser.get_format_instructions(),
         "submission": submission.text,
-        "feedbacks": json.dumps([feedback_to_dict(exercise, feedback, submission) for feedback in feedbacks]),
+        "feedbacks": json.dumps(
+            [feedback_to_dict(exercise, feedback, submission) for feedback in feedbacks]
+        ),
     }
 
     system_message_prompt = SystemMessagePromptTemplate.from_template(system_message)
     human_message_prompt = HumanMessagePromptTemplate.from_template(human_message)
 
-    chat_prompt_template = ChatPromptTemplate.from_messages([system_message_prompt, human_message_prompt])
+    chat_prompt_template = ChatPromptTemplate.from_messages(
+        [system_message_prompt, human_message_prompt]
+    )
 
     return chat_prompt_template.format_prompt(**prompt_input).to_messages()

@@ -16,4 +16,6 @@ class MetricEvaluation(BaseModel):
 
 
 class MetricEvaluations(BaseModel):
-    evaluations: list[MetricEvaluation] = Field(..., description="The evaluations of the metrics.")
+    evaluations: list[MetricEvaluation] = Field(
+        ..., description="The evaluations of the metrics."
+    )

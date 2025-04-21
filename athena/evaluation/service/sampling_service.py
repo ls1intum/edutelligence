@@ -2,7 +2,9 @@ import pandas as pd
 import numpy as np
 
 
-def systematic_random_sampling(data: pd.DataFrame, exercise_samples: dict, random_seed: int = 42) -> pd.DataFrame:
+def systematic_random_sampling(
+    data: pd.DataFrame, exercise_samples: dict, random_seed: int = 42
+) -> pd.DataFrame:
     """
     Performs systematic random sampling while preserving the original data format.
 
@@ -24,9 +26,8 @@ def systematic_random_sampling(data: pd.DataFrame, exercise_samples: dict, rando
             continue
 
         grouped_submissions = exercise_group.groupby("submission_id")
-        sorted_groups = (
-            grouped_submissions.first()
-            .sort_values(by=["result_score", "submission_id"], ascending=[False, True])
+        sorted_groups = grouped_submissions.first().sort_values(
+            by=["result_score", "submission_id"], ascending=[False, True]
         )
 
         total_submissions = len(sorted_groups)
@@ -36,7 +37,9 @@ def systematic_random_sampling(data: pd.DataFrame, exercise_samples: dict, rando
             continue
 
         if total_submissions <= sample_size:
-            print(f"Warning: Taking all {total_submissions} submissions for Exercise ID {exercise_id}.")
+            print(
+                f"Warning: Taking all {total_submissions} submissions for Exercise ID {exercise_id}."
+            )
             sampled_data.append(exercise_group)
             continue
 
@@ -45,16 +48,24 @@ def systematic_random_sampling(data: pd.DataFrame, exercise_samples: dict, rando
         start_index = np.random.randint(0, interval)
 
         # Determine sampled submission IDs
-        sampled_submission_ids = sorted_groups.iloc[start_index::interval].index[:sample_size]
+        sampled_submission_ids = sorted_groups.iloc[start_index::interval].index[
+            :sample_size
+        ]
 
         # Filter the original data for the sampled submission IDs
-        sampled_group = exercise_group[exercise_group["submission_id"].isin(sampled_submission_ids)]
+        sampled_group = exercise_group[
+            exercise_group["submission_id"].isin(sampled_submission_ids)
+        ]
         sampled_data.append(sampled_group)
 
     if sampled_data:
         sampled_data = pd.concat(sampled_data, ignore_index=True)
-        submission_counts = sampled_data.groupby("exercise_id")["submission_id"].nunique()
-        print(f"Sampled {submission_counts.sum()} submissions from {len(submission_counts)} exercises.")
+        submission_counts = sampled_data.groupby("exercise_id")[
+            "submission_id"
+        ].nunique()
+        print(
+            f"Sampled {submission_counts.sum()} submissions from {len(submission_counts)} exercises."
+        )
         return sampled_data
     else:
         print("Error: No data was sampled.")

@@ -1,6 +1,7 @@
 from dataclasses import dataclass, asdict
 from typing import Optional, List, Union, Dict
 
+
 @dataclass
 class Feedback:
     id: Optional[int]
@@ -15,18 +16,34 @@ class Feedback:
     submission_id: int
     type: str
 
-    def __init__(self, id: Optional[int], title: Optional[str], description: Optional[str], credits: float, index_start: Optional[int], index_end: Optional[int], structured_grading_instruction_id: Optional[int], exercise_id: int, submission_id: int) -> None:
+    def __init__(
+        self,
+        id: Optional[int],
+        title: Optional[str],
+        description: Optional[str],
+        credits: float,
+        index_start: Optional[int],
+        index_end: Optional[int],
+        structured_grading_instruction_id: Optional[int],
+        exercise_id: int,
+        submission_id: int,
+    ) -> None:
         self.id = id if id is None else int(id)
         self.title = title
         self.description = description
         self.credits = float(credits)
         self.index_start = index_start if index_start is None else int(index_start)
         self.index_end = index_end if index_end is None else int(index_end)
-        self.structured_grading_instruction_id = structured_grading_instruction_id if structured_grading_instruction_id is None else int(structured_grading_instruction_id)
+        self.structured_grading_instruction_id = (
+            structured_grading_instruction_id
+            if structured_grading_instruction_id is None
+            else int(structured_grading_instruction_id)
+        )
         self.meta = {}
         self.exercise_id = int(exercise_id)
         self.submission_id = int(submission_id)
         self.type = "text"
+
 
 @dataclass
 class Submission:
@@ -36,12 +53,19 @@ class Submission:
     meta: dict
     feedbacks: Optional[Union[List[Feedback], Dict[str, List[Feedback]]]] = None
 
-    def __init__(self, id: int, text: str, language: str, feedbacks: Optional[Union[List[Feedback], Dict[str, List[Feedback]]]]) -> None:
+    def __init__(
+        self,
+        id: int,
+        text: str,
+        language: str,
+        feedbacks: Optional[Union[List[Feedback], Dict[str, List[Feedback]]]],
+    ) -> None:
         self.id = int(id)
         self.text = text
         self.language = language
         self.meta = {}
         self.feedbacks = feedbacks
+
 
 @dataclass
 class StructuredGradingInstruction:
@@ -52,7 +76,15 @@ class StructuredGradingInstruction:
     feedback: str
     usage_count: int
 
-    def __init__(self, id: int, credits: float, grading_scale: str, instruction_description: str, feedback: str, usage_count: int) -> None:
+    def __init__(
+        self,
+        id: int,
+        credits: float,
+        grading_scale: str,
+        instruction_description: str,
+        feedback: str,
+        usage_count: int,
+    ) -> None:
         self.id = int(id)
         self.credits = float(credits)
         self.grading_scale = grading_scale
@@ -60,16 +92,23 @@ class StructuredGradingInstruction:
         self.feedback = feedback
         self.usage_count = int(usage_count)
 
+
 @dataclass
 class GradingCriterion:
     id: int
     title: Optional[str]
     structured_grading_instructions: List[StructuredGradingInstruction]
 
-    def __init__(self, id: int, title: str, structured_grading_instructions: List[StructuredGradingInstruction]) -> None:
+    def __init__(
+        self,
+        id: int,
+        title: str,
+        structured_grading_instructions: List[StructuredGradingInstruction],
+    ) -> None:
         self.id = int(id)
         self.title = title
         self.structured_grading_instructions = structured_grading_instructions
+
 
 @dataclass
 class Exercise:
@@ -85,7 +124,20 @@ class Exercise:
     example_solution: Optional[str]
     submissions: List[Submission]
 
-    def __init__(self, id: int, title: str, max_points: float, bonus_points: float, grading_instructions: str, grading_criteria: List[GradingCriterion], problem_statement: str, example_solution: str, submissions: List[Submission], type: str = "text", meta: dict = {}) -> None:
+    def __init__(
+        self,
+        id: int,
+        title: str,
+        max_points: float,
+        bonus_points: float,
+        grading_instructions: str,
+        grading_criteria: List[GradingCriterion],
+        problem_statement: str,
+        example_solution: str,
+        submissions: List[Submission],
+        type: str = "text",
+        meta: dict = {},
+    ) -> None:
         self.id = int(id)
         self.title = title
         self.type = type
