@@ -26,15 +26,16 @@ with chat.container():
     # Display chat messages from history on app rerun
     for message in st.session_state.messages:
         if isinstance(message, AIMessage) or isinstance(message, ToolMessage):
-            with messages_container.chat_message("AI"):
-                messages_container.markdown(message.content)
+            with messages_container.chat_message("AI") as msg:
+                st.markdown(message.content)
         elif isinstance(message, HumanMessage):
             with messages_container.chat_message("Human"):
-                messages_container.markdown(message.content)
+                st.markdown(message.content)
 
     # React to user input
     if input_query := st.chat_input("Ask anything"):
-        messages_container.chat_message("Human").markdown(input_query)
+        with messages_container.chat_message("Human") as msg:
+            st.markdown(input_query)
         st.session_state.messages.append(HumanMessage(input_query))
 
         with messages_container.chat_message("AI"):
@@ -48,7 +49,7 @@ with chat.container():
                 st.session_state.problem_statement = response.artifact
                 # Convert to AIMessage :shrug:
                 response = AIMessage(response.content)                
-            messages_container.markdown(response.content)
+            st.markdown(response.content)
         
         st.session_state.messages.append(response)
         st.rerun()  # To update problem_statement
