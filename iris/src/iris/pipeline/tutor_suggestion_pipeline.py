@@ -14,12 +14,44 @@ from iris.domain.communication.communication_tutor_suggestion_pipeline_execution
 from iris.llm import CapabilityRequestHandler, CompletionArguments, RequirementList
 from iris.llm.langchain import IrisLangchainChatModel
 from iris.pipeline import Pipeline
-from iris.pipeline.prompts.tutor_suggestion.summary_and_context_prompt import (
-    summary_and_context_prompt,
+from iris.pipeline.prompts.tutor_suggestion.post_summary_prompt import (
+    post_summary_prompt,
 )
 from iris.web.status.status_update import TutorSuggestionCallback
 
 logger = logging.getLogger(__name__)
+
+
+def sort_post_answers(dto):
+    """
+    Sort the answers of the post by their id
+    :param dto: execution data transfer object
+    """
+    dto.post.answers.sort(key=lambda x: x.id)
+    return dto
+
+
+def _extract_json_from_text(text: str):
+    """
+    Extracts the JSON string from the given text.
+    This function uses a regular expression to find the JSON string
+    and then attempts to parse it into a Python dictionary.
+    :param text: The input text containing the JSON string.
+    :return: A dictionary representation of the JSON string, or None if parsing fails.
+    :raises json.JSONDecodeError: If the JSON string cannot be parsed.
+    """
+    json_pattern = re.compile(r"\{.*?\}", re.DOTALL | re.MULTILINE)
+    matches = json_pattern.findall(text)
+
+    if matches:
+        json_str = matches[-1]
+        try:
+            data = json.loads(json_str)
+            return data
+        except json.JSONDecodeError as e:
+            logger.error("JSON decoding failed: %s", e)
+            return None
+    return None
 
 
 class TutorSuggestionPipeline(Pipeline):
@@ -57,29 +89,13 @@ class TutorSuggestionPipeline(Pipeline):
         :param dto: execution data transfer object
         """
         self.callback.in_progress("Summarizing post content")
-        summary_with_category = self._run_tutor_suggestion_pipeline(dto=dto)
-        self.callback.in_progress("Generated summary with context of post")
+        dto = sort_post_answers(dto=dto)
+        summary = self._run_tutor_suggestion_pipeline(dto=dto)
+        self.callback.in_progress("Generated summary of post")
         try:
-            post_category = summary_with_category.get("category")
-        except AttributeError:
-            post_category = None
-        try:
-            post_summary = summary_with_category.get("summary")
+            post_summary = summary.get("summary")
         except AttributeError:
             post_summary = None
-        self.callback.in_progress(f"Message is in category {post_category}")
-        if post_category == "EXERCISE":
-            logger.info("Working with exercise")
-        elif post_category == "LECTURE":
-            logger.info("Working with lecture")
-        elif post_category == "EXERCISE_LECTURE":
-            logger.info("Working with exercise and lecture")
-        elif post_category == "ORGANIZATION":
-            logger.info("Working with organization")
-        elif post_category == "SPAM":
-            logger.info("Working with spam")
-        else:
-            logger.info("Cannot categorize")
         self.callback.done(
             "Generated tutor suggestions",
             final_result=post_summary,
@@ -87,38 +103,32 @@ class TutorSuggestionPipeline(Pipeline):
         )
 
     def _run_tutor_suggestion_pipeline(self, dto):
+        """
+        Run the tutor suggestion pipeline.
+        :param dto: execution data transfer object
+        :return: the generated summary
+        """
         self.prompt = ChatPromptTemplate.from_messages(
             [
                 (
                     "system",
-                    summary_and_context_prompt(dto.post),
+                    post_summary_prompt(dto.post),
                 ),
             ]
         )
+        for i in range(len(dto.post.answers)):
+            answer = dto.post.answers[i]
+            if answer is not None:
+                logger.info(answer.id)
+                logger.info(answer.content)
+        logger.info(post_summary_prompt(dto.post))
         try:
             response = (self.prompt | self.pipeline).invoke({})
-            json_response = self._extract_json_from_text(response)
+            logger.info(response)
+            json_response = _extract_json_from_text(response)
             self._append_tokens(
                 self.llm.tokens, PipelineEnum.IRIS_TUTOR_SUGGESTION_PIPELINE
             )
             return json_response
         except Exception as e:
             raise e
-
-    @staticmethod
-    def _extract_json_from_text(text: str):
-        # Find the first JSON object in the text using a regular expression
-        json_pattern = re.compile(r"\{.*?\}", re.DOTALL)
-        match = json_pattern.search(text)
-
-        if match:
-            json_str = match.group()
-            try:
-                data = json.loads(json_str)
-                return data
-            except json.JSONDecodeError as e:
-                logger.error("JSON decoding failed: %s", e)
-                return None
-        else:
-            logger.error("No JSON found in text.")
-            return None
