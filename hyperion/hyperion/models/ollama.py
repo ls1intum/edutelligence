@@ -6,9 +6,9 @@ from langchain_ollama.chat_models import ChatOllama
 
 from shared.health import register_component
 
-from app.logger import logger
-from app.settings import settings
-from app.models.model_provider import ModelProvider
+from hyperion.logger import logger
+from hyperion.settings import settings
+from hyperion.models.model_provider import ModelProvider
 
 
 client = Client(

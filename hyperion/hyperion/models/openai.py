@@ -3,9 +3,9 @@ from typing import Sequence
 import openai
 from langchain_openai.chat_models import ChatOpenAI
 
-from app.settings import settings
-from app.logger import logger
-from app.models.model_provider import ModelProvider
+from hyperion.settings import settings
+from hyperion.logger import logger
+from hyperion.models.model_provider import ModelProvider
 
 
 class OpenAIProvider(ModelProvider):

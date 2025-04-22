@@ -3,9 +3,9 @@ from functools import partialmethod
 from typing import Sequence
 from langchain_openai.chat_models import AzureChatOpenAI
 
-from app.settings import settings
-from app.logger import logger
-from app.models.model_provider import ModelProvider
+from hyperion.settings import settings
+from hyperion.logger import logger
+from hyperion.models.model_provider import ModelProvider
 
 
 class AzureOpenAIProvider(ModelProvider):

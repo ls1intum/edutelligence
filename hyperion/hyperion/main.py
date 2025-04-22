@@ -5,10 +5,10 @@ from langfuse.callback import CallbackHandler
 from shared.security import AuthMiddleware, add_security_schema_to_app
 from shared.health import create_health_router
 
-from app.models import get_model
-from app.logger import logger
-from app.settings import settings
-from app.project_meta import project_meta
+from hyperion.models import get_model
+from hyperion.logger import logger
+from hyperion.settings import settings
+from hyperion.project_meta import project_meta
 
 app = FastAPI(
     title=project_meta.title,

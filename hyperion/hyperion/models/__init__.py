@@ -1,9 +1,9 @@
 from typing import List
-from app.models.model_provider import ModelProvider
-from app.models.openai import openai_provider
-from app.models.azure_openai import azure_openai_provider
-from app.models.ollama import ollama_provider
-from app.models.fake import fake_provider
+from hyperion.models.model_provider import ModelProvider
+from hyperion.models.openai import openai_provider
+from hyperion.models.azure_openai import azure_openai_provider
+from hyperion.models.ollama import ollama_provider
+from hyperion.models.fake import fake_provider
 
 
 model_providers: List[ModelProvider] = [

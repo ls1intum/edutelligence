@@ -1,5 +1,5 @@
 from langchain_core.language_models.fake_chat_models import FakeChatModel
-from app.models.model_provider import ModelProvider
+from hyperion.models.model_provider import ModelProvider
 
 
 class FakeProvider(ModelProvider):

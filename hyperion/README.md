@@ -55,6 +55,21 @@ poetry run fastapi dev
 poetry run fastapi run
 ```
 
+### Playground
+
+To test Hyperion using the interactive playground:
+
+```bash
+poetry run streamlit run playground/main.py
+```
+
+After running this command, you can access the playground in your web browser:
+
+- Local URL: http://localhost:8501
+- Network URL: Accessible via your local network IP address (shown in the terminal)
+
+The playground provides an interactive interface to test Hyperion's capabilities directly. It allows you to experiment with different inputs and configurations without needing to make API calls manually, making it ideal for development, demonstration, and exploration of the service's features. Unlike the REST API endpoints, the playground interfaces directly with the Python code, providing a seamless testing experience without API overhead.
+
 ### Authentication
 
 Hyperion uses API key authentication for secure access to its endpoints. The API key should be provided in the `X-API-Key` header, if `API_KEY_HEADER` is not set in the environment.
