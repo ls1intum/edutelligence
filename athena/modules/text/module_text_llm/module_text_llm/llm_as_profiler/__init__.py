@@ -13,6 +13,11 @@ class LLMAsProfilerConfig(ApproachConfig):
     type: Literal['llm_as_profiler'] = 'llm_as_profiler'
     thinking_prompt: ThinkingPrompt = Field(default=ThinkingPrompt())
     generate_suggestions_prompt: GenerateSuggestionsPrompt = Field(default=GenerateSuggestionsPrompt())
+    learner_profile: LearnerProfile = Field(default=LearnerProfile(
+        feedback_practical_theoretical=1,
+        feedback_creative_guidance=1,
+        feedback_followup_summary=1,
+        feedback_brief_detailed=5))
 
     async def generate_suggestions(self, exercise: Exercise, submission: Submission, config, *, debug: bool,
                                    is_graded: bool, learner_profile: LearnerProfile = None):
