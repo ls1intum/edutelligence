@@ -117,9 +117,7 @@ class OllamaModel(
         # Use custom HTTP transport to speed up request performance and avoid default retry/backoff behavior
         timeout = Timeout(connect=10.0, read=60.0, write=10.0, pool=5.0)
 
-        transport = HTTPTransport(
-            retries=1
-        )
+        transport = HTTPTransport(retries=1)
         # Override the internal HTTPX client used by Ollama to enable HTTP/2 and ensure consistent authentication
         self._client._client = HTTPXClient(  # pylint: disable=protected-access
             base_url=self.host,
