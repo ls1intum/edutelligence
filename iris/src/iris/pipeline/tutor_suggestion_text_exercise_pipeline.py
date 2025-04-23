@@ -49,9 +49,9 @@ class TutorSuggestionTextExercisePipeline(Pipeline):
 
     def __init__(self):
         super().__init__(implementation_id="tutor_suggestion_text_exercise_pipeline")
-        completion_args = CompletionArguments()
+        completion_args = CompletionArguments(temperature=0, max_tokens=2000)
         request_handler = CapabilityRequestHandler(
-            requirements=RequirementList(self_hosted=True)
+            requirements=RequirementList(self_hosted=False)
         )
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler,

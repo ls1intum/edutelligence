@@ -62,7 +62,7 @@ class TutorSuggestionSummaryPipeline(Pipeline):
 
     def __init__(self, callback: TutorSuggestionCallback):
         super().__init__(implementation_id="tutor_suggestion_summary_pipeline")
-        completion_args = CompletionArguments()
+        completion_args = CompletionArguments(temperature=0, max_tokens=2000)
         request_handler = CapabilityRequestHandler(
             requirements=RequirementList(self_hosted=True)
         )
@@ -82,16 +82,13 @@ class TutorSuggestionSummaryPipeline(Pipeline):
         """
         Run the pipeline.
         :param dto: execution data transfer object
+        :return: json of the summary of the post in the form
+        {"summary": "<summary>", "is_question": "<is_question>", "number_of_answers": <number_of_answers>}
         """
         dto = sort_post_answers(dto=dto)
         summary = self._run_tutor_suggestion_summary_pipeline(dto=dto)
 
-        try:
-            post_summary = summary.get("summary")
-        except AttributeError:
-            post_summary = None
-
-        return post_summary
+        return summary
 
     def _run_tutor_suggestion_summary_pipeline(self, dto):
         """
@@ -109,10 +106,13 @@ class TutorSuggestionSummaryPipeline(Pipeline):
         )
         try:
             response = (self.prompt | self.pipeline).invoke({})
+            logging.info(response)
             json_response = _extract_json_from_text(response)
             self._append_tokens(
                 self.llm.tokens, PipelineEnum.IRIS_TUTOR_SUGGESTION_PIPELINE
             )
+            if json_response is not None:
+                json_response["num_answers"] = len(dto.post.answers)
             return json_response
         except Exception as e:
             raise e
