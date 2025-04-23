@@ -14,6 +14,7 @@ from iris.domain.data.text_exercise_dto import TextExerciseDTO
 from iris.llm import CapabilityRequestHandler, CompletionArguments, RequirementList
 from iris.llm.langchain import IrisLangchainChatModel
 from iris.pipeline import Pipeline
+from iris.pipeline.prompts.tutor_suggestion.channel_type_checker_prompt import channel_type_checker_prompt
 from iris.pipeline.tutor_suggestion_text_exercise_pipeline import (
     TutorSuggestionTextExercisePipeline,
 )
@@ -172,20 +173,8 @@ class TutorSuggestionAgentPipeline(Pipeline):
         """
         prompt = ChatPromptTemplate.from_messages(
             [
-                (
-                    "system",
-                    "You are a verification assistant. Your task is to verify if the given category is appropriate for"
-                    " the context of the post. The only possible categories are:"
-                    "'text_exercise', 'programming_exercise', 'lecture', 'general'.\n\n",
-                ),
-                (
-                    "human",
-                    f"Summary of the post: {summary}\n\nChannel type:"
-                    f" {channel_type}\n\nIs the channel type appropriate for this context? "
-                    f"Answer only with 'yes' or 'no'."
-                    f"\nIf the channel_type is not appropriate, suggest a more suitable channel_type with the"
-                    f" format 'channel_type: <suggested_channel_type>'.",
-                ),
+                "system",
+                channel_type_checker_prompt()
             ]
         )
         llm = IrisLangchainChatModel(
@@ -196,7 +185,7 @@ class TutorSuggestionAgentPipeline(Pipeline):
         )
         self.tokens.append(llm.tokens)
         pipeline = llm | StrOutputParser()
-        return (prompt | pipeline).invoke({})
+        return (prompt | pipeline).invoke({"channel_type": channel_type, "summary": summary})
 
     def _run_text_exercise_pipeline(
         self, text_exercise_dto: TextExerciseDTO, summary: str
@@ -209,7 +198,12 @@ class TutorSuggestionAgentPipeline(Pipeline):
         """
         self.callback.in_progress("Generating suggestions for text exercise")
         if text_exercise_dto is None:
-            self.callback.error("No text exercise DTO was provided")
+            self.callback.done(
+                "No text exercise was provided",
+                final_result="<p>This post seems to be a text exercise post, but this is the wrong channel.</p><br>"
+                             "<p>Please move it to the text exercise channel.<p>",
+                tokens=self.tokens,
+            )
             return
         self.callback.in_progress("Running text exercise pipeline")
         text_exercise_pipeline = TutorSuggestionTextExercisePipeline()
