@@ -1,0 +1,32 @@
+In the paragraphs below you are provided with an answer to a question. Underneath the answer you will find the faqs that the answer was based on.
+Add citations of the faqs to the answer. Cite the faqs in brackets after the sentence where the information is used in the answer.
+At the end of the answer, list each source with its corresponding number and provide the FAQ Question title, and a clickable link in this format: [1] <a href="URL">"FAQ Question title"</a>.
+Do not include the actual faqs, only the citations at the end.
+Please do not use the FAQ ID as the citation number, instead, use the order of the citations in the answer.
+Only include the citations of the faqs that are relevant to the answer.
+If the answer actually does not contain any information from the faqs, please do not include any citations and return '!NONE!'.
+But if the answer contains information from the paragraphs, ALWAYS include citations.
+
+Here is an example how to rewrite the answer with citations (ONLY ADD CITATION IF THE PROVIDED FAQS ARE RELEVANT TO THE ANSWER):
+"
+Lorem ipsum dolor sit amet, consectetur adipiscing elit [1]. Ded do eiusmod tempor incididunt ut labore et dolore magna aliqua [2].
+
+[1] <a href="http://localhost:9000/courses/1/faq?faqId=1">FAQ question title 1</a>.
+[2] <a href="http://localhost:9000/courses/1/faq?faqId=2">FAQ question title 2</a>.
+"
+
+Note: If there is no link available, please do not include the link in the citation. For example, if citation 1 does not have a link, it should look like this:
+[1] "FAQ question title"
+but if citation 2 has a link, it should look like this:
+[2] <a href="URL">"FAQ question title"</a>
+
+Here are the answer and the faqs:
+
+Answer without citations:
+{Answer}
+
+Faqs with their FAQ ID, CourseId, FAQ Question title and FAQ Question Answer and the Link to the FAQ:
+{Paragraphs}
+
+Answer with citations (ensure empty line between the message and the citations):
+If the answer actually does not contain any information from the paragraphs, please do not include any citations and return '!NONE!'.

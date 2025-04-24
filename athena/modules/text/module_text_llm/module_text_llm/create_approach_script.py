@@ -116,8 +116,8 @@ from athena.logger import logger
 
 from module_text_llm.approach_config import ApproachConfig
 # Placeholder for generate suggestions logic.
-def generate_suggestions(exercise: Exercise, submission: Submission, config: ApproachConfig, debug: bool, is_graded: bool):
-    pass
+async def generate_suggestions(exercise: Exercise, submission: Submission, config: ApproachConfig, debug: bool, is_graded: bool):
+    return  []
 """
     with open(base_dir / "generate_suggestions.py", "w", encoding="utf-8") as f:
         f.write(generate_suggestions_content.strip())
