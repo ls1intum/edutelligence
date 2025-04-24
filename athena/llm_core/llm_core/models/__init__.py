@@ -3,10 +3,6 @@ from typing import Union
 from llm_core.models.providers.azure_model_config import AzureModelConfig
 from llm_core.models.providers.openai_model_config import OpenAIModelConfig
 
-<<<<<<< HEAD
-
-ModelConfigType = Union[OpenAIModelConfig, AzureModelConfig]
-=======
 DefaultModelConfig: Type[ModelConfig]
 MiniModelConfig: ModelConfig
 OllamaModelConfig: ModelConfig
@@ -19,6 +15,7 @@ evaluation_model: Optional[BaseLanguageModel] = None
 types: List[Type[ModelConfig]] = []
 try:
     import llm_core.models.openai as openai_config
+
     types.append(openai_config.OpenAIModelConfig)
     if default_model_name in openai_config.available_models:
         DefaultModelConfig = openai_config.OpenAIModelConfig
@@ -28,17 +25,27 @@ except AttributeError:
     pass
 
 try:
-    import llm_core.models.ollama as ollama_config #type: ignore
+    import llm_core.models.ollama as ollama_config  # type: ignore
+
     types.append(ollama_config.OllamaModelConfig)
-    OllamaModelConfig = ollama_config.OllamaModelConfig(model_name="llama3.3:latest",format="json",max_tokens=1000, temperature=0,top_p=1,presence_penalty=0,frequency_penalty=0)
+    OllamaModelConfig = ollama_config.OllamaModelConfig(
+        model_name="llama3.3:latest",
+        format="json",
+        max_tokens=1000,
+        temperature=0,
+        top_p=1,
+        presence_penalty=0,
+        frequency_penalty=0,
+    )
 except AttributeError:
     pass
 
 if not types:
     raise EnvironmentError(
-        "No model configurations available, please set up at least one provider in the environment variables.")
+        "No model configurations available, please set up at least one provider in the environment variables."
+    )
 
-if 'DefaultModelConfig' not in globals():
+if "DefaultModelConfig" not in globals():
     DefaultModelConfig = types[0]
 
 type0 = types[0]
@@ -46,6 +53,4 @@ if len(types) == 1:
     ModelConfigType = type0
 else:
     type1 = types[1]
-    ModelConfigType = Union[type0, type1] # type: ignore
-    
->>>>>>> main
+    ModelConfigType = Union[type0, type1]  # type: ignore
