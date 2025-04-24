@@ -1,2 +1,0 @@
-# This file ensures the _temp directory is included in git
-# The _temp directory is used for temporary files during code generation 

@@ -11,13 +11,6 @@ from datetime import datetime
 class Logger:
     
     def __init__(self, log_dir=None, level=logging.INFO):
-        """
-        Initialize the logger with a log directory and level.
-        
-        Args:
-            log_dir (str, optional): Directory to store log files
-            level (int): Logging level
-        """
         self.logger = logging.getLogger('code_generation')
         self.logger.setLevel(level)
         
