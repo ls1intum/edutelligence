@@ -1,5 +1,3 @@
-"""Mock configuration classes for testing the text LLM module."""
-
 from pydantic import BaseModel, Field
 from typing import Any, Callable
 from module_text_llm.approach_config import ApproachConfig
@@ -20,4 +18,5 @@ class MockApproachConfig(ApproachConfig):
 
     async def generate_suggestions(self, exercise, submission, debug=False, is_graded=True):
         """Mock implementation of generate_suggestions."""
-        return []
+        return [] 
+    

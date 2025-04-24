@@ -1,5 +1,3 @@
-"""Mock language model implementations for testing the text LLM module."""
-
 from pydantic import BaseModel, Field
 from typing import Any, List, Optional, Callable, Type
 from langchain_core.language_models.base import BaseLanguageModel
@@ -17,11 +15,11 @@ class MockFeedbackModel(BaseModel):
     credits: float = 0.0
     grading_instruction_id: Optional[int] = None
 
-class AssessmentModel(BaseModel):
+class MockAssessmentModel(BaseModel):
     """Mock assessment model containing feedback items."""
     feedbacks: List[MockFeedbackModel] = Field(default_factory=lambda: [MockFeedbackModel()])
 
-class StructuredMockLanguageModel(BaseLanguageModel):
+class MockStructuredMockLanguageModel(BaseLanguageModel):
     """Mock language model with structured output support."""
     return_value: Any = Field(default_factory=lambda: None)
 
@@ -64,7 +62,7 @@ class MockLanguageModel(BaseLanguageModel):
             self.return_value = return_value
 
     async def ainvoke(self, input: Any, config: Optional[RunnableConfig] = None, **kwargs: Any) -> Any:
-        if isinstance(self.return_value, AssessmentModel):
+        if isinstance(self.return_value, MockAssessmentModel):
             return RealAssessmentModel(feedbacks=self.return_value.feedbacks)
         return self.return_value
 
@@ -85,7 +83,7 @@ class MockLanguageModel(BaseLanguageModel):
         return [self.return_value]
 
     def invoke(self, input: Any, config: Optional[RunnableConfig] = None, **kwargs: Any) -> Any:
-        if isinstance(self.return_value, AssessmentModel):
+        if isinstance(self.return_value, MockAssessmentModel):
             return RealAssessmentModel(feedbacks=self.return_value.feedbacks)
         return self.return_value
 
@@ -94,3 +92,4 @@ class MockLanguageModel(BaseLanguageModel):
 
     def predict_messages(self, messages: List[BaseMessage], stop: Optional[List[str]] = None, **kwargs: Any) -> str:
         return str(self.return_value)
+     

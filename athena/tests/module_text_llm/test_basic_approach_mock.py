@@ -1,13 +1,18 @@
-"""Test suite for the text LLM module's basic approach functionality."""
-
-from tests.utils.mock_env import mock_sent_tokenize
 import sys
 from unittest.mock import Mock, patch
-
-# ---- Patch llm_core.models.openai ----
 from pydantic import BaseModel, Field
 from typing import Callable, Any
+import configparser
+import pytest
+from module_text_llm.basic_approach.generate_suggestions import generate_suggestions
+from athena.text import Exercise, Submission, Feedback
+from module_text_llm.approach_config import ApproachConfig
+from athena.schemas.exercise_type import ExerciseType
+from tests.utils.mock_env import mock_sent_tokenize
+from tests.utils.mock_llm import MockLanguageModel, MockAssessmentModel, MockFeedbackModel
+from tests.utils.mock_config import MockApproachConfig, MockModelConfig
 
+# ---- Patch llm_core.models.openai ----
 class MockOpenAIModelConfig(BaseModel):
     """Mock configuration for OpenAI model settings."""
     model_name: str = "mock_model"
@@ -22,8 +27,6 @@ mock_openai.available_models = {'mock_model': Mock()}
 sys.modules['llm_core.models.openai'] = mock_openai
 
 # ---- Patch configparser.ConfigParser ----
-import configparser
-
 class MockConfigParser:
     """Mock implementation of ConfigParser for module configuration."""
     def __init__(self):
@@ -38,18 +41,6 @@ class MockConfigParser:
 # Start the patch context before other imports
 patcher = patch("athena.module_config.configparser.ConfigParser", return_value=MockConfigParser())
 patcher.start()
-
-# Import test dependencies
-import pytest
-from module_text_llm.basic_approach.generate_suggestions import generate_suggestions
-from athena.text import Exercise, Submission, Feedback
-from module_text_llm.approach_config import ApproachConfig
-from athena.schemas.exercise_type import ExerciseType
-
-from tests.utils.mock_llm import MockLanguageModel, AssessmentModel, MockFeedbackModel
-from tests.utils.mock_config import MockApproachConfig, MockModelConfig
-from tests.utils.mock_env import mock_sent_tokenize
-
 
 @pytest.fixture
 def mock_exercise():
@@ -87,7 +78,7 @@ def mock_config():
 @pytest.mark.asyncio
 async def test_generate_suggestions_basic(mock_exercise, mock_submission, mock_config):
     """Test basic feedback generation with a simple submission."""
-    mock_model = MockLanguageModel(return_value=AssessmentModel(feedbacks=[
+    mock_model = MockLanguageModel(return_value=MockAssessmentModel(feedbacks=[
         MockFeedbackModel(
             title="Test Feedback",
             description="Test description",
@@ -124,7 +115,7 @@ async def test_generate_suggestions_empty_submission(mock_exercise, mock_config)
         exerciseId=mock_exercise.id,
         text=""
     )
-    mock_model = MockLanguageModel(return_value=AssessmentModel(feedbacks=[]))
+    mock_model = MockLanguageModel(return_value=MockAssessmentModel(feedbacks=[]))
     mock_config.model.get_model = lambda: mock_model
     mock_sent_tokenize.return_value = []
 
@@ -147,7 +138,7 @@ async def test_generate_suggestions_long_input(mock_exercise, mock_config):
         exerciseId=mock_exercise.id,
         text="Test " * 1000
     )
-    mock_model = MockLanguageModel(return_value=AssessmentModel(feedbacks=[
+    mock_model = MockLanguageModel(return_value=MockAssessmentModel(feedbacks=[
         MockFeedbackModel(
             title="Test Long Input Feedback",
             description="Test description for long input",
@@ -170,4 +161,5 @@ async def test_generate_suggestions_long_input(mock_exercise, mock_config):
     assert isinstance(feedbacks, list)
     assert all(isinstance(feedback, Feedback) for feedback in feedbacks)
     assert all(feedback.exercise_id == mock_exercise.id for feedback in feedbacks)
-    assert all(feedback.submission_id == long_submission.id for feedback in feedbacks)
+    assert all(feedback.submission_id == long_submission.id for feedback in feedbacks) 
+    
