@@ -8,13 +8,11 @@ from llm_core.utils.llm_utils import (
     check_prompt_length_and_omit_features_if_necessary, 
     num_tokens_from_prompt,
 )
-from langchain_community.chat_models import ChatOllama # type: ignore
 
 from llm_core.utils.predict_and_parse import predict_and_parse
 from module_text_llm.helpers.utils import add_sentence_numbers, get_index_range_from_line_range, format_grading_instructions
+from module_text_llm.in_context_learning.segmentation_prompt import system_message_segment, human_message_segment, Segmentation
 from module_text_llm.in_context_learning.prompt_generate_suggestions import AssessmentModel
-from module_text_llm.in_context_learning.ollama_prompt import system_message_segment, human_message_segment, Segmentation, system_message, human_message
-
 from module_text_llm.in_context_learning.feedback_icl.retrieve_rag_context import retrieve_rag_context
 
 
