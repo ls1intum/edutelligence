@@ -11,7 +11,8 @@ from module_text_llm.config import Configuration
 from module_text_llm.evaluation import get_feedback_statistics, get_llm_statistics
 from module_text_llm.generate_evaluation import generate_evaluation
 from module_text_llm.approach_controller import generate_suggestions
-from module_text_llm.in_context_learning.feedback_icl.store_feedback_icl import store_feedback_icl
+from module_text_llm.in_context_learning.feedback_icl.store_feedback import store_feedback
+
 @submissions_consumer
 def receive_submissions(exercise: Exercise, submissions: List[Submission]):
     logger.info("receive_submissions: Received %d submissions for exercise %d", len(submissions), exercise.id)
@@ -27,7 +28,7 @@ def select_submission(exercise: Exercise, submissions: List[Submission]) -> Subm
 def process_incoming_feedback(exercise: Exercise, submission: Submission, feedbacks: List[Feedback]):
     logger.info("Will try to create Schema")
     logger.info("process_feedback: Received %d feedbacks for submission %d of exercise %d.", len(feedbacks), submission.id, exercise.id)
-    store_feedback_icl(submission, exercise, feedbacks)
+    store_feedback(submission, exercise, feedbacks)
     
 @feedback_provider
 async def suggest_feedback(exercise: Exercise, submission: Submission, is_graded: bool, module_config: Configuration) -> List[Feedback]:

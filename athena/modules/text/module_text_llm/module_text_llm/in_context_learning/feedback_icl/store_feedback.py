@@ -25,7 +25,7 @@ def create_schema(client):
     ]
 )
     
-def store_feedback_icl(submission: Submission, exercise: Exercise, feedbacks: List[Feedback]):
+def store_feedback(submission: Submission, exercise: Exercise, feedbacks: List[Feedback]):
     client = weaviate.connect_to_local()
     try:
         create_schema(client)
@@ -33,10 +33,10 @@ def store_feedback_icl(submission: Submission, exercise: Exercise, feedbacks: Li
         logger.info("Storing feedback for submission %d of exercise %d.", submission.id, exercise.id)
         for feedback in feedbacks:
             chunk = get_reference(feedback, submission.text)
-            store_feedback(exercise.id, submission.id, feedback,chunk, client)
+            store_single_feedback(exercise.id, submission.id, feedback,chunk, client)
     client.close() 
     
-def store_feedback(exercise_id, submission_id, feedback, chunk, client):
+def store_single_feedback(exercise_id, submission_id, feedback, chunk, client):
     """
     Store feedback in the Weaviate database. 
     """
@@ -56,7 +56,7 @@ def store_feedback(exercise_id, submission_id, feedback, chunk, client):
     )
     return uuid
 
-def query_embedding (query,exercise_id,results_limit=1):
+def query_embedding(query,exercise_id,results_limit=1):
     logger.info("Querying weaviate database")
     client = weaviate.connect_to_local()
     feedbacks = client.collections.get("Feedback")

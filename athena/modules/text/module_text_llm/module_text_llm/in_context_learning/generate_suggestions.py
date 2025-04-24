@@ -13,10 +13,9 @@ from langchain_community.chat_models import ChatOllama # type: ignore
 from llm_core.utils.predict_and_parse import predict_and_parse
 from module_text_llm.helpers.utils import add_sentence_numbers, get_index_range_from_line_range, format_grading_instructions
 from module_text_llm.in_context_learning.prompt_generate_suggestions import AssessmentModel
-# from module_text_llm.in_context_learning.agent import TutorAgent
 from module_text_llm.in_context_learning.ollama_prompt import system_message_segment, human_message_segment, Segmentation, system_message, human_message
 
-from module_text_llm.in_context_learning.feedback_icl.retrieve_rag_context_icl import retrieve_rag_context_icl
+from module_text_llm.in_context_learning.feedback_icl.retrieve_rag_context import retrieve_rag_context
 
 
 async def generate_suggestions(exercise: Exercise, submission: Submission, config:ApproachConfig, debug: bool, is_graded :bool) -> List[Feedback]:
@@ -64,19 +63,22 @@ async def generate_suggestions(exercise: Exercise, submission: Submission, confi
     model=model, 
     system_message=system_message_segment, 
     human_message=human_message_segment, 
-    pydantic_object=Segmentation
-        )
+    pydantic_object=Segmentation)
+    
     segmentation_prompt_input = {
         "grading_instructions": format_grading_instructions(exercise.grading_instructions, exercise.grading_criteria),
         "submission": submission.text,
         "problem_statement": exercise.problem_statement or "No problem statement.",
     }
+    
     chain = segmentation_prompt | model 
     segments = chain.invoke( segmentation_prompt_input)
+    
     for segment in segments:
-        formatted_rag_context += retrieve_rag_context_icl(segment[0],exercise.id)
-    prompt_input["rag_context"] = formatted_rag_context
-            
+        formatted_rag_context += retrieve_rag_context(segment[0],exercise.id)
+    
+    prompt_input["rag_context"] = formatted_rag_context     
+    
     result = await predict_and_parse(
         model=model, 
         chat_prompt=chat_prompt, 
@@ -87,6 +89,7 @@ async def generate_suggestions(exercise: Exercise, submission: Submission, confi
             f"exercise-{exercise.id}",
             f"submission-{submission.id}",
         ],)
+    
     if debug:
         emit_meta("generate_suggestions", {
             "prompt": chat_prompt.format(**prompt_input),

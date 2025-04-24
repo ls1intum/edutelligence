@@ -1,6 +1,6 @@
-from module_text_llm.in_context_learning.feedback_icl.store_feedback_icl import query_embedding
+from module_text_llm.in_context_learning.feedback_icl.store_feedback import query_embedding
 
-def retrieve_rag_context_icl(submission_segment: str ,exercise_id: int) -> str:
+def retrieve_rag_context(submission_segment: str ,exercise_id: int) -> str:
     """
     This method takes a segment from a submission and for a given exercise id, 
     returns feedback that has been given for similar texts.
@@ -39,7 +39,7 @@ def format_context(title,description,credits,reference):
 def format_rag_context(rag_context):
     formatted_string = """  **Tutor provided Feedback from previous submissions of this same exercise.
     This are possible examples that could help with the grading of the current submission. However they are not identical
-    so please be careful when using them. You must carefully decide whether this references are relevant.**\n
+    so please be careful when using them. You must carefully decide whether these references are relevant.**\n
     **\n"""
     formatted_string += "\n" + "-"*40 + "\n"
 
