@@ -48,6 +48,7 @@ def failure_success(credits_per_submission,failures,submission_ids):
         hovermode='x unified'
     )
     return {"fig": fig, "html_explanation": ""}
+
 def total_credit_per_submission(data):
     html_explanation = """
     <h2 style="text-align: center;">Total Credits awarded by each model on each submission</h2>

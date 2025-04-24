@@ -94,7 +94,6 @@ export default function useBatchModuleExperiment(experiment: Experiment, moduleC
         { exercise, tutor_feedbacks, results },
         {
           onSuccess: (response) => {
-            // const newWindow = window.open("", "_blank", "width=900,height=900");
             const htmlContent = response[0].data;
             const blob = new Blob([htmlContent], { type: 'text/html' });
             const link = document.createElement('a');

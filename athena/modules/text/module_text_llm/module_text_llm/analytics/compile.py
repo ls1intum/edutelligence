@@ -65,7 +65,7 @@ Through plotly, the figures are embedded in the HTML file and are fully interact
         with open(output_file, "r", encoding="utf-8") as file:
             html_content = file.read()
     except Exception as e:
-        html_content = getFallbackHtml(f"An error occurred while generating the analytics {str(e)} . Full Trace: {traceback.format_exc()}")
+        html_content = get_fallback_html(f"An error occurred while generating the analytics {str(e)} . Full Trace: {traceback.format_exc()}")
     return html_content
 
 def file_exists(path) -> bool: 
@@ -77,9 +77,9 @@ def get_html_content(path):
             html_content = file.read()
         return html_content
     
-    return getFallbackHtml("File was not found")
+    return get_fallback_html("File was not found")
     
-def getFallbackHtml(specifics: str):
+def get_fallback_html(specifics: str):
     return  f"""
         <html>
   <head>
