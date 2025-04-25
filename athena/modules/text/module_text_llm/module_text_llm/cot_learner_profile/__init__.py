@@ -1,12 +1,12 @@
 from pydantic import Field
 from typing import Literal
-from athena.text import Exercise, Submission
 
+from athena.text import Exercise, Submission
+from athena.schemas.learner_profile import LearnerProfile
 from module_text_llm.approach_config import ApproachConfig
 from module_text_llm.cot_learner_profile.prompt_generate_feedback import GenerateSuggestionsPrompt
 from module_text_llm.cot_learner_profile.prompt_thinking import ThinkingPrompt
 from module_text_llm.cot_learner_profile.generate_suggestions import generate_suggestions
-from athena.schemas.learner_profile import LearnerProfile
 
 
 class COTLearnerProfileConfig(ApproachConfig):

@@ -1,6 +1,5 @@
 from pydantic import BaseModel, Field
 from typing import List, Optional
-from enum import Enum
 
 system_message = """
 You gave the following feedback on the first iteration: {answer}
