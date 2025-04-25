@@ -13,7 +13,13 @@ class COTLearnerProfileConfig(ApproachConfig):
     type: Literal['cot_learner_profile'] = 'cot_learner_profile'
     thinking_prompt: ThinkingPrompt = Field(default=ThinkingPrompt())
     generate_suggestions_prompt: GenerateSuggestionsPrompt = Field(default=GenerateSuggestionsPrompt())
+    profile: LearnerProfile = Field(default=LearnerProfile(
+        feedback_practical_theoretical=3,
+        feedback_creative_guidance=3,
+        feedback_followup_summary=3,
+        feedback_brief_detailed=3
+    ))
 
     async def generate_suggestions(self, exercise: Exercise, submission: Submission, config, *, debug: bool,
                                    is_graded: bool, learner_profile: LearnerProfile = None):
-        return await generate_suggestions(exercise, submission, config, debug, is_graded, learner_profile)
+        return await generate_suggestions(exercise, submission, config, debug=debug, is_graded=is_graded, learner_profile=learner_profile)

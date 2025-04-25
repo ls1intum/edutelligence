@@ -19,7 +19,7 @@ from module_text_llm.cot_learner_profile.prompt_thinking import InitialAssessmen
 from module_text_llm.cot_learner_profile.prompt_generate_feedback import AssessmentModel
 
 
-async def generate_suggestions(exercise: Exercise, submission: Submission, config: ApproachConfig, debug: bool,
+async def generate_suggestions(exercise: Exercise, submission: Submission, config: ApproachConfig, *, debug: bool,
                                is_graded: bool, learner_profile: Optional[LearnerProfile] = None) -> List[Feedback]:
     model = config.model.get_model()  # type: ignore[attr-defined]
 

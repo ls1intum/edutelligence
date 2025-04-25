@@ -12,11 +12,6 @@ class ChainOfThoughtConfig(ApproachConfig):
     type: Literal['chain_of_thought'] = 'chain_of_thought'
     thinking_prompt: ThinkingPrompt = Field(default=ThinkingPrompt())
     generate_suggestions_prompt: CoTGenerateSuggestionsPrompt = Field(default=CoTGenerateSuggestionsPrompt())
-    learner_profile: LearnerProfile = Field(default=LearnerProfile(
-        feedback_practical_theoretical=1,
-        feedback_creative_guidance=1,
-        feedback_followup_summary=1,
-        feedback_brief_detailed=5))
     
     async def generate_suggestions(self, exercise: Exercise, submission: Submission, config, *, debug: bool, is_graded: bool, learner_profile: LearnerProfile = None):
         return await generate_suggestions(exercise,submission,config,debug,is_graded)
