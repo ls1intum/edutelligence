@@ -3,10 +3,10 @@ from enum import Enum
 from scipy.spatial.distance import cosine
 from scipy.spatial.distance import jaccard
 from scipy.spatial.distance import euclidean
-from atlas.AtlasMl.atlasml.ml.SimilarityMeasurement.Cosine import compute_cosine_similarity
-from atlas.AtlasMl.atlasml.ml.SimilarityMeasurement.Jaccard import compute_jaccard_similarity
-from atlas.AtlasMl.atlasml.ml.SimilarityMeasurement.Euclidian import compute_euclidean_distance
-from atlas.AtlasMl.atlasml.ml.VectorEmbeddings.ModelDimension import ModelDimension
+from atlasml.ml.SimilarityMeasurement.Cosine import compute_cosine_similarity
+from atlasml.ml.SimilarityMeasurement.Jaccard import compute_jaccard_similarity
+from atlasml.ml.SimilarityMeasurement.Euclidian import compute_euclidean_distance
+from atlasml.ml.VectorEmbeddings.ModelDimension import ModelDimension
 
 class MockModelDimension(Enum):
     """Mock class for ModelDimension enum for testing."""
