@@ -7,22 +7,18 @@ app = FastAPI()
 app.include_router(router)
 
 client = TestClient(app)
+
 def test_generate_competency_success():
-    request_data = {"description": "Test input", "id": "1"}
+    request_data = {"description": "Test input", "id": "550e8400-e29b-41d4-a716-446655440000"}
     
     response = client.post("/generate-embedings", json=request_data)
     
     assert response.status_code == 200
     response_data = response.json()
     
-    assert "competencies" in response_data
-    assert isinstance(response_data["competencies"], list)
-    assert len(response_data["competencies"]) > 0
+    assert "embedings" in response_data
+    assert isinstance(response_data["embedings"], list)
     
-    first_competency = response_data["competencies"][0]
-    assert first_competency["title"] == "Competency 1"
-    assert first_competency["description"] == "Description 1"
-    assert first_competency["taxonomy"] == "R"
 
 def test_generate_competency_invalid_request():
     """Test invalid request with missing required field"""
