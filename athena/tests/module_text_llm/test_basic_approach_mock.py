@@ -1,46 +1,9 @@
-import sys
-from unittest.mock import Mock, patch
-from pydantic import BaseModel, Field
-from typing import Callable, Any
-import configparser
 import pytest
 from module_text_llm.basic_approach.generate_suggestions import generate_suggestions
 from athena.text import Exercise, Submission, Feedback
-from module_text_llm.approach_config import ApproachConfig
 from athena.schemas.exercise_type import ExerciseType
 from tests.utils.mock_env import mock_sent_tokenize
 from tests.utils.mock_llm import MockLanguageModel, MockAssessmentModel, MockFeedbackModel
-from tests.utils.mock_config import MockApproachConfig, MockModelConfig
-
-# ---- Patch llm_core.models.openai ----
-class MockOpenAIModelConfig(BaseModel):
-    """Mock configuration for OpenAI model settings."""
-    model_name: str = "mock_model"
-    get_model: Callable[[], Any] = Field(default_factory=lambda: Mock())
-
-    class Config:
-        arbitrary_types_allowed = True
-
-mock_openai = Mock()
-mock_openai.OpenAIModelConfig = MockOpenAIModelConfig
-mock_openai.available_models = {'mock_model': Mock()}
-sys.modules['llm_core.models.openai'] = mock_openai
-
-# ---- Patch configparser.ConfigParser ----
-class MockConfigParser:
-    """Mock implementation of ConfigParser for module configuration."""
-    def __init__(self):
-        self._data = {"module": {"name": "text", "type": "text", "port": "8000"}}
-
-    def __getitem__(self, key):
-        return self._data[key]
-
-    def read(self, *args, **kwargs):
-        pass
-
-# Start the patch context before other imports
-patcher = patch("athena.module_config.configparser.ConfigParser", return_value=MockConfigParser())
-patcher.start()
 
 @pytest.fixture
 def mock_exercise():
@@ -64,15 +27,6 @@ def mock_submission(mock_exercise):
         id=1,
         exerciseId=mock_exercise.id,
         text="This is a test submission.\nIt has multiple lines.\nFor testing purposes."
-    )
-
-@pytest.fixture
-def mock_config():
-    """Create a mock configuration for testing."""
-    return MockApproachConfig(
-        max_input_tokens=5000,
-        model=MockModelConfig(),
-        type="basic"
     )
 
 @pytest.mark.asyncio
