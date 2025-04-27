@@ -8,10 +8,12 @@ readme = "README.md"
 [tool.poetry.dependencies]
 python = "^3.13"
 fastapi = "^0.115.5"
-weaviate-client = "^4.13.2"
+weaviate-client = "^4.0"
 datasets = "^3.5.0"
 sentence-transformers = "^4.0.2"
 pydantic-settings = "^2.8.1"
+matplotlib = "^3.10.1"
+scipy = "^1.15.2"
 
 
 [tool.poetry.group.dev.dependencies]

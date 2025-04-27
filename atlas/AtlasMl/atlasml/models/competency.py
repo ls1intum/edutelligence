@@ -29,9 +29,15 @@ class CompetencyRelation(BaseModel):
     relation_type: CompetencyRelationType
 
 class GenerateCompetencyRequest(BaseModel):
+    id: str
     description: str
+
+class GenerateCompetencyRequestBatch(BaseModel):
+    competencies: List[GenerateCompetencyRequest]
 
 class GenerateCompetencyResponse(BaseModel):
     competencies: List[Competency]
     competency_relations: List[CompetencyRelation]
 
+class GenerateEmbedingsResponse(BaseModel):
+    embedings: List

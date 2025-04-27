@@ -2,13 +2,17 @@ from fastapi import FastAPI
 import os 
 
 from atlasml.clients.weaviate import weaviate_client
-from atlasml.routers import health_router
+
+from atlasml.routers.health import router as health_router
+from atlasml.routers.competency import router as competency_router
+
 
 ENV = os.getenv("ENV", "dev")
 
 app = FastAPI(title="AtlasML API")
 
 app.include_router(health_router)
+app.include_router(competency_router)
 
 @app.on_event("startup")
 def startup_event():
