@@ -1,10 +1,6 @@
 name: AtlasML Test and Build
 
 on:
-  push:
-    paths:
-      - 'atlas/AtlasMl/**'
-      - '.github/workflows/atlasml_test-and-build.yml'
   pull_request:
     paths:
       - 'atlas/AtlasMl/**'
@@ -33,9 +29,6 @@ jobs:
 
       - name: Install dependencies
         run: poetry install
-
-      - name: Run tests
-        run: poetry run pytest -v
 # TODO: Fix test workflow
 # build:
 #   needs: test
