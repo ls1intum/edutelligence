@@ -8,9 +8,9 @@ app.include_router(router)
 
 client = TestClient(app)
 def test_generate_competency_success():
-    request_data = {"description": "Test input"}
+    request_data = {"description": "Test input", "id": "1"}
     
-    response = client.post("/generate-competency", json=request_data)
+    response = client.post("/generate-embedings", json=request_data)
     
     assert response.status_code == 200
     response_data = response.json()
@@ -26,7 +26,7 @@ def test_generate_competency_success():
 
 def test_generate_competency_invalid_request():
     """Test invalid request with missing required field"""
-    response = client.post("/generate-competency", json={})
+    response = client.post("/generate-embedings", json={})
     
     # Ensure FastAPI returns a validation error
     assert response.status_code == 422
@@ -34,5 +34,5 @@ def test_generate_competency_invalid_request():
     response_data = response.json()
 
     assert "detail" in response_data
-    assert response_data["detail"][0]["loc"] == ["body", "description"]
+    assert response_data["detail"][0]["loc"] == ["body", "id"]
     assert response_data["detail"][0]["msg"] == "Field required"
