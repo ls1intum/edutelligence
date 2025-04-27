@@ -28,11 +28,14 @@
 			"path": "modules/programming/module_programming_themisml"
 		},
 		{
-      "path": "modules/programming/module_programming_apted"
+      		"path": "modules/programming/module_programming_apted"
 		},
 		{
-      "path": "modules/modeling/module_modeling_llm"
-		}
+      		"path": "modules/modeling/module_modeling_llm"
+		},
+		{
+            "path": "playground"
+        }
 	],
 	"settings": {
 		"python.linting.prospectorEnabled": true,
