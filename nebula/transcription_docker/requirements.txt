@@ -6,3 +6,5 @@ torch
 ffmpeg-python
 opencv-python
 pillow
+python-dotenv
+requests
