@@ -30,7 +30,7 @@ async def generate_suggestions(exercise: Exercise, submission: Submission, confi
         logger.info("Learner profile was not provided - continuing with the default values.")
         learner_profile = LearnerProfile(
             feedback_practical_theoretical=3,
-            feedback_creative_guidance=3,
+            feedback_alternative_standard=3,
             feedback_followup_summary=3,
             feedback_brief_detailed=3
         )

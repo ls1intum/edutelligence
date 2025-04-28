@@ -15,7 +15,7 @@ class COTLearnerProfileConfig(ApproachConfig):
     generate_suggestions_prompt: GenerateSuggestionsPrompt = Field(default=GenerateSuggestionsPrompt())
     profile: LearnerProfile = Field(default=LearnerProfile(
         feedback_practical_theoretical=3,
-        feedback_creative_guidance=3,
+        feedback_alternative_standard=3,
         feedback_followup_summary=3,
         feedback_brief_detailed=3
     ))

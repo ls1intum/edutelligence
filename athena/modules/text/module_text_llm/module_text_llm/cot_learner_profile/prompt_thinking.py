@@ -37,7 +37,7 @@ Student\'s submission to grade (with sentence numbers <number>: <sentence>):
 # Input Prompt
 class ThinkingPrompt(BaseModel):
     """\
-Features available: **{problem_statement}**, **{example_solution}**, **{grading_instructions}**, **{max_points}**, **{bonus_points}**, **{submission}**, **{practical_theoretical}**, **{creative_guidance}**, **{followup_summary}**, **{brief_detailed}**
+Features available: **{problem_statement}**, **{example_solution}**, **{grading_instructions}**, **{max_points}**, **{bonus_points}**, **{submission}**, **{learner_profile}**
 
 _Note: **{problem_statement}**, **{example_solution}**, or **{grading_instructions}** might be omitted if the input is too long._\
 """
