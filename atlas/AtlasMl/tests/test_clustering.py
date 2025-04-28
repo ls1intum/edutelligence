@@ -3,8 +3,8 @@ import numpy as np
 from enum import Enum
 from sklearn.manifold import TSNE
 from sklearn.cluster import HDBSCAN
-from atlas.AtlasMl.atlasml.ml.Clustering.TSNE import apply_tsne
-from atlas.AtlasMl.atlasml.ml.Clustering.HDBSCAN import apply_hdbscan
+from atlasml.ml.Clustering.TSNE import apply_tsne
+from atlasml.ml.Clustering.HDBSCAN import apply_hdbscan
 
 
 def test_tsne_output_shape_default():
