@@ -13,9 +13,12 @@ os.environ["AZURE_OPENAI_API_KEY"] = "mock_key"
 os.environ["AZURE_OPENAI_API_BASE"] = "mock_base"
 
 # Mock NLTK
+
+
 def mock_sent_tokenize(text):
     """Mock implementation of sent_tokenize that splits on periods."""
     return [s.strip() for s in text.split('.') if s.strip()]
+
 
 patch('module_text_llm.helpers.utils.sent_tokenize', mock_sent_tokenize).start()
 

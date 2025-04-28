@@ -5,6 +5,7 @@ from athena.schemas.exercise_type import ExerciseType
 from tests.utils.mock_env import mock_sent_tokenize
 from tests.utils.mock_llm import MockLanguageModel, MockAssessmentModel, MockFeedbackModel
 
+
 @pytest.fixture
 def mock_exercise():
     """Create a mock exercise for testing."""
@@ -20,6 +21,7 @@ def mock_exercise():
         grading_criteria=[]
     )
 
+
 @pytest.fixture
 def mock_submission(mock_exercise):
     """Create a mock submission for testing."""
@@ -29,8 +31,10 @@ def mock_submission(mock_exercise):
         text="This is a test submission.\nIt has multiple lines.\nFor testing purposes."
     )
 
+
 @pytest.mark.asyncio
-async def test_generate_suggestions_basic(mock_exercise, mock_submission, mock_config):
+async def test_generate_suggestions_basic(
+        mock_exercise, mock_submission, mock_config):
     """Test basic feedback generation with a simple submission."""
     mock_model = MockLanguageModel(return_value=MockAssessmentModel(feedbacks=[
         MockFeedbackModel(
@@ -58,18 +62,24 @@ async def test_generate_suggestions_basic(mock_exercise, mock_submission, mock_c
 
     assert isinstance(feedbacks, list)
     assert all(isinstance(feedback, Feedback) for feedback in feedbacks)
-    assert all(feedback.exercise_id == mock_exercise.id for feedback in feedbacks)
-    assert all(feedback.submission_id == mock_submission.id for feedback in feedbacks)
+    assert all(feedback.exercise_id ==
+               mock_exercise.id for feedback in feedbacks)
+    assert all(feedback.submission_id ==
+               mock_submission.id for feedback in feedbacks)
+
 
 @pytest.mark.asyncio
-async def test_generate_suggestions_empty_submission(mock_exercise, mock_config):
+async def test_generate_suggestions_empty_submission(
+        mock_exercise, mock_config):
     """Test feedback generation with an empty submission."""
     empty_submission = Submission(
         id=2,
         exerciseId=mock_exercise.id,
         text=""
     )
-    mock_model = MockLanguageModel(return_value=MockAssessmentModel(feedbacks=[]))
+    mock_model = MockLanguageModel(
+        return_value=MockAssessmentModel(
+            feedbacks=[]))
     mock_config.model.get_model = lambda: mock_model
     mock_sent_tokenize.return_value = []
 
@@ -83,6 +93,7 @@ async def test_generate_suggestions_empty_submission(mock_exercise, mock_config)
 
     assert isinstance(feedbacks, list)
     assert len(feedbacks) == 0
+
 
 @pytest.mark.asyncio
 async def test_generate_suggestions_long_input(mock_exercise, mock_config):
@@ -114,6 +125,7 @@ async def test_generate_suggestions_long_input(mock_exercise, mock_config):
 
     assert isinstance(feedbacks, list)
     assert all(isinstance(feedback, Feedback) for feedback in feedbacks)
-    assert all(feedback.exercise_id == mock_exercise.id for feedback in feedbacks)
-    assert all(feedback.submission_id == long_submission.id for feedback in feedbacks) 
-    
+    assert all(feedback.exercise_id ==
+               mock_exercise.id for feedback in feedbacks)
+    assert all(feedback.submission_id ==
+               long_submission.id for feedback in feedbacks)

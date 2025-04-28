@@ -6,6 +6,7 @@ from langchain_core.prompt_values import PromptValue
 from langchain_core.messages import BaseMessage
 from module_text_llm.basic_approach.prompt_generate_suggestions import AssessmentModel as RealAssessmentModel
 
+
 class MockFeedbackModel(BaseModel):
     """Mock feedback model for testing."""
     title: str = "Test Feedback"
@@ -15,9 +16,12 @@ class MockFeedbackModel(BaseModel):
     credits: float = 0.0
     grading_instruction_id: Optional[int] = None
 
+
 class MockAssessmentModel(BaseModel):
     """Mock assessment model containing feedback items."""
-    feedbacks: List[MockFeedbackModel] = Field(default_factory=lambda: [MockFeedbackModel()])
+    feedbacks: List[MockFeedbackModel] = Field(
+        default_factory=lambda: [MockFeedbackModel()])
+
 
 class MockStructuredMockLanguageModel(BaseLanguageModel):
     """Mock language model with structured output support."""
@@ -28,29 +32,56 @@ class MockStructuredMockLanguageModel(BaseLanguageModel):
         if return_value is not None:
             self.return_value = return_value
 
-    async def ainvoke(self, input: Any, config: Optional[RunnableConfig] = None, **kwargs: Any) -> Any:
+    async def ainvoke(
+            self,
+            input: Any,
+            config: Optional[RunnableConfig] = None,
+            **kwargs: Any) -> Any:
         return self.return_value
 
-    async def agenerate_prompt(self, prompts: List[PromptValue], stop: Optional[List[str]] = None, **kwargs: Any) -> Any:
+    async def agenerate_prompt(self,
+                               prompts: List[PromptValue],
+                               stop: Optional[List[str]] = None,
+                               **kwargs: Any) -> Any:
         return [self.return_value]
 
-    async def apredict(self, text: str, stop: Optional[List[str]] = None, **kwargs: Any) -> str:
+    async def apredict(self,
+                       text: str,
+                       stop: Optional[List[str]] = None,
+                       **kwargs: Any) -> str:
         return str(self.return_value)
 
-    async def apredict_messages(self, messages: List[BaseMessage], stop: Optional[List[str]] = None, **kwargs: Any) -> str:
+    async def apredict_messages(self,
+                                messages: List[BaseMessage],
+                                stop: Optional[List[str]] = None,
+                                **kwargs: Any) -> str:
         return str(self.return_value)
 
-    def generate_prompt(self, prompts: List[PromptValue], stop: Optional[List[str]] = None, **kwargs: Any) -> Any:
+    def generate_prompt(self,
+                        prompts: List[PromptValue],
+                        stop: Optional[List[str]] = None,
+                        **kwargs: Any) -> Any:
         return [self.return_value]
 
-    def invoke(self, input: Any, config: Optional[RunnableConfig] = None, **kwargs: Any) -> Any:
+    def invoke(
+            self,
+            input: Any,
+            config: Optional[RunnableConfig] = None,
+            **kwargs: Any) -> Any:
         return self.return_value
 
-    def predict(self, text: str, stop: Optional[List[str]] = None, **kwargs: Any) -> str:
+    def predict(self,
+                text: str,
+                stop: Optional[List[str]] = None,
+                **kwargs: Any) -> str:
         return str(self.return_value)
 
-    def predict_messages(self, messages: List[BaseMessage], stop: Optional[List[str]] = None, **kwargs: Any) -> str:
+    def predict_messages(self,
+                         messages: List[BaseMessage],
+                         stop: Optional[List[str]] = None,
+                         **kwargs: Any) -> str:
         return str(self.return_value)
+
 
 class MockLanguageModel(BaseLanguageModel):
     """Mock language model for testing feedback generation."""
@@ -61,7 +92,11 @@ class MockLanguageModel(BaseLanguageModel):
         if return_value is not None:
             self.return_value = return_value
 
-    async def ainvoke(self, input: Any, config: Optional[RunnableConfig] = None, **kwargs: Any) -> Any:
+    async def ainvoke(
+            self,
+            input: Any,
+            config: Optional[RunnableConfig] = None,
+            **kwargs: Any) -> Any:
         if isinstance(self.return_value, MockAssessmentModel):
             return RealAssessmentModel(feedbacks=self.return_value.feedbacks)
         return self.return_value
@@ -70,26 +105,47 @@ class MockLanguageModel(BaseLanguageModel):
         """Return a mock that will return the structured output directly."""
         return self
 
-    async def agenerate_prompt(self, prompts: List[PromptValue], stop: Optional[List[str]] = None, **kwargs: Any) -> Any:
+    async def agenerate_prompt(self,
+                               prompts: List[PromptValue],
+                               stop: Optional[List[str]] = None,
+                               **kwargs: Any) -> Any:
         return [self.return_value]
 
-    async def apredict(self, text: str, stop: Optional[List[str]] = None, **kwargs: Any) -> str:
+    async def apredict(self,
+                       text: str,
+                       stop: Optional[List[str]] = None,
+                       **kwargs: Any) -> str:
         return str(self.return_value)
 
-    async def apredict_messages(self, messages: List[BaseMessage], stop: Optional[List[str]] = None, **kwargs: Any) -> str:
+    async def apredict_messages(self,
+                                messages: List[BaseMessage],
+                                stop: Optional[List[str]] = None,
+                                **kwargs: Any) -> str:
         return str(self.return_value)
 
-    def generate_prompt(self, prompts: List[PromptValue], stop: Optional[List[str]] = None, **kwargs: Any) -> Any:
+    def generate_prompt(self,
+                        prompts: List[PromptValue],
+                        stop: Optional[List[str]] = None,
+                        **kwargs: Any) -> Any:
         return [self.return_value]
 
-    def invoke(self, input: Any, config: Optional[RunnableConfig] = None, **kwargs: Any) -> Any:
+    def invoke(
+            self,
+            input: Any,
+            config: Optional[RunnableConfig] = None,
+            **kwargs: Any) -> Any:
         if isinstance(self.return_value, MockAssessmentModel):
             return RealAssessmentModel(feedbacks=self.return_value.feedbacks)
         return self.return_value
 
-    def predict(self, text: str, stop: Optional[List[str]] = None, **kwargs: Any) -> str:
+    def predict(self,
+                text: str,
+                stop: Optional[List[str]] = None,
+                **kwargs: Any) -> str:
         return str(self.return_value)
 
-    def predict_messages(self, messages: List[BaseMessage], stop: Optional[List[str]] = None, **kwargs: Any) -> str:
+    def predict_messages(self,
+                         messages: List[BaseMessage],
+                         stop: Optional[List[str]] = None,
+                         **kwargs: Any) -> str:
         return str(self.return_value)
-     

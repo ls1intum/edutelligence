@@ -6,20 +6,24 @@ from tests.utils.mock_llm import MockLanguageModel, MockStructuredMockLanguageMo
 from tests.utils.mock_config import MockApproachConfig, MockModelConfig
 from tests.utils.mock_env import mock_sent_tokenize
 
+
 @pytest.fixture
 def mock_llm():
     """Fixture providing a basic mock language model."""
     return MockLanguageModel()
+
 
 @pytest.fixture
 def mock_structured_llm():
     """Fixture providing a structured mock language model."""
     return MockStructuredMockLanguageModel()
 
+
 @pytest.fixture
 def mock_assessment_model():
     """Fixture providing a mock assessment model."""
     return MockAssessmentModel()
+
 
 @pytest.fixture
 def mock_config():
@@ -28,4 +32,4 @@ def mock_config():
         max_input_tokens=5000,
         model=MockModelConfig(),
         type="basic"
-    ) 
+    )
