@@ -36,11 +36,24 @@ cd transcription_docker/ docker compose up --build
 
 ### Start Transcription
 
-- **Endpoint:** `POST http://localhost:8080/api/lecture/1/lecture-unit/2/nebula-transcriber`
+- **Endpoint:** `POST http://localhost:8080/api/lecture/{lecture_id}/lecture-unit/{lecture_Unit_id}/nebula-transcriber`
 - **Request Body:**
   {
   "videoUrl": "https://your.video.url/playlist.m3u8",
   "lectureId": 1,
   "lectureUnitId": 2
   }
+
+**How to Obtain a Video URL from TUM-Live**
+To test Nebula transcription with a TUM-Live lecture video, follow these steps:
+
+-Open TUM-Live and select any lecture.
+-Example: https://live.rbg.tum.de/w/WiSe24ItP/55921 (only ~12 minutes).
+-Right-click anywhere on the page and select Inspect to open Developer Tools.
+-Go to the "Network" tab and reload the page if necessary.
+-Look for a network request to a .m3u8 file (playlist link).
+e.g. "https://edge.live.rbg.tum.de/vod/WiSe24ItP_2025_02_05_15_10COMB.mp4/playlist.m3u8?jwt="
+-Copy the full URL, including your personal JWT token (everything after jwt=).
+-Paste the copied link as the Video URL when making a transcription request to Nebula.
+
 
