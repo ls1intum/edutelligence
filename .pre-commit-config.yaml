@@ -8,6 +8,11 @@ repos:
         args: ["-p", "iris"]
         files: "^iris/.*"
       - id: sub-pre-commit
+        alias: athena
+        name: "pre-commit for athena"
+        args: [ "-p", "athena" ]
+        files: "^athena/.*"
+      - id: sub-pre-commit
         alias: nebula
         name: "pre-commit for nebula"
         args: ["-p", "nebula"]
