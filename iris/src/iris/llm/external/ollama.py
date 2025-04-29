@@ -109,7 +109,6 @@ class OllamaModel(
     password: str
     _client: Client
 
-    # Auth credentials must be set via environment variables: OLLAMA_USERNAME and OLLAMA_PASSWORD
     def model_post_init(self, __context: Any) -> None:
 
         self._client = Client()
