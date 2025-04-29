@@ -13,6 +13,7 @@ import { FullScreenHandle } from "react-full-screen";
 
 import useHealth from "@/hooks/health";
 import useBatchModuleExperiment from "@/hooks/batch_module_experiment";
+import { useSendResults } from "@/hooks/athena/send_results";
 import { ModuleProvider } from "@/hooks/module_context";
 import { ExperimentIdentifiersProvider } from "@/hooks/experiment_identifiers_context";
 import { ModuleConfiguration } from "../configure_modules";
@@ -39,6 +40,8 @@ type ConductBatchModuleExperimentProps = {
 export type ConductBatchModuleExperimentHandles = {
   importData: ReturnType<typeof useBatchModuleExperiment>["importData"];
   exportData: ReturnType<typeof useBatchModuleExperiment>["exportData"];
+  analyseData: ReturnType<typeof useBatchModuleExperiment>["analyseData"]
+  getResults: ReturnType<typeof useBatchModuleExperiment>["getResults"];
 };
 
 // ForwardRef is needed to expose the ref to the parent component
@@ -66,7 +69,8 @@ const ConductBatchModuleExperiment = React.forwardRef<
 
     const [showProgress, setShowProgress] = useState(true);
     const [isConfigModalOpen, setConfigModalOpen] = useState(false);
-
+    // Use the `useSendResults` hook
+    const { mutate: sendResultsMutate } = useSendResults();
     function handleOpenModal() {
       document.body.style.overflow = "hidden"; // Prevent scrolling
       setConfigModalOpen(true);
@@ -80,10 +84,11 @@ const ConductBatchModuleExperiment = React.forwardRef<
     if (didStartExperiment) {
       moduleExperiment.startExperiment();
     }
-
     useImperativeHandle(ref, () => ({
       importData: moduleExperiment.importData,
       exportData: moduleExperiment.exportData,
+      analyseData: moduleExperiment.analyseData,
+      getResults: moduleExperiment.getResults,
     }));
 
     useEffect(() => {
