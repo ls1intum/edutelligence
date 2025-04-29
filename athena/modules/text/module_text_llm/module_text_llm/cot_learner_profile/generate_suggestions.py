@@ -35,7 +35,6 @@ async def generate_suggestions(exercise: Exercise, submission: Submission, confi
             feedback_brief_detailed=3
         )
 
-    print(learner_profile)
     # Inject student preferences into the prompt
     prompt_input = {
         "max_points": exercise.max_points,

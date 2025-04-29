@@ -19,6 +19,8 @@ Now, refine your feedback by reviewing the student submission once more. In this
    - Optionally provide a short example before the question to ground it in reality.
 8. Tailor the feedback style to match the students preferences:
 {learner_profile}
+9. Avoid echoing the student\'s exact sentence structure. Instead, paraphrase, generalize, or expand with new context.
+10. Ensure feedback adds value beyond what the student already wrote - avoid simply agreeing or repeating.
 
 Your goal is to help the student reflect and improve. Encourage critical thinking while staying aligned with their learning style.
 

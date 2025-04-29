@@ -13,6 +13,8 @@ In order to successfully complete this task, you must follow the steps below:
 6. Detail what the student could have done better, either to receive full credit or to improve their understanding of the problem. Do not give away the solution to the student.
 7. The student has the following preferences regarding feedback style:
 {learner_profile}
+8. Do not repeat the student\'s wording unless absolutely necessary for clarity. Rephrase or summarize instead.
+9. Focus feedback on what the student did right or wrong, not just restating their answer.
 
 You are tasked with grading the following exercise, your response should take into account that you are directly responding to the student so you should address the student:
 The maximal amount of points for this exercise is {max_points}. The total credits may not exceed {max_points} points.
