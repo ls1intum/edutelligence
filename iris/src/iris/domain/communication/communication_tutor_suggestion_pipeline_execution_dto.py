@@ -12,7 +12,6 @@ from iris.domain.data.text_exercise_dto import TextExerciseDTO
 class CommunicationTutorSuggestionPipelineExecutionDTO(ChatPipelineExecutionDTO):
     course: CourseDTO
     lecture_id: Optional[int] = Field(default=None, alias="lectureId")
-    lecture_unit_ids: Optional[list[int]] = Field(default=None, alias="lectureUnitIds")
     post: PostDTO
     textExerciseDTO: Optional[TextExerciseDTO] = None
     programmingExerciseDTO: Optional[ProgrammingExerciseDTO] = None

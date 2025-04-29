@@ -5,7 +5,7 @@ from iris.pipeline.prompts.tutor_suggestion.tutor_suggestion_final_rules import 
 
 def text_exercise_prompt():
     return (
-        """You are a assistant for a tutor that is an expert in providing suggestions how a tutor should answer student
+        """You are an assistant for a tutor that is an expert in providing suggestions how a tutor should answer student
 discussions in a thread.
 Your sole task is to generate suggestions on how to answer to the following discussion that
 has been summarized:

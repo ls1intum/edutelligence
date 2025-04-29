@@ -109,21 +109,6 @@ class TutorSuggestionAgentPipeline(Pipeline):
         self.dto = dto
         self.channel_type = get_channel_type(dto)
 
-        self.callback.in_progress(
-            "Checking if question is appropriate for the channel type"
-        )
-        result = self.channel_type_checker(
-            summary=summary, channel_type=self.channel_type
-        )
-        if "no" in result:
-            self.channel_type = result.split(":")[-1].strip()
-            self.callback.in_progress(
-                f"Channel was not appropriate. New channel_type: {self.channel_type}"
-            )
-            logging.info(
-                f"Channel was not appropriate. New channel: {self.channel_type}"
-            )
-
         if is_question and number_of_answers > 0:
             self.callback.in_progress("Checking if questions is already answered")
 
@@ -160,6 +145,10 @@ class TutorSuggestionAgentPipeline(Pipeline):
             self._run_text_exercise_pipeline(
                 text_exercise_dto=dto.textExerciseDTO, summary=summary
             )
+        elif self.channel_type == "programming_exercise":
+            self.callback.error("Not implemented yet")
+        elif self.channel_type == "lecture":
+            self.callback.error("Not implemented yet")
         else:
             self.callback.error("Not implemented yet")
 
