@@ -6,6 +6,7 @@ from iris.domain import ChatPipelineExecutionDTO
 from iris.domain.data.course_dto import CourseDTO
 from iris.domain.data.post_dto import PostDTO
 from iris.domain.data.programming_exercise_dto import ProgrammingExerciseDTO
+from iris.domain.data.programming_submission_dto import ProgrammingSubmissionDTO
 from iris.domain.data.text_exercise_dto import TextExerciseDTO
 
 
@@ -13,5 +14,6 @@ class CommunicationTutorSuggestionPipelineExecutionDTO(ChatPipelineExecutionDTO)
     course: CourseDTO
     lecture_id: Optional[int] = Field(default=None, alias="lectureId")
     post: PostDTO
-    textExerciseDTO: Optional[TextExerciseDTO] = None
-    programmingExerciseDTO: Optional[ProgrammingExerciseDTO] = None
+    textExercise: Optional[TextExerciseDTO] = None
+    submission: Optional[ProgrammingSubmissionDTO] = None
+    exercise: Optional[ProgrammingExerciseDTO] = None
