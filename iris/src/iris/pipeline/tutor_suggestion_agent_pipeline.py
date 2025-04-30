@@ -4,7 +4,6 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import Runnable
 from langsmith import traceable
-from pydantic import BaseModel, Field
 
 from iris.common.pipeline_enum import PipelineEnum
 from iris.domain.communication.communication_tutor_suggestion_pipeline_execution_dto import (
@@ -14,7 +13,15 @@ from iris.domain.data.text_exercise_dto import TextExerciseDTO
 from iris.llm import CapabilityRequestHandler, CompletionArguments, RequirementList
 from iris.llm.langchain import IrisLangchainChatModel
 from iris.pipeline import Pipeline
-from iris.pipeline.prompts.tutor_suggestion.channel_type_checker_prompt import channel_type_checker_prompt
+from iris.pipeline.prompts.tutor_suggestion.channel_type_checker_prompt import (
+    channel_type_checker_prompt,
+)
+from iris.pipeline.prompts.tutor_suggestion.question_answered_prompt import (
+    question_answered_prompt,
+)
+from iris.pipeline.tutor_suggestion_programming_exercise_pipeline import (
+    TutorSuggestionProgrammingExercisePipeline,
+)
 from iris.pipeline.tutor_suggestion_text_exercise_pipeline import (
     TutorSuggestionTextExercisePipeline,
 )
@@ -26,7 +33,7 @@ def get_channel_type(dto: CommunicationTutorSuggestionPipelineExecutionDTO) -> s
     Determines the channel type based on the context of the post.
     :return: The channel type as a string.
     """
-    if dto.programmingExerciseDTO is not None:
+    if dto.exercise is not None:
         return "programming_exercise"
     elif dto.textExerciseDTO is not None:
         return "text_exercise"
@@ -34,30 +41,6 @@ def get_channel_type(dto: CommunicationTutorSuggestionPipelineExecutionDTO) -> s
         return "lecture"
     else:
         return "general"
-
-
-class CategoryCheckerInput(BaseModel):
-    """
-    Input schema for the category checker tool.
-    :param category: The category to be validated.
-    :param summary: The summary of the post.
-    :param channel_type: The channel type of the post.
-    """
-
-    category: str = Field(description="The category to be validated.")
-    summary: str = Field(description="The summary of the post.")
-    channel_type: str = Field(description="The channel type of the post.")
-
-
-class RunTextExercisePipelineInput(BaseModel):
-    """
-    Input schema for the text exercise pipeline tool.
-    :param summary: The summary of the post.
-    :param text_exercise_dto: The TextExerciseDTO object containing details about the text exercise.
-    """
-
-    summary: str
-    text_exercise_dto: TextExerciseDTO
 
 
 class TutorSuggestionAgentPipeline(Pipeline):
@@ -113,15 +96,7 @@ class TutorSuggestionAgentPipeline(Pipeline):
             self.callback.in_progress("Checking if questions is already answered")
 
             prompt = ChatPromptTemplate.from_messages(
-                [
-                    (
-                        "system",
-                        "You are a verification assistant. Your task is to verify if in this discussion an asked question"
-                        "is already answered. Answer with yes or no if the question is already answered. The summarized"
-                        "thread is the following:\n\n"
-                        "{thread_summary}\n\n",
-                    )
-                ]
+                [("system", question_answered_prompt())]
             )
 
             try:
@@ -141,12 +116,13 @@ class TutorSuggestionAgentPipeline(Pipeline):
                 )
                 return
 
+        logging.info(self.channel_type)
         if self.channel_type == "text_exercise":
             self._run_text_exercise_pipeline(
                 text_exercise_dto=dto.textExerciseDTO, summary=summary
             )
         elif self.channel_type == "programming_exercise":
-            self.callback.error("Not implemented yet")
+            self._run_programming_exercise_pipeline(dto=dto, summary=summary)
         elif self.channel_type == "lecture":
             self.callback.error("Not implemented yet")
         else:
@@ -161,10 +137,7 @@ class TutorSuggestionAgentPipeline(Pipeline):
         :return: A validation result as a string.
         """
         prompt = ChatPromptTemplate.from_messages(
-            [
-                "system",
-                channel_type_checker_prompt()
-            ]
+            ["system", channel_type_checker_prompt()]
         )
         llm = IrisLangchainChatModel(
             request_handler=CapabilityRequestHandler(
@@ -174,7 +147,9 @@ class TutorSuggestionAgentPipeline(Pipeline):
         )
         self.tokens.append(llm.tokens)
         pipeline = llm | StrOutputParser()
-        return (prompt | pipeline).invoke({"channel_type": channel_type, "summary": summary})
+        return (prompt | pipeline).invoke(
+            {"channel_type": channel_type, "summary": summary}
+        )
 
     def _run_text_exercise_pipeline(
         self, text_exercise_dto: TextExerciseDTO, summary: str
@@ -186,15 +161,6 @@ class TutorSuggestionAgentPipeline(Pipeline):
         :return: The result of the text exercise pipeline.
         """
         self.callback.in_progress("Generating suggestions for text exercise")
-        if text_exercise_dto is None:
-            self.callback.done(
-                "No text exercise was provided",
-                final_result="<p>This post seems to be a text exercise post, but this is the wrong channel.</p><br>"
-                             "<p>Please move it to the text exercise channel.<p>",
-                tokens=self.tokens,
-            )
-            return
-        self.callback.in_progress("Running text exercise pipeline")
         text_exercise_pipeline = TutorSuggestionTextExercisePipeline()
         try:
             logging.info(summary)
@@ -208,5 +174,30 @@ class TutorSuggestionAgentPipeline(Pipeline):
         self.callback.done(
             "Generated tutor suggestions",
             final_result=text_exercise_result,
+            tokens=self.tokens,
+        )
+
+    def _run_programming_exercise_pipeline(
+        self, dto: CommunicationTutorSuggestionPipelineExecutionDTO, summary: str
+    ):
+        """
+        Run the programming exercise pipeline.
+        :param dto: The CommunicationTutorSuggestionPipelineExecutionDTO object containing details about the programming exercise.
+        :param summary: The summary of the post.
+        :return: The result of the programming exercise pipeline.
+        """
+        self.callback.in_progress("Generating suggestions for programming exercise")
+        programming_exercise_pipeline = TutorSuggestionProgrammingExercisePipeline()
+        try:
+            programming_exercise_result = programming_exercise_pipeline(
+                dto=dto, chat_summary=summary
+            )
+        except AttributeError as e:
+            self.callback.error(f"Error running programming exercise pipeline: {e}")
+            return
+
+        self.callback.done(
+            "Generated tutor suggestions",
+            final_result=programming_exercise_result,
             tokens=self.tokens,
         )
