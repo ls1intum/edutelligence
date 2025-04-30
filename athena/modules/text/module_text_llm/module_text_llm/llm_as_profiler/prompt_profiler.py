@@ -9,15 +9,26 @@ You are an educational analyst tasked with evaluating a student's answer to a te
 Your goal is to:
 1. Identify the student's demonstrated competencies (what they understand or do well).
 2. Identify the student's challenges (mistakes, misconceptions, or difficulties).
-3. Estimate the current cognitive level the student demonstrates using Bloom's Taxonomy.
-4. Suggest the next cognitive level the student should aim for (target level).
-5. Include the student's known feedback style preference (brief/detailed, practical/theoretical).
+3. Identify what student's missing (missing parts of of the solution).
+4. Estimate the current cognitive level the student demonstrates using Bloom's Taxonomy.
+5. Suggest the next cognitive level the student should aim for (target level).
+6. Include the student's known feedback style preference (brief/detailed, practical/theoretical).
 
 You will be given:
 - The student's submission
 - The correct solution or expected answer
 - Grading instructions or rubric (if available)
-- The student's feedback style preference
+
+Instructions:
+- Be specific in describing competencies and challenges.
+- Include Bloom level tags only if reasonably clear.
+- Provide suggestions only when helpful.
+- Include line references to the student's submission if possible.
+
+Output Format:
+Return only valid JSON, including line references where applicable. Do not add any comments or explanations outside the JSON block.
+
+<Exercise Details>
 
 Problem Statement:
 {problem_statement}
@@ -27,13 +38,6 @@ Example Solution:
 
 Grading Instructions:
 {grading_instructions}
-
-Instructions:
-- Be specific in describing competencies and challenges.
-- Include Bloom level tags only if reasonably clear.
-- Provide suggestions only when helpful.
-- Return only valid JSON. Do not add any comments or explanations outside the JSON block.
-
 """
 
 
@@ -77,11 +81,13 @@ class Competency(BaseModel):
         default=None,
         description="The Bloom's Taxonomy level corresponding to this competency."
     )
+    line_start: Optional[int] = Field(description="Referenced starting line number from the student's submission, or empty if unreferenced")
+    line_end: Optional[int] = Field(description="Referenced ending line number from the student's submission, or empty if unreferenced")
 
 
 class Challenge(BaseModel):
     description: str = Field(
-        description="A description of a learning challenge, misconception, or error identified in the student's response."
+        description="A description of a missing part, learning challenge, misconception, or error identified in the student's response."
     )
     bloom_level: Optional[BloomLevel] = Field(
         default=None,
@@ -91,6 +97,8 @@ class Challenge(BaseModel):
         default=None,
         description="An optional suggestion or tip to help the student overcome this challenge."
     )
+    line_start: Optional[int] = Field(description="Referenced starting line number from the student's submission, or empty if unreferenced")
+    line_end: Optional[int] = Field(description="Referenced ending line number from the student's submission, or empty if unreferenced")
 
 
 class ProfileModel(BaseModel):
