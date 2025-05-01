@@ -10,9 +10,8 @@ Your goal is to:
 1. Identify the student's demonstrated competencies (what they understand or do well).
 2. Identify the student's challenges (mistakes, misconceptions, or difficulties).
 3. Identify what student's missing (missing parts of of the solution).
-4. Estimate the current cognitive level the student demonstrates using Bloom's Taxonomy.
+4. Estimate the current cognitive level the student demonstrates using SOLO Taxonomy.
 5. Suggest the next cognitive level the student should aim for (target level).
-6. Include the student's known feedback style preference (brief/detailed, practical/theoretical).
 
 You will be given:
 - The student's submission
@@ -21,9 +20,14 @@ You will be given:
 
 Instructions:
 - Be specific in describing competencies and challenges.
-- Include Bloom level tags only if reasonably clear.
+- Include SOLO level tags only if reasonably clear.
 - Provide suggestions only when helpful.
 - Include line references to the student's submission if possible.
+
+SOLO Level Definitions:
+- Limited Response: The student addresses one idea or misses the point.
+- Partial Understanding: The student provides multiple relevant ideas, but treats them separately.
+- Connected Understanding: The student connects ideas into a coherent structure, or reasons beyond the task.
 
 Output Format:
 Return only valid JSON, including line references where applicable. Do not add any comments or explanations outside the JSON block.
@@ -64,22 +68,22 @@ _Note: **{problem_statement}**, **{example_solution}**, or **{grading_instructio
 
 # Output Object
 
-class BloomLevel(str, Enum):
-    REMEMBER = "Remember"
-    UNDERSTAND = "Understand"
-    APPLY = "Apply"
-    ANALYZE = "Analyze"
-    EVALUATE = "Evaluate"
-    CREATE = "Create"
+class SoloLevel(str, Enum):
+    LIMITED = "Limited Response"
+    PARTIAL = "Partial Understanding"
+    CONNECTED = "Connected Understanding"
 
 
 class Competency(BaseModel):
     description: str = Field(
         description="A description of what the student demonstrated successfully."
     )
-    bloom_level: Optional[BloomLevel] = Field(
+    solo_level: Optional[SoloLevel] = Field(
         default=None,
-        description="The Bloom's Taxonomy level corresponding to this competency."
+        description="The SOLO Taxonomy level corresponding to this competency."
+    )
+    grading_instruction_id: Optional[int] = Field(
+        description="ID of the grading instruction that was used to generate this feedback, or empty if no grading instruction was used"
     )
     line_start: Optional[int] = Field(description="Referenced starting line number from the student's submission, or empty if unreferenced")
     line_end: Optional[int] = Field(description="Referenced ending line number from the student's submission, or empty if unreferenced")
@@ -89,13 +93,16 @@ class Challenge(BaseModel):
     description: str = Field(
         description="A description of a missing part, learning challenge, misconception, or error identified in the student's response."
     )
-    bloom_level: Optional[BloomLevel] = Field(
+    solo_level: Optional[SoloLevel] = Field(
         default=None,
-        description="The Bloom's level that this challenge relates to."
+        description="The SOLO's level that this challenge relates to."
     )
     suggestion: Optional[str] = Field(
         default=None,
         description="An optional suggestion or tip to help the student overcome this challenge."
+    )
+    grading_instruction_id: Optional[int] = Field(
+        description="ID of the grading instruction that was used to generate this feedback, or empty if no grading instruction was used"
     )
     line_start: Optional[int] = Field(description="Referenced starting line number from the student's submission, or empty if unreferenced")
     line_end: Optional[int] = Field(description="Referenced ending line number from the student's submission, or empty if unreferenced")
@@ -108,11 +115,11 @@ class ProfileModel(BaseModel):
     challenges: List[Challenge] = Field(
         description="A list of learning challenges or misconceptions detected in the student's response."
     )
-    current_level: Optional[BloomLevel] = Field(
+    current_level: Optional[SoloLevel] = Field(
         default=None,
-        description="The highest Bloom's level the student demonstrated in this exercise."
+        description="The highest SOLO level the student demonstrated in this exercise."
     )
-    target_level: Optional[BloomLevel] = Field(
+    target_level: Optional[SoloLevel] = Field(
         default=None,
-        description="The next Bloom's level the student should aim to reach."
+        description="The next SOLO level the student should aim to reach."
     )
