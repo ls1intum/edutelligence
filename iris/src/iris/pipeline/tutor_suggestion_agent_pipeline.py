@@ -35,7 +35,7 @@ def get_channel_type(dto: CommunicationTutorSuggestionPipelineExecutionDTO) -> s
     """
     if dto.exercise is not None:
         return "programming_exercise"
-    elif dto.textExerciseDTO is not None:
+    elif dto.textExercise is not None:
         return "text_exercise"
     elif dto.lecture_id is not None:
         return "lecture"
@@ -119,7 +119,7 @@ class TutorSuggestionAgentPipeline(Pipeline):
         logging.info(self.channel_type)
         if self.channel_type == "text_exercise":
             self._run_text_exercise_pipeline(
-                text_exercise_dto=dto.textExerciseDTO, summary=summary
+                text_exercise_dto=dto.textExercise, summary=summary
             )
         elif self.channel_type == "programming_exercise":
             self._run_programming_exercise_pipeline(dto=dto, summary=summary)
