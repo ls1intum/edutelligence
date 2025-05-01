@@ -20,3 +20,11 @@ def ensure_model_present(model: str) -> None:
 def is_loaded(model: str) -> bool:
     models = [model.model for model in ollama_client.ps()["models"]]
     return model in models
+
+
+def load_model(model: str, duration: str = "5m") -> None:
+    ollama_client.chat(model, messages=[], keep_alive=duration)
+
+
+def unload_model(model: str) -> None:
+    ollama_client.chat(model, messages=[], keep_alive=0)

@@ -30,7 +30,7 @@ class LearningExtractor:
 
         if template is None:
             # Load the default template from the file located at memiris.default_templates.learning_extraction
-            template_path = "./default_templates/learning_extraction.j2"
+            template_path = "./default_templates/learning_extraction.md.j2"
             with open(template_path, "r", encoding="utf-8") as file:
                 template_content = file.read()
             self.template = Template(template_content)
