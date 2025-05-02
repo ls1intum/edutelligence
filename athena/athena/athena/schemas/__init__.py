@@ -15,3 +15,4 @@ from .modeling_exercise import ModelingExercise
 from .modeling_submission import ModelingSubmission
 from .grading_criterion import GradingCriterion, StructuredGradingInstruction
 from .structured_grading_criterion import StructuredGradingCriterion
+from .learner_profile import LearnerProfile
