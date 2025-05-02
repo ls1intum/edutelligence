@@ -37,9 +37,7 @@ jobs:
         echo "$HOME/.local/bin" >> $GITHUB_PATH
         poetry install
         poetry run install_all
-        cd tests/config
-        poetry install
         
     - name: Run tests
-      working-directory: athena/tests/config
-      run: poetry run test_all
+      working-directory: athena/modules/module_text_llm
+      run: poetry run pytest ../../tests/
