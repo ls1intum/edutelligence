@@ -38,8 +38,15 @@ def main():
         os.environ["VIRTUAL_ENV"] = venv_path
         os.environ["PATH"] = os.path.join(venv_path, "bin") + os.pathsep + path_env
         python_path = os.path.join(venv_path, "bin", "python")
+        pip_path = os.path.join(venv_path, "bin", "pip")
+
+        print(f"Using Python path: {python_path}")
 
         try:
+            # Install pytest in the virtual environment
+            print(f"Installing pytest for {module}...")
+            subprocess.run([pip_path, "install", "pytest"], check=True, capture_output=True, text=True)
+
             # Run pytest using the module's virtual environment
             result = subprocess.run([python_path, "-m", "pytest", test_dir], capture_output=True, text=True)
             if result.returncode != 0:
