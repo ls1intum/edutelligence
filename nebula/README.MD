@@ -1,59 +1,131 @@
-# Nebula
-
 # Nebula_Transcriber
 
-Nebula_Transcriber is a lightweight transcription service for educational videos.
-It uses OpenAI Whisper locally and enriches transcripts with slide numbers detected using GPT Vision.
+Nebula_Transcriber is a lightweight transcription service for educational videos.  
+It uses **Whisper** locally for audio transcription and **GPT-4o Vision** to detect visible slide numbers from video frames.
 
-## Features
+---
 
-- Download videos from a URL.
-- Extract audio and transcribe using local Whisper.
-- Detect visible slide numbers in frames using GPT-4o Vision.
-- Serve transcription results through a Flask API.
-- Stateless: no external storage required.
+## ✨ Features
 
-## Setup Instructions
+- 🎥 Download and process videos from a `.m3u8` playlist URL (e.g., from TUM-Live).
+- 🧠 Transcribe audio using local OpenAI Whisper models.
+- 👁️ Detect slide numbers using GPT-4o Vision from selected video frames.
+- ⚡ Fast and stateless — no external storage, no database.
+- 🌍 Exposes a simple Flask API.
 
-1. Clone the repository.
+---
 
-2. Create a `.env` file inside the `Nebula` folder with the following content:
-     OPENAI_API_KEY=your-openai-api-key
-     WHISPER_MODEL=base  
-     LOG_LEVEL=INFO
+## 🧪 Local Development Setup
 
+### 1. Clone the Repository
 
-1. Install Docker if you haven't already:
-- Docker Desktop for Windows/Mac
-- `sudo apt install docker.io` for Ubuntu/Linux
+```bash
+git clone https://github.com/ls1intum/edutelligence.git
+go to nebula/feature/transcript branch
+cd nebula/transcript
+```
 
-1. Navigate to the `transcription_docker/` directory and start the service:
+### 2–6. Environment Setup, Config, and Running
 
-cd transcription_docker/ docker compose up --build
+```bash
+# (Optional) Create and activate a virtual environment
+python -m venv .venv
+.venv\Scripts\activate         # on Windows
+source .venv/bin/activate        # on Unix/Mac
 
+# Install required dependencies
+pip install -r requirements.txt
 
-## API Usage
+# Create a file named `llm_config.nebula.yml` in the root directory with this structure:
+```
 
-### Start Transcription
+```yaml
+- id: azure-gpt-4-omni
+  type: azure_chat
+  api_key: <your-api-key>
+  api_version: 2025-01-01-preview
+  azure_deployment: gpt-4o
+  endpoint: https://<your-endpoint>.openai.azure.com/
+```
 
-- **Endpoint:** `POST http://localhost:8080/api/lecture/{lecture_id}/lecture-unit/{lecture_Unit_id}/nebula-transcriber`
-- **Request Body:**
-  {
+```bash
+# (Optional) Add a .env file in the root directory:
+# .env
+WHISPER_MODEL=base
+LOG_LEVEL=INFO
+VIDEO_STORAGE_PATH=./temp
+
+# Then run the application:
+python src/transcript/app.py
+```
+
+---
+
+## 🐳 Docker Setup
+
+```bash
+cd src/transcript/docker
+docker compose up --build
+```
+
+Ensure `llm_config.nebula.yml` is available inside the container.
+
+---
+
+## 🚀 API Usage
+
+**POST** `/api/lecture/{lectureId}/lecture-unit/{lectureUnitId}/nebula-transcriber`
+
+```json
+{
   "videoUrl": "https://your.video.url/playlist.m3u8",
   "lectureId": 1,
   "lectureUnitId": 2
-  }
+}
+```
 
-**How to Obtain a Video URL from TUM-Live**
-To test Nebula transcription with a TUM-Live lecture video, follow these steps:
+---
 
--Open TUM-Live and select any lecture.
--Example: https://live.rbg.tum.de/w/WiSe24ItP/55921 (only ~12 minutes).
--Right-click anywhere on the page and select Inspect to open Developer Tools.
--Go to the "Network" tab and reload the page if necessary.
--Look for a network request to a .m3u8 file (playlist link).
-e.g. "https://edge.live.rbg.tum.de/vod/WiSe24ItP_2025_02_05_15_10COMB.mp4/playlist.m3u8?jwt="
--Copy the full URL, including your personal JWT token (everything after jwt=).
--Paste the copied link as the Video URL when making a transcription request to Nebula.
+## 🎓 How to Get a TUM-Live `.m3u8` Link
 
+1. Open [TUM Live](https://live.rbg.tum.de)
+2. Inspect Network tab > find `.m3u8` link
+3. Copy full URL (including `jwt`)
+4. Use it in the request above
 
+---
+
+## 🧹 Temporary File Cleanup
+
+- Temporary `.mp4` files are saved in `./temp` by default
+- Auto-deleted after processing
+- You can change this via `.env` → `VIDEO_STORAGE_PATH=./temp`
+
+---
+
+## 📁 Project Structure
+
+```
+nebula/
+├── src/
+│   └── transcript/
+│       ├── app.py
+│       ├── slide_utils.py
+│       ├── whisper_utils.py
+│       ├── config.py
+│       ├── llm_utils.py
+│       └── docker/
+│           └── docker-compose.yml
+├── llm_config.nebula.yml
+└── .env (optional)
+```
+
+---
+
+## 🛠️ Troubleshooting
+
+- GPT Vision 404: Check deployment name and model match in Azure.
+- FFmpeg not found: Ensure it's installed and in PATH.
+- Whisper FP16 Warning: Safe to ignore on CPU.
+
+---
