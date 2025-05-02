@@ -11,27 +11,23 @@ from memiris.service.ollama_service import ollama_client
 from memiris.util.learning_util import dto_to_learning, learning_to_dto
 
 
-class LearningExtractor:
+class LearningDeduplicator:
     """
-    This class is responsible for extracting learning information from the given data.
+    A class to deduplicate Learnings using a large language model.
     """
 
-    llm: str  # Placeholder for the LLM instance
+    llm: str
     template: Template
-    focus: Optional[str]
 
-    def __init__(
-        self, llm: str, focus: Optional[str] = None, template: Optional[str] = None
-    ) -> None:
+    def __init__(self, llm: str, template: Optional[str] = None) -> None:
         """
         Initialize the LearningExtractor
         """
         self.llm = llm
-        self.focus = focus
 
         if template is None:
             # Load the default template from the file located at memiris.default_templates.learning_extraction
-            template_path = "./default_templates/learning_extraction.md.j2"
+            template_path = "./default_templates/learning_deduplication.md.j2"
             with open(template_path, "r", encoding="utf-8") as file:
                 template_content = file.read()
             self.template = Template(template_content)
@@ -39,12 +35,11 @@ class LearningExtractor:
             # Load the template from the provided string
             self.template = Template(template)
 
-    def extract(
-        self, text: str, previous_learnings: Optional[List[Learning]] = None, **kwargs
-    ) -> list[Learning]:
+    def deduplicate(self, learnings: List[Learning], **kwargs) -> List[Learning]:
         """
-        Extract learning information from the given data.
+        Deduplicate the given learnings using the LLM.
         """
+
         learning_array_type_adapter = TypeAdapter(List[LearningDto])
         learning_json_dict = learning_array_type_adapter.json_schema()
 
@@ -52,21 +47,19 @@ class LearningExtractor:
 
         system_message = self.template.render(
             learning_json_schema=learning_json_schema,
-            learning_focus=self.focus,
-            previous_learnings=(
-                [
-                    learning_to_dto(learning).model_dump()
-                    for learning in previous_learnings
-                ]
-                if previous_learnings
-                else None
-            ),
             **kwargs,
         )
 
         messages: list[Message] = [
             Message(role="system", content=system_message),
-            Message(role="user", content=text),
+            Message(
+                role="user",
+                content=str(
+                    learning_array_type_adapter.dump_json(
+                        [learning_to_dto(learning) for learning in learnings]
+                    )
+                ),
+            ),
         ]
 
         response = ollama_client.chat(
@@ -87,6 +80,6 @@ class LearningExtractor:
                 ]
             except Exception as e:
                 print(f"Error parsing response: {e}")
-                return []
+                return learnings
 
-        return []
+        return learnings
