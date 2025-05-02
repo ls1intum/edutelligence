@@ -19,11 +19,31 @@ def main():
     ]
 
     success = True
+    for module in modules:
+            # Check if test directory exists
+        test_dir = f"tests/{module}"
+        if not os.path.exists(test_dir):
+            print(f"No tests found for {module}, skipping...")
+            continue
+
+        try:
+            # Run pytest for each module that has tests
+            result = subprocess.run(["pytest", test_dir], capture_output=True, text=True)
+            if result.returncode != 0:
+                print(f"Tests failed for {module}:")
+                print(result.stdout)
+                print(result.stderr)
+                success = False
+            else:
+                print(f"Tests passed for {module}")
+        except Exception as e:
+            print(f"Error running tests for {module}: {str(e)}")
+            success = False
 
     if success:
-        sys.exit(0)
+            sys.exit(0)
     else:
-        sys.exit(-1)
+            sys.exit(-1)
 
 
 if __name__ == "__main__":
