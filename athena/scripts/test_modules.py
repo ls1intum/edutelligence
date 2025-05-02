@@ -19,15 +19,25 @@ def main():
     ]
 
     success = True
+    path_env = os.environ["PATH"]
+
     for module in modules:
-            # Check if test directory exists
+        # Check if test directory exists
         test_dir = f"tests/{module}"
         if not os.path.exists(test_dir):
             print(f"No tests found for {module}, skipping...")
             continue
 
+        venv_path = os.path.join(os.getcwd(), module, ".venv")
+        if not os.path.exists(venv_path):
+            print(f"Virtual environment not found for {module} at {venv_path}")
+            continue
+
+        os.environ["VIRTUAL_ENV"] = venv_path
+        os.environ["PATH"] = os.path.join(venv_path, "bin") + os.pathsep + path_env
+
         try:
-            # Run pytest for each module that has tests
+            # Run pytest using the module's virtual environment
             result = subprocess.run(["pytest", test_dir], capture_output=True, text=True)
             if result.returncode != 0:
                 print(f"Tests failed for {module}:")
@@ -41,9 +51,9 @@ def main():
             success = False
 
     if success:
-            sys.exit(0)
+        sys.exit(0)
     else:
-            sys.exit(-1)
+        sys.exit(-1)
 
 
 if __name__ == "__main__":

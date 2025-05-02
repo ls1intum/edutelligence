@@ -39,5 +39,5 @@ jobs:
         poetry run install_all
         
     - name: Run tests
-      working-directory: athena/modules/module_text_llm
-      run: poetry run pytest ../../tests/
+      working-directory: athena
+      run: poetry run test_all
