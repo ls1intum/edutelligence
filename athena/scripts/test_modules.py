@@ -28,17 +28,20 @@ def main():
             print(f"No tests found for {module}, skipping...")
             continue
 
+        # Get the module's virtual environment
         venv_path = os.path.join(os.getcwd(), module, ".venv")
         if not os.path.exists(venv_path):
             print(f"Virtual environment not found for {module} at {venv_path}")
             continue
 
+        # Set environment variables for the virtual environment
         os.environ["VIRTUAL_ENV"] = venv_path
         os.environ["PATH"] = os.path.join(venv_path, "bin") + os.pathsep + path_env
+        python_path = os.path.join(venv_path, "bin", "python")
 
         try:
             # Run pytest using the module's virtual environment
-            result = subprocess.run(["pytest", test_dir], capture_output=True, text=True)
+            result = subprocess.run([python_path, "-m", "pytest", test_dir], capture_output=True, text=True)
             if result.returncode != 0:
                 print(f"Tests failed for {module}:")
                 print(result.stdout)
