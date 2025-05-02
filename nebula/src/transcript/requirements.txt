@@ -1,0 +1,12 @@
+flask
+flask-cors
+openai
+git+https://github.com/openai/whisper.git
+torch
+ffmpeg-python
+opencv-python-headless
+pillow
+python-dotenv
+requests
+pyyaml
+numpy<2.0.0
