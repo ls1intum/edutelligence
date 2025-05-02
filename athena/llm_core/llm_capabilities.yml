@@ -1,7 +1,6 @@
 defaults:
   temperature: 0.7
   top_p: 1.0
-
   supports_function_calling: true
   supports_structured_output: true
 
