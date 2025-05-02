@@ -30,19 +30,18 @@ class LearnerProfile(BaseModel):
                 "Example 1: Besides QuickSort, you could also explore MergeSort or InsertionSort depending on the dataset characteristics.\n"
                 "Example 2: Instead of writing a formal essay, you could experiment with a narrative storytelling approach to engage the reader differently.\n"
             )
-        elif self.feedback_alternative_standard == 3:
+        if self.feedback_alternative_standard == 3:
             return (
                 "Present the standard solution clearly, but briefly mention one alternative approach.\n"
                 "Example 1: QuickSort is efficient for large datasets, but for nearly sorted data, InsertionSort could be faster.\n"
                 "Example 2: While a chronological structure works well for essays, you might briefly consider using a thematic structure.\n"
             )
-        else:  # 4 or 5
-            return (
-                "Focus strictly on the most conventional, best-practice solution.\n"
-                "Avoid suggesting alternatives unless necessary.\n"
-                "Example 1: Use QuickSort for efficient large dataset sorting as it is widely considered the best practical choice.\n"
-                "Example 2: Structure your essay with a clear introduction, body paragraphs supporting a single thesis, and a conclusion as per academic writing standards.\n"
-            )
+        return (
+            "Focus strictly on the most conventional, best-practice solution.\n"
+            "Avoid suggesting alternatives unless necessary.\n"
+            "Example 1: Use QuickSort for efficient large dataset sorting as it is widely considered the best practical choice.\n"
+            "Example 2: Structure your essay with a clear introduction, body paragraphs supporting a single thesis, and a conclusion as per academic writing standards.\n"
+        )
 
     def directive_followup_summary(self) -> str:
         if self.feedback_followup_summary <= 3:
@@ -55,15 +54,14 @@ class LearnerProfile(BaseModel):
                 "  - How would your solution scale if the dataset size doubled?\n"
                 "Ensure questions are easy to understand and clearly direct what kind of reflection is expected.\n"
             )
-        else:  # 4 or 5
-            return (
-                "End the feedback with a concise and clear summary.\n"
-                "- Summarize the key point(s) of the feedback.\n"
-                "- Avoid introducing open-ended questions unless necessary.\n"
-                "Examples:\n"
-                "  - In summary, using an index on user_id will optimize lookup performance.\n"
-                "  - Overall, structuring your argument with clear topic sentences improves clarity.\n"
-            )
+        return (
+            "End the feedback with a concise and clear summary.\n"
+            "- Summarize the key point(s) of the feedback.\n"
+            "- Avoid introducing open-ended questions unless necessary.\n"
+            "Examples:\n"
+            "  - In summary, using an index on user_id will optimize lookup performance.\n"
+            "  - Overall, structuring your argument with clear topic sentences improves clarity.\n"
+        )
 
     def directive_brief_detailed(self) -> str:
         if self.feedback_brief_detailed <= 2:
@@ -72,18 +70,17 @@ class LearnerProfile(BaseModel):
                 "Example 1: Add an index on the user_id column to improve performance.\n"
                 "Example 2: Clarify your thesis statement in the introduction to strengthen your argument.\n"
             )
-        elif self.feedback_brief_detailed == 3:
+        if self.feedback_brief_detailed == 3:
             return (
                 "Provide moderately detailed feedback, giving clear explanations without unnecessary length.\n"
                 "Example 1: Consider indexing user_id to speed up lookups; it helps databases quickly find matching records\n."
                 "Example 2: Starting your essay with a strong thesis helps guide the reader; this can also make your argumentation clearer.\nv"
             )
-        else:  # 4 or 5
-            return (
-                "Give detailed feedback with multiple sentences, examples, and background reasoning where relevant.\n"
-                "Example 1: Adding an index on user_id improves query speed by allowing the database to locate relevant rows efficiently without scanning the entire table, which is crucial for scaling.\n"
-                "Example 2: Introducing your main argument clearly in the essay’s opening not only frames the reader’s expectations but also strengthens your persuasiveness, a technique often recommended in academic writing.\n"
-                )
+        return (
+            "Give detailed feedback with multiple sentences, examples, and background reasoning where relevant.\n"
+            "Example 1: Adding an index on user_id improves query speed by allowing the database to locate relevant rows efficiently without scanning the entire table, which is crucial for scaling.\n"
+            "Example 2: Introducing your main argument clearly in the essay's opening not only frames the reader's expectations but also strengthens your persuasiveness, a technique often recommended in academic writing.\n"
+            )
 
     def to_feedback_style_description(self) -> str:
         return (
