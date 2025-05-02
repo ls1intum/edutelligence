@@ -36,6 +36,7 @@ jobs:
       run: |
         echo "$HOME/.local/bin" >> $GITHUB_PATH
         poetry install
+        poetry add --editable ./athena
         poetry run install_all
 
     - name: Run tests
