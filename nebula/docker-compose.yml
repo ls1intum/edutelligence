@@ -8,5 +8,3 @@ services:
     ports:
       - "5000:5000"
     restart: unless-stopped
-    env_file:
-      - .env
