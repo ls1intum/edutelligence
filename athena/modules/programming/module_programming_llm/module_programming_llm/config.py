@@ -2,7 +2,7 @@ from abc import ABC
 
 from llm_core.loaders.llm_config_loader import get_llm_config
 from pydantic import BaseModel, Field
-from llm_core.models import ModelConfig
+from llm_core.models import ModelConfigType
 
 from athena import config_schema_provider
 from module_programming_llm.prompts.generate_graded_suggestions_by_file import (
@@ -138,7 +138,11 @@ class BasicApproachConfig(BaseModel):
     max_input_tokens: int = Field(
         default=3000, description="Maximum number of tokens in the input prompt."
     )
-    model: ModelConfig = Field(default=llm_config.models.base_model_config)
+    model: ModelConfigType = Field(
+        title="Model",
+        description="The model to use for the approach.",
+        default=llm_config.models.base_model_config,
+    )
     max_number_of_files: int = Field(
         default=25,
         description="Maximum number of files. If exceeded, it will prioritize the most important ones.",

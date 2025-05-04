@@ -33,7 +33,6 @@ async def generate_suggestions(
     debug: bool,
     is_graded: bool,
 ) -> List[Feedback]:
-    model = config.model.get_model()  # type: ignore[attr-defined]
 
     prompt_input = {
         "max_points": exercise.max_points,
