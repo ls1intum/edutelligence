@@ -131,4 +131,11 @@ class WeaviateClient:
 
         return results
 
-weaviate_client = WeaviateClient()
+_weaviate_client_instance = None
+
+def get_weaviate_client() -> WeaviateClient:
+    """Get a Weaviate client instance using singleton pattern."""
+    global _weaviate_client_instance
+    if _weaviate_client_instance is None:
+        _weaviate_client_instance = WeaviateClient()
+    return _weaviate_client_instance

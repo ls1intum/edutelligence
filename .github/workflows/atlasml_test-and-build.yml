@@ -2,6 +2,12 @@ name: AtlasML Test and Build
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - 'atlas/AtlasMl/**'
+      - '.github/workflows/atlasml_test-and-build.yml'
+    branches: [main]
+  push:
     paths:
       - 'atlas/AtlasMl/**'
       - '.github/workflows/atlasml_test-and-build.yml'
@@ -29,28 +35,28 @@ jobs:
 
       - name: Install dependencies
         run: poetry install
-# TODO: Fix test workflow
-# build:
-#   needs: test
-#   runs-on: ubuntu-latest
-#   defaults:
-#     run:
-#       working-directory: ./atlas/AtlasMl
 
-#   steps:
-#     - uses: actions/checkout@v3
+build:
+  needs: test
+  runs-on: ubuntu-latest
+  defaults:
+    run:
+      working-directory: ./atlas/AtlasMl
 
-#     - name: Set up Python
-#       uses: actions/setup-python@v4
-#       with:
-#         python-version: '3.13'
+  steps:
+    - uses: actions/checkout@v3
 
-#     - name: Install Poetry
-#       run: |
-#         curl -sSL https://install.python-poetry.org | python3 -
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.13'
 
-#     - name: Install dependencies
-#       run: poetry install
+    - name: Install Poetry
+      run: |
+        curl -sSL https://install.python-poetry.org | python3 -
 
-#     - name: Build package
-#       run: poetry build
+    - name: Install dependencies
+      run: poetry install
+
+    - name: Build package
+      run: poetry build
