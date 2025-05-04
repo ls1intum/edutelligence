@@ -1,5 +1,6 @@
 from typing import List, Dict, Tuple
 import math
+
 from athena.text import Exercise, Submission, Feedback
 from athena.logger import logger
 from module_text_llm.approach_config import ApproachConfig
@@ -18,7 +19,7 @@ async def run_approach(exercise: Exercise, submission: Submission,
                        approach_config: ApproachConfig, debug: bool, is_graded: bool) -> List[Feedback]:
     """Executes a single approach and returns suggestions, handling exceptions."""
     try:
-        return await gen_sug(exercise, submission, approach_config, debug, is_graded)
+        return await gen_sug(exercise, submission, approach_config, debug=debug, is_graded=is_graded)
     except Exception as e:
         logger.error("Error in approach %s: %s", approach_config.__class__.__name__, e)
         return []

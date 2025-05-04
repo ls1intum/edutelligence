@@ -7,8 +7,10 @@ from weaviate.classes.query import Filter
 from iris.config import settings
 
 from .faq_schema import init_faq_schema
+from .lecture_transcription_schema import init_lecture_transcription_schema
 from .lecture_unit_page_chunk_schema import init_lecture_unit_page_chunk_schema
 from .lecture_unit_schema import init_lecture_unit_schema
+from .lecture_unit_segment_schema import init_lecture_unit_segment_schema
 
 logger = logging.getLogger(__name__)
 batch_update_lock = threading.Lock()
@@ -33,6 +35,8 @@ class VectorDatabase:
                 logger.info("Weaviate client initialized")
         self.client = VectorDatabase._client_instance
         self.lectures = init_lecture_unit_page_chunk_schema(self.client)
+        self.transcriptions = init_lecture_transcription_schema(self.client)
+        self.lecture_segments = init_lecture_unit_segment_schema(self.client)
         self.lecture_units = init_lecture_unit_schema(self.client)
         self.faqs = init_faq_schema(self.client)
 

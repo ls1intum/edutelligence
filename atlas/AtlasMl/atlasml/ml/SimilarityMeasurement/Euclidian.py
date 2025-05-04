@@ -1,6 +1,6 @@
 import numpy as np
 from scipy.spatial.distance import euclidean
-from atlas.AtlasMl.atlasml.ml.VectorEmbeddings.ModelDimension import ModelDimension
+from atlasml.ml.VectorEmbeddings.ModelDimension import ModelDimension
 
 
 def compute_euclidean_distance(embedding_vector, model: ModelDimension, comparison_vector):
