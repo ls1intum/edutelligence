@@ -6,14 +6,12 @@ from typing import Dict, Optional
 
 _state: Dict[str, Optional[LLMConfig]] = {"llm_config": None}
 
-def _load_raw_llm_config(path: Optional[str] = None) -> RawLLMConfig:
+
+def _load_raw_llm_config(path: str = "llm_config.yml") -> RawLLMConfig:
     """
     Loads the LLM configuration from a YAML file and returns a validated LLMConfig.
     Raises pydantic.ValidationError if something is incorrect in the YAML.
     """
-    # By default, we assume 'llm_config.yml' is in the same directory
-    if path is None:
-        path = "llm_config.yml"
 
     config_path = Path(path).resolve()
     if not config_path.exists():
@@ -25,11 +23,12 @@ def _load_raw_llm_config(path: Optional[str] = None) -> RawLLMConfig:
     # Validate and parse the Pydantic model
     return RawLLMConfig(**raw_data)
 
+
 def _materialize_llm_config(raw_config: RawLLMConfig) -> LLMConfig:
     base_model = raw_config.models.base_model
     if not base_model:
         raise ValueError("Missing required 'base_model' in models")
-    
+
     models_obj = LLMConfigModel(
         base_model_config=create_config_for_model(base_model),
         mini_model_config=(
@@ -51,10 +50,11 @@ def _materialize_llm_config(raw_config: RawLLMConfig) -> LLMConfig:
 
     return LLMConfig(models=models_obj)
 
+
 def get_llm_config(path: Optional[str] = None) -> LLMConfig:
     """
-    Public function: returns a cached LLMConfig instance. 
-    If not loaded yet, loads from YAML and materializes it. 
+    Public function: returns a cached LLMConfig instance.
+    If not loaded yet, loads from YAML and materializes it.
     """
     # Here we read/write _state["llm_config"] without using 'global'.
     if _state["llm_config"] is None:
