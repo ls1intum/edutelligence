@@ -215,6 +215,22 @@ For Programming Exercises
         Video version of Athena_ConductExperimentProgramming on TUM-Live.
     </iframe>
 
+Interactive Analytics
+^^^^^^^^^^^^^^^^^
+
+With the addition of the *Interactive Analytics* feature, researchers can 
+now visualize the results of their evaluations in a more engaging and informative manner. This feature
+produces an HTML page with multiple interactive plots which can be seperately downloaded.
+
+After defining an experiment with multiple approaches, the researcher can click on the 
+*Export Analytics Report* button to create the HTML page.
+
+.. raw:: html
+
+    <iframe src="../_static/videos/interactive_analytics.mp4" allowfullscreen="1" frameborder="0" width="950" height="500">
+        Export Analytics Report
+    </iframe>
+
 Expert Evaluation
 -----------------
 **Expert Evaluation** is the process where a researcher enlists experts to assess the quality of feedback provided on student submissions.
@@ -317,15 +333,3 @@ When ready to take a break, the expert clicks on the *Continue Later* button, wh
         Continue later
     </iframe>
 
-Interactive Analytics
------------------
-
-With the addition of the *Interactive Analytics* feature, researchers can 
-now visualize the results of their evaluations in a more engaging and informative manner. This feature
-produces an HTML page with multiple interactive plots which can be seperately downloaded.
-
-.. raw:: html
-
-    <iframe src="../_static/videos/interactive_analytics.mp4" allowfullscreen="1" frameborder="0" width="950" height="500">
-        Continue later
-    </iframe>
