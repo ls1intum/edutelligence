@@ -8,7 +8,7 @@ from langchain.prompts import ChatPromptTemplate
 from athena import emit_meta
 from athena.programming import Exercise, Submission
 
-from module_programming_llm.config import GradedBasicApproachConfig, BasicApproachConfig
+from module_programming_llm.config import BasicApproachConfig
 from llm_core.utils.llm_utils import (
     get_chat_prompt,
     num_tokens_from_prompt,
@@ -18,7 +18,7 @@ from llm_core.core.predict_and_parse import predict_and_parse
 from module_programming_llm.helpers.utils import (
     get_diff,
     load_files_from_repo,
-    add_line_numbers
+    add_line_numbers,
 )
 
 
@@ -48,11 +48,11 @@ class SolutionSummary(BaseModel):
 
 # pylint: disable=too-many-locals
 async def generate_summary_by_file(
-        exercise: Exercise,
-        submission: Submission,
-        prompt: ChatPromptTemplate,
-        config: BasicApproachConfig,
-        debug: bool,
+    exercise: Exercise,
+    submission: Submission,
+    prompt: ChatPromptTemplate,
+    config: BasicApproachConfig,
+    debug: bool,
 ) -> Optional[SolutionSummary]:
     """Generaty summary for the submission file by file
 
@@ -84,7 +84,8 @@ async def generate_summary_by_file(
     # Changed text files
     changed_files = load_files_from_repo(
         submission_repo,
-        file_filter=lambda file_path: file_path in changed_files_from_template_to_submission,
+        file_filter=lambda file_path: file_path
+        in changed_files_from_template_to_submission,
     )
     chat_prompt = get_chat_prompt(
         system_message=config.generate_file_summary_prompt.system_message,

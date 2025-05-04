@@ -1,5 +1,5 @@
 models:
-  base_model: ollama_gemma3:1b
-  mini_model: ollama_gemma3:1b
-  fast_reasoning_model: ollama_gemma3:1b
-  long_reasoning_model: ollama_gemma3:1b
+  base_model: openai_gpt-4o
+  mini_model: openai_gpt-4o
+  fast_reasoning_model: openai_gpt-4o
+  long_reasoning_model: openai_gpt-4o
