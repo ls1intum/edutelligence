@@ -1,8 +1,8 @@
 from typing import List
+
 from athena import emit_meta
 from athena.text import Exercise, Submission, Feedback
 from athena.logger import logger
-
 from llm_core.utils.llm_utils import (
     check_prompt_length_and_omit_features_if_necessary,
     get_chat_prompt,
