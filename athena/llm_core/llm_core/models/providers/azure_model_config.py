@@ -5,6 +5,7 @@ from llm_core.loaders.model_loaders.azure_loader import (
     AzureModel,
     azure_available_models,
 )
+from typing import Literal
 
 from ..model_config import ModelConfig
 from ..usage_handler import UsageHandler
@@ -12,6 +13,8 @@ from ..usage_handler import UsageHandler
 
 class AzureModelConfig(ModelConfig):
     """OpenAI LLM configuration."""
+
+    provider: Literal["azure"] = Field("azure", const=True)
 
     model_name: AzureModel = Field(
         description="The name of the model to use (e.g., openai_gpt-3.5-turbo)."
@@ -143,7 +146,7 @@ decreasing the model's likelihood to repeat the same line verbatim.
         model_kwargs = kwargs.get("model_kwargs", {})
 
         for attr, value in self.dict().items():
-            if attr == "model_name":
+            if attr in ["model_name", "provider"]:
                 continue
             if hasattr(model, attr):
                 kwargs[attr] = value

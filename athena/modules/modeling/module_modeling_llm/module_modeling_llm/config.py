@@ -54,16 +54,24 @@ class BasicApproachConfig(BaseModel):
         default=5000, description="Maximum number of tokens in the input prompt."
     )
     generate_feedback: ModelConfigType = Field(
-        default=llm_config.models.base_model_config
+        title="Generate Feedback Provider",
+        description="Select the LLM provider to use for generating feedback.",
+        default_factory=lambda: llm_config.models.base_model_config,
     )
     filter_feedback: ModelConfigType = Field(
-        default=llm_config.models.base_model_config
+        title="Filter Feedback Provider",
+        description="Select the LLM provider to use for filtering feedback.",
+        default_factory=lambda: llm_config.models.base_model_config,
     )
     review_feedback: ModelConfigType = Field(
-        default=llm_config.models.fast_reasoning_model_config
+        title="Review Feedback Provider",
+        description="Select the LLM provider to use for reviewing feedback.",
+        default_factory=lambda: llm_config.models.base_model_config,
     )
     generate_grading_instructions: ModelConfigType = Field(
-        default=llm_config.models.base_model_config
+        title="Generate Grading Instructions Provider",
+        description="Select the LLM provider to use for generating grading instructions.",
+        default_factory=lambda: llm_config.models.base_model_config,
     )
     generate_suggestions_prompt: GenerateSuggestionsPrompt = Field(
         default=GenerateSuggestionsPrompt()

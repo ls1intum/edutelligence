@@ -23,6 +23,8 @@ from ..usage_handler import UsageHandler
 class OllamaModelConfig(ModelConfig):
     """Configuration for an Ollama chat-completion deployment."""
 
+    provider: Literal["ollama"] = Field("ollama", const=True)
+
     model_name: OllamaModel = Field(
         description="Model key as listed by `ollama_loader` (prefix `ollama_…`)."
     )
@@ -165,7 +167,7 @@ class OllamaModelConfig(ModelConfig):
         model_kwargs = kwargs.get("model_kwargs", {})
 
         for attr, value in self.dict().items():
-            if attr == "model_name":
+            if attr in ["model_name", "provider"]:
                 continue
             if hasattr(template, attr):
                 kwargs[attr] = value

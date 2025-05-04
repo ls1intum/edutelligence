@@ -1,4 +1,5 @@
-from typing import Type, Union
+from typing import Union, Annotated
+from pydantic import Field
 
 from .model_config import ModelConfig
 from .providers.openai_model_config import OpenAIModelConfig  # noqa: F401
@@ -8,7 +9,7 @@ from .providers.ollama_model_config import OllamaModelConfig  # noqa: F401
 # --------------------------------------------------------------------------- #
 # Type alias                                                                   #
 # --------------------------------------------------------------------------- #
-ModelConfigType = Union[ModelConfig, Type[ModelConfig]]
+ModelConfigType = Union[OpenAIModelConfig, AzureModelConfig, OllamaModelConfig]
 
 __all__ = [
     "ModelConfig",

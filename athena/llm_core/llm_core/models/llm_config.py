@@ -1,6 +1,7 @@
 from pydantic import BaseModel
 from typing import Optional
-from llm_core.models.model_config import ModelConfig
+from . import ModelConfigType
+
 
 class RawModelsSection(BaseModel):
     base_model: Optional[str]
@@ -8,14 +9,17 @@ class RawModelsSection(BaseModel):
     fast_reasoning_model: Optional[str]
     long_reasoning_model: Optional[str]
 
+
 class RawLLMConfig(BaseModel):
     models: RawModelsSection
 
+
 class LLMConfigModel(BaseModel):
-    base_model_config: ModelConfig
-    mini_model_config: Optional[ModelConfig]
-    fast_reasoning_model_config: Optional[ModelConfig]
-    long_reasoning_model_config: Optional[ModelConfig]
+    base_model_config: ModelConfigType
+    mini_model_config: Optional[ModelConfigType]
+    fast_reasoning_model_config: Optional[ModelConfigType]
+    long_reasoning_model_config: Optional[ModelConfigType]
+
 
 class LLMConfig(BaseModel):
     models: LLMConfigModel
