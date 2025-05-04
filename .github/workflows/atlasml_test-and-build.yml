@@ -2,6 +2,12 @@ name: AtlasML Test and Build
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - 'atlas/AtlasMl/**'
+      - '.github/workflows/atlasml_test-and-build.yml'
+    branches: [main]
+  push:
     paths:
       - 'atlas/AtlasMl/**'
       - '.github/workflows/atlasml_test-and-build.yml'
