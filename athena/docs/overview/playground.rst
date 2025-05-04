@@ -316,3 +316,16 @@ When ready to take a break, the expert clicks on the *Continue Later* button, wh
     <iframe src="../_static/videos/continue_later.mp4" allowfullscreen="1" frameborder="0" width="950" height="500">
         Continue later
     </iframe>
+
+Interactive Analytics
+-----------------
+
+With the addition of the *Interactive Analytics* feature, researchers can 
+now visualize the results of their evaluations in a more engaging and informative manner. This feature
+produces an HTML page with multiple interactive plots which can be seperately downloaded.
+
+.. raw:: html
+
+    <iframe src="../_static/videos/interactive_analytics.mp4" allowfullscreen="1" frameborder="0" width="950" height="500">
+        Continue later
+    </iframe>
