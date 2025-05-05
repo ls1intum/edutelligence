@@ -6,12 +6,15 @@ from langchain_core.runnables import Runnable
 from langsmith import traceable
 
 from iris.common.pipeline_enum import PipelineEnum
+from iris.common.pyris_message import IrisMessageRole, PyrisMessage
 from iris.domain.communication.communication_tutor_suggestion_pipeline_execution_dto import (
     CommunicationTutorSuggestionPipelineExecutionDTO,
 )
-from iris.llm import CapabilityRequestHandler, CompletionArguments, RequirementList
+from iris.domain.data.text_message_content_dto import TextMessageContentDTO
+from iris.llm import BasicRequestHandler, CompletionArguments
 from iris.llm.langchain import IrisLangchainChatModel
 from iris.pipeline import Pipeline
+from iris.pipeline.chat.code_feedback_pipeline import CodeFeedbackPipeline
 from iris.pipeline.prompts.tutor_suggestion.programming_exercise_prompt import (
     programming_exercise_prompt,
 )
@@ -33,10 +36,9 @@ class TutorSuggestionProgrammingExercisePipeline(Pipeline):
         super().__init__(
             implementation_id="tutor_suggestion_programming_exercise_pipeline"
         )
-        completion_args = CompletionArguments(temperature=0, max_tokens=2000)
-        request_handler = CapabilityRequestHandler(
-            requirements=RequirementList(self_hosted=False)
-        )
+        completion_args = CompletionArguments(temperature=0, max_tokens=8000)
+        request_handler = BasicRequestHandler("gemma3:27b")
+
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler,
             completion_args=completion_args,
@@ -70,6 +72,36 @@ class TutorSuggestionProgrammingExercisePipeline(Pipeline):
         exercise_title = dto.exercise.name
         programming_language = dto.exercise.programming_language
 
+        code_feedback_response = "!NONE!"
+
+        if dto.submission:
+            code_feedback = CodeFeedbackPipeline(
+                request_handler=BasicRequestHandler("gemma3:27b")
+            )
+
+            query = PyrisMessage(
+                sender=IrisMessageRole.USER,
+                contents=[
+                    TextMessageContentDTO(
+                        textContent=summary,
+                    )
+                ],
+            )
+
+            code_feedback_response = code_feedback(
+                chat_history=[],
+                question=query,
+                repository=dto.submission.repository,
+                problem_statement=dto.exercise.problem_statement,
+                build_failed=dto.submission.build_failed,
+                build_logs=dto.submission.build_log_entries,
+                feedbacks=(
+                    dto.submission.latest_result.feedbacks
+                    if dto.submission and dto.submission.latest_result
+                    else []
+                ),
+            )
+
         try:
             response = (self.prompt | self.pipeline).invoke(
                 {
@@ -77,6 +109,7 @@ class TutorSuggestionProgrammingExercisePipeline(Pipeline):
                     "exercise_title": exercise_title,
                     "programming_language": programming_language,
                     "problem_statement": problem_statement,
+                    "code_feedback": code_feedback_response,
                 }
             )
             logger.info(response)

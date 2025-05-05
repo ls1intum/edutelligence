@@ -17,6 +17,7 @@ from ...domain.data.feedback_dto import FeedbackDTO
 from ...llm import (
     CapabilityRequestHandler,
     CompletionArguments,
+    RequestHandler,
     RequirementList,
 )
 from ...llm.langchain import IrisLangchainChatModel
@@ -48,16 +49,21 @@ class CodeFeedbackPipeline(Pipeline):
     output_parser: StrOutputParser
     tokens: TokenUsageDTO
 
-    def __init__(self, callback: Optional[StatusCallback] = None):
+    def __init__(
+        self,
+        callback: Optional[StatusCallback] = None,
+        request_handler: Optional[RequestHandler] = None,
+    ):
         super().__init__(implementation_id="code_feedback_pipeline_reference_impl")
-        request_handler = CapabilityRequestHandler(
-            requirements=RequirementList(
-                gpt_version_equivalent=4.5,
-                context_length=64000,
-                vendor="OpenAI",
-                json_mode=True,
+        if request_handler is None:
+            request_handler = CapabilityRequestHandler(
+                requirements=RequirementList(
+                    gpt_version_equivalent=4.5,
+                    context_length=64000,
+                    vendor="OpenAI",
+                    json_mode=True,
+                )
             )
-        )
         completion_args = CompletionArguments(
             temperature=0, max_tokens=1024, response_format="text"
         )
