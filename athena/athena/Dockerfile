@@ -18,6 +18,9 @@ RUN poetry config virtualenvs.create false \
 # Project files
 COPY . ./
 
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+
 # Build the package
 RUN poetry build -f wheel
 # The output is in /code/dist
