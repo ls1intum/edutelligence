@@ -1,0 +1,35 @@
+llm_costs:
+  gpt-4o:
+    input_cost_per_million: 2.50
+    cached_input_cost_per_million: 1.25
+    output_cost_per_million: 10.00
+
+  gpt-4o-2024-08-06:
+    input_cost_per_million: 2.50
+    cached_input_cost_per_million: 1.25
+    output_cost_per_million: 10.00
+
+  gpt-4o-2024-05-13:
+    input_cost_per_million: 2.50
+    cached_input_cost_per_million: 1.25
+    output_cost_per_million: 10.00
+
+  o1-preview:
+    input_cost_per_million: 15.00
+    cached_input_cost_per_million: 7.50
+    output_cost_per_million: 60.00
+
+  o1-mini:
+    input_cost_per_million: 3.00
+    cached_input_cost_per_million: 1.50
+    output_cost_per_million: 12.00
+
+  o1-mini-2024-09-12:
+    input_cost_per_million: 3.00
+    cached_input_cost_per_million: 1.50
+    output_cost_per_million: 12.00
+
+  o1-preview-2024-09-12:
+    input_cost_per_million: 15.00
+    cached_input_cost_per_million: 7.50
+    output_cost_per_million: 60.00
