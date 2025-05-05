@@ -31,18 +31,12 @@ jobs:
     - name: Install Poetry
       run: |
         curl -sSL https://install.python-poetry.org | python3 -
-    # - name: Cache Poetry dependencies
-    #   uses: actions/cache@v2
-    #   with:
-    #     path: ~/.cache/pypoetry
-    #     key: ${{ runner.os }}-poetry-${{ hashFiles('**/pyproject.toml') }}
-    #     restore-keys: |
-    #       ${{ runner.os }}-poetry-
 
     - name: Install dependencies
       working-directory: athena
       run: |
         echo "$HOME/.local/bin" >> $GITHUB_PATH
+        poetry config virtualenvs.create false
         poetry install
         poetry run install_all
         
