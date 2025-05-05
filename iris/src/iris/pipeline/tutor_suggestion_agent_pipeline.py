@@ -19,6 +19,7 @@ from iris.pipeline.prompts.tutor_suggestion.channel_type_checker_prompt import (
 from iris.pipeline.prompts.tutor_suggestion.question_answered_prompt import (
     question_answered_prompt,
 )
+from iris.pipeline.tutor_suggestion_lecture_pipeline import TutorSuggestionLecturePipeline
 from iris.pipeline.tutor_suggestion_programming_exercise_pipeline import (
     TutorSuggestionProgrammingExercisePipeline,
 )
@@ -124,7 +125,7 @@ class TutorSuggestionAgentPipeline(Pipeline):
         elif self.channel_type == "programming_exercise":
             self._run_programming_exercise_pipeline(dto=dto, summary=summary)
         elif self.channel_type == "lecture":
-            self.callback.error("Not implemented yet")
+            self._run_lecture_pipeline(dto=dto, summary=summary)
         else:
             self.callback.error("Not implemented yet")
 
@@ -201,3 +202,33 @@ class TutorSuggestionAgentPipeline(Pipeline):
             final_result=programming_exercise_result,
             tokens=self.tokens,
         )
+
+    def _run_lecture_pipeline(
+        self, dto: CommunicationTutorSuggestionPipelineExecutionDTO, summary: str
+    ):
+        """
+        Run the lecture pipeline.
+        :param dto: The CommunicationTutorSuggestionPipelineExecutionDTO object containing details about the lecture.
+        :param summary: The summary of the post.
+        :return: The result of the lecture pipeline.
+        """
+        self.callback.in_progress("Generating suggestions for lecture")
+
+        lecture_pipeline = TutorSuggestionLecturePipeline(callback=self.callback)
+
+        try:
+            lecture_result = lecture_pipeline(
+                dto=dto, chat_summary=summary
+            )
+        except AttributeError as e:
+            self.callback.error(f"Error running lecture pipeline: {e}")
+            return
+
+        self.callback.done(
+            "Generated tutor suggestions",
+            final_result=lecture_result,
+            tokens=self.tokens,
+        )
+
+
+
