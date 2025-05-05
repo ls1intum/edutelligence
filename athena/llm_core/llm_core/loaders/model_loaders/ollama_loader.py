@@ -50,7 +50,7 @@ else:
     logger.warning("No Ollama models discovered at %s.", OLLAMA_BASE_URL)
 
 
-# Enum
+# Enum for referencing the discovered models
 if ollama_available_models:
     OllamaModel = Enum(
         "OllamaModel", {name: name for name in ollama_available_models}  # type: ignore
