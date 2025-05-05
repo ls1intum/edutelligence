@@ -36,9 +36,12 @@ jobs:
       working-directory: athena
       run: |
         echo "$HOME/.local/bin" >> $GITHUB_PATH
-        poetry config virtualenvs.create false
-        poetry install
+        poetry install --with dev
         poetry run install_all
+
+    - name: Show installed packages
+      working-directory: athena
+      run: poetry run pip list
         
     - name: Run tests
       working-directory: athena
