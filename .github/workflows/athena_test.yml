@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - athena/feature/test-gh-action
     paths:
       - "athena/**"
       - ".github/workflows/athena_test.yml"
