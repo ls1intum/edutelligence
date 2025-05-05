@@ -1,13 +1,10 @@
-from __future__ import annotations
-
 import os
+import requests
 from enum import Enum
 from typing import Dict, List
-
-import requests
-from langchain_community.chat_models import ChatOllama  # type: ignore
-
+from langchain_community.chat_models import ChatOllama
 from athena.logger import logger
+from __future__ import annotations
 
 OLLAMA_PREFIX = "ollama_"
 
@@ -23,14 +20,13 @@ _headers = (
 )
 
 
-# -- Discovery -----------------------------------------------------------------
 def _discover_ollama_models() -> List[str]:
     try:
         resp = requests.get(f"{OLLAMA_BASE_URL}/api/tags", auth=_auth, timeout=15)
         resp.raise_for_status()
         data = resp.json()
         return [m["name"] for m in data.get("models", [])]
-    except Exception as exc:  # pylint: disable=broad-except
+    except Exception as exc:
         logger.warning("Could not query Ollama server (%s): %s", OLLAMA_BASE_URL, exc)
         return []
 
@@ -46,7 +42,7 @@ for _name in _discover_ollama_models():
     }
     if _headers:
         params["headers"] = _headers
-    ollama_available_models[key] = ChatOllama(**params)  # type: ignore[arg-type]
+    ollama_available_models[key] = ChatOllama(**params)
 
 if ollama_available_models:
     logger.info("Available Ollama models: %s", ", ".join(ollama_available_models))
@@ -54,7 +50,7 @@ else:
     logger.warning("No Ollama models discovered at %s.", OLLAMA_BASE_URL)
 
 
-# -- Enum ----------------------------------------------------------------------
+# Enum
 if ollama_available_models:
     OllamaModel = Enum(
         "OllamaModel", {name: name for name in ollama_available_models}  # type: ignore

@@ -35,7 +35,10 @@
 		},
 		{
             "path": "playground"
-        }
+        },
+		{
+			"path": "llm_core"
+		}
 	],
 	"settings": {
 		"python.linting.prospectorEnabled": true,
