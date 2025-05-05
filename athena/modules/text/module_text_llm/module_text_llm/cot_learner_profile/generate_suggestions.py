@@ -9,7 +9,7 @@ from llm_core.utils.llm_utils import (
     check_prompt_length_and_omit_features_if_necessary,
     num_tokens_from_prompt,
 )
-from llm_core.utils.predict_and_parse import predict_and_parse
+from llm_core.core.predict_and_parse import predict_and_parse
 from module_text_llm.cot_learner_profile import COTLearnerProfileConfig
 from module_text_llm.helpers.utils import (
     add_sentence_numbers,
@@ -92,7 +92,7 @@ async def generate_suggestions(
         return []
 
     initial_result = await predict_and_parse(
-        model=model,
+        model=config.model,
         chat_prompt=chat_prompt,
         prompt_input=prompt_input,
         pydantic_object=InitialAssessmentModel,
@@ -100,7 +100,6 @@ async def generate_suggestions(
             f"exercise-{exercise.id}",
             f"submission-{submission.id}",
         ],
-        use_function_calling=True,
     )
 
     if initial_result is None:
@@ -119,7 +118,7 @@ async def generate_suggestions(
     )
 
     result = await predict_and_parse(
-        model=model,
+        model=config.model,
         chat_prompt=second_chat_prompt,
         prompt_input=second_prompt_input,
         pydantic_object=AssessmentModel,
@@ -127,7 +126,6 @@ async def generate_suggestions(
             f"exercise-{exercise.id}",
             f"submission-{submission.id}",
         ],
-        use_function_calling=True,
     )
 
     if debug:

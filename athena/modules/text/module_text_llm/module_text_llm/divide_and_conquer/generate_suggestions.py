@@ -2,9 +2,8 @@ import asyncio
 
 from athena.text import Exercise, Submission, Feedback
 from athena.logger import logger
-from llm_core.utils.predict_and_parse import predict_and_parse
+from llm_core.core.predict_and_parse import predict_and_parse
 from llm_core.utils.llm_utils import get_chat_prompt
-from llm_core.utils.append_format_instructions import append_format_instructions
 
 from module_text_llm.divide_and_conquer.prompt_generate_suggestions import (
     AssessmentModel,
@@ -61,7 +60,7 @@ async def generate_suggestions(
             "grading_instruction_ids": grading_instruction_ids,
             "is_graded": is_graded,
         }
-        tasks.append(process_criteria(processing_inputs))
+        tasks.append(process_criteria(config, processing_inputs))
 
     # Execute all criterion assessments in parallel
     results = await asyncio.gather(*tasks)
@@ -70,13 +69,15 @@ async def generate_suggestions(
     return feedbacks
 
 
-async def process_criteria(processing_inputs: dict) -> list[Feedback]:
+async def process_criteria(
+    config: ApproachConfig, processing_inputs: dict
+) -> list[Feedback]:
     """
     Run one predict_and_parse call and route to parser.
     """
     try:
         result = await predict_and_parse(
-            model=processing_inputs["model"],
+            model=config.model,
             chat_prompt=processing_inputs["chat_prompt"],
             prompt_input=processing_inputs["prompt_input"],
             pydantic_object=processing_inputs["pydantic_object"],
@@ -84,7 +85,6 @@ async def process_criteria(processing_inputs: dict) -> list[Feedback]:
                 f"exercise-{processing_inputs['exercise'].id}",
                 f"submission-{processing_inputs['submission'].id}",
             ],
-            use_function_calling=True,
         )
     except Exception as e:
         logger.error(

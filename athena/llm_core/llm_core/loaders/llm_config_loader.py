@@ -7,11 +7,14 @@ from typing import Dict, Optional
 _state: Dict[str, Optional[LLMConfig]] = {"llm_config": None}
 
 
-def _load_raw_llm_config(path: str = "llm_config.yml") -> RawLLMConfig:
+def _load_raw_llm_config(path: Optional[str] = None) -> RawLLMConfig:
     """
     Loads the LLM configuration from a YAML file and returns a validated LLMConfig.
     Raises pydantic.ValidationError if something is incorrect in the YAML.
     """
+
+    if path is None:
+        path = "llm_config.yml"
 
     config_path = Path(path).resolve()
     if not config_path.exists():

@@ -10,6 +10,7 @@ from athena import emit_meta
 
 T = TypeVar("T", bound=BaseModel)
 
+
 def num_tokens_from_string(string: str) -> int:
     """Returns the number of tokens in a text string."""
     encoding = tiktoken.get_encoding("cl100k_base")
@@ -73,6 +74,7 @@ def get_chat_prompt(
     return ChatPromptTemplate.from_messages(
         [system_message_prompt, human_message_prompt]
     )
+
 
 def remove_system_message(chat_prompt: ChatPromptTemplate) -> ChatPromptTemplate:
     """
