@@ -19,6 +19,53 @@ components:
       - status
       title: ComponentHealth
       type: object
+    ConsistencyCheckRequest:
+      description: Request model for consistency checking.
+      properties:
+        exercise:
+          $ref: '#/components/schemas/ProgrammingExercise'
+          description: The programming exercise to check for consistency
+      required:
+      - exercise
+      title: ConsistencyCheckRequest
+      type: object
+    ConsistencyCheckResponse:
+      description: Response model for consistency checking.
+      properties:
+        issues:
+          description: List of consistency issues found
+          items:
+            $ref: '#/components/schemas/ConsistencyIssue'
+          title: Issues
+          type: array
+        status:
+          default: success
+          description: Status of the consistency check
+          title: Status
+          type: string
+        summary:
+          default: ''
+          description: A summary of all consistency issues
+          title: Summary
+          type: string
+      title: ConsistencyCheckResponse
+      type: object
+    ConsistencyIssue:
+      description: Data model representing a consistency issue found in the exercise.
+      properties:
+        description:
+          description: Description of the consistency issue
+          title: Description
+          type: string
+        file_path:
+          description: Path to the file with consistency issue
+          title: File Path
+          type: string
+      required:
+      - file_path
+      - description
+      title: ConsistencyIssue
+      type: object
     HTTPValidationError:
       properties:
         detail:
@@ -70,6 +117,32 @@ components:
       - uptime_seconds
       title: HealthCheck
       type: object
+    ProgrammingExercise:
+      description: Data model representing a programming exercise with problem statement
+        and repository files.
+      properties:
+        problem_statement:
+          description: The description of the exercise containing tasks
+          title: Problem Statement
+          type: string
+        solution_repository:
+          additionalProperties:
+            type: string
+          description: Files in the solution repository, mapping file paths to content
+          title: Solution Repository
+          type: object
+        template_repository:
+          additionalProperties:
+            type: string
+          description: Files in the template repository, mapping file paths to content
+          title: Template Repository
+          type: object
+      required:
+      - problem_statement
+      - template_repository
+      - solution_repository
+      title: ProgrammingExercise
+      type: object
     ValidationError:
       properties:
         loc:
@@ -109,6 +182,38 @@ info:
   version: 0.1.0
 openapi: 3.1.0
 paths:
+  /consistency-check/check:
+    post:
+      description: Check for consistency issues in a programming exercise
+      operationId: check_consistency_consistency_check_check_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConsistencyCheckRequest'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConsistencyCheckResponse'
+          description: Successful Response
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          description: Not found
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+        '500':
+          description: Internal server error
+      summary: Check Consistency
+      tags:
+      - consistency-check
   /health:
     get:
       description: "## Perform a Health Check\n\nEndpoint to perform a health check\
