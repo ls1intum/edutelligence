@@ -14,6 +14,6 @@ class CommunicationTutorSuggestionPipelineExecutionDTO(ChatPipelineExecutionDTO)
     course: CourseDTO
     lecture_id: Optional[int] = Field(default=None, alias="lectureId")
     post: PostDTO
-    textExercise: Optional[TextExerciseDTO] = None
+    textExercise: Optional[TextExerciseDTO] = Field(default=None, alias="textExerciseDTO")
     submission: Optional[ProgrammingSubmissionDTO] = None
     exercise: Optional[ProgrammingExerciseDTO] = None
