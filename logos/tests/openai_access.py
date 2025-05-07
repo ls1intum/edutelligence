@@ -1,7 +1,7 @@
 import unittest
 import requests
 
-VALID_LOGOS_KEY = "lg-brik-KO1l_KFpavHs2GYg3Zs--AleSN_mOThIFz4SrM6yaraYAkAT7OXen2pmCtT5FwwTNjnM_OcKkmc1cmycS62aEG6n7MVxDHl1L24vEFw47-d8GDAq_KXQCoif-xDrNQNk"
+VALID_LOGOS_KEY = ""
 
 
 class TestOpenAIForwardingProxy(unittest.TestCase):
