@@ -1,0 +1,27 @@
+version: '3.7'
+
+services:
+  logos-server:
+    network_mode: "host"
+    restart: unless-stopped
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      -   data_volume:/src/logos
+    ports:
+      - "8000:8000"
+  db:
+    image: postgres:17
+    container_name: logos-db
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: root
+      POSTGRES_DB: logosdb
+      POSTGRES_HOST: localhost
+    volumes:
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "5432:5432"
+volumes:
+  data_volume:

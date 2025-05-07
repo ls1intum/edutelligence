@@ -3,11 +3,7 @@ from json import JSONDecodeError
 from fastapi import FastAPI, Request
 import httpx
 
-from logos.constants import *
-from logos.config import KeyManager
-
-
-config = KeyManager()
+from logos.dbmanager import DBManager
 
 
 app = FastAPI()
@@ -35,7 +31,8 @@ async def openai_proxy(path: str, request: Request):
             provider = request.headers["provider"]
         # Check if key is an openai-Key (just for proxy purposes)
         if not key.startswith("sk-"):
-            key = config.get_llm_key(key, provider)
+            with DBManager() as db:
+                key = db.fetch_llm_key(provider, key)
     except PermissionError as e:
         return {"error": str(e)}, 401
     except ValueError as e:

@@ -1,7 +1,7 @@
 import unittest
 import requests
 
-VALID_LOGOS_KEY = "..."
+VALID_LOGOS_KEY = "lg-brik-KO1l_KFpavHs2GYg3Zs--AleSN_mOThIFz4SrM6yaraYAkAT7OXen2pmCtT5FwwTNjnM_OcKkmc1cmycS62aEG6n7MVxDHl1L24vEFw47-d8GDAq_KXQCoif-xDrNQNk"
 
 
 class TestOpenAIForwardingProxy(unittest.TestCase):
@@ -31,14 +31,15 @@ class TestOpenAIForwardingProxy(unittest.TestCase):
         }
 
         data = {
-            "messages": [{"role": "user", "content": "Hello, Azure!"}],
+            "messages": [{"role": "user", "content": "Tell me a fun fact about the roman empire!"}],
             "temperature": 0.5
         }
 
         response = requests.post("http://localhost:8000/v1/chat/completions", json=data, headers=headers)
+        from pprint import pprint
+        pprint(response.json())
         assert response.status_code == 200
         assert "completion_tokens" in str(response.text)
-        assert "Azure" in str(response.text)
 
     def test_logos_invalid_key(self):
         headers = {
