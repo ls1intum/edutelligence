@@ -46,7 +46,6 @@ def transcribe_with_azure_whisper(audio_path: str, llm_id="azure-whisper"):
                     "start": offset + seg["start"],
                     "end": offset + seg["end"],
                     "text": seg["text"]
-                    # You can assign slide numbers in a later pass
                 })
 
         offset += get_audio_duration(chunk_path)
