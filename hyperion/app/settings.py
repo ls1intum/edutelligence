@@ -14,10 +14,6 @@ class Settings(BaseSettings):
     API_KEY: str = ""
     DISABLE_AUTH: bool = False
 
-    # Playground Security
-    PLAYGROUND_USERNAME: str = "playground"
-    PLAYGROUND_PASSWORD: str = ""
-
     # Model to use prefixed by provider, i.e. "openai:gpt-4o"
     MODEL_NAME: str = ""
 

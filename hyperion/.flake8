@@ -8,3 +8,4 @@ exclude =
 
 per-file-ignores =
     app/openapi.py: E402
+    app/jobs/routes.py: E402
