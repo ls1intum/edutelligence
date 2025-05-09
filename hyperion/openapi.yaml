@@ -251,11 +251,90 @@ components:
           oneOf:
           - $ref: '#/components/schemas/ConsistencyCheckInput'
           - $ref: '#/components/schemas/TestActionInput'
-          title: Input Data
+          title: ActionInput
       required:
       - action_name
       - input_data
       title: JobRequest
+      type: object
+    JobResponse:
+      description: Job response model with proper schema name.
+      properties:
+        action_name:
+          description: Name of the AI action.
+          title: Action Name
+          type: string
+        callback_auth:
+          anyOf:
+          - $ref: '#/components/schemas/CallbackAuth'
+          - type: 'null'
+          description: Authentication for callback.
+        callback_url:
+          description: URL for callback.
+          format: uri
+          maxLength: 2083
+          minLength: 1
+          title: Callback Url
+          type: string
+        created_at:
+          description: Timestamp of job creation.
+          title: Created At
+          type: string
+        error_message:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: Error message if the job failed.
+          title: Error Message
+        input_data:
+          description: Input data for the AI action.
+          discriminator:
+            mapping:
+              consistency_check: '#/components/schemas/ConsistencyCheckInput'
+              test_action: '#/components/schemas/TestActionInput'
+            propertyName: action
+          oneOf:
+          - $ref: '#/components/schemas/ConsistencyCheckInput'
+          - $ref: '#/components/schemas/TestActionInput'
+          title: ActionInput
+        job_id:
+          description: Unique identifier for the job.
+          title: Job Id
+          type: string
+        status:
+          $ref: '#/components/schemas/JobStatus'
+          default: pending
+          description: Current status of the job.
+        updated_at:
+          description: Timestamp of last update.
+          title: Updated At
+          type: string
+        updates:
+          description: All updates for this job.
+          items:
+            discriminator:
+              mapping:
+                consistency_check_progress: '#/components/schemas/ConsistencyCheckProgressUpdate'
+                consistency_check_result: '#/components/schemas/ConsistencyCheckResult'
+                test_action_progress: '#/components/schemas/TestActionProgressUpdate'
+                test_action_result: '#/components/schemas/TestActionResult'
+              propertyName: update_type
+            oneOf:
+            - $ref: '#/components/schemas/ConsistencyCheckProgressUpdate'
+            - $ref: '#/components/schemas/ConsistencyCheckResult'
+            - $ref: '#/components/schemas/TestActionProgressUpdate'
+            - $ref: '#/components/schemas/TestActionResult'
+            title: ActionUpdate
+          title: Updates
+          type: array
+      required:
+      - job_id
+      - action_name
+      - input_data
+      - callback_url
+      - created_at
+      - updated_at
+      title: Job
       type: object
     JobStatus:
       description: Status states for a job.
@@ -300,83 +379,6 @@ components:
       - created_at
       - updated_at
       title: JobStatusResponse
-      type: object
-    ? Job_Annotated_Union_ConsistencyCheckInput__TestActionInput___FieldInfo_annotation_NoneType__required_True__discriminator__action____Annotated_Union_ConsistencyCheckProgressUpdate__ConsistencyCheckResult__TestActionProgressUpdate__TestActionResult___FieldInfo_annotation_NoneType__required_True__discriminator__update_type____
-    : properties:
-        action_name:
-          description: Name of the AI action.
-          title: Action Name
-          type: string
-        callback_auth:
-          anyOf:
-          - $ref: '#/components/schemas/CallbackAuth'
-          - type: 'null'
-          description: Authentication for callback.
-        callback_url:
-          description: URL for callback.
-          format: uri
-          maxLength: 2083
-          minLength: 1
-          title: Callback Url
-          type: string
-        created_at:
-          description: Timestamp of job creation.
-          title: Created At
-          type: string
-        error_message:
-          anyOf:
-          - type: string
-          - type: 'null'
-          description: Error message if the job failed.
-          title: Error Message
-        input_data:
-          description: Input data for the AI action.
-          discriminator:
-            mapping:
-              consistency_check: '#/components/schemas/ConsistencyCheckInput'
-              test_action: '#/components/schemas/TestActionInput'
-            propertyName: action
-          oneOf:
-          - $ref: '#/components/schemas/ConsistencyCheckInput'
-          - $ref: '#/components/schemas/TestActionInput'
-          title: Input Data
-        job_id:
-          description: Unique identifier for the job.
-          title: Job Id
-          type: string
-        status:
-          $ref: '#/components/schemas/JobStatus'
-          default: pending
-          description: Current status of the job.
-        updated_at:
-          description: Timestamp of last update.
-          title: Updated At
-          type: string
-        updates:
-          description: All updates for this job.
-          items:
-            discriminator:
-              mapping:
-                consistency_check_progress: '#/components/schemas/ConsistencyCheckProgressUpdate'
-                consistency_check_result: '#/components/schemas/ConsistencyCheckResult'
-                test_action_progress: '#/components/schemas/TestActionProgressUpdate'
-                test_action_result: '#/components/schemas/TestActionResult'
-              propertyName: update_type
-            oneOf:
-            - $ref: '#/components/schemas/ConsistencyCheckProgressUpdate'
-            - $ref: '#/components/schemas/ConsistencyCheckResult'
-            - $ref: '#/components/schemas/TestActionProgressUpdate'
-            - $ref: '#/components/schemas/TestActionResult'
-          title: Updates
-          type: array
-      required:
-      - job_id
-      - action_name
-      - input_data
-      - callback_url
-      - created_at
-      - updated_at
-      title: Job
       type: object
     TestActionInput:
       description: Input model for test action.
@@ -615,7 +617,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Job_Annotated_Union_ConsistencyCheckInput__TestActionInput___FieldInfo_annotation_NoneType__required_True__discriminator__action____Annotated_Union_ConsistencyCheckProgressUpdate__ConsistencyCheckResult__TestActionProgressUpdate__TestActionResult___FieldInfo_annotation_NoneType__required_True__discriminator__update_type____'
+                $ref: '#/components/schemas/JobResponse'
           description: Job accepted
         '401':
           $ref: '#/components/responses/UnauthorizedError'

@@ -137,24 +137,34 @@ def get_update_models(action_name: str) -> List[Type[ActionUpdate]]:
 def get_input_union() -> type:
     """Get the current Union type for all registered input models."""
     # Use Annotated to apply a better title for the OpenAPI schema
-    return Annotated[InputUnion, Field(discriminator="action", title="ActionInput")]
+    union_type = Annotated[InputUnion, Field(discriminator="action", title="ActionInput")]
+    
+    # Set a friendlier name for OpenAPI schema
+    union_type.__name__ = "ActionInput"
+    return union_type
 
 def get_update_union() -> type:
     """
-    Get a nested discriminated union of all action update models.
-    This creates a cleaner schema with action-specific updates grouped together.
+    Get a union of all action update models.
+    Uses update_type as the discriminator since it's unique across all models.
     """
-    if not ActionUpdateUnions:
-        # Return a simple union if we don't have any registered models
-        return Annotated[Union[ActionUpdate], Field(discriminator="update_type", title="ActionUpdate")]
+    # Flatten all models into a single list
+    all_update_models = []
+    for action_categories in _update_models.values():
+        for models in action_categories.values():
+            all_update_models.extend(models)
     
-    # Create a nested discriminated union by action name
-    action_values = tuple(ActionUpdateUnions.values())
-    return Annotated[
-        Union[action_values],
-        Field(discriminator="action_name", title="ActionUpdate"),
-        Tag("action_updates")
-    ]
+    if not all_update_models:
+        union_type = Annotated[Union[ActionUpdate], Field(discriminator="update_type", title="ActionUpdate")]
+    else:
+        union_type = Annotated[
+            Union[tuple(all_update_models)],
+            Field(discriminator="update_type", title="ActionUpdate")
+        ]
+    
+    # Set a friendlier name for OpenAPI schema
+    union_type.__name__ = "ActionUpdate"
+    return union_type
 
 def update_type_discriminator(obj: Any) -> Optional[str]:
     """

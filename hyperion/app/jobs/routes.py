@@ -1,7 +1,7 @@
 """
 API routes for the job system.
 """
-from typing import Optional
+from typing import Optional, Annotated, TypeVar, Generic
 
 from fastapi import APIRouter, status, Depends, BackgroundTasks, Header
 from fastapi.responses import JSONResponse
@@ -12,7 +12,8 @@ from app.actions.base_models import (
     JobCreateRequest, 
     Job, 
     JobStatusResponse, 
-    ActionInput
+    ActionInput,
+    ActionUpdate
 )
 
 from app.actions import autodiscover_handlers
@@ -34,6 +35,14 @@ from app.jobs.service import JobService
 # Get dynamic union types from the registry
 ActionInputUnion = get_input_union()
 ActionUpdateUnion = get_update_union()
+
+# Create a job response class with a clean name for OpenAPI
+class JobResponse(Job[ActionInputUnion, ActionUpdateUnion]):
+    """Job response model with proper schema name."""
+    
+    model_config = {
+        "json_schema_extra": {"title": "Job"}
+    }
 
 router = APIRouter(
     prefix="/jobs",
@@ -59,7 +68,7 @@ class JobRequest(BaseModel):
 
 @router.post(
     "/",
-    response_model=Job[ActionInputUnion, ActionUpdateUnion],
+    response_model=JobResponse,
     status_code=status.HTTP_202_ACCEPTED,
     summary="Create a new background job for an AI action",
     description=(
@@ -70,7 +79,7 @@ class JobRequest(BaseModel):
     responses={
         202: {
             "description": "Job accepted",
-            "model": Job[ActionInputUnion, ActionUpdateUnion],
+            "model": JobResponse,
         }
     }
 )

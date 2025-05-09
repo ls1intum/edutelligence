@@ -5,9 +5,8 @@ This is a sample action to demonstrate the dynamic model discovery.
 import asyncio
 from datetime import datetime, timezone
 import uuid
-from typing import Callable, Awaitable
 
-from app.actions.base_models import ResultUpdate
+from app.actions.base_models import ActionUpdateCallback
 from app.actions.test_action.models import (
     TestActionInput,
     TestActionProgressUpdate,
@@ -24,7 +23,7 @@ class TestActionHandler:
     async def handle(
         self,
         input_data: TestActionInput,
-        send_update: Callable[[ResultUpdate], Awaitable[None]]
+        send_update: ActionUpdateCallback
     ) -> TestActionResult:
         """Process the test action."""
         # Simulate processing with progress updates

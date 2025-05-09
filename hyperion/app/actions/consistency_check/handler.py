@@ -1,13 +1,13 @@
 import re
 import logging
-from typing import Dict, Callable, Awaitable
+from typing import Dict
 
 from langchain_core.prompts import PromptTemplate
 from langfuse.callback import CallbackHandler
 
 from app.settings import settings
 from app.models import get_model
-from app.actions.base_models import ActionInput, ActionUpdate
+from app.actions.base_models import ActionInput, ActionUpdate, ActionUpdateCallback
 
 from .models import (
     ConsistencyCheckInput,
@@ -18,7 +18,6 @@ from .models import (
 from .prompts import detector_prompt, summarizer_prompt
 
 logger = logging.getLogger(__name__)
-ActionUpdateCallback = Callable[[ActionUpdate], Awaitable[None]]
 
 class ConsistencyCheckHandler:
     """Handler for consistency check actions."""

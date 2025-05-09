@@ -6,7 +6,7 @@ should implement to ensure consistency and type safety across the application.
 """
 
 from enum import Enum
-from typing import Generic, TypeVar, Any, Optional, Protocol, runtime_checkable, Literal
+from typing import Awaitable, Callable, Generic, TypeVar, Any, Optional, Protocol, runtime_checkable, Literal
 from pydantic import BaseModel, Field, HttpUrl
 
 # Type variables for generic inputs and updates
@@ -95,11 +95,13 @@ class CallbackPayload(BaseModel, Generic[ActionUpdateT]):
     update: Optional[ActionUpdateT] = Field(None, description="Latest update data for the job.")
     error: Optional[str] = Field(None, description="Error message if the job failed.")
 
+ActionUpdateCallback = Callable[[ActionUpdate], Awaitable[None]]
+
 @runtime_checkable
 class ActionHandler(Protocol):
     """Protocol defining the interface for action handlers."""
     action_name: str
     
-    async def handle(self, input_data: ActionInput, send_update: Any) -> ActionUpdate:
+    async def handle(self, input_data: ActionInput, send_update: ActionUpdateCallback) -> ActionUpdate:
         """Handle the execution of an action."""
         ...
