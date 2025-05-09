@@ -7,19 +7,24 @@ from app.settings import settings
 settings.IS_GENERATING_OPENAPI = True
 
 # Import base models, ignore unused imports!
+# flake8: noqa
 from app.actions.base_models import (
-    JobStatus, 
+    JobStatus,
     ActionInput,
     ActionUpdate,
-    Job, 
-    JobStatusResponse, 
+    Job,
+    JobStatusResponse,
     CallbackPayload,
     CallbackAuth,
-    JobCreateRequest
+    JobCreateRequest,
 )
 
 # Import the model registry for dynamic discovery
-from app.actions.model_registry import autodiscover_models, get_input_union, get_update_union
+from app.actions.model_registry import (
+    autodiscover_models,
+    get_input_union,
+    get_update_union,
+)
 
 # Discover all action models before importing FastAPI app
 # This ensures they're registered and available in the schema
@@ -32,6 +37,7 @@ ActionUpdateUnion = get_update_union()
 # Import FastAPI app after model discovery
 from app.main import app
 
+
 def get_openapi_specs():
     """Generate OpenAPI schema for the application."""
     openapi_json = get_openapi(
@@ -41,7 +47,7 @@ def get_openapi_specs():
         contact=app.contact,
         routes=app.routes,
     )
-    
+
     openapi_json = add_security_schema_to_openapi(
         openapi_json, header_name="X-API-Key", exclude_paths=["/playground"]
     )

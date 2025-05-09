@@ -1,7 +1,8 @@
 """
 API routes for the job system.
 """
-from typing import Optional, Annotated, TypeVar, Generic
+
+from typing import Optional
 
 from fastapi import APIRouter, status, Depends, BackgroundTasks, Header
 from fastapi.responses import JSONResponse
@@ -9,11 +10,10 @@ from pydantic import HttpUrl, Field, BaseModel
 
 # Import base models
 from app.actions.base_models import (
-    JobCreateRequest, 
-    Job, 
-    JobStatusResponse, 
+    JobCreateRequest,
+    Job,
+    JobStatusResponse,
     ActionInput,
-    ActionUpdate
 )
 
 from app.actions import autodiscover_handlers
@@ -36,13 +36,13 @@ from app.jobs.service import JobService
 ActionInputUnion = get_input_union()
 ActionUpdateUnion = get_update_union()
 
+
 # Create a job response class with a clean name for OpenAPI
 class JobResponse(Job[ActionInputUnion, ActionUpdateUnion]):
     """Job response model with proper schema name."""
-    
-    model_config = {
-        "json_schema_extra": {"title": "Job"}
-    }
+
+    model_config = {"json_schema_extra": {"title": "Job"}}
+
 
 router = APIRouter(
     prefix="/jobs",
@@ -53,18 +53,24 @@ router = APIRouter(
     },
 )
 
+
 # Create a dependency that provides JobService with BackgroundTasks
 def get_job_service(background_tasks: BackgroundTasks) -> JobService:
     """Dependency that provides JobService with BackgroundTasks."""
     return JobService(background_tasks)
+
 
 class JobRequest(BaseModel):
     """
     Job creation request model with discriminated union for action-specific input data.
     This allows the OpenAPI schema to properly document the different possible input types.
     """
+
     action_name: str = Field(..., description="Name of the AI action to perform.")
-    input_data: ActionInputUnion = Field(..., description="Input data for the AI action.")
+    input_data: ActionInputUnion = Field(
+        ..., description="Input data for the AI action."
+    )
+
 
 @router.post(
     "/",
@@ -81,13 +87,19 @@ class JobRequest(BaseModel):
             "description": "Job accepted",
             "model": JobResponse,
         }
-    }
+    },
 )
 async def create_new_job(
     job_request: JobRequest,
-    callback_url: HttpUrl = Header(..., description="URL to send status updates and final results."),
-    x_callback_auth_secret: Optional[str] = Header(None, alias="X-Callback-Auth-Secret", description="Secret for callback authentication."),
-    job_service: JobService = Depends(get_job_service)
+    callback_url: HttpUrl = Header(
+        ..., description="URL to send status updates and final results."
+    ),
+    x_callback_auth_secret: Optional[str] = Header(
+        None,
+        alias="X-Callback-Auth-Secret",
+        description="Secret for callback authentication.",
+    ),
+    job_service: JobService = Depends(get_job_service),
 ):
     """
     Create a new job. The actual processing will be done in the background.
@@ -100,22 +112,22 @@ async def create_new_job(
         return JSONResponse(
             status_code=422,
             content={
-                "detail": f"Action name '{job_request.action_name}' in request doesn't match action '{job_request.input_data.action}' in input data."
+                "detail": (f"Action name '{job_request.action_name}' in request doesn't match action "
+                           "'{job_request.input_data.action}' in input data.")
             },
         )
-    
+
     # Create a job request with appropriate typing
     typed_request = JobCreateRequest[ActionInput](
-        action_name=job_request.action_name,
-        input_data=job_request.input_data
+        action_name=job_request.action_name, input_data=job_request.input_data
     )
-    
+
     created_job = await job_service.create_job(
         job_request=typed_request,
         callback_url=callback_url,
-        callback_auth_secret=x_callback_auth_secret
+        callback_auth_secret=x_callback_auth_secret,
     )
-    
+
     return created_job
 
 
@@ -124,17 +136,16 @@ async def create_new_job(
     response_model=JobStatusResponse,
     status_code=status.HTTP_200_OK,
     summary="Get job status and results",
-    description="Retrieves the current status of a job, along with any updates and final results."
+    description="Retrieves the current status of a job, along with any updates and final results.",
 )
 async def get_job_status_by_id(
-    job_id: str,
-    job_service: JobService = Depends(get_job_service)
+    job_id: str, job_service: JobService = Depends(get_job_service)
 ):
     """
     Get the status of a specific job by its ID.
     """
     job = await job_service.get_job_status(job_id)
-    
+
     return JobStatusResponse(
         job_id=job.job_id,
         action_name=job.action_name,

@@ -13,16 +13,18 @@ from .models import (
     ConsistencyCheckInput,
     ConsistencyCheckProgressUpdate,
     ConsistencyCheckResult,
-    ConsistencyIssue
+    ConsistencyIssue,
 )
 from .prompts import detector_prompt, summarizer_prompt
 
 logger = logging.getLogger(__name__)
 
+
 class ConsistencyCheckHandler:
     """Handler for consistency check actions."""
+
     action_name = "consistency_check"
-    
+
     def __init__(self):
         """Initialize the consistency check handler."""
         callbacks = []
@@ -36,31 +38,31 @@ class ConsistencyCheckHandler:
 
         self.detector_prompt = PromptTemplate.from_template(detector_prompt)
         self.summarizer_prompt = PromptTemplate.from_template(summarizer_prompt)
-        
-    async def handle(self, input_data: ActionInput, send_update: ActionUpdateCallback) -> ActionUpdate:
+
+    async def handle(
+        self, input_data: ActionInput, send_update: ActionUpdateCallback
+    ) -> ActionUpdate:
         """
         Handle a consistency check request.
-        
+
         Args:
             input_data: Input data for the consistency check
             send_update: Callback to send progress updates
-            
+
         Returns:
             The final result of the consistency check
         """
         if not isinstance(input_data, ConsistencyCheckInput):
             raise TypeError("Input data must be a ConsistencyCheckInput instance")
-            
+
         try:
             return await self._check_exercise_consistency(input_data, send_update)
         except Exception as e:
             logger.exception("Error during consistency check: %s", str(e))
             return ConsistencyCheckResult(
-                issues=[],
-                summary=f"Job execution failed: {str(e)}",
-                status="error"
+                issues=[], summary=f"Job execution failed: {str(e)}", status="error"
             )
-    
+
     async def _check_file_consistency(
         self,
         problem_statement: str,
@@ -114,14 +116,16 @@ class ConsistencyCheckHandler:
             exercise.solution_repository.keys()
         )
         total_files = len(file_paths)
-        
+
         # Send initial update
-        await send_update(ConsistencyCheckProgressUpdate(
-            status_message=f"Starting consistency check for {total_files} files",
-            progress=0,
-            files_processed=0,
-            total_files=total_files
-        ))
+        await send_update(
+            ConsistencyCheckProgressUpdate(
+                status_message=f"Starting consistency check for {total_files} files",
+                progress=0,
+                files_processed=0,
+                total_files=total_files,
+            )
+        )
 
         # Check each file for consistency issues
         file_issues: Dict[str, str] = {}
@@ -142,17 +146,19 @@ class ConsistencyCheckHandler:
 
             if issues:
                 file_issues[file_path] = issues
-            
+
             # Send progress update periodically
             if idx % 3 == 0 or idx == len(file_paths) - 1:
                 files_processed = idx + 1
                 percent = (files_processed / total_files) * 100
-                await send_update(ConsistencyCheckProgressUpdate(
-                    status_message=f"Processed {files_processed}/{total_files} files",
-                    progress=percent,
-                    files_processed=files_processed,
-                    total_files=total_files
-                ))
+                await send_update(
+                    ConsistencyCheckProgressUpdate(
+                        status_message=f"Processed {files_processed}/{total_files} files",
+                        progress=percent,
+                        files_processed=files_processed,
+                        total_files=total_files,
+                    )
+                )
 
         # If no issues found, return early
         if not file_issues:
@@ -177,21 +183,21 @@ class ConsistencyCheckHandler:
         )
 
         # Send update that we're generating summary
-        await send_update(ConsistencyCheckProgressUpdate(
-            status_message="Generating summary of found issues",
-            progress=95,
-            files_processed=total_files,
-            total_files=total_files
-        ))
+        await send_update(
+            ConsistencyCheckProgressUpdate(
+                status_message="Generating summary of found issues",
+                progress=95,
+                files_processed=total_files,
+                total_files=total_files,
+            )
+        )
 
         summary = await self._generate_summary(
             exercise.problem_statement, formatted_issues
         )
 
         return ConsistencyCheckResult(
-            issues=issues_list, 
-            summary=summary, 
-            status="success"
+            issues=issues_list, summary=summary, status="success"
         )
 
     async def _generate_summary(

@@ -7,13 +7,13 @@ from app.actions.test_action.models import (
     TestActionInput,
     TestActionProgressUpdate,
     TestActionResult,
-    TestItem
+    TestItem,
 )
 
 
 __all__ = [
-    'TestActionInput',
-    'TestActionProgressUpdate',
-    'TestActionResult',
-    'TestItem'
+    "TestActionInput",
+    "TestActionProgressUpdate",
+    "TestActionResult",
+    "TestItem",
 ]

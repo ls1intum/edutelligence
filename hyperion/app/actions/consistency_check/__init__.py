@@ -2,13 +2,13 @@ from app.actions.consistency_check.models import (
     ConsistencyCheckInput,
     ConsistencyCheckProgressUpdate,
     ConsistencyCheckResult,
-    ConsistencyIssue
+    ConsistencyIssue,
 )
 
 
 __all__ = [
-    'ConsistencyCheckInput',
-    'ConsistencyCheckProgressUpdate',
-    'ConsistencyCheckResult',
-    'ConsistencyIssue'
+    "ConsistencyCheckInput",
+    "ConsistencyCheckProgressUpdate",
+    "ConsistencyCheckResult",
+    "ConsistencyIssue",
 ]
