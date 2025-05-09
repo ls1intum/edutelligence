@@ -11,8 +11,8 @@ components:
       description: Authentication failed - API key is missing or invalid
   schemas:
     ActionUpdate:
-      description: Base class for all action updates, including intermediate updates
-        and final results.
+      description: Base class for all action updates, including progress updates and
+        final results.
       properties:
         timestamp:
           anyOf:
@@ -21,8 +21,9 @@ components:
           description: Timestamp when this update was generated.
           title: Timestamp
         update_type:
-          $ref: '#/components/schemas/UpdateType'
-          description: Type of update, either progress or result.
+          description: Type of update defined by the specific action.
+          title: Update Type
+          type: string
       required:
       - update_type
       title: ActionUpdate
@@ -122,9 +123,10 @@ components:
           description: Total number of files to process.
           title: Total Files
         update_type:
-          $ref: '#/components/schemas/UpdateType'
-          default: progress
-          description: Progress update.
+          const: consistency_check_progress
+          default: consistency_check_progress
+          title: Update Type
+          type: string
       required:
       - status_message
       title: ConsistencyCheckProgressUpdate
@@ -155,9 +157,10 @@ components:
           description: Timestamp when this update was generated.
           title: Timestamp
         update_type:
-          $ref: '#/components/schemas/UpdateType'
-          default: result
-          description: Final result.
+          const: consistency_check_result
+          default: consistency_check_result
+          title: Update Type
+          type: string
       title: ConsistencyCheckResult
       type: object
     ConsistencyIssue:
@@ -239,10 +242,15 @@ components:
           title: Action Name
           type: string
         input_data:
-          anyOf:
+          description: Input data for the AI action.
+          discriminator:
+            mapping:
+              consistency_check: '#/components/schemas/ConsistencyCheckInput'
+              test_action: '#/components/schemas/TestActionInput'
+            propertyName: action
+          oneOf:
           - $ref: '#/components/schemas/ConsistencyCheckInput'
           - $ref: '#/components/schemas/TestActionInput'
-          description: Input data for the AI action.
           title: Input Data
       required:
       - action_name
@@ -272,10 +280,6 @@ components:
           - type: string
           - type: 'null'
           title: Error Message
-        final_result:
-          anyOf:
-          - $ref: '#/components/schemas/ActionUpdate'
-          - type: 'null'
         job_id:
           title: Job Id
           type: string
@@ -297,7 +301,7 @@ components:
       - updated_at
       title: JobStatusResponse
       type: object
-    ? Job_Union_ConsistencyCheckInput__TestActionInput__Union_ConsistencyCheckProgressUpdate__ConsistencyCheckResult__TestActionProgressUpdate__TestActionResult__
+    ? Job_Annotated_Union_ConsistencyCheckInput__TestActionInput___FieldInfo_annotation_NoneType__required_True__discriminator__action____Annotated_Union_ConsistencyCheckProgressUpdate__ConsistencyCheckResult__TestActionProgressUpdate__TestActionResult___FieldInfo_annotation_NoneType__required_True__discriminator__update_type____
     : properties:
         action_name:
           description: Name of the AI action.
@@ -325,20 +329,16 @@ components:
           - type: 'null'
           description: Error message if the job failed.
           title: Error Message
-        final_result:
-          anyOf:
-          - $ref: '#/components/schemas/ConsistencyCheckProgressUpdate'
-          - $ref: '#/components/schemas/ConsistencyCheckResult'
-          - $ref: '#/components/schemas/TestActionProgressUpdate'
-          - $ref: '#/components/schemas/TestActionResult'
-          - type: 'null'
-          description: Final result of the job.
-          title: Final Result
         input_data:
-          anyOf:
+          description: Input data for the AI action.
+          discriminator:
+            mapping:
+              consistency_check: '#/components/schemas/ConsistencyCheckInput'
+              test_action: '#/components/schemas/TestActionInput'
+            propertyName: action
+          oneOf:
           - $ref: '#/components/schemas/ConsistencyCheckInput'
           - $ref: '#/components/schemas/TestActionInput'
-          description: Input data for the AI action.
           title: Input Data
         job_id:
           description: Unique identifier for the job.
@@ -355,7 +355,14 @@ components:
         updates:
           description: All updates for this job.
           items:
-            anyOf:
+            discriminator:
+              mapping:
+                consistency_check_progress: '#/components/schemas/ConsistencyCheckProgressUpdate'
+                consistency_check_result: '#/components/schemas/ConsistencyCheckResult'
+                test_action_progress: '#/components/schemas/TestActionProgressUpdate'
+                test_action_result: '#/components/schemas/TestActionResult'
+              propertyName: update_type
+            oneOf:
             - $ref: '#/components/schemas/ConsistencyCheckProgressUpdate'
             - $ref: '#/components/schemas/ConsistencyCheckResult'
             - $ref: '#/components/schemas/TestActionProgressUpdate'
@@ -426,9 +433,10 @@ components:
           description: Timestamp when this update was generated.
           title: Timestamp
         update_type:
-          $ref: '#/components/schemas/UpdateType'
-          default: progress
-          description: Progress update.
+          const: test_action_progress
+          default: test_action_progress
+          title: Update Type
+          type: string
       required:
       - status_message
       title: TestActionProgressUpdate
@@ -458,9 +466,10 @@ components:
           title: Total Score
           type: number
         update_type:
-          $ref: '#/components/schemas/UpdateType'
-          default: result
-          description: Final result.
+          const: test_action_result
+          default: test_action_result
+          title: Update Type
+          type: string
       required:
       - summary
       - total_score
@@ -489,13 +498,6 @@ components:
       - score
       title: TestItem
       type: object
-    UpdateType:
-      description: Types of updates that can be sent during job processing.
-      enum:
-      - progress
-      - result
-      title: UpdateType
-      type: string
     ValidationError:
       properties:
         loc:
@@ -613,7 +615,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Job_Union_ConsistencyCheckInput__TestActionInput__Union_ConsistencyCheckProgressUpdate__ConsistencyCheckResult__TestActionProgressUpdate__TestActionResult__'
+                $ref: '#/components/schemas/Job_Annotated_Union_ConsistencyCheckInput__TestActionInput___FieldInfo_annotation_NoneType__required_True__discriminator__action____Annotated_Union_ConsistencyCheckProgressUpdate__ConsistencyCheckResult__TestActionProgressUpdate__TestActionResult___FieldInfo_annotation_NoneType__required_True__discriminator__update_type____'
           description: Job accepted
         '401':
           $ref: '#/components/responses/UnauthorizedError'

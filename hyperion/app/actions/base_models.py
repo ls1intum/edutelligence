@@ -6,7 +6,7 @@ should implement to ensure consistency and type safety across the application.
 """
 
 from enum import Enum
-from typing import Generic, TypeVar, Any, Optional, Protocol, runtime_checkable
+from typing import Generic, TypeVar, Any, Optional, Protocol, runtime_checkable, Literal
 from pydantic import BaseModel, Field, HttpUrl
 
 # Type variables for generic inputs and updates
@@ -20,27 +20,14 @@ class JobStatus(str, Enum):
     COMPLETED = "completed"
     FAILED = "failed"
 
-class UpdateType(str, Enum):
-    """Types of updates that can be sent during job processing."""
-    PROGRESS = "progress"  # Intermediate progress update
-    RESULT = "result"      # Final result
-
 class ActionInput(BaseModel):
     """Base class for all AI action inputs."""
     action: str = Field(..., description="The action this input is for.")
 
 class ActionUpdate(BaseModel):
-    """Base class for all action updates, including intermediate updates and final results."""
-    update_type: UpdateType = Field(..., description="Type of update, either progress or result.")
+    """Base class for all action updates, including progress updates and final results."""
+    update_type: str = Field(..., description="Type of update defined by the specific action.")
     timestamp: Optional[str] = Field(None, description="Timestamp when this update was generated.")
-
-class ProgressUpdate(ActionUpdate):
-    """Base class for progress updates during an AI action."""
-    update_type: UpdateType = Field(default=UpdateType.PROGRESS, description="Progress update.")
-
-class ResultUpdate(ActionUpdate):
-    """Base class for final results of an AI action."""
-    update_type: UpdateType = Field(default=UpdateType.RESULT, description="Final result.")
 
 class JobCreateRequest(BaseModel, Generic[ActionInputT]):
     """Request to create a new job."""
@@ -61,12 +48,18 @@ class Job(BaseModel, Generic[ActionInputT, ActionUpdateT]):
     callback_url: HttpUrl = Field(..., description="URL for callback.")
     callback_auth: Optional[CallbackAuth] = Field(None, description="Authentication for callback.")
     updates: list[ActionUpdateT] = Field(default_factory=list, description="All updates for this job.")
-    final_result: Optional[ActionUpdateT] = Field(None, description="Final result of the job.")
     error_message: Optional[str] = Field(None, description="Error message if the job failed.")
     created_at: str = Field(..., description="Timestamp of job creation.")
     updated_at: str = Field(..., description="Timestamp of last update.")
 
-    # This is a workaround to set the name of the class to "Job" in the OpenAPI schema
+    @property
+    def final_result(self) -> Optional[ActionUpdateT]:
+        """Get the final result, which is the last update when job is completed."""
+        if self.status == JobStatus.COMPLETED and self.updates:
+            return self.updates[-1]
+        return None
+    
+    # Workaround to set the name of the class to "Job" in the OpenAPI schema
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
         cls.__name__ = "Job"
@@ -77,12 +70,18 @@ class JobStatusResponse(BaseModel, Generic[ActionUpdateT]):
     action_name: str
     status: JobStatus
     updates: list[ActionUpdateT] = Field(default_factory=list)
-    final_result: Optional[ActionUpdateT] = None
     error_message: Optional[str] = None
     created_at: str
     updated_at: str
     
-    # This is a workaround to set the name of the class to "JobStatusResponse" in the OpenAPI schema
+    @property
+    def final_result(self) -> Optional[ActionUpdateT]:
+        """Get the final result, which is the last update when job is completed."""
+        if self.status == JobStatus.COMPLETED and self.updates:
+            return self.updates[-1]
+        return None
+
+    # Workaround to set the name of the class to "JobStatusResponse" in the OpenAPI schema
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
         cls.__name__ = "JobStatusResponse"

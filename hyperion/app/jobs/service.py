@@ -28,7 +28,6 @@ from app.actions.base_models import (
     JobCreateRequest, 
     CallbackPayload, 
     CallbackAuth,
-    UpdateType,
     ActionInputT,
     ActionUpdateT
 )
@@ -95,9 +94,9 @@ async def process_job(job_id: str):
         job.updates.append(update)
         job.updated_at = datetime.now(timezone.utc).isoformat()
         
-        # Set the final result if this is a result update
-        if update.update_type == UpdateType.RESULT:
-            job.final_result = update
+        # By convention, we consider updates with type ending with "_result" as final results
+        # This allows each action to have its own specific result type
+        if update.update_type.endswith("_result"):
             job.status = JobStatus.COMPLETED
             await send_callback(job, JobStatus.COMPLETED, update=update)
             logger.info(f"Job {job.job_id} completed successfully with final result.")
@@ -115,9 +114,9 @@ async def process_job(job_id: str):
             # Ensure timestamp is set
             if not result.timestamp:
                 result.timestamp = datetime.now(timezone.utc).isoformat()
-                
-            job.final_result = result
-            job.updates.append(result)  
+            
+            # Add the final result update
+            job.updates.append(result)
             job.status = JobStatus.COMPLETED
             job.updated_at = datetime.now(timezone.utc).isoformat()
             await send_callback(job, JobStatus.COMPLETED, update=result)

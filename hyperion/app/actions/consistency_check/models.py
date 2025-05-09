@@ -1,7 +1,7 @@
 from typing import Dict, List, Optional, Literal
 from pydantic import BaseModel, Field
 
-from app.actions.base_models import ActionInput, ProgressUpdate, ResultUpdate
+from app.actions.base_models import ActionInput, ActionUpdate
 
 class ConsistencyCheckInput(ActionInput):
     """Input model for consistency check action."""
@@ -16,15 +16,17 @@ class ConsistencyIssue(BaseModel):
     file_path: str = Field(..., description="Path to the file with consistency issue")
     description: str = Field(..., description="Description of the consistency issue")
 
-class ConsistencyCheckProgressUpdate(ProgressUpdate):
+class ConsistencyCheckProgressUpdate(ActionUpdate):
     """Progress update for consistency check action."""
+    update_type: Literal["consistency_check_progress"] = "consistency_check_progress"
     status_message: str = Field(..., description="Current status message of the consistency checking process.")
     progress: Optional[float] = Field(None, ge=0, le=100, description="Optional progress indicator as percentage.")
     files_processed: Optional[int] = Field(None, description="Number of files processed so far.")
     total_files: Optional[int] = Field(None, description="Total number of files to process.")
 
-class ConsistencyCheckResult(ResultUpdate):
+class ConsistencyCheckResult(ActionUpdate):
     """Final result for consistency check action."""
+    update_type: Literal["consistency_check_result"] = "consistency_check_result"
     issues: List[ConsistencyIssue] = Field(default_factory=list, description="List of consistency issues found")
     summary: str = Field("", description="A summary of all consistency issues")
     status: str = Field("success", description="Status of the consistency check")

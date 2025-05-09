@@ -9,16 +9,13 @@ settings.IS_GENERATING_OPENAPI = True
 # Import base models, ignore unused imports!
 from app.actions.base_models import (
     JobStatus, 
-    UpdateType,
-    CallbackAuth, 
-    JobCreateRequest, 
     ActionInput,
     ActionUpdate,
-    ProgressUpdate,
-    ResultUpdate,
     Job, 
     JobStatusResponse, 
-    CallbackPayload
+    CallbackPayload,
+    CallbackAuth,
+    JobCreateRequest
 )
 
 # Import the model registry for dynamic discovery
@@ -59,9 +56,10 @@ def export():
         with open("./openapi.yaml", "w") as f:
             f.write(yaml_spec)
         print("OpenAPI YAML specification generated successfully.")
+        return 0
     except Exception as e:
         print(f"Error generating OpenAPI specs: {e}")
-        exit(1)
+        return 1
 
 
 if __name__ == "__main__":
