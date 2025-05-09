@@ -668,32 +668,5 @@ paths:
       summary: Get job status and results
       tags:
       - jobs
-  /run:
-    get:
-      operationId: run_run_get
-      parameters:
-      - in: query
-        name: query
-        required: true
-        schema:
-          title: Query
-          type: string
-      responses:
-        '200':
-          content:
-            application/json:
-              schema:
-                title: Response Run Run Get
-                type: string
-          description: Successful Response
-        '401':
-          $ref: '#/components/responses/UnauthorizedError'
-        '422':
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/HTTPValidationError'
-          description: Validation Error
-      summary: Run
 security:
 - ApiKeyAuth: []
