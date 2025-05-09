@@ -16,6 +16,7 @@ Generate the following response dictionary:
 
 Firstly, identify the language of the course. The language of the course is either german or english. You can extract
 the language from the existing FAQs. Your output should be in the same language as the course language.
+If you are unsure, choose english.
 
 The following four entries to the dictionary are optional and can only be set if inconsistencies are detected:
 "faqs": This entry should be a list of Strings, each string represents an FAQ.
@@ -24,6 +25,7 @@ The following four entries to the dictionary are optional and can only be set if
 -The fields are exactly named faq_id, faq_question_title and faq_question_answer
 and reside within properties dict of each list entry.
 -Make sure to only include inconsistent faqs
+-Assume that already exising FAQs are correct, consequently the rewritten FAQ is inconsistent.
 -Do not include any additional FAQs that are consistent with the final_result.
 
 "message": "The provided text was rephrased, however it contains inconsistent information with existing FAQs."
@@ -37,11 +39,10 @@ Insert the faq_id, faq_question_title, and faq_question_answer of the inconsiste
 - Each suggestions highlights what is the inconsistency and how it can be improved.
 - Do not mention the term final result, call it provided text
 - Please ensure that at no time, you have a different amount of suggestions than inconsistencies.\n
+- Highlight how you can improve the rewritten text to be consistent with the existing FAQs.
 Both should have the same amount of entries.
 
 -"improved version": This entry should be a string that represents the improved version of the final result.
-
-For each of the fields, make sure that the output is in the same language as the course language.
 
 
 Do NOT provide any explanations or additional text.

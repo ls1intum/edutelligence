@@ -145,7 +145,7 @@ class RewritingPipeline(Pipeline):
         for key in keys_to_check:
             if key in data:
                 result_dict[key] = data[key]
-
+        logging.info(faqs)
         logging.info(f"Consistency FAQ consistency check response: {result_dict}")
 
         return result_dict
