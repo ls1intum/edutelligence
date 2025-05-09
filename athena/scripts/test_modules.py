@@ -19,6 +19,46 @@ def main():
     ]
 
     success = True
+    path_env = os.environ["PATH"]
+
+    for module in modules:
+        # Check if test directory exists
+        test_dir = f"tests/{module}"
+        if not os.path.exists(test_dir):
+            print(f"No tests found for {module}, skipping...")
+            continue
+
+        # Get the module's virtual environment
+        venv_path = os.path.join(os.getcwd(), module, ".venv")
+        if not os.path.exists(venv_path):
+            print(f"Virtual environment not found for {module} at {venv_path}")
+            continue
+
+        # Set environment variables for the virtual environment
+        os.environ["VIRTUAL_ENV"] = venv_path
+        os.environ["PATH"] = os.path.join(venv_path, "bin") + os.pathsep + path_env
+        python_path = os.path.join(venv_path, "bin", "python")
+        pip_path = os.path.join(venv_path, "bin", "pip")
+
+        print(f"Using Python path: {python_path}")
+
+        try:
+            # Install pytest in the virtual environment
+            print(f"Installing pytest for {module}...")
+            subprocess.run([pip_path, "install", "pytest"], check=True, capture_output=True, text=True)
+
+            # Run pytest using the module's virtual environment
+            result = subprocess.run([python_path, "-m", "pytest", test_dir], capture_output=True, text=True)
+            if result.returncode != 0:
+                print(f"Tests failed for {module}:")
+                print(result.stdout)
+                print(result.stderr)
+                success = False
+            else:
+                print(f"Tests passed for {module}")
+        except Exception as e:
+            print(f"Error running tests for {module}: {str(e)}")
+            success = False
 
     if success:
         sys.exit(0)
