@@ -3,17 +3,6 @@
 -- DROP DATABASE IF EXISTS logosdb;
 
 
-CREATE DATABASE logosdb
-    WITH
-    OWNER = postgres
-    ENCODING = 'UTF-8'
-    LC_COLLATE = 'German_Germany.1252'
-    LC_CTYPE = 'German_Germany.1252'
-    LOCALE_PROVIDER = 'libc'
-    TABLESPACE = pg_default
-    CONNECTION LIMIT = -1
-    IS_TEMPLATE = False;
-
 DROP TYPE IF EXISTS threshold_enum CASCADE;
 DROP TABLE IF EXISTS profile_model_permissions CASCADE;
 DROP TABLE IF EXISTS policies CASCADE;
@@ -40,7 +29,7 @@ CREATE TABLE services (
 
 CREATE TABLE profiles (
     id SERIAL PRIMARY KEY,
-    name TEXT NOT NULL
+    name TEXT NOT NULL UNIQUE
 );
 
 CREATE TABLE process (
@@ -79,14 +68,14 @@ CREATE TABLE model_provider (
 
 CREATE TABLE model_api_keys (
     id SERIAL PRIMARY KEY,
-    profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE SET NULL,
+    profile_id INTEGER REFERENCES profiles(id) ON DELETE SET NULL,
     provider_id INTEGER NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
     api_key TEXT
 );
 
 CREATE TABLE profile_model_permissions (
     id SERIAL PRIMARY KEY,
-    profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE SET NULL,
+    profile_id INTEGER REFERENCES profiles(id) ON DELETE SET NULL,
     model_id INTEGER NOT NULL REFERENCES models(id) ON DELETE CASCADE
 );
 

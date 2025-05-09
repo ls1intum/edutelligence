@@ -5,12 +5,28 @@ import httpx
 
 from logos.dbmanager import DBManager
 
-
 app = FastAPI()
 
 
+@app.api_route("/logosdb/{action}", methods=["GET", "POST", "PUT", "DELETE"])
+async def db_action(action: str, request: Request):
+    with DBManager() as db:
+        if action == "setup":
+            # Set up the database. First action to execute when setting up logos
+            return db.setup()
+        elif action == "add_provider":
+            return db.add_provider(request.headers["logos_key"], request.headers["provider_name"],
+                                   request.headers["base_url"], request.headers["api_key"])
+        elif action == "add_process_connection":
+            return db.add_process_connection(request.headers["logos_key"], request.headers["profile_name"],
+                                             int(request.headers["process_id"]), int(request.headers["api_id"]))
+        elif action == "get_process_id":
+            return db.get_process_id(request.headers["logos_key"])
+        return action
+
+
 @app.api_route("/v1/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
-async def openai_proxy(path: str, request: Request):
+async def logos_service(path: str, request: Request):
     """
     Dynamic proxy for openai-Endpoints
     :param path: Path to Endpoint
@@ -19,7 +35,7 @@ async def openai_proxy(path: str, request: Request):
     """
     # Read request
     data = await request.body()
-    json = request2json(data)
+    json_data = request2json(data)
     # logos-API-check
     if "Authorization" not in request.headers:
         return {"error": "Missing Authorization Header"}, 401
@@ -66,7 +82,7 @@ async def openai_proxy(path: str, request: Request):
         response = await client.request(
             method="POST",
             url=forward_url,
-            json=json,
+            json=json_data,
             headers=headers,
             timeout=30,
         )

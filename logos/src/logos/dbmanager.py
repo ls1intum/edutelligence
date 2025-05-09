@@ -4,6 +4,7 @@ Central Manager for all Database-related actions for Logos
 import secrets
 from typing import Dict, Any, Optional
 
+import sqlalchemy.exc
 import yaml
 from sqlalchemy import Table, MetaData
 from sqlalchemy import text
@@ -105,7 +106,7 @@ class DBManager:
         result = self.session.execute(sql, {
             "logos_key": logos_key
         }).fetchone()
-
+        print(sql)
         if result:
             return {
                 "api_key": result.api_key,
@@ -114,24 +115,96 @@ class DBManager:
             }
         return None
 
-    def setup(self) -> str:
+    def __exec_init(self):
+        with self.engine.connect() as conn:
+            with open("./db/init.sql", "r", encoding="utf-8") as file:
+                sql = file.read()
+                for statement in sql.split(";"):
+                    stmt = statement.strip()
+                    if stmt:
+                        try:
+                            conn.execute(text(stmt))
+                        except sqlalchemy.exc.ProgrammingError:
+                            pass
+
+            conn.commit()
+
+    def setup(self) -> dict:
         """
         Sets up the initial database. Creates a root-user.
         :return: Initial API-Key
         """
+        # Check if database already exists
+        self.__exec_init()
+        try:
+            sql = text("""
+                        SELECT *
+                        FROM process
+                    """)
+            if self.session.execute(sql).fetchone() is not None:
+                return {"error": "Database already initialized"}
+        except sqlalchemy.exc.ProgrammingError:
+            pass
+
         self.create_all()
         # Create user
         user_id = self.insert("users", {"username": "root", "prename": "postgres", "name": "root"})
-        # Create profile
-        profile_id = self.insert("profiles", {"name": "root"})
         # Create process
         api_key = generate_logos_api_key("root")
-        _ = self.insert("process", {"logos_key": api_key, "user_id": user_id, "profile_id": profile_id, "name": "root"})
-        print(f"Successfully created database. API-Key: {api_key}")
-        # Insert data for supported providers
-        self.insert("providers", {"name": "openai", "base_url": "https://api.openai.com/v1"})
-        self.insert("providers", {"name": "azure", "base_url": "https://ase-se01.openai.azure.com/openai/deployments"})
-        return api_key
+        _ = self.insert("process", {"logos_key": api_key, "user_id": user_id, "name": "root"})
+        return {"api_key": api_key}
+
+    def add_provider(self, logos_key: str, provider_name: str, base_url: str, api_key: str) -> dict:
+        if not self.__check_authorization(logos_key):
+            return {"error": "Database changes only allowed for root user."}
+        pk = self.insert("providers", {"name": provider_name, "base_url": base_url})
+        pk_api = self.insert("model_api_keys", {"api_key": api_key, "provider_id": pk})
+        return {"result": f"Created Provider. API-ID: {pk_api}"}
+
+    def add_process_connection(self, root_key: str, profile_name: str, process_id: int, api_id: int):
+        if not self.__check_authorization(root_key):
+            return {"error": "Database changes only allowed for root user."}
+        pk = self.insert("profiles", {"name": profile_name})
+        sql = text("""
+                    UPDATE process
+                    SET profile_id = :pk
+                    WHERE id = :process_id
+                """)
+        self.session.execute(sql, {
+            "pk": pk,
+            "process_id": process_id
+        })
+        sql = text("""
+                    UPDATE model_api_keys
+                    SET profile_id = :pk
+                    WHERE id = :api_id
+                """)
+        self.session.execute(sql, {
+            "pk": pk,
+            "api_id": api_id
+        })
+        return {"result": f"Created Profile. ID: {pk}"}
+
+    def get_process_id(self, logos_key: str):
+        sql = text("""
+                    SELECT id
+                    FROM process
+                    WHERE logos_key = :logos_key
+        """)
+        exc = self.session.execute(sql, {"logos_key": logos_key}).fetchone()
+        if exc is None:
+            return {"error": "Key not found"}
+        return {"result": f"Process ID: {exc[0]}"}
+
+    def __check_authorization(self, logos_key: str):
+        sql = text("""
+                                SELECT *
+                                FROM process, users
+                                WHERE logos_key = :logos_key
+                                    and process.user_id = users.id
+                                    and users.name = 'root'
+                            """)
+        return self.session.execute(sql, {"logos_key": logos_key}).fetchone() is not None
 
     def __enter__(self):
         conf = load_postgres_env_vars_from_compose()
@@ -148,4 +221,10 @@ class DBManager:
 
 
 if __name__ == "__main__":
+    """
+    DB-Creation Steps:
+    1. Setup: Set up database. Creates an entry in "users" with "root" user and a process entry with an initial api key.
+    2. Add Provider. Add a provider and a corresponding api-key
+    3. Connect logos-user/service with profiles
+    """
     pass

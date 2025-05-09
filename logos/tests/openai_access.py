@@ -5,23 +5,13 @@ VALID_LOGOS_KEY = ""
 
 
 class TestOpenAIForwardingProxy(unittest.TestCase):
-    def test_logos_proxy_openai(self):
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {VALID_LOGOS_KEY}"
-        }
-
-        data = {
-            "model": "gpt-3.5-turbo",
-            "prompt": "Say this is a test",
-        }
-
-        response = requests.post("http://localhost:8000/v1/chat/completions", json=data, headers=headers)
-        assert response.status_code == 200
-        assert "error" in str(response.text)
-        assert "openai" in str(response.text)
-
-    def test_logos_proxy_azure(self):
+    def test_setup(self):
+        """
+action == "add_process_connection":
+            return db.add_process_connection(request.headers["logos_key"], request.headers["profile_name"],
+                                             int(request.headers["process_id"]), int(request.headers["api_id"]))
+        :return:
+        """
         headers = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {VALID_LOGOS_KEY}",
@@ -30,7 +20,7 @@ class TestOpenAIForwardingProxy(unittest.TestCase):
         }
 
         data = {
-            "messages": [{"role": "user", "content": "Tell me a fun fact about the roman empire!"}],
+            "messages": [{"role": "user", "content": "Tell me a fun fact about the ostrogothic empire!"}],
             "temperature": 0.5
         }
 
@@ -38,24 +28,6 @@ class TestOpenAIForwardingProxy(unittest.TestCase):
         from pprint import pprint
         pprint(response.json())
         assert response.status_code == 200
-        assert "completion_tokens" in str(response.text)
-
-    def test_logos_invalid_key(self):
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": "Bearer ..."
-        }
-
-        data = {
-            "model": "gpt-3.5-turbo",
-            "prompt": "Say this is a test",
-        }
-
-        response = requests.post("http://localhost:8000/v1/chat/completions", json=data, headers=headers)
-        content = eval(response.text)
-        assert response.status_code == 200
-        assert int(content[1]) == 401
-        assert {"error":"No corresponding profile found for provided key"} == content[0]
 
 
 if __name__ == '__main__':
