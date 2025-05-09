@@ -1,29 +1,12 @@
-fastapi==0.110.0
-uvicorn[standard]==0.29.0
-
-# OpenAI SDK supporting GPT-4o and Azure usage
-openai==1.25.0  # Supports GPT-4o; stable + fast
-
-# Whisper transcription model (latest from GitHub)
-git+https://github.com/openai/whisper.git
-
-# Whisper + Torch dependencies
-torch
-
-# Required for audio processing
+fastapi==0.110.1
+uvicorn==0.29.0
+openai==1.55.3
+httpx==0.27.2
 ffmpeg-python==0.2.0
-
-# For video frame extraction (headless avoids GUI issues)
 opencv-python-headless==4.9.0.80
-
-# For image handling and conversion to base64
 pillow
-
-# Needed by Whisper and other numerical ops
-numpy<2.0.0  # Whisper does not yet support numpy 2.x
-
-# HTTP utils (for things like downloading videos or calling external APIs)
+python-dotenv==1.0.1
 requests==2.31.0
-
-# YAML config loading (used in llm_config.nebula.yml)
 pyyaml==6.0.1
+pydub==0.25.1
+numpy<2.0.0

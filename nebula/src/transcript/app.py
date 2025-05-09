@@ -1,33 +1,34 @@
-import os
-import uuid
-import time
 import logging
+import os
+import time
 import traceback
+import uuid
 
 from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 from pydantic import BaseModel
 
-from config import Config
-from video_utils import download_video, extract_audio, extract_frames_at_timestamps
-from whisper_utils import transcribe_with_local_whisper
-from slide_utils import ask_gpt_for_slide_number
 from align_utils import align_slides_with_segments
+from config import Config
+from fastapi.middleware import Middleware
+from security import AuthMiddleware
+from health  import router as health_router
+from slide_utils import ask_gpt_for_slide_number
+from video_utils import download_video, extract_audio, extract_frames_at_timestamps
+from whisper_utils import transcribe_with_azure_whisper
 
-app = FastAPI()
+token = Config.API_KEYS[0] if Config.API_KEYS else "fallback-token"
 
-# Trust X-Forwarded-* headers if behind a reverse proxy
-app.add_middleware(ProxyHeadersMiddleware)
+middleware = [
+    Middleware(
+        AuthMiddleware,
+        api_key=token,
+        exclude_paths=["/health", "/docs", "/openapi.json"],
+        header_name="Authorization",
+    )
+]
 
-# Enable permissive CORS (adjust in production)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+app = FastAPI(middleware=middleware)
+app.include_router(health_router)
 
 # Setup logging
 logging.basicConfig(level=getattr(logging, Config.LOG_LEVEL))
@@ -59,7 +60,7 @@ async def start_transcribe(req: TranscribeRequest):
         download_video(video_url, video_path)
         extract_audio(video_path, audio_path)
 
-        transcription = transcribe_with_local_whisper(audio_path)
+        transcription = transcribe_with_azure_whisper(audio_path)
         timestamps = [s["start"] for s in transcription["segments"]]
         frames = extract_frames_at_timestamps(video_path, timestamps)
 
