@@ -16,14 +16,12 @@ nltk = "3.9.1"
 python-dotenv = "1.0.0"
 tiktoken = "0.7.0"
 
-[tool.poetry.dev-dependencies]
-pydantic = "1.10.17"
-prospector = "^1.10.2"
-
 [tool.poetry.scripts]
 module = "athena:run_module"
 
 [tool.poetry.group.dev.dependencies]
+pydantic = "1.10.17"
+prospector = "^1.10.2"
 types-requests = "^2.31.0.8"
 
 [build-system]
