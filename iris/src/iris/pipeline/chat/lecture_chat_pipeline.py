@@ -21,9 +21,8 @@ from ...domain.retrieval.lecture.lecture_retrieval_dto import (
     LectureRetrievalDTO,
 )
 from ...llm import (
-    CapabilityRequestHandler,
+    BasicRequestHandler,
     CompletionArguments,
-    RequirementList,
 )
 from ...llm.langchain import IrisLangchainChatModel
 from ...retrieval.lecture.lecture_retrieval import LectureRetrieval
@@ -83,13 +82,7 @@ class LectureChatPipeline(Pipeline):
     ):
         super().__init__(implementation_id="lecture_chat_pipeline")
         # Set the langchain chat model
-        request_handler = CapabilityRequestHandler(
-            requirements=RequirementList(
-                gpt_version_equivalent=4.5,
-                context_length=16385,
-                privacy_compliance=True,
-            )
-        )
+        request_handler = BasicRequestHandler(model_id="azure-gpt-41")
 
         self.callback = callback
         self.dto = dto
@@ -140,7 +133,7 @@ class LectureChatPipeline(Pipeline):
         )
         self._add_lecture_content_to_prompt(self.lecture_content)
         custom_instructions = format_custom_instructions(
-            custom_instructions=dto.customInstructions
+            custom_instructions=dto.custom_instructions
         )
         if custom_instructions:
             self.prompt += SystemMessagePromptTemplate.from_template(

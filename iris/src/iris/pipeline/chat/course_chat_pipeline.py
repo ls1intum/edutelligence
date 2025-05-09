@@ -27,9 +27,8 @@ from ...domain.retrieval.lecture.lecture_retrieval_dto import (
     LectureRetrievalDTO,
 )
 from ...llm import (
-    CapabilityRequestHandler,
+    BasicRequestHandler,
     CompletionArguments,
-    RequirementList,
 )
 from ...llm.langchain import IrisLangchainChatModel
 from ...retrieval.faq_retrieval import FaqRetrieval
@@ -56,7 +55,10 @@ from ..prompts.iris_course_chat_prompts_elicit import (
     elicit_no_chat_history_prompt,
 )
 from ..shared.citation_pipeline import CitationPipeline, InformationType
-from ..shared.utils import generate_structured_tools_from_functions
+from ..shared.utils import (
+    format_custom_instructions,
+    generate_structured_tools_from_functions,
+)
 from .interaction_suggestion_pipeline import (
     InteractionSuggestionPipeline,
 )
@@ -106,19 +108,11 @@ class CourseChatPipeline(Pipeline):
         # Set the langchain chat model
         completion_args = CompletionArguments(temperature=0.5, max_tokens=2000)
         self.llm_big = IrisLangchainChatModel(
-            request_handler=CapabilityRequestHandler(
-                requirements=RequirementList(
-                    gpt_version_equivalent=4.5,
-                )
-            ),
+            request_handler=BasicRequestHandler(model_id="azure-gpt-41"),
             completion_args=completion_args,
         )
         self.llm_small = IrisLangchainChatModel(
-            request_handler=CapabilityRequestHandler(
-                requirements=RequirementList(
-                    gpt_version_equivalent=4.25,
-                )
-            ),
+            request_handler=BasicRequestHandler(model_id="azure-gpt-41-mini"),
             completion_args=completion_args,
         )
         self.callback = callback
@@ -412,6 +406,8 @@ class CourseChatPipeline(Pipeline):
                     ),
                 }
 
+            custom_instructions = format_custom_instructions(dto.custom_instructions)
+
             if query is not None:
                 # Add the conversation to the prompt
                 chat_history_messages = [
@@ -426,6 +422,8 @@ class CourseChatPipeline(Pipeline):
                             + chat_history_exists_prompt
                             + "\n"
                             + agent_prompt
+                            + "\n"
+                            + custom_instructions
                         ),
                         *chat_history_messages,
                         ("placeholder", "{agent_scratchpad}"),
@@ -435,7 +433,12 @@ class CourseChatPipeline(Pipeline):
                 self.prompt = ChatPromptTemplate.from_messages(
                     [
                         SystemMessage(
-                            initial_prompt_with_date + "\n" + agent_prompt + "\n"
+                            initial_prompt_with_date
+                            + "\n"
+                            + agent_prompt
+                            + "\n"
+                            + custom_instructions
+                            + "\n"
                         ),
                         ("placeholder", "{agent_scratchpad}"),
                     ]

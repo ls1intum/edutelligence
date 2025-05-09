@@ -29,9 +29,8 @@ from ...domain.retrieval.lecture.lecture_retrieval_dto import (
     LectureRetrievalDTO,
 )
 from ...llm import (
-    CapabilityRequestHandler,
+    BasicRequestHandler,
     CompletionArguments,
-    RequirementList,
 )
 from ...llm.langchain import IrisLangchainChatModel
 from ...retrieval.faq_retrieval import FaqRetrieval
@@ -53,7 +52,10 @@ from ..prompts.iris_exercise_chat_agent_prompts import (
 )
 from ..shared.citation_pipeline import CitationPipeline, InformationType
 from ..shared.reranker_pipeline import RerankerPipeline
-from ..shared.utils import generate_structured_tools_from_functions
+from ..shared.utils import (
+    format_custom_instructions,
+    generate_structured_tools_from_functions,
+)
 from .code_feedback_pipeline import CodeFeedbackPipeline
 from .interaction_suggestion_pipeline import InteractionSuggestionPipeline
 
@@ -128,19 +130,11 @@ class ExerciseChatAgentPipeline(Pipeline):
         # Set the langchain chat model
         completion_args = CompletionArguments(temperature=0.5, max_tokens=2000)
         self.llm_big = IrisLangchainChatModel(
-            request_handler=CapabilityRequestHandler(
-                requirements=RequirementList(
-                    gpt_version_equivalent=4.5,
-                ),
-            ),
+            request_handler=BasicRequestHandler(model_id="azure-gpt-41"),
             completion_args=completion_args,
         )
         self.llm_small = IrisLangchainChatModel(
-            request_handler=CapabilityRequestHandler(
-                requirements=RequirementList(
-                    gpt_version_equivalent=4.25,
-                ),
-            ),
+            request_handler=BasicRequestHandler(model_id="azure-gpt-41-mini"),
             completion_args=completion_args,
         )
         self.variant = variant
@@ -494,6 +488,10 @@ class ExerciseChatAgentPipeline(Pipeline):
             exercise_title: str = dto.exercise.name
             programming_language = dto.exercise.programming_language.lower()
 
+            custom_instructions = format_custom_instructions(
+                custom_instructions=dto.custom_instructions
+            )
+
             params = {}
 
             if len(chat_history) > 0 and query is not None and self.event is None:
@@ -511,6 +509,8 @@ class ExerciseChatAgentPipeline(Pipeline):
                             )
                             + "\n"
                             + agent_prompt
+                            + "\n"
+                            + custom_instructions
                             + "\n"
                             + format_reminder_prompt,
                         ),
@@ -535,6 +535,8 @@ class ExerciseChatAgentPipeline(Pipeline):
                                 )
                                 + agent_prompt
                                 + "\n"
+                                + custom_instructions
+                                + "\n"
                                 + format_reminder_prompt,
                             ),
                             HumanMessage(
@@ -556,6 +558,8 @@ class ExerciseChatAgentPipeline(Pipeline):
                                     programming_language,
                                 )
                                 + agent_prompt
+                                + "\n"
+                                + custom_instructions
                                 + "\n"
                                 + format_reminder_prompt,
                             ),
