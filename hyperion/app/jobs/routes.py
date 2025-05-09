@@ -112,8 +112,10 @@ async def create_new_job(
         return JSONResponse(
             status_code=422,
             content={
-                "detail": (f"Action name '{job_request.action_name}' in request doesn't match action "
-                           "'{job_request.input_data.action}' in input data.")
+                "detail": (
+                    f"Action name '{job_request.action_name}' in request doesn't match action "
+                    "'{job_request.input_data.action}' in input data."
+                )
             },
         )
 
