@@ -7,21 +7,20 @@ VALID_LOGOS_KEY = ""
 class TestOpenAIForwardingProxy(unittest.TestCase):
     def test_setup(self):
         """
-action == "add_process_connection":
-            return db.add_process_connection(request.headers["logos_key"], request.headers["profile_name"],
-                                             int(request.headers["process_id"]), int(request.headers["api_id"]))
-        :return:
+        provider_name: str
+    base_url: str
+    api_key: str
+    auth_name: str
+    auth_format: str
         """
         headers = {
             "Content-Type": "application/json",
-            "Authorization": f"Bearer {VALID_LOGOS_KEY}",
-            "deployment_name": "gpt-4o",
-            "api_version": "2024-08-01-preview"
+            "logos_key": f"{VALID_LOGOS_KEY}"
         }
 
         data = {
             "messages": [{"role": "user", "content": "Tell me a fun fact about the ostrogothic empire!"}],
-            "temperature": 0.5
+            "temperature": 0.5,
         }
 
         response = requests.post("http://localhost:8000/v1/chat/completions", json=data, headers=headers)

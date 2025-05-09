@@ -4,79 +4,159 @@ from fastapi import FastAPI, Request
 import httpx
 
 from logos.dbmanager import DBManager
+from logos.dbrequest import *
 
 app = FastAPI()
 
 
-@app.api_route("/logosdb/{action}", methods=["GET", "POST", "PUT", "DELETE"])
-async def db_action(action: str, request: Request):
+@app.post("/logosdb/setup")
+async def setup_db():
     with DBManager() as db:
-        if action == "setup":
-            # Set up the database. First action to execute when setting up logos
-            return db.setup()
-        elif action == "add_provider":
-            return db.add_provider(request.headers["logos_key"], request.headers["provider_name"],
-                                   request.headers["base_url"], request.headers["api_key"])
-        elif action == "add_process_connection":
-            return db.add_process_connection(request.headers["logos_key"], request.headers["profile_name"],
-                                             int(request.headers["process_id"]), int(request.headers["api_id"]))
-        elif action == "get_process_id":
-            return db.get_process_id(request.headers["logos_key"])
-        return action
+        return db.setup()
+
+
+@app.post("/logosdb/add_provider")
+async def add_provider(data: AddProviderRequest):
+    with DBManager() as db:
+        return db.add_provider(**data.dict())
+
+
+@app.post("/logosdb/add_profile")
+async def add_profile(data: AddProfileRequest):
+    with DBManager() as db:
+        return db.add_profile(**data.dict())
+
+
+@app.post("/logosdb/connect_process_provider")
+async def connect_process_provider(data: ConnectProcessProviderRequest):
+    with DBManager() as db:
+        return db.connect_process_provider(**data.dict())
+
+
+@app.post("/logosdb/connect_process_model")
+async def connect_process_model(data: ConnectProcessModelRequest):
+    with DBManager() as db:
+        return db.connect_process_model(**data.dict())
+
+
+@app.post("/logosdb/connect_service_process")
+async def connect_service_process(data: ConnectServiceProcessRequest):
+    with DBManager() as db:
+        return db.connect_service_process(**data.dict())
+
+
+@app.post("/logosdb/connect_model_provider")
+async def connect_model_provider(data: ConnectModelProviderRequest):
+    with DBManager() as db:
+        return db.connect_model_provider(**data.dict())
+
+
+@app.post("/logosdb/connect_model_api")
+async def connect_model_api(data: ConnectModelApiRequest):
+    with DBManager() as db:
+        return db.connect_model_api(**data.dict())
+
+
+@app.post("/logosdb/add_model")
+async def add_model(data: AddModelRequest):
+    with DBManager() as db:
+        return db.add_model(**data.dict())
+
+
+@app.post("/logosdb/add_service")
+async def add_service(data: AddServiceRequest):
+    with DBManager() as db:
+        return db.add_service(**data.dict())
+
+
+@app.post("/logosdb/get_process_id")
+async def get_process_id(data: GetProcessIdRequest):
+    with DBManager() as db:
+        return db.get_process_id(data.logos_key)
+
+
+@app.post("/logosdb/get_api_id")
+async def get_api_id(data: GetAPIIdRequest):
+    with DBManager() as db:
+        return db.get_api_id(data.logos_key, data.api_key)
 
 
 @app.api_route("/v1/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
 async def logos_service(path: str, request: Request):
     """
-    Dynamic proxy for openai-Endpoints
+    Dynamic proxy for Endpoints
     :param path: Path to Endpoint
     :param request: Request
-    :return: The response from OpenAI Endpoints
+    :return: The response from Endpoints
     """
     # Read request
     data = await request.body()
     json_data = request2json(data)
     # logos-API-check
-    if "Authorization" not in request.headers:
+    if "logos_key" not in request.headers:
         return {"error": "Missing Authorization Header"}, 401
     try:
-        key = request.headers["Authorization"].replace("Bearer ", "")
-        # Check if key is an openai-Key (just for proxy purposes)
-        if not key.startswith("sk-"):
-            with DBManager() as db:
-                llm_info = db.fetch_llm_key(key)
-                if llm_info is None:
-                    return {"error": "Key not found"}, 401
-                key = llm_info["api_key"]
-                base_url = llm_info["base_url"]
-                provider = llm_info["provider_name"]
-        else:
-            provider = "openai"
+        key = request.headers["logos_key"]
+
+        with DBManager() as db:
+            # Get an api key for a llm. This is the starting point for classification later
+            llm_info = db.fetch_llm_key(key)
+            if llm_info is None:
+                return {"error": "Key not found"}, 401
+            # For now, we only redirect to saved models in the db if
+            # it is present in the db and no further info is provided
+            api_key = llm_info["api_key"]
+            base_url: str = llm_info["base_url"]
+            provider = llm_info["provider_name"]
+            # Check if model is in db
+            # Check for api-key
+            model_api_id = db.get_model_from_api(key, llm_info["api_id"])
+            model_provider_id = db.get_model_from_provider(key, llm_info["provider_id"])
+            if model_api_id is None and model_provider_id is None:
+                # Model not in the database, change to normal proxy
+                if provider == "azure":
+                    if "deployment_name" not in request.headers:
+                        return {"error": "Missing deployment name in header"}, 401
+                    if "api_version" not in request.headers:
+                        return {"error": "Missing api version in header"}, 401
+                    deployment_name = request.headers["deployment_name"]
+                    api_version = request.headers["api_version"]
+
+                    forward_url = (
+                        f"{base_url}/{deployment_name}/{path}"
+                        f"?api-version={api_version}"
+                    )
+
+                    headers = {
+                        "api-key": api_key,
+                        "Content-Type": "application/json"
+                    }
+                else:
+                    headers = {
+                        "Authorization": f"Bearer {api_key}",
+                        "Content-Type": "application/json"
+                    }
+                    forward_url = f"{base_url}/{path}"
+            else:
+                model_id = model_api_id if model_api_id is not None else model_provider_id
+                model_data = db.get_model(model_id)
+                endpoint = model_data["endpoint"]
+                if not base_url.endswith("/") and not endpoint.startswith("/"):
+                    forward_url = f"{base_url}/{endpoint}"
+                elif base_url.endswith("/") and endpoint.startswith("/"):
+                    forward_url = f"{base_url.replace("/", "", 1)}/{endpoint}"
+                else:
+                    forward_url = f"{base_url}{endpoint}"
+                auth_name = llm_info["auth_name"]
+                auth_format = llm_info["auth_format"].format(api_key)
+                headers = {
+                    auth_name: auth_format,
+                    "Content-Type": "application/json"
+                }
     except PermissionError as e:
         return {"error": str(e)}, 401
     except ValueError as e:
         return {"error": str(e)}, 401
-
-    if provider == "azure":
-        deployment_name = request.headers["deployment_name"]
-        api_version = request.headers["api_version"]
-
-        forward_url = (
-            f"{base_url}/{deployment_name}/{path}"
-            f"?api-version={api_version}"
-        )
-
-        headers = {
-            "api-key": key,
-            "Content-Type": "application/json"
-        }
-    else:
-        headers = {
-            "Authorization": f"Bearer {key}",
-            "Content-Type": "application/json"
-        }
-        forward_url = f"{base_url}/{path}"
-
     # Forward Request
     async with httpx.AsyncClient() as client:
         response = await client.request(

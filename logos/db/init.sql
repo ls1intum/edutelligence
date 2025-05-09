@@ -44,10 +44,19 @@ CREATE TABLE process (
 CREATE TABLE providers (
     id SERIAL PRIMARY KEY,
     name TEXT NOT NULL,
+    auth_name TEXT NOT NULL,
+    auth_format TEXT NOT NULL,
     base_url TEXT NOT NULL
 );
 
 CREATE TYPE threshold_enum as ENUM ('LOCAL', 'CLOUD_IN_EU_BY_US_PROVIDER', 'CLOUD_NOT_IN_EU_BY_US_PROVIDER', 'CLOUD_IN_EU_BY_EU_PROVIDER');
+
+CREATE TABLE model_api_keys (
+    id SERIAL PRIMARY KEY,
+    profile_id INTEGER REFERENCES profiles(id) ON DELETE SET NULL,
+    provider_id INTEGER NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
+    api_key TEXT
+);
 
 CREATE TABLE models (
     id SERIAL PRIMARY KEY,
@@ -57,20 +66,14 @@ CREATE TABLE models (
     weight_latency INTEGER DEFAULT(0),
     weight_accuracy INTEGER DEFAULT(0),
     weight_cost INTEGER DEFAULT(0),
-    weight_quality INTEGER DEFAULT(0)
+    weight_quality INTEGER DEFAULT(0),
+    api_id INTEGER REFERENCES model_api_keys(id) ON DELETE SET NULL
 );
 
 CREATE TABLE model_provider (
     id SERIAL PRIMARY KEY,
     provider_id INTEGER NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
     model_id INTEGER NOT NULL REFERENCES models(id) ON DELETE CASCADE
-);
-
-CREATE TABLE model_api_keys (
-    id SERIAL PRIMARY KEY,
-    profile_id INTEGER REFERENCES profiles(id) ON DELETE SET NULL,
-    provider_id INTEGER NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
-    api_key TEXT
 );
 
 CREATE TABLE profile_model_permissions (
