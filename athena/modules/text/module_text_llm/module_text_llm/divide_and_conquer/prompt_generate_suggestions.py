@@ -1,5 +1,6 @@
 from pydantic import Field, BaseModel
 from typing import List, Optional
+
 from athena.schemas.grading_criterion import GradingCriterion
 
 def get_human_message():

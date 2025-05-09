@@ -2,7 +2,7 @@
 
 # check if environment variable configuration exists
 if [ ! -d athena-env ]; then
-    echo "No athena-env directory found. Please create a copy of https://github.com/ls1intum/Athena/tree/develop/env_example with real secrets called "athena-env" and try again."
+    echo "No athena-env directory found. Please create a copy of https://github.com/ls1intum/edutelligence/tree/main/athena/env_example with real secrets called "athena-env" and try again."
     exit 1
 fi
 
@@ -29,7 +29,7 @@ function download_docker_compose {
   echo "Downloading docker compose files..."
   for file in docker-compose.prod.yml docker-compose.cofee.yml docker-compose.playground.prod.yml; do
     echo "  Downloading $file..."
-    curl -sSL -o "$file" https://raw.githubusercontent.com/ls1intum/Athena/"$pr_branch"/"$file"
+    curl -sSL -o "$file" https://raw.githubusercontent.com/ls1intum/edutelligence/"$pr_branch"/athena/"$file"
   done
 }
 
@@ -40,7 +40,7 @@ function download_cofee_config {
   mkdir -p ./module_text_cofee
   for file in traefik.docker.yml node_config.docker.yml; do
     echo "  Downloading $file..."
-    curl -sSL -o ./module_text_cofee/$file https://raw.githubusercontent.com/ls1intum/Athena/"$pr_branch"/modules/text/module_text_cofee/"$file"
+    curl -sSL -o ./module_text_cofee/$file https://raw.githubusercontent.com/ls1intum/edutelligence/"$pr_branch"/athena/modules/text/module_text_cofee/"$file"
   done
 }
 
@@ -48,14 +48,14 @@ function download_caddyfile {
   local pr_branch=$1
 
   echo "Downloading Caddyfile..."
-  curl -sSL -o Caddyfile https://raw.githubusercontent.com/ls1intum/Athena/"$pr_branch"/Caddyfile
+  curl -sSL -o Caddyfile https://raw.githubusercontent.com/ls1intum/edutelligence/"$pr_branch"/athena/Caddyfile
 }
 
 function download_postgres_init {
   local pr_branch=$1
 
   echo "Downloading postgres-init.sql..."
-  curl -sSL -o postgres-init.sql https://raw.githubusercontent.com/ls1intum/Athena/"$pr_branch"/postgres-init.sql
+  curl -sSL -o postgres-init.sql https://raw.githubusercontent.com/ls1intum/edutelligence/"$pr_branch"/athena/postgres-init.sql
 }
 
 function start {

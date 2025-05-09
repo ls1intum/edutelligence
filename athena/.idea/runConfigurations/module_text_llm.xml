@@ -1,6 +1,6 @@
 <component name="ProjectRunConfigurationManager">
   <configuration default="false" name="module_text_llm" type="PythonConfigurationType" factoryName="Python" folderName="Text">
-    <module name="Athena" />
+    <module name="athena" />
     <option name="ENV_FILES" value="" />
     <option name="INTERPRETER_OPTIONS" value="" />
     <option name="PARENT_ENVS" value="true" />

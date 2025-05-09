@@ -5,13 +5,16 @@ FROM python:3.12.3-slim
 WORKDIR /app
 
 # Copy the dependencies file to the working directory
-COPY requirements.txt .
+COPY iris/pyproject.toml iris/poetry.lock ./
+
+# Install poetry
+RUN pip install poetry
 
 # Install any dependencies
-RUN pip install --no-cache-dir -r requirements.txt
+RUN poetry install --only main --no-root
 
 # Copy the content of the local src directory to the working directory
-COPY app/ ./app
+COPY iris/src/iris ./iris
 
 # Specify the command to run on container start
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["poetry", "run", "uvicorn", "iris.main:app", "--host", "0.0.0.0", "--port", "8000"]
