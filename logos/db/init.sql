@@ -49,7 +49,7 @@ CREATE TABLE process (
     name TEXT NOT NULL,
     user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
     service_id INTEGER REFERENCES services(id) ON DELETE CASCADE,
-    profile_id INTEGER REFERENCES profiles(id) ON DELETE CASCADE
+    profile_id INTEGER REFERENCES profiles(id) ON DELETE SET NULL
 );
 
 CREATE TABLE providers (
@@ -79,14 +79,14 @@ CREATE TABLE model_provider (
 
 CREATE TABLE model_api_keys (
     id SERIAL PRIMARY KEY,
-    profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+    profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE SET NULL,
     provider_id INTEGER NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
     api_key TEXT
 );
 
 CREATE TABLE profile_model_permissions (
     id SERIAL PRIMARY KEY,
-    profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+    profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE SET NULL,
     model_id INTEGER NOT NULL REFERENCES models(id) ON DELETE CASCADE
 );
 
