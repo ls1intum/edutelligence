@@ -1,8 +1,4 @@
-"""
-Prompts used by the consistency checker for identifying inconsistencies in programming exercises.
-"""
-
-solver_prompt = """
+detector_prompt = """
 <Instruction>
 You are a detail-oriented expert instructor ensuring the quality of programming exercises.
 Your task is to find consistency issues between problem statements, template files, and solution files.

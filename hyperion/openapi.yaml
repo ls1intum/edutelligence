@@ -10,6 +10,37 @@ components:
             type: object
       description: Authentication failed - API key is missing or invalid
   schemas:
+    ActionUpdate:
+      description: Base class for all action updates, including intermediate updates
+        and final results.
+      properties:
+        timestamp:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: Timestamp when this update was generated.
+          title: Timestamp
+        update_type:
+          $ref: '#/components/schemas/UpdateType'
+          description: Type of update, either progress or result.
+      required:
+      - update_type
+      title: ActionUpdate
+      type: object
+    CallbackAuth:
+      description: Authentication details for job callbacks.
+      properties:
+        header_name:
+          default: X-Callback-Auth
+          title: Header Name
+          type: string
+        secret:
+          title: Secret
+          type: string
+      required:
+      - secret
+      title: CallbackAuth
+      type: object
     ComponentHealth:
       description: Health status of an individual system component.
       properties:
@@ -19,18 +50,87 @@ components:
       - status
       title: ComponentHealth
       type: object
-    ConsistencyCheckRequest:
-      description: Request model for consistency checking.
+    ConsistencyCheckInput:
+      description: Input model for consistency check action.
       properties:
-        exercise:
-          $ref: '#/components/schemas/ProgrammingExercise'
-          description: The programming exercise to check for consistency
+        action:
+          const: consistency_check
+          default: consistency_check
+          title: Action
+          type: string
+        problem_statement:
+          description: The description of the exercise containing tasks
+          title: Problem Statement
+          type: string
+        solution_repository:
+          additionalProperties:
+            type: string
+          description: Files in the solution repository, mapping file paths to content
+          title: Solution Repository
+          type: object
+        template_repository:
+          additionalProperties:
+            type: string
+          description: Files in the template repository, mapping file paths to content
+          title: Template Repository
+          type: object
+        test_repository:
+          anyOf:
+          - additionalProperties:
+              type: string
+            type: object
+          - type: 'null'
+          description: Files in the test repository, mapping file paths to content
+          title: Test Repository
       required:
-      - exercise
-      title: ConsistencyCheckRequest
+      - problem_statement
+      - template_repository
+      - solution_repository
+      title: ConsistencyCheckInput
       type: object
-    ConsistencyCheckResponse:
-      description: Response model for consistency checking.
+    ConsistencyCheckProgressUpdate:
+      description: Progress update for consistency check action.
+      properties:
+        files_processed:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          description: Number of files processed so far.
+          title: Files Processed
+        progress:
+          anyOf:
+          - maximum: 100.0
+            minimum: 0.0
+            type: number
+          - type: 'null'
+          description: Optional progress indicator as percentage.
+          title: Progress
+        status_message:
+          description: Current status message of the consistency checking process.
+          title: Status Message
+          type: string
+        timestamp:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: Timestamp when this update was generated.
+          title: Timestamp
+        total_files:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          description: Total number of files to process.
+          title: Total Files
+        update_type:
+          $ref: '#/components/schemas/UpdateType'
+          default: progress
+          description: Progress update.
+      required:
+      - status_message
+      title: ConsistencyCheckProgressUpdate
+      type: object
+    ConsistencyCheckResult:
+      description: Final result for consistency check action.
       properties:
         issues:
           description: List of consistency issues found
@@ -48,7 +148,17 @@ components:
           description: A summary of all consistency issues
           title: Summary
           type: string
-      title: ConsistencyCheckResponse
+        timestamp:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: Timestamp when this update was generated.
+          title: Timestamp
+        update_type:
+          $ref: '#/components/schemas/UpdateType'
+          default: result
+          description: Final result.
+      title: ConsistencyCheckResult
       type: object
     ConsistencyIssue:
       description: Data model representing a consistency issue found in the exercise.
@@ -117,32 +227,275 @@ components:
       - uptime_seconds
       title: HealthCheck
       type: object
-    ProgrammingExercise:
-      description: Data model representing a programming exercise with problem statement
-        and repository files.
+    JobRequest:
+      description: 'Job creation request model with discriminated union for action-specific
+        input data.
+
+        This allows the OpenAPI schema to properly document the different possible
+        input types.'
       properties:
-        problem_statement:
-          description: The description of the exercise containing tasks
-          title: Problem Statement
+        action_name:
+          description: Name of the AI action to perform.
+          title: Action Name
           type: string
-        solution_repository:
-          additionalProperties:
-            type: string
-          description: Files in the solution repository, mapping file paths to content
-          title: Solution Repository
-          type: object
-        template_repository:
-          additionalProperties:
-            type: string
-          description: Files in the template repository, mapping file paths to content
-          title: Template Repository
-          type: object
+        input_data:
+          anyOf:
+          - $ref: '#/components/schemas/ConsistencyCheckInput'
+          - $ref: '#/components/schemas/TestActionInput'
+          description: Input data for the AI action.
+          title: Input Data
       required:
-      - problem_statement
-      - template_repository
-      - solution_repository
-      title: ProgrammingExercise
+      - action_name
+      - input_data
+      title: JobRequest
       type: object
+    JobStatus:
+      description: Status states for a job.
+      enum:
+      - pending
+      - in_progress
+      - completed
+      - failed
+      title: JobStatus
+      type: string
+    JobStatusResponse:
+      description: Response for a job status request.
+      properties:
+        action_name:
+          title: Action Name
+          type: string
+        created_at:
+          title: Created At
+          type: string
+        error_message:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Error Message
+        final_result:
+          anyOf:
+          - $ref: '#/components/schemas/ActionUpdate'
+          - type: 'null'
+        job_id:
+          title: Job Id
+          type: string
+        status:
+          $ref: '#/components/schemas/JobStatus'
+        updated_at:
+          title: Updated At
+          type: string
+        updates:
+          items:
+            $ref: '#/components/schemas/ActionUpdate'
+          title: Updates
+          type: array
+      required:
+      - job_id
+      - action_name
+      - status
+      - created_at
+      - updated_at
+      title: JobStatusResponse
+      type: object
+    ? Job_Union_ConsistencyCheckInput__TestActionInput__Union_ConsistencyCheckProgressUpdate__ConsistencyCheckResult__TestActionProgressUpdate__TestActionResult__
+    : properties:
+        action_name:
+          description: Name of the AI action.
+          title: Action Name
+          type: string
+        callback_auth:
+          anyOf:
+          - $ref: '#/components/schemas/CallbackAuth'
+          - type: 'null'
+          description: Authentication for callback.
+        callback_url:
+          description: URL for callback.
+          format: uri
+          maxLength: 2083
+          minLength: 1
+          title: Callback Url
+          type: string
+        created_at:
+          description: Timestamp of job creation.
+          title: Created At
+          type: string
+        error_message:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: Error message if the job failed.
+          title: Error Message
+        final_result:
+          anyOf:
+          - $ref: '#/components/schemas/ConsistencyCheckProgressUpdate'
+          - $ref: '#/components/schemas/ConsistencyCheckResult'
+          - $ref: '#/components/schemas/TestActionProgressUpdate'
+          - $ref: '#/components/schemas/TestActionResult'
+          - type: 'null'
+          description: Final result of the job.
+          title: Final Result
+        input_data:
+          anyOf:
+          - $ref: '#/components/schemas/ConsistencyCheckInput'
+          - $ref: '#/components/schemas/TestActionInput'
+          description: Input data for the AI action.
+          title: Input Data
+        job_id:
+          description: Unique identifier for the job.
+          title: Job Id
+          type: string
+        status:
+          $ref: '#/components/schemas/JobStatus'
+          default: pending
+          description: Current status of the job.
+        updated_at:
+          description: Timestamp of last update.
+          title: Updated At
+          type: string
+        updates:
+          description: All updates for this job.
+          items:
+            anyOf:
+            - $ref: '#/components/schemas/ConsistencyCheckProgressUpdate'
+            - $ref: '#/components/schemas/ConsistencyCheckResult'
+            - $ref: '#/components/schemas/TestActionProgressUpdate'
+            - $ref: '#/components/schemas/TestActionResult'
+          title: Updates
+          type: array
+      required:
+      - job_id
+      - action_name
+      - input_data
+      - callback_url
+      - created_at
+      - updated_at
+      title: Job
+      type: object
+    TestActionInput:
+      description: Input model for test action.
+      properties:
+        action:
+          const: test_action
+          default: test_action
+          title: Action
+          type: string
+        language:
+          default: en
+          description: Language code
+          title: Language
+          type: string
+        options:
+          anyOf:
+          - type: object
+          - type: 'null'
+          description: Additional options for processing
+          title: Options
+        text:
+          description: Text to process
+          title: Text
+          type: string
+      required:
+      - text
+      title: TestActionInput
+      type: object
+    TestActionProgressUpdate:
+      description: Progress update for test action.
+      properties:
+        items_processed:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          description: Number of items processed
+          title: Items Processed
+        progress:
+          anyOf:
+          - maximum: 100.0
+            minimum: 0.0
+            type: number
+          - type: 'null'
+          description: Progress percentage
+          title: Progress
+        status_message:
+          description: Current status message
+          title: Status Message
+          type: string
+        timestamp:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: Timestamp when this update was generated.
+          title: Timestamp
+        update_type:
+          $ref: '#/components/schemas/UpdateType'
+          default: progress
+          description: Progress update.
+      required:
+      - status_message
+      title: TestActionProgressUpdate
+      type: object
+    TestActionResult:
+      description: Final result for test action.
+      properties:
+        items:
+          description: Processed items
+          items:
+            $ref: '#/components/schemas/TestItem'
+          title: Items
+          type: array
+        summary:
+          description: Summary of the processing
+          title: Summary
+          type: string
+        timestamp:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: Timestamp when this update was generated.
+          title: Timestamp
+        total_score:
+          description: Total score of all items
+          minimum: 0.0
+          title: Total Score
+          type: number
+        update_type:
+          $ref: '#/components/schemas/UpdateType'
+          default: result
+          description: Final result.
+      required:
+      - summary
+      - total_score
+      title: TestActionResult
+      type: object
+    TestItem:
+      description: An item in the test results.
+      properties:
+        content:
+          description: Content of the test item
+          title: Content
+          type: string
+        id:
+          description: Unique identifier for this item
+          title: Id
+          type: string
+        score:
+          description: Score between 0 and 1
+          maximum: 1.0
+          minimum: 0.0
+          title: Score
+          type: number
+      required:
+      - id
+      - content
+      - score
+      title: TestItem
+      type: object
+    UpdateType:
+      description: Types of updates that can be sent during job processing.
+      enum:
+      - progress
+      - result
+      title: UpdateType
+      type: string
     ValidationError:
       properties:
         loc:
@@ -182,38 +535,6 @@ info:
   version: 0.1.0
 openapi: 3.1.0
 paths:
-  /consistency-check/check:
-    post:
-      description: Check for consistency issues in a programming exercise
-      operationId: check_consistency_consistency_check_check_post
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/ConsistencyCheckRequest'
-        required: true
-      responses:
-        '200':
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ConsistencyCheckResponse'
-          description: Successful Response
-        '401':
-          $ref: '#/components/responses/UnauthorizedError'
-        '404':
-          description: Not found
-        '422':
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/HTTPValidationError'
-          description: Validation Error
-        '500':
-          description: Internal server error
-      summary: Check Consistency
-      tags:
-      - consistency-check
   /health:
     get:
       description: "## Perform a Health Check\n\nEndpoint to perform a health check\
@@ -253,6 +574,96 @@ paths:
       summary: Liveness Check
       tags:
       - healthcheck
+  /jobs/:
+    post:
+      description: Creates a new job to be processed in the background. The caller
+        provides an action name and input data in the request body, and callback URL
+        and an optional callback auth secret in headers.
+      operationId: create_new_job_jobs__post
+      parameters:
+      - description: URL to send status updates and final results.
+        in: header
+        name: callback-url
+        required: true
+        schema:
+          description: URL to send status updates and final results.
+          format: uri
+          maxLength: 2083
+          minLength: 1
+          title: Callback-Url
+          type: string
+      - description: Secret for callback authentication.
+        in: header
+        name: X-Callback-Auth-Secret
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: Secret for callback authentication.
+          title: X-Callback-Auth-Secret
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/JobRequest'
+        required: true
+      responses:
+        '202':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Job_Union_ConsistencyCheckInput__TestActionInput__Union_ConsistencyCheckProgressUpdate__ConsistencyCheckResult__TestActionProgressUpdate__TestActionResult__'
+          description: Job accepted
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          description: Not found
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+        '500':
+          description: Internal server error
+      summary: Create a new background job for an AI action
+      tags:
+      - jobs
+  /jobs/{job_id}:
+    get:
+      description: Retrieves the current status of a job, along with any updates and
+        final results.
+      operationId: get_job_status_by_id_jobs__job_id__get
+      parameters:
+      - in: path
+        name: job_id
+        required: true
+        schema:
+          title: Job Id
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobStatusResponse'
+          description: Successful Response
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          description: Not found
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+        '500':
+          description: Internal server error
+      summary: Get job status and results
+      tags:
+      - jobs
   /run:
     get:
       operationId: run_run_get

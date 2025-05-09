@@ -9,7 +9,8 @@ from app.models import get_model
 from app.logger import logger
 from app.settings import settings
 from app.project_meta import project_meta
-from app.consistency_checker.routes import router as consistency_checker_router
+from app.jobs.routes import router as jobs_router
+
 
 app = FastAPI(
     title=project_meta.title,
@@ -37,7 +38,7 @@ if not settings.DISABLE_AUTH:
 
 # Add routers
 app.include_router(create_health_router(app.version))
-app.include_router(consistency_checker_router)
+app.include_router(jobs_router)
 
 callbacks = []
 if settings.langfuse_enabled:
