@@ -25,7 +25,6 @@ class TestOpenAIForwardingProxy(unittest.TestCase):
         headers = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {VALID_LOGOS_KEY}",
-            "provider": "azure",
             "deployment_name": "gpt-4o",
             "api_version": "2024-08-01-preview"
         }

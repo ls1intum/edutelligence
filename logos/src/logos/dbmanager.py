@@ -6,6 +6,7 @@ from typing import Dict, Any, Optional
 
 import yaml
 from sqlalchemy import Table, MetaData
+from sqlalchemy import text
 
 from logos.dbmodules import *
 
@@ -91,39 +92,26 @@ class DBManager:
         result = self.session.execute(table.select()).mappings().all()
         return [dict(row) for row in result]
 
-    def fetch_llm_key(self, provider, logos_key):
-        process_table = Table("process", self.metadata, autoload_with=self.engine)
-        process_entry = self.session.execute(
-            process_table.select().where(process_table.c.logos_key == logos_key)
-        ).mappings().first()
+    def fetch_llm_key(self, logos_key):
+        sql = text("""
+                SELECT api_key, providers.name as name, base_url
+                FROM providers, model_api_keys, profiles, process
+                WHERE process.logos_key = :logos_key
+                    and process.profile_id = profiles.id 
+                    and profiles.id = model_api_keys.profile_id 
+                    and model_api_keys.provider_id = providers.id
+            """)
 
-        if not process_entry:
-            return None
-        profile_id = process_entry["profile_id"]
-
-        profile = Table("process", self.metadata, autoload_with=self.engine)
-        profile_entry = self.session.execute(
-            process_table.select().where(profile.c.id == profile_id)
-        ).mappings().first()
-        profile_id = profile_entry["id"]
-
-        provider_table = Table("process", self.metadata, autoload_with=self.engine)
-        profile_entry = self.session.execute(
-            process_table.select().where(provider_table.c.id == profile_id)
-        ).mappings().first()
-        profile_id = profile_entry["id"]
-
-        # 2. Finde API-Key in model_api_keys mit passender profile_id und provider
-        model_api_keys = Table("model_api_keys", self.metadata, autoload_with=self.engine)
-        result = self.session.execute(
-            model_api_keys.select().where(
-                (model_api_keys.c.profile_id == profile_id) &
-                (model_api_keys.c.provider == provider)
-            )
-        ).mappings().first()
+        result = self.session.execute(sql, {
+            "logos_key": logos_key
+        }).fetchone()
 
         if result:
-            return result["api_key"]
+            return {
+                "api_key": result.api_key,
+                "provider_name": result.name,
+                "base_url": result.base_url
+            }
         return None
 
     def setup(self) -> str:
@@ -160,5 +148,4 @@ class DBManager:
 
 
 if __name__ == "__main__":
-    with DBManager() as man:
-        man.setup()
+    pass

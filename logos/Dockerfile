@@ -10,14 +10,15 @@ RUN pip install --upgrade pip
 
 COPY pyproject.toml poetry.lock* ./
 
+COPY ./src ./src
+COPY ./tests ./tests
+COPY ./db ./db
+COPY ../shared ./shared
+
 RUN pip install poetry && \
     poetry self update && \
     poetry env activate && \
     poetry install
-
-COPY ./src ./src
-COPY ./tests ./tests
-COPY ./db ./db
 
 EXPOSE 8000
 

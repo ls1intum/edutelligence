@@ -25,14 +25,17 @@ async def openai_proxy(path: str, request: Request):
         return {"error": "Missing Authorization Header"}, 401
     try:
         key = request.headers["Authorization"].replace("Bearer ", "")
-        if "provider" not in request.headers:
-            provider = "openai"
-        else:
-            provider = request.headers["provider"]
         # Check if key is an openai-Key (just for proxy purposes)
         if not key.startswith("sk-"):
             with DBManager() as db:
-                key = db.fetch_llm_key(provider, key)
+                llm_info = db.fetch_llm_key(key)
+                if llm_info is None:
+                    return {"error": "Key not found"}, 401
+                key = llm_info["api_key"]
+                base_url = llm_info["base_url"]
+                provider = llm_info["provider_name"]
+        else:
+            provider = "openai"
     except PermissionError as e:
         return {"error": str(e)}, 401
     except ValueError as e:
@@ -43,7 +46,7 @@ async def openai_proxy(path: str, request: Request):
         api_version = request.headers["api_version"]
 
         forward_url = (
-            f"{AZURE_API_BASE}/{deployment_name}/{path}"
+            f"{base_url}/{deployment_name}/{path}"
             f"?api-version={api_version}"
         )
 
@@ -56,7 +59,7 @@ async def openai_proxy(path: str, request: Request):
             "Authorization": f"Bearer {key}",
             "Content-Type": "application/json"
         }
-        forward_url = f"{OPENAI_API_BASE}/{path}"
+        forward_url = f"{base_url}/{path}"
 
     # Forward Request
     async with httpx.AsyncClient() as client:
