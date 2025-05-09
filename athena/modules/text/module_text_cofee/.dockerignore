@@ -1,0 +1,6 @@
+.venv
+.vscode
+__pycache__
+.DS_Store
+
+module_text_cofee/protobuf

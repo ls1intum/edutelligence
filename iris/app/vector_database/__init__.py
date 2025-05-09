@@ -1,2 +1,2 @@
 import app.vector_database.database
-import app.vector_database.lecture_schema
+import app.vector_database.lecture_unit_page_chunk_schema

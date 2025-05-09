@@ -1,0 +1,80 @@
+{
+  "id": 2,
+  "course_id": 1,
+  "title": "What is your name?",
+  "type": "text",
+  "max_points": 10,
+  "bonus_points": 0,
+  "grading_instructions": "Give full points if the student provides their name.",
+  "problem_statement": "Write your name in the text field below.",
+  "example_solution": "Maximilian",
+  "meta": {},
+  "submissions": [
+    {
+      "id": 201,
+      "text": "Maximilian",
+      "meta": {},
+      "feedbacks": [
+        {
+          "id": 202,
+          "description": "You should write your full name.",
+          "title": "You should write your full name.",
+          "index_start": null,
+          "index_end": null,
+          "credits": -0.5,
+          "meta": {}
+        }
+      ]
+    },
+    {
+      "id": 202,
+      "text": "Paul",
+      "meta": {}
+    },
+    {
+      "id": 203,
+      "text": "Felix",
+      "meta": {}
+    },
+    {
+      "id": 204,
+      "text": "Liam",
+      "meta": {}
+    },
+    {
+      "id": 205,
+      "text": "Olivia",
+      "meta": {}
+    },
+    {
+      "id": 206,
+      "text": "Sophia",
+      "meta": {}
+    },
+    {
+      "id": 207,
+      "text": "Mason",
+      "meta": {}
+    },
+    {
+      "id": 208,
+      "text": "Isabella",
+      "meta": {}
+    },
+    {
+      "id": 209,
+      "text": "Lucas",
+      "meta": {}
+    },
+    {
+      "id": 210,
+      "text": "Ava",
+      "meta": {}
+    },
+    {
+      "id": 211,
+      "text": "Ethan",
+      "meta": {}
+    }
+  ]
+}

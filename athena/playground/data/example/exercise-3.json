@@ -1,0 +1,105 @@
+{
+  "id": 3,
+  "course_id": 1,
+  "title": "Test Exercise with only 2 answers (but 10 submissions)",
+  "type": "text",
+  "max_points": 100,
+  "bonus_points": 0,
+  "grading_instructions": "",
+  "problem_statement": "Test",
+  "example_solution": "",
+  "meta": {},
+  "submissions": [
+    {
+      "id": 301,
+      "text": "Hello world\nThis is a test\nPlease cluster me into cluster one\none one one",
+      "language": "ENGLISH",
+      "meta": {},
+      "feedbacks": [
+        {
+          "id": 301,
+          "description": "This is a test",
+          "index_start": 28,
+          "index_end": 32,
+          "title": "This is a test",
+          "credits": 80,
+          "meta": {}
+        }
+      ]
+    },
+    {
+      "id": 302,
+      "text": "Hello world\nThis is a test\nPlease cluster me into cluster one\none one one",
+      "language": "ENGLISH",
+      "meta": {},
+      "feedbacks": [
+        {
+          "id": 302,
+          "description": "Hello World!",
+          "index_start": 0,
+          "index_end": 11,
+          "title": "This is a test",
+          "credits": 80,
+          "meta": {}
+        },
+        {
+          "id": 303,
+          "description": "This is a test",
+          "index_start": 28,
+          "index_end": 32,
+          "title": "This is a test",
+          "credits": 80,
+          "meta": {}
+        }
+      ]
+    },
+    {
+      "id": 303,
+      "text": "Hello world\nThis is a test\nPlease cluster me into cluster one\none one one",
+      "language": "ENGLISH",
+      "meta": {}
+    },
+    {
+      "id": 304,
+      "text": "Hello world\nThis is a test\nPlease cluster me into cluster one\none one one",
+      "language": "ENGLISH",
+      "meta": {}
+    },
+    {
+      "id": 305,
+      "text": "Hello world\nThis is a test\nPlease cluster me into cluster one\none one one",
+      "language": "ENGLISH",
+      "meta": {}
+    },
+    {
+      "id": 306,
+      "text": "Hello world\nThis is a test\nPlease cluster me into the second cluster!\ntwo two two",
+      "language": "ENGLISH",
+      "meta": {}
+    },
+    {
+      "id": 307,
+      "text": "Hello world\nThis is a test\nPlease cluster me into the second cluster!\ntwo two two",
+      "language": "ENGLISH",
+      "meta": {}
+    },
+    {
+      "id": 308,
+      "text": "Hello world\nThis is a test\nPlease cluster me into the second cluster!\ntwo two two",
+      "language": "ENGLISH",
+      "meta": {}
+    },
+    {
+      "id": 309,
+      "text": "Hello world\nThis is a test\nPlease cluster me into the second cluster!\ntwo two two",
+      "language": "ENGLISH",
+      "meta": {}
+    },
+    {
+      "id": 310,
+      "text": "Hello world\nThis is a test\nPlease cluster me into the second cluster!\ntwo two two",
+      "language": "ENGLISH",
+      "meta": {}
+    }
+  ]
+}

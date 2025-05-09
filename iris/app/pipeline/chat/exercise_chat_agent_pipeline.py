@@ -26,7 +26,7 @@ from ..prompts.iris_exercise_chat_agent_prompts import (
     tell_progress_stalled_system_prompt,
 )
 
-from ..shared.citation_pipeline import CitationPipeline
+from ..shared.citation_pipeline import CitationPipeline, InformationType
 from ..shared.reranker_pipeline import RerankerPipeline
 from ..shared.utils import generate_structured_tools_from_functions
 from ...common.PipelineEnum import PipelineEnum
@@ -41,9 +41,9 @@ from ...llm import CompletionArguments
 from ...llm.langchain import IrisLangchainChatModel
 from ...retrieval.faq_retrieval import FaqRetrieval
 from ...retrieval.faq_retrieval_utils import should_allow_faq_tool, format_faqs
-from ...retrieval.lecture_retrieval import LectureRetrieval
+from app.retrieval.lecture.lecture_page_chunk_retrieval import LecturePageChunkRetrieval
 from ...vector_database.database import VectorDatabase
-from ...vector_database.lecture_schema import LectureSchema
+from ...vector_database.lecture_unit_page_chunk_schema import LectureUnitPageChunkSchema
 from weaviate.collections.classes.filters import Filter
 from ...web.status.status_update import ExerciseChatStatusCallback
 
@@ -139,7 +139,7 @@ class ExerciseChatAgentPipeline(Pipeline):
         # Create the pipelines
         self.db = VectorDatabase()
         self.suggestion_pipeline = InteractionSuggestionPipeline(variant="exercise")
-        self.lecture_retriever = LectureRetrieval(self.db.client)
+        self.lecture_retriever = LecturePageChunkRetrieval(self.db.client)
         self.faq_retriever = FaqRetrieval(self.db.client)
         self.reranker_pipeline = RerankerPipeline()
         self.code_feedback_pipeline = CodeFeedbackPipeline()
@@ -389,10 +389,12 @@ class ExerciseChatAgentPipeline(Pipeline):
             result = ""
             for paragraph in self.retrieved_paragraphs:
                 lct = "Lecture: {}, Unit: {}, Page: {}\nContent:\n---{}---\n\n".format(
-                    paragraph.get(LectureSchema.LECTURE_NAME.value),
-                    paragraph.get(LectureSchema.LECTURE_UNIT_NAME.value),
-                    paragraph.get(LectureSchema.PAGE_NUMBER.value),
-                    paragraph.get(LectureSchema.PAGE_TEXT_CONTENT.value),
+                    # paragraph.get(LectureUnitPageChunkSchema.LECTURE_NAME.value),
+                    # paragraph.get(LectureUnitPageChunkSchema.LECTURE_UNIT_NAME.value),
+                    "",
+                    "",
+                    paragraph.get(LectureUnitPageChunkSchema.PAGE_NUMBER.value),
+                    paragraph.get(LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value),
                 )
                 result += lct
             return result
@@ -585,6 +587,15 @@ class ExerciseChatAgentPipeline(Pipeline):
                     print("NEW RESPONSE: " + out)
                     print("Response is rewritten.")
 
+                if self.retrieved_faqs:
+                    self.callback.in_progress("Augmenting response ...")
+                    out = self.citation_pipeline(
+                        self.retrieved_faqs,
+                        out,
+                        InformationType.FAQS,
+                        base_url=dto.settings.artemis_base_url,
+                    )
+
                 self.callback.done(
                     "Response created", final_result=out, tokens=self.tokens
                 )
@@ -639,11 +650,11 @@ class ExerciseChatAgentPipeline(Pipeline):
         if course_id:
             # Fetch the first object that matches the course ID with the language property
             result = self.db.lectures.query.fetch_objects(
-                filters=Filter.by_property(LectureSchema.COURSE_ID.value).equal(
-                    course_id
-                ),
+                filters=Filter.by_property(
+                    LectureUnitPageChunkSchema.COURSE_ID.value
+                ).equal(course_id),
                 limit=1,
-                return_properties=[LectureSchema.COURSE_NAME.value],
+                return_properties=[LectureUnitPageChunkSchema.COURSE_NAME.value],
             )
             return len(result.objects) > 0
         return False

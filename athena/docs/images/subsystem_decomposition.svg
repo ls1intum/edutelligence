@@ -1,0 +1,1574 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!-- Created with Inkscape (http://www.inkscape.org/) -->
+
+<svg
+   width="189.97083mm"
+   height="105.83333mm"
+   viewBox="0 0 189.97083 105.83333"
+   version="1.1"
+   id="svg3100"
+   inkscape:version="1.2.2 (b0a84865, 2022-12-01)"
+   sodipodi:docname="system_design.svg"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg">
+  <sodipodi:namedview
+     id="namedview3102"
+     pagecolor="#ffffff"
+     bordercolor="#000000"
+     borderopacity="0.25"
+     inkscape:showpageshadow="2"
+     inkscape:pageopacity="0.0"
+     inkscape:pagecheckerboard="0"
+     inkscape:deskcolor="#d1d1d1"
+     inkscape:document-units="mm"
+     showgrid="false"
+     inkscape:zoom="1.0275"
+     inkscape:cx="371.28955"
+     inkscape:cy="218.00488"
+     inkscape:window-width="1309"
+     inkscape:window-height="726"
+     inkscape:window-x="0"
+     inkscape:window-y="38"
+     inkscape:window-maximized="0"
+     inkscape:current-layer="layer1" />
+  <defs
+     id="defs3097" />
+  <g
+     inkscape:label="Layer 1"
+     inkscape:groupmode="layer"
+     id="layer1"
+     transform="translate(-77.425601,-212.62147)">
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g538">
+      <rect
+         fill="#ffffff"
+         stroke="none"
+         x="185"
+         y="520"
+         width="425"
+         height="341"
+         id="rect536" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g542">
+      <path
+         fill="none"
+         stroke="#000000"
+         d="M 185,520 H 610 V 861 H 185 Z"
+         stroke-miterlimit="10"
+         id="path540" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g546">
+      <rect
+         fill="#ffffff"
+         stroke="none"
+         x="185"
+         y="520"
+         width="425"
+         height="341"
+         id="rect544" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g550">
+      <path
+         fill="none"
+         stroke="#000000"
+         d="M 185,520 H 610 V 861 H 185 Z"
+         stroke-miterlimit="10"
+         id="path548" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g554">
+      <rect
+         fill="#ffffff"
+         stroke="none"
+         x="590"
+         y="530"
+         width="13"
+         height="16"
+         id="rect552" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g558">
+      <path
+         fill="none"
+         stroke="#000000"
+         d="m 590,530 h 13 v 16 h -13 z"
+         stroke-miterlimit="10"
+         id="path556" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g562">
+      <rect
+         fill="#ffffff"
+         stroke="none"
+         x="587"
+         y="533"
+         width="7"
+         height="4"
+         id="rect560" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g566">
+      <path
+         fill="none"
+         stroke="#000000"
+         d="m 587,533 h 7 v 4 h -7 z"
+         stroke-miterlimit="10"
+         id="path564" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g570">
+      <rect
+         fill="#ffffff"
+         stroke="none"
+         x="587"
+         y="539"
+         width="7"
+         height="4"
+         id="rect568" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g574">
+      <path
+         fill="none"
+         stroke="#000000"
+         d="m 587,539 h 7 v 4 h -7 z"
+         stroke-miterlimit="10"
+         id="path572" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g582">
+      <g
+         id="g580">
+        <path
+           fill="none"
+           stroke="none"
+           id="path576"
+           d="" />
+        <text
+           fill="#000000"
+           stroke="none"
+           font-family="Arial"
+           font-size="13px"
+           font-style="normal"
+           font-weight="bold"
+           text-decoration="none"
+           x="298.4292"
+           y="537.70996"
+           id="text578"
+           style="text-decoration:none;text-decoration-line:none">Athena Assessment Service</text>
+      </g>
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g586">
+      <rect
+         fill="#d8f2ff"
+         stroke="none"
+         x="205"
+         y="681"
+         width="173"
+         height="38"
+         id="rect584" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g590">
+      <path
+         fill="none"
+         stroke="#000000"
+         d="m 205,681 h 173 v 38 H 205 Z"
+         stroke-miterlimit="10"
+         id="path588" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g594">
+      <rect
+         fill="#d8f2ff"
+         stroke="none"
+         x="358"
+         y="691"
+         width="13"
+         height="16"
+         id="rect592" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g598">
+      <path
+         fill="none"
+         stroke="#000000"
+         d="m 358,691 h 13 v 16 h -13 z"
+         stroke-miterlimit="10"
+         id="path596" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g602">
+      <rect
+         fill="#d8f2ff"
+         stroke="none"
+         x="355"
+         y="694"
+         width="7"
+         height="4"
+         id="rect600" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g606">
+      <path
+         fill="none"
+         stroke="#000000"
+         d="m 355,694 h 7 v 4 h -7 z"
+         stroke-miterlimit="10"
+         id="path604" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g610">
+      <rect
+         fill="#d8f2ff"
+         stroke="none"
+         x="355"
+         y="700"
+         width="7"
+         height="4"
+         id="rect608" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g614">
+      <path
+         fill="none"
+         stroke="#000000"
+         d="m 355,700 h 7 v 4 h -7 z"
+         stroke-miterlimit="10"
+         id="path612" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g622">
+      <g
+         id="g620">
+        <path
+           fill="none"
+           stroke="none"
+           id="path616"
+           d="" />
+        <text
+           fill="#000000"
+           stroke="none"
+           font-family="Arial"
+           font-size="13px"
+           font-style="normal"
+           font-weight="normal"
+           text-decoration="none"
+           x="250.95142"
+           y="696.70996"
+           id="text618"
+           style="text-decoration:none;text-decoration-line:none">«module»</text>
+      </g>
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g630">
+      <g
+         id="g628">
+        <path
+           fill="none"
+           stroke="none"
+           id="path624"
+           d="" />
+        <text
+           fill="#000000"
+           stroke="none"
+           font-family="Arial"
+           font-size="13px"
+           font-style="normal"
+           font-weight="bold"
+           text-decoration="none"
+           x="222.08228"
+           y="711.70996"
+           id="text626"
+           style="text-decoration:none;text-decoration-line:none">Programming LLM</text>
+      </g>
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g634">
+      <rect
+         fill="#ebffd8"
+         stroke="none"
+         x="205"
+         y="741"
+         width="173"
+         height="38"
+         id="rect632" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g638">
+      <path
+         fill="none"
+         stroke="#000000"
+         d="m 205,741 h 173 v 38 H 205 Z"
+         stroke-miterlimit="10"
+         id="path636" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g642">
+      <rect
+         fill="#ebffd8"
+         stroke="none"
+         x="358"
+         y="751"
+         width="13"
+         height="16"
+         id="rect640" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g646">
+      <path
+         fill="none"
+         stroke="#000000"
+         d="m 358,751 h 13 v 16 h -13 z"
+         stroke-miterlimit="10"
+         id="path644" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g650">
+      <rect
+         fill="#ebffd8"
+         stroke="none"
+         x="355"
+         y="754"
+         width="7"
+         height="4"
+         id="rect648" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g654">
+      <path
+         fill="none"
+         stroke="#000000"
+         d="m 355,754 h 7 v 4 h -7 z"
+         stroke-miterlimit="10"
+         id="path652" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g658">
+      <rect
+         fill="#ebffd8"
+         stroke="none"
+         x="355"
+         y="760"
+         width="7"
+         height="4"
+         id="rect656" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g662">
+      <path
+         fill="none"
+         stroke="#000000"
+         d="m 355,760 h 7 v 4 h -7 z"
+         stroke-miterlimit="10"
+         id="path660" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g670">
+      <g
+         id="g668">
+        <path
+           fill="none"
+           stroke="none"
+           id="path664"
+           d="" />
+        <text
+           fill="#000000"
+           stroke="none"
+           font-family="Arial"
+           font-size="13px"
+           font-style="normal"
+           font-weight="normal"
+           text-decoration="none"
+           x="250.95142"
+           y="756.70996"
+           id="text666"
+           style="text-decoration:none;text-decoration-line:none">«module»</text>
+      </g>
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g678">
+      <g
+         id="g676">
+        <path
+           fill="none"
+           stroke="none"
+           id="path672"
+           d="" />
+        <text
+           fill="#000000"
+           stroke="none"
+           font-family="Arial"
+           font-size="13px"
+           font-style="normal"
+           font-weight="bold"
+           text-decoration="none"
+           x="251.45605"
+           y="771.47192"
+           id="text674"
+           style="text-decoration:none;text-decoration-line:none">Text LLM</text>
+      </g>
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g682">
+      <rect
+         fill="#ebffd8"
+         stroke="none"
+         x="205"
+         y="801"
+         width="173"
+         height="38"
+         id="rect680" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g686">
+      <path
+         fill="none"
+         stroke="#000000"
+         d="m 205,801 h 173 v 38 H 205 Z"
+         stroke-miterlimit="10"
+         id="path684" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g690">
+      <rect
+         fill="#ebffd8"
+         stroke="none"
+         x="358"
+         y="811"
+         width="13"
+         height="16"
+         id="rect688" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g694">
+      <path
+         fill="none"
+         stroke="#000000"
+         d="m 358,811 h 13 v 16 h -13 z"
+         stroke-miterlimit="10"
+         id="path692" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g698">
+      <rect
+         fill="#ebffd8"
+         stroke="none"
+         x="355"
+         y="814"
+         width="7"
+         height="4"
+         id="rect696" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g702">
+      <path
+         fill="none"
+         stroke="#000000"
+         d="m 355,814 h 7 v 4 h -7 z"
+         stroke-miterlimit="10"
+         id="path700" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g706">
+      <rect
+         fill="#ebffd8"
+         stroke="none"
+         x="355"
+         y="820"
+         width="7"
+         height="4"
+         id="rect704" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g710">
+      <path
+         fill="none"
+         stroke="#000000"
+         d="m 355,820 h 7 v 4 h -7 z"
+         stroke-miterlimit="10"
+         id="path708" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g718">
+      <g
+         id="g716">
+        <path
+           fill="none"
+           stroke="none"
+           id="path712"
+           d="" />
+        <text
+           fill="#000000"
+           stroke="none"
+           font-family="Arial"
+           font-size="13px"
+           font-style="normal"
+           font-weight="normal"
+           text-decoration="none"
+           x="250.95142"
+           y="816.70996"
+           id="text714"
+           style="text-decoration:none;text-decoration-line:none">«module»</text>
+      </g>
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g726">
+      <g
+         id="g724">
+        <path
+           fill="none"
+           stroke="none"
+           id="path720"
+           d="" />
+        <text
+           fill="#000000"
+           stroke="none"
+           font-family="Arial"
+           font-size="13px"
+           font-style="normal"
+           font-weight="bold"
+           text-decoration="none"
+           x="259.63501"
+           y="831.53857"
+           id="text722"
+           style="text-decoration:none;text-decoration-line:none">CoFee</text>
+      </g>
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g730">
+      <rect
+         fill="#ffffff"
+         stroke="none"
+         x="426"
+         y="681"
+         width="160"
+         height="38"
+         id="rect728" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g734">
+      <path
+         fill="none"
+         stroke="#000000"
+         d="m 426,681 h 160 v 38 H 426 Z"
+         stroke-miterlimit="10"
+         id="path732" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g738">
+      <rect
+         fill="#ffffff"
+         stroke="none"
+         x="426"
+         y="681"
+         width="160"
+         height="38"
+         id="rect736" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g742">
+      <path
+         fill="none"
+         stroke="#000000"
+         d="m 426,681 h 160 v 38 H 426 Z"
+         stroke-miterlimit="10"
+         id="path740" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g746">
+      <rect
+         fill="#ffffff"
+         stroke="none"
+         x="566"
+         y="691"
+         width="13"
+         height="16"
+         id="rect744" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g750">
+      <path
+         fill="none"
+         stroke="#000000"
+         d="m 566,691 h 13 v 16 h -13 z"
+         stroke-miterlimit="10"
+         id="path748" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g754">
+      <rect
+         fill="#ffffff"
+         stroke="none"
+         x="563"
+         y="694"
+         width="7"
+         height="4"
+         id="rect752" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g758">
+      <path
+         fill="none"
+         stroke="#000000"
+         d="m 563,694 h 7 v 4 h -7 z"
+         stroke-miterlimit="10"
+         id="path756" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g762">
+      <rect
+         fill="#ffffff"
+         stroke="none"
+         x="563"
+         y="700"
+         width="7"
+         height="4"
+         id="rect760" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g766">
+      <path
+         fill="none"
+         stroke="#000000"
+         d="m 563,700 h 7 v 4 h -7 z"
+         stroke-miterlimit="10"
+         id="path764" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g776">
+      <g
+         id="g774">
+        <path
+           fill="none"
+           stroke="none"
+           id="path768"
+           d="" />
+        <text
+           fill="#000000"
+           stroke="none"
+           font-family="Arial"
+           font-size="13px"
+           font-style="normal"
+           font-weight="bold"
+           text-decoration="none"
+           x="431.14868"
+           y="698.70996"
+           id="text770"
+           style="text-decoration:none;text-decoration-line:none">Assessment Module</text>
+        <text
+           fill="#000000"
+           stroke="none"
+           font-family="Arial"
+           font-size="13px"
+           font-style="normal"
+           font-weight="bold"
+           text-decoration="none"
+           x="467.27002"
+           y="711.47192"
+           id="text772"
+           style="text-decoration:none;text-decoration-line:none">Manager</text>
+      </g>
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g780">
+      <rect
+         fill="#ffffff"
+         stroke="none"
+         x="725"
+         y="715"
+         width="177"
+         height="39"
+         id="rect778" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g784">
+      <path
+         fill="none"
+         stroke="#000000"
+         d="m 725,715 h 177 v 39 H 725 Z"
+         stroke-miterlimit="10"
+         id="path782" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g788">
+      <rect
+         fill="#ffffff"
+         stroke="none"
+         x="725"
+         y="715"
+         width="177"
+         height="39"
+         id="rect786" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g792">
+      <path
+         fill="none"
+         stroke="#000000"
+         d="m 725,715 h 177 v 39 H 725 Z"
+         stroke-miterlimit="10"
+         id="path790" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g796">
+      <rect
+         fill="#ffffff"
+         stroke="none"
+         x="882"
+         y="725"
+         width="13"
+         height="16"
+         id="rect794" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g800">
+      <path
+         fill="none"
+         stroke="#000000"
+         d="m 882,725 h 13 v 16 h -13 z"
+         stroke-miterlimit="10"
+         id="path798" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g804">
+      <rect
+         fill="#ffffff"
+         stroke="none"
+         x="879"
+         y="728"
+         width="7"
+         height="4"
+         id="rect802" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g808">
+      <path
+         fill="none"
+         stroke="#000000"
+         d="m 879,728 h 7 v 4 h -7 z"
+         stroke-miterlimit="10"
+         id="path806" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g812">
+      <rect
+         fill="#ffffff"
+         stroke="none"
+         x="879"
+         y="734"
+         width="7"
+         height="4"
+         id="rect810" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g816">
+      <path
+         fill="none"
+         stroke="#000000"
+         d="m 879,734 h 7 v 4 h -7 z"
+         stroke-miterlimit="10"
+         id="path814" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g826">
+      <g
+         id="g824">
+        <path
+           fill="none"
+           stroke="none"
+           id="path818"
+           d="" />
+        <text
+           fill="#000000"
+           stroke="none"
+           font-family="Arial"
+           font-size="13px"
+           font-style="normal"
+           font-weight="bold"
+           text-decoration="none"
+           x="732.51685"
+           y="732.70996"
+           id="text820"
+           style="text-decoration:none;text-decoration-line:none">Learning Management</text>
+        <text
+           fill="#000000"
+           stroke="none"
+           font-family="Arial"
+           font-size="13px"
+           font-style="normal"
+           font-weight="bold"
+           text-decoration="none"
+           x="778.37549"
+           y="745.53857"
+           id="text822"
+           style="text-decoration:none;text-decoration-line:none">System</text>
+      </g>
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g830">
+      <rect
+         fill="#ffffff"
+         stroke="none"
+         x="725"
+         y="644"
+         width="177"
+         height="39"
+         id="rect828" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g834">
+      <path
+         fill="none"
+         stroke="#000000"
+         d="m 725,644 h 177 v 39 H 725 Z"
+         stroke-miterlimit="10"
+         id="path832" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g838">
+      <rect
+         fill="#ffffff"
+         stroke="none"
+         x="725"
+         y="644"
+         width="177"
+         height="39"
+         id="rect836" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g842">
+      <path
+         fill="none"
+         stroke="#000000"
+         d="m 725,644 h 177 v 39 H 725 Z"
+         stroke-miterlimit="10"
+         id="path840" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g846">
+      <rect
+         fill="#ffffff"
+         stroke="none"
+         x="882"
+         y="654"
+         width="13"
+         height="16"
+         id="rect844" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g850">
+      <path
+         fill="none"
+         stroke="#000000"
+         d="m 882,654 h 13 v 16 h -13 z"
+         stroke-miterlimit="10"
+         id="path848" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g854">
+      <rect
+         fill="#ffffff"
+         stroke="none"
+         x="879"
+         y="657"
+         width="7"
+         height="4"
+         id="rect852" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g858">
+      <path
+         fill="none"
+         stroke="#000000"
+         d="m 879,657 h 7 v 4 h -7 z"
+         stroke-miterlimit="10"
+         id="path856" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g862">
+      <rect
+         fill="#ffffff"
+         stroke="none"
+         x="879"
+         y="663"
+         width="7"
+         height="4"
+         id="rect860" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g866">
+      <path
+         fill="none"
+         stroke="#000000"
+         d="m 879,663 h 7 v 4 h -7 z"
+         stroke-miterlimit="10"
+         id="path864" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g874">
+      <g
+         id="g872">
+        <path
+           fill="none"
+           stroke="none"
+           id="path868"
+           d="" />
+        <text
+           fill="#000000"
+           stroke="none"
+           font-family="Arial"
+           font-size="13px"
+           font-style="normal"
+           font-weight="bold"
+           text-decoration="none"
+           x="765.74683"
+           y="661.70996"
+           id="text870"
+           style="text-decoration:none;text-decoration-line:none">Playground</text>
+      </g>
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g902">
+      <path
+         fill="none"
+         stroke="#000000"
+         d="m 426,700 h -24 v 60 h -24"
+         stroke-miterlimit="10"
+         stroke-dasharray="3"
+         id="path900" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g906">
+      <path
+         fill="none"
+         stroke="#000000"
+         d="M 388.16267,755.79048 378,760 l 10.16267,4.20952"
+         stroke-miterlimit="10"
+         id="path904" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g910">
+      <path
+         fill="none"
+         stroke="#000000"
+         d="M 426,700 H 378"
+         stroke-miterlimit="10"
+         stroke-dasharray="3"
+         id="path908" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g914">
+      <path
+         fill="none"
+         stroke="#000000"
+         d="M 388.16267,695.79048 378,700 l 10.16267,4.20952"
+         stroke-miterlimit="10"
+         id="path912" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g918">
+      <path
+         fill="none"
+         stroke="#000000"
+         d="M 426,700 H 402 V 820 H 378"
+         stroke-miterlimit="10"
+         stroke-dasharray="3"
+         id="path916" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g922">
+      <path
+         fill="none"
+         stroke="#000000"
+         d="M 388.16267,815.79048 378,820 l 10.16267,4.20952"
+         stroke-miterlimit="10"
+         id="path920" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g2204">
+      <path
+         fill="none"
+         stroke="#000000"
+         d="m 655,689.5 a 11.5,11.5 0 0 1 0,23"
+         stroke-miterlimit="10"
+         id="path2202" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g2208">
+      <path
+         fill="none"
+         stroke="#000000"
+         d="m 655,689.5 a 11.5,11.5 0 0 1 0,23"
+         stroke-miterlimit="10"
+         id="path2206" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g2212">
+      <path
+         fill="#ffffff"
+         stroke="none"
+         d="m 647,701.5 c 0,-4.69442 3.80558,-8.5 8.5,-8.5 4.69442,0 8.5,3.80558 8.5,8.5 0,4.69442 -3.80558,8.5 -8.5,8.5 -4.69442,0 -8.5,-3.80558 -8.5,-8.5 z"
+         id="path2210" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g2216">
+      <path
+         fill="none"
+         stroke="#000000"
+         d="m 647,701.5 c 0,-4.69442 3.80558,-8.5 8.5,-8.5 4.69442,0 8.5,3.80558 8.5,8.5 0,4.69442 -3.80558,8.5 -8.5,8.5 -4.69442,0 -8.5,-3.80558 -8.5,-8.5 z"
+         stroke-miterlimit="10"
+         id="path2214" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g2224">
+      <g
+         id="g2222">
+        <path
+           fill="none"
+           stroke="none"
+           id="path2218"
+           d="" />
+        <text
+           fill="#000000"
+           stroke="none"
+           font-family="Arial"
+           font-size="13px"
+           font-style="normal"
+           font-weight="bold"
+           text-decoration="none"
+           x="620.8291"
+           y="730.70996"
+           id="text2220"
+           style="text-decoration:none;text-decoration-line:none">Athena API</text>
+      </g>
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g2228">
+      <path
+         fill="none"
+         stroke="#000000"
+         d="m 586,701 h 58"
+         stroke-miterlimit="10"
+         id="path2226" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g2232">
+      <path
+         fill="none"
+         stroke="#000000"
+         d="m 725,664 h -25 v 37 h -33"
+         stroke-miterlimit="10"
+         id="path2230" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g2440">
+      <rect
+         fill="#d8f2ff"
+         stroke="none"
+         x="205"
+         y="621"
+         width="173"
+         height="37"
+         id="rect2438" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g2444">
+      <path
+         fill="none"
+         stroke="#000000"
+         d="m 205,621 h 173 v 37 H 205 Z"
+         stroke-miterlimit="10"
+         id="path2442" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g2448">
+      <rect
+         fill="#d8f2ff"
+         stroke="none"
+         x="358"
+         y="631"
+         width="13"
+         height="16"
+         id="rect2446" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g2452">
+      <path
+         fill="none"
+         stroke="#000000"
+         d="m 358,631 h 13 v 16 h -13 z"
+         stroke-miterlimit="10"
+         id="path2450" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g2456">
+      <rect
+         fill="#d8f2ff"
+         stroke="none"
+         x="355"
+         y="634"
+         width="7"
+         height="4"
+         id="rect2454" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g2460">
+      <path
+         fill="none"
+         stroke="#000000"
+         d="m 355,634 h 7 v 4 h -7 z"
+         stroke-miterlimit="10"
+         id="path2458" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g2464">
+      <rect
+         fill="#d8f2ff"
+         stroke="none"
+         x="355"
+         y="640"
+         width="7"
+         height="4"
+         id="rect2462" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g2468">
+      <path
+         fill="none"
+         stroke="#000000"
+         d="m 355,640 h 7 v 4 h -7 z"
+         stroke-miterlimit="10"
+         id="path2466" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g2476">
+      <g
+         id="g2474">
+        <path
+           fill="none"
+           stroke="none"
+           id="path2470"
+           d="" />
+        <text
+           fill="#000000"
+           stroke="none"
+           font-family="Arial"
+           font-size="13px"
+           font-style="normal"
+           font-weight="normal"
+           text-decoration="none"
+           x="250.95142"
+           y="636.70996"
+           id="text2472"
+           style="text-decoration:none;text-decoration-line:none">«module»</text>
+      </g>
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g2484">
+      <g
+         id="g2482">
+        <path
+           fill="none"
+           stroke="none"
+           id="path2478"
+           d="" />
+        <text
+           fill="#000000"
+           stroke="none"
+           font-family="Arial"
+           font-size="13px"
+           font-style="normal"
+           font-weight="bold"
+           text-decoration="none"
+           x="247.35864"
+           y="651.70996"
+           id="text2480"
+           style="text-decoration:none;text-decoration-line:none">ThemisML</text>
+      </g>
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g2488">
+      <rect
+         fill="#d8f2ff"
+         stroke="none"
+         x="205"
+         y="561"
+         width="173"
+         height="38"
+         id="rect2486" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g2492">
+      <path
+         fill="none"
+         stroke="#000000"
+         d="m 205,561 h 173 v 38 H 205 Z"
+         stroke-miterlimit="10"
+         id="path2490" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g2496">
+      <rect
+         fill="#d8f2ff"
+         stroke="none"
+         x="358"
+         y="571"
+         width="13"
+         height="16"
+         id="rect2494" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g2500">
+      <path
+         fill="none"
+         stroke="#000000"
+         d="m 358,571 h 13 v 16 h -13 z"
+         stroke-miterlimit="10"
+         id="path2498" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g2504">
+      <rect
+         fill="#d8f2ff"
+         stroke="none"
+         x="355"
+         y="574"
+         width="7"
+         height="4"
+         id="rect2502" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g2508">
+      <path
+         fill="none"
+         stroke="#000000"
+         d="m 355,574 h 7 v 4 h -7 z"
+         stroke-miterlimit="10"
+         id="path2506" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g2512">
+      <rect
+         fill="#d8f2ff"
+         stroke="none"
+         x="355"
+         y="580"
+         width="7"
+         height="4"
+         id="rect2510" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g2516">
+      <path
+         fill="none"
+         stroke="#000000"
+         d="m 355,580 h 7 v 4 h -7 z"
+         stroke-miterlimit="10"
+         id="path2514" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g2524">
+      <g
+         id="g2522">
+        <path
+           fill="none"
+           stroke="none"
+           id="path2518"
+           d="" />
+        <text
+           fill="#000000"
+           stroke="none"
+           font-family="Arial"
+           font-size="13px"
+           font-style="normal"
+           font-weight="normal"
+           text-decoration="none"
+           x="250.95142"
+           y="576.70996"
+           id="text2520"
+           style="text-decoration:none;text-decoration-line:none">«module»</text>
+      </g>
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g2532">
+      <g
+         id="g2530">
+        <path
+           fill="none"
+           stroke="none"
+           id="path2526"
+           d="" />
+        <text
+           fill="#000000"
+           stroke="none"
+           font-family="Arial"
+           font-size="13px"
+           font-style="normal"
+           font-weight="bold"
+           text-decoration="none"
+           x="252.76367"
+           y="591.70996"
+           id="text2528"
+           style="text-decoration:none;text-decoration-line:none">Example</text>
+      </g>
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g2536">
+      <path
+         fill="none"
+         stroke="#000000"
+         d="M 426,700 H 402 V 580 h -24"
+         stroke-miterlimit="10"
+         stroke-dasharray="3"
+         id="path2534" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g2540">
+      <path
+         fill="none"
+         stroke="#000000"
+         d="M 388.16267,575.79048 378,580 l 10.16267,4.20952"
+         stroke-miterlimit="10"
+         id="path2538" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g2544">
+      <path
+         fill="none"
+         stroke="#000000"
+         d="M 426,700 H 402 V 640 H 378"
+         stroke-miterlimit="10"
+         stroke-dasharray="3"
+         id="path2542" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g2548">
+      <path
+         fill="none"
+         stroke="#000000"
+         d="M 388.16267,635.79048 378,640 l 10.16267,4.20952"
+         stroke-miterlimit="10"
+         id="path2546" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g2552">
+      <rect
+         fill="#ebffd8"
+         stroke="none"
+         x="421"
+         y="897"
+         width="24"
+         height="22"
+         id="rect2550" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g2556">
+      <path
+         fill="none"
+         stroke="#000000"
+         d="m 421,897 h 24 v 22 h -24 z"
+         stroke-miterlimit="10"
+         id="path2554" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g2560">
+      <rect
+         fill="#d8f2ff"
+         stroke="none"
+         x="421"
+         y="871"
+         width="24"
+         height="22"
+         id="rect2558" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g2564">
+      <path
+         fill="none"
+         stroke="#000000"
+         d="m 421,871 h 24 v 22 h -24 z"
+         stroke-miterlimit="10"
+         id="path2562" />
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g2572">
+      <g
+         id="g2570">
+        <path
+           fill="none"
+           stroke="none"
+           id="path2566"
+           d="" />
+        <text
+           fill="#000000"
+           stroke="none"
+           font-family="Arial"
+           font-size="15px"
+           font-style="normal"
+           font-weight="normal"
+           text-decoration="none"
+           x="450"
+           y="886.86914"
+           id="text2568"
+           style="text-decoration:none;text-decoration-line:none">Programming Module</text>
+      </g>
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g2580">
+      <g
+         id="g2578">
+        <path
+           fill="none"
+           stroke="none"
+           id="path2574"
+           d="" />
+        <text
+           fill="#000000"
+           stroke="none"
+           font-family="Arial"
+           font-size="15px"
+           font-style="normal"
+           font-weight="normal"
+           text-decoration="none"
+           x="450"
+           y="912.86914"
+           id="text2576"
+           style="text-decoration:none;text-decoration-line:none">Text Module</text>
+      </g>
+    </g>
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,28.609977,75.170432)"
+       id="g2584">
+      <path
+         fill="none"
+         stroke="#000000"
+         d="M 725,733 H 700 V 701 H 667"
+         stroke-miterlimit="10"
+         id="path2582" />
+    </g>
+  </g>
+</svg>

@@ -1,0 +1,102 @@
+version: '3.8'
+
+# The production version directly uses the Docker images from the registry.
+
+services:
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      - ATHENA_DOMAIN=${ATHENA_DOMAIN:-localhost}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+
+  assessment_module_manager:
+    hostname: assessment-module-manager
+    env_file:
+      - ${ATHENA_ENV_DIR:-./env_example}/assessment_module_manager.env
+    depends_on:
+      - postgres
+    image: ls1tum/athena_assessment_module_manager:${ATHENA_TAG:-develop}
+    volumes:
+      - ./deployments.ini:/code/deployments.ini:ro
+      - ./modules.ini:/code/modules.ini:ro
+
+  module_example:
+    hostname: module-example
+    env_file:
+      - ${ATHENA_ENV_DIR:-./env_example}/module_example.env
+    depends_on:
+      - postgres
+    image: ls1tum/athena_module_example:${ATHENA_TAG:-develop}
+
+  module_programming_llm:
+    hostname: module-programming-llm
+    env_file:
+      - ${ATHENA_ENV_DIR:-./env_example}/module_programming_llm.env
+    depends_on:
+      - postgres
+    image: ls1tum/athena_module_programming_llm:${ATHENA_TAG:-develop}
+
+  module_text_llm:
+    hostname: module-text-llm
+    env_file:
+      - ${ATHENA_ENV_DIR:-./env_example}/module_text_llm.env
+    image: ls1tum/athena_module_text_llm:${ATHENA_TAG:-develop}
+
+  module_text_cofee:
+    hostname: module-text-cofee
+    env_file:
+      - ${ATHENA_ENV_DIR:-./env_example}/module_text_cofee.env
+    depends_on:
+      - postgres
+    image: ls1tum/athena_module_text_cofee:${ATHENA_TAG:-develop}
+
+  module_programming_themisml:
+    hostname: module-programming-themisml
+    env_file:
+      - ${ATHENA_ENV_DIR:-./env_example}/module_programming_themisml.env
+    depends_on:
+      - postgres
+    image: ls1tum/athena_module_programming_themisml:${ATHENA_TAG:-develop}
+
+  module_programming_apted:
+    hostname: module-programming-apted
+    env_file:
+      - ${ATHENA_ENV_DIR:-./env_example}/module_programming_apted.env
+    depends_on:
+      - postgres
+    image: ls1tum/athena_module_programming_apted:${ATHENA_TAG:-develop}
+
+  module_programming_winnowing:
+    hostname: module-programming-winnowing
+    env_file:
+      - ${ATHENA_ENV_DIR:-./env_example}/module_programming_winnowing.env
+    depends_on:
+      - postgres
+    image: ls1tum/athena_module_programming_winnowing:${ATHENA_TAG:-develop}
+
+  module_modeling_llm:
+    hostname: module-modeling-llm
+    env_file:
+      - ${ATHENA_ENV_DIR:-./env_example}/module_modeling_llm.env
+    depends_on:
+      - postgres
+    image: ls1tum/athena_module_modeling_llm:${ATHENA_TAG:-develop}
+
+  postgres:
+    hostname: postgres
+    image: postgres:15
+    env_file:
+      - ${ATHENA_ENV_DIR:-./env_example}/postgres.env
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres-init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "5432:5432"
+
+volumes:
+  postgres_data:

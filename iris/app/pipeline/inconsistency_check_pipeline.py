@@ -1,9 +1,10 @@
 import logging
-from typing import Optional
+import re
 
-from langchain_core.output_parsers import StrOutputParser
-from langchain_core.prompts import PromptTemplate
+from typing import Dict, Optional
+
 from langchain_core.runnables import Runnable
+from langchain_core.prompts import PromptTemplate
 from langsmith import traceable
 
 from app.common.PipelineEnum import PipelineEnum
@@ -12,19 +13,25 @@ from app.llm import CapabilityRequestHandler, RequirementList, CompletionArgumen
 from app.llm.langchain.iris_langchain_chat_model import IrisLangchainChatModel
 from app.pipeline import Pipeline
 from app.web.status.status_update import InconsistencyCheckCallback
-from app.pipeline.prompts.inconsistency_check_prompts import basic_prompt
+from app.pipeline.prompts.inconsistency_check_prompts import (
+    solver_prompt,
+    prettify_prompt,
+)
 
 logger = logging.getLogger(__name__)
 
 
 class InconsistencyCheckPipeline(Pipeline):
-    pipeline: Runnable
     llm: IrisLangchainChatModel
     callback: InconsistencyCheckCallback
+
+    solver: Runnable
+    prettify: Runnable
 
     def __init__(self, callback: Optional[InconsistencyCheckCallback] = None):
         super().__init__(implementation_id="inconsistency_check_pipeline")
         completion_args = CompletionArguments(temperature=0, max_tokens=2000)
+
         self.llm = IrisLangchainChatModel(
             request_handler=CapabilityRequestHandler(
                 requirements=RequirementList(
@@ -34,8 +41,12 @@ class InconsistencyCheckPipeline(Pipeline):
             ),
             completion_args=completion_args,
         )
-        self.prompt = PromptTemplate.from_template(basic_prompt)
-        self.pipeline = self.prompt | self.llm | StrOutputParser()
+        self.solver_prompt = PromptTemplate.from_template(solver_prompt)
+        self.solver = self.solver_prompt | self.llm
+
+        self.prettify_prompt = PromptTemplate.from_template(prettify_prompt)
+        self.prettify = self.prettify_prompt | self.llm
+
         self.callback = callback
         self.tokens = []
 
@@ -54,18 +65,56 @@ class InconsistencyCheckPipeline(Pipeline):
         logger.info("Running inconsistency check pipeline...")
         self.callback.in_progress()
 
-        template_repository = "\n".join(
-            f"<File path='{file_path}'>\n{file_content}</File>"
-            for file_path, file_content in dto.exercise.template_repository.items()
+        # First, for each file in the exercise, we will check for consistency issues via the solver pipeline
+        consistency_issues: Dict[str, str] = {}
+        file_paths = set(dto.exercise.template_repository.keys()) | set(
+            dto.exercise.solution_repository.keys()
         )
+        solver_inputs = [
+            {
+                "file_path": file_path,
+                "problem_statement": dto.exercise.problem_statement,
+                "template_file": dto.exercise.template_repository.get(
+                    file_path, "no file found"
+                ),
+                "solution_file": dto.exercise.solution_repository.get(
+                    file_path, "no file found"
+                ),
+            }
+            for file_path in file_paths
+        ]
+        file_responses = self.solver.map().invoke(solver_inputs)
+        consistency_issues = {
+            file_path: response.content
+            for file_path, response in zip(file_paths, file_responses)
+        }
 
-        response: str = self.pipeline.invoke(
+        # Second, we will prettify the consistency issues and provide a summary using the prettify pipeline
+        formatted_consistency_issues = "\n".join(
+            [
+                f"<PotentialFileIssues filePath=`{file_path}`>\n{issues}\n</PotentialFileIssues>"
+                for file_path, issues in consistency_issues.items()
+            ]
+        )
+        summary_response = self.prettify.invoke(
             {
                 "problem_statement": dto.exercise.problem_statement,
-                "template_repository": template_repository,
+                "consistency_issues": formatted_consistency_issues,
             }
         )
 
-        self._append_tokens(self.llm.tokens, PipelineEnum.IRIS_INCONSISTENCY_CHECK)
+        result = summary_response.content.strip()
 
-        self.callback.done(final_result=response, tokens=self.tokens)
+        # Remove ``` from start and end if exists
+        if result.startswith("```") and result.endswith("```"):
+            result = result[3:-3]
+            if result.startswith("markdown"):
+                result = result[8:]
+            result = result.strip()
+
+        # Remove first heading or heading containing 'Summary of Consistency Issues'
+        result = re.sub(r"^#\s.*?\n", "", result)
+        result = re.sub(r"^#+.*?Summary of Consistency Issues\s*\n", "", result)
+
+        self._append_tokens(self.llm.tokens, PipelineEnum.IRIS_INCONSISTENCY_CHECK)
+        self.callback.done(final_result=result, tokens=self.tokens)

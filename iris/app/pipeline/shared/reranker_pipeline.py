@@ -15,7 +15,9 @@ from app.pipeline import Pipeline
 from app.pipeline.chat.output_models.output_models.selected_paragraphs import (
     SelectedParagraphs,
 )
-from app.vector_database.lecture_schema import LectureSchema
+from app.vector_database.lecture_unit_page_chunk_schema import (
+    LectureUnitPageChunkSchema,
+)
 
 
 class RerankerPipeline(Pipeline):
@@ -85,7 +87,10 @@ class RerankerPipeline(Pipeline):
         if paragraphs and isinstance(paragraphs[0], dict):
             for i, paragraph in enumerate(paragraphs):
                 paras += "Paragraph {}:\n{}\n".format(
-                    str(i), paragraph.get(LectureSchema.PAGE_TEXT_CONTENT.value, "")
+                    str(i),
+                    paragraph.get(
+                        LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value, ""
+                    ),
                 )
         elif paragraphs and isinstance(paragraphs[0], str):
             for i, paragraph in enumerate(paragraphs):

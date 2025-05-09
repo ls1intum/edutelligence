@@ -30,14 +30,19 @@ class IngestionStatusCallback(StatusCallback):
                 weight=10, state=StageStateEnum.NOT_STARTED, name="Old slides removal"
             ),
             StageDTO(
-                weight=60,
+                weight=40,
                 state=StageStateEnum.NOT_STARTED,
                 name="Slides Interpretation",
             ),
             StageDTO(
-                weight=30,
+                weight=20,
                 state=StageStateEnum.NOT_STARTED,
                 name="Slides ingestion",
+            ),
+            StageDTO(
+                weight=30,
+                state=StageStateEnum.NOT_STARTED,
+                name="Lecture unit summary ingestion",
             ),
         ]
         status = IngestionStatusUpdateDTO(stages=stages, id=lecture_unit_id)

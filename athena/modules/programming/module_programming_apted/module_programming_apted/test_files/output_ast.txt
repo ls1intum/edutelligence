@@ -1,0 +1,203 @@
+{
+    "node_type": "CompilationUnit",
+    "children": [
+        {
+            "node_type": "CompilationUnit",
+            "role": null,
+            "value": null,
+            "children": [
+                {
+                    "node_type": "ClassDeclaration",
+                    "role": null,
+                    "value": null,
+                    "children": [
+                        {
+                            "node_type": "MethodDeclaration",
+                            "role": null,
+                            "value": null,
+                            "children": [
+                                {
+                                    "node_type": "FormalParameter",
+                                    "role": null,
+                                    "value": null,
+                                    "children": [
+                                        {
+                                            "node_type": "ReferenceType",
+                                            "role": null,
+                                            "value": null,
+                                            "children": []
+                                        }
+                                    ]
+                                },
+                                {
+                                    "node_type": "StatementExpression",
+                                    "role": null,
+                                    "value": null,
+                                    "children": [
+                                        {
+                                            "node_type": "MethodInvocation",
+                                            "role": null,
+                                            "value": null,
+                                            "children": [
+                                                {
+                                                    "node_type": "Literal",
+                                                    "role": null,
+                                                    "value": "\"Hello, world!\"",
+                                                    "children": []
+                                                }
+                                            ]
+                                        }
+                                    ]
+                                },
+                                {
+                                    "node_type": "LocalVariableDeclaration",
+                                    "role": null,
+                                    "value": null,
+                                    "children": [
+                                        {
+                                            "node_type": "BasicType",
+                                            "role": null,
+                                            "value": null,
+                                            "children": []
+                                        },
+                                        {
+                                            "node_type": "VariableDeclarator",
+                                            "role": null,
+                                            "value": null,
+                                            "children": [
+                                                {
+                                                    "node_type": "Literal",
+                                                    "role": null,
+                                                    "value": "5",
+                                                    "children": []
+                                                }
+                                            ]
+                                        }
+                                    ]
+                                },
+                                {
+                                    "node_type": "ForStatement",
+                                    "role": null,
+                                    "value": null,
+                                    "children": [
+                                        {
+                                            "node_type": "ForControl",
+                                            "role": null,
+                                            "value": null,
+                                            "children": [
+                                                {
+                                                    "node_type": "VariableDeclaration",
+                                                    "role": null,
+                                                    "value": null,
+                                                    "children": [
+                                                        {
+                                                            "node_type": "BasicType",
+                                                            "role": null,
+                                                            "value": null,
+                                                            "children": []
+                                                        },
+                                                        {
+                                                            "node_type": "VariableDeclarator",
+                                                            "role": null,
+                                                            "value": null,
+                                                            "children": [
+                                                                {
+                                                                    "node_type": "Literal",
+                                                                    "role": null,
+                                                                    "value": "0",
+                                                                    "children": []
+                                                                }
+                                                            ]
+                                                        }
+                                                    ]
+                                                },
+                                                {
+                                                    "node_type": "BinaryOperation",
+                                                    "role": null,
+                                                    "value": null,
+                                                    "children": [
+                                                        {
+                                                            "node_type": "MemberReference",
+                                                            "role": null,
+                                                            "value": null,
+                                                            "children": []
+                                                        },
+                                                        {
+                                                            "node_type": "Literal",
+                                                            "role": null,
+                                                            "value": "10",
+                                                            "children": []
+                                                        }
+                                                    ]
+                                                },
+                                                {
+                                                    "node_type": "MemberReference",
+                                                    "role": null,
+                                                    "value": null,
+                                                    "children": []
+                                                }
+                                            ]
+                                        },
+                                        {
+                                            "node_type": "BlockStatement",
+                                            "role": null,
+                                            "value": null,
+                                            "children": [
+                                                {
+                                                    "node_type": "LocalVariableDeclaration",
+                                                    "role": null,
+                                                    "value": null,
+                                                    "children": [
+                                                        {
+                                                            "node_type": "ReferenceType",
+                                                            "role": null,
+                                                            "value": null,
+                                                            "children": []
+                                                        },
+                                                        {
+                                                            "node_type": "VariableDeclarator",
+                                                            "role": null,
+                                                            "value": null,
+                                                            "children": [
+                                                                {
+                                                                    "node_type": "Literal",
+                                                                    "role": null,
+                                                                    "value": "\"Test\"",
+                                                                    "children": []
+                                                                }
+                                                            ]
+                                                        }
+                                                    ]
+                                                },
+                                                {
+                                                    "node_type": "StatementExpression",
+                                                    "role": null,
+                                                    "value": null,
+                                                    "children": [
+                                                        {
+                                                            "node_type": "MethodInvocation",
+                                                            "role": null,
+                                                            "value": null,
+                                                            "children": [
+                                                                {
+                                                                    "node_type": "MemberReference",
+                                                                    "role": null,
+                                                                    "value": null,
+                                                                    "children": []
+                                                                }
+                                                            ]
+                                                        }
+                                                    ]
+                                                }
+                                            ]
+                                        }
+                                    ]
+                                }
+                            ]
+                        }
+                    ]
+                }
+            ]
+        }
+    ]
+}
