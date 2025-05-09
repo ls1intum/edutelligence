@@ -127,7 +127,11 @@ class LectureRetrieval(Pipeline):
     ) -> LectureRetrievalDTO:
         lecture_unit = self.get_lecture_unit(course_id, lecture_id, lecture_unit_id)
         if lecture_unit is None:
-            raise ValueError("The lecture unit is not indexed")
+            return LectureRetrievalDTO(
+                lecture_transcriptions=[],
+                lecture_unit_page_chunks=[],
+                lecture_unit_segments=[],
+            )
 
         (
             rewritten_lecture_pages_query,
