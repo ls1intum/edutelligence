@@ -10,13 +10,12 @@ from atlasml.ml.VectorEmbeddings import FallbackModel
 from atlasml.ml.Clustering.TSNE import apply_tsne
 from atlasml.ml.Clustering.HDBSCAN import apply_hdbscan
 
-from atlasml.clients.weaviate import weaviate_client
+from atlasml.clients.weaviate import get_weaviate_client
 
 router = APIRouter()
 
 @router.post("/generate-embedings", response_model=GenerateEmbedingsResponse)
 async def generate_embedings(request: GenerateCompetencyRequest):
-
     print("GENERATING EMBEDDING FOR ==> ", request.id)
     uuid, embedings = FallbackModel.generate_embeddings(request.id, request.description)
 
@@ -44,6 +43,7 @@ async def generate_embedings_batch(request: GenerateCompetencyRequestBatch):
 
 @router.get("/competency/{id}", response_model=Competency)
 async def get_competency(id: str):
+    weaviate_client = get_weaviate_client()
     competency_embeddings = weaviate_client.get_all_embeddings()
     
     print("COMPETENCY EMBEDDINGS LENGTH: ", len(competency_embeddings))

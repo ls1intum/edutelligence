@@ -1,3 +1,5 @@
+import asyncio
+
 from athena.text import Exercise, Submission, Feedback
 from athena.logger import logger
 from llm_core.utils.llm_utils import get_chat_prompt_with_formatting_instructions
@@ -5,7 +7,7 @@ from llm_core.utils.predict_and_parse import predict_and_parse
 from module_text_llm.divide_and_conquer.prompt_generate_suggestions import AssessmentModel, FeedbackModel, double_curly_braces, get_system_prompt, get_human_message
 from module_text_llm.approach_config import ApproachConfig
 from module_text_llm.helpers.utils import add_sentence_numbers, get_index_range_from_line_range
-import asyncio
+
   
 async def generate_suggestions(exercise: Exercise, submission: Submission, config: ApproachConfig, debug: bool, is_graded: bool):
     submission_text = double_curly_braces(submission.text)
