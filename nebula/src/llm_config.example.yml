@@ -1,0 +1,19 @@
+- api_key:
+  api_version: 2024-02-15-preview
+  azure_deployment: gpt-4o
+  capabilities:
+    context_length: 128000
+    gpt_version_equivalent: 4.5
+    image_recognition: true
+    input_cost: 5
+    json_mode: true
+    output_cost: 15
+    privacy_compliance: true
+    self_hosted: false
+    vendor: OpenAI
+  description: GPT 4 Omni on Azure
+  endpoint: "<your-endpoint>"
+  id: azure-gpt-4-omni
+  model: gpt-4o
+  name: GPT 4 Omni
+  type: azure_chat
