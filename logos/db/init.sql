@@ -1,7 +1,7 @@
 -- Database: logos
 
--- DROP DATABASE IF EXISTS logosdb;
-
+GRANT ALL PRIVILEGES ON DATABASE logosdb TO postgres;
+ALTER DATABASE logosdb OWNER TO postgres;
 
 DROP TYPE IF EXISTS threshold_enum CASCADE;
 DROP TABLE IF EXISTS profile_model_permissions CASCADE;
@@ -29,7 +29,7 @@ CREATE TABLE services (
 
 CREATE TABLE profiles (
     id SERIAL PRIMARY KEY,
-    name TEXT NOT NULL UNIQUE
+    name TEXT NOT NULL
 );
 
 CREATE TABLE process (
@@ -44,19 +44,10 @@ CREATE TABLE process (
 CREATE TABLE providers (
     id SERIAL PRIMARY KEY,
     name TEXT NOT NULL,
-    auth_name TEXT NOT NULL,
-    auth_format TEXT NOT NULL,
     base_url TEXT NOT NULL
 );
 
 CREATE TYPE threshold_enum as ENUM ('LOCAL', 'CLOUD_IN_EU_BY_US_PROVIDER', 'CLOUD_NOT_IN_EU_BY_US_PROVIDER', 'CLOUD_IN_EU_BY_EU_PROVIDER');
-
-CREATE TABLE model_api_keys (
-    id SERIAL PRIMARY KEY,
-    profile_id INTEGER REFERENCES profiles(id) ON DELETE SET NULL,
-    provider_id INTEGER NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
-    api_key TEXT
-);
 
 CREATE TABLE models (
     id SERIAL PRIMARY KEY,
@@ -66,8 +57,7 @@ CREATE TABLE models (
     weight_latency INTEGER DEFAULT(0),
     weight_accuracy INTEGER DEFAULT(0),
     weight_cost INTEGER DEFAULT(0),
-    weight_quality INTEGER DEFAULT(0),
-    api_id INTEGER REFERENCES model_api_keys(id) ON DELETE SET NULL
+    weight_quality INTEGER DEFAULT(0)
 );
 
 CREATE TABLE model_provider (
@@ -76,16 +66,23 @@ CREATE TABLE model_provider (
     model_id INTEGER NOT NULL REFERENCES models(id) ON DELETE CASCADE
 );
 
+CREATE TABLE model_api_keys (
+    id SERIAL PRIMARY KEY,
+    profile_id INTEGER REFERENCES profiles(id) ON DELETE CASCADE,
+    provider_id INTEGER NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
+    api_key TEXT NOT NULL
+);
+
 CREATE TABLE profile_model_permissions (
     id SERIAL PRIMARY KEY,
-    profile_id INTEGER REFERENCES profiles(id) ON DELETE SET NULL,
+    profile_id INTEGER REFERENCES profiles(id) ON DELETE CASCADE,
     model_id INTEGER NOT NULL REFERENCES models(id) ON DELETE CASCADE
 );
 
 CREATE TABLE policies (
     id SERIAL PRIMARY KEY,
     entity_id INTEGER NOT NULL REFERENCES process(id) ON DELETE CASCADE,
-    name TEXT,
+    name TEXT NOT NULL,
     description TEXT,
     threshold_privacy threshold_enum DEFAULT('LOCAL'),
     threshold_latency INTEGER DEFAULT(0),

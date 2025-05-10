@@ -11,8 +11,11 @@ app = FastAPI()
 
 @app.post("/logosdb/setup")
 async def setup_db():
-    with DBManager() as db:
-        return db.setup()
+    try:
+        with DBManager() as db:
+            return db.setup()
+    except Exception as e:
+        return {"error": f"{str(e)}"}, 401
 
 
 @app.post("/logosdb/add_provider")

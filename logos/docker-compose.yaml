@@ -1,23 +1,30 @@
-version: '3.7'
-
 services:
   logos-server:
     restart: unless-stopped
     build:
-      context: .
-      dockerfile: Dockerfile
+      context: ../
+      dockerfile: ./logos/Dockerfile
+    depends_on:
+      logos-db:
+        condition: service_healthy
     volumes:
       -   data_volume:/src/logos
     ports:
       - "8000:8000"
-  db:
+  logos-db:
     image: postgres:17
+    restart: unless-stopped
     container_name: logos-db
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: root
       POSTGRES_DB: logosdb
-      POSTGRES_HOST: localhost
+      POSTGRES_HOST: logos.ase.cit.tum.de
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready"]
+      interval: 1s
+      timeout: 5s
+      retries: 10
     volumes:
       - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql
     ports:

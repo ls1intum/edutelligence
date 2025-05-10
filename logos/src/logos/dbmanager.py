@@ -12,17 +12,17 @@ from sqlalchemy import text
 from logos.dbmodules import *
 
 
-def load_postgres_env_vars_from_compose(file_path="docker-compose.yaml"):
+def load_postgres_env_vars_from_compose(file_path="./logos/docker-compose.yaml"):
     with open(file_path, "r", encoding="utf-8") as f:
         compose = yaml.safe_load(f)
 
-    env = compose.get("services", {}).get("db", {}).get("environment", {})
+    env = compose.get("services", {}).get("logos-db", {}).get("environment", {})
     return {
         "user": env.get("POSTGRES_USER"),
         "password": env.get("POSTGRES_PASSWORD"),
         "db": env.get("POSTGRES_DB"),
         "host": env.get("POSTGRES_HOST"),
-        "port": compose.get("services", {}).get("db", {}).get("ports", 5432)[0].split(":")[0]
+        "port": compose.get("services", {}).get("logos-db", {}).get("ports", ['5432:5432'])[0].split(":")[0]
     }
 
 
@@ -126,7 +126,7 @@ class DBManager:
 
     def __exec_init(self):
         with self.engine.connect() as conn:
-            with open("./db/init.sql", "r", encoding="utf-8") as file:
+            with open("./logos/db/init.sql", "r", encoding="utf-8") as file:
                 sql = file.read()
                 for statement in sql.split(";"):
                     stmt = statement.strip()
@@ -135,7 +135,6 @@ class DBManager:
                             conn.execute(text(stmt))
                         except sqlalchemy.exc.ProgrammingError:
                             pass
-
             conn.commit()
 
     def setup(self) -> dict:
@@ -345,7 +344,7 @@ class DBManager:
 
 if __name__ == "__main__":
     """
-    DB-Creation Steps:
+    Logos Installation Steps:
     1. Set up database. Creates an entry in "users" with "root" user and a process entry with an initial api key.
         =>  Call "/logosdb/setup"
         =>  In the response you get the logos-API-key for the root user. This key is used to setup the database
