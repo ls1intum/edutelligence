@@ -67,6 +67,13 @@ sudo docker compose -f ./logos/docker-compose.yaml up -d --remove-orphans
 
 Now all endpoints are working, and you can proceed with setting up the database.
 
+#### Stop the service
+
+You can stop the service via:
+```bash
+sudo docker compose -f ./logos/docker-compose.yaml down --remove-orphans
+```
+
 ## Configuration
 Follow these steps to install and configure **Logos** as your intelligent routing and management layer for LLMs.
 
