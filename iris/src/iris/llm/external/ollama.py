@@ -11,7 +11,7 @@ from typing import (
     Union,
 )
 
-from httpx import Client as HTTPXClient
+from httpx import Client as HTTPXClient, Timeout
 from httpx import HTTPTransport
 from langchain_core.tools import BaseTool
 from ollama import Client, Message
@@ -110,16 +110,18 @@ class OllamaModel(
     _client: Client
 
     def model_post_init(self, __context: Any) -> None:
-
         self._client = Client()
 
         # Use custom HTTP transport to speed up request performance and avoid default retry/backoff behavior
+        timeout = Timeout(connect=10.0, read=60.0, write=10.0, pool=5.0)
+
         transport = HTTPTransport(retries=1)
         # Override the internal HTTPX client used by Ollama to enable HTTP/2 and ensure consistent authentication
         self._client._client = HTTPXClient(  # pylint: disable=protected-access
             base_url=self.host,
             http2=True,
             transport=transport,
+            timeout=timeout,
             auth=(
                 HTTPBasicAuth(self.username, self.password)
                 if self.username and self.password
