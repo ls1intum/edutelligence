@@ -11,8 +11,8 @@ from typing import (
     Union,
 )
 
-from httpx import Client as HTTPXClient, Timeout
-from httpx import HTTPTransport
+from httpx import Client as HTTPXClient
+from httpx import HTTPTransport, Timeout
 from langchain_core.tools import BaseTool
 from ollama import Client, Message
 from pydantic import BaseModel, Field
