@@ -1,17 +1,15 @@
 from typing import List
+
 from athena import emit_meta
 from athena.text import Exercise, Submission, Feedback
 from athena.logger import logger
-
 from module_text_llm.approach_config import ApproachConfig
-
 from llm_core.utils.llm_utils import (
     get_chat_prompt_with_formatting_instructions, 
     check_prompt_length_and_omit_features_if_necessary, 
     num_tokens_from_prompt,
 )
 from llm_core.utils.predict_and_parse import predict_and_parse
-
 from module_text_llm.helpers.utils import add_sentence_numbers, get_index_range_from_line_range, format_grading_instructions
 from module_text_llm.chain_of_thought_approach.prompt_thinking import InitialAssessmentModel
 from module_text_llm.chain_of_thought_approach.prompt_generate_feedback import AssessmentModel
