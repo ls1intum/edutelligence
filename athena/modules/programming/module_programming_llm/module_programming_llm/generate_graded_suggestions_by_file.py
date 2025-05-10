@@ -15,10 +15,10 @@ from module_programming_llm.split_problem_statement_by_file import (
 )
 from llm_core.utils.llm_utils import (
     check_prompt_length_and_omit_features_if_necessary,
-    get_chat_prompt_with_formatting_instructions,
+    get_chat_prompt,
     num_tokens_from_string,
 )
-from llm_core.utils.predict_and_parse import predict_and_parse
+from llm_core.core.predict_and_parse import predict_and_parse
 
 from module_programming_llm.helpers.utils import (
     get_diff,
@@ -64,13 +64,10 @@ async def generate_suggestions_by_file(
     config: GradedBasicApproachConfig,
     debug: bool,
 ) -> List[Feedback]:
-    model = config.model.get_model()  # type: ignore[attr-defined]
 
-    chat_prompt = get_chat_prompt_with_formatting_instructions(
-        model=model,
+    chat_prompt = get_chat_prompt(
         system_message=config.generate_suggestions_by_file_prompt.system_message,
         human_message=config.generate_suggestions_by_file_prompt.human_message,
-        pydantic_object=AssessmentModel,
     )
 
     # Get split problem statement and grading instructions by file (if necessary)
@@ -264,11 +261,10 @@ async def generate_suggestions_by_file(
     results: List[Optional[AssessmentModel]] = await asyncio.gather(
         *[
             predict_and_parse(
-                model=model,
+                model=config.model,
                 chat_prompt=chat_prompt,
                 prompt_input=prompt_input,
                 pydantic_object=AssessmentModel,
-                use_function_calling=True,
                 tags=[
                     f"exercise-{exercise.id}",
                     f"submission-{submission.id}",

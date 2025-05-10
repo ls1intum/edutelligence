@@ -8,7 +8,7 @@ from langchain_core.output_parsers import PydanticOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 
 from athena.schemas import GradingCriterion, StructuredGradingCriterion
-from llm_core.utils.predict_and_parse import predict_and_parse
+from llm_core.core.predict_and_parse import predict_and_parse
 from module_modeling_llm.config import BasicApproachConfig
 from module_modeling_llm.models.exercise_model import ExerciseModel
 from module_modeling_llm.prompts.structured_grading_instructions_prompt import StructuredGradingInstructionsInputs
@@ -42,11 +42,10 @@ async def get_structured_grading_instructions(
             grading_instructions=grading_instructions or "No grading instructions.",
             submission_uml_type=exercise_model.submission_uml_type,
             example_solution=exercise_model.transformed_example_solution or "No example solution.",
-            structured_instructions_output_format=PydanticOutputParser(pydantic_object=StructuredGradingCriterion).get_format_instructions()
         )
 
     grading_instruction_result = await predict_and_parse(
-        model=config.model.get_model(), # type: ignore[attr-defined]
+        model=config.generate_grading_instructions,
         chat_prompt=chat_prompt,
         prompt_input=prompt_inputs.dict(),
         pydantic_object=StructuredGradingCriterion,
