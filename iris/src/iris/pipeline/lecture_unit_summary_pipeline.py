@@ -76,6 +76,6 @@ class LectureUnitSummaryPipeline(Pipeline):
             self._append_tokens(
                 self.llm.tokens, PipelineEnum.IRIS_LECTURE_SUMMARY_PIPELINE
             )
-            return response
+            return response, self.tokens
         except Exception as e:
             raise e

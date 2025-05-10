@@ -18,16 +18,14 @@ from ...domain.ingestion.deletion_pipeline_execution_dto import (
 from ...domain.ingestion.transcription_ingestion.transcription_ingestion_pipeline_execution_dto import (
     TranscriptionIngestionPipelineExecutionDto,
 )
+from ...pipeline.delete_lecture_units_pipeline import LectureUnitDeletionPipeline
 from ...pipeline.faq_ingestion_pipeline import FaqIngestionPipeline
-from ...pipeline.lecture_ingestion_pipeline import (
-    LectureUnitPageIngestionPipeline,
-)
+from ...pipeline.lecture_ingestion_update_pipeline import LectureIngestionUpdatePipeline
 from ...pipeline.transcription_ingestion_pipeline import (
     TranscriptionIngestionPipeline,
 )
 from ...vector_database.database import VectorDatabase
 from ..status.faq_ingestion_status_callback import FaqIngestionStatus
-from ..status.ingestion_status_callback import IngestionStatusCallback
 from ..status.lecture_deletion_status_callback import (
     LecturesDeletionStatusCallback,
 )
@@ -42,29 +40,12 @@ semaphore = Semaphore(5)
 
 def run_lecture_update_pipeline_worker(dto: IngestionPipelineExecutionDto):
     """
-    Run the exercise chat pipeline in a separate thread
+    Run the lecture unit ingestion pipeline in a separate thread
     """
     with semaphore:
-        try:
-            callback = IngestionStatusCallback(
-                run_id=dto.settings.authentication_token,
-                base_url=dto.settings.artemis_base_url,
-                initial_stages=dto.initial_stages,
-                lecture_unit_id=dto.lecture_unit.lecture_unit_id,
-            )
-            db = VectorDatabase()
-            client = db.get_client()
-            pipeline = LectureUnitPageIngestionPipeline(
-                client=client, dto=dto, callback=callback
-            )
-            pipeline()
-
-        except Exception as e:
-            logger.error("Error Ingestion pipeline: %s", e)
-            logger.error(traceback.format_exc())
-            capture_exception(e)
-        finally:
-            semaphore.release()
+        lecture_ingestion_update_pipeline = LectureIngestionUpdatePipeline(dto)
+        lecture_ingestion_update_pipeline()
+        semaphore.release()
 
 
 def run_lecture_deletion_pipeline_worker(dto: LecturesDeletionExecutionDto):
@@ -79,10 +60,13 @@ def run_lecture_deletion_pipeline_worker(dto: LecturesDeletionExecutionDto):
         )
         db = VectorDatabase()
         client = db.get_client()
-        pipeline = LectureUnitPageIngestionPipeline(
-            client=client, dto=None, callback=callback
+        pipeline = LectureUnitDeletionPipeline(
+            client=client,
+            lecture_units=dto.lecture_units,
+            callback=callback,
+            artemis_base_url=dto.settings.artemis_base_url,
         )
-        pipeline.delete_old_lectures(dto.lecture_units, dto.settings.artemis_base_url)
+        pipeline()
     except Exception as e:
         logger.error("Error while deleting lectures: %s", e)
         logger.error(traceback.format_exc())
@@ -100,7 +84,7 @@ def run_transcription_ingestion_pipeline_worker(
                 run_id=dto.settings.authentication_token,
                 base_url=dto.settings.artemis_base_url,
                 initial_stages=dto.initial_stages,
-                lecture_id=dto.lecture_unit_id,
+                lecture_unit_id=dto.lecture_unit_id,
             )
             db = VectorDatabase()
             client = db.get_client()
