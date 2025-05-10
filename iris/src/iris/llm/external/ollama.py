@@ -110,7 +110,6 @@ class OllamaModel(
     _client: Client
 
     def model_post_init(self, __context: Any) -> None:
-
         self._client = Client()
 
         # Use custom HTTP transport to speed up request performance and avoid default retry/backoff behavior
