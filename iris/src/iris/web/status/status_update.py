@@ -1,35 +1,35 @@
-import logging
-from abc import ABC
-from typing import List, Optional
+from typing import Optional, List
 
-import requests
+
 from sentry_sdk import capture_exception, capture_message
 
-from iris.common.token_usage_dto import TokenUsageDTO
-from iris.domain.chat.course_chat.course_chat_status_update_dto import (
-    CourseChatStatusUpdateDTO,
-)
-from iris.domain.chat.exercise_chat.exercise_chat_status_update_dto import (
-    ExerciseChatStatusUpdateDTO,
-)
-from iris.domain.status.competency_extraction_status_update_dto import (
+import requests
+from abc import ABC
+
+from app.common.token_usage_dto import TokenUsageDTO
+from app.domain.status.competency_extraction_status_update_dto import (
     CompetencyExtractionStatusUpdateDTO,
 )
-from iris.domain.status.inconsistency_check_status_update_dto import (
+from app.domain.chat.course_chat.course_chat_status_update_dto import (
+    CourseChatStatusUpdateDTO,
+)
+from app.domain.status.inconsistency_check_status_update_dto import (
     InconsistencyCheckStatusUpdateDTO,
 )
-from iris.domain.status.lecture_chat_status_update_dto import (
+from app.domain.status.lecture_chat_status_update_dto import (
     LectureChatStatusUpdateDTO,
 )
-from iris.domain.status.rewriting_status_update_dto import (
-    RewritingStatusUpdateDTO,
-)
-from iris.domain.status.stage_dto import StageDTO
-from iris.domain.status.stage_state_dto import StageStateEnum
-from iris.domain.status.status_update_dto import StatusUpdateDTO
-from iris.domain.status.text_exercise_chat_status_update_dto import (
+from app.domain.status.rewriting_status_update_dto import RewritingStatusUpdateDTO
+from app.domain.status.stage_state_dto import StageStateEnum
+from app.domain.status.stage_dto import StageDTO
+from app.domain.status.text_exercise_chat_status_update_dto import (
     TextExerciseChatStatusUpdateDTO,
 )
+from app.domain.chat.exercise_chat.exercise_chat_status_update_dto import (
+    ExerciseChatStatusUpdateDTO,
+)
+from app.domain.status.status_update_dto import StatusUpdateDTO
+import logging
 
 logger = logging.getLogger(__name__)
 
@@ -113,6 +113,8 @@ class StatusCallback(ABC):
         tokens: Optional[List[TokenUsageDTO]] = None,
         next_stage_message: Optional[str] = None,
         start_next_stage: bool = True,
+        inconsistencies : Optional[List[str]] = None,
+        improvement : Optional[str] = None
     ):
         """
         Transition the current stage to DONE and update the status.
@@ -125,6 +127,11 @@ class StatusCallback(ABC):
         self.status.tokens = tokens or self.status.tokens
         if hasattr(self.status, "suggestions"):
             self.status.suggestions = suggestions
+
+        if hasattr(self.status, "inconsistencies"):
+            self.status.inconsistencies = inconsistencies
+        if hasattr(self.status, "improvement"):
+            self.status.improvement = improvement
         next_stage = self.get_next_stage()
         if next_stage is not None:
             self.stage = next_stage
@@ -136,6 +143,8 @@ class StatusCallback(ABC):
         self.status.result = None
         if hasattr(self.status, "suggestions"):
             self.status.suggestions = None
+        if hasattr(self.status, "inconsistencies"):
+            self.status.inconsistencies = None
 
     def error(
         self,
@@ -165,10 +174,7 @@ class StatusCallback(ABC):
         self.stage = self.status.stages[-1]
         self.on_status_update()
         logger.error(
-            "Error occurred in job %s in stage %s: %s",
-            self.run_id,
-            self.stage.name,
-            message,
+            f"Error occurred in job {self.run_id} in stage {self.stage.name}: {message}"
         )
         if exception:
             capture_exception(exception)
@@ -220,12 +226,10 @@ class CourseChatStatusCallback(StatusCallback):
 
 
 class ExerciseChatStatusCallback(StatusCallback):
-    """Status callback for exercise chat pipelines."""
-
     def __init__(
         self, run_id: str, base_url: str, initial_stages: List[StageDTO] = None
     ):
-        url = f"{base_url}/{self.api_url}/tutor-chat/runs/{run_id}/status"
+        url = f"{base_url}/api/public/pyris/pipelines/tutor-chat/runs/{run_id}/status"
         current_stage_index = len(initial_stages) if initial_stages else 0
         stages = initial_stages or []
         stages += [
@@ -235,9 +239,7 @@ class ExerciseChatStatusCallback(StatusCallback):
                 name="Checking available information",
             ),
             StageDTO(
-                weight=10,
-                state=StageStateEnum.NOT_STARTED,
-                name="Creating suggestions",
+                weight=10, state=StageStateEnum.NOT_STARTED, name="Creating suggestions"
             ),
         ]
         status = ExerciseChatStatusUpdateDTO(stages=stages)
@@ -246,12 +248,10 @@ class ExerciseChatStatusCallback(StatusCallback):
 
 
 class ChatGPTWrapperStatusCallback(StatusCallback):
-    """Status callback for ChatGPT wrapper pipelines."""
-
     def __init__(
         self, run_id: str, base_url: str, initial_stages: List[StageDTO] = None
     ):
-        url = f"{base_url}/{self.api_url}/tutor-chat/runs/{run_id}/status"
+        url = f"{base_url}/api/public/pyris/pipelines/tutor-chat/runs/{run_id}/status"
         current_stage_index = len(initial_stages) if initial_stages else 0
         stages = initial_stages or []
         stages += [
@@ -267,15 +267,13 @@ class ChatGPTWrapperStatusCallback(StatusCallback):
 
 
 class TextExerciseChatCallback(StatusCallback):
-    """Status callback for text exercise chat pipelines."""
-
     def __init__(
         self,
         run_id: str,
         base_url: str,
         initial_stages: List[StageDTO],
     ):
-        url = f"{base_url}/{self.api_url}/text-exercise-chat/runs/{run_id}/status"
+        url = f"{base_url}/api/public/pyris/pipelines/text-exercise-chat/runs/{run_id}/status"
         stages = initial_stages or []
         stage = len(stages)
         stages += [
@@ -300,15 +298,13 @@ class TextExerciseChatCallback(StatusCallback):
 
 
 class CompetencyExtractionCallback(StatusCallback):
-    """Status callback for competency extraction pipelines."""
-
     def __init__(
         self,
         run_id: str,
         base_url: str,
         initial_stages: List[StageDTO],
     ):
-        url = f"{base_url}/{self.api_url}/competency-extraction/runs/{run_id}/status"
+        url = f"{base_url}/api/public/pyris/pipelines/competency-extraction/runs/{run_id}/status"
         stages = initial_stages or []
         stages.append(
             StageDTO(
@@ -323,15 +319,13 @@ class CompetencyExtractionCallback(StatusCallback):
 
 
 class RewritingCallback(StatusCallback):
-    """Status callback for rewriting pipelines."""
-
     def __init__(
         self,
         run_id: str,
         base_url: str,
         initial_stages: List[StageDTO],
     ):
-        url = f"{base_url}/{self.api_url}/rewriting/runs/{run_id}/status"
+        url = f"{base_url}/api/public/pyris/pipelines/rewriting/runs/{run_id}/status"
         stages = initial_stages or []
         stages.append(
             StageDTO(
@@ -346,15 +340,13 @@ class RewritingCallback(StatusCallback):
 
 
 class InconsistencyCheckCallback(StatusCallback):
-    """Status callback for inconsistency check pipelines."""
-
     def __init__(
         self,
         run_id: str,
         base_url: str,
         initial_stages: List[StageDTO],
     ):
-        url = f"{base_url}/{self.api_url}/inconsistency-check/runs/{run_id}/status"
+        url = f"{base_url}/api/public/pyris/pipelines/inconsistency-check/runs/{run_id}/status"
         stages = initial_stages or []
         stages.append(
             StageDTO(
@@ -369,15 +361,13 @@ class InconsistencyCheckCallback(StatusCallback):
 
 
 class LectureChatCallback(StatusCallback):
-    """Status callback for lecture chat pipelines."""
-
     def __init__(
         self,
         run_id: str,
         base_url: str,
         initial_stages: List[StageDTO],
     ):
-        url = f"{base_url}/{self.api_url}/lecture-chat/runs/{run_id}/status"
+        url = f"{base_url}/api/public/pyris/pipelines/lecture-chat/runs/{run_id}/status"
         stages = initial_stages or []
         stage = len(stages)
         stages += [
