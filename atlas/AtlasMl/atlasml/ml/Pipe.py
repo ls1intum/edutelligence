@@ -5,25 +5,65 @@ from atlasml.ml.Clustering.HDBSCAN import apply_hdbscan, SimilarityMetric
 from atlasml.ml.SimilarityMeasurement.Cosine import compute_cosine_similarity
 from sklearn.metrics.pairwise import cosine_similarity
 
-# Get Text
-text = "This is an apple."
-uuid = "UUID"
-# TODO: @Arda Prepare the text
+class InitialPipeline:
+    """
+    InitialPipeline orchestrates loading texts from Artemis, generating embeddings, clustering them via HDBSCAN,
+     and computing a similarity matrix of cluster medoids.
 
-# Get vector embeddings
-# embedding_id, embedding = generate_embeddings_openai(uuid, text) TODO: Get API key for OpenAI
-embedding_id, embedding = generate_embeddings_local(uuid, text)
-# TODO: @Ufuk Save embeddings in VectorDB
+    Args:
+        texts (np.ndarray): Fetch and feed 2D array of texts from Artemis.
 
-# TODO: @Ufuk Load the embeddings from VectorDB
-# Currently Local embedding
-df = pd.read_csv("embeddings.csv", index_col=0)
-embeddings = df.values
+    Attributes:
+        embeddings_uuids (np.ndarray): Array of embedding UUIDs for each text entry.
+        embeddings (np.ndarray): 2D array of vector embeddings for all texts.
+        labels (list[int]): Cluster labels assigned to each embedding.
+        medoids (np.ndarray): Representative vectors (medoids) for each identified cluster.
+        similarity_matrix (np.ndarray): Pairwise cosine similarity matrix of the medoids.
+    """
+    def __init__(self, texts: np.ndarray):
+        self.embeddings_uuids = None
+        self.embeddings = None
+        self.similarity_matrix = None
+        self.medoids = None
+        self.labels = None
+        self.texts = texts
 
-# Cluster texts and get cluster centroids
-labels, centroids, medoids = apply_hdbscan(embeddings, eps=0.1, min_samples=5, metric=SimilarityMetric.cosine.value, min_cluster_size=5)
+    def run(self, eps: float = 0.1, min_samples: int = 5, min_cluster_size: int = 5):
+        # TODO: Get all text data from Artemis
+        texts = self.texts
 
-# Compute pairwise cosine similarities between medoids
-similarity_matrix = cosine_similarity(medoids)
-print("Similarity matrix between medoids:")
-print(similarity_matrix)
+        # TODO: get the uuids from the texts
+        # Generate embeddings for each text entry and collect UUIDs
+        embeddings_list = []
+        embeddings_uuids = []
+        for idx, t in enumerate(texts):
+            emb_id, emb = generate_embeddings_local(str(idx), t)
+            embeddings_list.append(emb)
+            embeddings_uuids.append(emb_id)
+
+        embeddings = np.vstack(embeddings_list)
+        embeddings_uuids = np.array(embeddings_uuids)
+
+        # Cluster texts and get cluster medoids
+        labels, centroids, medoids = apply_hdbscan(
+            embeddings,
+            eps=eps,
+            min_samples=min_samples,
+            metric=SimilarityMetric.cosine.value,
+            min_cluster_size=min_cluster_size
+        )
+
+        # Compute pairwise cosine similarities between medoids
+        similarity_matrix = cosine_similarity(medoids)
+
+        # Expose clusters and similarity matrix as instance variables
+        # TODO: Save to DB
+        self.embeddings = embeddings
+        self.embeddings_uuids = embeddings_uuids
+        self.labels = labels
+        self.medoids = medoids
+        self.similarity_matrix = similarity_matrix
+
+        # Return the similarity matrix
+        return self.similarity_matrix
+
