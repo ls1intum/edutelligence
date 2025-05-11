@@ -22,7 +22,7 @@ def load_postgres_env_vars_from_compose(file_path="./logos/docker-compose.yaml")
         "password": env.get("POSTGRES_PASSWORD"),
         "db": env.get("POSTGRES_DB"),
         "host": env.get("POSTGRES_HOST"),
-        "port": compose.get("services", {}).get("logos-db", {}).get("ports", ['5432:5432'])[0].split(":")[0]
+        "port": 5432    # compose.get("services", {}).get("logos-db", {}).get("ports", ['5432:5432'])[0].split(":")[0]
     }
 
 
@@ -329,8 +329,8 @@ class DBManager:
         return self.session.execute(sql, {"logos_key": logos_key}).fetchone() is not None
 
     def __enter__(self):
-        conf = load_postgres_env_vars_from_compose()
-        db_url = f"postgresql://{conf['user']}:{conf['password']}@{conf['host']}:{conf['port']}/{conf['db']}"
+        conf = load_postgres_env_vars_from_compose()    # {conf['port']}
+        db_url = f"postgresql://{conf['user']}:{conf['password']}@logos-db:5432/{conf['db']}"
         self.engine = create_engine(db_url)
         self.metadata = MetaData()
         self.metadata.reflect(bind=self.engine)

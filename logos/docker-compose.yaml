@@ -11,6 +11,8 @@ services:
       -   data_volume:/src/logos
     ports:
       - "8000:8000"
+    networks:
+      - internal
   logos-db:
     image: postgres:17
     restart: unless-stopped
@@ -27,7 +29,11 @@ services:
       retries: 10
     volumes:
       - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql
-    ports:
-      - "5432:5432"
+    networks:
+      - internal
 volumes:
   data_volume:
+
+networks:
+  internal:
+    driver: bridge
