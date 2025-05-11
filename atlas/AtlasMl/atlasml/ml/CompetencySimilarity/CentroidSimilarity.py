@@ -30,8 +30,9 @@ def generate_competency_relationship(medoids_emb, descriptions):
                    device=0)
     
     def entail_prob(p, h):
-        logits = nli(f"{p} </s></s> {h}")[0]['scores']
-        return logits[0]
+        logits = nli(f"{p} </s></s> {h}")
+        score = logits[0]['score']
+        return score
 
     S = cosine_similarity(medoids_emb)
 
