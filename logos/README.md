@@ -100,7 +100,7 @@ Add a new provider, the corresponding base url, the API key and authentication s
 "auth_format" is used in the header to format the authentication (e.g. "Bearer {}" for OpenAI)
 
 - **Endpoint**: `POST /logosdb/add_provider`
-- **Required Headers**:
+- **Required Data Fields**:
   - `logos_key` – Your Logos API key
   - `provider_name` – Name of the provider (e.g., `OpenAI`, `Azure`)
   - `base_url` – Base URL of the provider’s API
@@ -118,7 +118,7 @@ now what models you want to have access to over Logos. Therefore, define the mod
 (without the base url) and the name of the model.
 
 - **Endpoint**: `POST /logosdb/add_model`
-- **Required Headers**:
+- **Required Data Fields**:
   - `logos_key`
   - `name` – A model name (e.g., `gpt-4`)
   - `endpoint` – The relative path (without base URL)
@@ -136,7 +136,7 @@ If you don't know the ID of a process, you can find it out via the `get_process_
 supplying a corresponding key.
 
 - **Endpoint**: `POST /logosdb/add_profile`
-- **Required Headers**:
+- **Required Data Fields**:
   - `logos_key`
   - `profile_name`
   - `process_id` – The process that this profile is tied to
@@ -153,7 +153,7 @@ call the connect_process_provider-Endpoint with the profile ID and the correspon
 is obtained by calling the `get_api_id`-Endpoint for a given api-key. 
 
 - **Endpoint**: `POST /logosdb/connect_process_provider`
-- **Required Headers**:
+- **Required Data Fields**:
   - `logos_key`
   - `profile_id`
   - `api_id` – Retrieved via `GET /logosdb/get_api_id` using a provider's API key
@@ -173,7 +173,7 @@ Use the steps below to enable fine-grained model routing.
 Allow specific profiles to access specific models.
 
 - **Endpoint**: `POST /logosdb/connect_process_model`
-- **Required Headers**:
+- **Required Data Fields**:
   - `logos_key`
   - `profile_id`
   - `model_id`
@@ -185,7 +185,7 @@ Allow specific profiles to access specific models.
 Link models to their respective providers.
 
 - **Endpoint**: `POST /logosdb/connect_model_provider`
-- **Required Headers**:
+- **Required Data Fields**:
   - `logos_key`
   - `model_id`
   - `provider_id`
@@ -199,7 +199,7 @@ connect a stored api-key to that model. Otherwise, this is not necessary. Theref
 `connect_model_api`-Endpoint as in step 7.
 
 - **Endpoint**: `POST /logosdb/connect_model_api`
-- **Required Headers**:
+- **Required Data Fields**:
   - `logos_key`
   - `model_id`
   - `api_id`
@@ -209,4 +209,4 @@ connect a stored api-key to that model. Otherwise, this is not necessary. Theref
 ### 🎉 Done!
 
 You’re ready to use Logos for intelligent LLM request routing!  
-Just remember to include the `logos_key` in your request header — not as data.
+Just remember to include the `logos_key` in your request header — not as data as during the configuration.
