@@ -280,7 +280,7 @@ The details include the problem statement, grading instructions, and a sample so
 
 .. raw:: html
 
-    <iframe src="../_static/videos/exercise_details.mp4" allowfullscreen="1" frameborder="0" width="950" height="500">
+    <iframe src="https://live.rbg.tum.de/w/artemisintro/60247" allowfullscreen="1" frameborder="0" width="600" height="350">
         Read exercise details
     </iframe>
 
@@ -288,7 +288,7 @@ After understanding the exercise, the expert reads through the submission and th
 
 .. raw:: html
 
-    <iframe src="../_static/videos/read_submission.mp4" allowfullscreen="1" frameborder="0" width="950" height="500">
+    <iframe src="https://live.rbg.tum.de/w/artemisintro/60249" allowfullscreen="1" frameborder="0" width="600" height="350">
         Read submission
     </iframe>
 
@@ -296,7 +296,7 @@ The expert then evaluates the feedback using a 5-point Likert scale based on the
 
 .. raw:: html
 
-    <iframe src="../_static/videos/evaluation_metrics.mp4" allowfullscreen="1" frameborder="0" width="950" height="500">
+    <iframe src="https://live.rbg.tum.de/w/artemisintro/60246" allowfullscreen="1" frameborder="0" width="600" height="350">
         Evaluate metrics
     </iframe>
 
@@ -304,7 +304,7 @@ If the meaning of a metric is unclear, a more detailed explanation can be access
 
 .. raw:: html
 
-    <iframe src="../_static/videos/metrics_explanation.mp4" allowfullscreen="1" frameborder="0" width="950" height="500">
+    <iframe src="https://live.rbg.tum.de/w/artemisintro/60248" allowfullscreen="1" frameborder="0" width="600" height="350">
         Read metrics explanation
     </iframe>
 
@@ -313,6 +313,6 @@ When ready to take a break, the expert clicks on the *Continue Later* button, wh
 
 .. raw:: html
 
-    <iframe src="../_static/videos/continue_later.mp4" allowfullscreen="1" frameborder="0" width="950" height="500">
+    <iframe src="https://live.rbg.tum.de/w/artemisintro/60245" allowfullscreen="1" frameborder="0" width="600" height="350">
         Continue later
     </iframe>
