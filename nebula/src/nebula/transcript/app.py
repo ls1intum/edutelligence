@@ -7,28 +7,28 @@ import uuid
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
-from align_utils import align_slides_with_segments
-from config import Config
-from fastapi.middleware import Middleware
-from security import AuthMiddleware
-from health  import router as health_router
-from slide_utils import ask_gpt_for_slide_number
-from video_utils import download_video, extract_audio, extract_frames_at_timestamps
-from whisper_utils import transcribe_with_azure_whisper
+from nebula.security import AuthMiddleware, add_security_schema_to_app
+from nebula.health import create_health_router
+from nebula.transcript.align_utils import align_slides_with_segments
+from nebula.transcript.config import Config
+from nebula.transcript.slide_utils import ask_gpt_for_slide_number
+from nebula.transcript.video_utils import download_video, extract_audio, extract_frames_at_timestamps
+from nebula.transcript.whisper_utils import transcribe_with_azure_whisper
 
 token = Config.API_KEYS[0] if Config.API_KEYS else "fallback-token"
 
-middleware = [
-    Middleware(
-        AuthMiddleware,
-        api_key=token,
-        exclude_paths=["/health", "/docs", "/openapi.json"],
-        header_name="Authorization",
-    )
-]
+app = FastAPI()
 
-app = FastAPI(middleware=middleware)
-app.include_router(health_router)
+app.add_middleware(
+    AuthMiddleware,
+    api_key=token,
+    exclude_paths=["/health", "/docs", "/openapi.json"],
+    header_name="Authorization",
+)
+
+app.include_router(create_health_router(app_version="1.0.0"))
+
+add_security_schema_to_app(app, header_name="Authorization", exclude_paths=["/health", "/docs", "/openapi.json"])
 
 # Setup logging
 logging.basicConfig(level=getattr(logging, Config.LOG_LEVEL))

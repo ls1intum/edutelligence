@@ -3,8 +3,8 @@ import logging
 import requests
 import ffmpeg
 
-from audio_utils import split_audio_ffmpeg
-from llm_utils import load_llm_config
+from nebula.transcript.audio_utils import split_audio_ffmpeg
+from nebula.transcript.llm_utils import load_llm_config
 
 
 def get_audio_duration(audio_path: str) -> float:

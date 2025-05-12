@@ -1,4 +1,4 @@
-FROM python:3.9
+FROM python:3.9-slim
 
 # System dependencies
 RUN apt-get update && apt-get install -y \
@@ -11,14 +11,14 @@ RUN apt-get update && apt-get install -y \
 # Set working directory
 WORKDIR /app
 
-# Copy all project files
+# Copy project files
 COPY . /app
 
 # Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Expose Flask port
-EXPOSE 5000
+# Expose FastAPI default port
+EXPOSE 8000
 
-# Run the app
-CMD ["python", "app.py"]
+# Run FastAPI with Uvicorn (production-grade server)
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]

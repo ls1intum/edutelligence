@@ -1,5 +1,5 @@
 import logging
-from llm_utils import get_openai_client
+from nebula.transcript.llm_utils import get_openai_client
 
 
 def ask_gpt_for_slide_number(image_b64: str) -> int | None:
