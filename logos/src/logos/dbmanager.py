@@ -1,6 +1,7 @@
 """
 Central Manager for all Database-related actions for Logos
 """
+import os
 import secrets
 from typing import Dict, Any, Optional, Tuple, Union
 
@@ -143,16 +144,9 @@ class DBManager:
         :return: Initial API-Key
         """
         # Check if database already exists
+        if os.path.exists("./logos/db/.env"):
+            return {"error": "Database already initialized"}
         self.__exec_init()
-        try:
-            sql = text("""
-                        SELECT *
-                        FROM process
-                    """)
-            if self.session.execute(sql).fetchone() is not None:
-                return {"error": "Database already initialized"}
-        except sqlalchemy.exc.ProgrammingError:
-            pass
 
         self.create_all()
         # Create user
@@ -160,6 +154,9 @@ class DBManager:
         # Create process
         api_key = generate_logos_api_key("root")
         _ = self.insert("process", {"logos_key": api_key, "user_id": user_id, "name": "root"})
+        with open("./logos/db/.env", "w") as file:
+            file.write("Setup Completed")
+            file.write("\n")
         return {"result": f"Created root user. ID: {user_id}", "api_key": api_key}
 
     def add_provider(self, logos_key: str, provider_name: str, base_url: str,
@@ -184,6 +181,7 @@ class DBManager:
             "pk": pk,
             "process_id": int(process_id)
         })
+        self.session.commit()
         return {"result": f"Added profile. Profile-ID: {pk}"}, 200
 
     def add_model(self, logos_key: str, name: str, endpoint: str):
@@ -210,6 +208,7 @@ class DBManager:
             "profile_id": int(profile_id),
             "api_id": int(api_id)
         })
+        self.session.commit()
         return {"result": f"Added connection to api."}, 200
 
     def connect_process_model(self, logos_key: str, profile_id: int, model_id: int):
@@ -245,6 +244,7 @@ class DBManager:
             "model_id": int(model_id),
             "api_id": int(api_id)
         })
+        self.session.commit()
         return {"result": f"Added api-connection to model."}, 200
 
     def get_process_id(self, logos_key: str):

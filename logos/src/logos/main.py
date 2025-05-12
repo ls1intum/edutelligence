@@ -100,7 +100,6 @@ async def logos_service(path: str, request: Request):
         return {"error": "Missing Authorization Header"}, 401
     try:
         key = request.headers["logos_key"]
-
         with DBManager() as db:
             # Get an api key for a llm. This is the starting point for classification later
             llm_info = db.fetch_llm_key(key)
@@ -147,9 +146,11 @@ async def logos_service(path: str, request: Request):
                 if not base_url.endswith("/") and not endpoint.startswith("/"):
                     forward_url = f"{base_url}/{endpoint}"
                 elif base_url.endswith("/") and endpoint.startswith("/"):
-                    forward_url = f"{base_url.replace("/", "", 1)}/{endpoint}"
+                    forward_url = f"{base_url[:-1]}/{endpoint[1:]}"
                 else:
                     forward_url = f"{base_url}{endpoint}"
+
+                # forward_url = forward_url.replace("///", "/")
                 auth_name = llm_info["auth_name"]
                 auth_format = llm_info["auth_format"].format(api_key)
                 headers = {
