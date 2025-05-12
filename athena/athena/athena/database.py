@@ -1,12 +1,7 @@
 import os
 from contextlib import contextmanager
-from pathlib import Path
-
 from sqlalchemy import create_engine
 from sqlalchemy.orm import declarative_base, sessionmaker
-
-from alembic.config import Config as AlembicConfig
-from alembic import command
 
 from athena import env
 

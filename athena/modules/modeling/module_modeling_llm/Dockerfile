@@ -26,4 +26,4 @@ RUN poetry config virtualenvs.create true \
 # Project files
 COPY . ./
 
-CMD ["poetry", "run", "python", "-m", "module_*"]
+CMD poetry run python -m module_*

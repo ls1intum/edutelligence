@@ -44,12 +44,6 @@ class FastAPIWithStart(FastAPI):
 
         conf = get_module_config()
 
-        if not env.PRODUCTION:
-            logger.debug("Dev mode: Running DB migrations")
-            from athena.database import run_migrations
-
-            run_migrations()
-
         if env.PRODUCTION:
             logger.info("Running in PRODUCTION mode")
             uvicorn.run(

@@ -1,0 +1,43 @@
+version: "3.8"
+
+services:
+  postgres:
+    image: postgres:15
+    container_name: athena-postgres
+    environment:
+      POSTGRES_USER: athena
+      POSTGRES_PASSWORD: athena
+      POSTGRES_DB: athena
+      PGDATA: /var/lib/postgresql/data/pgdata
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U athena"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  athena:
+    environment:
+      - DATABASE_URL=postgresql+psycopg2://athena:athena@postgres:5432/athena
+
+  assessment_module_manager:
+    environment:
+      - DATABASE_URL=postgresql+psycopg2://athena:athena@postgres:5432/athena
+      - PRODUCTION=1                 
+      - SECRET=changeme              
+      - LMS_LOCAL_SECRET=changeme
+
+  module_modeling_llm:
+    environment:
+      - DATABASE_URL=postgresql+psycopg2://athena:athena@postgres:5432/athena
+      - SECRET=changeme
+      - PRODUCTION=1
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
