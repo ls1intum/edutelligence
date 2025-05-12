@@ -18,6 +18,10 @@ class AddProfileRequest(LogosKeyModel):
     process_id: int
 
 
+class GetRole(LogosKeyModel):
+    pass
+
+
 class ConnectProcessProviderRequest(LogosKeyModel):
     profile_id: int
     api_id: int

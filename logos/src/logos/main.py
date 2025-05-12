@@ -84,6 +84,18 @@ async def get_api_id(data: GetAPIIdRequest):
         return db.get_api_id(data.logos_key, data.api_key)
 
 
+@app.post("/logosdb/get_role")
+async def get_role(data: GetRole):
+    with DBManager() as db:
+        return db.get_role(**data.dict())
+
+
+@app.post("/logosdb/export")
+async def export(data: LogosKeyModel):
+    with DBManager() as db:
+        return db.export(**data.dict())
+
+
 @app.api_route("/v1/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
 async def logos_service(path: str, request: Request):
     """

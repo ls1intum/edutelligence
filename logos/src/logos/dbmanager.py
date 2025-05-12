@@ -1,6 +1,7 @@
 """
 Central Manager for all Database-related actions for Logos
 """
+import json
 import os
 import secrets
 from typing import Dict, Any, Optional, Tuple, Union
@@ -196,6 +197,21 @@ class DBManager:
         pk = self.insert("services", {"name": name})
         return {"result": f"Created Service. Service-ID: {pk}"}, 200
 
+    def get_role(self, logos_key: str):
+        sql = text("""
+            SELECT *
+            FROM process, users
+            WHERE logos_key = :logos_key
+                and process.user_id = users.id
+        """)
+        entity = self.session.execute(sql, {"logos_key": logos_key}).fetchone() is not None
+        admin = self.__check_authorization(logos_key)
+        if admin:
+            return {"role": "root"}
+        elif entity:
+            return {"role": "entity"}
+        return {"error": "unknown key"}
+
     def connect_process_provider(self, logos_key: str, profile_id: int, api_id: int):
         if not self.__check_authorization(logos_key):
             return {"error": "Database changes only allowed for root user."}, 500
@@ -317,6 +333,30 @@ class DBManager:
         """)
         result = self.session.execute(sql, {"model_id": int(model_id)}).fetchone()
         return {"name": result.name, "endpoint": result.endpoint}
+
+    def export(self, logos_key: str):
+        if not self.__check_authorization(logos_key):
+            return {"error": "Database exports only allowed for root user."}, 403
+
+        data = {}
+        for table in Base.metadata.sorted_tables:
+            rows = self.session.execute(table.select()).fetchall()
+            data[table.name] = [dict(row._mapping) for row in rows]
+
+        return {"result": data}, 200
+
+    def import_from_json(self, logos_key: str, input_path="export.json"):
+        if not self.__check_authorization(logos_key):
+            return {"error": "Database changes only allowed for root user."}, 500
+        with open(input_path, "r") as f:
+            data = json.load(f)
+        for table_name, rows in data.items():
+            table = Base.metadata.tables.get(table_name)
+            if table is not None:
+                self.session.execute(table.delete())  # Optional: leeren
+                self.session.execute(table.insert(), rows)
+        self.session.commit()
+        return {"result": f"Imported data from {input_path}"}, 200
 
     def __check_authorization(self, logos_key: str):
         sql = text("""
