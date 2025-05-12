@@ -4,7 +4,6 @@ from enum import Enum
 from typing import Dict, List
 from langchain_community.chat_models import ChatOllama
 from athena.logger import logger
-from __future__ import annotations
 
 OLLAMA_PREFIX = "ollama_"
 
