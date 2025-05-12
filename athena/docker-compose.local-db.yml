@@ -39,5 +39,15 @@ services:
       postgres:
         condition: service_healthy
 
+  playground:
+    container_name: athena-playground
+    image: ls1tum/athena_playground:develop
+    ports:
+      - "5173:5173"
+    environment:
+      - VITE_ASM_BASE_URL=http://assessment_module_manager:5100
+    depends_on:
+      - assessment_module_manager
+
 volumes:
   postgres_data:
