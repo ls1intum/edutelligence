@@ -34,8 +34,11 @@ class Learning:
         return f"Learning({self.title}, {self.content}, {self.reference})"
 
     def __eq__(self, other):
-        return (
-            self.title == other.title
-            and self.content == other.content
-            and self.reference == other.reference
-        )
+        if self.id:
+            return self.id == other.id
+        else:
+            return (
+                self.title == other.title
+                and self.content == other.content
+                and self.reference == other.reference
+            )

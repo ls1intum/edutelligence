@@ -1,4 +1,6 @@
+import abc
 from abc import ABC
+from typing import Sequence
 from uuid import UUID
 
 from memiris.domain.learning import Learning
@@ -10,4 +12,8 @@ class LearningRepository(BaseRepository[Learning, UUID], ABC):
     LearningRepository is an abstract class that defines the database operations for Learning objects.
     """
 
-    pass
+    @abc.abstractmethod
+    def find_similar(
+        self, tenant: str, vector_name: str, vector: Sequence[float], count: int
+    ) -> list[Learning]:
+        pass

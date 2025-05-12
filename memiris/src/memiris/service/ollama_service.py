@@ -23,8 +23,12 @@ def is_loaded(model: str) -> bool:
 
 
 def load_model(model: str, duration: str = "5m") -> None:
+    print(f"Loading model {model} for {duration}...")
     ollama_client.chat(model, messages=[], keep_alive=duration)
+    print(f"Model {model} loaded.")
 
 
 def unload_model(model: str) -> None:
+    print(f"Unloading model {model}...")
     ollama_client.chat(model, messages=[], keep_alive=0)
+    print(f"Model {model} unloaded.")

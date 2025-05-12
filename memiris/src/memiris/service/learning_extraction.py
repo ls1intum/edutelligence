@@ -6,9 +6,12 @@ from ollama import Message
 from pydantic import TypeAdapter
 
 from memiris.domain.learning import Learning
-from memiris.dto.learning_dto import LearningDto
+from memiris.dto.learning_creation_dto import LearningCreationDto
 from memiris.service.ollama_service import ollama_client
-from memiris.util.learning_util import dto_to_learning, learning_to_dto
+from memiris.util.learning_util import (
+    creation_dto_to_learning,
+    learning_to_creation_dto,
+)
 
 
 class LearningExtractor:
@@ -45,7 +48,7 @@ class LearningExtractor:
         """
         Extract learning information from the given data.
         """
-        learning_array_type_adapter = TypeAdapter(List[LearningDto])
+        learning_array_type_adapter = TypeAdapter(List[LearningCreationDto])
         learning_json_dict = learning_array_type_adapter.json_schema()
 
         learning_json_schema = json.dumps(learning_json_dict, indent=2)
@@ -55,7 +58,7 @@ class LearningExtractor:
             learning_focus=self.focus,
             previous_learnings=(
                 [
-                    learning_to_dto(learning).model_dump()
+                    learning_to_creation_dto(learning).model_dump()
                     for learning in previous_learnings
                 ]
                 if previous_learnings
@@ -82,7 +85,7 @@ class LearningExtractor:
                     response.message.content
                 )
                 return [
-                    dto_to_learning(learning_dto, reference=None)
+                    creation_dto_to_learning(learning_dto, reference=None)
                     for learning_dto in learning_dtos
                 ]
             except Exception as e:

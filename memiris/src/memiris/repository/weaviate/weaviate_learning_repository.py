@@ -1,3 +1,4 @@
+from typing import Sequence
 from uuid import UUID
 
 from weaviate import WeaviateClient
@@ -86,7 +87,7 @@ class WeaviateLearningRepository(LearningRepository):
         """Find a Learning by its ID."""
         try:
             result = self.collection.with_tenant(tenant).query.fetch_object_by_id(
-                uuid=entity_id, include_vector=False
+                uuid=entity_id, include_vector=True
             )
 
             if not result:
@@ -98,6 +99,7 @@ class WeaviateLearningRepository(LearningRepository):
                 title=str(result.properties["title"]),
                 content=str(result.properties["content"]),
                 reference=str(result.properties["reference"]),
+                vectors=result.vector,  # type: ignore
             )
         except Exception as e:
             raise ValueError(f"Error retrieving Learning with id {entity_id}") from e
@@ -108,3 +110,29 @@ class WeaviateLearningRepository(LearningRepository):
             self.collection.with_tenant(tenant).data.delete_by_id(entity_id)
         except Exception as e:
             raise ValueError(f"Error deleting Learning with id {entity_id}") from e
+
+    def find_similar(
+        self, tenant: str, vector_name: str, vector: Sequence[float], count: int
+    ) -> list[Learning]:
+        try:
+            result = self.collection.with_tenant(tenant).query.near_vector(
+                near_vector=vector,
+                target_vector=vector_name,
+                limit=count,
+            )
+
+            if not result:
+                return []
+
+            # Create Learning objects
+            return [
+                Learning(
+                    uid=item.uuid,
+                    title=str(item.properties["title"]),
+                    content=str(item.properties["content"]),
+                    reference=str(item.properties["reference"]),
+                )
+                for item in result.objects
+            ]
+        except Exception as e:
+            raise ValueError("Error finding similar Learning objects") from e

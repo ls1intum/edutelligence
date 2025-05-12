@@ -6,9 +6,12 @@ from ollama import Message
 from pydantic import TypeAdapter
 
 from memiris.domain.learning import Learning
-from memiris.dto.learning_dto import LearningDto
+from memiris.dto.learning_creation_dto import LearningCreationDto
 from memiris.service.ollama_service import ollama_client
-from memiris.util.learning_util import dto_to_learning, learning_to_dto
+from memiris.util.learning_util import (
+    creation_dto_to_learning,
+    learning_to_creation_dto,
+)
 
 
 class LearningDeduplicator:
@@ -38,9 +41,11 @@ class LearningDeduplicator:
     def deduplicate(self, learnings: List[Learning], **kwargs) -> List[Learning]:
         """
         Deduplicate the given learnings using the LLM.
+        NOTE: This is currently only meant to be used immediately after the learning extraction.
+        If it is used afterward, it will lose the id and reference of the learnings.
         """
 
-        learning_array_type_adapter = TypeAdapter(List[LearningDto])
+        learning_array_type_adapter = TypeAdapter(List[LearningCreationDto])
         learning_json_dict = learning_array_type_adapter.json_schema()
 
         learning_json_schema = json.dumps(learning_json_dict, indent=2)
@@ -56,7 +61,7 @@ class LearningDeduplicator:
                 role="user",
                 content=str(
                     learning_array_type_adapter.dump_json(
-                        [learning_to_dto(learning) for learning in learnings]
+                        [learning_to_creation_dto(learning) for learning in learnings]
                     )
                 ),
             ),
@@ -75,7 +80,7 @@ class LearningDeduplicator:
                     response.message.content
                 )
                 return [
-                    dto_to_learning(learning_dto, reference=None)
+                    creation_dto_to_learning(learning_dto, reference=None)
                     for learning_dto in learning_dtos
                 ]
             except Exception as e:
