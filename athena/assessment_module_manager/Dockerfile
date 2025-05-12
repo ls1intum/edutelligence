@@ -25,8 +25,12 @@ RUN poetry config virtualenvs.create true \
 # Project files
 COPY . ./
 
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+
 # Use modules configuration file for docker
 RUN mv ./modules.docker.ini ./modules.ini
 
 # poetry scripts don't work here
-CMD poetry run python -m assessment_module_manager
+ENTRYPOINT ["docker-entrypoint.sh"]
+CMD ["poetry", "run", "python", "-m", "assessment_module_manager"]

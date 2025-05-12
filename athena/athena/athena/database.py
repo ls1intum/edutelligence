@@ -33,11 +33,3 @@ def get_db():
         yield db
     finally:
         db.close()
-
-
-_ALEMBIC_CFG = AlembicConfig(str(Path(__file__).parent.parent / "alembic.ini"))
-
-
-def run_migrations() -> None:
-    """Upgrade the SQL schema to the latest revision."""
-    command.upgrade(_ALEMBIC_CFG, "head")
