@@ -173,7 +173,7 @@ class TutorSuggestionAgentPipeline(Pipeline):
 
         self.callback.done(
             "Generated tutor suggestions",
-            final_result=text_exercise_result,
+            tutor_suggestion=text_exercise_result,
             tokens=self.tokens,
         )
 
@@ -198,6 +198,6 @@ class TutorSuggestionAgentPipeline(Pipeline):
 
         self.callback.done(
             "Generated tutor suggestions",
-            final_result=programming_exercise_result,
+            tutor_suggestion=programming_exercise_result,
             tokens=self.tokens,
         )
