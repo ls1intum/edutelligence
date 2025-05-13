@@ -10,5 +10,6 @@ class TutorSuggestionStatusUpdateDTO(StatusUpdateDTO):
     - suggestion: The suggestion generated.
     - result: Generated chat answer.
     """
+
     suggestion: Optional[str] = None
     result: Optional[str] = None

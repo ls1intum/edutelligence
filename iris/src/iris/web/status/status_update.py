@@ -434,8 +434,7 @@ class TutorSuggestionCallback(StatusCallback):
         suggestions: Optional[List[str]] = None,
         tokens: Optional[List[TokenUsageDTO]] = None,
         next_stage_message: Optional[str] = None,
-        start_next_stage: bool = True
+        start_next_stage: bool = True,
     ):
         self.status.suggestion = tutor_suggestion
         super().done(message=message, final_result=final_result, tokens=tokens)
-
