@@ -14,7 +14,7 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U athena"]
+      test: [ "CMD-SHELL", "pg_isready -U athena" ]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -24,30 +24,24 @@ services:
       - DATABASE_URL=postgresql+psycopg2://athena:athena@postgres:5432/athena
 
   assessment_module_manager:
+    env_file:
+      - ${ATHENA_ENV_DIR:-./env_example}/assessment_module_manager.env
     environment:
       - DATABASE_URL=postgresql+psycopg2://athena:athena@postgres:5432/athena
-      - PRODUCTION=1                 
-      - SECRET=changeme              
-      - LMS_LOCAL_SECRET=changeme
+      - PRODUCTION=1
+      - MODULE_MODELING_LLM_SECRET=dev-modeling-secret
+      - LMS_PLAYGROUND_SECRET=dev-playground-secret
 
   module_modeling_llm:
+    env_file:
+      - ${ATHENA_ENV_DIR:-./env_example}/module_modeling_llm.env
     environment:
       - DATABASE_URL=postgresql+psycopg2://athena:athena@postgres:5432/athena
-      - SECRET=changeme
       - PRODUCTION=1
+      - SECRET=dev-modeling-secret
     depends_on:
       postgres:
         condition: service_healthy
-
-  playground:
-    container_name: athena-playground
-    image: ls1tum/athena_playground:develop
-    ports:
-      - "5173:5173"
-    environment:
-      - VITE_ASM_BASE_URL=http://assessment_module_manager:5100
-    depends_on:
-      - assessment_module_manager
 
 volumes:
   postgres_data:

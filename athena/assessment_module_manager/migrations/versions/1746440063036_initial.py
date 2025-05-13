@@ -45,7 +45,6 @@ def upgrade() -> None:
             BigIntAI,
             sa.ForeignKey("exercise.id", ondelete="CASCADE"),
             nullable=False,
-            unique=True,
             index=True,
         ),
         sa.Column("instructions_hash", sa.String(), nullable=False),
@@ -145,7 +144,10 @@ def upgrade() -> None:
         sa.Column("is_graded", sa.Boolean(), nullable=True),
         sa.Column("meta", sa.JSON(), nullable=False),
         sa.Column(
-            "is_suggestion", sa.Boolean(), server_default=sa.text("0"), nullable=False
+            "is_suggestion",
+            sa.Boolean(),
+            server_default=sa.false(),
+            nullable=False,
         ),
         sa.UniqueConstraint("lms_id"),
     ]
@@ -160,14 +162,12 @@ def upgrade() -> None:
             BigIntAI,
             sa.ForeignKey("modeling_exercises.id", ondelete="CASCADE"),
             nullable=False,
-            index=True,
         ),
         sa.Column(
             "submission_id",
             BigIntAI,
             sa.ForeignKey("modeling_submissions.id", ondelete="CASCADE"),
             nullable=False,
-            index=True,
         ),
     )
 
