@@ -45,8 +45,8 @@ CREATE TABLE providers (
     id SERIAL PRIMARY KEY,
     name TEXT NOT NULL,
     base_url TEXT NOT NULL,
-    auth_name TEXT,
-    auth_format TEXT
+    auth_name TEXT NOT NULL,
+    auth_format TEXT NOT NULL
 );
 
 CREATE TYPE threshold_enum as ENUM ('LOCAL', 'CLOUD_IN_EU_BY_US_PROVIDER', 'CLOUD_NOT_IN_EU_BY_US_PROVIDER', 'CLOUD_IN_EU_BY_EU_PROVIDER');

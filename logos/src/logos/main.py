@@ -142,12 +142,12 @@ async def logos_service(path: str, request: Request):
                     )
 
                     headers = {
-                        "api-key": api_key,
+                        "api-key": request.headers["api_key"],
                         "Content-Type": "application/json"
                     }
                 else:
                     headers = {
-                        "Authorization": f"Bearer {api_key}",
+                        "Authorization": f"Bearer {request.headers["api_key"]}",
                         "Content-Type": "application/json"
                     }
                     forward_url = f"{base_url}/{path}"
