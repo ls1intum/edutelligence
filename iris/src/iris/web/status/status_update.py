@@ -425,3 +425,17 @@ class TutorSuggestionCallback(StatusCallback):
             stages[stage],
             stage,
         )
+
+    def done(
+        self,
+        message: Optional[str] = None,
+        final_result: Optional[str] = None,
+        tutor_suggestion: Optional[str] = None,
+        suggestions: Optional[List[str]] = None,
+        tokens: Optional[List[TokenUsageDTO]] = None,
+        next_stage_message: Optional[str] = None,
+        start_next_stage: bool = True
+    ):
+        self.status.suggestion = tutor_suggestion
+        super().done(message=message, final_result=final_result, tokens=tokens)
+
