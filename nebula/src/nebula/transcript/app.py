@@ -84,7 +84,7 @@ async def start_transcribe(req: TranscribeRequestDTO):
         # Return structured response
         return TranscriptionResponseDTO(
             lectureUnitId=req.lectureUnitId,
-            language=transcription["language"],
+            language=transcription.get("language", "en"),
             segments=segments
         )
 
