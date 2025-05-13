@@ -21,7 +21,7 @@ It uses **Whisper** locally for audio transcription and **GPT-4o Vision** to det
 git clone https://github.com/ls1intum/edutelligence.git
 cd edutelligence
 git checkout feature/transcript
-cd nebula/transcript
+cd nebula/src/nebula/transcript
 ```
 
 ```bash
@@ -31,22 +31,43 @@ source .venv/bin/activate  # on Unix/Mac
 
 pip install -r requirements.txt
 ```
+## Environment Variables Setup
+Windows-
+Under Nebula/src
+$env:APPLICATION_YML_PATH = "../application_local.nebula.yml"
+$env:LLM_CONFIG_PATH = "../llm_config.nebula.yml"
+
+Unix/macOS -
+export APPLICATION_YML_PATH=../application_local.nebula.yml
+export LLM_CONFIG_PATH=../llm_config.nebula.yml
+
 
 Create `llm_config.nebula.yml`:
+Copy llm_config.example.yml and add your api key
 
 ```yaml
-- id: azure-gpt-4-omni
+- id: azure-gpt-4o
   type: azure_chat
-  api_key: <your-api-key>
+  api_key: <your-gpt-api-key>
   api_version: 2024-02-15-preview
   azure_deployment: gpt-4o
   endpoint: https://<your-endpoint>.openai.azure.com/
+
+- id: azure-whisper
+  type: azure_whisper
+  api_key: <your-whisper-api-key>
+  api_version: 2024-06-01
+  azure_deployment: whisper
+  endpoint: https://<your-endpoint>.openai.azure.com/
+
 ```
+Create `application_local.nebula.yml`:
+Copy application_local.example.nebula.yml
 
 Run the FastAPI app:
 
 ```bash
-uvicorn app:app --reload --host 0.0.0.0 --port 5000
+uvicorn nebula.transcript.app:app --reload --port 5000
 ```
 
 ---
@@ -57,9 +78,10 @@ uvicorn app:app --reload --host 0.0.0.0 --port 5000
 cd src/transcript/docker
 docker compose up --build
 ```
+Make sure the following files are present or mounted in the container:
 
-Ensure `llm_config.nebula.yml` is available in the container.
-
+`llm_config.nebula.yml`
+`application_local.nebula.yml`
 ---
 
 ## 🚀 API Usage
@@ -78,7 +100,7 @@ Ensure `llm_config.nebula.yml` is available in the container.
 
 ## 🎓 Getting a TUM-Live `.m3u8` Link
 
-1. Open [https://live.rbg.tum.de](https://live.rbg.tum.de)
+1. Open [https://live.rbg.tum.de](https://live.rbg.tum.de/w/WiSe24ItP/55921 only 12 min)
 2. Open DevTools → Network tab → Filter by `.m3u8`
 3. Copy full link (including `jwt`)
 4. Use in `videoUrl`
@@ -102,11 +124,13 @@ nebula/
 │       ├── app.py
 │       ├── slide_utils.py
 │       ├── whisper_utils.py
-│       ├── config.py
 │       ├── llm_utils.py
+│       ├── config.py
 │       └── docker/
 │           └── docker-compose.yml
+├── application_local.nebula.yml
 ├── llm_config.nebula.yml
+└── temp/
 ```
 
 ---
