@@ -195,7 +195,9 @@ class DBManager:
         if not self.__check_authorization(logos_key):
             return {"error": "Database changes only allowed for root user."}, 500
         pk = self.insert("services", {"name": name})
-        return {"result": f"Created Service. Service-ID: {pk}"}, 200
+        api_key = generate_logos_api_key(name)
+        ppk = self.insert("process", {"logos_key": api_key, "service_id": pk, "name": name})
+        return {"result": f"Created Service. Service-ID: {pk}, Process-ID: {ppk}", "logos-key": {api_key}}, 200
 
     def get_role(self, logos_key: str):
         sql = text("""

@@ -126,7 +126,7 @@ async def logos_service(path: str, request: Request):
             # Check for api-key
             model_api_id = db.get_model_from_api(key, llm_info["api_id"])
             model_provider_id = db.get_model_from_provider(key, llm_info["provider_id"])
-            if model_api_id is None and model_provider_id is None:
+            if model_api_id is None and model_provider_id is None or "proxy" in request.headers:
                 # Model not in the database, change to normal proxy
                 if provider == "azure":
                     if "deployment_name" not in request.headers:
