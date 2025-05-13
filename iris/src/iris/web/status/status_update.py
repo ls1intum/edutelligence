@@ -268,7 +268,7 @@ class ChatGPTWrapperStatusCallback(StatusCallback):
 
 
 class TextExerciseChatCallback(StatusCallback):
-    """Status callback for ChatGPT wrapper pipelines."""
+    """Status callback for text exercise chat pipelines."""
     def __init__(
         self,
         run_id: str,
@@ -300,7 +300,7 @@ class TextExerciseChatCallback(StatusCallback):
 
 
 class CompetencyExtractionCallback(StatusCallback):
-    """Status callback for text exercise chat pipelines."""
+    """Status callback for competency extraction pipelines."""
     def __init__(
         self,
         run_id: str,
