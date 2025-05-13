@@ -1,6 +1,8 @@
-from typing import Optional, List
-
+import logging
 from abc import ABC
+from typing import Optional, List
+import requests
+
 from sentry_sdk import capture_exception, capture_message
 from iris.common.token_usage_dto import TokenUsageDTO
 from iris.domain.chat.course_chat.course_chat_status_update_dto import (
@@ -18,14 +20,15 @@ from iris.domain.status.inconsistency_check_status_update_dto import (
 from iris.domain.status.lecture_chat_status_update_dto import (
     LectureChatStatusUpdateDTO,
 )
+from iris.domain.status.rewriting_status_update_dto import (
+    RewritingStatusUpdateDTO,
+)
 from iris.domain.status.stage_dto import StageDTO
 from iris.domain.status.stage_state_dto import StageStateEnum
 from iris.domain.status.status_update_dto import StatusUpdateDTO
 from iris.domain.status.text_exercise_chat_status_update_dto import (
     TextExerciseChatStatusUpdateDTO,
 )
-
-import logging
 
 logger = logging.getLogger(__name__)
 
@@ -222,10 +225,11 @@ class CourseChatStatusCallback(StatusCallback):
 
 
 class ExerciseChatStatusCallback(StatusCallback):
+    """Status callback for exercise chat pipelines."""
     def __init__(
         self, run_id: str, base_url: str, initial_stages: List[StageDTO] = None
     ):
-        url = f"{base_url}/api/public/pyris/pipelines/tutor-chat/runs/{run_id}/status"
+        url = f"{base_url}/{self.api_url}/tutor-chat/runs/{run_id}/status"
         current_stage_index = len(initial_stages) if initial_stages else 0
         stages = initial_stages or []
         stages += [
@@ -244,10 +248,11 @@ class ExerciseChatStatusCallback(StatusCallback):
 
 
 class ChatGPTWrapperStatusCallback(StatusCallback):
+    """Status callback for ChatGPT wrapper pipelines."""
     def __init__(
         self, run_id: str, base_url: str, initial_stages: List[StageDTO] = None
     ):
-        url = f"{base_url}/api/public/pyris/pipelines/tutor-chat/runs/{run_id}/status"
+        url = f"{base_url}/{self.api_url}/tutor-chat/runs/{run_id}/status"
         current_stage_index = len(initial_stages) if initial_stages else 0
         stages = initial_stages or []
         stages += [
@@ -263,13 +268,14 @@ class ChatGPTWrapperStatusCallback(StatusCallback):
 
 
 class TextExerciseChatCallback(StatusCallback):
+    """Status callback for ChatGPT wrapper pipelines."""
     def __init__(
         self,
         run_id: str,
         base_url: str,
         initial_stages: List[StageDTO],
     ):
-        url = f"{base_url}/api/public/pyris/pipelines/text-exercise-chat/runs/{run_id}/status"
+        url = f"{base_url}/{self.api_url}/text-exercise-chat/runs/{run_id}/status"
         stages = initial_stages or []
         stage = len(stages)
         stages += [
@@ -294,13 +300,14 @@ class TextExerciseChatCallback(StatusCallback):
 
 
 class CompetencyExtractionCallback(StatusCallback):
+    """Status callback for text exercise chat pipelines."""
     def __init__(
         self,
         run_id: str,
         base_url: str,
         initial_stages: List[StageDTO],
     ):
-        url = f"{base_url}/api/public/pyris/pipelines/competency-extraction/runs/{run_id}/status"
+        url = f"{base_url}/{self.api_url}/competency-extraction/runs/{run_id}/status"
         stages = initial_stages or []
         stages.append(
             StageDTO(
@@ -315,13 +322,14 @@ class CompetencyExtractionCallback(StatusCallback):
 
 
 class RewritingCallback(StatusCallback):
+    """Status callback for rewriting pipelines."""
     def __init__(
         self,
         run_id: str,
         base_url: str,
         initial_stages: List[StageDTO],
     ):
-        url = f"{base_url}/api/public/pyris/pipelines/rewriting/runs/{run_id}/status"
+        url = f"{base_url}/{self.api_url}/rewriting/runs/{run_id}/status"
         stages = initial_stages or []
         stages.append(
             StageDTO(
@@ -336,13 +344,14 @@ class RewritingCallback(StatusCallback):
 
 
 class InconsistencyCheckCallback(StatusCallback):
+    """Status callback for inconsistency check pipelines."""
     def __init__(
         self,
         run_id: str,
         base_url: str,
         initial_stages: List[StageDTO],
     ):
-        url = f"{base_url}/api/public/pyris/pipelines/inconsistency-check/runs/{run_id}/status"
+        url = f"{base_url}/{self.api_url}/inconsistency-check/runs/{run_id}/status"
         stages = initial_stages or []
         stages.append(
             StageDTO(
@@ -357,13 +366,14 @@ class InconsistencyCheckCallback(StatusCallback):
 
 
 class LectureChatCallback(StatusCallback):
+    """Status callback for lecture chat pipelines."""
     def __init__(
         self,
         run_id: str,
         base_url: str,
         initial_stages: List[StageDTO],
     ):
-        url = f"{base_url}/api/public/pyris/pipelines/lecture-chat/runs/{run_id}/status"
+        url = f"{base_url}/{self.api_url}/lecture-chat/runs/{run_id}/status"
         stages = initial_stages or []
         stage = len(stages)
         stages += [

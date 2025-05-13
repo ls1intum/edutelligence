@@ -5,8 +5,7 @@ from langsmith import traceable
 from weaviate import WeaviateClient
 from weaviate.collections.classes.filters import Filter
 
-
-
+from ..common.pipeline_enum import PipelineEnum
 from ..common.pyris_message import PyrisMessage
 from ..pipeline.prompts.faq_retrieval_prompts import (
     faq_retriever_initial_prompt,
