@@ -5,7 +5,6 @@ import traceback
 import uuid
 
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
 
 from nebula.security import AuthMiddleware, add_security_schema_to_app
 from nebula.health import create_health_router

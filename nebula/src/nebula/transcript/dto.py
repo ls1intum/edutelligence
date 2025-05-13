@@ -2,21 +2,21 @@ from pydantic import BaseModel
 from typing import List
 
 
-class TranscribeRequest(BaseModel):
+class TranscribeRequestDTO(BaseModel):
     videoUrl: str
     lectureId: int
     lectureUnitId: int
 
 
-class TranscriptionSegment(BaseModel):
+class TranscriptionSegmentDTO(BaseModel):
     startTime: float
     endTime: float
     text: str
     slideNumber: int
 
 
-class TranscriptionResponse(BaseModel):
+class TranscriptionResponseDTO(BaseModel):
     lectureId: int
     lectureUnitId: int
     language: str
-    segments: List[TranscriptionSegment]
+    segments: List[TranscriptionSegmentDTO]
