@@ -98,7 +98,7 @@ class TutorSuggestionPipeline(Pipeline):
             post_summary = None
         self.callback.done(
             "Generated tutor suggestions",
-            final_result=post_summary,
+            tutor_suggestion=post_summary,
             tokens=self.tokens,
         )
 
