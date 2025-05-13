@@ -4,7 +4,6 @@ from typing import List
 
 class TranscribeRequestDTO(BaseModel):
     videoUrl: str
-    lectureId: int
     lectureUnitId: int
 
 
@@ -16,7 +15,6 @@ class TranscriptionSegmentDTO(BaseModel):
 
 
 class TranscriptionResponseDTO(BaseModel):
-    lectureId: int
     lectureUnitId: int
     language: str
     segments: List[TranscriptionSegmentDTO]
