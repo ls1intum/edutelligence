@@ -3,13 +3,10 @@ from typing import List
 
 from langsmith import traceable
 from weaviate import WeaviateClient
-
-from iris.common.pipeline_enum import PipelineEnum
-
 from weaviate.collections.classes.filters import Filter
 
-from app.common.PipelineEnum import PipelineEnum
-from .basic_retrieval import BaseRetrieval, merge_retrieved_chunks
+
+
 from ..common.pyris_message import PyrisMessage
 from ..pipeline.prompts.faq_retrieval_prompts import (
     faq_retriever_initial_prompt,

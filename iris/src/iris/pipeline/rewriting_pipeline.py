@@ -6,17 +6,24 @@ from langchain_core.prompts import (
     ChatPromptTemplate,
 )
 
-from app.common.PipelineEnum import PipelineEnum
-from app.common.pyris_message import PyrisMessage, IrisMessageRole
-from app.domain.data.text_message_content_dto import TextMessageContentDTO
-from app.domain.rewriting_pipeline_execution_dto import RewritingPipelineExecutionDTO
-from app.llm import CapabilityRequestHandler, RequirementList, CompletionArguments
-from app.pipeline import Pipeline
-from app.pipeline.prompts.rewriting_prompts import (
+from iris.common.pipeline_enum import PipelineEnum
+from iris.common.pyris_message import IrisMessageRole, PyrisMessage
+from iris.domain.data.text_message_content_dto import TextMessageContentDTO
+from iris.domain.rewriting_pipeline_execution_dto import (
+    RewritingPipelineExecutionDTO,
+)
+from iris.llm import (
+    CapabilityRequestHandler,
+    CompletionArguments,
+    RequirementList,
+)
+from iris.pipeline import Pipeline
+from iris.pipeline.prompts.rewriting_prompts import (
     system_prompt_faq,
     system_prompt_problem_statement,
 )
-from app.web.status.status_update import RewritingCallback
+
+from iris.web.status.status_update import RewritingCallback
 
 logger = logging.getLogger(__name__)
 
