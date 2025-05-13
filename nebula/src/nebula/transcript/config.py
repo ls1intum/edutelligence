@@ -28,8 +28,6 @@ class Config:
                 Config.API_KEYS = [entry["token"] for entry in data.get("api_keys", [])]
         else:
             Config.API_KEYS = []
-        print(f"[Config] Loaded API_KEYS: {Config.API_KEYS}")
-        print(f"[DEBUG] APPLICATION_YML_PATH resolved to: {Config.APPLICATION_YML_PATH.resolve()}")
 
 
 # Run loader on import
