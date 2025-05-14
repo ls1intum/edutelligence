@@ -10,7 +10,7 @@ services:
     volumes:
       -   data_volume:/src/logos
     ports:
-      - "8000:8000"
+      - "8080:8080"
   db:
     image: postgres:17
     container_name: logos-db
