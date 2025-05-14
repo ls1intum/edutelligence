@@ -22,6 +22,6 @@ RUN pip install poetry && \
     poetry env activate
 RUN poetry install
 
-EXPOSE 8000
+EXPOSE 8080
 
-CMD ["poetry", "run", "uvicorn", "logos.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["poetry", "run", "uvicorn", "logos.main:app", "--host", "0.0.0.0", "--port", "8080"]

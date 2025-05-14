@@ -18,12 +18,12 @@ services:
     restart: unless-stopped
     container_name: logos-db
     environment:
-      POSTGRES_USER: postgres
+      POSTGRES_USER: root
       POSTGRES_PASSWORD: root
       POSTGRES_DB: logosdb
       POSTGRES_HOST: logos.ase.cit.tum.de
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready"]
+      test: ["CMD-SHELL", "pg_isready root"]
       interval: 1s
       timeout: 5s
       retries: 10
