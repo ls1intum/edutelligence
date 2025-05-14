@@ -347,18 +347,16 @@ class DBManager:
 
         return {"result": data}, 200
 
-    def import_from_json(self, logos_key: str, input_path="export.json"):
+    def import_from_json(self, logos_key: str, json_data: dict):
         if not self.__check_authorization(logos_key):
             return {"error": "Database changes only allowed for root user."}, 500
-        with open(input_path, "r") as f:
-            data = json.load(f)
-        for table_name, rows in data.items():
+        for table_name, rows in json_data.items():
             table = Base.metadata.tables.get(table_name)
             if table is not None:
                 self.session.execute(table.delete())  # Optional: leeren
                 self.session.execute(table.insert(), rows)
         self.session.commit()
-        return {"result": f"Imported data from {input_path}"}, 200
+        return {"result": f"Imported data"}, 200
 
     def __check_authorization(self, logos_key: str):
         sql = text("""

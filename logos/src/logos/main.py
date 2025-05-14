@@ -96,6 +96,12 @@ async def export(data: LogosKeyModel):
         return db.export(**data.dict())
 
 
+@app.post("/logosdb/import")
+async def import_json(data: GetImportDataRequest):
+    with DBManager() as db:
+        return db.import_from_json(**data.dict())
+
+
 @app.api_route("/v1/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
 async def logos_service(path: str, request: Request):
     """

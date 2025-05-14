@@ -62,3 +62,7 @@ class GetProcessIdRequest(LogosKeyModel):
 
 class GetAPIIdRequest(LogosKeyModel):
     api_key: str
+
+
+class GetImportDataRequest(LogosKeyModel):
+    json_data: dict
