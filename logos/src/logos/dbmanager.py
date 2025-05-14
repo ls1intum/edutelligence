@@ -350,10 +350,26 @@ class DBManager:
     def import_from_json(self, logos_key: str, json_data: dict):
         if not self.__check_authorization(logos_key):
             return {"error": "Database changes only allowed for root user."}, 500
-        for table_name, rows in json_data.items():
+        # Store table names to prevent silent errors on foreign key insertions
+        table_names = [
+            "users",
+            "services",
+            "profiles",
+            "process",
+            "providers",
+            "model_api_keys",
+            "models",
+            "model_provider",
+            "profile_model_permissions",
+            "policies"
+        ]
+        for table_name in table_names:
+            if table_name not in json_data:
+                return {"error": f"Missing table in json: {table_name}"}, 500
+            rows = json_data[table_name]
             table = Base.metadata.tables.get(table_name)
             if table is not None and rows:
-                self.session.execute(table.delete())  # Optional: leeren
+                self.session.execute(table.delete())
                 self.session.execute(table.insert(), rows)
         self.session.commit()
         return {"result": f"Imported data"}, 200
