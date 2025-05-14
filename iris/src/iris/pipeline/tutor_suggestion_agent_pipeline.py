@@ -112,7 +112,7 @@ class TutorSuggestionAgentPipeline(Pipeline):
             if "yes" in response.lower():
                 self.callback.done(
                     "The question has already been answered",
-                    final_result="The question has already been answered in the thread and should be marked as resolved.",
+                    tutor_suggestion="The question has already been answered in the thread and should be marked as resolved.",
                     tokens=self.tokens,
                 )
                 return
@@ -174,7 +174,7 @@ class TutorSuggestionAgentPipeline(Pipeline):
 
         self.callback.done(
             "Generated tutor suggestions",
-            final_result=text_exercise_result,
+            tutor_suggestion=text_exercise_result,
             tokens=self.tokens,
         )
 
@@ -199,7 +199,7 @@ class TutorSuggestionAgentPipeline(Pipeline):
 
         self.callback.done(
             "Generated tutor suggestions",
-            final_result=programming_exercise_result,
+            tutor_suggestion=programming_exercise_result,
             tokens=self.tokens,
         )
 
