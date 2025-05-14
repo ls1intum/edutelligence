@@ -226,7 +226,7 @@ class TutorSuggestionAgentPipeline(Pipeline):
 
         self.callback.done(
             "Generated tutor suggestions",
-            final_result=lecture_result,
+            tutor_suggestion=lecture_result,
             tokens=self.tokens,
         )
 
