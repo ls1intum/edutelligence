@@ -17,13 +17,14 @@ services:
     image: postgres:17
     restart: unless-stopped
     container_name: logos-db
+    user: postgres
     environment:
-      POSTGRES_USER: root
+      POSTGRES_USER: postgres
       POSTGRES_PASSWORD: root
       POSTGRES_DB: logosdb
       POSTGRES_HOST: logos.ase.cit.tum.de
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready root"]
+      test: ["CMD-SHELL", "pg_isready", "--username=postgres"]
       interval: 1s
       timeout: 5s
       retries: 10
