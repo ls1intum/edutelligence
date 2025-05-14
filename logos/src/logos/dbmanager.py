@@ -352,7 +352,7 @@ class DBManager:
             return {"error": "Database changes only allowed for root user."}, 500
         for table_name, rows in json_data.items():
             table = Base.metadata.tables.get(table_name)
-            if table is not None:
+            if table is not None and rows:
                 self.session.execute(table.delete())  # Optional: leeren
                 self.session.execute(table.insert(), rows)
         self.session.commit()
