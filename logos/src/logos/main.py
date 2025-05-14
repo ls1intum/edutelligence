@@ -108,10 +108,11 @@ async def logos_service(path: str, request: Request):
     data = await request.body()
     json_data = request2json(data)
     # logos-API-check
-    if "logos_key" not in request.headers:
+    if "Authorization" not in request.headers and "logos_key" not in request.headers:
         return {"error": "Missing Authorization Header"}, 401
     try:
-        key = request.headers["logos_key"]
+        key = request.headers["logos_key"] if "logos_key" in request.headers else (
+            request.headers["Authorization"].replace("Bearer ", ""))
         with DBManager() as db:
             # Get an api key for a llm. This is the starting point for classification later
             llm_info = db.fetch_llm_key(key)
