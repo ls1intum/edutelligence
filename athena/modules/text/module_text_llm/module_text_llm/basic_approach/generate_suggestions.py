@@ -1,5 +1,4 @@
 from typing import List
-from module_text_llm.approach_config import ApproachConfig
 
 from athena import emit_meta
 from athena.text import Exercise, Submission, Feedback
@@ -10,10 +9,10 @@ from llm_core.utils.llm_utils import (
     num_tokens_from_prompt,
 )
 from llm_core.utils.predict_and_parse import predict_and_parse
-
-# from module_text_llm.config import BasicApproachConfig
+from module_text_llm.approach_config import ApproachConfig
 from module_text_llm.helpers.utils import add_sentence_numbers, get_index_range_from_line_range, format_grading_instructions
 from module_text_llm.basic_approach.prompt_generate_suggestions import AssessmentModel
+
 
 async def generate_suggestions(exercise: Exercise, submission: Submission, config: ApproachConfig, debug: bool, is_graded: bool) -> List[Feedback]:
     model = config.model.get_model()  # type: ignore[attr-defined]
