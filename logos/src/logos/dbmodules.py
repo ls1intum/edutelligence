@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine, Column, Integer, String, Enum, Text, ForeignKey, UniqueConstraint
+from sqlalchemy import create_engine, Column, Integer, String, Boolean, Enum, Text, ForeignKey, UniqueConstraint
 from sqlalchemy.orm import sessionmaker, declarative_base, relationship
 from sqlalchemy.ext.declarative import declarative_base
 import enum
@@ -42,6 +42,7 @@ class Process(Base):
     user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
     service_id = Column(Integer, ForeignKey('services.id'), nullable=False)
     profile_id = Column(Integer, ForeignKey('profiles.id'), nullable=False)
+    log = Column(Boolean, default=False)
 
     user = relationship("User")
     service = relationship("Service")
@@ -53,6 +54,7 @@ class Model(Base):
     id = Column(Integer, primary_key=True)
     name = Column(String, nullable=False)
     endpoint = Column(Text)
+    api_id = Column(Integer, ForeignKey("model_api_keys.id", ondelete="SET NULL"))
     weight_privacy = Column(Integer)
     weight_latency = Column(Integer)
     weight_accuracy = Column(Integer)
@@ -65,6 +67,8 @@ class Provider(Base):
     id = Column(Integer, primary_key=True)
     name = Column(String, nullable=False)
     base_url = Column(Text, nullable=False)
+    auth_name = Column(String, nullable=False)
+    auth_format = Column(String, nullable=False)
 
 
 class ModelProvider(Base):

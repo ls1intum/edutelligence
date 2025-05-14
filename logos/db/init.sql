@@ -38,7 +38,8 @@ CREATE TABLE process (
     name TEXT NOT NULL,
     user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
     service_id INTEGER REFERENCES services(id) ON DELETE CASCADE,
-    profile_id INTEGER REFERENCES profiles(id) ON DELETE SET NULL
+    profile_id INTEGER REFERENCES profiles(id) ON DELETE SET NULL,
+    log BOOLEAN default(FALSE)
 );
 
 CREATE TABLE providers (
