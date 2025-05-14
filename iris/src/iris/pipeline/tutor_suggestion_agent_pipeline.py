@@ -111,7 +111,7 @@ class TutorSuggestionAgentPipeline(Pipeline):
             if "yes" in response.lower():
                 self.callback.done(
                     "The question has already been answered",
-                    final_result="The question has already been answered in the thread and should be marked as resolved.",
+                    tutor_suggestion="The question has already been answered in the thread and should be marked as resolved.",
                     tokens=self.tokens,
                 )
                 return
