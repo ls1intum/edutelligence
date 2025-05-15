@@ -32,28 +32,28 @@ services:
       - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql
     networks:
       - internal
-  # logos-ui:
-  #   build:
-  #     context: ../
-  #     dockerfile: ./logos/logos-ui/Dockerfile
-  #   restart: unless-stopped
-  #   container_name: logos-ui
-  #   ports:
-  #     - "8081"
-  #   networks:
-  #     - internal
-  # nginx:
-  #   image: nginx:latest
-  #   container_name: logos-nginx
-  #   ports:
-  #     - "8080:8080"
-  #   volumes:
-  #     - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-  #   depends_on:
-  #     - logos-server
-  #     - logos-ui
-  #   networks:
-  #     - internal
+  logos-ui:
+    build:
+      context: ../
+      dockerfile: ./logos/logos-ui/Dockerfile
+    restart: unless-stopped
+    container_name: logos-ui
+    ports:
+      - "8081:8080"
+    networks:
+      - internal
+  nginx:
+    image: nginx:latest
+    container_name: logos-nginx
+    ports:
+      - "8082:8080"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - logos-server
+      - logos-ui
+    networks:
+      - internal
 volumes:
   data_volume:
 
