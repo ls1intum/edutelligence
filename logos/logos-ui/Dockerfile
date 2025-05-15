@@ -1,12 +1,41 @@
-# logos-ui/Dockerfile
+# Stage 1: Build the Angular application
+FROM node:22-alpine AS build
 
-FROM nginx:alpine
+WORKDIR /app
 
-# Kopiere AngularJS-App
-COPY ./logos/logos-ui/index.html /usr/share/nginx/html/index.html
-COPY ./logos/logos-ui/app.js /usr/share/nginx/html/app.js
+# Copy and install dependencies early to leverage Docker layer caching
+COPY package.json package-lock.json /app/
 
-# Optional: Custom NGINX config
-# COPY ./nginx.conf /etc/nginx/nginx.conf
+RUN npm install
 
-EXPOSE 8081
+# Copy the rest of the application code
+COPY ./ /app/
+
+# Ensure that environment.prod.ts contains placeholders (already present in codebase)
+
+# Build the Angular application
+RUN npm run build --prod
+
+# Stage 2: Serve the app with Nginx
+FROM nginx:stable-alpine
+
+# Install necessary packages: bash, grep, perl
+RUN apk update && apk add --no-cache bash grep perl
+
+# Copy built Angular app from the build stage
+COPY --from=build /app/dist/webapp/browser /usr/share/nginx/html
+
+# Copy the substitution script into the image
+COPY substitute_env_variables.sh /usr/local/bin/
+
+# Make the substitution script executable
+RUN chmod +x /usr/local/bin/substitute_env_variables.sh
+
+# Copy custom Nginx configuration if necessary
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+
+# Expose port 80
+EXPOSE 80
+
+# Set the substitution script to run before starting Nginx
+ENTRYPOINT ["/bin/bash", "-c", "exec nginx -g 'daemon off;'"]
