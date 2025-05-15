@@ -9,4 +9,4 @@ COPY ./app.js /usr/share/nginx/html/app.js
 # Optional: Custom NGINX config
 # COPY ./nginx.conf /etc/nginx/nginx.conf
 
-EXPOSE 80
+EXPOSE 8081
