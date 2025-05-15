@@ -8,12 +8,13 @@ from fastapi import FastAPI, HTTPException
 
 from nebula.security import AuthMiddleware, add_security_schema_to_app
 from nebula.health import create_health_router
-from nebula.transcript.align_utils import align_slides_with_segments
 from nebula.transcript.config import Config
+from nebula.transcript.align_utils import align_slides_with_segments
 from nebula.transcript.slide_utils import ask_gpt_for_slide_number
 from nebula.transcript.video_utils import download_video, extract_audio, extract_frames_at_timestamps
 from nebula.transcript.whisper_utils import transcribe_with_azure_whisper
 from nebula.transcript.dto import TranscribeRequestDTO, TranscriptionSegmentDTO, TranscriptionResponseDTO
+
 
 # Get the API token from config
 token = Config.API_KEYS[0] if Config.API_KEYS else "fallback-token"

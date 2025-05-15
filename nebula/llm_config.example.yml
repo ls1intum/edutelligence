@@ -17,3 +17,12 @@
   model: gpt-4o
   name: GPT 4 Omni
   type: azure_chat
+
+- id: azure-whisper
+  name: Azure Whisper
+  type: azure_whisper
+  endpoint: "<your-endpoint>"
+  azure_deployment: whisper
+  api_key:
+  api_version: 2024-06-01
+
