@@ -49,6 +49,7 @@ pip install poetry
 poetry install
 ```
 
+---
 
 ## 🛠 FFmpeg Installation
 
@@ -90,6 +91,7 @@ Copy `llm_config.example.yml` and add your keys:
 Copy from `application_local.example.nebula.yml`
 
 ---
+
 ### Run App
 Set environment variables and run:
 
@@ -97,14 +99,14 @@ Set environment variables and run:
 ```powershell
 $env:APPLICATION_YML_PATH = "./application_local.nebula.yml"
 $env:LLM_CONFIG_PATH = "./llm_config.nebula.yml"
-poetry run uvicorn src.nebula.transcript.app:app --reload --port 5000
+poetry run uvicorn nebula.transcript.app:app --reload --port 5000
 ```
 
 #### macOS / Linux
 ```bash
 export APPLICATION_YML_PATH=./application_local.nebula.yml
 export LLM_CONFIG_PATH=./llm_config.nebula.yml
-poetry run uvicorn src.nebula.transcript.app:app --reload --port 5000
+poetry run uvicorn nebula.transcript.app:app --reload --port 5000
 ```
 
 ---
@@ -114,7 +116,7 @@ poetry run uvicorn src.nebula.transcript.app:app --reload --port 5000
 > Docker setup is isolated inside the `docker/transcript/` folder.
 
 ```bash
-cd docker/transcript
+cd nebula
 docker compose up --build
 ```
 
@@ -140,7 +142,7 @@ Make sure these files are present or mounted in the container:
 
 ## 🎓 Getting a TUM-Live `.m3u8` Link
 
-1. Open [https://live.rbg.tum.de](https://live.rbg.tum.de)
+1. Open [https://live.rbg.tum.de](hhttps://live.rbg.tum.de/w/WiSe24ItP/55921 (only 12 min))
 2. Open DevTools → Network tab → Filter by `.m3u8`
 3. Copy full link (including `jwt`)
 4. Use in `videoUrl`
@@ -167,14 +169,15 @@ nebula/
 │       │   ├── whisper_utils.py
 │       │   ├── llm_utils.py
 │       │   ├── config.py
+│       │   ├── .....
 │       ├── health.py
 │       ├── security.py
 ├── application_local.nebula.yml
 ├── llm_config.nebula.yml
 ├── docker/
-│   └── transcript/
-│       ├── docker-compose.yml
-│       └── requirements.txt
+│   └── transcript/     
+│       └── Dockerfile
+├── docker-compose.yml
 └── temp/
 ```
 
