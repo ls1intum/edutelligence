@@ -9,12 +9,16 @@ def split_audio_ffmpeg(audio_path, output_dir, chunk_duration=60):
 
     command = [
         "ffmpeg",
-        "-i", audio_path,
-        "-f", "segment",
-        "-segment_time", str(chunk_duration),
-        "-c", "copy",
+        "-i",
+        audio_path,
+        "-f",
+        "segment",
+        "-segment_time",
+        str(chunk_duration),
+        "-c",
+        "copy",
         output_template,
-        "-y"
+        "-y",
     ]
 
     result = subprocess.run(command, capture_output=True, text=True)
@@ -22,9 +26,11 @@ def split_audio_ffmpeg(audio_path, output_dir, chunk_duration=60):
         raise RuntimeError(f"FFmpeg split failed: {result.stderr}")
 
     # List chunk files in order
-    chunk_files = sorted([
-        os.path.join(output_dir, f)
-        for f in os.listdir(output_dir)
-        if f.endswith(".wav")
-    ])
+    chunk_files = sorted(
+        [
+            os.path.join(output_dir, f)
+            for f in os.listdir(output_dir)
+            if f.endswith(".wav")
+        ]
+    )
     return chunk_files

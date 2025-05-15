@@ -9,11 +9,14 @@ def download_video(video_url: str, video_path: str) -> None:
     logging.info("Downloading video...")
     command = [
         "ffmpeg",
-        "-allowed_extensions", "ALL",
-        "-i", video_url,
-        "-c", "copy",
+        "-allowed_extensions",
+        "ALL",
+        "-i",
+        video_url,
+        "-c",
+        "copy",
         video_path,
-        "-y"
+        "-y",
     ]
     result = subprocess.run(command, capture_output=True, text=True)
     if result.returncode != 0:
@@ -24,21 +27,16 @@ def download_video(video_url: str, video_path: str) -> None:
 def extract_audio(video_path: str, audio_path: str) -> None:
     """Extract audio from a video file using ffmpeg."""
     logging.info("Extracting audio...")
-    command = [
-        "ffmpeg",
-        "-i", video_path,
-        "-q:a", "0",
-        "-map", "a",
-        audio_path,
-        "-y"
-    ]
+    command = ["ffmpeg", "-i", video_path, "-q:a", "0", "-map", "a", audio_path, "-y"]
     result = subprocess.run(command, capture_output=True, text=True)
     if result.returncode != 0:
         raise RuntimeError(f"FFmpeg audio extraction failed: {result.stderr}")
     logging.info("Audio extraction complete.")
 
 
-def extract_frames_at_timestamps(video_path: str, timestamps: list[float]) -> list[tuple[float, str]]:
+def extract_frames_at_timestamps(
+    video_path: str, timestamps: list[float]
+) -> list[tuple[float, str]]:
     """Extract cropped base64-encoded frames from given timestamps."""
     cap = cv2.VideoCapture(video_path)
     fps = cap.get(cv2.CAP_PROP_FPS)
@@ -50,7 +48,7 @@ def extract_frames_at_timestamps(video_path: str, timestamps: list[float]) -> li
         if not ret:
             continue
         height = frame.shape[0]
-        cropped = frame[int(height * 0.95):, :]
+        cropped = frame[int(height * 0.95) :, :]
         _, buffer = cv2.imencode(".jpg", cropped)
         img_b64 = base64.b64encode(buffer).decode("utf-8")
         result.append((ts, img_b64))

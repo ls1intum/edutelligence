@@ -9,11 +9,11 @@ class AuthMiddleware(BaseHTTPMiddleware):
     """Middleware that authenticates all requests using API key."""
 
     def __init__(
-            self,
-            app,
-            api_key: str,
-            exclude_paths: List[str],
-            header_name: str,
+        self,
+        app,
+        api_key: str,
+        exclude_paths: List[str],
+        header_name: str,
     ):
         super().__init__(app)
         self.exclude_paths = exclude_paths + [
@@ -54,7 +54,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
 
 def add_security_schema_to_openapi(
-        openapi_schema: dict, header_name: str, exclude_paths: List[str]
+    openapi_schema: dict, header_name: str, exclude_paths: List[str]
 ) -> dict:
     exclude_paths.append("/health")
     exclude_paths.append("/health/live")
@@ -108,7 +108,7 @@ def add_security_schema_to_openapi(
 
 # Use this if you do not have any other custom OpenAPI schema modifications to add
 def add_security_schema_to_app(
-        app: FastAPI, header_name: str, exclude_paths: List[str]
+    app: FastAPI, header_name: str, exclude_paths: List[str]
 ):
     # Custom OpenAPI schema
     def custom_openapi():

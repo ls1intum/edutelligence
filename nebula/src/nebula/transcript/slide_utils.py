@@ -2,7 +2,6 @@ import logging
 from nebula.transcript.llm_utils import get_openai_client
 
 
-
 def ask_gpt_for_slide_number(image_b64: str) -> int | None:
     """
     Use GPT-4o Vision to detect a visible slide number from a base64 image.
@@ -21,18 +20,18 @@ def ask_gpt_for_slide_number(image_b64: str) -> int | None:
                     "content": [
                         {
                             "type": "text",
-                            "text": "What slide number is visible? Only number, or 'unknown'."
+                            "text": "What slide number is visible? Only number, or 'unknown'.",
                         },
                         {
                             "type": "image_url",
                             "image_url": {
                                 "url": f"data:image/jpeg;base64,{image_b64}",
-                                "detail": "high"
-                            }
-                        }
-                    ]
+                                "detail": "high",
+                            },
+                        },
+                    ],
                 }
-            ]
+            ],
         )
 
         content = response.choices[0].message.content.strip().lower()

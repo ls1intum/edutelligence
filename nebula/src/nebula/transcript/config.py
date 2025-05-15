@@ -11,8 +11,14 @@ class Config:
     API_KEYS = []
 
     # Load paths from env or fall back to root-level config
-    APPLICATION_YML_PATH = Path(os.getenv("APPLICATION_YML_PATH", BASE_DIR.parent / "application_local.nebula.yml"))
-    LLM_CONFIG_PATH = Path(os.getenv("LLM_CONFIG_PATH", BASE_DIR.parent / "llm_config.nebula.yml"))
+    APPLICATION_YML_PATH = Path(
+        os.getenv(
+            "APPLICATION_YML_PATH", BASE_DIR.parent / "application_local.nebula.yml"
+        )
+    )
+    LLM_CONFIG_PATH = Path(
+        os.getenv("LLM_CONFIG_PATH", BASE_DIR.parent / "llm_config.nebula.yml")
+    )
 
     @staticmethod
     def ensure_dirs() -> None:

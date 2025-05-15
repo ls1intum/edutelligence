@@ -11,9 +11,17 @@ from nebula.health import create_health_router
 from nebula.transcript.config import Config
 from nebula.transcript.align_utils import align_slides_with_segments
 from nebula.transcript.slide_utils import ask_gpt_for_slide_number
-from nebula.transcript.video_utils import download_video, extract_audio, extract_frames_at_timestamps
+from nebula.transcript.video_utils import (
+    download_video,
+    extract_audio,
+    extract_frames_at_timestamps,
+)
 from nebula.transcript.whisper_utils import transcribe_with_azure_whisper
-from nebula.transcript.dto import TranscribeRequestDTO, TranscriptionSegmentDTO, TranscriptionResponseDTO
+from nebula.transcript.dto import (
+    TranscribeRequestDTO,
+    TranscriptionSegmentDTO,
+    TranscriptionResponseDTO,
+)
 
 
 # Get the API token from config
@@ -34,7 +42,11 @@ app.add_middleware(
 app.include_router(create_health_router(app_version="1.0.0"))
 
 # Add security schema to OpenAPI
-add_security_schema_to_app(app, header_name="Authorization", exclude_paths=["/health", "/docs", "/openapi.json"])
+add_security_schema_to_app(
+    app,
+    header_name="Authorization",
+    exclude_paths=["/health", "/docs", "/openapi.json"],
+)
 
 # Setup logging
 logging.basicConfig(level=getattr(logging, Config.LOG_LEVEL))
@@ -79,14 +91,16 @@ async def start_transcribe(req: TranscribeRequestDTO):
             time.sleep(2)  # GPT rate limit
 
         # Align slide numbers to transcript segments
-        aligned_segments = align_slides_with_segments(transcription["segments"], slide_timestamps)
+        aligned_segments = align_slides_with_segments(
+            transcription["segments"], slide_timestamps
+        )
         segments = [TranscriptionSegmentDTO(**s) for s in aligned_segments]
 
         # Return structured response
         return TranscriptionResponseDTO(
             lectureUnitId=req.lectureUnitId,
             language=transcription.get("language", "en"),
-            segments=segments
+            segments=segments,
         )
 
     except Exception as e:

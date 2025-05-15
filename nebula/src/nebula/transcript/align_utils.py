@@ -2,8 +2,7 @@ from typing import List, Dict, Tuple
 
 
 def align_slides_with_segments(
-        segments: List[Dict],
-        slide_timestamps: List[Tuple[float, int]]
+    segments: List[Dict], slide_timestamps: List[Tuple[float, int]]
 ) -> List[Dict]:
     """Attach slide numbers to transcript segments based on timestamps."""
     result = []
@@ -15,11 +14,13 @@ def align_slides_with_segments(
                 slide_number = num
                 break
 
-        result.append({
-            "startTime": segment["start"],
-            "endTime": segment["end"],
-            "text": segment["text"].strip(),
-            "slideNumber": slide_number,
-        })
+        result.append(
+            {
+                "startTime": segment["start"],
+                "endTime": segment["end"],
+                "text": segment["text"].strip(),
+                "slideNumber": slide_number,
+            }
+        )
 
     return result

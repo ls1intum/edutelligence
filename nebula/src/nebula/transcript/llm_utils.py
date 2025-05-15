@@ -31,9 +31,11 @@ def get_openai_client(llm_id="azure-gpt-4-omni"):
         azure_endpoint=config["endpoint"],
         azure_deployment=config["azure_deployment"],
         api_version=config["api_version"],
-        api_key=config["api_key"]
+        api_key=config["api_key"],
     )
     return client, config["azure_deployment"]
+
+
 def get_azure_whisper_config(llm_id="azure-whisper"):
     config = load_llm_config(llm_id=llm_id)
     return config

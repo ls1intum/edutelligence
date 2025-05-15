@@ -78,10 +78,10 @@ def register_component(name: str) -> Callable[[ComponentCheckFunc], ComponentChe
 
 
 def create_health_router(
-        app_version: str,
-        prefix: str = "/health",
-        tags: List[str] = ["healthcheck"],
-        system_info: bool = True,
+    app_version: str,
+    prefix: str = "/health",
+    tags: List[str] = ["healthcheck"],
+    system_info: bool = True,
 ) -> APIRouter:
     """
     Create a health check router with standard health endpoints.
@@ -154,8 +154,8 @@ def create_health_router(
 
                 # If any component is not OK, the overall status is the worst status
                 if component_status != "OK" and (
-                        overall_status == "OK"
-                        or (overall_status == "WARNING" and component_status == "ERROR")
+                    overall_status == "OK"
+                    or (overall_status == "WARNING" and component_status == "ERROR")
                 ):
                     overall_status = component_status
             except Exception as e:
