@@ -32,6 +32,16 @@ services:
       - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql
     networks:
       - internal
+  logos-ui:
+    build:
+      context: ../
+      dockerfile: ./logos/logos-ui/Dockerfile
+    restart: unless-stopped
+    container_name: logos-ui
+    ports:
+      - "8081:80"
+    networks:
+      - internal
 volumes:
   data_volume:
 
