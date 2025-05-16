@@ -8,6 +8,7 @@ from app.grpc import hyperion_pb2, hyperion_pb2_grpc
 
 logger = getLogger(__name__)
 
+
 class HealthServicer(hyperion_pb2_grpc.HealthServicer):
 
     def __init__(self, version="0.1.0"):

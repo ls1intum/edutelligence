@@ -11,10 +11,11 @@ import grpc
 import time
 from app.grpc import hyperion_pb2, hyperion_pb2_grpc
 
+
 def main():
     """Test the Health service by sending a Ping request."""
     # Create a gRPC channel
-    print(f"Connecting to gRPC server at...")
+    print("Connecting to gRPC server at...")
 
     with grpc.insecure_channel("0.0.0.0:50051") as channel:
         try:

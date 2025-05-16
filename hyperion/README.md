@@ -56,7 +56,7 @@ By default, the server runs on `0.0.0.0:50051`. You can configure the host and p
 To verify the server is running correctly, you can use the health check script:
 
 ```bash
-poetry run hyperion-health
+poetry run health-check
 ```
 
 This will test connectivity to the server and return server status information.
