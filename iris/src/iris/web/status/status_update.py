@@ -112,8 +112,8 @@ class StatusCallback(ABC):
         tokens: Optional[List[TokenUsageDTO]] = None,
         next_stage_message: Optional[str] = None,
         start_next_stage: bool = True,
-        inconsistencies : Optional[List[str]] = None,
-        improvement : Optional[str] = None
+        inconsistencies: Optional[List[str]] = None,
+        improvement: Optional[str] = None,
     ):
         """
         Transition the current stage to DONE and update the status.
@@ -226,6 +226,7 @@ class CourseChatStatusCallback(StatusCallback):
 
 class ExerciseChatStatusCallback(StatusCallback):
     """Status callback for exercise chat pipelines."""
+
     def __init__(
         self, run_id: str, base_url: str, initial_stages: List[StageDTO] = None
     ):
@@ -249,6 +250,7 @@ class ExerciseChatStatusCallback(StatusCallback):
 
 class ChatGPTWrapperStatusCallback(StatusCallback):
     """Status callback for ChatGPT wrapper pipelines."""
+
     def __init__(
         self, run_id: str, base_url: str, initial_stages: List[StageDTO] = None
     ):
@@ -269,6 +271,7 @@ class ChatGPTWrapperStatusCallback(StatusCallback):
 
 class TextExerciseChatCallback(StatusCallback):
     """Status callback for text exercise chat pipelines."""
+
     def __init__(
         self,
         run_id: str,
@@ -301,6 +304,7 @@ class TextExerciseChatCallback(StatusCallback):
 
 class CompetencyExtractionCallback(StatusCallback):
     """Status callback for competency extraction pipelines."""
+
     def __init__(
         self,
         run_id: str,
@@ -323,6 +327,7 @@ class CompetencyExtractionCallback(StatusCallback):
 
 class RewritingCallback(StatusCallback):
     """Status callback for rewriting pipelines."""
+
     def __init__(
         self,
         run_id: str,
@@ -345,6 +350,7 @@ class RewritingCallback(StatusCallback):
 
 class InconsistencyCheckCallback(StatusCallback):
     """Status callback for inconsistency check pipelines."""
+
     def __init__(
         self,
         run_id: str,
@@ -367,6 +373,7 @@ class InconsistencyCheckCallback(StatusCallback):
 
 class LectureChatCallback(StatusCallback):
     """Status callback for lecture chat pipelines."""
+
     def __init__(
         self,
         run_id: str,

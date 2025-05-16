@@ -1,3 +1,4 @@
+import json
 import logging
 from typing import Literal, Optional, List, Dict
 
@@ -24,6 +25,9 @@ from iris.pipeline.prompts.rewriting_prompts import (
 )
 
 from iris.web.status.status_update import RewritingCallback
+
+from iris.src.iris.retrieval.faq_retrieval import FaqRetrieval
+from iris.src.iris.vector_database.database import VectorDatabase
 
 logger = logging.getLogger(__name__)
 
@@ -157,16 +161,13 @@ class RewritingPipeline(Pipeline):
         for key in keys_to_check:
             if key in data:
                 result_dict[key] = data[key]
-        logging.info(faqs)
-        logging.info(f"Consistency FAQ consistency check response: {result_dict}")
 
         return result_dict
 
 
 def parse_inconsistencies(inconsistencies: List[Dict[str, str]]) -> List[str]:
-    logging.info("parse consistency")
     parsed_inconsistencies = [
-        f"FAQ ID: {entry['faq_id']}, Title: {entry['faq_question_title']}, Answer: {entry['faq_question_answer']}"
+        f"FAQ ID: {entry["faq_id"]}, Title: {entry["faq_question_title"]}, Answer: {entry["faq_question_answer"]}"
         for entry in inconsistencies
     ]
     return parsed_inconsistencies
