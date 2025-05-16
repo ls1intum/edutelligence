@@ -43,39 +43,45 @@ poetry install
 
 ## Running the Service
 
-### Development
+The Hyperion service runs as a gRPC server that listens for requests from clients.
 
 ```bash
-poetry run fastapi dev
+poetry run hyperion
 ```
 
-### Production
+By default, the server runs on `0.0.0.0:50051`. You can configure the host and port through environment variables.
+
+### Health Check
+
+To verify the server is running correctly, you can use the health check script:
 
 ```bash
-poetry run fastapi run
+poetry run hyperion-health
 ```
 
-### Authentication
+This will test connectivity to the server and return server status information.
 
-Hyperion uses API key authentication for secure access to its endpoints. The API key should be provided in the `X-API-Key` header, if `API_KEY_HEADER` is not set in the environment.
+### Docker Compose
 
-To set up authentication:
-
-1. Set the `API_KEY` environment variable or in your `.env` file
-2. If not provided, a random API key will be generated at startup
-3. Set `DISABLE_AUTH=true` for development if you want to bypass authentication
-
-## Usage
-
-After running the application, you can access the FastAPI API documentation at `http://127.0.0.1:8000/docs` or `http://127.0.0.1:8000/redoc`.
-
-## Generate OpenAPI YAML
-
-To generate the OpenAPI YAML file, run the following command:
+To run the service using Docker Compose:
 
 ```bash
-poetry run openapi
+cd docker
+docker-compose -f compose.hyperion.yaml up -d
 ```
+
+To check the health of a running Docker container:
+
+
+## Generate gRPC stubs
+
+The service uses gRPC for communication. If you make changes to the proto files, you'll need to regenerate the stubs:
+
+```bash
+poetry run generate-grpc
+```
+
+The generated stubs will be placed in the `app/grpc` directory.
 
 ## Formatting
 
@@ -94,21 +100,3 @@ To lint the code, run the following command:
 ```bash
 poetry run flake8 .
 ```
-
-## Version Bump
-
-To bump the version of the project, run the following command:
-
-```bash
-poetry version <version>
-```
-
-Where `<version>` is one of the following:
-
-- patch
-- minor
-- major
-- prepatch
-- preminor
-- premajor
-- prerelease

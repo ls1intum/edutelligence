@@ -5,6 +5,6 @@ exclude =
     __pycache__,
     .idea
     .venv
-
-per-file-ignores =
-    app/openapi.py: E402
+    app/grpc/hyperion_pb2.py
+    app/grpc/hyperion_pb2_grpc.py
+    app/grpc/hyperion_pb2_grpc.py

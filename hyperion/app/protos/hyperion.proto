@@ -93,53 +93,35 @@ message ProgrammingExercise {
   
 }
 
-////////////////////////////////////////////////////////////////////
+// Health check service
+service Health {
+  // Check if the server is running
+  rpc Ping (PingRequest) returns (PingResponse) {}
+}
+
 // Exercise Creation Step 1: Define Boundary Conditions
-////////////////////////////////////////////////////////////////////
+service DefineBoundaryCondition { }
 
-service BoundaryConditionHelper { }
-
-////////////////////////////////////////////////////////////////////
 // Exercise Creation Step 2: Create Draft Problem Statement
-////////////////////////////////////////////////////////////////////
+service DraftProblemStatement {}
 
-service ProblemStatementDrafter {}
-
-////////////////////////////////////////////////////////////////////
 // Exercise Creation Step 3: Create Solution Repository
-////////////////////////////////////////////////////////////////////
+service CreateSolutionRepository {}
 
-service SolutionRepositoryCreator {}
-
-////////////////////////////////////////////////////////////////////
 // Exercise Creation Step 4: Create Template Repository
-////////////////////////////////////////////////////////////////////
+service CreateTemplateRepository {}
 
-service TemplateRepositoryCreator {}
-
-////////////////////////////////////////////////////////////////////
 // Exercise Creation Step 5: Create Test Repository
-////////////////////////////////////////////////////////////////////
+service CreateTestRepository {}
 
-service TestRepositoryCreator {}
-
-////////////////////////////////////////////////////////////////////
 // Exercise Creation Step 6: Finalize Problem Statement
-////////////////////////////////////////////////////////////////////
+service FinalizeProblemStatement {}
 
-service ProblemStatementFinalizer {}
-
-////////////////////////////////////////////////////////////////////
 // Exercise Creation Step 7: Configure Grading
-////////////////////////////////////////////////////////////////////
+service ConfigureGrading {}
 
-service GradingConfigurator {}
-
-////////////////////////////////////////////////////////////////////
 // Exercise Creation Step 8: Verify Configuration
-////////////////////////////////////////////////////////////////////
-
-service ConfigurationVerifier {
+service VerifyConfiguration {
   rpc CheckInconsistencies(InconsistencyCheckRequest) returns (InconsistencyCheckResponse) {}
 }
 
@@ -152,4 +134,20 @@ message InconsistencyCheckRequest {
 
 message InconsistencyCheckResponse {
   string inconsistencies = 1;
+}
+
+// Simple ping request message
+message PingRequest {
+  // Optional client identifier 
+  string client_id = 1;
+}
+
+// Ping response with server status
+message PingResponse {
+  // Server status message
+  string status = 1;
+  // Server version
+  string version = 2;
+  // Timestamp of the server response
+  int64 timestamp = 3;
 }

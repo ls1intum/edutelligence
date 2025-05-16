@@ -23,5 +23,8 @@ WORKDIR /app/hyperion
 # Install dependencies
 RUN poetry install --no-root
 
-# Run the app
-CMD ["poetry", "run", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Expose the gRPC port
+EXPOSE 50051
+
+# Use our custom entrypoint script
+ENTRYPOINT ["poetry", "run", "hyperion"]
