@@ -3,6 +3,7 @@ File containing methods calling logos endpoints.
 """
 import requests
 from requests import Response
+import configparser
 
 
 def endpoint_setup() -> Response:
@@ -229,3 +230,13 @@ def endpoint_export(logos_key: str) -> Response:
     }
 
     return requests.post("http://logos.ase.cit.tum.de:8080/logosdb/export", json=data, headers=headers)
+
+
+def load_config():
+    config = dict()
+    configParser = configparser.RawConfigParser()
+    configFilePath = "./logos/logos.conf"
+    configParser.read(configFilePath)
+    config["INIT_PROVIDER_BASE_URL"] = config.get('proxy_setup', 'INIT_PROVIDER_BASE_URL')
+    config["INIT_PROVIDER_NAME"] = config.get('proxy_setup', 'INIT_PROVIDER_NAME')
+    return config
