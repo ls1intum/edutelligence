@@ -1,8 +1,19 @@
 import weaviate
 import requests
+import logging
+from enum import Enum
 
 from atlasml.config import settings
 
+# Define enum for Collection names  
+
+class CollectionNames(str, Enum):
+    COMPETENCY = "Competency"
+    CLUSTER = "Cluster"
+    COURSE = "Course"
+
+
+logger = logging.getLogger(__name__)
 
 class WeaviateClient:
     def __init__(
@@ -19,72 +30,95 @@ class WeaviateClient:
 
         self.competency_collection = self.client.collections.get("Competency")
 
-        # Automatically ensure the class exists
-        self._ensure_competency_class()
+        self._ensure_collections_exist()
 
-    def _ensure_competency_class(self):
+    def _ensure_collections_exist(self):
         """Ensure 'Competency' class exists."""
-        if not self.client.collections.exists("Competency"):
-            self.client.collections.create(
-                name="Competency",
-                vectorizer_config=weaviate.classes.config.Configure.Vectorizer.none(),
-            )
-            print("✅ 'Competency' collection created.")
-        else:
-            print("ℹ️ 'Competency' collection already exists.")
+        for collection in CollectionNames:
+            if not self.client.collections.exists(collection):
+                self.client.collections.create(
+                    name=collection,
+                    vectorizer_config=weaviate.classes.config.Configure.Vectorizer.none(),
+                )
+                logger.info(f"✅ {collection} collection created.")
+        
+        logger.info("--- All collections initialized ---")
+
+    def _check_if_collection_exists(self, collection_name: str):
+        """Check if the collection exists."""
+        if collection_name not in [c.value for c in CollectionNames]:
+            logger.error(f"❌ Invalid collection name: {collection_name}")
+            raise ValueError(f"Collection name '{collection_name}' is not valid. Use one of: {', '.join([c.value for c in CollectionNames])}")
+        
+        return self.client.collections.exists(collection_name)
+        
 
     def is_alive(self):
         """Check if the Weaviate client is alive."""
         try:
             return self.client.is_live()
         except Exception as e:
-            print(f"❌ Weaviate connection failed: {e}")
+            logger.error(f"❌ Weaviate connection failed: {e}")
             return False
 
     def close(self):
         """Close the Weaviate client."""
         self.client.close()
 
-    def add_embeddings(self, id: str, description: str, embeddings: list[float]):
-        """Add an embedding with a custom ID and description to the 'Competency' class."""
-        print("--- ADDING EMBEDDING TO WEAVIATE ---")
-        uuid = self.competency_collection.data.insert(
+    def add_embeddings(self, collection_name: str, id: str, description: str, embeddings: list[float]):
+        """Add an embedding with a custom ID and description to the specified collection."""
+        logger.info(f"--- ADDING EMBEDDING TO WEAVIATE COLLECTION '{collection_name}' ---")
+        self._check_if_collection_exists(collection_name)
+        collection = self.client.collections.get(collection_name)
+        uuid = collection.data.insert(
             properties={
                 "text": description,
                 "course_id": id
             },
-
             vector=embeddings
         )
 
-        print("--- EMBEDDING ADDED TO WEAVIATE ---")
-        print("UUID: ", uuid)
+        logger.info("--- EMBEDDING ADDED TO WEAVIATE ---")
+        logger.info(f"UUID: {uuid}")
 
-    def get_embeddings_rest(self, id: str):
-        url = f"http://localhost:8080/v1/objects/Competency/{id}?include=vector"
+    def get_embeddings_rest(self, collection_name: str, id: str):
+        """Get embeddings for a given ID from the specified collection using REST (no gRPC)."""
+        self._check_if_collection_exists(collection_name)
+
+        url = f"http://localhost:8080/v1/objects/{collection_name}/{id}?include=vector"
         response = requests.get(url)
         if response.status_code == 200:
             return response.json()
         else:
-            print("❌ Failed:", response.text)
+            logger.error(f"❌ Failed: {response.text}")
             return None
 
-    def get_embeddings(self, id: str):
-        """Get embeddings for a given ID."""
-        print("--- GETTING EMBEDDINGS FROM WEAVIATE ---")
-        embedding = self.get_embeddings_rest(id)
+    def get_embeddings(self, collection_name: str, id: str):
+        """Get embeddings for a given ID from the specified collection."""
+        logger.info(f"--- GETTING EMBEDDINGS FROM WEAVIATE COLLECTION '{collection_name}' ---")
+        self._check_if_collection_exists(collection_name)
 
-        print("--- EMBEDDINGS RETRIEVED FROM WEAVIATE ---")
+        embedding = self.get_embeddings_rest(collection_name, id)
+
+        logger.info("--- EMBEDDINGS RETRIEVED FROM WEAVIATE ---")
 
         return embedding
     
-    def get_all_embeddings(self):
+    def get_all_embeddings(self, collection_name: str = "Competency"):
         """
-        Fetch all objects and their vectors from the 'Competency' collection using REST (no gRPC).
-        """
-        results = []
+        Fetch all objects and their vectors from the specified collection using REST (no gRPC).
         
-        response = self.competency_collection.iterator(
+        Args:
+            collection_name: Name of the collection to fetch embeddings from. Defaults to 'Competency'.
+            
+        Returns:
+            List of dictionaries containing id, text, and vector for each object.
+        """
+        self._check_if_collection_exists(collection_name)
+
+        results = []
+        collection = self.client.collections.get(collection_name)
+        response = collection.iterator(
             include_vector=True,
         )
 
