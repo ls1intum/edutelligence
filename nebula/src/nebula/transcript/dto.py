@@ -1,10 +1,13 @@
-from pydantic import BaseModel
+# pylint: disable=invalid-name
+from pydantic import BaseModel, ConfigDict
 from typing import List
 
 
 class TranscribeRequestDTO(BaseModel):
     videoUrl: str
     lectureUnitId: int
+
+    model_config = ConfigDict(extra="forbid")
 
 
 class TranscriptionSegmentDTO(BaseModel):
@@ -13,8 +16,12 @@ class TranscriptionSegmentDTO(BaseModel):
     text: str
     slideNumber: int
 
+    model_config = ConfigDict(extra="forbid")
+
 
 class TranscriptionResponseDTO(BaseModel):
     lectureUnitId: int
     language: str
     segments: List[TranscriptionSegmentDTO]
+
+    model_config = ConfigDict(extra="forbid")

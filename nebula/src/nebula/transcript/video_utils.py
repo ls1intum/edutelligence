@@ -9,16 +9,18 @@ def download_video(video_url: str, video_path: str) -> None:
     logging.info("Downloading video...")
     command = [
         "ffmpeg",
-        "-allowed_extensions",
-        "ALL",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-protocol_whitelist",
+        "file,http,https,tcp,tls",
         "-i",
         video_url,
-        "-c",
-        "copy",
-        video_path,
         "-y",
+        video_path,
     ]
-    result = subprocess.run(command, capture_output=True, text=True)
+
+    result = subprocess.run(command, capture_output=True, text=True, check=True)
     if result.returncode != 0:
         raise RuntimeError(f"FFmpeg download failed: {result.stderr}")
     logging.info("Download complete.")
@@ -28,7 +30,7 @@ def extract_audio(video_path: str, audio_path: str) -> None:
     """Extract audio from a video file using ffmpeg."""
     logging.info("Extracting audio...")
     command = ["ffmpeg", "-i", video_path, "-q:a", "0", "-map", "a", audio_path, "-y"]
-    result = subprocess.run(command, capture_output=True, text=True)
+    result = subprocess.run(command, capture_output=True, text=True, check=True)
     if result.returncode != 0:
         raise RuntimeError(f"FFmpeg audio extraction failed: {result.stderr}")
     logging.info("Audio extraction complete.")

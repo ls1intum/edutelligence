@@ -14,6 +14,16 @@ def get_audio_duration(audio_path: str) -> float:
 
 
 def transcribe_with_azure_whisper(audio_path: str, llm_id="azure-whisper"):
+    """
+    Transcribe audio using Azure Whisper API by splitting into chunks and aggregating results.
+
+    Args:
+        audio_path (str): Path to the WAV audio file.
+        llm_id (str): ID of the LLM config to use. Default is "azure-whisper".
+
+    Returns:
+        dict: Contains list of transcription segments with start, end, and text.
+    """
     config = load_llm_config(llm_id=llm_id)
     headers = {"api-key": config["api_key"]}
 
@@ -26,15 +36,17 @@ def transcribe_with_azure_whisper(audio_path: str, llm_id="azure-whisper"):
 
     for chunk_path in chunk_paths:
         with open(chunk_path, "rb") as f:
-            logging.info(f"Sending chunk to Azure Whisper: {chunk_path}")
+            logging.info("Sending chunk to Azure Whisper: %s", chunk_path)
             response = requests.post(
-                f"{config['endpoint']}/openai/deployments/whisper/audio/transcriptions?api-version={config['api_version']}",
+                url=f"{config['endpoint']}/openai/deployments/whisper/audio/transcriptions"
+                f"?api-version={config['api_version']}",
                 headers=headers,
                 files={"file": (os.path.basename(chunk_path), f, "audio/wav")},
                 data={
                     "response_format": "verbose_json",
                     "timestamp_granularities[]": "segment",
                 },
+                timeout=30,  # ✅ prevent hanging requests
             )
             response.raise_for_status()
             segment_data = response.json().get("segments", [])

@@ -23,7 +23,6 @@ from nebula.transcript.dto import (
     TranscriptionResponseDTO,
 )
 
-
 # Get the API token from config
 token = Config.API_KEYS[0] if Config.API_KEYS else "fallback-token"
 
@@ -62,6 +61,8 @@ async def home():
 
 @app.post("/start-transcribe", response_model=TranscriptionResponseDTO)
 async def start_transcribe(req: TranscribeRequestDTO):
+    print("[DEBUG] ▶ Received request", flush=True)
+
     video_url = req.videoUrl
     if not video_url:
         raise HTTPException(status_code=400, detail="Missing videoUrl")
@@ -70,33 +71,56 @@ async def start_transcribe(req: TranscribeRequestDTO):
     video_path = os.path.join(Config.VIDEO_STORAGE_PATH, f"{uid}.mp4")
     audio_path = os.path.join(Config.VIDEO_STORAGE_PATH, f"{uid}.wav")
 
+    print(f"[DEBUG] ▶ Video URL: {video_url}", flush=True)
+    print(
+        f"[DEBUG] ▶ Temp paths -> video: {video_path}, audio: {audio_path}", flush=True
+    )
+
     try:
-        # Download and process media
+        print("[DEBUG] ▶ Downloading video...", flush=True)
         download_video(video_url, video_path)
+        print("[DEBUG] ✅ Video downloaded.", flush=True)
+
+        print("[DEBUG] ▶ Extracting audio...", flush=True)
         extract_audio(video_path, audio_path)
+        print("[DEBUG] ✅ Audio extracted.", flush=True)
 
-        # Transcribe
+        print("[DEBUG] ▶ Starting transcription...", flush=True)
         transcription = transcribe_with_azure_whisper(audio_path)
+        print(
+            f"[DEBUG] ✅ Transcription complete. Segments: {len(transcription['segments'])}",
+            flush=True,
+        )
 
-        # Extract frames
         timestamps = [s["start"] for s in transcription["segments"]]
+        print(f"[DEBUG] ▶ Extracting {len(timestamps)} frames...", flush=True)
         frames = extract_frames_at_timestamps(video_path, timestamps)
+        print(f"[DEBUG] ✅ Extracted {len(frames)} frames.", flush=True)
 
-        # Detect slide numbers
         slide_timestamps = []
-        for ts, img_b64 in frames:
+        for idx, (ts, img_b64) in enumerate(frames):
+            print(
+                f"[DEBUG] ▶ Asking GPT for slide {idx + 1}/{len(frames)} at {ts:.2f}s...",
+                flush=True,
+            )
             slide_number = ask_gpt_for_slide_number(img_b64)
+            print(f"[DEBUG] → GPT returned slide number: {slide_number}", flush=True)
             if slide_number is not None:
                 slide_timestamps.append((ts, slide_number))
-            time.sleep(2)  # GPT rate limit
+            time.sleep(2)
 
-        # Align slide numbers to transcript segments
+        print("[DEBUG] ▶ Aligning slide numbers with transcript...", flush=True)
         aligned_segments = align_slides_with_segments(
             transcription["segments"], slide_timestamps
         )
+        print(
+            f"[DEBUG] ✅ Alignment complete: {len(aligned_segments)} segments.",
+            flush=True,
+        )
+
         segments = [TranscriptionSegmentDTO(**s) for s in aligned_segments]
 
-        # Return structured response
+        print("[DEBUG] ✅ Sending final response.", flush=True)
         return TranscriptionResponseDTO(
             lectureUnitId=req.lectureUnitId,
             language=transcription.get("language", "en"),
@@ -105,12 +129,15 @@ async def start_transcribe(req: TranscribeRequestDTO):
 
     except Exception as e:
         traceback.print_exc()
+        print(f"[ERROR] ❌ Transcription failed: {e}", flush=True)
         logging.error("Transcription failed", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
     finally:
         try:
             os.remove(video_path)
             os.remove(audio_path)
+            print("[DEBUG] 🧹 Temp files removed.", flush=True)
         except Exception as cleanup_err:
-            logging.warning(f"Cleanup failed: {cleanup_err}")
+            print(f"[WARNING] ⚠️ Cleanup failed: {cleanup_err}", flush=True)
+            logging.warning("Cleanup failed: %s", cleanup_err)

@@ -28,7 +28,7 @@ class Config:
     def load_local_config() -> None:
         print(f"[Config] Loading from: {Config.APPLICATION_YML_PATH}")
         if Config.APPLICATION_YML_PATH.exists():
-            with open(Config.APPLICATION_YML_PATH, "r") as f:
+            with open(Config.APPLICATION_YML_PATH, "r", encoding="utf-8") as f:
                 data = yaml.safe_load(f)
                 print(f"[DEBUG] Raw YAML data: {data}")
                 Config.API_KEYS = [entry["token"] for entry in data.get("api_keys", [])]

@@ -20,7 +20,7 @@ def ask_gpt_for_slide_number(image_b64: str) -> int | None:
                     "content": [
                         {
                             "type": "text",
-                            "text": "What slide number is visible? Only number, or 'unknown'.",
+                            "text": "What slide number is visible? Only number, or 'Null'.",
                         },
                         {
                             "type": "image_url",
@@ -43,5 +43,5 @@ def ask_gpt_for_slide_number(image_b64: str) -> int | None:
         return int(digits) if digits else None
 
     except Exception as e:
-        logging.warning(f"GPT Vision failed: {e}")
+        logging.warning("GPT Vision failed: %s", e)
         return None
