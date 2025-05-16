@@ -39,8 +39,8 @@ def transcribe_with_azure_whisper(audio_path: str, llm_id="azure-whisper"):
         with open(chunk_path, "rb") as f:
             logging.info("Sending chunk to Azure Whisper: %s", chunk_path)
             response = requests.post(
-                url=f"{config['endpoint']}/openai/deployments/whisper/audio/transcriptions"
-                f"?api-version={config['api_version']}",
+                url=f"{config["endpoint"]}/openai/deployments/whisper/audio/transcriptions"
+                f"?api-version={config["api_version"]}",
                 headers=headers,
                 files={"file": (os.path.basename(chunk_path), f, "audio/wav")},
                 data={

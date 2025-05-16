@@ -15,7 +15,7 @@ def test_transcribe_with_azure_whisper_success(
 ):
     # Mock Azure config
     mock_config.return_value = {
-        "api_key": "dummy",
+        "api_key": "dummy",  # pragma: allowlist secret
         "endpoint": "https://dummy.azure.com",
         "api_version": "2024-06-01",
     }
@@ -47,7 +47,7 @@ def test_transcribe_with_azure_whisper_failure(
     mock_config, mock_split, mock_post, mock_file
 ):
     mock_config.return_value = {
-        "api_key": "dummy",
+        "api_key": "dummy",  # pragma: allowlist secret
         "endpoint": "https://dummy.azure.com",
         "api_version": "2024-06-01",
     }

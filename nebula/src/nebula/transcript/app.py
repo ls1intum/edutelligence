@@ -6,25 +6,23 @@ import uuid
 
 from fastapi import FastAPI, HTTPException
 
-from nebula.security import AuthMiddleware, add_security_schema_to_app
 from nebula.health import create_health_router
-from nebula.transcript.config import Config
+from nebula.security import AuthMiddleware, add_security_schema_to_app
 from nebula.transcript.align_utils import align_slides_with_segments
+from nebula.transcript.config import Config
+from nebula.transcript.dto import (TranscribeRequestDTO,
+                                   TranscriptionResponseDTO,
+                                   TranscriptionSegmentDTO)
 from nebula.transcript.slide_utils import ask_gpt_for_slide_number
-from nebula.transcript.video_utils import (
-    download_video,
-    extract_audio,
-    extract_frames_at_timestamps,
-)
+from nebula.transcript.video_utils import (download_video, extract_audio,
+                                           extract_frames_at_timestamps)
 from nebula.transcript.whisper_utils import transcribe_with_azure_whisper
-from nebula.transcript.dto import (
-    TranscribeRequestDTO,
-    TranscriptionSegmentDTO,
-    TranscriptionResponseDTO,
-)
 
 # Get the API token from config
-token = Config.API_KEYS[0] if Config.API_KEYS else "fallback-token"
+if not Config.API_KEYS:
+    raise RuntimeError("No API keys configured!")
+token = Config.API_KEYS[0]
+
 
 # Initialize FastAPI app
 app = FastAPI()
@@ -68,11 +66,11 @@ async def start_transcribe(req: TranscribeRequestDTO):
         raise HTTPException(status_code=400, detail="Missing videoUrl")
 
     uid = str(uuid.uuid4())
-    video_path = os.path.join(Config.VIDEO_STORAGE_PATH, f"{uid}.mp4")
-    audio_path = os.path.join(Config.VIDEO_STORAGE_PATH, f"{uid}.wav")
+    video_path = os.path.join(Config.VIDEO_STORAGE_PATH, "%s.mp4" % uid)
+    audio_path = os.path.join(Config.VIDEO_STORAGE_PATH, "%s.wav" % uid)
 
-    logging.debug(f"▶ Video URL: {video_url}")
-    logging.debug(f"▶ Temp paths -> video: {video_path}, audio: {audio_path}")
+    logging.debug("▶ Video URL: %s", video_url)
+    logging.debug("▶ Temp paths -> video: %s, audio: %s", video_path, audio_path)
 
     try:
         logging.debug("▶ Downloading video...")
@@ -85,18 +83,22 @@ async def start_transcribe(req: TranscribeRequestDTO):
 
         logging.debug("▶ Starting transcription...")
         transcription = transcribe_with_azure_whisper(audio_path)
-        logging.debug(f"✅ Transcription complete. Segments: {len(transcription['segments'])}")
+        logging.debug(
+            "✅ Transcription complete. Segments: %d", len(transcription["segments"])
+        )
 
         timestamps = [s["start"] for s in transcription["segments"]]
-        logging.debug(f"▶ Extracting {len(timestamps)} frames...")
+        logging.debug("▶ Extracting %d frames...", len(timestamps))
         frames = extract_frames_at_timestamps(video_path, timestamps)
-        logging.debug(f"✅ Extracted {len(frames)} frames.")
+        logging.debug("✅ Extracted %d frames.", len(frames))
 
         slide_timestamps = []
         for idx, (ts, img_b64) in enumerate(frames):
-            logging.debug(f"▶ Asking GPT for slide {idx + 1}/{len(frames)} at {ts:.2f}s...")
+            logging.debug(
+                "▶ Asking GPT for slide %d/%d at %.2fs...", idx + 1, len(frames), ts
+            )
             slide_number = ask_gpt_for_slide_number(img_b64)
-            logging.debug(f"→ GPT returned slide number: {slide_number}")
+            logging.debug("→ GPT returned slide number: %s", slide_number)
             if slide_number is not None:
                 slide_timestamps.append((ts, slide_number))
             time.sleep(2)
@@ -105,7 +107,7 @@ async def start_transcribe(req: TranscribeRequestDTO):
         aligned_segments = align_slides_with_segments(
             transcription["segments"], slide_timestamps
         )
-        logging.debug(f"✅ Alignment complete: {len(aligned_segments)} segments.")
+        logging.debug("✅ Alignment complete: %d segments.", len(aligned_segments))
 
         segments = [TranscriptionSegmentDTO(**s) for s in aligned_segments]
 
@@ -118,7 +120,7 @@ async def start_transcribe(req: TranscribeRequestDTO):
 
     except Exception as e:
         traceback.print_exc()
-        logging.error(f"❌ Transcription failed: {e}", exc_info=True)
+        logging.error("❌ Transcription failed: %s", e, exc_info=True)
         raise HTTPException(status_code=500, detail=str(e)) from e
 
     finally:
@@ -127,4 +129,4 @@ async def start_transcribe(req: TranscribeRequestDTO):
             os.remove(audio_path)
             logging.debug("🧹 Temp files removed.")
         except Exception as cleanup_err:
-            logging.warning(f"⚠️ Cleanup failed: {cleanup_err}")
+            logging.warning("⚠️ Cleanup failed: %s", cleanup_err)

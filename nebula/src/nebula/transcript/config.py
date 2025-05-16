@@ -5,6 +5,13 @@ import yaml
 
 
 class Config:
+    """
+    Configuration class for transcript service settings.
+
+    Loads and stores environment-specific values such as API keys,
+    log levels, file storage paths, and other system constants.
+    """
+
     BASE_DIR = Path(__file__).resolve().parent
     VIDEO_STORAGE_PATH = BASE_DIR / "temp"
     WHISPER_MODEL = "base"
