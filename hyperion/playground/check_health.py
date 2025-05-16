@@ -3,29 +3,26 @@
 Simple client to test the Health service of the gRPC server.
 
 Usage:
-    poetry run python -m app.health.test_client
+    poetry run health-check
 """
 
 import sys
 import grpc
 import time
 from app.grpc import hyperion_pb2, hyperion_pb2_grpc
-from app.settings import settings
-
 
 def main():
     """Test the Health service by sending a Ping request."""
     # Create a gRPC channel
-    address = f"{settings.GRPC_HOST}:{settings.GRPC_PORT}"
-    print(f"Connecting to gRPC server at {address}...")
+    print(f"Connecting to gRPC server at...")
 
-    with grpc.insecure_channel(address) as channel:
+    with grpc.insecure_channel("0.0.0.0:50051") as channel:
         try:
             # Create a stub (client)
             stub = hyperion_pb2_grpc.HealthStub(channel)
 
             # Create a request
-            request = hyperion_pb2.PingRequest(client_id="test-client")
+            request = hyperion_pb2.PingRequest(client_id="health-client")
 
             # Make the call
             print("Sending ping request...")
