@@ -1,11 +1,13 @@
 from functools import partialmethod
+from logging import getLogger
 from typing import Sequence
 import openai
 from langchain_openai.chat_models import ChatOpenAI
 
 from app.settings import settings
-from app.logger import logger
 from app.models.model_provider import ModelProvider
+
+logger = getLogger(__name__)
 
 
 class OpenAIProvider(ModelProvider):
