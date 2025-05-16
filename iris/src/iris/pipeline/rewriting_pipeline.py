@@ -26,8 +26,9 @@ from iris.pipeline.prompts.rewriting_prompts import (
 
 from iris.web.status.status_update import RewritingCallback
 
-from iris.src.iris.retrieval.faq_retrieval import FaqRetrieval
-from iris.src.iris.vector_database.database import VectorDatabase
+from ..vector_database.database import VectorDatabase, batch_update_lock
+
+from ..retrieval.faq_retrieval import FaqRetrieval
 
 logger = logging.getLogger(__name__)
 
