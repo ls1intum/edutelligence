@@ -1,6 +1,6 @@
 # Nebula_Transcriber
 
-Nebula_Transcriber is a lightweight transcription service for educational videos.  
+Nebula_Transcriber is a lightweight transcription service for educational videos.
 It uses **Whisper** (Azure or local) for audio transcription and **GPT-4o Vision** to detect visible slide numbers from video frames.
 
 ---
@@ -28,9 +28,11 @@ cd nebula
 
 Ensure Python version `>=3.10,<3.13` is installed.
 You can check with:
+
 ```bash
 python --version
 ```
+
 If needed, install from https://www.python.org/downloads/
 
 ---
@@ -40,11 +42,13 @@ If needed, install from https://www.python.org/downloads/
 We use [Poetry](https://python-poetry.org/) for dependency and virtual environment management.
 
 ### Install Poetry (if not installed)
+
 ```bash
 pip install poetry
 ```
 
 ### Install Dependencies
+
 ```bash
 poetry install
 ```
@@ -56,10 +60,12 @@ poetry install
 FFmpeg is required for video/audio processing.
 
 ### Windows
+
 - Download from https://ffmpeg.org/download.html (or use chocolatey: `choco install ffmpeg`)
 - Ensure `ffmpeg.exe` is added to your system `PATH`
 
 ### macOS
+
 ```bash
 brew install ffmpeg
 ```
@@ -69,6 +75,7 @@ brew install ffmpeg
 ## 🔧 Configuration Files
 
 ### Create `llm_config.nebula.yml`
+
 Copy `llm_config.example.yml` and add your keys:
 
 ```yaml
@@ -88,14 +95,17 @@ Copy `llm_config.example.yml` and add your keys:
 ```
 
 ### Create `application_local.nebula.yml`
+
 Copy from `application_local.example.nebula.yml`
 
 ---
 
 ### Run App
+
 Set environment variables and run:
 
 #### Windows PowerShell
+
 ```powershell
 $env:APPLICATION_YML_PATH = "./application_local.nebula.yml"
 $env:LLM_CONFIG_PATH = "./llm_config.nebula.yml"
@@ -103,6 +113,7 @@ poetry run uvicorn nebula.transcript.app:app --reload --port 5000
 ```
 
 #### macOS / Linux
+
 ```bash
 export APPLICATION_YML_PATH=./application_local.nebula.yml
 export LLM_CONFIG_PATH=./llm_config.nebula.yml
@@ -121,6 +132,7 @@ docker compose up --build
 ```
 
 Make sure these files are present or mounted in the container:
+
 - `llm_config.nebula.yml`
 - `application_local.nebula.yml`
 
@@ -142,7 +154,7 @@ Make sure these files are present or mounted in the container:
 
 ## 🎓 Getting a TUM-Live `.m3u8` Link
 
-1. Open [https://live.rbg.tum.de](hhttps://live.rbg.tum.de/w/WiSe24ItP/55921 (only 12 min))
+1. Open [https://live.rbg.tum.de](hhttps://live.rbg.tum.de/w/WiSe24ItP/55921 "only 12 min")
 2. Open DevTools → Network tab → Filter by `.m3u8`
 3. Copy full link (including `jwt`)
 4. Use in `videoUrl`
@@ -175,7 +187,7 @@ nebula/
 ├── application_local.nebula.yml
 ├── llm_config.nebula.yml
 ├── docker/
-│   └── transcript/     
+│   └── transcript/
 │       └── Dockerfile
 ├── docker-compose.yml
 └── temp/

@@ -1,6 +1,7 @@
-import subprocess
-import logging
 import base64
+import logging
+import subprocess
+
 import cv2
 
 

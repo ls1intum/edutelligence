@@ -1,4 +1,5 @@
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
+
 from nebula.transcript.slide_utils import ask_gpt_for_slide_number
 
 

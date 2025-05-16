@@ -1,5 +1,7 @@
+from unittest.mock import MagicMock, mock_open, patch
+
 import pytest
-from unittest.mock import patch, MagicMock, mock_open
+
 from nebula.transcript.whisper_utils import transcribe_with_azure_whisper
 
 

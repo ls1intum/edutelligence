@@ -1,7 +1,7 @@
 import pytest
 from fastapi.testclient import TestClient
-from nebula.transcript.app import app
 
+from nebula.transcript.app import app
 
 client = TestClient(app)
 

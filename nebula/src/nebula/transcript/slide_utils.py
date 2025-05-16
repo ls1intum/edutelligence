@@ -1,4 +1,5 @@
 import logging
+
 from nebula.transcript.llm_utils import get_openai_client
 
 

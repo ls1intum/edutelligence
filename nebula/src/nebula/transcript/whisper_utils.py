@@ -1,7 +1,8 @@
-import os
 import logging
-import requests
+import os
+
 import ffmpeg
+import requests
 
 from nebula.transcript.audio_utils import split_audio_ffmpeg
 from nebula.transcript.llm_utils import load_llm_config

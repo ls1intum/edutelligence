@@ -31,6 +31,7 @@ coverage = "^7.5.0"
 pytest = "^8.3.5"
 aiohttp = "^3.11.18"
 pre-commit = "^4.2.0"
+mypy = "^1.15.0"
 
 [build-system]
 requires = ["poetry-core"]

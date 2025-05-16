@@ -1,7 +1,7 @@
 import platform
 import time
 from datetime import datetime
-from typing import Dict, Any, Optional, Callable, List, Union, Awaitable
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Union
 
 from fastapi import APIRouter, status
 from pydantic import BaseModel, Field
