@@ -61,7 +61,7 @@ async def home():
 
 @app.post("/start-transcribe", response_model=TranscriptionResponseDTO)
 async def start_transcribe(req: TranscribeRequestDTO):
-    print("[DEBUG] ▶ Received request", flush=True)
+    logging.debug("▶ Received request")
 
     video_url = req.videoUrl
     if not video_url:
@@ -71,56 +71,45 @@ async def start_transcribe(req: TranscribeRequestDTO):
     video_path = os.path.join(Config.VIDEO_STORAGE_PATH, f"{uid}.mp4")
     audio_path = os.path.join(Config.VIDEO_STORAGE_PATH, f"{uid}.wav")
 
-    print(f"[DEBUG] ▶ Video URL: {video_url}", flush=True)
-    print(
-        f"[DEBUG] ▶ Temp paths -> video: {video_path}, audio: {audio_path}", flush=True
-    )
+    logging.debug(f"▶ Video URL: {video_url}")
+    logging.debug(f"▶ Temp paths -> video: {video_path}, audio: {audio_path}")
 
     try:
-        print("[DEBUG] ▶ Downloading video...", flush=True)
+        logging.debug("▶ Downloading video...")
         download_video(video_url, video_path)
-        print("[DEBUG] ✅ Video downloaded.", flush=True)
+        logging.debug("✅ Video downloaded.")
 
-        print("[DEBUG] ▶ Extracting audio...", flush=True)
+        logging.debug("▶ Extracting audio...")
         extract_audio(video_path, audio_path)
-        print("[DEBUG] ✅ Audio extracted.", flush=True)
+        logging.debug("✅ Audio extracted.")
 
-        print("[DEBUG] ▶ Starting transcription...", flush=True)
+        logging.debug("▶ Starting transcription...")
         transcription = transcribe_with_azure_whisper(audio_path)
-        print(
-            f"[DEBUG] ✅ Transcription complete. Segments: {len(transcription['segments'])}",
-            flush=True,
-        )
+        logging.debug(f"✅ Transcription complete. Segments: {len(transcription['segments'])}")
 
         timestamps = [s["start"] for s in transcription["segments"]]
-        print(f"[DEBUG] ▶ Extracting {len(timestamps)} frames...", flush=True)
+        logging.debug(f"▶ Extracting {len(timestamps)} frames...")
         frames = extract_frames_at_timestamps(video_path, timestamps)
-        print(f"[DEBUG] ✅ Extracted {len(frames)} frames.", flush=True)
+        logging.debug(f"✅ Extracted {len(frames)} frames.")
 
         slide_timestamps = []
         for idx, (ts, img_b64) in enumerate(frames):
-            print(
-                f"[DEBUG] ▶ Asking GPT for slide {idx + 1}/{len(frames)} at {ts:.2f}s...",
-                flush=True,
-            )
+            logging.debug(f"▶ Asking GPT for slide {idx + 1}/{len(frames)} at {ts:.2f}s...")
             slide_number = ask_gpt_for_slide_number(img_b64)
-            print(f"[DEBUG] → GPT returned slide number: {slide_number}", flush=True)
+            logging.debug(f"→ GPT returned slide number: {slide_number}")
             if slide_number is not None:
                 slide_timestamps.append((ts, slide_number))
             time.sleep(2)
 
-        print("[DEBUG] ▶ Aligning slide numbers with transcript...", flush=True)
+        logging.debug("▶ Aligning slide numbers with transcript...")
         aligned_segments = align_slides_with_segments(
             transcription["segments"], slide_timestamps
         )
-        print(
-            f"[DEBUG] ✅ Alignment complete: {len(aligned_segments)} segments.",
-            flush=True,
-        )
+        logging.debug(f"✅ Alignment complete: {len(aligned_segments)} segments.")
 
         segments = [TranscriptionSegmentDTO(**s) for s in aligned_segments]
 
-        print("[DEBUG] ✅ Sending final response.", flush=True)
+        logging.debug("✅ Sending final response.")
         return TranscriptionResponseDTO(
             lectureUnitId=req.lectureUnitId,
             language=transcription.get("language", "en"),
@@ -129,15 +118,13 @@ async def start_transcribe(req: TranscribeRequestDTO):
 
     except Exception as e:
         traceback.print_exc()
-        print(f"[ERROR] ❌ Transcription failed: {e}", flush=True)
-        logging.error("Transcription failed", exc_info=True)
+        logging.error(f"❌ Transcription failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e)) from e
 
     finally:
         try:
             os.remove(video_path)
             os.remove(audio_path)
-            print("[DEBUG] 🧹 Temp files removed.", flush=True)
+            logging.debug("🧹 Temp files removed.")
         except Exception as cleanup_err:
-            print(f"[WARNING] ⚠️ Cleanup failed: {cleanup_err}", flush=True)
-            logging.warning("Cleanup failed: %s", cleanup_err)
+            logging.warning(f"⚠️ Cleanup failed: {cleanup_err}")

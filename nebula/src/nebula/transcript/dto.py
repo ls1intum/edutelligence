@@ -7,8 +7,6 @@ class TranscribeRequestDTO(BaseModel):
     videoUrl: str
     lectureUnitId: int
 
-    model_config = ConfigDict(extra="forbid")
-
 
 class TranscriptionSegmentDTO(BaseModel):
     startTime: float

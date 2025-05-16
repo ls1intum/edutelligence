@@ -74,7 +74,7 @@ jobs:
         working-directory: nebula
 
       - name: Use example config as test config
-        run: cp application_local.example.nebula.yml application_local.nebula.yml
+        run: cp nebula/application_local.example.nebula.yml application_local.nebula.yml
         working-directory: nebula
 
       - name: Run Tests
