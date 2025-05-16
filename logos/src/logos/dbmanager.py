@@ -139,6 +139,10 @@ class DBManager:
                             pass
             conn.commit()
 
+    @staticmethod
+    def is_initialized():
+        return os.path.exists("./logos/db/.env")
+
     def setup(self) -> dict:
         """
         Sets up the initial database. Creates a root-user.

@@ -1,7 +1,7 @@
 """
 Setup script to initialize Logos as proxy.
 """
-from logos.src.scripts.endpointmodules import *
+from scripts.endpointmodules import *
 
 
 def setup():

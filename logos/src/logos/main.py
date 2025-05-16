@@ -6,6 +6,8 @@ import httpx
 from logos.dbmanager import DBManager
 from logos.dbrequest import *
 
+from scripts.setup_proxy import setup
+
 app = FastAPI()
 
 
@@ -101,6 +103,12 @@ async def import_json(data: GetImportDataRequest):
     with DBManager() as db:
         return db.import_from_json(**data.dict())
 
+@app.get("/forward_host")
+def route_handler(request: Request):
+    host = request.headers.get("x-forwarded-host") or request.headers.get("forwarded")
+    return {"host": host}
+
+
 
 @app.api_route("/v1/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
 async def logos_service(path: str, request: Request):
@@ -110,6 +118,9 @@ async def logos_service(path: str, request: Request):
     :param request: Request
     :return: The response from Endpoints
     """
+    if not DBManager.is_initialized():
+        # If we run logos for the first time automatically run a basic setup skript
+        setup()
     # Read request
     data = await request.body()
     json_data = request2json(data)
