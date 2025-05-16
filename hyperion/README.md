@@ -63,14 +63,62 @@ This will test connectivity to the server and return server status information.
 
 ### Docker Compose
 
-To run the service using Docker Compose:
+#### Production Deployment
+
+To run the service in a production environment using Docker Compose:
 
 ```bash
 cd docker
-docker-compose -f compose.hyperion.yaml up -d
+docker compose -f compose.hyperion.yaml up -d
+```
+
+This uses the pre-built image from the GitHub Container Registry.
+
+#### Local Development
+
+For local development or testing, use the local compose file which builds from your local source:
+
+```bash
+cd docker
+docker compose -f compose.hyperion.local.yaml build
+docker compose -f compose.hyperion.local.yaml up -d
+```
+
+The local compose file:
+- Builds the image from your local source code
+- Maps port 50051 directly to your host machine
+- Sets default environment variables with fallbacks (e.g., OpenAI API keys)
+- Includes health checks and logging configuration
+
+To check the logs of the running container:
+
+```bash
+docker compose -f compose.hyperion.local.yaml logs
 ```
 
 To check the health of a running Docker container:
+
+```bash
+docker compose -f compose.hyperion.local.yaml exec hyperion poetry run health-check
+```
+
+#### Environment Variables
+
+The Docker Compose files support the following environment variables:
+
+| Variable | Description | Default in Local Compose |
+|----------|-------------|-----------------------|
+| `MODEL_NAME` | OpenAI model to use | gpt-3.5-turbo |
+| `OPENAI_API_KEY` | OpenAI API key | sk-dummy-key |
+| `OPENAI_API_VERSION` | OpenAI API version | 2023-05-15 |
+| `AZURE_OPENAI_ENDPOINT` | Azure OpenAI endpoint URL | empty |
+| `AZURE_OPENAI_API_KEY` | Azure OpenAI API key | empty |
+| `OLLAMA_BASIC_AUTH_USERNAME` | Ollama authentication username | empty |
+| `OLLAMA_BASIC_AUTH_PASSWORD` | Ollama authentication password | empty |
+| `OLLAMA_HOST` | Ollama host address | empty |
+
+You can set these environment variables in your shell before running Docker Compose, or use a `.env` file.
+
 
 
 ## Generate gRPC stubs

@@ -66,12 +66,6 @@ def main():
             logger.error(f"STDERR: {e.stderr}")
             sys.exit(1)
 
-    # Create __init__.py files for importing convenience if they don't exist
-    init_file = output_dir / "__init__.py"
-    if not init_file.exists():
-        with open(init_file, "w") as f:
-            f.write('"""Generated gRPC stubs."""\n')
-
     # Fix the import statements in the generated files
     logger.info("Fixing import statements in generated files...")
     for proto_file in proto_files:
