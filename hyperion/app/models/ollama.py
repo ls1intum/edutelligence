@@ -1,4 +1,5 @@
 from functools import partialmethod
+from logging import getLogger
 from typing import Sequence
 from requests.auth import _basic_auth_str as basic_auth_str
 from ollama import Client
@@ -6,9 +7,10 @@ from langchain_ollama.chat_models import ChatOllama
 
 from shared.health import register_component
 
-from app.logger import logger
 from app.settings import settings
 from app.models.model_provider import ModelProvider
+
+logger = getLogger(__name__)
 
 
 client = Client(
