@@ -16,11 +16,12 @@ COPY shared/ /app/shared/
 # Copy hyperion files
 COPY hyperion/pyproject.toml hyperion/poetry.lock /app/hyperion/
 COPY hyperion/app/ /app/hyperion/app/
+COPY hyperion/playground/ /app/hyperion/playground/
 
 # Set working directory to hyperion folder where the poetry config is
 WORKDIR /app/hyperion
 
-# Install dependencies
+# Install dependencies but don't try to install the current project
 RUN poetry install --no-root
 
 # Expose the gRPC port
