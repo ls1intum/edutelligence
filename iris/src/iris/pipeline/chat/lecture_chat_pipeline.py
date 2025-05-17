@@ -21,9 +21,8 @@ from ...domain.retrieval.lecture.lecture_retrieval_dto import (
     LectureRetrievalDTO,
 )
 from ...llm import (
-    CapabilityRequestHandler,
+    BasicRequestHandler,
     CompletionArguments,
-    RequirementList,
 )
 from ...llm.langchain import IrisLangchainChatModel
 from ...retrieval.lecture.lecture_retrieval import LectureRetrieval
@@ -31,6 +30,7 @@ from ...vector_database.database import VectorDatabase
 from ...web.status.status_update import LectureChatCallback
 from ..pipeline import Pipeline
 from ..shared.citation_pipeline import CitationPipeline
+from ..shared.utils import format_custom_instructions
 
 logger = logging.getLogger(__name__)
 
@@ -56,8 +56,9 @@ def lecture_initial_prompt():
      student's question. If the context provided to you is not enough to formulate an answer to the student question
      you can simply ask the student to elaborate more on his question. Use only the parts of the context provided for
      you that is relevant to the student's question. If the user greets you greet him back,
-      and ask him how you can help.
-     Always formulate your answer in the same language as the user's language.
+     and ask him how you can help.
+     Always respond in the same language as the user. If they use English, you use English.
+     If they use German, you use German, but then always use "du" instead of "Sie".
      """
 
 
@@ -81,13 +82,7 @@ class LectureChatPipeline(Pipeline):
     ):
         super().__init__(implementation_id="lecture_chat_pipeline")
         # Set the langchain chat model
-        request_handler = CapabilityRequestHandler(
-            requirements=RequirementList(
-                gpt_version_equivalent=4.5,
-                context_length=16385,
-                privacy_compliance=True,
-            )
-        )
+        request_handler = BasicRequestHandler(model_id="azure-gpt-41")
 
         self.callback = callback
         self.dto = dto
@@ -137,6 +132,13 @@ class LectureChatPipeline(Pipeline):
             base_url=dto.settings.artemis_base_url,
         )
         self._add_lecture_content_to_prompt(self.lecture_content)
+        custom_instructions = format_custom_instructions(
+            custom_instructions=dto.custom_instructions
+        )
+        if custom_instructions:
+            self.prompt += SystemMessagePromptTemplate.from_template(
+                custom_instructions
+            )
         prompt_val = self.prompt.format_messages()
         self.prompt = ChatPromptTemplate.from_messages(prompt_val)
         try:
