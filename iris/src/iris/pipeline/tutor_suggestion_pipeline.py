@@ -13,15 +13,22 @@ from iris.domain.data.text_exercise_dto import TextExerciseDTO
 from iris.llm import CapabilityRequestHandler, CompletionArguments, RequirementList
 from iris.llm.langchain import IrisLangchainChatModel
 from iris.pipeline import Pipeline
-from iris.pipeline.prompts.tutor_suggestion.question_answered_prompt import question_answered_prompt
-from iris.pipeline.tutor_suggestion_programming_exercise_pipeline import TutorSuggestionProgrammingExercisePipeline
+from iris.pipeline.prompts.tutor_suggestion.question_answered_prompt import (
+    question_answered_prompt,
+)
+from iris.pipeline.tutor_suggestion_programming_exercise_pipeline import (
+    TutorSuggestionProgrammingExercisePipeline,
+)
 from iris.pipeline.tutor_suggestion_summary_pipeline import (
     TutorSuggestionSummaryPipeline,
 )
-from iris.pipeline.tutor_suggestion_text_exercise_pipeline import TutorSuggestionTextExercisePipeline
+from iris.pipeline.tutor_suggestion_text_exercise_pipeline import (
+    TutorSuggestionTextExercisePipeline,
+)
 from iris.web.status.status_update import TutorSuggestionCallback
 
 logger = logging.getLogger(__name__)
+
 
 def get_channel_type(dto: CommunicationTutorSuggestionPipelineExecutionDTO) -> str:
     """
@@ -36,6 +43,7 @@ def get_channel_type(dto: CommunicationTutorSuggestionPipelineExecutionDTO) -> s
         return "lecture"
     else:
         return "general"
+
 
 class TutorSuggestionPipeline(Pipeline):
     """
@@ -85,7 +93,6 @@ class TutorSuggestionPipeline(Pipeline):
             self.callback.error("No summary was generated")
             return
 
-
         try:
             is_question = "yes" in summary.get("is_question").lower()
             number_of_answers = summary.get("num_answers")
@@ -98,7 +105,6 @@ class TutorSuggestionPipeline(Pipeline):
             return
 
         channel_type = get_channel_type(dto)
-
 
         if is_question and number_of_answers > 0:
             self.callback.in_progress("Checking if questions is already answered")
@@ -135,8 +141,6 @@ class TutorSuggestionPipeline(Pipeline):
                 self.callback.error("Not implemented yet")
             else:
                 self.callback.error("Not implemented yet")
-
-
 
     def _run_text_exercise_pipeline(
         self, text_exercise_dto: TextExerciseDTO, summary: str
