@@ -5,12 +5,13 @@ You should aggregate connected learnings into a single memory.
 You should still try to create separate memories for learnings that are not connected.
 A memory is useless if it is bloated and contains too many learnings tangentially connected learnings.
 
-{% if is_tool_phase is false %}
+{% if is_tool_phase is false and is_thinking_phase is false %}
 You should not include any other text or explanation. Providing an empty array is not acceptable.
 You should output the memories in this structured JSON format:
 ```
 {{ memory_json_schema }}
 ```
+You **MUST** ensure that you only use UUIDs that actually exist in the learnings.
 {% endif %}
 
 {% if is_tool_phase is true %}
@@ -28,6 +29,7 @@ Once you have thought enough about the learnings and how to aggregate them and g
 You are in the thinking phase.
 You should not output any learnings or memories.
 You should reflect on the learnings available and how they can be grouped into memories.
+When mentioning the learnings, you should use the UUIDs of the learnings. The UUIDs **MUST** actually exist in the learnings.
 The thinking phase is a time for you to reflect on the learnings and how they can be grouped into memories.
 After the thinking phase, you will proceed to the tool phase.
 **DO NOT try to use any tools in the thinking phase.**

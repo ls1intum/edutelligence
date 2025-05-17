@@ -1,6 +1,6 @@
 import abc
 from abc import ABC
-from typing import Sequence
+from typing import Mapping, Sequence
 from uuid import UUID
 
 from memiris.domain.learning import Learning
@@ -13,7 +13,13 @@ class LearningRepository(BaseRepository[Learning, UUID], ABC):
     """
 
     @abc.abstractmethod
-    def find_similar(
+    def search(
         self, tenant: str, vector_name: str, vector: Sequence[float], count: int
+    ) -> list[Learning]:
+        pass
+
+    @abc.abstractmethod
+    def search_multi(
+        self, tenant: str, vectors: Mapping[str, Sequence[float]], count: int
     ) -> list[Learning]:
         pass

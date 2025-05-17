@@ -11,7 +11,11 @@ from memiris.dto.learning_main_dto import LearningDto
 from memiris.dto.memory_creation_dto import MemoryCreationDto
 from memiris.repository.learning_repository import LearningRepository
 from memiris.service.ollama_service import ollama_client
-from memiris.tool.learning_tools import create_tool_find_similar
+from memiris.service.vectorizer import Vectorizer
+from memiris.tool.learning_tools import (
+    create_tool_find_similar,
+    create_tool_search_learnings,
+)
 from memiris.util.learning_util import learning_to_dto
 from memiris.util.memory_util import creation_dto_to_memory
 
@@ -25,12 +29,14 @@ class MemoryCreator:
     response_llm: str
     template: Template
     learning_repository: LearningRepository
+    vectorizer: Vectorizer
 
     def __init__(
         self,
         tool_llm: str,
         response_llm: str,
         learning_repository: LearningRepository,
+        vectorizer: Vectorizer,
         template: Optional[str] = None,
     ) -> None:
         """
@@ -39,6 +45,7 @@ class MemoryCreator:
         self.tool_llm = tool_llm
         self.response_llm = response_llm
         self.learning_repository = learning_repository
+        self.vectorizer = vectorizer
 
         if template is None:
             # Load the default template from the file located at memiris.default_templates
@@ -50,9 +57,7 @@ class MemoryCreator:
             # Load the template from the provided string
             self.template = Template(template)
 
-    def create(
-        self, learnings: List[Learning], tenant: str, vector_name: str, **kwargs
-    ) -> List[Memory]:
+    def create(self, learnings: List[Learning], tenant: str, **kwargs) -> List[Memory]:
         """
         Create a memory from the given learnings using the LLM.
         """
@@ -85,8 +90,11 @@ class MemoryCreator:
             pass
 
         tools = {
-            "find_similar": create_tool_find_similar(
-                self.learning_repository, tenant, vector_name
+            "find_similar_learnings": create_tool_find_similar(
+                self.learning_repository, tenant
+            ),
+            "search_learnings": create_tool_search_learnings(
+                self.learning_repository, self.vectorizer, tenant
             ),
             "done_tool": done_tool,
         }
@@ -109,8 +117,9 @@ class MemoryCreator:
                 tools=(
                     [
                         done_tool,
-                        create_tool_find_similar(
-                            self.learning_repository, tenant, vector_name
+                        create_tool_find_similar(self.learning_repository, tenant),
+                        create_tool_search_learnings(
+                            self.learning_repository, self.vectorizer, tenant
                         ),
                     ]
                     if i % 2 == 1
@@ -170,8 +179,21 @@ class MemoryCreator:
                 memory_dtos = memory_array_type_adapter.validate_json(
                     response.message.content
                 )
+
+                needed_learnings = []
+                for memory_dto in memory_dtos:
+                    for learning_id in memory_dto.learnings:
+                        try:
+                            learning = self.learning_repository.find(
+                                tenant, learning_id
+                            )
+                            if learning:
+                                needed_learnings.append(learning)
+                        except Exception as e:
+                            print(f"Error finding learning with ID {learning_id}: {e}")
+
                 return [
-                    creation_dto_to_memory(memory_dto, learnings)
+                    creation_dto_to_memory(memory_dto, needed_learnings)
                     for memory_dto in memory_dtos
                 ]
             except Exception as e:

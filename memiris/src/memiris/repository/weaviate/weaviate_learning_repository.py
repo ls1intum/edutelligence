@@ -1,10 +1,11 @@
-from typing import Sequence
+from typing import Mapping, Sequence
 from uuid import UUID
 
 from weaviate import WeaviateClient
 from weaviate.classes.config import DataType, Property
 from weaviate.collections import Collection
 from weaviate.collections.classes.config import Configure, VectorDistances
+from weaviate.collections.classes.grpc import TargetVectors
 
 from memiris.domain.learning import Learning
 from memiris.repository.learning_repository import LearningRepository
@@ -69,7 +70,11 @@ class WeaviateLearningRepository(LearningRepository):
     def save(self, tenant: str, entity: Learning) -> Learning:
         """Save a Learning entity to Weaviate."""
 
-        properties = {"title": entity.title, "content": entity.content}
+        properties = {
+            "title": entity.title,
+            "content": entity.content,
+            "reference": entity.reference,
+        }
 
         if not entity.id:
             operation = self.collection.with_tenant(tenant).data.insert
@@ -111,13 +116,44 @@ class WeaviateLearningRepository(LearningRepository):
         except Exception as e:
             raise ValueError(f"Error deleting Learning with id {entity_id}") from e
 
-    def find_similar(
+    def search(
         self, tenant: str, vector_name: str, vector: Sequence[float], count: int
     ) -> list[Learning]:
         try:
             result = self.collection.with_tenant(tenant).query.near_vector(
                 near_vector=vector,
                 target_vector=vector_name,
+                limit=count,
+                include_vector=True,
+            )
+
+            if not result:
+                return []
+
+            # Create Learning objects
+            return [
+                Learning(
+                    uid=item.uuid,
+                    title=str(item.properties["title"]),
+                    content=str(item.properties["content"]),
+                    reference=str(item.properties["reference"]),
+                    vectors=item.vector,  # type: ignore
+                )
+                for item in result.objects
+            ]
+        except Exception as e:
+            raise ValueError("Error finding similar Learning objects") from e
+
+    def search_multi(
+        self, tenant: str, vectors: Mapping[str, Sequence[float]], count: int
+    ) -> list[Learning]:
+        try:
+            vectors = {
+                vector_name: vector for vector_name, vector in vectors.items() if vector
+            }
+            result = self.collection.with_tenant(tenant).query.near_vector(
+                near_vector=vectors,
+                target_vector=TargetVectors.minimum(list(vectors.keys())),
                 limit=count,
             )
 
@@ -135,4 +171,4 @@ class WeaviateLearningRepository(LearningRepository):
                 for item in result.objects
             ]
         except Exception as e:
-            raise ValueError("Error finding similar Learning objects") from e
+            raise ValueError("Error searching for Learning objects") from e
