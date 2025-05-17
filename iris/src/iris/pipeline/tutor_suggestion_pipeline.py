@@ -131,7 +131,6 @@ class TutorSuggestionPipeline(Pipeline):
                 )
                 return
 
-        logging.info(channel_type)
         if channel_type == "text_exercise":
             self._run_text_exercise_pipeline(
                 text_exercise_dto=dto.textExercise, summary=summary
