@@ -12,4 +12,4 @@ class Submission(Schema, ABC):
     meta: dict = Field({}, example={})
 
     class Config:
-        orm_mode = True
+        from_attributes = True
