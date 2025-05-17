@@ -1,5 +1,5 @@
 import os
-import subprocess
+import subprocess  # nosec B404
 
 
 def split_audio_ffmpeg(audio_path, output_dir, chunk_duration=60):
@@ -21,7 +21,10 @@ def split_audio_ffmpeg(audio_path, output_dir, chunk_duration=60):
         "-y",
     ]
 
-    result = subprocess.run(command, capture_output=True, text=True, check=True)
+    result = subprocess.run(
+        command, shell=False, capture_output=True, text=True, check=True
+    )  # nosec B603
+
     if result.returncode != 0:
         raise RuntimeError(f"FFmpeg split failed: {result.stderr}")
 

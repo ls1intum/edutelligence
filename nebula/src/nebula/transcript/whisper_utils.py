@@ -1,7 +1,7 @@
 import logging
 import os
 
-import ffmpeg
+import ffmpeg  # type: ignore
 import requests
 
 from nebula.transcript.audio_utils import split_audio_ffmpeg

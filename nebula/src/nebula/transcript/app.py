@@ -6,7 +6,7 @@ import uuid
 
 from fastapi import FastAPI, HTTPException
 
-from nebula.health import create_health_router
+from nebula.health import router as health_router
 from nebula.security import AuthMiddleware, add_security_schema_to_app
 from nebula.transcript.align_utils import align_slides_with_segments
 from nebula.transcript.config import Config
@@ -36,7 +36,7 @@ app.add_middleware(
 )
 
 # Health check router
-app.include_router(create_health_router(app_version="1.0.0"))
+app.include_router(health_router)
 
 # Add security schema to OpenAPI
 add_security_schema_to_app(
@@ -66,8 +66,8 @@ async def start_transcribe(req: TranscribeRequestDTO):
         raise HTTPException(status_code=400, detail="Missing videoUrl")
 
     uid = str(uuid.uuid4())
-    video_path = os.path.join(Config.VIDEO_STORAGE_PATH, "%s.mp4" % uid)
-    audio_path = os.path.join(Config.VIDEO_STORAGE_PATH, "%s.wav" % uid)
+    video_path = os.path.join(Config.VIDEO_STORAGE_PATH, f"{uid}.mp4")
+    audio_path = os.path.join(Config.VIDEO_STORAGE_PATH, f"{uid}.wav")
 
     logging.debug("▶ Video URL: %s", video_url)
     logging.debug("▶ Temp paths -> video: %s, audio: %s", video_path, audio_path)

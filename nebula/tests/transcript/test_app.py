@@ -1,16 +1,10 @@
 from unittest.mock import patch
 
-import pytest
 from fastapi.testclient import TestClient
 
 from nebula.transcript.app import app
 
 client = TestClient(app)
-
-
-@pytest.fixture
-def authorized_headers():
-    return {"Authorization": "nebula-secret"}
 
 
 def test_home(authorized_headers):
@@ -30,8 +24,7 @@ def test_start_transcribe_success(
     mock_gpt,
     mock_frames,
     mock_transcribe,
-    _mock_audio,
-    _mock_download,
+    *_,
     authorized_headers,
 ):
     mock_transcribe.return_value = {
@@ -55,9 +48,8 @@ def test_start_transcribe_success(
 
 
 def test_start_transcribe_missing_video_url(authorized_headers):
-    payload = {"lectureUnitId": 42}
     response = client.post(
-        "/start-transcribe", json=payload, headers=authorized_headers
+        "/start-transcribe", json={"lectureUnitId": 42}, headers=authorized_headers
     )
     assert response.status_code == 422
 
@@ -73,8 +65,7 @@ def test_start_transcribe_gpt_returns_none(
     mock_gpt,
     mock_frames,
     mock_transcribe,
-    _mock_audio,
-    _mock_download,
+    *_,
     authorized_headers,
 ):
     mock_transcribe.return_value = {
@@ -102,9 +93,7 @@ def test_start_transcribe_gpt_returns_none(
     "nebula.transcript.app.transcribe_with_azure_whisper",
     side_effect=RuntimeError("Whisper failed"),
 )
-def test_start_transcribe_whisper_failure(
-    mock_transcribe, _mock_audio, _mock_download, authorized_headers
-):
+def test_start_transcribe_whisper_failure(*_, authorized_headers):
     payload = {"videoUrl": "http://example.com/video.mp4", "lectureUnitId": 42}
     response = client.post(
         "/start-transcribe", json=payload, headers=authorized_headers
@@ -119,9 +108,7 @@ def test_start_transcribe_whisper_failure(
     "nebula.transcript.app.transcribe_with_azure_whisper", side_effect=Exception("Boom")
 )
 @patch("os.remove")
-def test_start_transcribe_cleanup_on_failure(
-    mock_remove, _mock_transcribe, _mock_audio, _mock_download, authorized_headers
-):
+def test_start_transcribe_cleanup_on_failure(mock_remove, *_, authorized_headers):
     payload = {"videoUrl": "http://example.com/video.mp4", "lectureUnitId": 42}
     response = client.post(
         "/start-transcribe", json=payload, headers=authorized_headers
@@ -131,7 +118,7 @@ def test_start_transcribe_cleanup_on_failure(
 
 
 def test_start_transcribe_invalid_schema(authorized_headers):
-    payload = {"videoUrl": 123, "lectureUnitId": "abc"}  # wrong types
+    payload = {"videoUrl": 123, "lectureUnitId": "abc"}
     response = client.post(
         "/start-transcribe", json=payload, headers=authorized_headers
     )

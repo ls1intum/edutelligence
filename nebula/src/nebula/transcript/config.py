@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+from typing import List
 
 import yaml
 
@@ -12,11 +13,11 @@ class Config:
     log levels, file storage paths, and other system constants.
     """
 
-    BASE_DIR = Path(__file__).resolve().parent
+    BASE_DIR = Path(__file__).resolve().parent.parent
     VIDEO_STORAGE_PATH = BASE_DIR / "temp"
     WHISPER_MODEL = "base"
     LOG_LEVEL = "INFO"
-    API_KEYS = []
+    API_KEYS: List[str] = []
 
     # Load paths from env or fall back to root-level config
     APPLICATION_YML_PATH = Path(

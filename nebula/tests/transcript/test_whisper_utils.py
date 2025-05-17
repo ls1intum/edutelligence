@@ -11,19 +11,19 @@ from nebula.transcript.whisper_utils import transcribe_with_azure_whisper
 @patch("nebula.transcript.whisper_utils.split_audio_ffmpeg")
 @patch("nebula.transcript.whisper_utils.load_llm_config")
 def test_transcribe_with_azure_whisper_success(
-    mock_config, mock_split, mock_post, mock_duration, mock_file
+    mock_config,
+    mock_split,
+    mock_post,
+    *_,
 ):
-    # Mock Azure config
     mock_config.return_value = {
         "api_key": "dummy",  # pragma: allowlist secret
         "endpoint": "https://dummy.azure.com",
         "api_version": "2024-06-01",
     }
 
-    # Simulate audio split
     mock_split.return_value = ["test_chunk.wav"]
 
-    # Simulate Whisper response
     mock_response = MagicMock()
     mock_response.json.return_value = {
         "segments": [{"start": 0, "end": 2, "text": "Hello"}]
@@ -43,9 +43,7 @@ def test_transcribe_with_azure_whisper_success(
 @patch("nebula.transcript.whisper_utils.requests.post", side_effect=Exception("Boom"))
 @patch("nebula.transcript.whisper_utils.split_audio_ffmpeg")
 @patch("nebula.transcript.whisper_utils.load_llm_config")
-def test_transcribe_with_azure_whisper_failure(
-    mock_config, mock_split, mock_post, mock_file
-):
+def test_transcribe_with_azure_whisper_failure(mock_config, mock_split, *_):
     mock_config.return_value = {
         "api_key": "dummy",  # pragma: allowlist secret
         "endpoint": "https://dummy.azure.com",
