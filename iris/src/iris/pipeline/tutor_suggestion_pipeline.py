@@ -130,17 +130,17 @@ class TutorSuggestionPipeline(Pipeline):
                 )
                 return
 
-            logging.info(channel_type)
-            if channel_type == "text_exercise":
-                self._run_text_exercise_pipeline(
-                    text_exercise_dto=dto.textExercise, summary=summary
-                )
-            elif channel_type == "programming_exercise":
-                self._run_programming_exercise_pipeline(dto=dto, summary=summary)
-            elif channel_type == "lecture":
-                self.callback.error("Not implemented yet")
-            else:
-                self.callback.error("Not implemented yet")
+        logging.info(channel_type)
+        if channel_type == "text_exercise":
+            self._run_text_exercise_pipeline(
+                text_exercise_dto=dto.textExercise, summary=summary
+            )
+        elif channel_type == "programming_exercise":
+            self._run_programming_exercise_pipeline(dto=dto, summary=summary)
+        elif channel_type == "lecture":
+            self.callback.error("Not implemented yet")
+        else:
+            self.callback.error("Not implemented yet")
 
     def _run_text_exercise_pipeline(
         self, text_exercise_dto: TextExerciseDTO, summary: str
