@@ -85,7 +85,7 @@ class FaqRetrieval(BaseRetrieval):
         hybrid_factor: float = 0.75,
     ) -> List[dict]:
         """
-        Retrieves FAQs directly from the database, optionally with a similarity search on question_title and question_answer.
+        Retrieves FAQs from the database, optionally with a similarity search on question_title and question_answer.
 
         :param course_id: ID of the course to fetch FAQs for a specific course.
         :param search_text: Optional search text used for semantic search.

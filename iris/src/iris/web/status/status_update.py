@@ -173,7 +173,10 @@ class StatusCallback(ABC):
         self.stage = self.status.stages[-1]
         self.on_status_update()
         logger.error(
-            f"Error occurred in job {self.run_id} in stage {self.stage.name}: {message}"
+            "Error occurred in job %s in stage %s: %s",
+            self.run_id,
+            self.stage.name,
+            message,
         )
         if exception:
             capture_exception(exception)
