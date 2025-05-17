@@ -1,7 +1,7 @@
 import subprocess
 import os
 import sys
-
+from dotenv import load_dotenv
 
 def main():
     modules = [
@@ -33,6 +33,14 @@ def main():
         if not os.path.exists(venv_path):
             print(f"Virtual environment not found for {module} at {venv_path}")
             continue
+
+        # Load module-specific .env file
+        module_env_path = os.path.join(os.getcwd(), module, ".env")
+        if os.path.exists(module_env_path):
+            print(f"Loading environment variables from {module_env_path}")
+            load_dotenv(module_env_path)
+        else:
+            print(f"No .env file found for {module}")
 
         # Set environment variables for the virtual environment
         os.environ["VIRTUAL_ENV"] = venv_path
