@@ -13,3 +13,4 @@ def setup():
     _ = endpoint_add_provider(logos_key, base_url=base_url, api_key="")
     _ = endpoint_add_profile(logos_key)
     _ = endpoint_connect_process_provider(logos_key)
+    return logos_key

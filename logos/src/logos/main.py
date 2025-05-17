@@ -120,7 +120,8 @@ async def logos_service(path: str, request: Request):
     """
     if not DBManager.is_initialized():
         # If we run logos for the first time automatically run a basic setup skript
-        setup()
+        lk = setup()
+        request.headers["logos_key"] = lk
     # Read request
     data = await request.body()
     json_data = request2json(data)
