@@ -16,6 +16,7 @@ from iris.pipeline import Pipeline
 from iris.pipeline.prompts.tutor_suggestion.question_answered_prompt import (
     question_answered_prompt,
 )
+from iris.pipeline.tutor_suggestion_lecture_pipeline import TutorSuggestionLecturePipeline
 from iris.pipeline.tutor_suggestion_programming_exercise_pipeline import (
     TutorSuggestionProgrammingExercisePipeline,
 )
@@ -130,17 +131,17 @@ class TutorSuggestionPipeline(Pipeline):
                 )
                 return
 
-            logging.info(channel_type)
-            if channel_type == "text_exercise":
-                self._run_text_exercise_pipeline(
-                    text_exercise_dto=dto.textExercise, summary=summary
-                )
-            elif channel_type == "programming_exercise":
-                self._run_programming_exercise_pipeline(dto=dto, summary=summary)
-            elif channel_type == "lecture":
-                self.callback.error("Not implemented yet")
-            else:
-                self.callback.error("Not implemented yet")
+        logging.info(channel_type)
+        if channel_type == "text_exercise":
+            self._run_text_exercise_pipeline(
+                text_exercise_dto=dto.textExercise, summary=summary
+            )
+        elif channel_type == "programming_exercise":
+            self._run_programming_exercise_pipeline(dto=dto, summary=summary)
+        elif channel_type == "lecture":
+            self._run_lecture_pipeline(dto=dto, summary=summary)
+        else:
+            self.callback.error("Not implemented yet")
 
     def _run_text_exercise_pipeline(
         self, text_exercise_dto: TextExerciseDTO, summary: str
@@ -190,5 +191,32 @@ class TutorSuggestionPipeline(Pipeline):
         self.callback.done(
             "Generated tutor suggestions",
             tutor_suggestion=programming_exercise_result,
+            tokens=self.tokens,
+        )
+
+    def _run_lecture_pipeline(
+        self, dto: CommunicationTutorSuggestionPipelineExecutionDTO, summary: str
+    ):
+        """
+        Run the lecture pipeline.
+        :param dto: The CommunicationTutorSuggestionPipelineExecutionDTO object containing details about the lecture.
+        :param summary: The summary of the post.
+        :return: The result of the lecture pipeline.
+        """
+        self.callback.in_progress("Generating suggestions for lecture")
+
+        lecture_pipeline = TutorSuggestionLecturePipeline(callback=self.callback)
+
+        try:
+            lecture_result = lecture_pipeline(
+                dto=dto, chat_summary=summary
+            )
+        except AttributeError as e:
+            self.callback.error(f"Error running lecture pipeline: {e}")
+            return
+
+        self.callback.done(
+            "Generated tutor suggestions",
+            tutor_suggestion=lecture_result,
             tokens=self.tokens,
         )
