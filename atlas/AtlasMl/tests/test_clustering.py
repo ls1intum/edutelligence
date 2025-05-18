@@ -40,7 +40,7 @@ def test_tsne_perplexity_too_high():
 def test_hdbscan_output_shape_default():
     # Generate a dataset with 100 samples and 5 features.
     matrix = np.random.rand(100, 5)
-    labels = apply_hdbscan(matrix)
+    labels, centroid, medoid = apply_hdbscan(matrix)
     # The returned labels should be a 1D numpy array with length equal to the number of samples.
     assert isinstance(labels, np.ndarray)
     assert labels.shape[0] == 100
@@ -55,7 +55,7 @@ def test_hdbscan_invalid_input_type():
 def test_hdbscan_metric_cosine():
     # Ensure the function works with a different metric.
     matrix = np.random.rand(100, 5)
-    labels = apply_hdbscan(matrix, metric='cosine')
+    labels, centroid, medoid = apply_hdbscan(matrix, metric='cosine')
     # Verify output shape remains consistent.
     assert isinstance(labels, np.ndarray)
     assert labels.shape[0] == 100
@@ -71,7 +71,7 @@ def test_hdbscan_noise_detection():
 
     # Run HDBSCAN with parameters tuned to detect noise.
     # Adjust parameters by using 'min_cluster_size' instead of 'eps' to better isolate the noise points.
-    labels = apply_hdbscan(matrix, min_samples=3, min_cluster_size=15)
+    labels, centroid, medoid = apply_hdbscan(matrix, min_samples=3, min_cluster_size=15)
 
     # HDBSCAN typically marks noise points as -1.
     # Check that some points have been labeled as noise and provide a debug message if not.
