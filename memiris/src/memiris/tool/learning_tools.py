@@ -7,7 +7,33 @@ from memiris.service.vectorizer import Vectorizer
 from memiris.util.learning_util import learning_to_dto
 
 
-def create_tool_find_similar(
+def create_tool_find_learnings_by_id(
+    learning_repository: LearningRepository, tenant: str
+) -> Callable[[List[UUID]], List[LearningDto]]:
+    """
+    Create a tool to find learnings by their IDs.
+    """
+
+    def find_learnings_by_id(learning_ids: List[UUID]) -> List[LearningDto]:
+        """
+        Find learnings by their IDs. Can be used to get unknown learnings of a memory.
+
+        Args:
+            learning_ids (List[UUID]): A list of learning IDs to find.
+
+        Returns:
+            List[LearningDto]: A list of learning objects that match the given IDs.
+        """
+        print(f"TOOL: Finding learnings by ID in {tenant}: {learning_ids}")
+        return [
+            learning_to_dto(learning_repository.find(tenant, learning_id))
+            for learning_id in learning_ids
+        ]
+
+    return find_learnings_by_id
+
+
+def create_tool_find_similar_learnings(
     learning_repository: LearningRepository, tenant: str
 ) -> Callable[[UUID], List[LearningDto]]:
     """

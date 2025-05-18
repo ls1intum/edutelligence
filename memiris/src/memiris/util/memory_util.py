@@ -51,7 +51,7 @@ def memory_to_dto(memory: Memory) -> MemoryDto:
     Convert a Memory object to a MemoryDto.
     """
     return MemoryDto(
-        id=memory.id,
+        id=memory.id,  # type: ignore
         title=memory.title,
         content=memory.content,
         learnings=[learning.id for learning in memory.learnings if learning.id],

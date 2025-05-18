@@ -10,14 +10,16 @@ class Vectorizer:
 
     vector_models: dict[str, str]
 
-    def __init__(self, vector_models: dict[str, str]) -> None:
+    def __init__(self, vector_models: list[str]) -> None:
         """
         Initialize the Vectorizer with a dictionary of vector models.
 
         Args:
-            vector_models (dict[str, str]): A dictionary mapping model names to their respective vectorization methods.
+            vector_models (list[str]): A list of model names to be used for vectorization.
         """
-        self.vector_models = vector_models
+        self.vector_models = {
+            f"vector_{i}": vector_models[i] for i in range(len(vector_models))
+        }
 
     def vectorize(self, query: str) -> dict[str, Sequence[float]]:
         """

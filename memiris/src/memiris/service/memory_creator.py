@@ -1,5 +1,5 @@
 import json
-from typing import Any, List, Mapping, Optional, Union
+from typing import Any, Callable, List, Mapping, Optional, Union
 
 from jinja2 import Template
 from ollama import Message
@@ -10,12 +10,10 @@ from memiris.domain.memory import Memory
 from memiris.dto.learning_main_dto import LearningDto
 from memiris.dto.memory_creation_dto import MemoryCreationDto
 from memiris.repository.learning_repository import LearningRepository
+from memiris.repository.memory_repository import MemoryRepository
 from memiris.service.ollama_service import ollama_client
 from memiris.service.vectorizer import Vectorizer
-from memiris.tool.learning_tools import (
-    create_tool_find_similar,
-    create_tool_search_learnings,
-)
+from memiris.tool import learning_tools, memory_tools
 from memiris.util.learning_util import learning_to_dto
 from memiris.util.memory_util import creation_dto_to_memory
 
@@ -29,6 +27,7 @@ class MemoryCreator:
     response_llm: str
     template: Template
     learning_repository: LearningRepository
+    memory_repository: MemoryRepository
     vectorizer: Vectorizer
 
     def __init__(
@@ -36,6 +35,7 @@ class MemoryCreator:
         tool_llm: str,
         response_llm: str,
         learning_repository: LearningRepository,
+        memory_repository: MemoryRepository,
         vectorizer: Vectorizer,
         template: Optional[str] = None,
     ) -> None:
@@ -45,6 +45,7 @@ class MemoryCreator:
         self.tool_llm = tool_llm
         self.response_llm = response_llm
         self.learning_repository = learning_repository
+        self.memory_repository = memory_repository
         self.vectorizer = vectorizer
 
         if template is None:
@@ -89,12 +90,21 @@ class MemoryCreator:
             """
             pass
 
-        tools = {
-            "find_similar_learnings": create_tool_find_similar(
+        tools: dict[str, Callable] = {
+            "find_learnings_by_id": learning_tools.create_tool_find_learnings_by_id(
                 self.learning_repository, tenant
             ),
-            "search_learnings": create_tool_search_learnings(
+            "find_similar_learnings": learning_tools.create_tool_find_similar_learnings(
+                self.learning_repository, tenant
+            ),
+            "search_learnings": learning_tools.create_tool_search_learnings(
                 self.learning_repository, self.vectorizer, tenant
+            ),
+            "find_similar_memories": memory_tools.create_tool_find_similar(
+                self.memory_repository, tenant
+            ),
+            "search_memories": memory_tools.create_tool_search_memories(
+                self.memory_repository, self.vectorizer, tenant
             ),
             "done_tool": done_tool,
         }
@@ -114,17 +124,7 @@ class MemoryCreator:
             response = ollama_client.chat(
                 model=self.tool_llm,
                 messages=messages,
-                tools=(
-                    [
-                        done_tool,
-                        create_tool_find_similar(self.learning_repository, tenant),
-                        create_tool_search_learnings(
-                            self.learning_repository, self.vectorizer, tenant
-                        ),
-                    ]
-                    if i % 2 == 1
-                    else None
-                ),
+                tools=(list(tools.values()) if i % 2 == 1 else None),
                 options={"temperature": 0.05},
                 **kwargs,
             )
