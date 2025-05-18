@@ -77,12 +77,18 @@ jobs:
         run: cp application_local.example.nebula.yml application_local.nebula.yml
         working-directory: nebula
 
+      - name: Clean old coverage data
+        run: |
+          rm -f .coverage
+          rm -f coverage.xml
+        working-directory: nebula
+
       - name: Run Tests
         run: poetry run coverage run -m pytest
         working-directory: nebula
 
       - name: Generate Coverage Report
-        run: poetry run coverage xml
+        run: poetry run coverage xml --ignore-errors
         working-directory: nebula
 
       #- name: Upload Coverage Report
