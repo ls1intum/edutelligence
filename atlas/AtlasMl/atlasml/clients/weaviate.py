@@ -2,7 +2,7 @@ import logging
 from enum import Enum
 
 import weaviate
-from weaviate.classes.filters import Filter
+from weaviate.classes.query import Filter
 
 from atlasml.config import settings
 
@@ -31,13 +31,18 @@ class WeaviateClient:
 
         self._ensure_collections_exist()
 
+    def _check_if_collection_exists(self, collection_name: str):
+        """Check if a collection exists and create it if it doesn't."""
+        if not self.client.collections.exists(collection_name):
+            raise ValueError(f"Collection '{collection_name}' does not exist")
+
+
     def _ensure_collections_exist(self):
         """Ensure collections exist with proper schema."""
         # Define schemas for each collection
         # TODO: ARDA: Add properties for each collection
         # After, schema updated automatically and u can fetch the data from the collection with the new properties
         collection_schemas = {
-            # TODO:
             CollectionNames.COMPETENCY.value: {
                 "properties": [
                     {"name": "text", "dataType": ["text"]},
@@ -130,7 +135,7 @@ class WeaviateClient:
         logger.info("--- EMBEDDING ADDED TO WEAVIATE ---")
         logger.info(f"UUID: {uuid}")
         return uuid
-
+    
     def get_embeddings(self, collection_name: str, id: str):
         """Get embeddings for a given ID from the specified collection."""
         logger.info(f"--- GETTING EMBEDDINGS FROM WEAVIATE COLLECTION '{collection_name}' ---")
@@ -275,6 +280,11 @@ class WeaviateClient:
             
         logger.info(f"--- FOUND {len(results)} EMBEDDINGS MATCHING MULTIPLE PROPERTIES ---")
         return results
+
+    def _check_if_collection_exists(self, collection_name: str):
+        """Check if a collection exists and create it if it doesn't."""
+        if not self.client.collections.exists(collection_name):
+            raise ValueError(f"Collection '{collection_name}' does not exist")
 
 
 _weaviate_client_instance = None
