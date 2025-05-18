@@ -35,6 +35,10 @@ mypy = "^1.15.0"
 types-pyyaml = "^6.0.12.20250516"
 types-requests = "^2.32.0.20250515"
 
+[tool.isort]
+profile = "black"
+multi_line_output = 3
+
 [tool.bandit]
 skips = ["B101"]
 

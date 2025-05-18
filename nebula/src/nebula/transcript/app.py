@@ -10,12 +10,17 @@ from nebula.health import router as health_router
 from nebula.security import AuthMiddleware, add_security_schema_to_app
 from nebula.transcript.align_utils import align_slides_with_segments
 from nebula.transcript.config import Config
-from nebula.transcript.dto import (TranscribeRequestDTO,
-                                   TranscriptionResponseDTO,
-                                   TranscriptionSegmentDTO)
+from nebula.transcript.dto import (
+    TranscribeRequestDTO,
+    TranscriptionResponseDTO,
+    TranscriptionSegmentDTO,
+)
 from nebula.transcript.slide_utils import ask_gpt_for_slide_number
-from nebula.transcript.video_utils import (download_video, extract_audio,
-                                           extract_frames_at_timestamps)
+from nebula.transcript.video_utils import (
+    download_video,
+    extract_audio,
+    extract_frames_at_timestamps,
+)
 from nebula.transcript.whisper_utils import transcribe_with_azure_whisper
 
 # Get the API token from config
