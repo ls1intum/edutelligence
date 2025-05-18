@@ -109,6 +109,27 @@ class WeaviateLearningRepository(LearningRepository):
         except Exception as e:
             raise ValueError(f"Error retrieving Learning with id {entity_id}") from e
 
+    def all(self, tenant: str) -> list[Learning]:
+        """Get all Learning objects."""
+        try:
+            result = self.collection.with_tenant(tenant).query.fetch_objects()
+
+            if not result:
+                return []
+
+            return [
+                Learning(
+                    uid=item.uuid,
+                    title=str(item.properties["title"]),
+                    content=str(item.properties["content"]),
+                    reference=str(item.properties["reference"]),
+                    vectors=item.vector,  # type: ignore
+                )
+                for item in result.objects
+            ]
+        except Exception as e:
+            raise ValueError("Error retrieving all Learning objects") from e
+
     def delete(self, tenant: str, entity_id: UUID) -> None:
         """Delete a Learning by its ID."""
         try:
