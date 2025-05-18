@@ -1,8 +1,8 @@
 [tool.poetry]
 name = "nebula-transcriber"
-version = "0.1.0"
+version = "3.0.0"
 description = "FastAPI-based transcription service for lecture videos using Whisper and GPT-4o"
-authors = ["Anish Goyal <anish.goyal@tum.de>"]
+authors = ["Timor Morrien <timor.morrien@tum.de>", "Patrick Bassner <patrick.bassner@tum.de>", "Anish Goyal <anish.goyal@tum.de>"]
 readme = "README.md"
 packages = [
     { include = "nebula", from = "src" }
