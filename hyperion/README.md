@@ -43,39 +43,93 @@ poetry install
 
 ## Running the Service
 
-### Development
+The Hyperion service runs as a gRPC server that listens for requests from clients.
 
 ```bash
-poetry run fastapi dev
+poetry run hyperion
 ```
 
-### Production
+By default, the server runs on `0.0.0.0:50051`. You can configure the host and port through environment variables.
+
+### Health Check
+
+To verify the server is running correctly, you can use the health check script:
 
 ```bash
-poetry run fastapi run
+poetry run health-check
 ```
 
-### Authentication
+This will test connectivity to the server and return server status information.
 
-Hyperion uses API key authentication for secure access to its endpoints. The API key should be provided in the `X-API-Key` header, if `API_KEY_HEADER` is not set in the environment.
+### Docker Compose
 
-To set up authentication:
+#### Production Deployment
 
-1. Set the `API_KEY` environment variable or in your `.env` file
-2. If not provided, a random API key will be generated at startup
-3. Set `DISABLE_AUTH=true` for development if you want to bypass authentication
-
-## Usage
-
-After running the application, you can access the FastAPI API documentation at `http://127.0.0.1:8000/docs` or `http://127.0.0.1:8000/redoc`.
-
-## Generate OpenAPI YAML
-
-To generate the OpenAPI YAML file, run the following command:
+To run the service in a production environment using Docker Compose:
 
 ```bash
-poetry run openapi
+cd docker
+docker compose -f compose.hyperion.yaml up -d
 ```
+
+This uses the pre-built image from the GitHub Container Registry.
+
+#### Local Development
+
+For local development or testing, use the local compose file which builds from your local source:
+
+```bash
+cd docker
+docker compose -f compose.hyperion.local.yaml build
+docker compose -f compose.hyperion.local.yaml up -d
+```
+
+The local compose file:
+- Builds the image from your local source code
+- Maps port 50051 directly to your host machine
+- Sets default environment variables with fallbacks (e.g., OpenAI API keys)
+- Includes health checks and logging configuration
+
+To check the logs of the running container:
+
+```bash
+docker compose -f compose.hyperion.local.yaml logs
+```
+
+To check the health of a running Docker container:
+
+```bash
+docker compose -f compose.hyperion.local.yaml exec hyperion poetry run health-check
+```
+
+#### Environment Variables
+
+The Docker Compose files support the following environment variables:
+
+| Variable | Description | Default in Local Compose |
+|----------|-------------|-----------------------|
+| `MODEL_NAME` | OpenAI model to use | gpt-3.5-turbo |
+| `OPENAI_API_KEY` | OpenAI API key | sk-dummy-key |
+| `OPENAI_API_VERSION` | OpenAI API version | 2023-05-15 |
+| `AZURE_OPENAI_ENDPOINT` | Azure OpenAI endpoint URL | empty |
+| `AZURE_OPENAI_API_KEY` | Azure OpenAI API key | empty |
+| `OLLAMA_BASIC_AUTH_USERNAME` | Ollama authentication username | empty |
+| `OLLAMA_BASIC_AUTH_PASSWORD` | Ollama authentication password | empty |
+| `OLLAMA_HOST` | Ollama host address | empty |
+
+You can set these environment variables in your shell before running Docker Compose, or use a `.env` file.
+
+
+
+## Generate gRPC stubs
+
+The service uses gRPC for communication. If you make changes to the proto files, you'll need to regenerate the stubs:
+
+```bash
+poetry run generate-grpc
+```
+
+The generated stubs will be placed in the `app/grpc` directory.
 
 ## Formatting
 
@@ -94,21 +148,3 @@ To lint the code, run the following command:
 ```bash
 poetry run flake8 .
 ```
-
-## Version Bump
-
-To bump the version of the project, run the following command:
-
-```bash
-poetry version <version>
-```
-
-Where `<version>` is one of the following:
-
-- patch
-- minor
-- major
-- prepatch
-- preminor
-- premajor
-- prerelease
