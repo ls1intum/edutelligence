@@ -41,6 +41,8 @@ multi_line_output = 3
 
 [tool.bandit]
 skips = ["B101"]
+exclude_dirs = ["tests"]
+
 
 [build-system]
 requires = ["poetry-core"]

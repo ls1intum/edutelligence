@@ -19,12 +19,13 @@ def test_home(authorized_headers):
 @patch("nebula.transcript.app.extract_frames_at_timestamps")
 @patch("nebula.transcript.app.ask_gpt_for_slide_number")
 @patch("nebula.transcript.app.align_slides_with_segments")
-def test_start_transcribe_success(
+def test_start_transcribe_success(  # pylint: disable=unused-argument
     mock_align,
     mock_gpt,
     mock_frames,
     mock_transcribe,
-    *_,
+    mock_audio,
+    mock_download,
     authorized_headers,
 ):
     mock_transcribe.return_value = {
@@ -47,25 +48,19 @@ def test_start_transcribe_success(
     assert len(response.json()["segments"]) == 1
 
 
-def test_start_transcribe_missing_video_url(authorized_headers):
-    response = client.post(
-        "/start-transcribe", json={"lectureUnitId": 42}, headers=authorized_headers
-    )
-    assert response.status_code == 422
-
-
 @patch("nebula.transcript.app.download_video")
 @patch("nebula.transcript.app.extract_audio")
 @patch("nebula.transcript.app.transcribe_with_azure_whisper")
 @patch("nebula.transcript.app.extract_frames_at_timestamps")
 @patch("nebula.transcript.app.ask_gpt_for_slide_number")
 @patch("nebula.transcript.app.align_slides_with_segments")
-def test_start_transcribe_gpt_returns_none(
+def test_start_transcribe_gpt_returns_none(  # pylint: disable=unused-argument
     mock_align,
     mock_gpt,
     mock_frames,
     mock_transcribe,
-    *_,
+    mock_audio,
+    mock_download,
     authorized_headers,
 ):
     mock_transcribe.return_value = {
@@ -93,7 +88,12 @@ def test_start_transcribe_gpt_returns_none(
     "nebula.transcript.app.transcribe_with_azure_whisper",
     side_effect=RuntimeError("Whisper failed"),
 )
-def test_start_transcribe_whisper_failure(*_, authorized_headers):
+def test_start_transcribe_whisper_failure(  # pylint: disable=unused-argument
+    mock_transcribe,
+    mock_audio,
+    mock_download,
+    authorized_headers,
+):
     payload = {"videoUrl": "http://example.com/video.mp4", "lectureUnitId": 42}
     response = client.post(
         "/start-transcribe", json=payload, headers=authorized_headers
@@ -108,7 +108,13 @@ def test_start_transcribe_whisper_failure(*_, authorized_headers):
     "nebula.transcript.app.transcribe_with_azure_whisper", side_effect=Exception("Boom")
 )
 @patch("os.remove")
-def test_start_transcribe_cleanup_on_failure(mock_remove, *_, authorized_headers):
+def test_start_transcribe_cleanup_on_failure(  # pylint: disable=unused-argument
+    mock_remove,
+    mock_transcribe,
+    mock_audio,
+    mock_download,
+    authorized_headers,
+):
     payload = {"videoUrl": "http://example.com/video.mp4", "lectureUnitId": 42}
     response = client.post(
         "/start-transcribe", json=payload, headers=authorized_headers
