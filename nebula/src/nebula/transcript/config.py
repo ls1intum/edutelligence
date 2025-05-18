@@ -1,25 +1,19 @@
 import os
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 import yaml
 
 
 class Config:
-    """
-    Configuration class for transcript service settings.
-
-    Loads and stores environment-specific values such as API keys,
-    log levels, file storage paths, and other system constants.
-    """
+    _loaded = False
+    _api_keys: List[str] = []
+    _log_level: str = "INFO"
 
     BASE_DIR = Path(__file__).resolve().parent.parent
     VIDEO_STORAGE_PATH = BASE_DIR / "temp"
     WHISPER_MODEL = "base"
-    LOG_LEVEL = "INFO"
-    API_KEYS: List[str] = []
 
-    # Load paths from env or fall back to root-level config
     APPLICATION_YML_PATH = Path(
         os.getenv(
             "APPLICATION_YML_PATH", BASE_DIR.parent / "application_local.nebula.yml"
@@ -29,21 +23,32 @@ class Config:
         os.getenv("LLM_CONFIG_PATH", BASE_DIR.parent / "llm_config.nebula.yml")
     )
 
-    @staticmethod
-    def ensure_dirs() -> None:
-        Config.VIDEO_STORAGE_PATH.mkdir(parents=True, exist_ok=True)
+    @classmethod
+    def load(cls) -> None:
+        if cls._loaded:
+            return
 
-    @staticmethod
-    def load_local_config() -> None:
-        print(f"[Config] Loading from: {Config.APPLICATION_YML_PATH}")
-        if Config.APPLICATION_YML_PATH.exists():
-            with open(Config.APPLICATION_YML_PATH, "r", encoding="utf-8") as f:
+        print(f"[Config] Loading from: {cls.APPLICATION_YML_PATH}")
+        if cls.APPLICATION_YML_PATH.exists():
+            with open(cls.APPLICATION_YML_PATH, "r", encoding="utf-8") as f:
                 data = yaml.safe_load(f)
                 print(f"[DEBUG] Raw YAML data: {data}")
-                Config.API_KEYS = [entry["token"] for entry in data.get("api_keys", [])]
+                cls._api_keys = [entry["token"] for entry in data.get("api_keys", [])]
+                cls._log_level = data.get("log_level", "INFO")
         else:
-            Config.API_KEYS = []
+            print("[Config] No config file found, skipping")
+        cls._loaded = True
 
+    @classmethod
+    def get_api_keys(cls) -> List[str]:
+        cls.load()
+        return cls._api_keys
 
-# Run loader on import
-Config.load_local_config()
+    @classmethod
+    def get_log_level(cls) -> str:
+        cls.load()
+        return cls._log_level
+
+    @classmethod
+    def ensure_dirs(cls) -> None:
+        cls.VIDEO_STORAGE_PATH.mkdir(parents=True, exist_ok=True)

@@ -24,9 +24,10 @@ from nebula.transcript.video_utils import (
 from nebula.transcript.whisper_utils import transcribe_with_azure_whisper
 
 # Get the API token from config
-if not Config.API_KEYS:
+api_keys = Config.get_api_keys()
+if not api_keys:
     raise RuntimeError("No API keys configured!")
-token = Config.API_KEYS[0]
+token = api_keys[0]
 
 
 # Initialize FastAPI app
@@ -51,7 +52,7 @@ add_security_schema_to_app(
 )
 
 # Setup logging
-logging.basicConfig(level=getattr(logging, Config.LOG_LEVEL))
+logging.basicConfig(level=getattr(logging, Config.get_log_level()))
 
 # Ensure temp directory exists
 Config.ensure_dirs()
