@@ -23,4 +23,4 @@ def apply_hdbscan(matrix, eps=0.5, min_samples=5, metric='euclidean',  min_clust
     """
     clusterer = HDBSCAN(min_samples=min_samples, metric=metric, cluster_selection_epsilon=eps, min_cluster_size=min_cluster_size)
     clusterer.fit(matrix)
-    return clusterer.labels_
+    return clusterer.labels_, clusterer.centroids_, clusterer.medoids_

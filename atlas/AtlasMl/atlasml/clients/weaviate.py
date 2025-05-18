@@ -10,6 +10,7 @@ from atlasml.config import settings
 # TODO: ARDA: Add proper collection names according to your use cases. If you define all the
 # collections here all the collections will be created automatically when you run the project.
 class CollectionNames(str, Enum):
+    TEXT = "Text"
     COMPETENCY = "Competency"
     CLUSTER = "Cluster"
     COURSE = "Course"
@@ -38,21 +39,31 @@ class WeaviateClient:
 
 
     def _ensure_collections_exist(self):
-        """Ensure collections exist with proper schema."""
+        """Ensure collections exist with a proper schema."""
         # Define schemas for each collection
         # TODO: ARDA: Add properties for each collection
         # After, schema updated automatically and u can fetch the data from the collection with the new properties
         collection_schemas = {
-            CollectionNames.COMPETENCY.value: {
+            CollectionNames.TEXT.value: {
                 "properties": [
                     {"name": "text", "dataType": ["text"]},
+                    {"name": "uuid", "dataType": ["string"], "indexFilterable": True},
+                    {"name": "competencyID", "dataType": ["string"], "indexFilterable": True},
+                ]
+            },
+            CollectionNames.COMPETENCY.value: {
+                "properties": [
+                    {"name": "uuid", "dataType": ["string"], "indexFilterable": True},
+                    {"name": "name", "dataType": ["string"]},
+                    {"name": "text", "dataType": ["text"]},
                     {"name": "unit_id", "dataType": ["string"], "indexFilterable": True},
-                    {"name": "name", "dataType": ["string"], "indexFilterable": True},
                     {"name": "category", "dataType": ["string"], "indexFilterable": True},
+                    {"name": "clusterID", "dataType": ["string"], "indexFilterable": True},
                 ]
             },
             CollectionNames.CLUSTER.value: {
                 "properties": [
+                    {"name": "id", "dataType": ["string"], "indexFilterable": True},
                     {"name": "name", "dataType": ["string"], "indexFilterable": True},
                     {"name": "size", "dataType": ["int"], "indexFilterable": True},
                     {"name": "members", "dataType": ["string[]"], "indexFilterable": True}
@@ -61,6 +72,7 @@ class WeaviateClient:
             CollectionNames.COURSE.value: {
                 "properties": [
                     {"name": "title", "dataType": ["string"], "indexFilterable": True},
+                    {"name": "courseID", "dataType": ["string"], "indexFilterable": True},
                     {"name": "description", "dataType": ["text"]},
                     {"name": "author", "dataType": ["string"], "indexFilterable": True},
                     {"name": "level", "dataType": ["string"], "indexFilterable": True},

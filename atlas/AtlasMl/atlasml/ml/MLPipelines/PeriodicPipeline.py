@@ -1,43 +1,30 @@
-import pandas as pd
 import numpy as np
+from atlasml.clients.weaviate import get_weaviate_client, CollectionNames
 from atlasml.ml.VectorEmbeddings.FallbackModel import generate_embeddings_local
 from atlasml.ml.Clustering.HDBSCAN import apply_hdbscan, SimilarityMetric
 from atlasml.ml.SimilarityMeasurement.Cosine import compute_cosine_similarity
 from sklearn.metrics.pairwise import cosine_similarity
 
-class InitialPipeline:
+class PeriodicPipeline:
     """
     InitialPipeline orchestrates loading texts from Artemis, generating embeddings, clustering them via HDBSCAN,
      and computing a similarity matrix of cluster medoids.
 
     Args:
-        texts (np.ndarray): Fetch and feed 2D array of texts from Artemis.
-
-    Attributes:
-        embeddings_uuids (np.ndarray): Array of embedding UUIDs for each text entry.
-        embeddings (np.ndarray): 2D array of vector embeddings for all texts.
-        labels (list[int]): Cluster labels assigned to each embedding.
-        medoids (np.ndarray): Representative vectors (medoids) for each identified cluster.
-        similarity_matrix (np.ndarray): Pairwise cosine similarity matrix of the medoids.
+        texts: Fetch and feed texts from Artemis.
     """
-    def __init__(self, texts: np.ndarray):
-        self.embeddings_uuids = None
-        self.embeddings = None
-        self.similarity_matrix = None
-        self.medoids = None
-        self.labels = None
-        self.texts = texts
+    def __init__(self):
+        self.weaviate_client = get_weaviate_client()
+        self.texts = None
 
     def run(self, eps: float = 0.1, min_samples: int = 5, min_cluster_size: int = 5):
-        # TODO: Get all text data from Artemis
-        texts = self.texts
+        self.texts = self.weaviate_client.get_all_embeddings(CollectionNames.TEXT.value)
 
-        # TODO: get the uuids from the texts
         # Generate embeddings for each text entry and collect UUIDs
         embeddings_list = []
         embeddings_uuids = []
-        for idx, t in enumerate(texts):
-            emb_id, emb = generate_embeddings_local(str(idx), t)
+        for textEntry in self.texts["properties"]:
+            emb_id, emb = generate_embeddings_local(textEntry["id"], textEntry["text"])
             embeddings_list.append(emb)
             embeddings_uuids.append(emb_id)
 
@@ -57,13 +44,14 @@ class InitialPipeline:
         similarity_matrix = cosine_similarity(medoids)
 
         # Expose clusters and similarity matrix as instance variables
-        # TODO: Save to DB
-        self.embeddings = embeddings
-        self.embeddings_uuids = embeddings_uuids
-        self.labels = labels
-        self.medoids = medoids
-        self.similarity_matrix = similarity_matrix
+        for index in range(len(medoids)):
+            cluster = { "properties": [{
+                "id": "id",
+                "name": str(index),
+                "size": int((labels == index).sum()),
+                "members": embeddings_uuids[labels == index].tolist(),
+                }]}
+            self.weaviate_client.add_embeddings(CollectionNames.CLUSTER.value, medoids[index].tolist(), cluster)
 
         # Return the similarity matrix
-        return self.similarity_matrix
-
+        return similarity_matrix
