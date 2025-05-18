@@ -1,16 +1,18 @@
 import os
 from pathlib import Path
-from typing import List, Optional
+from typing import List
 
 import yaml
 
 
 class Config:
+    """Holds configuration settings loaded from the environment or YAML files."""
+
     _loaded = False
     _api_keys: List[str] = []
     _log_level: str = "INFO"
 
-    BASE_DIR = Path(__file__).resolve().parent.parent
+    BASE_DIR = Path(__file__).resolve().parent.parent.parent
     VIDEO_STORAGE_PATH = BASE_DIR / "temp"
     WHISPER_MODEL = "base"
 
