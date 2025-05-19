@@ -425,12 +425,6 @@ def get_pipeline(feature: str):
         case "FAQ_INGESTION":
             return FaqIngestionPipeline.get_variants(available_llms)
         case "TUTOR_SUGGESTION":
-            return [
-                FeatureDTO(
-                    id="default",
-                    name="Default Variant",
-                    description="Default tutor suggestion variant.",
-                )
-            ]
+            return TutorSuggestionPipeline.get_variants(available_llms)
         case _:
             return Response(status_code=status.HTTP_400_BAD_REQUEST)
