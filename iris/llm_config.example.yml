@@ -1,60 +1,45 @@
 - api_key:
   api_version: 2024-05-01-preview
-  azure_deployment: gpt-35-turbo
-  description: GPT 3.5 16k on Azure
+  azure_deployment: gpt-41-mini
+  description: GPT 4.1 Mini on Azure
   endpoint: "<your-endpoint>"
-  id: azure-gpt-35-turbo
-  model: gpt-3.5-turbo
-  name: GPT 3.5 Turbo
+  cost_per_million_input_token: 0.4
+  cost_per_million_output_token: 1.6
+  id: azure-gpt-41-mini
+  model: gpt-4.1-mini
+  name: GPT 4.1 Mini
   type: azure_chat
 - api_key:
-  description: GPT 3.5 16k
-  id: oai-gpt-35-turbo
-  model: gpt-3.5-turbo
-  name: GPT 3.5 Turbo
+  description: GPT 4.1 Mini
+  cost_per_million_input_token: 0.4
+  cost_per_million_output_token: 1.6
+  id: oai-gpt-41-mini
+  model: gpt-4.1-mini
+  name: GPT 4.1 Mini
   type: openai_chat
-- api_key:
-  api_version: 2024-02-15-preview
-  azure_deployment: gpt-4-turbo
-  description: GPT 4 Turbo 128k on Azure
-  endpoint: "<your-endpoint>"
-  id: azure-gpt-4-turbo
-  model: gpt-4-turbo
-  name: GPT 4 Turbo
-  type: azure_chat
-- api_key:
-  api_version: 2024-02-15-preview
-  azure_deployment: gpt-4o
-  description: GPT 4 Omni on Azure
-  endpoint: "<your-endpoint>"
-  id: azure-gpt-4-omni
-  model: gpt-4o
-  name: GPT 4 Omni
-  type: azure_chat
-- api_key:
-  api_version: 2023-03-15-preview
-  azure_deployment: gpt-4o-mini
-  description: GPT 4 Omni Mini on Azure
-  endpoint: "<your-endpoint>"
-  id: azure-gpt-4-omni-mini
-  model: gpt-4o-mini
-  name: GPT 4 Omni Mini
-  type: azure_chat
 - api_key:
   api_version: "2023-05-15T00:00:00.000Z"
   azure_deployment: te-3-large
   description: Embedding Large 8k Azure
   endpoint: "<your-endpoint>"
-  id: embedding-large
+  cost_per_million_input_token: 0.13
+  id: azure-embedding-large
   model: text-embedding-3-large
   name: Embedding Large
   type: azure_embedding
 - api_key:
   api_version: 2024-02-15-preview
-  azure_deployment: te-3-small
-  description: Embedding Small 8k Azure
-  endpoint: "<your-endpoint>"
-  id: embedding-small
+  description: Embedding Small 8k
+  cost_per_million_input_token: 0.02
+  id: oai-embedding-small
   model: text-embedding-3-small
   name: Embedding Small
-  type: azure_embedding
+  type: openai_embedding
+- api_key:
+  description: Cohere V2 client
+  endpoint: "your_cohere-endpoint"
+  model: "rerank-multilingual-v3.5"
+  cost_per_1k_requests: 2
+  id: cohere
+  name: Cohere Client V2
+  type: cohere_azure

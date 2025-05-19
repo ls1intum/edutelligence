@@ -15,6 +15,7 @@ class LanguageModel(BaseModel, metaclass=ABCMeta):
     id: str
     name: str
     description: str
+    model: str
 
 
 class CompletionModel(LanguageModel, metaclass=ABCMeta):
@@ -32,6 +33,9 @@ class CompletionModel(LanguageModel, metaclass=ABCMeta):
 
 class ChatModel(LanguageModel, metaclass=ABCMeta):
     """Abstract class for the llm chat completion wrappers"""
+
+    cost_per_million_input_token: float
+    cost_per_million_output_token: float
 
     @classmethod
     def __subclasshook__(cls, subclass) -> bool:
@@ -54,6 +58,8 @@ class ChatModel(LanguageModel, metaclass=ABCMeta):
 
 class EmbeddingModel(LanguageModel, metaclass=ABCMeta):
     """Abstract class for the llm embedding wrappers"""
+
+    cost_per_million_input_token: float
 
     @classmethod
     def __subclasshook__(cls, subclass) -> bool:

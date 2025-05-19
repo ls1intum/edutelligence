@@ -47,7 +47,13 @@ class ModelVersionRequestHandler(RequestHandler):
     ) -> PyrisMessage:
         llm = self._select_model(ChatModel)
         message = llm.chat(messages, arguments, tools)
-        # If you want to track token costs, set them here or remove if not needed
+        message.token_usage.model_info = llm.model
+        message.token_usage.cost_per_million_input_token = (
+            llm.cost_per_million_input_token
+        )
+        message.token_usage.cost_per_million_output_token = (
+            llm.cost_per_million_output_token
+        )
         return message
 
     def embed(self, text: str) -> list[float]:
