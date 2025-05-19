@@ -21,10 +21,9 @@ from ...domain.retrieval.lecture.lecture_retrieval_dto import (
     LectureRetrievalDTO,
 )
 from ...llm import (
-    CapabilityRequestHandler,
     CompletionArguments,
-    RequirementList,
 )
+from ...llm.gpt_version_request_handler import GPTVersionRequestHandler
 from ...llm.langchain import IrisLangchainChatModel
 from ...retrieval.lecture.lecture_retrieval import LectureRetrieval
 from ...vector_database.database import VectorDatabase
@@ -81,13 +80,7 @@ class LectureChatPipeline(Pipeline):
     ):
         super().__init__(implementation_id="lecture_chat_pipeline")
         # Set the langchain chat model
-        request_handler = CapabilityRequestHandler(
-            requirements=RequirementList(
-                gpt_version_equivalent=4.5,
-                context_length=16385,
-                privacy_compliance=True,
-            )
-        )
+        request_handler = GPTVersionRequestHandler(version="gpt-4o")
 
         self.callback = callback
         self.dto = dto

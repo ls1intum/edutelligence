@@ -8,9 +8,8 @@ from weaviate import WeaviateClient
 from iris.common.pipeline_enum import PipelineEnum
 from iris.domain.lecture.lecture_unit_dto import LectureUnitDTO
 from iris.llm import (
-    CapabilityRequestHandler,
     CompletionArguments,
-    RequirementList,
+    GPTVersionRequestHandler,
 )
 from iris.llm.langchain import IrisLangchainChatModel
 from iris.pipeline import Pipeline
@@ -39,13 +38,7 @@ class LectureUnitSummaryPipeline(Pipeline):
         self.lecture_unit_dto = lecture_unit_dto
         self.lecture_unit_segment_summaries = lecture_unit_segment_summaries
 
-        request_handler = CapabilityRequestHandler(
-            requirements=RequirementList(
-                gpt_version_equivalent=4.5,
-                context_length=16385,
-                privacy_compliance=True,
-            )
-        )
+        request_handler = GPTVersionRequestHandler(version="gpt-4o")
         completion_args = CompletionArguments(temperature=0, max_tokens=2000)
 
         self.llm = IrisLangchainChatModel(

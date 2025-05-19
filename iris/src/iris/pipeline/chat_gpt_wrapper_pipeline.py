@@ -12,9 +12,8 @@ from iris.domain.chat.exercise_chat.exercise_chat_pipeline_execution_dto import 
 )
 from iris.domain.data.text_message_content_dto import TextMessageContentDTO
 from iris.llm import (
-    CapabilityRequestHandler,
     CompletionArguments,
-    RequirementList,
+    GPTVersionRequestHandler,
 )
 from iris.llm.langchain.iris_langchain_chat_model import IrisLangchainChatModel
 from iris.pipeline import Pipeline
@@ -63,16 +62,14 @@ class ChatGPTWrapperPipeline(Pipeline):
     callback: ChatGPTWrapperStatusCallback
     llm: IrisLangchainChatModel
     pipeline: Runnable
+    tokens: List[str]
+    request_handler: GPTVersionRequestHandler
 
     def __init__(self, callback: Optional[ChatGPTWrapperStatusCallback] = None):
         super().__init__(implementation_id="chat_gpt_wrapper_pipeline_reference_impl")
         self.callback = callback
-        self.request_handler = CapabilityRequestHandler(
-            requirements=RequirementList(
-                gpt_version_equivalent=4.5,
-                context_length=16385,
-            )
-        )
+        self.tokens = []
+        self.request_handler = GPTVersionRequestHandler(version="gpt-4o")
 
     def __call__(
         self,

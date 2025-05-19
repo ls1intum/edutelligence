@@ -14,9 +14,8 @@ from iris.domain.rewriting_pipeline_execution_dto import (
     RewritingPipelineExecutionDTO,
 )
 from iris.llm import (
-    CapabilityRequestHandler,
     CompletionArguments,
-    RequirementList,
+    GPTVersionRequestHandler,
 )
 from iris.llm.external.model import LanguageModel
 from iris.pipeline import Pipeline
@@ -38,7 +37,7 @@ class RewritingPipeline(Pipeline):
     """
 
     callback: RewritingCallback
-    request_handler: CapabilityRequestHandler
+    request_handler: GPTVersionRequestHandler
     output_parser: PydanticOutputParser
     variant: Literal["faq", "problem_statement"]
 
@@ -49,12 +48,7 @@ class RewritingPipeline(Pipeline):
     ):
         super().__init__(implementation_id="rewriting_pipeline_reference_impl")
         self.callback = callback
-        self.request_handler = CapabilityRequestHandler(
-            requirements=RequirementList(
-                gpt_version_equivalent=4.5,
-                context_length=16385,
-            )
-        )
+        self.request_handler = GPTVersionRequestHandler(version="gpt-4o")
         self.tokens = []
         self.variant = variant
 

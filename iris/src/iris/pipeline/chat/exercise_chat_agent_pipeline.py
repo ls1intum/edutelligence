@@ -29,10 +29,9 @@ from ...domain.retrieval.lecture.lecture_retrieval_dto import (
     LectureRetrievalDTO,
 )
 from ...llm import (
-    CapabilityRequestHandler,
     CompletionArguments,
-    RequirementList,
 )
+from ...llm.gpt_version_request_handler import GPTVersionRequestHandler
 from ...llm.langchain import IrisLangchainChatModel
 from ...retrieval.faq_retrieval import FaqRetrieval
 from ...retrieval.faq_retrieval_utils import format_faqs, should_allow_faq_tool
@@ -106,8 +105,8 @@ def convert_chat_history_to_str(chat_history: List[PyrisMessage]) -> str:
 class ExerciseChatAgentPipeline(Pipeline):
     """Exercise chat agent pipeline that answers exercises related questions from students."""
 
-    llm_big: IrisLangchainChatModel
-    llm_small: IrisLangchainChatModel
+    llm: IrisLangchainChatModel
+    llm_assistant: IrisLangchainChatModel
     pipeline: Runnable
     callback: ExerciseChatStatusCallback
     suggestion_pipeline: InteractionSuggestionPipeline
@@ -126,21 +125,14 @@ class ExerciseChatAgentPipeline(Pipeline):
     ):
         super().__init__(implementation_id="exercise_chat_pipeline")
         # Set the langchain chat model
-        completion_args = CompletionArguments(temperature=0.5, max_tokens=2000)
-        self.llm_big = IrisLangchainChatModel(
-            request_handler=CapabilityRequestHandler(
-                requirements=RequirementList(
-                    gpt_version_equivalent=4.5,
-                ),
-            ),
+        completion_args = CompletionArguments(temperature=0.1, max_tokens=2000)
+        self.llm = IrisLangchainChatModel(
+            request_handler=GPTVersionRequestHandler(version="gpt-4o"),
             completion_args=completion_args,
         )
-        self.llm_small = IrisLangchainChatModel(
-            request_handler=CapabilityRequestHandler(
-                requirements=RequirementList(
-                    gpt_version_equivalent=4.25,
-                ),
-            ),
+
+        self.llm_assistant = IrisLangchainChatModel(
+            request_handler=GPTVersionRequestHandler(version="gpt-4o-mini"),
             completion_args=completion_args,
         )
         self.variant = variant
@@ -154,15 +146,15 @@ class ExerciseChatAgentPipeline(Pipeline):
         self.faq_retriever = FaqRetrieval(self.db.client)
         self.reranker_pipeline = RerankerPipeline()
         self.code_feedback_pipeline = CodeFeedbackPipeline()
-        self.pipeline = self.llm_big | JsonOutputParser()
+        self.pipeline = self.llm | JsonOutputParser()
         self.citation_pipeline = CitationPipeline()
         self.tokens = []
 
     def __repr__(self):
-        return f"{self.__class__.__name__}(llm_big={self.llm_big}, llm_small={self.llm_small})"
+        return f"{self.__class__.__name__}(llm={self.llm}, llm_assistant={self.llm_assistant})"
 
     def __str__(self):
-        return f"{self.__class__.__name__}(llm_big={self.llm_big}, llm_small={self.llm_small})"
+        return f"{self.__class__.__name__}(llm={self.llm}, llm_assistant={self.llm_assistant})"
 
     @traceable(name="Exercise Chat Agent Pipeline")
     def __call__(self, dto: ExerciseChatPipelineExecutionDTO):
@@ -578,14 +570,14 @@ class ExerciseChatAgentPipeline(Pipeline):
 
             tools = generate_structured_tools_from_functions(tool_list)
             agent = create_tool_calling_agent(
-                llm=self.llm_big, tools=tools, prompt=self.prompt
+                llm=self.llm, tools=tools, prompt=self.prompt
             )
             agent_executor = AgentExecutor(agent=agent, tools=tools, verbose=False)
             self.callback.in_progress("Thinking ...")
             out = None
             for step in agent_executor.iter(params):
                 self._append_tokens(
-                    self.llm_big.tokens,
+                    self.llm.tokens,
                     PipelineEnum.IRIS_CHAT_EXERCISE_AGENT_MESSAGE,
                 )
                 if step.get("output", None):
@@ -601,14 +593,14 @@ class ExerciseChatAgentPipeline(Pipeline):
                 )
 
                 guide_response = (
-                    self.prompt | self.llm_small | StrOutputParser()
+                    self.prompt | self.llm_assistant | StrOutputParser()
                 ).invoke(
                     {
                         "problem": problem_statement,
                     }
                 )
                 self._append_tokens(
-                    self.llm_big.tokens,
+                    self.llm.tokens,
                     PipelineEnum.IRIS_CHAT_EXERCISE_AGENT_MESSAGE,
                 )
                 if "!ok!" in guide_response:

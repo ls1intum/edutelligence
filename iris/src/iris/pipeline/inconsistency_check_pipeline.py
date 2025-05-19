@@ -9,9 +9,8 @@ from langsmith import traceable
 from iris.common.pipeline_enum import PipelineEnum
 from iris.domain import InconsistencyCheckPipelineExecutionDTO
 from iris.llm import (
-    CapabilityRequestHandler,
     CompletionArguments,
-    RequirementList,
+    GPTVersionRequestHandler,
 )
 from iris.llm.langchain.iris_langchain_chat_model import IrisLangchainChatModel
 from iris.pipeline import Pipeline
@@ -43,12 +42,7 @@ class InconsistencyCheckPipeline(Pipeline):
         completion_args = CompletionArguments()
 
         self.llm = IrisLangchainChatModel(
-            request_handler=CapabilityRequestHandler(
-                requirements=RequirementList(
-                    gpt_version_equivalent=0.3,
-                    context_length=16385,
-                )
-            ),
+            request_handler=GPTVersionRequestHandler(version="gpt-3.5-turbo"),
             completion_args=completion_args,
         )
         self.solver_prompt = PromptTemplate.from_template(solver_prompt)

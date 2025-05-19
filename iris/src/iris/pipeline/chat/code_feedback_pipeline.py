@@ -15,9 +15,8 @@ from ...common.pyris_message import PyrisMessage
 from ...domain.data.build_log_entry import BuildLogEntryDTO
 from ...domain.data.feedback_dto import FeedbackDTO
 from ...llm import (
-    CapabilityRequestHandler,
     CompletionArguments,
-    RequirementList,
+    GPTVersionRequestHandler,
 )
 from ...llm.langchain import IrisLangchainChatModel
 from ...pipeline import Pipeline
@@ -50,21 +49,16 @@ class CodeFeedbackPipeline(Pipeline):
 
     def __init__(self, callback: Optional[StatusCallback] = None):
         super().__init__(implementation_id="code_feedback_pipeline_reference_impl")
-        request_handler = CapabilityRequestHandler(
-            requirements=RequirementList(
-                gpt_version_equivalent=4.5,
-                context_length=64000,
-                vendor="OpenAI",
-                json_mode=True,
-            )
-        )
+        self.callback = callback
+
+        # Set up the language model
+        request_handler = GPTVersionRequestHandler(version="gpt-4o")
         completion_args = CompletionArguments(
             temperature=0, max_tokens=1024, response_format="text"
         )
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler, completion_args=completion_args
         )
-        self.callback = callback
         # Load prompt from file
         dirname = os.path.dirname(__file__)
         with open(

@@ -7,9 +7,8 @@ from iris.domain.text_exercise_chat_pipeline_execution_dto import (
     TextExerciseChatPipelineExecutionDTO,
 )
 from iris.llm import (
-    CapabilityRequestHandler,
     CompletionArguments,
-    RequirementList,
+    GPTVersionRequestHandler,
 )
 from iris.pipeline import Pipeline
 from iris.pipeline.prompts.text_exercise_chat_prompts import (
@@ -28,14 +27,12 @@ class TextExerciseChatPipeline(Pipeline):
     """
 
     callback: TextExerciseChatCallback
-    request_handler: CapabilityRequestHandler
+    request_handler: GPTVersionRequestHandler
 
     def __init__(self, callback: Optional[TextExerciseChatCallback] = None):
         super().__init__(implementation_id="text_exercise_chat_pipeline_reference_impl")
         self.callback = callback
-        self.request_handler = CapabilityRequestHandler(
-            requirements=RequirementList(context_length=8000)
-        )
+        self.request_handler = GPTVersionRequestHandler(version="gpt-4.1")
 
     def __call__(
         self,

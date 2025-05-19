@@ -10,9 +10,8 @@ from langsmith import traceable
 from iris.common.pipeline_enum import PipelineEnum
 from iris.common.pyris_message import PyrisMessage
 from iris.llm import (
-    CapabilityRequestHandler,
     CompletionArguments,
-    RequirementList,
+    GPTVersionRequestHandler,
 )
 from iris.llm.langchain import IrisLangchainChatModel
 from iris.pipeline import Pipeline
@@ -34,12 +33,7 @@ class RerankerPipeline(Pipeline):
 
     def __init__(self):
         super().__init__(implementation_id="reranker_pipeline")
-        request_handler = CapabilityRequestHandler(
-            requirements=RequirementList(
-                gpt_version_equivalent=3.5,
-                context_length=16385,
-            )
-        )
+        request_handler = GPTVersionRequestHandler(version="gpt-3.5-turbo")
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler,
             completion_args=CompletionArguments(temperature=0, max_tokens=4000),

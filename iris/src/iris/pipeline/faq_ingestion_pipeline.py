@@ -13,12 +13,10 @@ from ..domain import FeatureDTO
 from ..domain.data.faq_dto import FaqDTO
 from ..ingestion.abstract_ingestion import AbstractIngestion
 from ..llm import (
-    BasicRequestHandler,
-    CapabilityRequestHandler,
     CompletionArguments,
-    RequirementList,
 )
 from ..llm.external import LanguageModel
+from ..llm.gpt_version_request_handler import GPTVersionRequestHandler
 from ..llm.langchain import IrisLangchainChatModel
 from ..vector_database.database import batch_update_lock
 from ..vector_database.faq_schema import FaqSchema, init_faq_schema
@@ -43,15 +41,9 @@ class FaqIngestionPipeline(AbstractIngestion, Pipeline):
         self.client = client
         self.collection = init_faq_schema(client)
         self.dto = dto
-        self.llm_embedding = BasicRequestHandler("embedding-small")
         self.callback = callback
-        request_handler = CapabilityRequestHandler(
-            requirements=RequirementList(
-                gpt_version_equivalent=4.25,
-                context_length=16385,
-                privacy_compliance=True,
-            )
-        )
+        self.llm_embedding = GPTVersionRequestHandler("text-embedding-3-small")
+        request_handler = GPTVersionRequestHandler(version="gpt-4o-mini")
         completion_args = CompletionArguments(temperature=0.2, max_tokens=2000)
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler, completion_args=completion_args

@@ -26,12 +26,10 @@ from ..domain.data.text_message_content_dto import TextMessageContentDTO
 from ..domain.lecture.lecture_unit_dto import LectureUnitDTO
 from ..ingestion.abstract_ingestion import AbstractIngestion
 from ..llm import (
-    BasicRequestHandler,
-    CapabilityRequestHandler,
     CompletionArguments,
-    RequirementList,
 )
 from ..llm.external import LanguageModel
+from ..llm.gpt_version_request_handler import GPTVersionRequestHandler
 from ..llm.langchain import IrisLangchainChatModel
 from ..vector_database.lecture_unit_page_chunk_schema import (
     LectureUnitPageChunkSchema,
@@ -107,17 +105,11 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         super().__init__()
         self.collection = init_lecture_unit_page_chunk_schema(client)
         self.dto = dto
-        self.llm_vision = BasicRequestHandler("azure-gpt-4-omni")
-        self.llm_chat = BasicRequestHandler("azure-gpt-4-omni")
-        self.llm_embedding = BasicRequestHandler("embedding-small")
+        self.llm_vision = GPTVersionRequestHandler("gpt-4o")
+        self.llm_chat = GPTVersionRequestHandler("gpt-4o")
+        self.llm_embedding = GPTVersionRequestHandler("text-embedding-3-small")
         self.callback = callback
-        request_handler = CapabilityRequestHandler(
-            requirements=RequirementList(
-                gpt_version_equivalent=3.5,
-                context_length=16385,
-                privacy_compliance=True,
-            )
-        )
+        request_handler = GPTVersionRequestHandler("gpt-3.5-turbo")
         completion_args = CompletionArguments(temperature=0.2, max_tokens=2000)
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler, completion_args=completion_args

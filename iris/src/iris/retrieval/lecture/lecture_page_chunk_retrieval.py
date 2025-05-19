@@ -16,11 +16,9 @@ from iris.domain.retrieval.lecture.lecture_retrieval_dto import (
     LectureUnitRetrievalDTO,
 )
 from iris.llm import (
-    BasicRequestHandler,
-    CapabilityRequestHandler,
     CompletionArguments,
-    RequirementList,
 )
+from iris.llm.gpt_version_request_handler import GPTVersionRequestHandler
 from iris.llm.langchain import IrisLangchainChatModel
 from iris.llm.request_handler.rerank_request_handler import (
     RerankRequestHandler,
@@ -67,18 +65,12 @@ class LecturePageChunkRetrieval(Pipeline):
 
     def __init__(self, client: WeaviateClient):
         super().__init__(implementation_id="lecture_retrieval_pipeline")
-        request_handler = CapabilityRequestHandler(
-            requirements=RequirementList(
-                gpt_version_equivalent=4.25,
-                context_length=16385,
-                privacy_compliance=True,
-            )
-        )
+        request_handler = GPTVersionRequestHandler(version="gpt-4o-mini")
         completion_args = CompletionArguments(temperature=0, max_tokens=2000)
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler, completion_args=completion_args
         )
-        self.llm_embedding = BasicRequestHandler("embedding-small")
+        self.llm_embedding = GPTVersionRequestHandler("text-embedding-3-small")
         self.cohere_client = RerankRequestHandler("cohere")
 
         self.pipeline = self.llm | StrOutputParser()
