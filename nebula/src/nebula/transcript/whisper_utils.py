@@ -47,7 +47,7 @@ def transcribe_with_azure_whisper(audio_path: str, llm_id="azure-whisper"):
                     "response_format": "verbose_json",
                     "timestamp_granularities[]": "segment",
                 },
-                timeout=30,  # ✅ prevent hanging requests
+                timeout=30,  # prevent hanging requests
             )
             response.raise_for_status()
             segment_data = response.json().get("segments", [])
