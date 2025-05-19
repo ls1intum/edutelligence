@@ -102,6 +102,7 @@ def test_start_transcribe_whisper_failure(  # pylint: disable=unused-argument
     assert "Whisper failed" in response.json()["detail"]
 
 
+@patch("os.path.exists", return_value=True)
 @patch("nebula.transcript.app.download_video")
 @patch("nebula.transcript.app.extract_audio")
 @patch(
@@ -113,12 +114,14 @@ def test_start_transcribe_cleanup_on_failure(  # pylint: disable=unused-argument
     mock_transcribe,
     mock_audio,
     mock_download,
+    mock_exists,
     authorized_headers,
 ):
     payload = {"videoUrl": "http://example.com/video.mp4", "lectureUnitId": 42}
     response = client.post(
         "/start-transcribe", json=payload, headers=authorized_headers
     )
+
     assert response.status_code == 500
     assert mock_remove.called
 
