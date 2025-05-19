@@ -7,7 +7,6 @@ from pydantic import BaseModel
 
 from ...common.pyris_message import PyrisMessage
 from ...llm import CompletionArguments
-from ...llm.capability import CapabilityList
 
 
 class LanguageModel(BaseModel, metaclass=ABCMeta):
@@ -16,7 +15,6 @@ class LanguageModel(BaseModel, metaclass=ABCMeta):
     id: str
     name: str
     description: str
-    capabilities: CapabilityList
 
 
 class CompletionModel(LanguageModel, metaclass=ABCMeta):

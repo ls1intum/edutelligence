@@ -54,7 +54,7 @@ def convert_chat_history_to_str(chat_history: List[PyrisMessage]) -> str:
 class ChatGPTWrapperPipeline(Pipeline):
     """ChatGPTWrapperPipeline executes a single-step response generation process using ChatGPT.
 
-    It constructs a system prompt along with the chat history, sends the assembled prompts to a capability request
+    It constructs a system prompt along with the chat history, sends the assembled prompts to a model request
     handler, and then invokes the callback with the final response. If no valid response is generated, it logs
     detailed error information.
     """

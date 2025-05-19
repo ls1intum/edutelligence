@@ -3,8 +3,6 @@ from typing import Any, Literal
 import cohere
 from pydantic import BaseModel, ConfigDict
 
-from ...llm.capability import CapabilityList
-
 
 class CohereAzureClient(BaseModel):
     """CohereAzureClient provides an interface to interact with the Cohere API using Azure endpoints."""
@@ -13,7 +11,6 @@ class CohereAzureClient(BaseModel):
     endpoint: str
     api_key: str
     model: str
-    capabilities: CapabilityList
     id: str
     _client: cohere.ClientV2
     model_config = ConfigDict(arbitrary_types_allowed=True)
