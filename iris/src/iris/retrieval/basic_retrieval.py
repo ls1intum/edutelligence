@@ -16,7 +16,7 @@ from iris.common.pipeline_enum import PipelineEnum
 from iris.common.token_usage_dto import TokenUsageDTO
 from iris.llm import (
     CompletionArguments,
-    GPTVersionRequestHandler,
+    ModelVersionRequestHandler,
 )
 
 from ..common.message_converters import (
@@ -83,12 +83,12 @@ class BaseRetrieval(Pipeline, ABC):
         super().__init__(
             implementation_id=kwargs.get("implementation_id", "base_retrieval_pipeline")
         )
-        request_handler = GPTVersionRequestHandler(version="gpt-4o-mini")
+        request_handler = ModelVersionRequestHandler(version="gpt-4o-mini")
         completion_args = CompletionArguments(temperature=0, max_tokens=2000)
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler, completion_args=completion_args
         )
-        self.llm_embedding = GPTVersionRequestHandler("text-embedding-3-small")
+        self.llm_embedding = ModelVersionRequestHandler("text-embedding-3-small")
         self.pipeline = self.llm | StrOutputParser()
         self.collection = schema_init_func(client)
         self.tokens = []

@@ -8,7 +8,7 @@ from langchain_core.prompts import (
 )
 from langchain_core.runnables import Runnable
 
-from ...llm import GPTVersionRequestHandler
+from ...llm import ModelVersionRequestHandler
 from ...llm.langchain import IrisLangchainCompletionModel
 from ...pipeline import Pipeline
 
@@ -26,7 +26,7 @@ class SummaryPipeline(Pipeline):
     def __init__(self):
         super().__init__(implementation_id="summary_pipeline")
         # Set the langchain chat model
-        request_handler = GPTVersionRequestHandler(version="gpt-3.5-turbo")
+        request_handler = ModelVersionRequestHandler(version="gpt-3.5-turbo")
         self.llm = IrisLangchainCompletionModel(
             request_handler=request_handler, max_tokens=1000
         )

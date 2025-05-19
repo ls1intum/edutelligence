@@ -25,8 +25,8 @@ from ...common.pyris_message import PyrisMessage
 from ...llm import (
     CompletionArguments,
 )
-from ...llm.gpt_version_request_handler import GPTVersionRequestHandler
 from ...llm.langchain import IrisLangchainChatModel
+from ...llm.model_version_request_handler import ModelVersionRequestHandler
 from ..pipeline import Pipeline
 from ..prompts.iris_interaction_suggestion_prompts import (
     course_chat_begin_prompt,
@@ -62,7 +62,7 @@ class InteractionSuggestionPipeline(Pipeline):
         self.variant = variant
 
         # Set the langchain chat model
-        request_handler = GPTVersionRequestHandler(version="gpt-4o-mini")
+        request_handler = ModelVersionRequestHandler(version="gpt-4o-mini")
         completion_args = CompletionArguments(
             temperature=0.6, max_tokens=2000, response_format="JSON"
         )

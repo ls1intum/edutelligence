@@ -15,15 +15,8 @@ from iris.llm.llm_manager import LlmManager
 from iris.llm.request_handler.request_handler_interface import RequestHandler
 
 
-class GPTVersionRequestHandler(RequestHandler):
-    """Request handler that selects the first model with a matching version.
-
-    The version string should be prefixed with 'gpt-', for example:
-    - 'gpt-4o'
-    - 'gpt-4.1'
-    - 'gpt-4.1-mini'
-    - 'gpt-3.5'
-    """
+class ModelVersionRequestHandler(RequestHandler):
+    """Request handler that selects the first model with a matching version."""
 
     version: str
     llm_manager: LlmManager | None = None

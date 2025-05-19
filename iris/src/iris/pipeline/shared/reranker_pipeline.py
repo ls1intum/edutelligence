@@ -11,7 +11,7 @@ from iris.common.pipeline_enum import PipelineEnum
 from iris.common.pyris_message import PyrisMessage
 from iris.llm import (
     CompletionArguments,
-    GPTVersionRequestHandler,
+    ModelVersionRequestHandler,
 )
 from iris.llm.langchain import IrisLangchainChatModel
 from iris.pipeline import Pipeline
@@ -33,7 +33,7 @@ class RerankerPipeline(Pipeline):
 
     def __init__(self):
         super().__init__(implementation_id="reranker_pipeline")
-        request_handler = GPTVersionRequestHandler(version="gpt-3.5-turbo")
+        request_handler = ModelVersionRequestHandler(version="gpt-3.5-turbo")
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler,
             completion_args=CompletionArguments(temperature=0, max_tokens=4000),

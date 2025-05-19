@@ -15,7 +15,7 @@ from iris.domain.data.competency_dto import Competency
 from iris.domain.data.text_message_content_dto import TextMessageContentDTO
 from iris.llm import (
     CompletionArguments,
-    GPTVersionRequestHandler,
+    ModelVersionRequestHandler,
 )
 from iris.pipeline import Pipeline
 from iris.pipeline.prompts.competency_extraction import system_prompt
@@ -32,7 +32,7 @@ class CompetencyExtractionPipeline(Pipeline):
     """
 
     callback: CompetencyExtractionCallback
-    request_handler: GPTVersionRequestHandler
+    request_handler: ModelVersionRequestHandler
     output_parser: PydanticOutputParser
 
     def __init__(self, callback: Optional[CompetencyExtractionCallback] = None):
@@ -40,7 +40,7 @@ class CompetencyExtractionPipeline(Pipeline):
             implementation_id="competency_extraction_pipeline_reference_impl"
         )
         self.callback = callback
-        self.request_handler = GPTVersionRequestHandler(version="gpt-4o")
+        self.request_handler = ModelVersionRequestHandler(version="gpt-4o")
         self.output_parser = PydanticOutputParser(pydantic_object=Competency)
         self.tokens = []
 

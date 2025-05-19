@@ -16,7 +16,7 @@ from ...domain.data.build_log_entry import BuildLogEntryDTO
 from ...domain.data.feedback_dto import FeedbackDTO
 from ...llm import (
     CompletionArguments,
-    GPTVersionRequestHandler,
+    ModelVersionRequestHandler,
 )
 from ...llm.langchain import IrisLangchainChatModel
 from ...pipeline import Pipeline
@@ -52,7 +52,7 @@ class CodeFeedbackPipeline(Pipeline):
         self.callback = callback
 
         # Set up the language model
-        request_handler = GPTVersionRequestHandler(version="gpt-4o")
+        request_handler = ModelVersionRequestHandler(version="gpt-4o")
         completion_args = CompletionArguments(
             temperature=0, max_tokens=1024, response_format="text"
         )

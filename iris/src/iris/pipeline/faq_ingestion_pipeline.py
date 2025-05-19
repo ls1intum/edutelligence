@@ -16,8 +16,8 @@ from ..llm import (
     CompletionArguments,
 )
 from ..llm.external import LanguageModel
-from ..llm.gpt_version_request_handler import GPTVersionRequestHandler
 from ..llm.langchain import IrisLangchainChatModel
+from ..llm.model_version_request_handler import ModelVersionRequestHandler
 from ..vector_database.database import batch_update_lock
 from ..vector_database.faq_schema import FaqSchema, init_faq_schema
 from ..web.status.faq_ingestion_status_callback import FaqIngestionStatus
@@ -42,8 +42,8 @@ class FaqIngestionPipeline(AbstractIngestion, Pipeline):
         self.collection = init_faq_schema(client)
         self.dto = dto
         self.callback = callback
-        self.llm_embedding = GPTVersionRequestHandler("text-embedding-3-small")
-        request_handler = GPTVersionRequestHandler(version="gpt-4o-mini")
+        self.llm_embedding = ModelVersionRequestHandler("text-embedding-3-small")
+        request_handler = ModelVersionRequestHandler(version="gpt-4o-mini")
         completion_args = CompletionArguments(temperature=0.2, max_tokens=2000)
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler, completion_args=completion_args

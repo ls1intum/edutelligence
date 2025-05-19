@@ -28,7 +28,7 @@ from ...domain.retrieval.lecture.lecture_retrieval_dto import (
 )
 from ...llm import (
     CompletionArguments,
-    GPTVersionRequestHandler,
+    ModelVersionRequestHandler,
 )
 from ...llm.langchain import IrisLangchainChatModel
 from ...retrieval.faq_retrieval import FaqRetrieval
@@ -105,12 +105,12 @@ class CourseChatPipeline(Pipeline):
         # Set the langchain chat model
         completion_args = CompletionArguments(temperature=0.1, max_tokens=2000)
         self.llm = IrisLangchainChatModel(
-            request_handler=GPTVersionRequestHandler(version="gpt-4o"),
+            request_handler=ModelVersionRequestHandler(version="gpt-4o"),
             completion_args=completion_args,
         )
 
         self.llm_assistant = IrisLangchainChatModel(
-            request_handler=GPTVersionRequestHandler(version="gpt-4o-mini"),
+            request_handler=ModelVersionRequestHandler(version="gpt-4o-mini"),
             completion_args=completion_args,
         )
         self.callback = callback

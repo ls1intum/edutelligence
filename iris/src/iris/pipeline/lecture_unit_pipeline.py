@@ -1,7 +1,7 @@
 from weaviate.classes.query import Filter
 
 from iris.domain.lecture.lecture_unit_dto import LectureUnitDTO
-from iris.llm import GPTVersionRequestHandler
+from iris.llm import ModelVersionRequestHandler
 from iris.pipeline import Pipeline
 from iris.pipeline.lecture_unit_segment_summary_pipeline import (
     LectureUnitSegmentSummaryPipeline,
@@ -26,7 +26,7 @@ class LectureUnitPipeline(Pipeline):
         vector_database = VectorDatabase()
         self.weaviate_client = vector_database.get_client()
         self.lecture_unit_collection = init_lecture_unit_schema(self.weaviate_client)
-        self.llm_embedding = GPTVersionRequestHandler("text-embedding-3-small")
+        self.llm_embedding = ModelVersionRequestHandler("text-embedding-3-small")
 
     def __call__(self, lecture_unit: LectureUnitDTO):
         lecture_unit_segment_summaries = LectureUnitSegmentSummaryPipeline(

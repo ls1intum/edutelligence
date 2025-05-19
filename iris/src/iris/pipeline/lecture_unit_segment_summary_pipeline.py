@@ -11,8 +11,8 @@ from iris.domain.lecture.lecture_unit_dto import LectureUnitDTO
 from iris.llm import (
     CompletionArguments,
 )
-from iris.llm.gpt_version_request_handler import GPTVersionRequestHandler
 from iris.llm.langchain import IrisLangchainChatModel
+from iris.llm.model_version_request_handler import ModelVersionRequestHandler
 from iris.pipeline import Pipeline
 from iris.pipeline.prompts.lecture_unit_segment_summary_prompt import (
     lecture_unit_segment_summary_prompt,
@@ -60,9 +60,9 @@ class LectureUnitSegmentSummaryPipeline(Pipeline):
             client
         )
 
-        self.llm_embedding = GPTVersionRequestHandler("text-embedding-3-small")
+        self.llm_embedding = ModelVersionRequestHandler("text-embedding-3-small")
 
-        request_handler = GPTVersionRequestHandler(version="gpt-4o")
+        request_handler = ModelVersionRequestHandler(version="gpt-4o")
         completion_args = CompletionArguments(temperature=0, max_tokens=2000)
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler, completion_args=completion_args

@@ -3,5 +3,5 @@ from ..request_handler.capability_request_handler import (
     CapabilityRequestHandler,
     CapabilityRequestHandlerSelectionMode,
 )
-from ..request_handler.gpt_version_request_handler import GPTVersionRequestHandler
+from ..request_handler.model_version_request_handler import ModelVersionRequestHandler
 from ..request_handler.request_handler_interface import RequestHandler

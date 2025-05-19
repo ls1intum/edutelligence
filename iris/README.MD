@@ -221,7 +221,7 @@ their programming exercises on Artemis in a pedagogically meaningful way.
 
      - `description`: Additional information about the model.
      - `id`: Unique identifier for the model across all models.
-     - `model`: The official name of the model as used by the vendor, also used by GPTVersionRequestHandler for model selection (e.g., "gpt-4o", "gpt-3.5-turbo").
+     - `model`: The official name of the model as used by the vendor, also used by ModelVersionRequestHandler for model selection (e.g., "gpt-4o", "gpt-3.5-turbo").
      - `name`: A custom, human-readable name for the model.
      - `type`: The model type, used to select the appropriate client (e.g., `openai_chat`, `azure_chat`, `ollama`).
      - `endpoint`: The URL to connect to the model.
@@ -238,7 +238,7 @@ their programming exercises on Artemis in a pedagogically meaningful way.
      > - GPT-3.5 Turbo equivalent: 3.5
 
      > **New Version-Based Model Selection:**
-     > Pyris now offers a simpler model selection method using the `GPTVersionRequestHandler`.
+     > Pyris now offers a simpler model selection method using the `ModelVersionRequestHandler`.
      > This handler selects models directly by the model name (e.g., "gpt-4o", "gpt-3.5-turbo")
      > rather than using capability comparisons. This provides a more direct and predictable way
      > to select specific model versions.

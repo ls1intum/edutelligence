@@ -29,8 +29,8 @@ from ...domain.data.programming_submission_dto import ProgrammingSubmissionDTO
 from ...llm import (
     CompletionArguments,
 )
-from ...llm.gpt_version_request_handler import GPTVersionRequestHandler
 from ...llm.langchain import IrisLangchainChatModel
+from ...llm.model_version_request_handler import ModelVersionRequestHandler
 from ...vector_database.database import VectorDatabase
 from ...vector_database.lecture_unit_page_chunk_schema import (
     LectureUnitPageChunkSchema,
@@ -77,7 +77,7 @@ class ExerciseChatPipeline(Pipeline):
         # Set the langchain chat model
         completion_args = CompletionArguments(temperature=0, max_tokens=2000)
         self.llm = IrisLangchainChatModel(
-            request_handler=GPTVersionRequestHandler(version="gpt-4o"),
+            request_handler=ModelVersionRequestHandler(version="gpt-4o"),
             completion_args=completion_args,
         )
         self.variant = variant

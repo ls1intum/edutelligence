@@ -13,7 +13,7 @@ from iris.domain.chat.exercise_chat.exercise_chat_pipeline_execution_dto import 
 from iris.domain.data.text_message_content_dto import TextMessageContentDTO
 from iris.llm import (
     CompletionArguments,
-    GPTVersionRequestHandler,
+    ModelVersionRequestHandler,
 )
 from iris.llm.langchain.iris_langchain_chat_model import IrisLangchainChatModel
 from iris.pipeline import Pipeline
@@ -63,13 +63,13 @@ class ChatGPTWrapperPipeline(Pipeline):
     llm: IrisLangchainChatModel
     pipeline: Runnable
     tokens: List[str]
-    request_handler: GPTVersionRequestHandler
+    request_handler: ModelVersionRequestHandler
 
     def __init__(self, callback: Optional[ChatGPTWrapperStatusCallback] = None):
         super().__init__(implementation_id="chat_gpt_wrapper_pipeline_reference_impl")
         self.callback = callback
         self.tokens = []
-        self.request_handler = GPTVersionRequestHandler(version="gpt-4o")
+        self.request_handler = ModelVersionRequestHandler(version="gpt-4o")
 
     def __call__(
         self,
