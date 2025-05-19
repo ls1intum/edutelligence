@@ -1,5 +1,5 @@
 import logging
-from typing import Literal, Optional
+from typing import List, Literal, Optional
 
 from langchain.output_parsers import PydanticOutputParser
 from langchain_core.prompts import (
@@ -8,6 +8,7 @@ from langchain_core.prompts import (
 
 from iris.common.pipeline_enum import PipelineEnum
 from iris.common.pyris_message import IrisMessageRole, PyrisMessage
+from iris.domain import FeatureDTO
 from iris.domain.data.text_message_content_dto import TextMessageContentDTO
 from iris.domain.rewriting_pipeline_execution_dto import (
     RewritingPipelineExecutionDTO,
@@ -17,6 +18,7 @@ from iris.llm import (
     CompletionArguments,
     RequirementList,
 )
+from iris.llm.external.model import LanguageModel
 from iris.pipeline import Pipeline
 from iris.pipeline.prompts.rewriting_prompts import (
     system_prompt_faq,
@@ -55,6 +57,33 @@ class RewritingPipeline(Pipeline):
         )
         self.tokens = []
         self.variant = variant
+
+    @classmethod
+    def get_variants(cls, available_llms: List[LanguageModel]) -> List[FeatureDTO]:
+        """
+        Returns available variants for the RewritingPipeline based on available LLMs.
+        This pipeline supports 'faq' and 'problem_statement' variants.
+
+        Args:
+            available_llms: List of available language models
+
+        Returns:
+            List of FeatureDTO objects representing available variants
+        """
+        # We could use available_llms to determine if we have LLMs capable of handling each variant
+        # For now, we'll just return both variants regardless of available LLMs
+        return [
+            FeatureDTO(
+                id="faq",
+                name="FAQ Variant",
+                description="FAQ rewriting variant.",
+            ),
+            FeatureDTO(
+                id="problem_statement",
+                name="Problem Statement Variant",
+                description="Problem statement rewriting variant.",
+            ),
+        ]
 
     def __call__(
         self,

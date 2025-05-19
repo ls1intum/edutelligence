@@ -9,6 +9,7 @@ from iris.domain.ingestion.ingestion_pipeline_execution_dto import (
     FaqIngestionPipelineExecutionDto,
 )
 
+from ..domain import FeatureDTO
 from ..domain.data.faq_dto import FaqDTO
 from ..ingestion.abstract_ingestion import AbstractIngestion
 from ..llm import (
@@ -17,6 +18,7 @@ from ..llm import (
     CompletionArguments,
     RequirementList,
 )
+from ..llm.external import LanguageModel
 from ..llm.langchain import IrisLangchainChatModel
 from ..vector_database.database import batch_update_lock
 from ..vector_database.faq_schema import FaqSchema, init_faq_schema
@@ -56,6 +58,25 @@ class FaqIngestionPipeline(AbstractIngestion, Pipeline):
         )
         self.pipeline = self.llm | StrOutputParser()
         self.tokens = []
+
+    @classmethod
+    def get_variants(cls, available_llms: List[LanguageModel]) -> List[FeatureDTO]:
+        """
+        Returns available variants for the FaqIngestionPipeline based on available LLMs.
+
+        Args:
+            available_llms: List of available language models
+
+        Returns:
+            List of FeatureDTO objects representing available variants
+        """
+        return [
+            FeatureDTO(
+                id="default",
+                name="Default Variant",
+                description="Default FAQ ingestion variant.",
+            )
+        ]
 
     def __call__(self) -> bool:
         try:

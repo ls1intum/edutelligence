@@ -10,7 +10,6 @@ from iris.domain import (
     CompetencyExtractionPipelineExecutionDTO,
     CourseChatPipelineExecutionDTO,
     ExerciseChatPipelineExecutionDTO,
-    FeatureDTO,
     InconsistencyCheckPipelineExecutionDTO,
 )
 from iris.domain.chat.lecture_chat.lecture_chat_pipeline_execution_dto import (
@@ -22,6 +21,7 @@ from iris.domain.rewriting_pipeline_execution_dto import (
 from iris.domain.text_exercise_chat_pipeline_execution_dto import (
     TextExerciseChatPipelineExecutionDTO,
 )
+from iris.llm.llm_manager import LlmManager
 from iris.pipeline.chat.course_chat_pipeline import CourseChatPipeline
 from iris.pipeline.chat.exercise_chat_agent_pipeline import (
     ExerciseChatAgentPipeline,
@@ -31,9 +31,11 @@ from iris.pipeline.chat_gpt_wrapper_pipeline import ChatGPTWrapperPipeline
 from iris.pipeline.competency_extraction_pipeline import (
     CompetencyExtractionPipeline,
 )
+from iris.pipeline.faq_ingestion_pipeline import FaqIngestionPipeline
 from iris.pipeline.inconsistency_check_pipeline import (
     InconsistencyCheckPipeline,
 )
+from iris.pipeline.lecture_ingestion_pipeline import LectureUnitPageIngestionPipeline
 from iris.pipeline.rewriting_pipeline import RewritingPipeline
 from iris.pipeline.text_exercise_chat_pipeline import TextExerciseChatPipeline
 from iris.web.status.status_update import (
@@ -354,101 +356,32 @@ def get_pipeline(feature: str):
     """
     Get the pipeline variants for the given feature.
     """
+    # Get available LLMs from LlmManager
+    llm_manager = LlmManager()
+    available_llms = llm_manager.entries
+
     match feature:
         case "CHAT":
-            return [
-                FeatureDTO(
-                    id="default",
-                    name="Default Variant",
-                    description="Default chat variant.",
-                )
-            ]
+            return ChatGPTWrapperPipeline.get_variants(available_llms)
         case "PROGRAMMING_EXERCISE_CHAT":
-            return [
-                FeatureDTO(
-                    id="default",
-                    name="Default Variant",
-                    description="Default programming exercise chat variant.",
-                )
-            ]
+            return ExerciseChatAgentPipeline.get_variants(available_llms)
         case "TEXT_EXERCISE_CHAT":
-            return [
-                FeatureDTO(
-                    id="default",
-                    name="Default Variant",
-                    description="Default text exercise chat variant.",
-                )
-            ]
+            return TextExerciseChatPipeline.get_variants(available_llms)
         case "COURSE_CHAT":
-            return [
-                FeatureDTO(
-                    id="default",
-                    name="Default Variant",
-                    description="Default course chat variant.",
-                )
-            ]
+            return CourseChatPipeline.get_variants(available_llms)
         case "COMPETENCY_GENERATION":
-            return [
-                FeatureDTO(
-                    id="default",
-                    name="Default Variant",
-                    description="Default competency generation variant.",
-                )
-            ]
-        case "LECTURE_INGESTION":
-            return [
-                FeatureDTO(
-                    id="default",
-                    name="Default Variant",
-                    description="Default lecture ingestion variant.",
-                )
-            ]
+            return CompetencyExtractionPipeline.get_variants(available_llms)
         case "LECTURE_CHAT":
-            return [
-                FeatureDTO(
-                    id="default",
-                    name="Default Variant",
-                    description="Default lecture chat variant.",
-                )
-            ]
+            return LectureChatPipeline.get_variants(available_llms)
         case "INCONSISTENCY_CHECK":
-            return [
-                FeatureDTO(
-                    id="default",
-                    name="Default Variant",
-                    description="Default inconsistency check variant.",
-                )
-            ]
+            return InconsistencyCheckPipeline.get_variants(available_llms)
         case "REWRITING":
-            return [
-                FeatureDTO(
-                    id="faq",
-                    name="FAQ Variant",
-                    description="FAQ rewriting variant.",
-                ),
-                FeatureDTO(
-                    id="problem_statement",
-                    name="Problem Statement Variant",
-                    description="Problem statement rewriting variant.",
-                ),
-            ]
+            return RewritingPipeline.get_variants(available_llms)
         case "CHAT_GPT_WRAPPER":
-            return [
-                FeatureDTO(
-                    id="chat_gpt_wrapper",
-                    name="Default Variant",
-                    description="Default ChatGPT wrapper variant.",
-                )
-            ]
-
+            return ChatGPTWrapperPipeline.get_variants(available_llms)
+        case "LECTURE_INGESTION":
+            return LectureUnitPageIngestionPipeline.get_variants(available_llms)
         case "FAQ_INGESTION":
-            return [
-                FeatureDTO(
-                    id="default",
-                    name="Default Variant",
-                    description="Default faq ingestion variant.",
-                )
-            ]
-
+            return FaqIngestionPipeline.get_variants(available_llms)
         case _:
             return Response(status_code=status.HTTP_400_BAD_REQUEST)

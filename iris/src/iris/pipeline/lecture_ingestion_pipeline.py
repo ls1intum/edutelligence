@@ -3,7 +3,7 @@ import os
 import tempfile
 import threading
 from asyncio.log import logger
-from typing import Optional
+from typing import List, Optional
 
 import fitz
 from langchain_core.output_parsers import StrOutputParser
@@ -14,6 +14,7 @@ from weaviate import WeaviateClient
 from weaviate.classes.query import Filter
 
 from iris.common.pipeline_enum import PipelineEnum
+from iris.domain import FeatureDTO
 from iris.domain.ingestion.ingestion_pipeline_execution_dto import (
     IngestionPipelineExecutionDto,
 )
@@ -30,6 +31,7 @@ from ..llm import (
     CompletionArguments,
     RequirementList,
 )
+from ..llm.external import LanguageModel
 from ..llm.langchain import IrisLangchainChatModel
 from ..vector_database.lecture_unit_page_chunk_schema import (
     LectureUnitPageChunkSchema,
@@ -123,6 +125,25 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         self.pipeline = self.llm | StrOutputParser()
         self.tokens = []
         self.course_language = None
+
+    @classmethod
+    def get_variants(cls, available_llms: List[LanguageModel]) -> List[FeatureDTO]:
+        """
+        Returns available variants for the LectureUnitPageIngestionPipeline based on available LLMs.
+
+        Args:
+            _available_llms: List of available language models
+
+        Returns:
+            List of FeatureDTO objects representing available variants
+        """
+        return [
+            FeatureDTO(
+                id="default",
+                name="Default Variant",
+                description="Default lecture ingestion variant.",
+            )
+        ]
 
     def __call__(self) -> bool:
         try:
