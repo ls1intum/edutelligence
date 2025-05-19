@@ -1,5 +1,6 @@
 import logging
 import os
+import shutil
 import time
 import traceback
 import uuid
@@ -22,6 +23,9 @@ from nebula.transcript.video_utils import (
     extract_frames_at_timestamps,
 )
 from nebula.transcript.whisper_utils import transcribe_with_azure_whisper
+
+# Setup logging
+logging.basicConfig(level=logging.DEBUG)
 
 # Get the API token from config
 api_keys = Config.get_api_keys()
@@ -51,8 +55,6 @@ add_security_schema_to_app(
     exclude_paths=["/health", "/docs", "/openapi.json"],
 )
 
-# Setup logging
-logging.basicConfig(level=getattr(logging, Config.get_log_level()))
 
 # Ensure temp directory exists
 Config.ensure_dirs()
@@ -65,7 +67,7 @@ async def home():
 
 @app.post("/start-transcribe", response_model=TranscriptionResponseDTO)
 async def start_transcribe(req: TranscribeRequestDTO):
-    logging.debug("▶ Received request")
+    logging.debug("Received transcription request.")
 
     video_url = req.videoUrl
     if not video_url:
@@ -75,49 +77,35 @@ async def start_transcribe(req: TranscribeRequestDTO):
     video_path = os.path.join(Config.VIDEO_STORAGE_PATH, f"{uid}.mp4")
     audio_path = os.path.join(Config.VIDEO_STORAGE_PATH, f"{uid}.wav")
 
-    logging.debug("▶ Video URL: %s", video_url)
-    logging.debug("▶ Temp paths -> video: %s, audio: %s", video_path, audio_path)
-
     try:
-        logging.debug("▶ Downloading video...")
+        logging.debug("Downloading video...")
         download_video(video_url, video_path)
-        logging.debug("✅ Video downloaded.")
 
-        logging.debug("▶ Extracting audio...")
+        logging.debug("Extracting audio...")
         extract_audio(video_path, audio_path)
-        logging.debug("✅ Audio extracted.")
 
-        logging.debug("▶ Starting transcription...")
+        logging.debug("Transcribing with Azure Whisper...")
         transcription = transcribe_with_azure_whisper(audio_path)
         logging.debug(
-            "✅ Transcription complete. Segments: %d", len(transcription["segments"])
+            "Transcription complete. Segments: %d", len(transcription["segments"])
         )
 
         timestamps = [s["start"] for s in transcription["segments"]]
-        logging.debug("▶ Extracting %d frames...", len(timestamps))
         frames = extract_frames_at_timestamps(video_path, timestamps)
-        logging.debug("✅ Extracted %d frames.", len(frames))
 
         slide_timestamps = []
-        for idx, (ts, img_b64) in enumerate(frames):
-            logging.debug(
-                "▶ Asking GPT for slide %d/%d at %.2fs...", idx + 1, len(frames), ts
-            )
+        for ts, img_b64 in frames:
             slide_number = ask_gpt_for_slide_number(img_b64)
-            logging.debug("→ GPT returned slide number: %s", slide_number)
             if slide_number is not None:
                 slide_timestamps.append((ts, slide_number))
-            time.sleep(2)
+            time.sleep(2)  # to avoid rate limits
 
-        logging.debug("▶ Aligning slide numbers with transcript...")
         aligned_segments = align_slides_with_segments(
             transcription["segments"], slide_timestamps
         )
-        logging.debug("✅ Alignment complete: %d segments.", len(aligned_segments))
+        logging.debug("Slide alignment complete: %d segments.", len(aligned_segments))
 
         segments = [TranscriptionSegmentDTO(**s) for s in aligned_segments]
-
-        logging.debug("✅ Sending final response.")
         return TranscriptionResponseDTO(
             lectureUnitId=req.lectureUnitId,
             language=transcription.get("language", "en"),
@@ -126,13 +114,28 @@ async def start_transcribe(req: TranscribeRequestDTO):
 
     except Exception as e:
         traceback.print_exc()
-        logging.error("❌ Transcription failed: %s", e, exc_info=True)
+        logging.error("Transcription failed: %s", e, exc_info=True)
         raise HTTPException(status_code=500, detail=str(e)) from e
 
     finally:
+        # Clean video/audio temp files
+        for path in [video_path, audio_path]:
+            try:
+                if os.path.exists(path):
+                    os.remove(path)
+                    logging.debug("Removed temp file: %s", path)
+            except Exception as cleanup_err:
+                logging.warning("Failed to remove temp file %s: %s", path, cleanup_err)
+
+        # Clean chunk directories
+        chunk_dir_prefix = f"chunks_{uid}"
+        temp_dir = Config.VIDEO_STORAGE_PATH
         try:
-            os.remove(video_path)
-            os.remove(audio_path)
-            logging.debug("🧹 Temp files removed.")
+            for entry in os.listdir(temp_dir):
+                full_path = os.path.join(temp_dir, entry)
+                if entry.startswith(chunk_dir_prefix) and os.path.isdir(full_path):
+
+                    shutil.rmtree(full_path)
+                    logging.debug("Removed chunk directory: %s", full_path)
         except Exception as cleanup_err:
-            logging.warning("⚠️ Cleanup failed: %s", cleanup_err)
+            logging.warning("Failed to remove chunk directories: %s", cleanup_err)
