@@ -22,6 +22,12 @@ RUN pip install poetry && \
     poetry self update && \
     poetry env activate
 RUN poetry install
+RUN poetry run python -m grpc_tools.protoc \
+  -I src/grpclocal \
+  --python_out=src/grpclocal \
+  --grpc_python_out=src/grpclocal \
+  src/grpclocal/model.proto
+
 
 EXPOSE 8080
 

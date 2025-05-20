@@ -1,7 +1,8 @@
 import json
 from json import JSONDecodeError
 from fastapi import FastAPI, Request
-import httpx
+from fastapi.responses import StreamingResponse
+from grpclocal.client import GRPCModelClient
 
 from logos.dbmanager import DBManager
 from logos.dbrequest import *
@@ -192,7 +193,7 @@ async def logos_service(path: str, request: Request):
     except ValueError as e:
         return {"error": str(e)}, 401
     # Forward Request
-    async with httpx.AsyncClient() as client:
+    """async with httpx.AsyncClient() as client:
         response = await client.request(
             method="POST",
             url=forward_url,
@@ -205,6 +206,16 @@ async def logos_service(path: str, request: Request):
         return response.json()
     except JSONDecodeError:
         return response.text
+    """
+    client = GRPCModelClient(target_host=forward_url)
+
+    def token_generator():
+        for chunk in client.generate_stream(json=json_data, deployment_name=headers["deployment_name"],
+                                            api_key=headers["api_key"], api_version=headers["api_version"],
+                                            authorization=f"Bearer {headers["api_key"]}"):
+            yield chunk
+
+    return StreamingResponse(token_generator(), media_type="text/plain")
 
 
 def request2json(request_data: bytes) -> dict:

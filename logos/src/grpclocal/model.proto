@@ -1,0 +1,22 @@
+syntax = "proto3";
+
+package src.grpc;
+
+
+service ModelService {
+  rpc Generate (GenerateRequest) returns (stream GenerateResponse);
+}
+
+
+message GenerateRequest {
+  string json              = 1;
+  string deployment_name   = 2;
+  string api_key           = 3;
+  string api_version       = 4;
+  string authorization     = 5;
+}
+
+
+message GenerateResponse {
+  string text_chunk        = 1;
+}
