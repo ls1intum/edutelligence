@@ -1,6 +1,7 @@
 services:
   logos-server:
     restart: unless-stopped
+    container_name: logos-server
     build:
       context: ../
       dockerfile: ./logos/Dockerfile
@@ -10,7 +11,7 @@ services:
     volumes:
       -   data_volume:/src/logos
     ports:
-      - "8080:8080"
+      - "8080"
     networks:
       - internal
   logos-db:
@@ -39,14 +40,14 @@ services:
     restart: unless-stopped
     container_name: logos-ui
     ports:
-      - "8081:8080"
+      - "8081"
     networks:
       - internal
   nginx:
     image: nginx:latest
     container_name: logos-nginx
     ports:
-      - "8082:8080"
+      - "8080:8080"
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
     depends_on:
