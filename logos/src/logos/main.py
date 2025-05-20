@@ -3,6 +3,7 @@ from json import JSONDecodeError
 from fastapi import FastAPI, Request
 from fastapi.responses import StreamingResponse
 from grpclocal.client import GRPCModelClient
+import httpx
 
 from logos.dbmanager import DBManager
 from logos.dbrequest import *
@@ -130,7 +131,7 @@ async def logos_service(path: str, request: Request):
     # logos-API-check
     try:
         key = headers["logos_key"] if "logos_key" in headers else (
-            headers["Authorization"].replace("Bearer ", ""))
+            headers["Authorization"].replace("Bearer ", "") if "Authorization" in headers else "")
         with DBManager() as db:
             # Get an api key for a llm. This is the starting point for classification later
             llm_info = db.fetch_llm_key(key)
@@ -159,13 +160,14 @@ async def logos_service(path: str, request: Request):
                         f"{base_url}/{deployment_name}/{path}"
                         f"?api-version={api_version}"
                     )
+                    forward_url = forward_url[:8] + forward_url[8:].replace("//", "/")
 
-                    headers = {
+                    proxy_headers = {
                         "api-key": headers["api_key"],
                         "Content-Type": "application/json"
                     }
                 else:
-                    headers = {
+                    proxy_headers = {
                         "Authorization": f"Bearer {headers["api_key"]}",
                         "Content-Type": "application/json"
                     }
@@ -184,7 +186,7 @@ async def logos_service(path: str, request: Request):
                 # forward_url = forward_url.replace("///", "/")
                 auth_name = llm_info["auth_name"]
                 auth_format = llm_info["auth_format"].format(api_key)
-                headers = {
+                proxy_headers = {
                     auth_name: auth_format,
                     "Content-Type": "application/json"
                 }
@@ -198,7 +200,7 @@ async def logos_service(path: str, request: Request):
             method="POST",
             url=forward_url,
             json=json_data,
-            headers=headers,
+            headers=proxy_headers,
             timeout=30,
         )
 
@@ -206,16 +208,25 @@ async def logos_service(path: str, request: Request):
         return response.json()
     except JSONDecodeError:
         return response.text
-    """
     client = GRPCModelClient(target_host=forward_url)
 
     def token_generator():
-        for chunk in client.generate_stream(json=json_data, deployment_name=headers["deployment_name"],
+        for chunk in client.generate_stream(payload=json_data, deployment_name=headers["deployment_name"],
                                             api_key=headers["api_key"], api_version=headers["api_version"],
                                             authorization=f"Bearer {headers["api_key"]}"):
             yield chunk
 
     return StreamingResponse(token_generator(), media_type="text/plain")
+    """
+    json_data["stream"] = True
+
+    async def stream_response():
+        async with httpx.AsyncClient(timeout=None) as client:
+            async with client.stream(method="POST", url=forward_url, headers=proxy_headers, json=json_data) as response:
+                async for chunk in response.aiter_bytes():
+                    yield chunk
+
+    return StreamingResponse(stream_response(), media_type="application/json")
 
 
 def request2json(request_data: bytes) -> dict:

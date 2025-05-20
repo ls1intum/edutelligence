@@ -23,9 +23,9 @@ RUN pip install poetry && \
     poetry env activate
 RUN poetry install
 RUN poetry run python -m grpc_tools.protoc \
-  -I src/grpclocal \
-  --python_out=src/grpclocal \
-  --grpc_python_out=src/grpclocal \
+  -I . \
+  --python_out=. \
+  --grpc_python_out=. \
   src/grpclocal/model.proto
 
 
