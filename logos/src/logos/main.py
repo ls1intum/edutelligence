@@ -118,19 +118,18 @@ async def logos_service(path: str, request: Request):
     :param request: Request
     :return: The response from Endpoints
     """
+    headers = dict(request.headers)
     if not DBManager.is_initialized():
         # If we run logos for the first time automatically run a basic setup skript
         lk = setup()
-        request.headers["logos_key"] = lk
+        headers["logos_key"] = lk
     # Read request
     data = await request.body()
     json_data = request2json(data)
     # logos-API-check
-    if "Authorization" not in request.headers and "logos_key" not in request.headers:
-        return {"error": "Missing Authorization Header"}, 401
     try:
-        key = request.headers["logos_key"] if "logos_key" in request.headers else (
-            request.headers["Authorization"].replace("Bearer ", ""))
+        key = headers["logos_key"] if "logos_key" in headers else (
+            headers["Authorization"].replace("Bearer ", ""))
         with DBManager() as db:
             # Get an api key for a llm. This is the starting point for classification later
             llm_info = db.fetch_llm_key(key)
@@ -145,15 +144,15 @@ async def logos_service(path: str, request: Request):
             # Check for api-key
             model_api_id = db.get_model_from_api(key, llm_info["api_id"])
             model_provider_id = db.get_model_from_provider(key, llm_info["provider_id"])
-            if model_api_id is None and model_provider_id is None or "proxy" in request.headers:
+            if model_api_id is None and model_provider_id is None or "proxy" in headers:
                 # Model not in the database, change to normal proxy
                 if provider == "azure":
-                    if "deployment_name" not in request.headers:
+                    if "deployment_name" not in headers or headers["deployment_name"] == "":
                         return {"error": "Missing deployment name in header"}, 401
-                    if "api_version" not in request.headers:
+                    if "api_version" not in headers or headers["api_version"] == "":
                         return {"error": "Missing api version in header"}, 401
-                    deployment_name = request.headers["deployment_name"]
-                    api_version = request.headers["api_version"]
+                    deployment_name = headers["deployment_name"]
+                    api_version = headers["api_version"]
 
                     forward_url = (
                         f"{base_url}/{deployment_name}/{path}"
@@ -161,12 +160,12 @@ async def logos_service(path: str, request: Request):
                     )
 
                     headers = {
-                        "api-key": request.headers["api_key"],
+                        "api-key": headers["api_key"],
                         "Content-Type": "application/json"
                     }
                 else:
                     headers = {
-                        "Authorization": f"Bearer {request.headers["api_key"]}",
+                        "Authorization": f"Bearer {headers["api_key"]}",
                         "Content-Type": "application/json"
                     }
                     forward_url = f"{base_url}/{path}"
