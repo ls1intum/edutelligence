@@ -17,7 +17,7 @@ router = APIRouter()
 @router.post("/generate-embedings", response_model=GenerateEmbedingsResponse)
 async def generate_embedings(request: GenerateCompetencyRequest):
     print("GENERATING EMBEDDING FOR ==> ", request.id)
-    uuid, embedings = FallbackModel.generate_embeddings(request.id, request.description)
+    uuid, embedings = FallbackModel.generate_embeddings_local(request.id, request.description)
 
     print("EMBEDDING GENERATED WITH UUID ==> ", uuid)
     print("EMBEDDING's VECTOR LENGTH ==> ", len(embedings))
@@ -31,7 +31,7 @@ async def generate_embedings_batch(request: GenerateCompetencyRequestBatch):
     response = []
     for req in request.competencies:
         print("GENERATING EMBEDDING FOR ==> ", req.id)
-        embedings = FallbackModel.generate_embeddings(req.id, req.description)
+        embedings = FallbackModel.generate_embeddings_local(req.id, req.description)
         response.append(embedings)
         print("EMBEDDING GENERATED")
     print("EMBEDING ARE HERE ==> ", len(response))
