@@ -4,7 +4,7 @@ import shutil
 import time
 import uuid
 
-from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
+from fastapi import BackgroundTasks, FastAPI, HTTPException
 
 from nebula.health import router as health_router
 from nebula.transcript.align_utils import align_slides_with_segments
@@ -30,8 +30,9 @@ from nebula.transcript.whisper_utils import transcribe_with_azure_whisper
 # ─────────────────────────────
 # ✅ Initialize FastAPI
 # ─────────────────────────────
-app = FastAPI()
+app = FastAPI(title="Nebula Transcription Service")
 app.include_router(health_router)
+
 logging.basicConfig(level=getattr(logging, Config.get_log_level()))
 Config.ensure_dirs()
 
@@ -88,7 +89,6 @@ def run_transcription(req: TranscribeRequestDTO, job_id: str):
         fail_job(job_id, str(e))
 
     finally:
-        # Clean up individual temp files
         for path in [video_path, audio_path]:
             try:
                 if os.path.exists(path):
@@ -99,7 +99,6 @@ def run_transcription(req: TranscribeRequestDTO, job_id: str):
                     "⚠️ Failed to remove temp file %s: %s", path, cleanup_err
                 )
 
-        # Clean up chunked frame directory
         chunk_dir_prefix = f"chunks_{uid}"
         temp_dir = Config.VIDEO_STORAGE_PATH
 
@@ -114,9 +113,9 @@ def run_transcription(req: TranscribeRequestDTO, job_id: str):
 
 
 # ─────────────────────────────
-# 🚀 Start Transcription Endpoint
+# 🚀 Internal Transcription Endpoint (called by Gateway)
 # ─────────────────────────────
-@app.post("/start-transcribe")
+@app.post("/start-transcribe", tags=["internal"])
 async def start_transcribe(
     req: TranscribeRequestDTO, background_tasks: BackgroundTasks
 ):
@@ -130,16 +129,16 @@ async def start_transcribe(
 
 
 # ─────────────────────────────
-# 🔁 Polling Endpoint
+# 🔁 Internal Status Endpoint (called by Gateway)
 # ─────────────────────────────
-@app.get("/status/{job_id}")
+@app.get("/status/{job_id}", tags=["internal"])
 async def get_transcription_status(job_id: str):
     return get_job_status(job_id)
 
 
 # ─────────────────────────────
-# 👋 Root Endpoint
+# 👋 Health Check
 # ─────────────────────────────
-@app.get("/")
+@app.get("/", include_in_schema=False)
 async def home():
     return {"message": "FastAPI Nebula transcription service is running"}

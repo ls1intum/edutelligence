@@ -1,17 +1,19 @@
-# Nebula_Transcriber
+# 🧠 Nebula Transcriber
 
-Nebula_Transcriber is a lightweight transcription service for educational videos.
-It uses **Whisper** (Azure or local) for audio transcription and **GPT-4o Vision** to detect visible slide numbers from video frames.
+Nebula is a lightweight, modular transcription system that powers automated lecture transcription for Artemis using **Whisper** and **GPT-4o Vision**. It includes two components:
+
+- 🎯 **Transcriber**: Transcribes `.m3u8` lecture videos, detects slide numbers
+- 🚪 **Gateway**: Provides an authenticated API layer for Artemis integration
 
 ---
 
 ## ✨ Features
 
 - 🎥 Process `.m3u8` lecture video URLs (e.g., from TUM-Live)
-- 🧠 Transcribe audio using local or Azure Whisper
-- 👁️ Detect slide numbers via GPT-4o Vision (Azure)
-- ⚡ Stateless and fast — no database or external storage
-- 🚀 Exposes a clean **FastAPI** interface
+- 🧠 Transcribe audio using **Azure Whisper**
+- 👁️ Detect slide numbers via **GPT-4o Vision** (Azure)
+- 🔁 Async background job processing via polling
+- ✅ Clean FastAPI interface, Docker-ready, stateless
 
 ---
 
@@ -19,37 +21,25 @@ It uses **Whisper** (Azure or local) for audio transcription and **GPT-4o Vision
 
 ```bash
 git clone https://github.com/ls1intum/edutelligence.git
-cd edutelligence
-git checkout feature/transcript
-cd nebula
+cd edutelligence/nebula
 ```
 
 ### Python Installation
 
-Ensure Python version `>=3.10,<3.13` is installed.
-You can check with:
+Ensure Python version `>=3.10,<3.13` is installed:
 
 ```bash
 python --version
 ```
 
-If needed, install from https://www.python.org/downloads/
-
 ---
 
-## 📦 Poetry-Based Setup
+## 📦 Poetry Setup
 
-We use [Poetry](https://python-poetry.org/) for dependency and virtual environment management.
-
-### Install Poetry (if not installed)
+We use [Poetry](https://python-poetry.org/) for dependency and environment management.
 
 ```bash
 pip install poetry
-```
-
-### Install Dependencies
-
-```bash
 poetry install
 ```
 
@@ -61,8 +51,8 @@ FFmpeg is required for video/audio processing.
 
 ### Windows
 
-- Download from https://ffmpeg.org/download.html (or use chocolatey: `choco install ffmpeg`)
-- Ensure `ffmpeg.exe` is added to your system `PATH`
+- Download from https://ffmpeg.org/download.html (or use chocolatey: choco install ffmpeg)
+- Ensure ffmpeg.exe is added to your system PATH
 
 ### macOS
 
@@ -72,16 +62,20 @@ brew install ffmpeg
 
 ---
 
-## 🔧 Configuration Files
+## 🔧 Configuration
 
-### Create `llm_config.nebula.yml`
+### 1. `application_local.nebula.yml`
 
-Copy `llm_config.example.yml` and add your keys:
+Copy from application_local.example.nebula.yml
+
+### 2. `llm_config.nebula.yml`
+
+Copy llm_config.example.yml and add your keys:
 
 ```yaml
 - id: azure-gpt-4o
   type: azure_chat
-  api_key: <your-gpt-api-key>
+  api_key: <your-api-key>
   api_version: 2024-02-15-preview
   azure_deployment: gpt-4o
   endpoint: https://<your-endpoint>.openai.azure.com/
@@ -94,51 +88,81 @@ Copy `llm_config.example.yml` and add your keys:
   endpoint: https://<your-endpoint>.openai.azure.com/
 ```
 
-### Create `application_local.nebula.yml`
-
-Copy from `application_local.example.nebula.yml`
-
 ---
 
-### Run App
+## ▶️ Running Locally
 
-Set environment variables and run:
+```bash
+# Set environment variable
 
-#### Windows PowerShell
-
-```powershell
+### Windows PowerShell
 $env:APPLICATION_YML_PATH = "./application_local.nebula.yml"
 $env:LLM_CONFIG_PATH = "./llm_config.nebula.yml"
-poetry run uvicorn nebula.transcript.app:app --reload --port 5000
-```
+$env:TRANSCRIBE_SERVICE_URL = "http://localhost:5000"
 
-#### macOS / Linux
-
-```bash
+### macOS / Linux
 export APPLICATION_YML_PATH=./application_local.nebula.yml
 export LLM_CONFIG_PATH=./llm_config.nebula.yml
+export TRANSCRIBE_SERVICE_URL=http://localhost:5000
+
+# Run the transcription service
 poetry run uvicorn nebula.transcript.app:app --reload --port 5000
+
+# In a separate terminal, run the gateway
+poetry run uvicorn gateway.main:app --reload --port 8000
+
 ```
 
 ---
 
-## 🐳 Docker Setup
-
-> Docker setup is isolated inside the `docker/transcript/` folder.
+## 🐳 Docker
 
 ```bash
-cd nebula
+cd docker/transcript
 docker compose up --build
 ```
 
-Make sure these files are present or mounted in the container:
-
-- `llm_config.nebula.yml`
-- `application_local.nebula.yml`
+Make sure to mount both `.yml` config files inside the container.
 
 ---
 
-## 📡 API Usage
+## 📁 Project Structure
+
+```
+nebula/
+├── docker/
+│   └── transcript/
+│       └── Dockerfile
+├── src/
+│   ├── gateway/
+│   │   ├── main.py
+│   │   ├── security.py
+│   │   └── routes/
+│   │       └── transcribe.py
+│   └── nebula/
+│       ├── __init__.py
+│       ├── main.py
+│       ├── health.py
+│       └── transcript/
+│           ├── app.py
+│           ├── audio_utils.py
+│           ├── align_utils.py
+│           ├── config.py
+│           ├── dto.py
+│           ├── jobs.py
+│           ├── llm_utils.py
+│           ├── slide_utils.py
+│           ├── video_utils.py
+│           └── whisper_utils.py
+├── temp/  # Temporary files
+├── application_local.nebula.yml
+├── llm_config.nebula.yml
+└── pyproject.toml
+```
+
+---
+
+## 📡 API Usage (via Artemis)
 
 **POST** `/api/lecture/{lectureId}/lecture-unit/{lectureUnitId}/nebula-transcriber`
 
@@ -152,51 +176,18 @@ Make sure these files are present or mounted in the container:
 
 ---
 
-## 🎓 Getting a TUM-Live `.m3u8` Link
+## 🧹 Temp File Handling
 
-1. Open [https://live.rbg.tum.de](hhttps://live.rbg.tum.de/w/WiSe24ItP/55921 "only 12 min")
-2. Open DevTools → Network tab → Filter by `.m3u8`
-3. Copy full link (including `jwt`)
-4. Use in `videoUrl`
-
----
-
-## 🧹 Temporary Files
-
-- Stored in `./temp` by default
-- Automatically removed after transcription
-- Configurable via `.env`
-
----
-
-## 📁 Project Structure
-
-```
-nebula/
-├── src/
-│   └── nebula/
-│       ├── transcript/
-│       │   ├── app.py
-│       │   ├── slide_utils.py
-│       │   ├── whisper_utils.py
-│       │   ├── llm_utils.py
-│       │   ├── config.py
-│       │   ├── .....
-│       ├── health.py
-│       ├── security.py
-├── application_local.nebula.yml
-├── llm_config.nebula.yml
-├── docker/
-│   └── transcript/
-│       └── Dockerfile
-├── docker-compose.yml
-└── temp/
-```
+- Stored under `./temp`
+- Removed automatically after job completion
+- Controlled by `Config.VIDEO_STORAGE_PATH`
 
 ---
 
 ## 🛠 Troubleshooting
 
-- 404 from GPT Vision: Check Azure deployment name and API version
-- FFmpeg error: Ensure it's installed and on PATH
-- `proxies` error: Use OpenAI SDK version ≤ `1.55.3`
+- ❌ **404 from GPT Vision**: Check Azure deployment + API version
+- ❌ **FFmpeg not found**: Ensure installed and in PATH
+- 🧪 **OpenAI errors**: Use SDK ≤ `1.55.3`
+
+---

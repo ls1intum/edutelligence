@@ -1,7 +1,6 @@
 import threading
 import time
 import uuid
-from collections import defaultdict
 from typing import Any, Dict
 
 # Job state store
