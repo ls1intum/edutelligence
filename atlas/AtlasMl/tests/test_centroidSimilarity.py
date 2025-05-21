@@ -1,5 +1,17 @@
 import numpy as np
+import pytest
 from atlasml.ml.CompetencySimilarity import CentroidSimilarity
+import atlasml.ml.CompetencySimilarity as cs_module
+
+class DummyEmbedder:
+    def __init__(self, *args, **kwargs): pass
+    def __call__(self, texts):
+        return [{'score': 1.0} for _ in texts]
+
+@pytest.fixture(autouse=True)
+def stub_pipeline(monkeypatch):
+    monkeypatch.setattr(CentroidSimilarity, 'pipeline',
+                        lambda *args, **kwargs: DummyEmbedder())
 
 def test_no_relations_matrix():
     embs = np.array([[1, 0],
