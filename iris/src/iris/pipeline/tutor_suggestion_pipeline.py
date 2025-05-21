@@ -126,7 +126,7 @@ class TutorSuggestionPipeline(Pipeline):
             if "yes" in response.lower():
                 self.callback.done(
                     "The question has already been answered",
-                    tutor_suggestion="The question has already been answered in the thread and should be marked as resolved.",
+                    artifact="The question has already been answered in the thread and should be marked as resolved.",
                     tokens=self.tokens,
                 )
                 return
@@ -164,7 +164,7 @@ class TutorSuggestionPipeline(Pipeline):
 
         self.callback.done(
             "Generated tutor suggestions",
-            tutor_suggestion=text_exercise_result,
+            artifact=text_exercise_result,
             tokens=self.tokens,
         )
 
@@ -189,7 +189,7 @@ class TutorSuggestionPipeline(Pipeline):
 
         self.callback.done(
             "Generated tutor suggestions",
-            tutor_suggestion=programming_exercise_result,
+            artifact=programming_exercise_result,
             tokens=self.tokens,
         )
 
