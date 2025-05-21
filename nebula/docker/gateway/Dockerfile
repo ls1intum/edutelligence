@@ -1,13 +1,14 @@
 # docker/gateway/Dockerfile
-FROM python:3.10-slim
+FROM python:3.12-slim
 
 WORKDIR /app
 
-# Copy only the gateway logic and shared config
-COPY gateway/main.py .
-COPY src/security.py ./security.py
-COPY application_local.nebula.yml ./application_local.nebula.yml
+COPY pyproject.toml poetry.lock ./
+RUN pip install poetry && poetry install --only main --no-root
 
-RUN pip install fastapi uvicorn httpx pyyaml
+COPY src/nebula ./nebula
+COPY application_local.nebula.yml ./
 
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]
+ENV PYTHONPATH=/app
+
+CMD ["poetry", "run", "uvicorn", "nebula.gateway.main:app", "--host", "0.0.0.0", "--port", "8000"]

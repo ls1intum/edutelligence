@@ -16,3 +16,19 @@ services:
       - ./llm_config.nebula.yml:/app/llm_config.nebula.yml:ro
       - ./temp:/app/temp
     restart: unless-stopped
+
+  gateway:
+    build:
+      context: .
+      dockerfile: docker/gateway/Dockerfile
+    container_name: nebula-gateway
+    ports:
+      - "8000:8000"
+    environment:
+      - TRANSCRIBE_SERVICE_URL=http://transcriber:5000
+      - APPLICATION_YML_PATH=/app/application_local.nebula.yml
+    volumes:
+      - ./application_local.nebula.yml:/app/application_local.nebula.yml:ro
+    depends_on:
+      - transcriber
+    restart: unless-stopped
