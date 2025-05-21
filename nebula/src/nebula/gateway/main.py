@@ -4,9 +4,8 @@ import os
 import yaml
 from fastapi import FastAPI
 
-from nebula.gateway.security import AuthMiddleware, add_security_schema_to_app
 from nebula.gateway.routes import transcribe
-
+from nebula.gateway.security import AuthMiddleware, add_security_schema_to_app
 
 # ─────────────────────────────
 # ✅ Logging Setup
