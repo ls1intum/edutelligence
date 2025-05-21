@@ -109,7 +109,7 @@ export TRANSCRIBE_SERVICE_URL=http://localhost:5000
 poetry run uvicorn nebula.transcript.app:app --reload --port 5000
 
 # In a separate terminal, run the gateway
-poetry run uvicorn gateway.main:app --reload --port 8000
+poetry run uvicorn nebula.gateway.main:app --reload --port 8000
 
 ```
 

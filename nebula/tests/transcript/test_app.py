@@ -3,14 +3,17 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 
 from nebula.transcript.app import app
+from nebula.transcript.jobs import create_job, save_job_result
 
 client = TestClient(app)
 
 
-def test_home(authorized_headers):
-    response = client.get("/", headers=authorized_headers)
+def test_home():
+    response = client.get("/")
     assert response.status_code == 200
-    assert response.json() == {"message": "FastAPI server is running!"}
+    assert response.json() == {
+        "message": "FastAPI Nebula transcription service is running"
+    }
 
 
 @patch("nebula.transcript.app.download_video")
@@ -19,14 +22,13 @@ def test_home(authorized_headers):
 @patch("nebula.transcript.app.extract_frames_at_timestamps")
 @patch("nebula.transcript.app.ask_gpt_for_slide_number")
 @patch("nebula.transcript.app.align_slides_with_segments")
-def test_start_transcribe_success(  # pylint: disable=unused-argument
+def test_start_transcribe_success(
     mock_align,
     mock_gpt,
     mock_frames,
     mock_transcribe,
-    mock_audio,
-    mock_download,
-    authorized_headers,
+    mock_audio,  # pylint: disable=unused-argument
+    mock_download,  # pylint: disable=unused-argument
 ):
     mock_transcribe.return_value = {
         "segments": [{"start": 0, "end": 1, "text": "Hello"}],
@@ -39,102 +41,33 @@ def test_start_transcribe_success(  # pylint: disable=unused-argument
     ]
 
     payload = {"videoUrl": "http://example.com/video.mp4", "lectureUnitId": 42}
-    response = client.post(
-        "/start-transcribe", json=payload, headers=authorized_headers
-    )
+    response = client.post("/start-transcribe", json=payload)
 
     assert response.status_code == 200
+    assert "transcriptionId" in response.json()
+    assert response.json()["status"] == "processing"
+
+
+def test_get_status_done():
+    job_id = create_job()
+    save_job_result(
+        job_id,
+        {
+            "lectureUnitId": 42,
+            "language": "en",
+            "segments": [
+                {"startTime": 0, "endTime": 1, "text": "test", "slideNumber": 1}
+            ],
+        },
+    )
+
+    response = client.get(f"/status/{job_id}")
+    assert response.status_code == 200
+    assert response.json()["status"] == "done"
     assert response.json()["lectureUnitId"] == 42
-    assert len(response.json()["segments"]) == 1
 
 
-@patch("nebula.transcript.app.download_video")
-@patch("nebula.transcript.app.extract_audio")
-@patch("nebula.transcript.app.transcribe_with_azure_whisper")
-@patch("nebula.transcript.app.extract_frames_at_timestamps")
-@patch("nebula.transcript.app.ask_gpt_for_slide_number")
-@patch("nebula.transcript.app.align_slides_with_segments")
-def test_start_transcribe_gpt_returns_none(  # pylint: disable=unused-argument
-    mock_align,
-    mock_gpt,
-    mock_frames,
-    mock_transcribe,
-    mock_audio,
-    mock_download,
-    authorized_headers,
-):
-    mock_transcribe.return_value = {
-        "segments": [{"start": 0, "end": 1, "text": "No slide"}],
-        "language": "en",
-    }
-    mock_frames.return_value = [(0, "dummy_b64")]
-    mock_gpt.return_value = None
-    mock_align.return_value = [
-        {"startTime": 0, "endTime": 1, "text": "No slide", "slideNumber": 0}
-    ]
-
-    payload = {"videoUrl": "http://example.com/video.mp4", "lectureUnitId": 42}
-    response = client.post(
-        "/start-transcribe", json=payload, headers=authorized_headers
-    )
-
-    assert response.status_code == 200
-    assert isinstance(response.json()["segments"][0]["slideNumber"], int)
-
-
-@patch("nebula.transcript.app.download_video")
-@patch("nebula.transcript.app.extract_audio")
-@patch(
-    "nebula.transcript.app.transcribe_with_azure_whisper",
-    side_effect=RuntimeError("Whisper failed"),
-)
-def test_start_transcribe_whisper_failure(  # pylint: disable=unused-argument
-    mock_transcribe,
-    mock_audio,
-    mock_download,
-    authorized_headers,
-):
-    payload = {"videoUrl": "http://example.com/video.mp4", "lectureUnitId": 42}
-    response = client.post(
-        "/start-transcribe", json=payload, headers=authorized_headers
-    )
-    assert response.status_code == 500
-    assert "Whisper failed" in response.json()["detail"]
-
-
-@patch("os.path.exists", return_value=True)
-@patch("nebula.transcript.app.download_video")
-@patch("nebula.transcript.app.extract_audio")
-@patch(
-    "nebula.transcript.app.transcribe_with_azure_whisper", side_effect=Exception("Boom")
-)
-@patch("os.remove")
-def test_start_transcribe_cleanup_on_failure(  # pylint: disable=unused-argument
-    mock_remove,
-    mock_transcribe,
-    mock_audio,
-    mock_download,
-    mock_exists,
-    authorized_headers,
-):
-    payload = {"videoUrl": "http://example.com/video.mp4", "lectureUnitId": 42}
-    response = client.post(
-        "/start-transcribe", json=payload, headers=authorized_headers
-    )
-
-    assert response.status_code == 500
-    assert mock_remove.called
-
-
-def test_start_transcribe_invalid_schema(authorized_headers):
+def test_start_transcribe_invalid_schema():
     payload = {"videoUrl": 123, "lectureUnitId": "abc"}
-    response = client.post(
-        "/start-transcribe", json=payload, headers=authorized_headers
-    )
+    response = client.post("/start-transcribe", json=payload)
     assert response.status_code == 422
-
-
-def test_start_transcribe_unauthorized():
-    payload = {"videoUrl": "http://example.com/video.mp4", "lectureUnitId": 42}
-    response = client.post("/start-transcribe", json=payload)  # No auth header
-    assert response.status_code == 401

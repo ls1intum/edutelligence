@@ -71,7 +71,7 @@ def run_transcription(req: TranscribeRequestDTO, job_id: str):
             transcription["segments"], slide_timestamps
         )
 
-        segments = [TranscriptionSegmentDTO(**s).dict() for s in aligned_segments]
+        segments = [TranscriptionSegmentDTO(**s).model_dump() for s in aligned_segments]
 
         save_job_result(
             job_id,

@@ -5,8 +5,7 @@ description = "FastAPI-based transcription service for lecture videos using Whis
 authors = ["Timor Morrien <timor.morrien@tum.de>", "Patrick Bassner <patrick.bassner@tum.de>", "Anish Goyal <anish.goyal@tum.de>"]
 readme = "README.md"
 packages = [
-    { include = "nebula", from = "src" },
-    { include = "gateway", from = "src" }
+    { include = "nebula", from = "src" }
 ]
 
 [tool.poetry.dependencies]
@@ -23,7 +22,6 @@ requests = "2.31.0"
 pyyaml = "6.0.1"
 pydub = "0.25.1"
 numpy = "<2.0.0"
-
 
 [tool.poetry.group.dev.dependencies]
 black = "^24.3.0"
@@ -43,7 +41,6 @@ multi_line_output = 3
 [tool.bandit]
 skips = ["B101"]
 exclude_dirs = ["tests"]
-
 
 [build-system]
 requires = ["poetry-core"]
