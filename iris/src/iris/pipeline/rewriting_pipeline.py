@@ -26,7 +26,7 @@ from iris.pipeline.prompts.rewriting_prompts import (
 
 from iris.web.status.status_update import RewritingCallback
 
-from .prompts import faq_consistency_prompt
+from .prompts.faq_consistency_prompt import faq_consistency_prompt
 from ..vector_database.database import VectorDatabase
 
 from ..retrieval.faq_retrieval import FaqRetrieval
