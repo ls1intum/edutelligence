@@ -111,9 +111,6 @@ class RewritingPipeline(Pipeline):
                 course_id=dto.course_id, search_text=response, result_limit=10
             )
             consistency_result = self.check_faq_consistency(faqs, final_result)
-            logging.info(
-                f"FAQ consistency check result: {consistency_result}"
-            )
             faq_type = consistency_result.get("type", "").lower()
             if "inconsistent" in faq_type:
                 logging.warning("Detected inconsistencies in FAQ retrieval.")
@@ -163,16 +160,16 @@ class RewritingPipeline(Pipeline):
             result.strip().removeprefix("```json").removesuffix("```").strip()
         elif result.strip().startswith("```"):
             result.strip().removeprefix("```").removesuffix("```").strip()
-        else:
-            data = {}
 
         result_dict = {}
 
         keys_to_check = ["type", "message", "faqs", "suggestion", "improved version"]
 
         for key in keys_to_check:
-            if key in data:
-                result_dict[key] = data[key]
+            if key in result:
+                result_dict[key] = result[key]
+
+        logging.info(f"Consistency FAQ consistency check result: {result_dict}")
 
         return result_dict
 
