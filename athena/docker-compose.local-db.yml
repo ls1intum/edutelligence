@@ -22,6 +22,8 @@ services:
   athena:
     environment:
       - DATABASE_URL=postgresql+psycopg2://athena:athena@postgres:5432/athena
+      - PRODUCTION=1
+      - SECRET=dev-modeling-secret
 
   assessment_module_manager:
     env_file:
@@ -31,6 +33,7 @@ services:
       - PRODUCTION=1
       - MODULE_MODELING_LLM_SECRET=dev-modeling-secret
       - LMS_PLAYGROUND_SECRET=dev-playground-secret
+      - LMS_LOCAL_SECRET=dev-playground-secret
 
   module_modeling_llm:
     env_file:
