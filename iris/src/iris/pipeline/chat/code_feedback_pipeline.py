@@ -23,6 +23,7 @@ from ...llm.langchain import IrisLangchainChatModel
 from ...llm.model import LanguageModel
 from ...pipeline import Pipeline
 from ...web.status.status_update import StatusCallback
+from ..shared.utils import filter_variants_by_available_models
 
 logger = logging.getLogger(__name__)
 
@@ -92,18 +93,26 @@ class CodeFeedbackPipeline(Pipeline):
 
     @classmethod
     def get_variants(cls, available_llms: List[LanguageModel]) -> List[FeatureDTO]:
-        return [
-            FeatureDTO(
-                id="nano",
-                name="Nano",
-                description="Uses a smaller model for faster and cost-efficient responses.",
+        variant_specs = [
+            (
+                ["gpt-4.1-nano"],
+                FeatureDTO(
+                    id="nano",
+                    name="Nano",
+                    description="Uses a smaller model for faster and cost-efficient responses.",
+                ),
             ),
-            FeatureDTO(
-                id="regular",
-                name="Regular",
-                description="Uses a larger chat model, balancing speed and quality.",
+            (
+                ["gpt-4.1"],
+                FeatureDTO(
+                    id="regular",
+                    name="Regular",
+                    description="Uses a larger chat model, balancing speed and quality.",
+                ),
             ),
         ]
+
+        return filter_variants_by_available_models(available_llms, variant_specs)
 
     @traceable(name="Code Feedback Pipeline")
     def __call__(

@@ -30,8 +30,8 @@ from ...llm import (
     CompletionArguments,
     ModelVersionRequestHandler,
 )
-from ...llm.external.model import LanguageModel
 from ...llm.langchain import IrisLangchainChatModel
+from ...llm.model import LanguageModel
 from ...retrieval.faq_retrieval import FaqRetrieval
 from ...retrieval.faq_retrieval_utils import format_faqs, should_allow_faq_tool
 from ...retrieval.lecture.lecture_retrieval import LectureRetrieval
@@ -56,7 +56,10 @@ from ..prompts.iris_course_chat_prompts_elicit import (
     elicit_no_chat_history_prompt,
 )
 from ..shared.citation_pipeline import CitationPipeline, InformationType
-from ..shared.utils import generate_structured_tools_from_functions
+from ..shared.utils import (
+    filter_variants_by_available_models,
+    generate_structured_tools_from_functions,
+)
 from .interaction_suggestion_pipeline import (
     InteractionSuggestionPipeline,
 )
@@ -541,18 +544,26 @@ class CourseChatPipeline(Pipeline):
 
     @classmethod
     def get_variants(cls, available_llms: List[LanguageModel]) -> List[FeatureDTO]:
-        return [
-            FeatureDTO(
-                id="nano",
-                name="Nano",
-                description="Uses a smaller model for faster and cost-efficient responses.",
+        variant_specs = [
+            (
+                ["gpt-4.1-nano"],
+                FeatureDTO(
+                    id="nano",
+                    name="Nano",
+                    description="Uses a smaller model for faster and cost-efficient responses.",
+                ),
             ),
-            FeatureDTO(
-                id="regular",
-                name="Regular",
-                description="Uses a larger chat model, balancing speed and quality.",
+            (
+                ["gpt-4.1", "gpt-4.1-mini"],
+                FeatureDTO(
+                    id="regular",
+                    name="Regular",
+                    description="Uses a larger chat model, balancing speed and quality.",
+                ),
             ),
         ]
+
+        return filter_variants_by_available_models(available_llms, variant_specs)
 
 
 def datetime_to_string(dt: Optional[datetime]) -> str:

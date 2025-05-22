@@ -10,12 +10,28 @@
   name: GPT 4.1 Mini
   type: azure_chat
 - api_key:
+  description: GPT 4.1
+  cost_per_million_input_token: 0.4
+  cost_per_million_output_token: 1.6
+  id: oai-gpt-41
+  model: gpt-4.1
+  name: GPT 4.1
+  type: openai_chat
+- api_key:
   description: GPT 4.1 Mini
   cost_per_million_input_token: 0.4
   cost_per_million_output_token: 1.6
   id: oai-gpt-41-mini
   model: gpt-4.1-mini
   name: GPT 4.1 Mini
+  type: openai_chat
+- api_key:
+  description: GPT 4.1 Nano
+  cost_per_million_input_token: 0.4
+  cost_per_million_output_token: 1.6
+  id: oai-gpt-41-nano
+  model: gpt-4.1-nano
+  name: GPT 4.1 Nano
   type: openai_chat
 - api_key:
   api_version: "2023-05-15T00:00:00.000Z"

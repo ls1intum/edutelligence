@@ -32,6 +32,7 @@ from ...vector_database.database import VectorDatabase
 from ...web.status.status_update import LectureChatCallback
 from ..pipeline import Pipeline
 from ..shared.citation_pipeline import CitationPipeline
+from ..shared.utils import filter_variants_by_available_models
 
 logger = logging.getLogger(__name__)
 
@@ -109,18 +110,26 @@ class LectureChatPipeline(Pipeline):
 
     @classmethod
     def get_variants(cls, available_llms: List[LanguageModel]) -> List[FeatureDTO]:
-        return [
-            FeatureDTO(
-                id="nano",
-                name="Nano",
-                description="Uses a smaller model for faster and cost-efficient responses.",
+        variant_specs = [
+            (
+                ["gpt-4.1-nano"],
+                FeatureDTO(
+                    id="nano",
+                    name="Nano",
+                    description="Uses a smaller model for faster and cost-efficient responses.",
+                ),
             ),
-            FeatureDTO(
-                id="regular",
-                name="Regular",
-                description="Uses a larger chat model, balancing speed and quality.",
+            (
+                ["gpt-4.1"],
+                FeatureDTO(
+                    id="regular",
+                    name="Regular",
+                    description="Uses a larger chat model, balancing speed and quality.",
+                ),
             ),
         ]
+
+        return filter_variants_by_available_models(available_llms, variant_specs)
 
     def __repr__(self):
         return f"{self.__class__.__name__}(llm={self.llm})"

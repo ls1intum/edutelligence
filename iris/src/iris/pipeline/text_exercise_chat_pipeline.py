@@ -18,6 +18,7 @@ from iris.pipeline.prompts.text_exercise_chat_prompts import (
     fmt_sentiment_analysis_prompt,
     fmt_system_prompt,
 )
+from iris.pipeline.shared.utils import filter_variants_by_available_models
 from iris.web.status.status_update import TextExerciseChatCallback
 
 logger = logging.getLogger(__name__)
@@ -48,18 +49,26 @@ class TextExerciseChatPipeline(Pipeline):
 
     @classmethod
     def get_variants(cls, available_llms: List[LanguageModel]) -> List[FeatureDTO]:
-        return [
-            FeatureDTO(
-                id="nano",
-                name="Nano",
-                description="Uses a smaller model for faster and cost-efficient responses.",
+        variant_specs = [
+            (
+                ["gpt-4.1-nano"],
+                FeatureDTO(
+                    id="nano",
+                    name="Nano",
+                    description="Uses a smaller model for faster and cost-efficient responses.",
+                ),
             ),
-            FeatureDTO(
-                id="regular",
-                name="Regular",
-                description="Uses a larger chat model, balancing speed and quality.",
+            (
+                ["gpt-4.1"],
+                FeatureDTO(
+                    id="regular",
+                    name="Regular",
+                    description="Uses a larger chat model, balancing speed and quality.",
+                ),
             ),
         ]
+
+        return filter_variants_by_available_models(available_llms, variant_specs)
 
     def __call__(
         self,

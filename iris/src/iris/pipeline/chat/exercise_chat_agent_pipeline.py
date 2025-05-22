@@ -52,8 +52,10 @@ from ..prompts.iris_exercise_chat_agent_prompts import (
     tell_progress_stalled_system_prompt,
 )
 from ..shared.citation_pipeline import CitationPipeline, InformationType
-from ..shared.reranker_pipeline import RerankerPipeline
-from ..shared.utils import generate_structured_tools_from_functions
+from ..shared.utils import (
+    filter_variants_by_available_models,
+    generate_structured_tools_from_functions,
+)
 from .code_feedback_pipeline import CodeFeedbackPipeline
 from .interaction_suggestion_pipeline import InteractionSuggestionPipeline
 
@@ -153,7 +155,6 @@ class ExerciseChatAgentPipeline(Pipeline):
         self.suggestion_pipeline = InteractionSuggestionPipeline(variant="exercise")
         self.lecture_retriever = LectureRetrieval(self.db.client)
         self.faq_retriever = FaqRetrieval(self.db.client)
-        self.reranker_pipeline = RerankerPipeline()
         self.code_feedback_pipeline = CodeFeedbackPipeline()
         self.pipeline = self.llm | JsonOutputParser()
         self.citation_pipeline = CitationPipeline()
@@ -167,18 +168,26 @@ class ExerciseChatAgentPipeline(Pipeline):
 
     @classmethod
     def get_variants(cls, available_llms: List[LanguageModel]) -> List[FeatureDTO]:
-        return [
-            FeatureDTO(
-                id="nano",
-                name="Nano",
-                description="Uses a smaller model for faster and cost-efficient responses.",
+        variant_specs = [
+            (
+                ["gpt-4.1-nano"],
+                FeatureDTO(
+                    id="nano",
+                    name="Nano",
+                    description="Uses a smaller model for faster and cost-efficient responses.",
+                ),
             ),
-            FeatureDTO(
-                id="regular",
-                name="Regular",
-                description="Uses a larger chat model, balancing speed and quality.",
+            (
+                ["gpt-4.1", "gpt-4.1-mini"],
+                FeatureDTO(
+                    id="regular",
+                    name="Regular",
+                    description="Uses a larger chat model, balancing speed and quality.",
+                ),
             ),
         ]
+
+        return filter_variants_by_available_models(available_llms, variant_specs)
 
     @traceable(name="Exercise Chat Agent Pipeline")
     def __call__(self, dto: ExerciseChatPipelineExecutionDTO):
