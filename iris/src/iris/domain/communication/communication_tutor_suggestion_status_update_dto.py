@@ -7,9 +7,9 @@ class TutorSuggestionStatusUpdateDTO(StatusUpdateDTO):
     """
     This class is used to update the status of a tutor suggestion.
     It inherits from StatusUpdateDTO and adds two optional fields:
-    - suggestion: The suggestion generated.
+    - artifact: The suggestion generated.
     - result: Generated chat answer.
     """
 
-    suggestion: Optional[str] = None
+    artifact: Optional[str] = None
     result: Optional[str] = None
