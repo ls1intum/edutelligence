@@ -111,12 +111,15 @@ class RewritingPipeline(Pipeline):
                 course_id=dto.course_id, search_text=response, result_limit=10
             )
             consistency_result = self.check_faq_consistency(faqs, final_result)
-
-            if "inconsistent" in consistency_result["type"].lower():
+            logging.info(
+                f"FAQ consistency check result: {consistency_result}"
+            )
+            faq_type = consistency_result.get("type", "").lower()
+            if "inconsistent" in faq_type:
                 logging.warning("Detected inconsistencies in FAQ retrieval.")
-                inconsistencies = parse_inconsistencies(consistency_result["faqs"])
-                improvement = consistency_result["improved version"]
-                suggestions = consistency_result["suggestion"]
+                inconsistencies = parse_inconsistencies(consistency_result.get("faqs", []))
+                improvement = consistency_result.get("improved version", "")
+                suggestions = consistency_result.get("suggestion", [])
 
         self.callback.done(
             final_result=final_result,
