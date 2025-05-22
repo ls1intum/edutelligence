@@ -118,7 +118,7 @@ poetry run uvicorn nebula.gateway.main:app --reload --port 8000
 ## 🐳 Docker
 
 ```bash
-cd docker/transcript
+cd nebula
 docker compose up --build
 ```
 
