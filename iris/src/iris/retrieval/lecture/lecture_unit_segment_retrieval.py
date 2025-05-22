@@ -35,7 +35,7 @@ class LectureUnitSegmentRetrieval(Pipeline):
 
     def __init__(self, client: WeaviateClient):
         super().__init__(implementation_id="lecture_unit_segment_retrieval_pipeline")
-        request_handler = ModelVersionRequestHandler(version="gpt-4o-mini")
+        request_handler = ModelVersionRequestHandler(version="gpt-4.1-mini")
         completion_args = CompletionArguments(temperature=0, max_tokens=2000)
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler, completion_args=completion_args

@@ -45,7 +45,6 @@ from iris.pipeline.prompts.lecture_retrieval_prompts import (
     write_hypothetical_lecture_pages_answer_prompt,
     write_hypothetical_lecture_transcriptions_answer_prompt,
 )
-from iris.pipeline.shared.reranker_pipeline import RerankerPipeline
 from iris.retrieval.lecture.lecture_page_chunk_retrieval import (
     LecturePageChunkRetrieval,
 )
@@ -99,7 +98,6 @@ class LectureRetrieval(Pipeline):
             client
         )
 
-        self.reranker_pipeline = RerankerPipeline()
         self.tokens = []
 
         self.lecture_unit_segment_pipeline = LectureUnitSegmentRetrieval(client)

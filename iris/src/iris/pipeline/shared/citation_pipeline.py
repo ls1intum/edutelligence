@@ -34,7 +34,7 @@ class CitationPipeline(Pipeline):
 
     def __init__(self):
         super().__init__(implementation_id="citation_pipeline")
-        request_handler = ModelVersionRequestHandler(version="gpt-4o-mini")
+        request_handler = ModelVersionRequestHandler(version="gpt-4.1-mini")
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler,
             completion_args=CompletionArguments(temperature=0, max_tokens=4000),

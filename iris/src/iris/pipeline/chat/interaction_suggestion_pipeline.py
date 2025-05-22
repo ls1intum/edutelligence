@@ -48,7 +48,9 @@ class Questions(BaseModel):
 
 
 class InteractionSuggestionPipeline(Pipeline):
-    """Course chat pipeline that answers course related questions from students."""
+    """
+    Interaction suggestion pipeline that suggests next chat interactions, either for exercises or courses.
+    """
 
     llm: IrisLangchainChatModel
     pipeline: Runnable
@@ -62,7 +64,7 @@ class InteractionSuggestionPipeline(Pipeline):
         self.variant = variant
 
         # Set the langchain chat model
-        request_handler = ModelVersionRequestHandler(version="gpt-4o-mini")
+        request_handler = ModelVersionRequestHandler(version="gpt-4.1-nano")
         completion_args = CompletionArguments(
             temperature=0.6, max_tokens=2000, response_format="JSON"
         )

@@ -129,7 +129,9 @@ class LectureChatPipeline(Pipeline):
             ),
         ]
 
-        return filter_variants_by_available_models(available_llms, variant_specs)
+        return filter_variants_by_available_models(
+            available_llms, variant_specs, pipeline_name="LectureChatPipeline"
+        )
 
     def __repr__(self):
         return f"{self.__class__.__name__}(llm={self.llm})"

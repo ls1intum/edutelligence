@@ -563,7 +563,9 @@ class CourseChatPipeline(Pipeline):
             ),
         ]
 
-        return filter_variants_by_available_models(available_llms, variant_specs)
+        return filter_variants_by_available_models(
+            available_llms, variant_specs, pipeline_name="CourseChatPipeline"
+        )
 
 
 def datetime_to_string(dt: Optional[datetime]) -> str:

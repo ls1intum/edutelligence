@@ -1,23 +1,25 @@
 import logging
 import re
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 from langchain_core.prompts import PromptTemplate
 from langchain_core.runnables import Runnable
 from langsmith import traceable
 
 from iris.common.pipeline_enum import PipelineEnum
-from iris.domain import InconsistencyCheckPipelineExecutionDTO
+from iris.domain import FeatureDTO, InconsistencyCheckPipelineExecutionDTO
 from iris.llm import (
     CompletionArguments,
     ModelVersionRequestHandler,
 )
 from iris.llm.langchain.iris_langchain_chat_model import IrisLangchainChatModel
+from iris.llm.model import LanguageModel
 from iris.pipeline import Pipeline
 from iris.pipeline.prompts.inconsistency_check_prompts import (
     prettify_prompt,
     solver_prompt,
 )
+from iris.pipeline.shared.utils import filter_variants_by_available_models
 from iris.web.status.status_update import InconsistencyCheckCallback
 
 logger = logging.getLogger(__name__)
@@ -122,3 +124,29 @@ class InconsistencyCheckPipeline(Pipeline):
 
         self._append_tokens(self.llm.tokens, PipelineEnum.IRIS_INCONSISTENCY_CHECK)
         self.callback.done(final_result=result, tokens=self.tokens)
+
+    @classmethod
+    def get_variants(cls, available_llms: List[LanguageModel]) -> List[FeatureDTO]:
+        """
+        Returns available variants for the InconsistencyCheckPipeline based on available LLMs.
+
+        Args:
+            available_llms: List of available language models
+
+        Returns:
+            List of FeatureDTO objects representing available variants
+        """
+        variant_specs = [
+            (
+                ["gpt-4.1-nano"],
+                FeatureDTO(
+                    id="default",
+                    name="Default",
+                    description="Default inconsistency check variant using GPT-4.1-nano",
+                ),
+            )
+        ]
+
+        return filter_variants_by_available_models(
+            available_llms, variant_specs, pipeline_name="InconsistencyCheckPipeline"
+        )

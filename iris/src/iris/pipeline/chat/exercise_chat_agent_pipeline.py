@@ -187,7 +187,9 @@ class ExerciseChatAgentPipeline(Pipeline):
             ),
         ]
 
-        return filter_variants_by_available_models(available_llms, variant_specs)
+        return filter_variants_by_available_models(
+            available_llms, variant_specs, pipeline_name="ExerciseChatAgentPipeline"
+        )
 
     @traceable(name="Exercise Chat Agent Pipeline")
     def __call__(self, dto: ExerciseChatPipelineExecutionDTO):

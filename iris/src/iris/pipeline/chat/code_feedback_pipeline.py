@@ -112,7 +112,9 @@ class CodeFeedbackPipeline(Pipeline):
             ),
         ]
 
-        return filter_variants_by_available_models(available_llms, variant_specs)
+        return filter_variants_by_available_models(
+            available_llms, variant_specs, pipeline_name="CodeFeedbackPipeline"
+        )
 
     @traceable(name="Code Feedback Pipeline")
     def __call__(
