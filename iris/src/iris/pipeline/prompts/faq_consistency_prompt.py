@@ -16,7 +16,7 @@ Generate the following response dictionary:
 
 Firstly, identify the language of the course. The language of the course is either german or english. You can extract
 the language from the existing FAQs. Your output should be in the same language as the course language.
-If you are unsure, choose english.
+If you are unsure, choose english. 
 
 The following four entries to the dictionary are optional and can only be set if inconsistencies are detected:
 "faqs": This entry should be a list of Strings, each string represents an FAQ.

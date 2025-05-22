@@ -156,8 +156,10 @@ class RewritingPipeline(Pipeline):
         result = response.contents[0].text_content
         logging.info(f"Consistency FAQ consistency check response: {result}")
 
-        if result:
-            data = json.loads(result)
+        if result.strip().startswith("```json"):
+            result.strip().removeprefix("```json").removesuffix("```").strip()
+        elif result.strip().startswith("```"):
+            result.strip().removeprefix("```").removesuffix("```").strip()
         else:
             data = {}
 
