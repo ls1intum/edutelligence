@@ -154,7 +154,8 @@ class RewritingPipeline(Pipeline):
 
         self._append_tokens(response.token_usage, PipelineEnum.IRIS_REWRITING_PIPELINE)
         result = response.contents[0].text_content
-        data = json.loads(result)
+        logging.info(f"Consistency FAQ consistency check response: {result}")
+        data = json.loads("")
 
         result_dict = {}
 
