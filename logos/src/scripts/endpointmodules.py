@@ -2,15 +2,14 @@
 File containing methods calling logos endpoints.
 """
 from requests import Response
-import configparser
 
 from logos.dbmanager import DBManager
 
 
-def endpoint_add_provider(logos_key: str, base_url: str, api_key: str) -> Response:
+def endpoint_add_provider(logos_key: str, base_url: str, provider_name: str, api_key: str) -> Response:
     data = {
         "logos_key": f"{logos_key}",
-        "provider_name": "azure",
+        "provider_name": f"{provider_name}",
         "base_url": f"{base_url}",
         "api_key": f"{api_key}",
         "auth_name": "api-key",
@@ -39,13 +38,3 @@ def endpoint_connect_process_provider(logos_key: str, profile_id: int, api_id: i
 
     with DBManager() as man:
         return man.connect_process_provider(**data)
-
-
-def load_config():
-    config = dict()
-    configParser = configparser.RawConfigParser()
-    configFilePath = "./logos/logos.conf"
-    configParser.read(configFilePath)
-    config["INIT_PROVIDER_BASE_URL"] = configParser.get('proxy_setup', 'INIT_PROVIDER_BASE_URL')
-    config["INIT_PROVIDER_NAME"] = configParser.get('proxy_setup', 'INIT_PROVIDER_NAME')
-    return config

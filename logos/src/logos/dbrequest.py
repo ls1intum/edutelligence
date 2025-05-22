@@ -5,6 +5,11 @@ class LogosKeyModel(BaseModel):
     logos_key: str
 
 
+class LogosSetupRequest(BaseModel):
+    base_url: str
+    provider_name: str
+
+
 class AddProviderRequest(LogosKeyModel):
     provider_name: str
     base_url: str

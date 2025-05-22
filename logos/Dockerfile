@@ -13,7 +13,6 @@ COPY ./logos/pyproject.toml ./logos/poetry.lock* ./
 COPY ./logos/src/ ./src/
 COPY ./logos/tests/ ./logos/tests/
 COPY ./logos/db/ ./logos/db/
-COPY ./logos/logos.conf ./logos/logos.conf
 COPY ../shared/ ./shared/
 COPY ./logos/README.md ./logos/README.md
 COPY ./logos/docker-compose.yaml ./logos/docker-compose.yaml

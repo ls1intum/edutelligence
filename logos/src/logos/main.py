@@ -14,10 +14,13 @@ app = FastAPI()
 
 
 @app.post("/logosdb/setup")
-async def setup_db():
+async def setup_db(data: LogosSetupRequest):
     try:
-        with DBManager() as db:
-            return db.setup()
+        if not DBManager.is_initialized():
+            # If we run logos for the first time automatically run a basic setup skript
+            lk = setup(**data.dict())
+            return {"logos-key": lk}
+        return {"error": "Database already initialized"}
     except Exception as e:
         return {"error": f"{str(e)}"}, 401
 
@@ -121,10 +124,6 @@ async def logos_service(path: str, request: Request):
     :return: The response from Endpoints
     """
     headers = dict(request.headers)
-    if not DBManager.is_initialized():
-        # If we run logos for the first time automatically run a basic setup skript
-        lk = setup()
-        headers["logos_key"] = lk
     # Read request
     data = await request.body()
     json_data = request2json(data)
