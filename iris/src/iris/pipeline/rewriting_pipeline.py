@@ -48,7 +48,7 @@ class RewritingPipeline(Pipeline):
     ):
         super().__init__(implementation_id="rewriting_pipeline_reference_impl")
         self.callback = callback
-        self.request_handler = ModelVersionRequestHandler(version="gpt-4o")
+        self.request_handler = ModelVersionRequestHandler(version="gpt-4.1")
         self.tokens = []
         self.variant = variant
 

@@ -12,6 +12,7 @@ from iris.common.pipeline_enum import PipelineEnum
 from iris.common.token_usage_dto import TokenUsageDTO
 
 from ...common.pyris_message import PyrisMessage
+from ...domain import FeatureDTO
 from ...domain.data.build_log_entry import BuildLogEntryDTO
 from ...domain.data.feedback_dto import FeedbackDTO
 from ...llm import (
@@ -19,6 +20,7 @@ from ...llm import (
     ModelVersionRequestHandler,
 )
 from ...llm.langchain import IrisLangchainChatModel
+from ...llm.model import LanguageModel
 from ...pipeline import Pipeline
 from ...web.status.status_update import StatusCallback
 
@@ -46,19 +48,30 @@ class CodeFeedbackPipeline(Pipeline):
     default_prompt: PromptTemplate
     output_parser: StrOutputParser
     tokens: TokenUsageDTO
+    variant: str
 
-    def __init__(self, callback: Optional[StatusCallback] = None):
+    def __init__(
+        self, callback: Optional[StatusCallback] = None, variant: str = "nano"
+    ):
         super().__init__(implementation_id="code_feedback_pipeline_reference_impl")
         self.callback = callback
+        self.variant = variant
 
         # Set up the language model
-        request_handler = ModelVersionRequestHandler(version="gpt-4o")
         completion_args = CompletionArguments(
             temperature=0, max_tokens=1024, response_format="text"
         )
+
+        if variant == "regular":
+            model = "gpt-4.1"
+        else:
+            model = "gpt-4.1-nano"
+
+        request_handler = ModelVersionRequestHandler(version=model)
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler, completion_args=completion_args
         )
+
         # Load prompt from file
         dirname = os.path.dirname(__file__)
         with open(
@@ -76,6 +89,21 @@ class CodeFeedbackPipeline(Pipeline):
         )
         # Create the pipeline
         self.pipeline = self.llm | self.output_parser
+
+    @classmethod
+    def get_variants(cls, available_llms: List[LanguageModel]) -> List[FeatureDTO]:
+        return [
+            FeatureDTO(
+                id="nano",
+                name="Nano",
+                description="Uses a smaller model for faster and cost-efficient responses.",
+            ),
+            FeatureDTO(
+                id="regular",
+                name="Regular",
+                description="Uses a larger chat model, balancing speed and quality.",
+            ),
+        ]
 
     @traceable(name="Code Feedback Pipeline")
     def __call__(

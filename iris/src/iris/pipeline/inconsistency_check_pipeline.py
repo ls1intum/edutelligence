@@ -42,7 +42,7 @@ class InconsistencyCheckPipeline(Pipeline):
         completion_args = CompletionArguments()
 
         self.llm = IrisLangchainChatModel(
-            request_handler=ModelVersionRequestHandler(version="gpt-3.5-turbo"),
+            request_handler=ModelVersionRequestHandler(version="gpt-4.1-nano"),
             completion_args=completion_args,
         )
         self.solver_prompt = PromptTemplate.from_template(solver_prompt)

@@ -63,7 +63,7 @@ class TranscriptionIngestionPipeline(Pipeline):
         self.collection = init_lecture_transcription_schema(client)
         self.llm_embedding = ModelVersionRequestHandler("text-embedding-3-small")
 
-        request_handler = ModelVersionRequestHandler(version="gpt-4o")
+        request_handler = ModelVersionRequestHandler(version="gpt-4.1-mini")
         completion_args = CompletionArguments(temperature=0, max_tokens=2000)
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler, completion_args=completion_args

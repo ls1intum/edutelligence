@@ -40,7 +40,7 @@ class CompetencyExtractionPipeline(Pipeline):
             implementation_id="competency_extraction_pipeline_reference_impl"
         )
         self.callback = callback
-        self.request_handler = ModelVersionRequestHandler(version="gpt-4o")
+        self.request_handler = ModelVersionRequestHandler(version="gpt-4.1")
         self.output_parser = PydanticOutputParser(pydantic_object=Competency)
         self.tokens = []
 

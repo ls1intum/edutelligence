@@ -3,6 +3,7 @@ from datetime import datetime
 from typing import List, Optional, Tuple
 
 from iris.common.pyris_message import IrisMessageRole, PyrisMessage
+from iris.domain import FeatureDTO
 from iris.domain.text_exercise_chat_pipeline_execution_dto import (
     TextExerciseChatPipelineExecutionDTO,
 )
@@ -10,6 +11,7 @@ from iris.llm import (
     CompletionArguments,
     ModelVersionRequestHandler,
 )
+from iris.llm.model import LanguageModel
 from iris.pipeline import Pipeline
 from iris.pipeline.prompts.text_exercise_chat_prompts import (
     fmt_extract_sentiments_prompt,
@@ -28,11 +30,36 @@ class TextExerciseChatPipeline(Pipeline):
 
     callback: TextExerciseChatCallback
     request_handler: ModelVersionRequestHandler
+    variant: str
 
-    def __init__(self, callback: Optional[TextExerciseChatCallback] = None):
+    def __init__(
+        self, callback: Optional[TextExerciseChatCallback] = None, variant: str = "nano"
+    ):
         super().__init__(implementation_id="text_exercise_chat_pipeline_reference_impl")
         self.callback = callback
-        self.request_handler = ModelVersionRequestHandler(version="gpt-4.1")
+        self.variant = variant
+
+        if variant == "regular":
+            model = "gpt-4.1"
+        else:
+            model = "gpt-4.1-nano"
+
+        self.request_handler = ModelVersionRequestHandler(version=model)
+
+    @classmethod
+    def get_variants(cls, available_llms: List[LanguageModel]) -> List[FeatureDTO]:
+        return [
+            FeatureDTO(
+                id="nano",
+                name="Nano",
+                description="Uses a smaller model for faster and cost-efficient responses.",
+            ),
+            FeatureDTO(
+                id="regular",
+                name="Regular",
+                description="Uses a larger chat model, balancing speed and quality.",
+            ),
+        ]
 
     def __call__(
         self,

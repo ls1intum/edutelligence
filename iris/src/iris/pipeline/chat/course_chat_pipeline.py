@@ -21,7 +21,7 @@ from ...common.message_converters import (
 )
 from ...common.pipeline_enum import PipelineEnum
 from ...common.pyris_message import PyrisMessage
-from ...domain import CourseChatPipelineExecutionDTO
+from ...domain import CourseChatPipelineExecutionDTO, FeatureDTO
 from ...domain.data.metrics.competency_jol_dto import CompetencyJolDTO
 from ...domain.retrieval.lecture.lecture_retrieval_dto import (
     LectureRetrievalDTO,
@@ -30,6 +30,7 @@ from ...llm import (
     CompletionArguments,
     ModelVersionRequestHandler,
 )
+from ...llm.external.model import LanguageModel
 from ...llm.langchain import IrisLangchainChatModel
 from ...retrieval.faq_retrieval import FaqRetrieval
 from ...retrieval.faq_retrieval_utils import format_faqs, should_allow_faq_tool
@@ -79,7 +80,7 @@ class CourseChatPipeline(Pipeline):
     """Course chat pipeline that answers course related questions from students."""
 
     llm: IrisLangchainChatModel
-    llm_assistant: IrisLangchainChatModel
+    llm_small: IrisLangchainChatModel
     pipeline: Runnable
     lecture_pipeline: LectureChatPipeline
     suggestion_pipeline: InteractionSuggestionPipeline
@@ -94,7 +95,7 @@ class CourseChatPipeline(Pipeline):
     def __init__(
         self,
         callback: CourseChatStatusCallback,
-        variant: str = "default",
+        variant: str = "nano",
         event: str | None = None,
     ):
         super().__init__(implementation_id="course_chat_pipeline")
@@ -104,13 +105,21 @@ class CourseChatPipeline(Pipeline):
 
         # Set the langchain chat model
         completion_args = CompletionArguments(temperature=0.1, max_tokens=2000)
+
+        if variant == "regular":
+            model = "gpt-4.1"
+            model_small = "gpt-4.1-mini"
+        else:
+            model = "gpt-4.1-nano"
+            model_small = "gpt-4.1-nano"
+
         self.llm = IrisLangchainChatModel(
-            request_handler=ModelVersionRequestHandler(version="gpt-4o"),
+            request_handler=ModelVersionRequestHandler(version=model),
             completion_args=completion_args,
         )
 
-        self.llm_assistant = IrisLangchainChatModel(
-            request_handler=ModelVersionRequestHandler(version="gpt-4o-mini"),
+        self.llm_small = IrisLangchainChatModel(
+            request_handler=ModelVersionRequestHandler(version=model_small),
             completion_args=completion_args,
         )
         self.callback = callback
@@ -126,10 +135,10 @@ class CourseChatPipeline(Pipeline):
         self.tokens = []
 
     def __repr__(self):
-        return f"{self.__class__.__name__}(llm={self.llm}, llm_assistant={self.llm_assistant})"
+        return f"{self.__class__.__name__}(llm={self.llm}, llm_small={self.llm_small})"
 
     def __str__(self):
-        return f"{self.__class__.__name__}(llm={self.llm}, llm_assistant={self.llm_assistant})"
+        return f"{self.__class__.__name__}(llm={self.llm}, llm_small={self.llm_small})"
 
     @traceable(name="Course Chat Pipeline")
     def __call__(self, dto: CourseChatPipelineExecutionDTO, **kwargs):
@@ -529,6 +538,21 @@ class CourseChatPipeline(Pipeline):
             )
             return len(result.objects) > 0
         return False
+
+    @classmethod
+    def get_variants(cls, available_llms: List[LanguageModel]) -> List[FeatureDTO]:
+        return [
+            FeatureDTO(
+                id="nano",
+                name="Nano",
+                description="Uses a smaller model for faster and cost-efficient responses.",
+            ),
+            FeatureDTO(
+                id="regular",
+                name="Regular",
+                description="Uses a larger chat model, balancing speed and quality.",
+            ),
+        ]
 
 
 def datetime_to_string(dt: Optional[datetime]) -> str:

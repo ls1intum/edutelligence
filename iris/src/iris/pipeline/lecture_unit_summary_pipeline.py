@@ -38,7 +38,7 @@ class LectureUnitSummaryPipeline(Pipeline):
         self.lecture_unit_dto = lecture_unit_dto
         self.lecture_unit_segment_summaries = lecture_unit_segment_summaries
 
-        request_handler = ModelVersionRequestHandler(version="gpt-4o")
+        request_handler = ModelVersionRequestHandler(version="gpt-4.1-mini")
         completion_args = CompletionArguments(temperature=0, max_tokens=2000)
 
         self.llm = IrisLangchainChatModel(

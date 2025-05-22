@@ -105,11 +105,10 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         super().__init__()
         self.collection = init_lecture_unit_page_chunk_schema(client)
         self.dto = dto
-        self.llm_vision = ModelVersionRequestHandler("gpt-4o")
-        self.llm_chat = ModelVersionRequestHandler("gpt-4o")
+        self.llm_chat = ModelVersionRequestHandler("gpt-4.1-mini")
         self.llm_embedding = ModelVersionRequestHandler("text-embedding-3-small")
         self.callback = callback
-        request_handler = ModelVersionRequestHandler("gpt-3.5-turbo")
+        request_handler = ModelVersionRequestHandler("gpt-4.1-mini")
         completion_args = CompletionArguments(temperature=0.2, max_tokens=2000)
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler, completion_args=completion_args
@@ -292,7 +291,7 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
             contents=[image_interpretation_prompt, image],
         )
         try:
-            response = self.llm_vision.chat(
+            response = self.llm_chat.chat(
                 [iris_message],
                 CompletionArguments(temperature=0, max_tokens=512),
                 tools=[],

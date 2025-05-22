@@ -11,7 +11,7 @@ from iris.common.pipeline_enum import PipelineEnum
 from iris.domain.communication.communication_tutor_suggestion_pipeline_execution_dto import (
     CommunicationTutorSuggestionPipelineExecutionDTO,
 )
-from iris.llm import CapabilityRequestHandler, CompletionArguments, RequirementList
+from iris.llm import CompletionArguments, ModelVersionRequestHandler
 from iris.llm.langchain import IrisLangchainChatModel
 from iris.pipeline import Pipeline
 from iris.pipeline.prompts.tutor_suggestion.post_summary_prompt import (
@@ -68,9 +68,7 @@ class TutorSuggestionPipeline(Pipeline):
     def __init__(self, callback: TutorSuggestionCallback):
         super().__init__(implementation_id="tutor_suggestion_pipeline")
         completion_args = CompletionArguments()
-        request_handler = CapabilityRequestHandler(
-            requirements=RequirementList(self_hosted=True)
-        )
+        request_handler = ModelVersionRequestHandler(version="gpt-4.1-mini")
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler,
             completion_args=completion_args,

@@ -43,7 +43,7 @@ class FaqIngestionPipeline(AbstractIngestion, Pipeline):
         self.dto = dto
         self.callback = callback
         self.llm_embedding = ModelVersionRequestHandler("text-embedding-3-small")
-        request_handler = ModelVersionRequestHandler(version="gpt-4o-mini")
+        request_handler = ModelVersionRequestHandler(version="gpt-4.1-mini")
         completion_args = CompletionArguments(temperature=0.2, max_tokens=2000)
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler, completion_args=completion_args

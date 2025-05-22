@@ -14,6 +14,7 @@ from ...common.message_converters import (
 )
 from ...common.pipeline_enum import PipelineEnum
 from ...common.pyris_message import PyrisMessage
+from ...domain import FeatureDTO
 from ...domain.chat.lecture_chat.lecture_chat_pipeline_execution_dto import (
     LectureChatPipelineExecutionDTO,
 )
@@ -24,6 +25,7 @@ from ...llm import (
     CompletionArguments,
 )
 from ...llm.langchain import IrisLangchainChatModel
+from ...llm.model import LanguageModel
 from ...llm.model_version_request_handler import ModelVersionRequestHandler
 from ...retrieval.lecture.lecture_retrieval import LectureRetrieval
 from ...vector_database.database import VectorDatabase
@@ -71,22 +73,30 @@ class LectureChatPipeline(Pipeline):
     pipeline: Runnable
     prompt: ChatPromptTemplate
     callback: LectureChatCallback
+    variant: str
 
     def __init__(
         self,
         callback: LectureChatCallback,
         dto: LectureChatPipelineExecutionDTO,
-        variant: str,
+        variant: str = "nano",
     ):
         super().__init__(implementation_id="lecture_chat_pipeline")
         # Set the langchain chat model
-        request_handler = ModelVersionRequestHandler(version="gpt-4o")
 
         self.callback = callback
         self.dto = dto
         self.variant = variant
 
         completion_args = CompletionArguments(temperature=0, max_tokens=2000)
+
+        if variant == "regular":
+            model = "gpt-4.1"
+        else:
+            model = "gpt-4.1-nano"
+
+        request_handler = ModelVersionRequestHandler(version=model)
+
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler, completion_args=completion_args
         )
@@ -96,6 +106,21 @@ class LectureChatPipeline(Pipeline):
         self.pipeline = self.llm | StrOutputParser()
         self.citation_pipeline = CitationPipeline()
         self.tokens = []
+
+    @classmethod
+    def get_variants(cls, available_llms: List[LanguageModel]) -> List[FeatureDTO]:
+        return [
+            FeatureDTO(
+                id="nano",
+                name="Nano",
+                description="Uses a smaller model for faster and cost-efficient responses.",
+            ),
+            FeatureDTO(
+                id="regular",
+                name="Regular",
+                description="Uses a larger chat model, balancing speed and quality.",
+            ),
+        ]
 
     def __repr__(self):
         return f"{self.__class__.__name__}(llm={self.llm})"
