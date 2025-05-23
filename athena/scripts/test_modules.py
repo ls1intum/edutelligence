@@ -43,9 +43,9 @@ def main():
         print(f"Using Python path: {python_path}")
 
         try:
-            # Install pytest in the virtual environment
-            print(f"Installing pytest for {module}...")
-            subprocess.run([pip_path, "install", "pytest"], check=True, capture_output=True, text=True)
+            # Install pytest and pytest-asyncio in the virtual environment
+            print(f"Installing pytest and pytest-asyncio for {module}...")
+            subprocess.run([pip_path, "install", "pytest", "pytest-asyncio"], check=True, capture_output=True, text=True)
 
             # Run pytest using the module's virtual environment, only running tests from mock directories
             mock_test_dir = os.path.join(test_dir, "mock")
