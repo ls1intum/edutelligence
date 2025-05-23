@@ -3,116 +3,141 @@ from athena.text import Exercise, Submission, Feedback
 from athena.schemas.exercise_type import ExerciseType
 
 @pytest.mark.asyncio
-async def test_generate_suggestions_invalid_code(real_config):
-
-    # Create a real exercise for testing
+async def test_generate_suggestions_algorithm_explanation(real_config):
+    """Test feedback generation for explaining an algorithm."""
     exercise = Exercise(
         id=1,
-        title="Python Function Exercise",
+        title="Algorithm Explanation Exercise",
         type=ExerciseType.text,
         max_points=10,
         bonus_points=2,
-        grading_instructions="",
-        problem_statement="Implement a function that calculates the factorial of a given number n.",
-        example_solution="def factorial(n):\n    if n == 0:\n        return 1\n    return n * factorial(n-1)",
+        grading_instructions="Explain the algorithm clearly, including its time complexity and space complexity.",
+        problem_statement="Explain how the binary search algorithm works. Include its time complexity and when it should be used.",
+        example_solution="Binary search is an efficient algorithm for finding an element in a sorted array. It works by repeatedly dividing the search interval in half. If the value of the search key is less than the item in the middle of the interval, narrow the interval to the lower half. Otherwise, narrow it to the upper half. The time complexity is O(log n) because we divide the search space in half each time. Space complexity is O(1) as we only use a constant amount of extra space.",
         grading_criteria=[]
     )
     
-    # Create a submission with invalid code (recursive factorial without base case)
-    invalid_submission = Submission(
-        id=3,
+    submission = Submission(
+        id=1,
         exerciseId=exercise.id,
-        text="def factorial(n):\n    return n * factorial(n)"  # Missing base case and not decrementing n
+        text="Binary search is when you look for something in a sorted list by checking the middle element. If it's not there, you look in the left or right half. It's pretty fast."
     )
     
     feedbacks = await real_config.generate_suggestions(
         exercise=exercise,
-        submission=invalid_submission,
+        submission=submission,
         config=real_config,
         debug=False,
         is_graded=True
     )
+    
     for feedback in feedbacks:
         print(feedback.description)
         print("--------------------------------")
     
     assert isinstance(feedbacks, list)
-    assert len(feedbacks) > 0, "Expected some feedback"
-    assert any("base case" in feedback.description.lower() 
-        for feedback in feedbacks), "Expected feedback about missing base case"
-    assert any("n-1" in feedback.description.lower() 
-        for feedback in feedbacks), "Expected feedback about decrementing n"
+    assert len(feedbacks) > 0, "Expected feedback about algorithm explanation"
+    
+    # Combine all feedback for analysis
+    all_feedback = " ".join(f.description.lower() for f in feedbacks)
+    
+    # Technical Accuracy Checks - must include at least half of the terms
+    required_complexity_terms = ["time complexity", "o(log n)", "space complexity", "o(1)"]
+    found_complexity = [term for term in required_complexity_terms if term in all_feedback]
+    min_required = len(required_complexity_terms) // 2
+    assert len(found_complexity) >= min_required, f"Feedback must include at least {min_required} complexity terms. Found: {', '.join(found_complexity)}"
+    
+    required_algorithm_terms = ["sorted", "interval", "element"]
+    found_algorithm = [term for term in required_algorithm_terms if term in all_feedback]
+    min_required = len(required_algorithm_terms) // 2
+    assert len(found_algorithm) >= min_required, f"Feedback must include at least {min_required} algorithm terms. Found: {', '.join(found_algorithm)}"
 
 @pytest.mark.asyncio
-async def test_generate_suggestions_string_manipulation(real_config):
-
+async def test_generate_suggestions_code_documentation(real_config):
+    """Test feedback generation for code documentation exercise."""
     exercise = Exercise(
         id=2,
-        title="String Reversal Exercise",
+        title="Code Documentation Exercise",
         type=ExerciseType.text,
         max_points=10,
         bonus_points=2,
-        grading_instructions="",
-        problem_statement="Implement a function that takes a string as input and returns the reversed string. Do not use any built-in reverse methods.",
-        example_solution="def reverse_string(s):\n    return s[::-1]",
+        grading_instructions="Document the code's purpose, parameters, return values, and any important notes about usage.",
+        problem_statement="Write documentation for a function that calculates the factorial of a number. Include its purpose, parameters, return value, and any edge cases to consider.",
+        example_solution="This function calculates the factorial of a non-negative integer n. Parameters: n (int) - The number to calculate factorial for. Returns: int - The factorial of n. Note: This function will raise a ValueError if n is negative. The factorial of 0 is defined as 1.",
         grading_criteria=[]
     )
     
-    invalid_submission = Submission(
-        id=9,
+    submission = Submission(
+        id=2,
         exerciseId=exercise.id,
-        text="def reverse_string(s):\n    return s.reverse()"  # Using built-in reverse
+        text="This function finds the factorial. It takes a number and multiplies it by all numbers below it until it reaches 1."
     )
     
     feedbacks = await real_config.generate_suggestions(
         exercise=exercise,
-        submission=invalid_submission,
+        submission=submission,
         config=real_config,
         debug=False,
         is_graded=True
     )
+    
     for feedback in feedbacks:
         print(feedback.description)
         print("--------------------------------")
     
     assert isinstance(feedbacks, list)
-    assert len(feedbacks) > 0, "Expected feedback about using built-in reverse"
-    assert any("built-in" in feedback.description.lower()  
-        for feedback in feedbacks), "Expected feedback about not using built-in methods"
+    assert len(feedbacks) > 0, "Expected feedback about documentation"
+    
+    # Combine all feedback for analysis
+    all_feedback = " ".join(f.description.lower() for f in feedbacks)
+    
+    # Documentation Requirements - must include at least half of the terms
+    required_doc_terms = ["parameter", "return", "edge case", "negative", "0"]
+    found_doc = [term for term in required_doc_terms if term in all_feedback]
+    min_required = len(required_doc_terms) // 2
+    assert len(found_doc) >= min_required, f"Feedback must include at least {min_required} documentation terms. Found: {', '.join(found_doc)}"
 
 @pytest.mark.asyncio
-async def test_generate_suggestions_list_processing(real_config):
-    """Test feedback generation for a list processing exercise."""
+async def test_generate_suggestions_design_pattern(real_config):
+    """Test feedback generation for explaining a design pattern."""
     exercise = Exercise(
         id=3,
-        title="List Deduplication Exercise",
+        title="Design Pattern Explanation Exercise",
         type=ExerciseType.text,
         max_points=10,
         bonus_points=2,
-        grading_instructions="",
-        problem_statement="Implement a function that takes a list as input and returns a new list with duplicates removed while maintaining the original order.",
-        example_solution="def remove_duplicates(lst):\n    seen = set()\n    return [x for x in lst if not (x in seen or seen.add(x))]",
+        grading_instructions="Explain the design pattern, its use cases, advantages, and disadvantages.",
+        problem_statement="Explain the Singleton design pattern. Include when it should be used and its potential drawbacks.",
+        example_solution="The Singleton pattern ensures a class has only one instance and provides a global point of access to it. It's useful when exactly one object is needed to coordinate actions across the system. Advantages include controlled access to the sole instance and reduced namespace pollution. Disadvantages include potential violation of the Single Responsibility Principle and difficulty in unit testing due to global state.",
         grading_criteria=[]
     )
     
-    invalid_submission = Submission(
-        id=10,
+    submission = Submission(
+        id=3,
         exerciseId=exercise.id,
-        text="def remove_duplicates(lst):\n    return list(set(lst))"  # Doesn't preserve order
+        text="Singleton is when you make sure there's only one copy of something in your program. It's good for saving memory."
     )
     
     feedbacks = await real_config.generate_suggestions(
         exercise=exercise,
-        submission=invalid_submission,
+        submission=submission,
         config=real_config,
         debug=False,
         is_graded=True
     )
+    
     for feedback in feedbacks:
         print(feedback.description)
         print("--------------------------------")
     
     assert isinstance(feedbacks, list)
-    assert len(feedbacks) > 0, "Expected feedback about order preservation"
-    assert any("order" in feedback.description.lower() or "preserve" in feedback.description.lower() 
-        for feedback in feedbacks), "Expected feedback about preserving list order"
+    assert len(feedbacks) > 0, "Expected feedback about design pattern explanation"
+    
+    # Combine all feedback for analysis
+    all_feedback = " ".join(f.description.lower() for f in feedbacks)
+    
+    # Design Pattern Requirements - must include at least half of the terms
+    required_pattern_terms = ["instance", "advantage", "drawback", "use"]
+    found_pattern = [term for term in required_pattern_terms if term in all_feedback]
+    min_required = len(required_pattern_terms) // 2
+    assert len(found_pattern) >= min_required, f"Feedback must include at least {min_required} design pattern terms. Found: {', '.join(found_pattern)}"
