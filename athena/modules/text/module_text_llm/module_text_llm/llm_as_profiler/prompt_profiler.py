@@ -4,33 +4,36 @@ from pydantic import BaseModel, Field
 
 
 system_message = """
-You are an educational analyst tasked with evaluating a student's answer to a text-based exercise.
+You are an educational analyst evaluating a student's answer to a text-based exercise.
 
-Your goal is to:
+Your task is to:
 1. Identify the student's demonstrated competencies (what they understand or do well).
-2. Identify the student's challenges (mistakes, misconceptions, or difficulties).
-3. Identify what student's missing (missing parts of of the solution).
-4. Estimate the current cognitive level the student demonstrates using SOLO Taxonomy.
-5. Suggest the next cognitive level the student should aim for (target level).
+2. Identify the student's challenges (misconceptions, errors, or difficulties).
+3. Identify missing components in the student's response (important points that were not addressed).
+4. Estimate the student's level of understanding using the response quality levels below.
+5. Suggest the next level the student should aim for, based on the current response.
 
-You will be given:
-- The student's submission
-- The correct solution or expected answer
+You will receive:
+- The student's submission (with line numbers)
+- The correct solution (if available)
 - Grading instructions or rubric (if available)
 
 Instructions:
 - Be specific in describing competencies and challenges.
-- Include SOLO level tags only if reasonably clear.
-- Provide suggestions only when helpful.
-- Include line references to the student's submission if possible.
+- Use line numbers when referencing issues in the submission.
+- Include a response quality level only if it is reasonably clear.
+- Suggest a next-level learning target only if it is helpful.
+- If students miss some parts of the question, point that out without referencing their submission (no line_end, line_start)
 
-SOLO Level Definitions:
-- Limited Response: The student addresses one idea or misses the point.
-- Partial Understanding: The student provides multiple relevant ideas, but treats them separately.
-- Connected Understanding: The student connects ideas into a coherent structure, or reasons beyond the task.
+Response Quality Levels:
+- Off-Target: The response is irrelevant or not aligned with the question or course content.
+- Insufficient Knowledge: The response attempts to address the question but lacks key concepts or terminology.
+- Incomplete Answer: The student covers only part of the required answer or omits key elements.
+- Partially Correct: The response includes relevant and partially accurate content, but lacks completeness or clarity.
+- Correct: The response is accurate, complete, and well-structured.
 
 Output Format:
-Return only valid JSON, including line references where applicable. Do not add any comments or explanations outside the JSON block.
+Return only valid JSON. Do not include any explanation or comments outside the JSON.
 
 <Exercise Details>
 
@@ -68,58 +71,37 @@ _Note: **{problem_statement}**, **{example_solution}**, or **{grading_instructio
 
 # Output Object
 
-class SoloLevel(str, Enum):
-    LIMITED = "Limited Response"
-    PARTIAL = "Partial Understanding"
-    CONNECTED = "Connected Understanding"
+class ResponseQualityLevel(str, Enum):
+    OFF_TARGET = "Off-Target"  # The response is irrelevant or unrelated to the task
+    INSUFFICIENT_KNOWLEDGE = "Insufficient Knowledge"  # Shows lack of understanding of key concepts
+    INCOMPLETE_ANSWER = "Missing Points"  # Leaves out required parts of the answer
+    PARTIALLY_CORRECT = "Partially Correct"  # Contains some correct information but is incomplete or poorly explained
+    FULLY_CORRECT = "Correct"  # Accurate, complete, and well-structured answer
 
 
-class Competency(BaseModel):
+class ResponseAnalysisItem(BaseModel):
     description: str = Field(
-        description="A description of what the student demonstrated successfully."
+        description="Detailed explanation of a specific issue or observation in the student's response, such as a misconception, omission, or vague explanation."
     )
-    solo_level: Optional[SoloLevel] = Field(
-        default=None,
-        description="The SOLO Taxonomy level corresponding to this competency."
+    response_quality_level: ResponseQualityLevel = Field(
+        description="Estimated level of the student's understanding based on the current response, using the custom response quality levels."
     )
     grading_instruction_id: Optional[int] = Field(
-        description="ID of the grading instruction that was used to generate this feedback, or empty if no grading instruction was used"
+        default=None,
+        description="Optional reference ID to the grading instruction or rubric item that this analysis relates to."
     )
-    line_start: Optional[int] = Field(description="Referenced starting line number from the student's submission, or empty if unreferenced")
-    line_end: Optional[int] = Field(description="Referenced ending line number from the student's submission, or empty if unreferenced")
+    line_start: Optional[int] = Field(
+        default=None,
+        description="Line number in the student's submission where this issue begins, if applicable."
+    )
+    line_end: Optional[int] = Field(
+        default=None,
+        description="Line number in the student's submission where this issue ends, if applicable."
+    )
 
 
-class Challenge(BaseModel):
-    description: str = Field(
-        description="A description of a missing part, learning challenge, misconception, or error identified in the student's response."
+class StudentResponseAnalysis(BaseModel):
+    analyses: List[ResponseAnalysisItem] = Field(
+        description="A list of issues, gaps, or errors identified in the student's response, each with a quality assessment and optional references."
     )
-    solo_level: Optional[SoloLevel] = Field(
-        default=None,
-        description="The SOLO's level that this challenge relates to."
-    )
-    suggestion: Optional[str] = Field(
-        default=None,
-        description="An optional suggestion or tip to help the student overcome this challenge."
-    )
-    grading_instruction_id: Optional[int] = Field(
-        description="ID of the grading instruction that was used to generate this feedback, or empty if no grading instruction was used"
-    )
-    line_start: Optional[int] = Field(description="Referenced starting line number from the student's submission, or empty if unreferenced")
-    line_end: Optional[int] = Field(description="Referenced ending line number from the student's submission, or empty if unreferenced")
 
-
-class ProfileModel(BaseModel):
-    competencies: List[Competency] = Field(
-        description="A list of competencies the student has demonstrated in their submission."
-    )
-    challenges: List[Challenge] = Field(
-        description="A list of learning challenges or misconceptions detected in the student's response."
-    )
-    current_level: Optional[SoloLevel] = Field(
-        default=None,
-        description="The highest SOLO level the student demonstrated in this exercise."
-    )
-    target_level: Optional[SoloLevel] = Field(
-        default=None,
-        description="The next SOLO level the student should aim to reach."
-    )
