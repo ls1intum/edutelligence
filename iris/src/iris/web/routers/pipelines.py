@@ -53,6 +53,7 @@ from iris.web.status.status_update import (
     TextExerciseChatCallback,
     TutorSuggestionCallback,
 )
+from iris.web.utils import validate_pipeline_variant
 
 router = APIRouter(prefix="/api/v1/pipelines", tags=["pipelines"])
 logger = logging.getLogger(__name__)
@@ -112,18 +113,21 @@ def run_chatgpt_wrapper_pipeline_worker(
 
 
 @router.post(
-    "/tutor-chat/{variant}/run",
+    "/programming-exercise-chat/run",
     status_code=status.HTTP_202_ACCEPTED,
     dependencies=[Depends(TokenValidator())],
 )
 def run_exercise_chat_pipeline(
-    variant: str,
     event: str | None = Query(None, description="Event query parameter"),
     dto: ExerciseChatPipelineExecutionDTO = Body(
         description="Exercise Chat Pipeline Execution DTO"
     ),
 ):
+    variant = validate_pipeline_variant(dto.settings, ExerciseChatAgentPipeline)
+
     if variant == "chat-gpt-wrapper":
+        # Additional validation for ChatGPT wrapper variant
+        validate_pipeline_variant(dto.settings, ChatGPTWrapperPipeline)
         thread = Thread(target=run_chatgpt_wrapper_pipeline_worker, args=(dto, variant))
     else:
         thread = Thread(
@@ -156,17 +160,18 @@ def run_course_chat_pipeline_worker(dto, variant, event):
 
 
 @router.post(
-    "/course-chat/{variant}/run",
+    "/course-chat/run",
     status_code=status.HTTP_202_ACCEPTED,
     dependencies=[Depends(TokenValidator())],
 )
 def run_course_chat_pipeline(
-    variant: str,
     event: str | None = Query(None, description="Event query parameter"),
     dto: CourseChatPipelineExecutionDTO = Body(
         description="Course Chat Pipeline Execution DTO"
     ),
 ):
+    variant = validate_pipeline_variant(dto.settings, CourseChatPipeline)
+
     thread = Thread(target=run_course_chat_pipeline_worker, args=(dto, variant, event))
     thread.start()
 
@@ -226,23 +231,27 @@ def run_lecture_chat_pipeline_worker(dto, variant):
 
 
 @router.post(
-    "/text-exercise-chat/{variant}/run",
+    "/text-exercise-chat/run",
     status_code=status.HTTP_202_ACCEPTED,
     dependencies=[Depends(TokenValidator())],
 )
-def run_text_exercise_chat_pipeline(
-    variant: str, dto: TextExerciseChatPipelineExecutionDTO
-):
+def run_text_exercise_chat_pipeline(dto: TextExerciseChatPipelineExecutionDTO):
+    variant = validate_pipeline_variant(
+        dto.execution.settings, TextExerciseChatPipeline
+    )
+
     thread = Thread(target=run_text_exercise_chat_pipeline_worker, args=(dto, variant))
     thread.start()
 
 
 @router.post(
-    "/lecture-chat/{variant}/run",
+    "/lecture-chat/run",
     status_code=status.HTTP_202_ACCEPTED,
     dependencies=[Depends(TokenValidator())],
 )
-def run_lecture_chat_pipeline(variant: str, dto: LectureChatPipelineExecutionDTO):
+def run_lecture_chat_pipeline(dto: LectureChatPipelineExecutionDTO):
+    variant = validate_pipeline_variant(dto.settings, LectureChatPipeline)
+
     thread = Thread(target=run_lecture_chat_pipeline_worker, args=(dto, variant))
     thread.start()
 
@@ -272,13 +281,15 @@ def run_competency_extraction_pipeline_worker(
 
 
 @router.post(
-    "/competency-extraction/{variant}/run",
+    "/competency-extraction/run",
     status_code=status.HTTP_202_ACCEPTED,
     dependencies=[Depends(TokenValidator())],
 )
-def run_competency_extraction_pipeline(
-    variant: str, dto: CompetencyExtractionPipelineExecutionDTO
-):
+def run_competency_extraction_pipeline(dto: CompetencyExtractionPipelineExecutionDTO):
+    variant = validate_pipeline_variant(
+        dto.execution.settings, CompetencyExtractionPipeline
+    )
+
     thread = Thread(
         target=run_competency_extraction_pipeline_worker, args=(dto, variant)
     )
@@ -312,13 +323,16 @@ def run_rewriting_pipeline_worker(dto: RewritingPipelineExecutionDTO, variant: s
 
 
 @router.post(
-    "/rewriting/{variant}/run",
+    "/rewriting/run",
     status_code=status.HTTP_202_ACCEPTED,
     dependencies=[Depends(TokenValidator())],
 )
-def run_rewriting_pipeline(variant: str, dto: RewritingPipelineExecutionDTO):
-    variant = variant.lower()
+def run_rewriting_pipeline(dto: RewritingPipelineExecutionDTO):
+    variant = validate_pipeline_variant(
+        dto.execution.settings, RewritingPipeline
+    ).lower()
     logger.info("Rewriting pipeline started with variant: %s and dto: %s", variant, dto)
+
     thread = Thread(target=run_rewriting_pipeline_worker, args=(dto, variant))
     thread.start()
 
@@ -345,13 +359,15 @@ def run_inconsistency_check_pipeline_worker(
 
 
 @router.post(
-    "/inconsistency-check/{variant}/run",
+    "/inconsistency-check/run",
     status_code=status.HTTP_202_ACCEPTED,
     dependencies=[Depends(TokenValidator())],
 )
-def run_inconsistency_check_pipeline(
-    variant: str, dto: InconsistencyCheckPipelineExecutionDTO
-):
+def run_inconsistency_check_pipeline(dto: InconsistencyCheckPipelineExecutionDTO):
+    variant = validate_pipeline_variant(
+        dto.execution.settings, InconsistencyCheckPipeline
+    )
+
     thread = Thread(target=run_inconsistency_check_pipeline_worker, args=(dto, variant))
     thread.start()
 
@@ -379,13 +395,15 @@ def run_communication_tutor_suggestions_pipeline_worker(
 
 
 @router.post(
-    "/tutor-suggestion/{variant}/run",
+    "/tutor-suggestion/run",
     status_code=status.HTTP_202_ACCEPTED,
     dependencies=[Depends(TokenValidator())],
 )
 def run_communication_tutor_suggestions_pipeline(
-    variant: str, dto: CommunicationTutorSuggestionPipelineExecutionDTO
+    dto: CommunicationTutorSuggestionPipelineExecutionDTO,
 ):
+    variant = validate_pipeline_variant(dto.settings, TutorSuggestionPipeline)
+
     thread = Thread(
         target=run_communication_tutor_suggestions_pipeline_worker, args=(dto, variant)
     )

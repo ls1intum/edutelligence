@@ -142,7 +142,7 @@ class InconsistencyCheckPipeline(Pipeline):
                 FeatureDTO(
                     id="default",
                     name="Default",
-                    description="Default inconsistency check variant using GPT-4.1-nano",
+                    description="Standard inconsistency check implementation with efficient model usage",
                 ),
             )
         ]

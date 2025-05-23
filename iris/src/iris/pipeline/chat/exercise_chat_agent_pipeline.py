@@ -123,7 +123,7 @@ class ExerciseChatAgentPipeline(Pipeline):
     def __init__(
         self,
         callback: ExerciseChatStatusCallback,
-        variant: str = "nano",
+        variant: str = "default",
         event: str | None = None,
     ):
         super().__init__(implementation_id="exercise_chat_pipeline")
@@ -172,8 +172,8 @@ class ExerciseChatAgentPipeline(Pipeline):
             (
                 ["gpt-4.1-nano"],
                 FeatureDTO(
-                    id="nano",
-                    name="Nano",
+                    id="default",
+                    name="Default",
                     description="Uses a smaller model for faster and cost-efficient responses.",
                 ),
             ),

@@ -98,7 +98,7 @@ class CourseChatPipeline(Pipeline):
     def __init__(
         self,
         callback: CourseChatStatusCallback,
-        variant: str = "nano",
+        variant: str = "default",
         event: str | None = None,
     ):
         super().__init__(implementation_id="course_chat_pipeline")
@@ -548,8 +548,8 @@ class CourseChatPipeline(Pipeline):
             (
                 ["gpt-4.1-nano"],
                 FeatureDTO(
-                    id="nano",
-                    name="Nano",
+                    id="default",
+                    name="Default",
                     description="Uses a smaller model for faster and cost-efficient responses.",
                 ),
             ),

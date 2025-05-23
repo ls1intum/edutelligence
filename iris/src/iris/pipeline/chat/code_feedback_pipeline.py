@@ -52,7 +52,7 @@ class CodeFeedbackPipeline(Pipeline):
     variant: str
 
     def __init__(
-        self, callback: Optional[StatusCallback] = None, variant: str = "nano"
+        self, callback: Optional[StatusCallback] = None, variant: str = "default"
     ):
         super().__init__(implementation_id="code_feedback_pipeline_reference_impl")
         self.callback = callback
@@ -97,8 +97,8 @@ class CodeFeedbackPipeline(Pipeline):
             (
                 ["gpt-4.1-nano"],
                 FeatureDTO(
-                    id="nano",
-                    name="Nano",
+                    id="default",
+                    name="Default",
                     description="Uses a smaller model for faster and cost-efficient responses.",
                 ),
             ),

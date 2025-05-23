@@ -64,7 +64,9 @@ class InteractionSuggestionPipeline(Pipeline):
         self.variant = variant
 
         # Set the langchain chat model
-        request_handler = ModelVersionRequestHandler(version="gpt-4.1-nano")
+        model = "gpt-4.1-nano"  # Default model for all variants
+
+        request_handler = ModelVersionRequestHandler(version=model)
         completion_args = CompletionArguments(
             temperature=0.6, max_tokens=2000, response_format="JSON"
         )

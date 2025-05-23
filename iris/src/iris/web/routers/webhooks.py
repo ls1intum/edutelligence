@@ -10,6 +10,7 @@ from iris.domain.ingestion.ingestion_pipeline_execution_dto import (
     FaqIngestionPipelineExecutionDto,
     IngestionPipelineExecutionDto,
 )
+from iris.web.utils import validate_pipeline_variant
 
 from ...domain.ingestion.deletion_pipeline_execution_dto import (
     FaqDeletionExecutionDto,
@@ -168,7 +169,7 @@ def run_faq_delete_pipeline_worker(dto: FaqDeletionExecutionDto):
 
 
 @router.post(
-    "/lectures/fullIngestion",
+    "/lectures/ingest",
     status_code=status.HTTP_202_ACCEPTED,
     dependencies=[Depends(TokenValidator())],
 )
@@ -176,6 +177,8 @@ def lecture_ingestion_webhook(dto: IngestionPipelineExecutionDto):
     """
     Webhook endpoint to trigger the exercise chat pipeline
     """
+    validate_pipeline_variant(dto.settings, LectureUnitPageIngestionPipeline)
+
     thread = Thread(target=run_lecture_update_pipeline_worker, args=(dto,))
     thread.start()
 
@@ -189,12 +192,14 @@ def lecture_deletion_webhook(dto: LecturesDeletionExecutionDto):
     """
     Webhook endpoint to trigger the lecture deletion
     """
+    validate_pipeline_variant(dto.settings, LectureUnitPageIngestionPipeline)
+
     thread = Thread(target=run_lecture_deletion_pipeline_worker, args=(dto,))
     thread.start()
 
 
 @router.post(
-    "/transcriptions/fullIngestion",
+    "/transcriptions/ingest",
     status_code=status.HTTP_202_ACCEPTED,
     dependencies=[Depends(TokenValidator())],
 )
@@ -204,6 +209,8 @@ def transcription_ingestion_webhook(
     """
     Webhook endpoint to trigger the lecture transcription ingestion pipeline
     """
+    validate_pipeline_variant(dto.settings, TranscriptionIngestionPipeline)
+
     logger.info("transcription ingestion got DTO %s", dto)
     thread = Thread(target=run_transcription_ingestion_pipeline_worker, args=(dto,))
     thread.start()
@@ -218,6 +225,8 @@ def faq_ingestion_webhook(dto: FaqIngestionPipelineExecutionDto):
     """
     Webhook endpoint to trigger the faq ingestion pipeline
     """
+    validate_pipeline_variant(dto.settings, FaqIngestionPipeline)
+
     thread = Thread(target=run_faq_update_pipeline_worker, args=(dto,))
     thread.start()
     return
@@ -232,6 +241,8 @@ def faq_deletion_webhook(dto: FaqDeletionExecutionDto):
     """
     Webhook endpoint to trigger the faq deletion pipeline
     """
+    validate_pipeline_variant(dto.settings, FaqIngestionPipeline)
+
     thread = Thread(target=run_faq_delete_pipeline_worker, args=(dto,))
     thread.start()
     return

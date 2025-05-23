@@ -34,7 +34,9 @@ class TextExerciseChatPipeline(Pipeline):
     variant: str
 
     def __init__(
-        self, callback: Optional[TextExerciseChatCallback] = None, variant: str = "nano"
+        self,
+        callback: Optional[TextExerciseChatCallback] = None,
+        variant: str = "default",
     ):
         super().__init__(implementation_id="text_exercise_chat_pipeline_reference_impl")
         self.callback = callback
@@ -53,8 +55,8 @@ class TextExerciseChatPipeline(Pipeline):
             (
                 ["gpt-4.1-nano"],
                 FeatureDTO(
-                    id="nano",
-                    name="Nano",
+                    id="default",
+                    name="Default",
                     description="Uses a smaller model for faster and cost-efficient responses.",
                 ),
             ),

@@ -80,7 +80,7 @@ class LectureChatPipeline(Pipeline):
         self,
         callback: LectureChatCallback,
         dto: LectureChatPipelineExecutionDTO,
-        variant: str = "nano",
+        variant: str = "default",
     ):
         super().__init__(implementation_id="lecture_chat_pipeline")
         # Set the langchain chat model
@@ -114,8 +114,8 @@ class LectureChatPipeline(Pipeline):
             (
                 ["gpt-4.1-nano"],
                 FeatureDTO(
-                    id="nano",
-                    name="Nano",
+                    id="default",
+                    name="Default",
                     description="Uses a smaller model for faster and cost-efficient responses.",
                 ),
             ),
