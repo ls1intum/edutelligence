@@ -175,6 +175,7 @@ class RewritingPipeline(Pipeline):
 
 
 def parse_inconsistencies(inconsistencies: List[Dict[str, str]]) -> List[str]:
+    logging.info(f"Parsing inconsistencies: {inconsistencies}")
     parsed_inconsistencies = [
         f"FAQ ID: {entry["faq_id"]}, Title: {entry["faq_question_title"]}, Answer: {entry["faq_question_answer"]}"
         for entry in inconsistencies
