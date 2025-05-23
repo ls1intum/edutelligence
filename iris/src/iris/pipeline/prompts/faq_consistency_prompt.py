@@ -18,15 +18,14 @@ Firstly, identify the language of the course. The language of the course is eith
 the language from the existing FAQs. Your output should be in the same language as the course language.
 If you are unsure, choose english. 
 
-The following four entries to the dictionary are optional and can only be set if inconsistencies are detected:
-"faqs": This entry should be a list of Strings, each string represents an FAQ.
--Make sure each faq is separated by comma.
--Also end each faq with a newline character.
--The fields are exactly named faq_id, faq_question_title and faq_question_answer
-and reside within properties dict of each list entry.
--Make sure to only include inconsistent faqs
--Assume that already exising FAQs are correct, consequently the rewritten FAQ is inconsistent.
--Do not include any additional FAQs that are consistent with the final_result.
+The following four entries are optional and should only be set if inconsistencies are detected.
+"faqs" must be a JSON array of objects. Each entry must be a JSON dictionary with exactly the following fields:
+"faq_id" (string or number)
+"faq_question_title" (string)
+"faq_question_answer" (string)
+Do not return strings like "faq_id: 1, faq_question_title: ..., ..." — return actual JSON objects.
+Assume that existing FAQs are correct, so the new final_result is inconsistent.
+Include only FAQs that contradict the final_result.
 
 "message": "The provided text was rephrased, however it contains inconsistent information with existing FAQs."
 -Make sure to always insert two new lines after the last character of this sentences.
