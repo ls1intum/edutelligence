@@ -16,6 +16,9 @@ from iris.domain import (
 from iris.domain.chat.lecture_chat.lecture_chat_pipeline_execution_dto import (
     LectureChatPipelineExecutionDTO,
 )
+from iris.domain.communication.communication_tutor_suggestion_pipeline_execution_dto import (
+    CommunicationTutorSuggestionPipelineExecutionDTO,
+)
 from iris.domain.rewriting_pipeline_execution_dto import (
     RewritingPipelineExecutionDTO,
 )
@@ -36,6 +39,7 @@ from iris.pipeline.inconsistency_check_pipeline import (
 )
 from iris.pipeline.rewriting_pipeline import RewritingPipeline
 from iris.pipeline.text_exercise_chat_pipeline import TextExerciseChatPipeline
+from iris.pipeline.tutor_suggestion_pipeline import TutorSuggestionPipeline
 from iris.web.status.status_update import (
     ChatGPTWrapperStatusCallback,
     CompetencyExtractionCallback,
@@ -45,6 +49,7 @@ from iris.web.status.status_update import (
     LectureChatCallback,
     RewritingCallback,
     TextExerciseChatCallback,
+    TutorSuggestionCallback,
 )
 
 router = APIRouter(prefix="/api/v1/pipelines", tags=["pipelines"])
@@ -349,6 +354,42 @@ def run_inconsistency_check_pipeline(
     thread.start()
 
 
+def run_communication_tutor_suggestions_pipeline_worker(
+    dto: CommunicationTutorSuggestionPipelineExecutionDTO, _variant: str
+):  # pylint: disable=invalid-name
+    logger.info("Communication tutor suggestions pipeline started with dto: %s", dto)
+    try:
+        callback = TutorSuggestionCallback(
+            run_id=dto.settings.authentication_token,
+            base_url=dto.settings.artemis_base_url,
+            initial_stages=dto.initial_stages,
+        )
+        pipeline = TutorSuggestionPipeline(callback=callback)
+    except Exception as e:
+        logger.error("Error preparing communication tutor suggestions pipeline: %s", e)
+
+    try:
+        pipeline(dto=dto)
+    except Exception as e:
+        logger.error("Error running communication tutor suggestions pipeline: %s", e)
+        logger.error(traceback.format_exc())
+        callback.error("Fatal error.", exception=e)
+
+
+@router.post(
+    "/tutor-suggestion/{variant}/run",
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(TokenValidator())],
+)
+def run_communication_tutor_suggestions_pipeline(
+    variant: str, dto: CommunicationTutorSuggestionPipelineExecutionDTO
+):
+    thread = Thread(
+        target=run_communication_tutor_suggestions_pipeline_worker, args=(dto, variant)
+    )
+    thread.start()
+
+
 @router.get("/{feature}/variants")
 def get_pipeline(feature: str):
     """
@@ -447,6 +488,15 @@ def get_pipeline(feature: str):
                     id="default",
                     name="Default Variant",
                     description="Default faq ingestion variant.",
+                )
+            ]
+
+        case "TUTOR_SUGGESTION":
+            return [
+                FeatureDTO(
+                    id="default",
+                    name="Default Variant",
+                    description="Default tutor suggestion variant.",
                 )
             ]
 
