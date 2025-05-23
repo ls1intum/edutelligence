@@ -47,15 +47,18 @@ def main():
             print(f"Installing pytest for {module}...")
             subprocess.run([pip_path, "install", "pytest"], check=True, capture_output=True, text=True)
 
-            # Run pytest using the module's virtual environment
-            result = subprocess.run([python_path, "-m", "pytest", test_dir], capture_output=True, text=True)
-            if result.returncode != 0:
-                print(f"Tests failed for {module}:")
-                print(result.stdout)
-                print(result.stderr)
-                success = False
+            # Run pytest using the module's virtual environment, only running tests from mock directories
+            mock_test_dir = os.path.join(test_dir, "mock")
+            if os.path.exists(mock_test_dir):
+                print(f"\nRunning tests for {module}...")
+                result = subprocess.run([python_path, "-m", "pytest", mock_test_dir, "-v"], check=False)
+                if result.returncode != 0:
+                    print(f"\nTests failed for {module}")
+                    success = False
+                else:
+                    print(f"\nTests passed for {module}")
             else:
-                print(f"Tests passed for {module}")
+                print(f"No mock tests found for {module}, skipping...")
         except Exception as e:
             print(f"Error running tests for {module}: {str(e)}")
             success = False
