@@ -9,6 +9,7 @@ class CohereAzureClient(BaseModel):
 
     type: Literal["cohere_azure"]
     cost_per_1k_requests: float
+    model: str
     endpoint: str
     api_key: str
     id: str

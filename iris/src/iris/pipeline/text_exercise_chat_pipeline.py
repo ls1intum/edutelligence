@@ -11,7 +11,7 @@ from iris.llm import (
     CompletionArguments,
     ModelVersionRequestHandler,
 )
-from iris.llm.model import LanguageModel
+from iris.llm.external.model import LanguageModel
 from iris.pipeline import Pipeline
 from iris.pipeline.prompts.text_exercise_chat_prompts import (
     fmt_extract_sentiments_prompt,
@@ -42,7 +42,7 @@ class TextExerciseChatPipeline(Pipeline):
         self.callback = callback
         self.variant = variant
 
-        if variant == "regular":
+        if variant == "advanced":
             model = "gpt-4.1"
         else:
             model = "gpt-4.1-nano"
@@ -63,8 +63,8 @@ class TextExerciseChatPipeline(Pipeline):
             (
                 ["gpt-4.1"],
                 FeatureDTO(
-                    id="regular",
-                    name="Regular",
+                    id="advanced",
+                    name="Advanced",
                     description="Uses a larger chat model, balancing speed and quality.",
                 ),
             ),

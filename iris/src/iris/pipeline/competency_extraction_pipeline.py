@@ -15,7 +15,7 @@ from iris.llm import (
     CompletionArguments,
     ModelVersionRequestHandler,
 )
-from iris.llm.model import LanguageModel
+from iris.llm.external.model import LanguageModel
 from iris.pipeline import Pipeline
 from iris.pipeline.prompts.competency_extraction import system_prompt
 from iris.pipeline.shared.utils import filter_variants_by_available_models

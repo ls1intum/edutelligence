@@ -23,10 +23,10 @@ from ...domain.retrieval.lecture.lecture_retrieval_dto import (
 )
 from ...llm import (
     CompletionArguments,
+    ModelVersionRequestHandler,
 )
+from ...llm.external.model import LanguageModel
 from ...llm.langchain import IrisLangchainChatModel
-from ...llm.model import LanguageModel
-from ...llm.model_version_request_handler import ModelVersionRequestHandler
 from ...retrieval.lecture.lecture_retrieval import LectureRetrieval
 from ...vector_database.database import VectorDatabase
 from ...web.status.status_update import LectureChatCallback
@@ -91,7 +91,7 @@ class LectureChatPipeline(Pipeline):
 
         completion_args = CompletionArguments(temperature=0, max_tokens=2000)
 
-        if variant == "regular":
+        if variant == "advanced":
             model = "gpt-4.1"
         else:
             model = "gpt-4.1-nano"
@@ -122,8 +122,8 @@ class LectureChatPipeline(Pipeline):
             (
                 ["gpt-4.1"],
                 FeatureDTO(
-                    id="regular",
-                    name="Regular",
+                    id="advanced",
+                    name="Advanced",
                     description="Uses a larger chat model, balancing speed and quality.",
                 ),
             ),

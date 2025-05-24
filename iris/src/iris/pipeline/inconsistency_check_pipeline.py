@@ -12,8 +12,8 @@ from iris.llm import (
     CompletionArguments,
     ModelVersionRequestHandler,
 )
+from iris.llm.external.model import LanguageModel
 from iris.llm.langchain.iris_langchain_chat_model import IrisLangchainChatModel
-from iris.llm.model import LanguageModel
 from iris.pipeline import Pipeline
 from iris.pipeline.prompts.inconsistency_check_prompts import (
     prettify_prompt,

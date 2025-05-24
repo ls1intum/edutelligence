@@ -19,8 +19,8 @@ from ...llm import (
     CompletionArguments,
     ModelVersionRequestHandler,
 )
+from ...llm.external.model import LanguageModel
 from ...llm.langchain import IrisLangchainChatModel
-from ...llm.model import LanguageModel
 from ...pipeline import Pipeline
 from ...web.status.status_update import StatusCallback
 from ..shared.utils import filter_variants_by_available_models
@@ -63,7 +63,7 @@ class CodeFeedbackPipeline(Pipeline):
             temperature=0, max_tokens=1024, response_format="text"
         )
 
-        if variant == "regular":
+        if variant == "advanced":
             model = "gpt-4.1"
         else:
             model = "gpt-4.1-nano"
@@ -105,8 +105,8 @@ class CodeFeedbackPipeline(Pipeline):
             (
                 ["gpt-4.1"],
                 FeatureDTO(
-                    id="regular",
-                    name="Regular",
+                    id="advanced",
+                    name="Advanced",
                     description="Uses a larger chat model, balancing speed and quality.",
                 ),
             ),

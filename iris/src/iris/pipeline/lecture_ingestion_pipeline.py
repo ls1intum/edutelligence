@@ -27,10 +27,10 @@ from ..domain.lecture.lecture_unit_dto import LectureUnitDTO
 from ..ingestion.abstract_ingestion import AbstractIngestion
 from ..llm import (
     CompletionArguments,
+    ModelVersionRequestHandler,
 )
-from ..llm.external import LanguageModel
+from ..llm.external.model import LanguageModel
 from ..llm.langchain import IrisLangchainChatModel
-from ..llm.model_version_request_handler import ModelVersionRequestHandler
 from ..vector_database.lecture_unit_page_chunk_schema import (
     LectureUnitPageChunkSchema,
     init_lecture_unit_page_chunk_schema,

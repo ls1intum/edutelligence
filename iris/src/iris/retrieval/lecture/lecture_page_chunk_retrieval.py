@@ -17,9 +17,9 @@ from iris.domain.retrieval.lecture.lecture_retrieval_dto import (
 )
 from iris.llm import (
     CompletionArguments,
+    ModelVersionRequestHandler,
 )
 from iris.llm.langchain import IrisLangchainChatModel
-from iris.llm.model_version_request_handler import ModelVersionRequestHandler
 from iris.llm.request_handler.rerank_request_handler import (
     RerankRequestHandler,
 )

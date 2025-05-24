@@ -14,10 +14,10 @@ from ..domain.data.faq_dto import FaqDTO
 from ..ingestion.abstract_ingestion import AbstractIngestion
 from ..llm import (
     CompletionArguments,
+    ModelVersionRequestHandler,
 )
-from ..llm.external import LanguageModel
+from ..llm.external.model import LanguageModel
 from ..llm.langchain import IrisLangchainChatModel
-from ..llm.model_version_request_handler import ModelVersionRequestHandler
 from ..vector_database.database import batch_update_lock
 from ..vector_database.faq_schema import FaqSchema, init_faq_schema
 from ..web.status.faq_ingestion_status_callback import FaqIngestionStatus

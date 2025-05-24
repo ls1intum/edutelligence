@@ -38,4 +38,4 @@ class LlmManager(metaclass=Singleton):
         with open(path, "r", encoding="utf-8") as file:
             loaded_llms = yaml.safe_load(file)
 
-        self.entries = LlmList.model_validate({"llms": loaded_llms}).llms
+        self.entries = LlmList(llms=loaded_llms).llms

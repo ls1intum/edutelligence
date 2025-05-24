@@ -30,10 +30,10 @@ from ...domain.retrieval.lecture.lecture_retrieval_dto import (
 )
 from ...llm import (
     CompletionArguments,
+    ModelVersionRequestHandler,
 )
 from ...llm.external.model import LanguageModel
 from ...llm.langchain import IrisLangchainChatModel
-from ...llm.model_version_request_handler import ModelVersionRequestHandler
 from ...retrieval.faq_retrieval import FaqRetrieval
 from ...retrieval.faq_retrieval_utils import format_faqs, should_allow_faq_tool
 from ...retrieval.lecture.lecture_retrieval import LectureRetrieval
@@ -131,7 +131,7 @@ class ExerciseChatAgentPipeline(Pipeline):
         # Set the langchain chat model
         completion_args = CompletionArguments(temperature=0.1, max_tokens=2000)
 
-        if variant == "regular":
+        if variant == "advanced":
             model = "gpt-4.1"
             model_small = "gpt-4.1-mini"
         else:
@@ -180,8 +180,8 @@ class ExerciseChatAgentPipeline(Pipeline):
             (
                 ["gpt-4.1", "gpt-4.1-mini"],
                 FeatureDTO(
-                    id="regular",
-                    name="Regular",
+                    id="advanced",
+                    name="Advanced",
                     description="Uses a larger chat model, balancing speed and quality.",
                 ),
             ),

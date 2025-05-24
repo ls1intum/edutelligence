@@ -24,9 +24,9 @@ from ...common.message_converters import (
 from ...common.pyris_message import PyrisMessage
 from ...llm import (
     CompletionArguments,
+    ModelVersionRequestHandler,
 )
 from ...llm.langchain import IrisLangchainChatModel
-from ...llm.model_version_request_handler import ModelVersionRequestHandler
 from ..pipeline import Pipeline
 from ..prompts.iris_interaction_suggestion_prompts import (
     course_chat_begin_prompt,

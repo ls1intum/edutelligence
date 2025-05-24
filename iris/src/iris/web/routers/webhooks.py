@@ -217,7 +217,7 @@ def transcription_ingestion_webhook(
 
 
 @router.post(
-    "/faqs",
+    "/faqs/ingest",
     status_code=status.HTTP_202_ACCEPTED,
     dependencies=[Depends(TokenValidator())],
 )

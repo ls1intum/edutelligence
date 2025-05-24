@@ -30,8 +30,8 @@ from ...llm import (
     CompletionArguments,
     ModelVersionRequestHandler,
 )
+from ...llm.external.model import LanguageModel
 from ...llm.langchain import IrisLangchainChatModel
-from ...llm.model import LanguageModel
 from ...retrieval.faq_retrieval import FaqRetrieval
 from ...retrieval.faq_retrieval_utils import format_faqs, should_allow_faq_tool
 from ...retrieval.lecture.lecture_retrieval import LectureRetrieval
@@ -109,7 +109,7 @@ class CourseChatPipeline(Pipeline):
         # Set the langchain chat model
         completion_args = CompletionArguments(temperature=0.1, max_tokens=2000)
 
-        if variant == "regular":
+        if variant == "advanced":
             model = "gpt-4.1"
             model_small = "gpt-4.1-mini"
         else:
@@ -454,6 +454,10 @@ class CourseChatPipeline(Pipeline):
             if self.should_allow_lecture_tool(dto.course.id):
                 tool_list.append(lecture_content_retrieval)
 
+            print(
+                "Allowing lecture tool:", self.should_allow_lecture_tool(dto.course.id)
+            )
+
             if should_allow_faq_tool(self.db, dto.course.id):
                 tool_list.append(faq_content_retrieval)
 
@@ -556,8 +560,8 @@ class CourseChatPipeline(Pipeline):
             (
                 ["gpt-4.1", "gpt-4.1-mini"],
                 FeatureDTO(
-                    id="regular",
-                    name="Regular",
+                    id="advanced",
+                    name="Advanced",
                     description="Uses a larger chat model, balancing speed and quality.",
                 ),
             ),
