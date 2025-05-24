@@ -23,15 +23,15 @@ def generate_competency_relationship(medoids_emb, descriptions):
     COS_NONE  = 0.35
     COS_MATCH = 0.75
     P_ENTAIL  = 0.80
-    
+
     # --- text classification pipeline ---
-    nli = pipeline("text-classification",
+    nli = pipeline("zero-shot-classification",
                    model="facebook/bart-large-mnli",
                    device=0)
-    
+
     def entail_prob(p, h):
-        logits = nli(f"{p} </s></s> {h}")
-        score = logits[0]['score']
+        logits = nli(f"{p}", candidate_labels=[f"{h}"])
+        score = logits['scores'][0]
         return score
 
     S = cosine_similarity(medoids_emb)
