@@ -31,15 +31,15 @@ class NewTextPipeline:
 
     def run(self, text: str, uuid: str):
         embedding_id, embedding = generate_embeddings_local(uuid, text)
-        clusters = self.weaviate_client.get_all_embeddings(CollectionNames.CLUSTER.value)
+        clusters = self.weaviate_client.get_all_embeddings(CollectionNames.CLUSTERCENTER.value)
         medoids = np.array(entry["vector"] for entry in clusters)
         similarity_scores = np.array(compute_cosine_similarity(embedding, medoid) for medoid in medoids)
         best_medoid_idx = int(np.argmax(similarity_scores))
 
         properties = { "properties": [{
+                    "uuid": uuid,
                     "text": text ,
-                    "uuid": uuid ,
-                    "competencyID": clusters[best_medoid_idx]["properties"]["id"]
+                    "competencyID": clusters[best_medoid_idx]["properties"]["uuid"]
         } ] }
         self.weaviate_client.add_embeddings(CollectionNames.TEXT.value, embedding, properties)
         return similarity_scores

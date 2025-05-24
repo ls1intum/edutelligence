@@ -12,8 +12,7 @@ from atlasml.config import settings
 class CollectionNames(str, Enum):
     TEXT = "Text"
     COMPETENCY = "Competency"
-    CLUSTER = "Cluster"
-    COURSE = "Course"
+    CLUSTERCENTER = "ClusterCenter"
 
 logger = logging.getLogger(__name__)
 
@@ -41,13 +40,12 @@ class WeaviateClient:
     def _ensure_collections_exist(self):
         """Ensure collections exist with a proper schema."""
         # Define schemas for each collection
-        # TODO: ARDA: Add properties for each collection
-        # After, schema updated automatically and u can fetch the data from the collection with the new properties
+        # After, schema updated automatically, and you can fetch the data from the collection with the new properties
         collection_schemas = {
             CollectionNames.TEXT.value: {
                 "properties": [
-                    {"name": "text", "dataType": ["text"]},
                     {"name": "uuid", "dataType": ["string"], "indexFilterable": True},
+                    {"name": "text", "dataType": ["text"]},
                     {"name": "competencyID", "dataType": ["string"], "indexFilterable": True},
                 ]
             },
@@ -56,29 +54,16 @@ class WeaviateClient:
                     {"name": "uuid", "dataType": ["string"], "indexFilterable": True},
                     {"name": "name", "dataType": ["string"]},
                     {"name": "text", "dataType": ["text"]},
-                    {"name": "unit_id", "dataType": ["string"], "indexFilterable": True},
-                    {"name": "category", "dataType": ["string"], "indexFilterable": True},
                     {"name": "clusterID", "dataType": ["string"], "indexFilterable": True},
                 ]
             },
-            CollectionNames.CLUSTER.value: {
+            CollectionNames.CLUSTERCENTER.value: {
                 "properties": [
-                    {"name": "id", "dataType": ["string"], "indexFilterable": True},
+                    {"name": "uuid", "dataType": ["string"], "indexFilterable": True},
                     {"name": "name", "dataType": ["string"], "indexFilterable": True},
-                    {"name": "size", "dataType": ["int"], "indexFilterable": True},
                     {"name": "members", "dataType": ["string[]"], "indexFilterable": True}
                 ]
             },
-            CollectionNames.COURSE.value: {
-                "properties": [
-                    {"name": "title", "dataType": ["string"], "indexFilterable": True},
-                    {"name": "courseID", "dataType": ["string"], "indexFilterable": True},
-                    {"name": "description", "dataType": ["text"]},
-                    {"name": "author", "dataType": ["string"], "indexFilterable": True},
-                    {"name": "level", "dataType": ["string"], "indexFilterable": True},
-                    {"name": "competencies", "dataType": ["string[]"], "indexFilterable": True}
-                ]
-            }
         }
         
         for collection_name, schema in collection_schemas.items():

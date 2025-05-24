@@ -1,5 +1,5 @@
 import numpy as np
-from atlasml.clients.weaviate import get_weaviate_client, CollectionNames
+from atlasml.clients.weaviate import get_weaviate_client, CollectionNames, WeaviateClient
 from atlasml.ml.VectorEmbeddings.FallbackModel import generate_embeddings_local
 from atlasml.ml.SimilarityMeasurement.Cosine import compute_cosine_similarity
 from sklearn.metrics.pairwise import cosine_similarity
@@ -26,26 +26,24 @@ class ClusterToCompetencyPipeline:
                back into the competency collection in Weaviate.
     """
 
-    def __init__(self):
+    def __init__(self, weaviate_client: WeaviateClient):
         self.clusters = None
         self.competencies = None
-        self.weaviate_client = get_weaviate_client()
+        self.weaviate_client = weaviate_client
 
     def run(self):
-        self.clusters = self.weaviate_client.get_all_embeddings(CollectionNames.CLUSTER.value)
+        self.clusters = self.weaviate_client.get_all_embeddings(CollectionNames.CLUSTERCENTER.value)
         medoids = np.array(entry["vector"] for entry in self.clusters)
         self.competencies = self.weaviate_client.get_all_embeddings(CollectionNames.COMPETENCY.value)
 
         for competency in self.competencies:
-            uuid, embedding = generate_embeddings_local(competency["properties"]["id"], competency["properties"]["text"])
+            uuid, embedding = generate_embeddings_local(competency["properties"]["uuid"], competency["properties"]["text"])
             similarity_score = np.array(compute_cosine_similarity(embedding, medoid) for medoid in medoids)
             best_medoid_idx = int(np.argmax(similarity_score))
             properties = { "properties": [{
                 "id": uuid ,
                 "name" : competency["properties"]["name"],
                 "text": competency["properties"]["text"],
-                "unit_id": competency["properties"]["unit_id"],
-                "category" : competency["properties"]["category"],
-                "competencyID": self.clusters[best_medoid_idx]["properties"]["id"]
+                "competencyID": self.clusters[best_medoid_idx]["properties"]["uuid"]
             }]}
             self.weaviate_client.add_embeddings(CollectionNames.COMPETENCY.value, embedding, properties)
