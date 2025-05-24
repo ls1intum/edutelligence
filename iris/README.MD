@@ -143,109 +143,67 @@ their programming exercises on Artemis in a pedagogically meaningful way.
      env_vars:
      ```
 
-   - **Create an LLM Config File**
+     - **Create an LLM Config File**
 
-     Create an `llm_config.local.yml` file in the root directory. You can use the provided `llm_config.example.yml` as
-     a base.
+       Create an `llm_config.local.yml` file in the root directory. You can use the provided `llm_config.example.yml` as
+       a base.
 
-     ```bash
-     cp llm_config.example.yml llm_config.local.yml
-     ```
+       ```bash
+       cp llm_config.example.yml llm_config.local.yml
+       ```
 
-     **Example OpenAI Configuration:**
+       **Example OpenAI Configuration:**
 
-     ```yaml
-     - id: "oai-gpt-35-turbo"
-       name: "GPT 3.5 Turbo"
-       description: "GPT 3.5 16k"
-       type: "openai_chat"
-       model: "gpt-3.5-turbo"
-       api_key: "<your_openai_api_key>"
-       tools: []
-       capabilities:
-         input_cost: 0.5
-         output_cost: 1.5
-         gpt_version_equivalent: 3.5
-         context_length: 16385
-         vendor: "OpenAI"
-         privacy_compliance: false
-         self_hosted: false
-         image_recognition: false
-         json_mode: true
-     ```
+       ```yaml
+       - id: "oai-gpt-41-mini"
+         name: "GPT 4.1 Mini"
+         description: "GPT 4.1 Mini on OpenAI"
+         type: "openai_chat"
+         model: "gpt-4.1-mini"
+         api_key: "<your_openai_api_key>"
+         tools: []
+         cost_per_million_input_token: 0.4
+         cost_per_million_output_token: 1.6
+       ```
 
-     **Example Azure OpenAI Configuration:**
+       **Example Azure OpenAI Configuration:**
 
-     ```yaml
-     - id: "azure-gpt-4-omni"
-       name: "GPT 4 Omni"
-       description: "GPT 4 Omni on Azure"
-       type: "azure_chat"
-       endpoint: "<your_azure_model_endpoint>"
-       api_version: "2024-02-15-preview"
-       azure_deployment: "gpt4o"
-       model: "gpt4o"
-       api_key: "<your_azure_api_key>"
-       tools: []
-       capabilities:
-         input_cost: 6
-         output_cost: 16
-         gpt_version_equivalent: 4.5 # Equivalent GPT version of the model
-         context_length: 128000
-         vendor: "OpenAI"
-         privacy_compliance: true
-         self_hosted: false
-         image_recognition: true
-         json_mode: true
-     ```
+       ```yaml
+       - id: "azure-gpt-4-omni"
+         name: "GPT 4 Omni"
+         description: "GPT 4 Omni on Azure"
+         type: "azure_chat"
+         endpoint: "<your_azure_model_endpoint>"
+         api_version: "2024-02-15-preview"
+         azure_deployment: "gpt4o"
+         model: "gpt4o"
+         api_key: "<your_azure_api_key>"
+         tools: []
+         cost_per_million_input_token: 0.4
+         cost_per_million_output_token: 1.6
+       ```
 
-     **Explanation of Configuration Parameters**
+       **Explanation of Configuration Parameters**
 
-     The configuration parameters are used by Pyris's capability system to select the appropriate model for a task.
+       The configuration parameters are used by Pyris's capability system to select the appropriate model for a task.
 
-     **Parameter Descriptions:**
+       **Parameter Descriptions:**
 
-     - `api_key`: The API key for the model.
-     - `capabilities`: The capabilities of the model.
+       - `api_key`: The API key for the model.
+       - `description`: Additional information about the model.
+       - `id`: Unique identifier for the model across all models.
+       - `model`: The official name of the model as used by the vendor, also used by ModelVersionRequestHandler for model selection (e.g., "gpt-4.1", "gpt-4.1-mini").
+       - `name`: A custom, human-readable name for the model.
+       - `type`: The model type, used to select the appropriate client (e.g., `openai_chat`, `azure_chat`, `ollama`).
+       - `endpoint`: The URL to connect to the model.
+       - `api_version`: The API version to use with the model.
+       - `azure_deployment`: The deployment name of the model on Azure.
+       - `tools`: The tools supported by the model.
+       - `cost_per_million_input_token`: The cost per million input tokens for the model.
+       - `cost_per_million_output_token`: The cost per million output tokens for the model.
 
-       - `context_length`: The maximum number of tokens the model can process in a single request.
-       - `gpt_version_equivalent`: The equivalent GPT version of the model in terms of overall capabilities.
-       - `image_recognition`: Whether the model supports image recognition (for multimodal models).
-       - `input_cost`: The cost of input tokens for the model.
-       - `output_cost`: The cost of output tokens for the model.
-       - `json_mode`: Whether the model supports structured JSON output mode.
-       - `privacy_compliance`: Whether the model complies with privacy regulations.
-       - `self_hosted`: Whether the model is self-hosted.
-       - `vendor`: The provider of the model (e.g., OpenAI).
-       - `speed`: The model's processing speed.
-
-     - `description`: Additional information about the model.
-     - `id`: Unique identifier for the model across all models.
-     - `model`: The official name of the model as used by the vendor, also used by ModelVersionRequestHandler for model selection (e.g., "gpt-4o", "gpt-3.5-turbo").
-     - `name`: A custom, human-readable name for the model.
-     - `type`: The model type, used to select the appropriate client (e.g., `openai_chat`, `azure_chat`, `ollama`).
-     - `endpoint`: The URL to connect to the model.
-     - `api_version`: The API version to use with the model.
-     - `azure_deployment`: The deployment name of the model on Azure.
-     - `tools`: The tools supported by the model.
-
-     > **Notes on `gpt_version_equivalent`:** The `gpt_version_equivalent` field is subjective and used to compare
-     > capabilities of different models using GPT models as a reference. For example:
-     >
-     > - GPT-4 Omni equivalent: 4.5
-     > - GPT-4 Omni Mini equivalent: 4.25
-     > - GPT-4 equivalent: 4
-     > - GPT-3.5 Turbo equivalent: 3.5
-
-     > **New Version-Based Model Selection:**
-     > Pyris now offers a simpler model selection method using the `ModelVersionRequestHandler`.
-     > This handler selects models directly by the model name (e.g., "gpt-4o", "gpt-3.5-turbo")
-     > rather than using capability comparisons. This provides a more direct and predictable way
-     > to select specific model versions.
-
-     > **Warning:** Most existing pipelines in Pyris require a model with a `gpt_version_equivalent` of **4.5 or higher
-     > **. It is advised to define models in the `llm_config.local.yml` file with a `gpt_version_equivalent` of 4.5 or
-     > higher.
+     > **Note:** Most existing pipelines in Pyris currently require the full GPT-4.1 model family to be configured.
+     > Some features require special models. Watch the logs for any warnings regarding missing models.
 
 6. **Run the Server**
 
