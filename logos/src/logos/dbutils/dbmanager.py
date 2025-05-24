@@ -11,7 +11,7 @@ import yaml
 from sqlalchemy import Table, MetaData
 from sqlalchemy import text
 
-from logos.dbmodules import *
+from logos.dbutils.dbmodules import *
 
 
 def load_postgres_env_vars_from_compose(file_path="./logos/docker-compose.yaml"):
@@ -103,7 +103,8 @@ class DBManager:
                     model_api_keys.id as api_id, 
                     providers.id as provider_id,
                     providers.auth_name as auth_name,
-                    providers.auth_format as auth_format
+                    providers.auth_format as auth_format,
+                    process.id as process_id
                 FROM providers, model_api_keys, profiles, process
                 WHERE process.logos_key = :logos_key
                     and process.profile_id = profiles.id 
@@ -122,7 +123,8 @@ class DBManager:
                 "api_id": result.api_id,
                 "provider_id": result.provider_id,
                 "auth_name": result.auth_name,
-                "auth_format": result.auth_format
+                "auth_format": result.auth_format,
+                "process_id": result.process_id
             }
         return None
 
@@ -166,7 +168,7 @@ class DBManager:
 
     def add_provider(self, logos_key: str, provider_name: str, base_url: str,
                      api_key: str, auth_name: str, auth_format: str) -> Tuple[dict, int]:
-        if not self.__check_authorization(logos_key):
+        if not self.check_authorization(logos_key):
             return {"error": "Database changes only allowed for root user."}, 500
         pk = self.insert("providers", {"name": provider_name, "base_url": base_url,
                                        "auth_name": auth_name, "auth_format": auth_format})
@@ -174,7 +176,7 @@ class DBManager:
         return {"result": f"Created Provider. API-ID: {pk_api}"}, 200
 
     def add_profile(self, logos_key: str, profile_name: str, process_id: int):
-        if not self.__check_authorization(logos_key):
+        if not self.check_authorization(logos_key):
             return {"error": "Database changes only allowed for root user."}, 500
         pk = self.insert("profiles", {"name": profile_name})
         sql = text("""
@@ -190,13 +192,13 @@ class DBManager:
         return {"result": f"Added profile. Profile-ID: {pk}"}, 200
 
     def add_model(self, logos_key: str, name: str, endpoint: str):
-        if not self.__check_authorization(logos_key):
+        if not self.check_authorization(logos_key):
             return {"error": "Database changes only allowed for root user."}, 500
         pk = self.insert("models", {"name": name, "endpoint": endpoint})
         return {"result": f"Created Model. ID: {pk}"}, 200
 
     def add_service(self, logos_key: str, name: str):
-        if not self.__check_authorization(logos_key):
+        if not self.check_authorization(logos_key):
             return {"error": "Database changes only allowed for root user."}, 500
         pk = self.insert("services", {"name": name})
         api_key = generate_logos_api_key(name)
@@ -211,7 +213,7 @@ class DBManager:
                 and process.user_id = users.id
         """)
         entity = self.session.execute(sql, {"logos_key": logos_key}).fetchone() is not None
-        admin = self.__check_authorization(logos_key)
+        admin = self.check_authorization(logos_key)
         if admin:
             return {"role": "root"}
         elif entity:
@@ -219,7 +221,7 @@ class DBManager:
         return {"error": "unknown key"}
 
     def connect_process_provider(self, logos_key: str, profile_id: int, api_id: int):
-        if not self.__check_authorization(logos_key):
+        if not self.check_authorization(logos_key):
             return {"error": "Database changes only allowed for root user."}, 500
         sql = text("""
                     UPDATE model_api_keys
@@ -234,14 +236,14 @@ class DBManager:
         return {"result": f"Added connection to api."}, 200
 
     def connect_process_model(self, logos_key: str, profile_id: int, model_id: int):
-        if not self.__check_authorization(logos_key):
+        if not self.check_authorization(logos_key):
             return {"error": "Database changes only allowed for root user."}, 500
         pk = self.insert("profile_model_permissions",
                          {"profile_id": int(profile_id), "model_id": int(model_id)})
         return {"result": f"Connected process to model. ID: {pk}"}, 200
 
     def connect_service_process(self, logos_key: str, service_id: int, process_name: str):
-        if not self.__check_authorization(logos_key):
+        if not self.check_authorization(logos_key):
             return {"error": "Database changes only allowed for root user."}, 500
         api_key = generate_logos_api_key("root")
         pk = self.insert("process", {"logos_key": api_key, "service_id": int(service_id),
@@ -249,13 +251,13 @@ class DBManager:
         return {"result": f"Connected service. Process-ID: {pk}.", "api-key": api_key}, 200
 
     def connect_model_provider(self, logos_key: str, model_id: int, provider_id: int):
-        if not self.__check_authorization(logos_key):
+        if not self.check_authorization(logos_key):
             return {"error": "Database changes only allowed for root user."}, 500
         pk = self.insert("model_provider", {"provider_id": int(provider_id), "model_id": int(model_id)})
         return {"result": f"Connected Model to Provider. ID: {pk}."}, 200
 
     def connect_model_api(self, logos_key: str, model_id: int, api_id: int):
-        if not self.__check_authorization(logos_key):
+        if not self.check_authorization(logos_key):
             return {"error": "Database changes only allowed for root user."}, 500
         sql = text("""
                     UPDATE models
@@ -269,6 +271,19 @@ class DBManager:
         self.session.commit()
         return {"result": f"Added api-connection to model."}, 200
 
+    def set_process_log(self, process_id: int, log: bool):
+        sql = text("""
+                   UPDATE process
+                   SET log = :log
+                   WHERE id = :process_id
+                   """)
+        self.session.execute(sql, {
+            "log": log,
+            "process_id": int(process_id)
+        })
+        self.session.commit()
+        return {"result": f"Updated log to {log}"}, 200
+
     def get_process_id(self, logos_key: str):
         sql = text("""
                     SELECT id
@@ -277,11 +292,11 @@ class DBManager:
         """)
         exc = self.session.execute(sql, {"logos_key": logos_key}).fetchone()
         if exc is None:
-            return {"error": "Key not found"}
-        return {"result": f"Process ID: {exc[0]}"}, 200
+            return {"error": "Key not found"}, 500
+        return {"result": exc[0]}, 200
 
     def get_api_id(self, logos_key: str, api_key: str):
-        if not self.__check_authorization(logos_key):
+        if not self.check_authorization(logos_key):
             return {"error": "Database changes only allowed for root user."}, 500
         sql = text("""
                     SELECT id
@@ -340,8 +355,48 @@ class DBManager:
         result = self.session.execute(sql, {"model_id": int(model_id)}).fetchone()
         return {"name": result.name, "endpoint": result.endpoint}
 
+    def log(self, process_id: int):
+        sql = text("""
+                   SELECT log
+                   FROM process
+                   WHERE id = :process_id
+                   """)
+        result = self.session.execute(sql, {"process_id": int(process_id)}).fetchone()
+        if result is None:
+            return False
+        return result.log
+
+    def log_request(self, process_id: int, client_ip: str, input_payload: dict, provider_id: int, model_id: int,
+            headers: dict) -> int:
+        log_id = self.insert("request_log", {
+            "process_id": process_id,
+            "client_ip": client_ip,
+            "input_payload": input_payload,
+            "provider_id": provider_id,
+            "model_id": model_id,
+            "headers": headers
+        })
+        return log_id
+
+    def log_usage(self, request_id: int, response_body: str, prompt_tokens: int, completion_tokens: int,
+                  total_tokens: int, provider_id: int, model_id: int):
+        try:
+            payload_json = json.loads(response_body)
+        except json.JSONDecodeError:
+            payload_json = {"error": response_body}
+        log_id = self.insert("usage_log", {
+            "request_id": request_id,
+            "response_payload": payload_json,
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": total_tokens,
+            "provider_id": provider_id,
+            "model_id": model_id
+        })
+        return log_id
+
     def export(self, logos_key: str):
-        if not self.__check_authorization(logos_key):
+        if not self.check_authorization(logos_key):
             return {"error": "Database exports only allowed for root user."}, 403
 
         data = {}
@@ -352,7 +407,7 @@ class DBManager:
         return {"result": data}, 200
 
     def import_from_json(self, logos_key: str, json_data: dict):
-        if not self.__check_authorization(logos_key):
+        if not self.check_authorization(logos_key):
             return {"error": "Database changes only allowed for root user."}, 500
         # Store table names to prevent silent errors on foreign key insertions
         table_names = [
@@ -365,7 +420,9 @@ class DBManager:
             "models",
             "model_provider",
             "profile_model_permissions",
-            "policies"
+            "policies",
+            "request_log",
+            "usage_log"
         ]
         for table_name in table_names:
             if table_name not in json_data:
@@ -378,7 +435,7 @@ class DBManager:
         self.session.commit()
         return {"result": f"Imported data"}, 200
 
-    def __check_authorization(self, logos_key: str):
+    def check_authorization(self, logos_key: str):
         sql = text("""
                                 SELECT *
                                 FROM process, users

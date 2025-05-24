@@ -10,6 +10,11 @@ class LogosSetupRequest(BaseModel):
     provider_name: str
 
 
+class SetLogRequest(LogosKeyModel):
+    set_log: bool
+    process_id: int
+
+
 class AddProviderRequest(LogosKeyModel):
     provider_name: str
     base_url: str

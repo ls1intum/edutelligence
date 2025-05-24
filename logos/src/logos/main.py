@@ -1,12 +1,13 @@
 import json
-from json import JSONDecodeError
-from fastapi import FastAPI, Request
-from fastapi.responses import StreamingResponse
-from grpclocal.client import GRPCModelClient
-import httpx
+import traceback
 
-from logos.dbmanager import DBManager
-from logos.dbrequest import *
+from fastapi import FastAPI, Request
+from fastapi.responses import StreamingResponse, JSONResponse
+import httpx
+from requests import JSONDecodeError
+
+from logos.dbutils.dbmanager import DBManager
+from logos.dbutils.dbrequest import *
 
 from scripts.setup_proxy import setup
 
@@ -23,6 +24,17 @@ async def setup_db(data: LogosSetupRequest):
         return {"error": "Database already initialized"}
     except Exception as e:
         return {"error": f"{str(e)}"}, 401
+
+
+@app.post("/logosdb/set_log")
+async def set_log(data: SetLogRequest):
+    with DBManager() as db:
+        check, code = db.get_process_id(data.dict()["logos_key"])
+        if "error" in check:
+            return check, code
+        if check["result"] != data.dict()["process_id"] and not db.check_authorization(data.dict()["logos_key"]):
+            return {"error": "Missing authentication to set log"}
+        return db.set_process_log(data.dict()["process_id"], data.dict()["set_log"])
 
 
 @app.post("/logosdb/add_provider")
@@ -114,30 +126,14 @@ def route_handler(request: Request):
     return {"host": host}
 
 
-
-@app.api_route("/v1/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
-async def logos_service(path: str, request: Request):
-    """
-    Dynamic proxy for Endpoints
-    :param path: Path to Endpoint
-    :param request: Request
-    :return: The response from Endpoints
-    """
-    headers = dict(request.headers)
-    # Read request
-    data = await request.body()
-    json_data = request2json(data)
-    # logos-API-check
+def request_setup(headers: dict, path: str, llm_info: dict):
     try:
         key = headers["logos_key"] if "logos_key" in headers else (
             headers["Authorization"].replace("Bearer ", "") if "Authorization" in headers else "")
         with DBManager() as db:
-            # Get an api key for a llm. This is the starting point for classification later
-            llm_info = db.fetch_llm_key(key)
-            if llm_info is None:
-                return {"error": "Key not found"}, 401
             # For now, we only redirect to saved models in the db if
             # it is present in the db and no further info is provided
+            model_id = None
             api_key = llm_info["api_key"]
             base_url: str = llm_info["base_url"]
             provider = llm_info["provider_name"]
@@ -189,10 +185,41 @@ async def logos_service(path: str, request: Request):
                     auth_name: auth_format,
                     "Content-Type": "application/json"
                 }
+        return proxy_headers, forward_url, model_id
     except PermissionError as e:
         return {"error": str(e)}, 401
     except ValueError as e:
         return {"error": str(e)}, 401
+
+
+@app.api_route("/v1/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
+async def logos_service(path: str, request: Request):
+    """
+    Dynamic proxy for Endpoints
+    :param path: Path to Endpoint
+    :param request: Request
+    :return: The response from Endpoints
+    """
+    headers = dict(request.headers)
+    # Read request
+    data = await request.body()
+    json_data = request2json(data)
+    # logos-API-check
+    key = headers["logos_key"] if "logos_key" in headers else (
+        headers["Authorization"].replace("Bearer ", "") if "Authorization" in headers else "")
+    # Get an api key for a llm. This is the starting point for classification later
+    with DBManager() as db:
+        llm_info = db.fetch_llm_key(key)
+        if llm_info is None:
+            return {"error": "Key not found"}, 401
+        tmp = request_setup(headers, path, llm_info)
+        if isinstance(tmp[0], dict) and "error" in tmp[0]:
+            return tmp
+        proxy_headers, forward_url, model_id = tmp
+        if db.log(llm_info["process_id"]):
+            request_id = db.log_request(llm_info["process_id"], get_client_ip(request), json_data, llm_info["provider_id"], model_id, headers)
+        else:
+            request_id = None
     # Forward Request
     """async with httpx.AsyncClient() as client:
         response = await client.request(
@@ -216,7 +243,6 @@ async def logos_service(path: str, request: Request):
             yield chunk
 
     return StreamingResponse(token_generator(), media_type="text/plain")
-    """
     json_data["stream"] = True
 
     async def stream_response():
@@ -226,6 +252,43 @@ async def logos_service(path: str, request: Request):
                     yield chunk
 
     return StreamingResponse(stream_response(), media_type="application/json")
+    """
+
+    headers["authorization"] = f"Bearer {headers["api_key"]}"
+    # Try multiple requesting methods. Start with streaming
+    try:
+        print("Sending Streaming Request")
+        json_data["stream"] = True
+
+        async def stream_response():
+            async with httpx.AsyncClient(timeout=None) as client:
+                async with client.stream(method="POST", url=forward_url, headers=proxy_headers,
+                                         json=json_data, timeout=30) as response:
+                    async for chunk in response.aiter_bytes():
+                        yield chunk
+
+        return StreamingResponse(stream_response(), media_type="application/json")
+    except:
+        traceback.print_exc()
+    # Fall back to naive request method
+    try:
+        print("Falling back to Standard Request")
+        async with httpx.AsyncClient() as client:
+            response = await client.request(
+                method="POST",
+                url=forward_url,
+                json=json_data,
+                headers=proxy_headers,
+                timeout=30,
+            )
+
+        try:
+            return response.json()
+        except JSONDecodeError:
+            return response.text
+    except:
+        traceback.print_exc()
+    return {"error": "provider not reachable"}, 500
 
 
 def request2json(request_data: bytes) -> dict:
@@ -238,3 +301,10 @@ def request2json(request_data: bytes) -> dict:
         return {}
     string = request_data.decode('utf8').replace("'", '"')
     return json.loads(string)
+
+
+def get_client_ip(request: Request) -> str:
+    forwarded_for = request.headers.get("x-forwarded-for")
+    if forwarded_for:
+        return forwarded_for.split(",")[0].strip()
+    return request.client.host

@@ -14,6 +14,8 @@ DROP TABLE IF EXISTS process CASCADE;
 DROP TABLE IF EXISTS profiles CASCADE;
 DROP TABLE IF EXISTS services CASCADE;
 DROP TABLE IF EXISTS users CASCADE;
+DROP TABLE IF EXISTS request_log CASCADE;
+DROP TABLE IF EXISTS usage_log CASCADE;
 
 CREATE TABLE users (
     id SERIAL PRIMARY KEY,
@@ -95,4 +97,27 @@ CREATE TABLE policies (
     threshold_quality INTEGER DEFAULT(0),
     priority INTEGER DEFAULT(0),
     topic TEXT
+);
+
+CREATE TABLE request_log (
+    id SERIAL PRIMARY KEY,
+    timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    process_id INTEGER NOT NULL REFERENCES process(id) ON DELETE CASCADE,
+    client_ip TEXT,
+    input_payload JSONB,
+    provider_id INTEGER,
+    model_id INTEGER,
+    headers JSONB
+);
+
+CREATE TABLE usage_log (
+    id SERIAL PRIMARY KEY,
+    request_id INTEGER NOT NULL REFERENCES request_log(id) ON DELETE CASCADE,
+    timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    response_payload JSONB,
+    prompt_tokens INTEGER,
+    completion_tokens INTEGER,
+    total_tokens INTEGER,
+    provider_id INTEGER,
+    model_id INTEGER
 );

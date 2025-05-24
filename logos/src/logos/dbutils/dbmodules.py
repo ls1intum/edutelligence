@@ -1,6 +1,7 @@
-from sqlalchemy import create_engine, Column, Integer, String, Boolean, Enum, Text, ForeignKey, UniqueConstraint
+from sqlalchemy import create_engine, Column, Integer, String, Boolean, Enum, Text, ForeignKey, JSON, TIMESTAMP, Numeric
 from sqlalchemy.orm import sessionmaker, declarative_base, relationship
 from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.sql import func
 import enum
 
 Base = declarative_base()
@@ -117,3 +118,35 @@ class ProfileModelPermission(Base):
 
     profile = relationship("Profile")
     model = relationship("Model")
+
+
+class RequestLog(Base):
+    __tablename__ = "request_log"
+
+    id = Column(Integer, primary_key=True)
+    timestamp = Column(TIMESTAMP(timezone=True), server_default=func.now(), nullable=False)
+    process_id = Column(Integer, ForeignKey("process.id", ondelete="CASCADE"), nullable=False)
+    client_ip = Column(Text)
+    input_payload = Column(JSON)
+    provider_id = Column(Integer)
+    model_id = Column(Integer)
+    headers = Column(JSON)
+
+    # one-to-many to usage entries
+    usages = relationship("UsageLog", back_populates="request", cascade="all, delete-orphan")
+
+
+class UsageLog(Base):
+    __tablename__ = "usage_log"
+
+    id = Column(Integer, primary_key=True)
+    request_id = Column(Integer, ForeignKey("request_log.id", ondelete="CASCADE"), nullable=False)
+    timestamp = Column(TIMESTAMP(timezone=True), server_default=func.now(), nullable=False)
+    response_payload = Column(JSON)
+    prompt_tokens = Column(Integer)
+    completion_tokens = Column(Integer)
+    total_tokens = Column(Integer)
+    provider_id = Column(Integer)
+    model_id = Column(Integer)
+
+    request = relationship("RequestLog", back_populates="usages")

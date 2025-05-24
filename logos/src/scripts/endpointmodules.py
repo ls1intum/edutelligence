@@ -3,7 +3,7 @@ File containing methods calling logos endpoints.
 """
 from requests import Response
 
-from logos.dbmanager import DBManager
+from logos.dbutils.dbmanager import DBManager
 
 
 def endpoint_add_provider(logos_key: str, base_url: str, provider_name: str, api_key: str) -> Response:
