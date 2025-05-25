@@ -3,6 +3,7 @@ from uuid import UUID
 
 from weaviate import WeaviateClient
 from weaviate.collections import Collection
+from weaviate.collections.classes.filters import Filter
 from weaviate.collections.classes.grpc import QueryReference, TargetVectors
 
 from memiris.domain.learning import Learning
@@ -123,3 +124,36 @@ class WeaviateLearningRepository(LearningRepository, _WeaviateBaseRepository):
             return [self.object_to_learning(item) for item in result.objects]
         except Exception as e:
             raise ValueError("Error searching for Learning objects") from e
+
+    def find_by_ids(self, tenant: str, ids: list[UUID]) -> list[Learning]:
+        """
+        Retrieve multiple learning objects by their IDs in a single batch operation.
+
+        Args:
+            tenant: The tenant identifier
+            ids: List of learning IDs to retrieve
+
+        Returns:
+            List of Learning objects that match the provided IDs
+        """
+        if not ids:
+            return []
+
+        try:
+            # Convert UUIDs to strings for the filter
+            id_strings = [str(uid) for uid in ids]
+
+            # Use proper filter syntax with Weaviate's filter classes
+            result = self.collection.with_tenant(tenant).query.fetch_objects(
+                filters=Filter.by_id().contains_any(id_strings),
+                include_vector=True,
+                return_references=QueryReference(link_on="memories"),
+            )
+
+            if not result or not result.objects:
+                return []
+
+            # Create Learning objects from the results
+            return [self.object_to_learning(item) for item in result.objects]
+        except Exception as e:
+            raise ValueError(f"Error retrieving Learning objects by IDs: {e}") from e

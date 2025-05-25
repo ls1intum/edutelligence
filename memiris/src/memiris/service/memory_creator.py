@@ -1,9 +1,7 @@
-import json
 from typing import Any, Callable, List, Mapping, Optional, Union
 
 from jinja2 import Template
 from ollama import Message
-from pydantic import TypeAdapter
 
 from memiris.domain.learning import Learning
 from memiris.domain.memory import Memory
@@ -11,9 +9,10 @@ from memiris.dto.learning_main_dto import LearningDto
 from memiris.dto.memory_creation_dto import MemoryCreationDto
 from memiris.repository.learning_repository import LearningRepository
 from memiris.repository.memory_repository import MemoryRepository
-from memiris.service.ollama_service import ollama_client
+from memiris.service.ollama_wrapper import OllamaService
 from memiris.service.vectorizer import Vectorizer
 from memiris.tool import learning_tools, memory_tools
+from memiris.util.jinja_util import create_template
 from memiris.util.learning_util import learning_to_dto
 from memiris.util.memory_util import creation_dto_to_memory
 
@@ -29,40 +28,44 @@ class MemoryCreator:
     learning_repository: LearningRepository
     memory_repository: MemoryRepository
     vectorizer: Vectorizer
+    ollama_service: OllamaService
 
     def __init__(
         self,
         tool_llm: str,
         response_llm: str,
         learning_repository: LearningRepository,
-        memory_repository: MemoryRepository,
-        vectorizer: Vectorizer,
+        memory_repository: Optional[MemoryRepository] = None,
+        vectorizer: Optional[Vectorizer] = None,
+        ollama_service: Optional[OllamaService] = None,
         template: Optional[str] = None,
     ) -> None:
         """
-        Initialize the LearningExtractor
+        Initialize the MemoryCreator
+
+        Args:
+            tool_llm: The language model to use for tool operations
+            response_llm: The language model to use for responses
+            learning_repository: The repository for accessing learning data
+            memory_repository: The repository for accessing memory data
+            vectorizer: The vectorizer service
+            ollama_service: The Ollama service to use for LLM calls
+            template: Optional template path
         """
         self.tool_llm = tool_llm
         self.response_llm = response_llm
         self.learning_repository = learning_repository
         self.memory_repository = memory_repository
         self.vectorizer = vectorizer
+        self.ollama_service = ollama_service or OllamaService()
 
-        if template is None:
-            # Load the default template from the file located at memiris.default_templates
-            template_path = "./default_templates/memory_creator.md.j2"
-            with open(template_path, "r", encoding="utf-8") as file:
-                template_content = file.read()
-            self.template = Template(template_content)
-        else:
-            # Load the template from the provided string
-            self.template = Template(template)
+        self.template = create_template(template, "memory_creator.md.j2")
 
     def create(self, learnings: List[Learning], tenant: str, **kwargs) -> List[Memory]:
         """
         Create a memory from the given learnings using the LLM.
         """
-        learning_array_type_adapter = TypeAdapter(List[LearningDto])
+        learning_array_type_adapter = LearningDto.json_array_type()
 
         learnings_string = str(
             learning_array_type_adapter.dump_json(
@@ -70,10 +73,7 @@ class MemoryCreator:
             )
         )
 
-        memory_array_type_adapter = TypeAdapter(List[MemoryCreationDto])
-        memory_json_dict = memory_array_type_adapter.json_schema()
-
-        memory_json_schema = json.dumps(memory_json_dict, indent=2)
+        memory_json_schema = MemoryCreationDto.json_array_schema()
 
         messages: List[Union[Mapping[str, Any], Message]] = [
             Message(role="system", content="TODO"),
@@ -121,7 +121,7 @@ class MemoryCreator:
             messages[0].content = system_message  # type: ignore
 
             # Call the LLM to get the response
-            response = ollama_client.chat(
+            response = self.ollama_service.chat(
                 model=self.tool_llm,
                 messages=messages,
                 tools=(list(tools.values()) if i % 2 == 1 else None),
@@ -170,13 +170,15 @@ class MemoryCreator:
             **kwargs,
         )
 
-        response = ollama_client.chat(
-            model=self.response_llm, messages=messages, format=memory_json_dict
+        response = self.ollama_service.chat(
+            model=self.response_llm,
+            messages=messages,
+            response_format=MemoryCreationDto.json_array_type().json_schema(),
         )
 
         if response and response.message and response.message.content:
             try:
-                memory_dtos = memory_array_type_adapter.validate_json(
+                memory_dtos = MemoryCreationDto.json_array_type().validate_json(
                     response.message.content
                 )
 

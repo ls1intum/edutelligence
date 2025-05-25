@@ -1,6 +1,6 @@
 from typing_extensions import Sequence
 
-from memiris.service.ollama_service import ollama_client
+from memiris.service.ollama_wrapper import OllamaService
 
 
 class Vectorizer:
@@ -9,17 +9,20 @@ class Vectorizer:
     """
 
     vector_models: dict[str, str]
+    ollama_service: OllamaService
 
-    def __init__(self, vector_models: list[str]) -> None:
+    def __init__(self, vector_models: list[str], ollama_service: OllamaService) -> None:
         """
         Initialize the Vectorizer with a dictionary of vector models.
 
         Args:
             vector_models (list[str]): A list of model names to be used for vectorization.
+            ollama_service (OllamaService): The Ollama service to use for embeddings.
         """
         self.vector_models = {
             f"vector_{i}": vector_models[i] for i in range(len(vector_models))
         }
+        self.ollama_service = ollama_service
 
     def vectorize(self, query: str) -> dict[str, Sequence[float]]:
         """
@@ -27,7 +30,7 @@ class Vectorizer:
         """
         return {
             vector_name: (
-                ollama_client.embed(model_name, query).embeddings[0]
+                self.ollama_service.embed(model_name, query).embeddings[0]
                 if model_name
                 else []
             )

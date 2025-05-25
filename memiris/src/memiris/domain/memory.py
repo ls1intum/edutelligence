@@ -18,6 +18,8 @@ class Memory:
     vectors: Dict[
         str, Sequence[float]
     ]  # The vector representations of the memory object,
+    slept_on: bool = False  # Whether the memory has been slept on or not.
+    deleted: bool = False  # Whether the memory has been marked as deleted.
 
     def __init__(
         self,
@@ -26,6 +28,8 @@ class Memory:
         learnings: List[UUID],
         uid: Optional[UUID] = None,
         vectors: Optional[Dict[str, Sequence[float]]] = None,
+        slept_on: bool = False,
+        deleted: bool = False,
     ) -> None:
         if vectors is None:
             vectors = {}
@@ -34,6 +38,8 @@ class Memory:
         self.content = content
         self.learnings = learnings
         self.vectors = vectors
+        self.slept_on = slept_on
+        self.deleted = deleted
 
     def __str__(self) -> str:
         return f"{self.title}: {self.content} ({self.learnings})"

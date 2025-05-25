@@ -1,13 +1,12 @@
-import json
 from typing import List, Optional
 
 from jinja2 import Template
 from ollama import Message
-from pydantic import TypeAdapter
 
 from memiris.domain.learning import Learning
 from memiris.dto.learning_creation_dto import LearningCreationDto
-from memiris.service.ollama_service import ollama_client
+from memiris.service.ollama_wrapper import OllamaService
+from memiris.util.jinja_util import create_template
 from memiris.util.learning_util import (
     creation_dto_to_learning,
     learning_to_creation_dto,
@@ -21,22 +20,22 @@ class LearningDeduplicator:
 
     llm: str
     template: Template
+    ollama_service: OllamaService
 
-    def __init__(self, llm: str, template: Optional[str] = None) -> None:
+    def __init__(
+        self, llm: str, ollama_service: OllamaService, template: Optional[str] = None
+    ) -> None:
         """
         Initialize the LearningExtractor
+
+        Args:
+            llm: The name of the language model to use
+            ollama_service: The Ollama service to use for LLM calls
+            template: Optional template path to use for the deduplication prompt
         """
         self.llm = llm
-
-        if template is None:
-            # Load the default template from the file located at memiris.default_templates.learning_extraction
-            template_path = "./default_templates/learning_deduplication.md.j2"
-            with open(template_path, "r", encoding="utf-8") as file:
-                template_content = file.read()
-            self.template = Template(template_content)
-        else:
-            # Load the template from the provided string
-            self.template = Template(template)
+        self.template = create_template(template, "learning_deduplication.md.j2")
+        self.ollama_service = ollama_service
 
     def deduplicate(self, learnings: List[Learning], **kwargs) -> List[Learning]:
         """
@@ -44,11 +43,12 @@ class LearningDeduplicator:
         NOTE: This is currently only meant to be used immediately after the learning extraction.
         If it is used afterward, it will lose the id and reference of the learnings.
         """
+        # Early return if there are no learnings to deduplicate
+        if not learnings:
+            return []
 
-        learning_array_type_adapter = TypeAdapter(List[LearningCreationDto])
-        learning_json_dict = learning_array_type_adapter.json_schema()
-
-        learning_json_schema = json.dumps(learning_json_dict, indent=2)
+        learning_json_schema = LearningCreationDto.json_array_schema()
+        learning_array_type_adapter = LearningCreationDto.json_array_type()
 
         system_message = self.template.render(
             learning_json_schema=learning_json_schema,
@@ -67,16 +67,16 @@ class LearningDeduplicator:
             ),
         ]
 
-        response = ollama_client.chat(
+        response = self.ollama_service.chat(
             model=self.llm,
             messages=messages,
-            format=learning_json_dict,
+            response_format=LearningCreationDto.json_array_type().json_schema(),
             options={"temperature": 0.05},
         )
 
         if response and response.message and response.message.content:
             try:
-                learning_dtos = learning_array_type_adapter.validate_json(
+                learning_dtos = LearningCreationDto.json_array_type().validate_json(
                     response.message.content
                 )
                 return [

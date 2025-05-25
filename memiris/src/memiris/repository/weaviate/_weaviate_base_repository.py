@@ -56,7 +56,7 @@ class _WeaviateBaseRepository(ABC):
         if not self.client.collections.exists(self.learning_collection_name):
             self.client.collections.create(
                 name=self.learning_collection_name,
-                description="(v1.0) A learning object represents a piece of "
+                description="(v0.2) A learning object represents a piece of "
                 "information that has been learned from a source.",
                 vectorizer_config=vector_config,
                 multi_tenancy_config=Configure.multi_tenancy(
@@ -95,7 +95,7 @@ class _WeaviateBaseRepository(ABC):
         if not self.client.collections.exists(self.memory_collection_name):
             self.client.collections.create(
                 name=self.memory_collection_name,
-                description="(v1.0) A memory object represents 1+ processed learning objects.",
+                description="(v0.2) A memory object represents 1+ processed learning objects.",
                 vectorizer_config=vector_config,
                 multi_tenancy_config=Configure.multi_tenancy(
                     enabled=True, auto_tenant_creation=True, auto_tenant_activation=True
@@ -110,6 +110,16 @@ class _WeaviateBaseRepository(ABC):
                         name="content",
                         data_type=DataType.TEXT,
                         description="Memory content",
+                    ),
+                    Property(
+                        name="slept_on",
+                        data_type=DataType.BOOL,
+                        description="Indicates if the memory has been slept on",
+                    ),
+                    Property(
+                        name="deleted",
+                        data_type=DataType.BOOL,
+                        description="Indicates if the memory has been deleted",
                     ),
                 ],
             )
@@ -176,4 +186,5 @@ class _WeaviateBaseRepository(ABC):
                 else []
             ),
             vectors=obj.vector if obj.vector else {},  # type: ignore
+            slept_on=obj.properties.get("slept_on", False),
         )

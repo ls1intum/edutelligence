@@ -3,6 +3,7 @@ from uuid import UUID
 
 from weaviate import WeaviateClient
 from weaviate.collections import Collection
+from weaviate.collections.classes.filters import Filter
 from weaviate.collections.classes.grpc import QueryReference, TargetVectors
 
 from memiris.domain.memory import Memory
@@ -30,7 +31,12 @@ class WeaviateMemoryRepository(MemoryRepository, _WeaviateBaseRepository):
     def save(self, tenant: str, entity: Memory) -> Memory:
         """Save a Memory entity to Weaviate."""
 
-        properties = {"title": entity.title, "content": entity.content}
+        properties = {
+            "title": entity.title,
+            "content": entity.content,
+            "slept_on": entity.slept_on,
+            "deleted": entity.deleted,
+        }
 
         if not entity.id:
             operation = self.collection.with_tenant(tenant).data.insert
@@ -83,7 +89,9 @@ class WeaviateMemoryRepository(MemoryRepository, _WeaviateBaseRepository):
     def all(self, tenant: str) -> list[Memory]:
         """Get all Memory objects."""
         try:
-            result = self.collection.with_tenant(tenant).query.fetch_objects()
+            result = self.collection.with_tenant(tenant).query.fetch_objects(
+                filters=Filter.by_property("deleted").equal(False),
+            )
 
             if not result:
                 return []
@@ -103,9 +111,12 @@ class WeaviateMemoryRepository(MemoryRepository, _WeaviateBaseRepository):
         self, tenant: str, vector_name: str, vector: Sequence[float], count: int
     ) -> list[Memory]:
         try:
-            result = self.collection.with_tenant(tenant).query.near_vector(
-                near_vector=vector,
+            # Use hybrid search to combine vector search with filter for non-deleted memories
+            result = self.collection.with_tenant(tenant).query.hybrid(
+                query=None,
+                vector=vector,
                 target_vector=vector_name,
+                filters=Filter.by_property("deleted").equal(False),
                 limit=count,
                 include_vector=True,
                 return_references=QueryReference(link_on="learnings"),
@@ -125,9 +136,12 @@ class WeaviateMemoryRepository(MemoryRepository, _WeaviateBaseRepository):
             vectors = {
                 vector_name: vector for vector_name, vector in vectors.items() if vector
             }
-            result = self.collection.with_tenant(tenant).query.near_vector(
-                near_vector=vectors,
+            # Use hybrid search with filter for non-deleted memories
+            result = self.collection.with_tenant(tenant).query.hybrid(
+                query=None,
+                vector=vectors,
                 target_vector=TargetVectors.minimum(list(vectors.keys())),
+                filters=Filter.by_property("deleted").equal(False),
                 limit=count,
                 include_vector=True,
                 return_references=QueryReference(link_on="learnings"),
@@ -140,3 +154,21 @@ class WeaviateMemoryRepository(MemoryRepository, _WeaviateBaseRepository):
             return [self.object_to_memory(item) for item in result.objects]
         except Exception as e:
             raise ValueError("Error searching for Memory objects") from e
+
+    def find_unslept_memories(self, tenant: str) -> list[Memory]:
+        try:
+            # Combine filters for both unslept AND not deleted memories
+            result = self.collection.with_tenant(tenant).query.fetch_objects(
+                filters=Filter.by_property("slept_on").equal(False)
+                & Filter.by_property("deleted").equal(False),
+                limit=-1,
+                include_vector=True,
+                return_references=QueryReference(link_on="learnings"),
+            )
+
+            if not result:
+                return []
+
+            return [self.object_to_memory(item) for item in result.objects]
+        except Exception as e:
+            raise ValueError("Error retrieving unslept Memory objects") from e
