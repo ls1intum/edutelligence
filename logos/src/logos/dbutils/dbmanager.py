@@ -378,12 +378,9 @@ class DBManager:
         })
         return log_id
 
-    def log_usage(self, request_id: int, response_body: str, prompt_tokens: int, completion_tokens: int,
+    def log_usage(self, request_id: int, response_body: dict, prompt_tokens: int, completion_tokens: int,
                   total_tokens: int, provider_id: int, model_id: int):
-        try:
-            payload_json = json.loads(response_body)
-        except json.JSONDecodeError:
-            payload_json = {"error": response_body}
+        payload_json = response_body
         log_id = self.insert("usage_log", {
             "request_id": request_id,
             "response_payload": payload_json,

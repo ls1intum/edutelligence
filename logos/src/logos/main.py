@@ -2,12 +2,12 @@ import json
 import traceback
 
 from fastapi import FastAPI, Request
-from fastapi.responses import StreamingResponse, JSONResponse
 import httpx
 from requests import JSONDecodeError
 
 from logos.dbutils.dbmanager import DBManager
 from logos.dbutils.dbrequest import *
+from logos.responses import get_streaming_response, get_standard_response
 
 from scripts.setup_proxy import setup
 
@@ -134,6 +134,7 @@ def request_setup(headers: dict, path: str, llm_info: dict):
             # For now, we only redirect to saved models in the db if
             # it is present in the db and no further info is provided
             model_id = None
+            model_name = None
             api_key = llm_info["api_key"]
             base_url: str = llm_info["base_url"]
             provider = llm_info["provider_name"]
@@ -163,13 +164,14 @@ def request_setup(headers: dict, path: str, llm_info: dict):
                     }
                 else:
                     proxy_headers = {
-                        "Authorization": f"Bearer {headers["api_key"]}",
+                        "Authorization": headers["Authorization"],
                         "Content-Type": "application/json"
                     }
                     forward_url = f"{base_url}/{path}"
             else:
                 model_id = model_api_id if model_api_id is not None else model_provider_id
                 model_data = db.get_model(model_id)
+                model_name = model_data["name"]
                 endpoint = model_data["endpoint"]
                 if not base_url.endswith("/") and not endpoint.startswith("/"):
                     forward_url = f"{base_url}/{endpoint}"
@@ -185,7 +187,7 @@ def request_setup(headers: dict, path: str, llm_info: dict):
                     auth_name: auth_format,
                     "Content-Type": "application/json"
                 }
-        return proxy_headers, forward_url, model_id
+        return proxy_headers, forward_url, model_id, model_name
     except PermissionError as e:
         return {"error": str(e)}, 401
     except ValueError as e:
@@ -215,77 +217,24 @@ async def logos_service(path: str, request: Request):
         tmp = request_setup(headers, path, llm_info)
         if isinstance(tmp[0], dict) and "error" in tmp[0]:
             return tmp
-        proxy_headers, forward_url, model_id = tmp
+        proxy_headers, forward_url, model_id, model_name = tmp
         if db.log(llm_info["process_id"]):
             request_id = db.log_request(llm_info["process_id"], get_client_ip(request), json_data, llm_info["provider_id"], model_id, headers)
         else:
             request_id = None
     # Forward Request
-    """async with httpx.AsyncClient() as client:
-        response = await client.request(
-            method="POST",
-            url=forward_url,
-            json=json_data,
-            headers=proxy_headers,
-            timeout=30,
-        )
-
-    try:
-        return response.json()
-    except JSONDecodeError:
-        return response.text
-    client = GRPCModelClient(target_host=forward_url)
-
-    def token_generator():
-        for chunk in client.generate_stream(payload=json_data, deployment_name=headers["deployment_name"],
-                                            api_key=headers["api_key"], api_version=headers["api_version"],
-                                            authorization=f"Bearer {headers["api_key"]}"):
-            yield chunk
-
-    return StreamingResponse(token_generator(), media_type="text/plain")
-    json_data["stream"] = True
-
-    async def stream_response():
-        async with httpx.AsyncClient(timeout=None) as client:
-            async with client.stream(method="POST", url=forward_url, headers=proxy_headers, json=json_data) as response:
-                async for chunk in response.aiter_bytes():
-                    yield chunk
-
-    return StreamingResponse(stream_response(), media_type="application/json")
-    """
-
-    headers["authorization"] = f"Bearer {headers["api_key"]}"
     # Try multiple requesting methods. Start with streaming
     try:
         print("Sending Streaming Request")
         json_data["stream"] = True
-
-        async def stream_response():
-            async with httpx.AsyncClient(timeout=None) as client:
-                async with client.stream(method="POST", url=forward_url, headers=proxy_headers,
-                                         json=json_data, timeout=30) as response:
-                    async for chunk in response.aiter_bytes():
-                        yield chunk
-
-        return StreamingResponse(stream_response(), media_type="application/json")
+        return get_streaming_response(forward_url, proxy_headers, json_data, model_name, request_id, llm_info["provider_id"], model_id)
     except:
         traceback.print_exc()
     # Fall back to naive request method
     try:
         print("Falling back to Standard Request")
-        async with httpx.AsyncClient() as client:
-            response = await client.request(
-                method="POST",
-                url=forward_url,
-                json=json_data,
-                headers=proxy_headers,
-                timeout=30,
-            )
-
-        try:
-            return response.json()
-        except JSONDecodeError:
-            return response.text
+        json_data["stream"] = False
+        return await get_standard_response(forward_url, proxy_headers, json_data, model_name, request_id, llm_info["provider_id"], model_id)
     except:
         traceback.print_exc()
     return {"error": "provider not reachable"}, 500
