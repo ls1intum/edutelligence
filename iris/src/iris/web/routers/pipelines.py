@@ -183,11 +183,7 @@ def run_text_exercise_chat_pipeline_worker(dto, variant):
             base_url=dto.execution.settings.artemis_base_url,
             initial_stages=dto.execution.initial_stages,
         )
-        match variant:
-            case "default" | "text_exercise_chat_pipeline_reference_impl":
-                pipeline = TextExerciseChatPipeline(callback=callback)
-            case _:
-                raise ValueError(f"Unknown variant: {variant}")
+        pipeline = TextExerciseChatPipeline(callback=callback, variant=variant)
     except Exception as e:
         logger.error("Error preparing text exercise chat pipeline: %s", e)
         logger.error(traceback.format_exc())
@@ -209,13 +205,7 @@ def run_lecture_chat_pipeline_worker(dto, variant):
             base_url=dto.settings.artemis_base_url,
             initial_stages=dto.initial_stages,
         )
-        match variant:
-            case "default" | "lecture_chat_pipeline_reference_impl":
-                pipeline = LectureChatPipeline(
-                    callback=callback, dto=dto, variant=variant
-                )
-            case _:
-                raise ValueError(f"Unknown variant: {variant}")
+        pipeline = LectureChatPipeline(callback=callback, dto=dto, variant=variant)
     except Exception as e:
         logger.error("Error preparing lecture chat pipeline: %s", e)
         logger.error(traceback.format_exc())
