@@ -5,8 +5,12 @@ import atlasml.ml.CompetencySimilarity as cs_module
 
 class DummyEmbedder:
     def __init__(self, *args, **kwargs): pass
-    def __call__(self, texts):
-        return [{'score': 1.0} for _ in texts]
+    def __call__(self, sequence, candidate_labels):
+        return {
+            "sequence": sequence,
+            "labels": candidate_labels,
+            "scores": [0.9 for _ in candidate_labels]
+        }
 
 @pytest.fixture(autouse=True)
 def stub_pipeline(monkeypatch):
