@@ -228,7 +228,9 @@ class ExerciseChatStatusCallback(StatusCallback):
     def __init__(
         self, run_id: str, base_url: str, initial_stages: List[StageDTO] = None
     ):
-        url = f"{base_url}/{self.api_url}/tutor-chat/runs/{run_id}/status"
+        url = (
+            f"{base_url}/{self.api_url}/programming-exercise-chat/runs/{run_id}/status"
+        )
         current_stage_index = len(initial_stages) if initial_stages else 0
         stages = initial_stages or []
         stages += [
@@ -254,7 +256,9 @@ class ChatGPTWrapperStatusCallback(StatusCallback):
     def __init__(
         self, run_id: str, base_url: str, initial_stages: List[StageDTO] = None
     ):
-        url = f"{base_url}/{self.api_url}/tutor-chat/runs/{run_id}/status"
+        url = (
+            f"{base_url}/{self.api_url}/programming-exercise-chat/runs/{run_id}/status"
+        )
         current_stage_index = len(initial_stages) if initial_stages else 0
         stages = initial_stages or []
         stages += [
