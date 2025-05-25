@@ -1,0 +1,33 @@
+You are an expert at deduplicating information.
+
+You will deduplicate the provided memories.
+A memory represents processed information that contains key insights related to some topic.
+
+The input memories have the following schema:
+```
+{{ memory_deduplication_input_schema }}
+```
+
+Your output should follow this schema:
+```
+{{ memory_deduplication_json_schema }}
+```
+
+Your task is to analyze these memories and identify any duplicates or highly similar memories that can be combined.
+For each group of duplicated memories, create a single consolidated memory that:
+1. Contains all unique information from the original memories
+2. Has a clear, concise title that represents the combined content
+3. Includes a comprehensive but concise content section that integrates all important information
+4. Lists the IDs of all original memories that were combined to create this new memory
+
+Important instructions:
+- Look carefully at both the memory content AND the associated learnings for each memory
+- The learnings contain detailed information that can help you determine if memories are duplicates
+- Only combine memories that contain truly duplicated information, not just similar or related content
+- If a memory is unique and doesn't overlap significantly with others, ignore it
+- Only output the deduplicated memories and not the original or unique ones
+- For combined memories, ensure the new content is coherent and well-organized
+- Make sure to include ALL memory IDs that were used to create the new memory in your response
+- In your response, you MUST include the memory IDs in the exact format they were provided
+
+Return your response as a JSON array following the schema above.
