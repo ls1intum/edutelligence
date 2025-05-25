@@ -1,8 +1,6 @@
 from typing import Dict, List, Optional, Sequence
 from uuid import UUID
 
-from memiris.domain.learning import Learning
-
 
 class Memory:
     """
@@ -15,7 +13,7 @@ class Memory:
     title: str  # The title of the memory object. Used for identification by the user.
     content: str  # The content of the memory object. Contains the information that was learned without details.
     learnings: List[
-        Learning
+        UUID
     ]  # The learning object(s) that this memory object was created from.
     vectors: Dict[
         str, Sequence[float]
@@ -25,7 +23,7 @@ class Memory:
         self,
         title: str,
         content: str,
-        learnings: List[Learning],
+        learnings: List[UUID],
         uid: Optional[UUID] = None,
         vectors: Optional[Dict[str, Sequence[float]]] = None,
     ) -> None:

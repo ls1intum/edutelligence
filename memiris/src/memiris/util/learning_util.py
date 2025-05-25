@@ -42,7 +42,7 @@ def learning_to_dto(learning: Learning) -> LearningDto:
     Convert a Learning object to a LearningDto.
     """
     return LearningDto(
-        id=learning.id,
+        id=learning.id,  # type: ignore
         title=learning.title,
         content=learning.content,
     )

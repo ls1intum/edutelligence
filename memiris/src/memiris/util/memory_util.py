@@ -16,7 +16,9 @@ def creation_dto_to_memory(
         title=memory_dto.title,
         content=memory_dto.content,
         learnings=[
-            learning for learning in learnings if learning.id in memory_dto.learnings
+            id
+            for id in memory_dto.learnings
+            if id in [learning.id for learning in learnings]
         ],
     )
 
@@ -28,7 +30,7 @@ def memory_to_creation_dto(memory: Memory) -> MemoryCreationDto:
     return MemoryCreationDto(
         title=memory.title,
         content=memory.content,
-        learnings=[learning.id for learning in memory.learnings if learning.id],
+        learnings=memory.learnings,
     )
 
 
@@ -41,7 +43,9 @@ def dto_to_memory(memory_dto: MemoryDto, learnings: List[Learning]) -> Memory:
         title=memory_dto.title,
         content=memory_dto.content,
         learnings=[
-            learning for learning in learnings if learning.id in memory_dto.learnings
+            id
+            for id in memory_dto.learnings
+            if id in [learning.id for learning in learnings]
         ],
     )
 
@@ -54,5 +58,5 @@ def memory_to_dto(memory: Memory) -> MemoryDto:
         id=memory.id,  # type: ignore
         title=memory.title,
         content=memory.content,
-        learnings=[learning.id for learning in memory.learnings if learning.id],
+        learnings=memory.learnings,
     )

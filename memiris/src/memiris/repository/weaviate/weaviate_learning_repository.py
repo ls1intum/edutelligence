@@ -2,70 +2,27 @@ from typing import Mapping, Sequence
 from uuid import UUID
 
 from weaviate import WeaviateClient
-from weaviate.classes.config import DataType, Property
 from weaviate.collections import Collection
-from weaviate.collections.classes.config import Configure, VectorDistances
-from weaviate.collections.classes.grpc import TargetVectors
+from weaviate.collections.classes.grpc import QueryReference, TargetVectors
 
 from memiris.domain.learning import Learning
 from memiris.repository.learning_repository import LearningRepository
+from memiris.repository.weaviate._weaviate_base_repository import (
+    _WeaviateBaseRepository,
+)
 
 
-class WeaviateLearningRepository(LearningRepository):
+class WeaviateLearningRepository(LearningRepository, _WeaviateBaseRepository):
     """
     WeaviateLearningRepository is a concrete implementation of the LearningRepository for Weaviate.
     """
 
-    client: WeaviateClient
-    collection_name: str
     collection: Collection
-    _vector_count = 5
 
     def __init__(self, client: WeaviateClient):
         """Initialize repository with Weaviate client and optional learning repository."""
-        self.client = client
-        self.collection_name = "Learning"
-        self._ensure_schema()
-        self.collection = self.client.collections.get(self.collection_name)
-
-    def _ensure_schema(self) -> None:
-        """Ensure Learning collection schema exists or create it."""
-        vector_config = [
-            Configure.NamedVectors.none(
-                f"vector_{i}",
-                vector_index_config=Configure.VectorIndex.hnsw(
-                    distance_metric=VectorDistances.COSINE,
-                ),
-            )
-            for i in range(self._vector_count)
-        ]
-
-        if not self.client.collections.exists(self.collection_name):
-            self.client.collections.create(
-                name=self.collection_name,
-                description="A learning object represents a piece of information that has been learned from a source.",
-                vectorizer_config=vector_config,
-                multi_tenancy_config=Configure.multi_tenancy(
-                    enabled=True, auto_tenant_creation=True, auto_tenant_activation=True
-                ),
-                properties=[
-                    Property(
-                        name="title",
-                        data_type=DataType.TEXT,
-                        description="Learning title",
-                    ),
-                    Property(
-                        name="content",
-                        data_type=DataType.TEXT,
-                        description="Learning content",
-                    ),
-                    Property(
-                        name="reference",
-                        data_type=DataType.TEXT,
-                        description="Learning reference",
-                    ),
-                ],
-            )
+        super().__init__(client)
+        self.collection = self.learning_collection
 
     def save(self, tenant: str, entity: Learning) -> Learning:
         """Save a Learning entity to Weaviate."""
@@ -92,41 +49,29 @@ class WeaviateLearningRepository(LearningRepository):
         """Find a Learning by its ID."""
         try:
             result = self.collection.with_tenant(tenant).query.fetch_object_by_id(
-                uuid=entity_id, include_vector=True
+                uuid=entity_id,
+                include_vector=True,
+                return_references=QueryReference(link_on="memories"),
             )
 
             if not result:
                 raise ValueError(f"Learning with id {entity_id} not found")
 
-            # Create Learning object
-            return Learning(
-                uid=result.uuid,
-                title=str(result.properties["title"]),
-                content=str(result.properties["content"]),
-                reference=str(result.properties["reference"]),
-                vectors=result.vector,  # type: ignore
-            )
+            return self.object_to_learning(result)
         except Exception as e:
             raise ValueError(f"Error retrieving Learning with id {entity_id}") from e
 
     def all(self, tenant: str) -> list[Learning]:
         """Get all Learning objects."""
         try:
-            result = self.collection.with_tenant(tenant).query.fetch_objects()
+            result = self.collection.with_tenant(tenant).query.fetch_objects(
+                return_references=QueryReference(link_on="memories"),
+            )
 
             if not result:
                 return []
 
-            return [
-                Learning(
-                    uid=item.uuid,
-                    title=str(item.properties["title"]),
-                    content=str(item.properties["content"]),
-                    reference=str(item.properties["reference"]),
-                    vectors=item.vector,  # type: ignore
-                )
-                for item in result.objects
-            ]
+            return [self.object_to_learning(item) for item in result.objects]
         except Exception as e:
             raise ValueError("Error retrieving all Learning objects") from e
 
@@ -146,22 +91,14 @@ class WeaviateLearningRepository(LearningRepository):
                 target_vector=vector_name,
                 limit=count,
                 include_vector=True,
+                return_references=QueryReference(link_on="memories"),
             )
 
             if not result:
                 return []
 
             # Create Learning objects
-            return [
-                Learning(
-                    uid=item.uuid,
-                    title=str(item.properties["title"]),
-                    content=str(item.properties["content"]),
-                    reference=str(item.properties["reference"]),
-                    vectors=item.vector,  # type: ignore
-                )
-                for item in result.objects
-            ]
+            return [self.object_to_learning(item) for item in result.objects]
         except Exception as e:
             raise ValueError("Error finding similar Learning objects") from e
 
@@ -176,20 +113,13 @@ class WeaviateLearningRepository(LearningRepository):
                 near_vector=vectors,
                 target_vector=TargetVectors.minimum(list(vectors.keys())),
                 limit=count,
+                return_references=QueryReference(link_on="memories"),
             )
 
             if not result:
                 return []
 
             # Create Learning objects
-            return [
-                Learning(
-                    uid=item.uuid,
-                    title=str(item.properties["title"]),
-                    content=str(item.properties["content"]),
-                    reference=str(item.properties["reference"]),
-                )
-                for item in result.objects
-            ]
+            return [self.object_to_learning(item) for item in result.objects]
         except Exception as e:
             raise ValueError("Error searching for Learning objects") from e

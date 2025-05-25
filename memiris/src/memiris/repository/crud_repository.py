@@ -19,5 +19,12 @@ class BaseRepository[Entity, EntityId](ABC):
         pass
 
     @abstractmethod
+    def all(self, tenant: str) -> List[Entity]:
+        """
+        Retrieve all entities for a given tenant.
+        """
+        return []
+
+    @abstractmethod
     def delete(self, tenant: str, entity_id: EntityId) -> None:
         pass
