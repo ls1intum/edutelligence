@@ -24,6 +24,7 @@ class LearnerProfile(BaseModel):
     )]
 
     class Config:
+        @staticmethod
         def alias_generator(s: str) -> str:
             return ''.join([s.split('_')[0]] + [word.capitalize() for word in s.split('_')[1:]])
         allow_population_by_field_name = True
