@@ -24,7 +24,8 @@ class LearnerProfile(BaseModel):
     )]
 
     class Config:
-        alias_generator = lambda s: ''.join([s.split('_')[0]] + [word.capitalize() for word in s.split('_')[1:]])
+        def alias_generator(s: str) -> str:
+            return ''.join([s.split('_')[0]] + [word.capitalize() for word in s.split('_')[1:]])
         allow_population_by_field_name = True
 
     def directive_alternative_standard(self) -> str:
