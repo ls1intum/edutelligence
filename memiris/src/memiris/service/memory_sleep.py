@@ -277,17 +277,11 @@ class MemorySleeper:
                 )
 
                 # Vectorize the new memory
-                for field in [
-                    "title",
-                    "content",
-                ]:
-                    text = getattr(new_memory, field)
-                    if text:
-                        vector = self.vectorizer.vectorize(text)
-                        if vector is not None:
-                            new_memory.vectors = vector
+                new_memory.vectors = self.vectorizer.vectorize(new_memory.content)
 
                 deduplicated_results.append(new_memory)
+
+            self.memory_repository.save_all(tenant, deduplicated_results)
 
             # Add memories that weren't used in any deduplication
             for memory in valid_memories:

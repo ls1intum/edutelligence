@@ -399,3 +399,9 @@ valid-classmethod-first-arg=cls,
 
 # List of valid names for the first argument in a metaclass class method.
 valid-metaclass-classmethod-first-arg=mcs
+
+
+[MASTER]
+# Ignore protected-access (W0212) warnings in the tests directory
+ignore-paths=tests/.*
+per-ignore=tests/.*:W0212
