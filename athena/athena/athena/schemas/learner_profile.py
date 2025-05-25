@@ -23,6 +23,10 @@ class LearnerProfile(BaseModel):
         description="Preference for brief (1) vs detailed (3) feedback."
     )]
 
+    class Config:
+        alias_generator = lambda s: ''.join([s.split('_')[0]] + [word.capitalize() for word in s.split('_')[1:]])
+        allow_population_by_field_name = True
+
     def directive_alternative_standard(self) -> str:
         if self.feedback_alternative_standard == 1:
             return (
