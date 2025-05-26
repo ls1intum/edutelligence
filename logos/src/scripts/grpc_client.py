@@ -2,9 +2,12 @@
 import grpc
 from grpclocal import model_pb2, model_pb2_grpc
 
-def run_grpc_client(headers, path, payload):
+def run_grpc_client(headers: dict, path: str, payload: str):
     """
     Creates a gRPC-Client that can communicate with Logos Server via gRPC.
+    :param headers: Headers as sent in REST
+    :param path: Path to the Logos-Endpoint
+    :param payload: Payload as sent in REST, provided as string
     """
     channel = grpc.insecure_channel("0.0.0.0:50051")
     stub = model_pb2_grpc.LogosStub(channel)
