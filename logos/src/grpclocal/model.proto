@@ -1,17 +1,21 @@
 syntax = "proto3";
+package logos.grpc;
 
-package logos;
-
-service LogosProxy {
-  rpc Forward (ForwardRequest) returns (stream ResponseChunk);
+// One gRPC service for every incoming client
+service Logos {
+  // Streams back chunks of the LLM response
+  rpc Generate (GenerateRequest) returns (stream GenerateResponse);
 }
 
-message ForwardRequest {
-  string url = 1;
-  map<string, string> headers = 2;
-  string json = 3;
+// The client sends arbitrary JSON as a string payload,
+// plus any metadata (headers) in the metadata map.
+message GenerateRequest {
+    string path                     = 1;
+    map<string,string> metadata     = 2;
+    string payload                  = 3;
 }
 
-message ResponseChunk {
-  string chunk = 1;
+// We stream back raw bytes (UTF-8 chunks)
+message GenerateResponse {
+  bytes chunk = 1;
 }

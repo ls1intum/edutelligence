@@ -1,17 +1,34 @@
 import json
 import traceback
 
+import grpc
 from fastapi import FastAPI, Request
-import httpx
-from requests import JSONDecodeError
 
+from grpclocal import model_pb2_grpc
+from grpclocal.grpc_server import LogosServicer
 from logos.dbutils.dbmanager import DBManager
 from logos.dbutils.dbrequest import *
-from logos.responses import get_streaming_response, get_standard_response
+from logos.responses import get_streaming_response, get_standard_response, get_client_ip, request_setup
 
 from scripts.setup_proxy import setup
 
 app = FastAPI()
+_grpc_server = None
+
+@app.on_event("startup")
+async def start_grpc():
+    global _grpc_server
+    _grpc_server = grpc.aio.server()
+    model_pb2_grpc.add_LogosServicer_to_server(LogosServicer(), _grpc_server)
+    _grpc_server.add_insecure_port("[::]:50051")
+    await _grpc_server.start()
+
+
+@app.on_event("shutdown")
+async def stop_grpc():
+    global _grpc_server
+    if _grpc_server:
+        await _grpc_server.stop(0)
 
 
 @app.post("/logosdb/setup")
@@ -120,78 +137,11 @@ async def import_json(data: GetImportDataRequest):
     with DBManager() as db:
         return db.import_from_json(**data.dict())
 
+
 @app.get("/forward_host")
 def route_handler(request: Request):
     host = request.headers.get("x-forwarded-host") or request.headers.get("forwarded")
     return {"host": host}
-
-
-def request_setup(headers: dict, path: str, llm_info: dict):
-    try:
-        key = headers["logos_key"] if "logos_key" in headers else (
-            headers["Authorization"].replace("Bearer ", "") if "Authorization" in headers else "")
-        with DBManager() as db:
-            # For now, we only redirect to saved models in the db if
-            # it is present in the db and no further info is provided
-            model_id = None
-            model_name = None
-            api_key = llm_info["api_key"]
-            base_url: str = llm_info["base_url"]
-            provider = llm_info["provider_name"]
-            # Check if model is in db
-            # Check for api-key
-            model_api_id = db.get_model_from_api(key, llm_info["api_id"])
-            model_provider_id = db.get_model_from_provider(key, llm_info["provider_id"])
-            if model_api_id is None and model_provider_id is None or "proxy" in headers:
-                # Model not in the database, change to normal proxy
-                if provider == "azure":
-                    if "deployment_name" not in headers or headers["deployment_name"] == "":
-                        return {"error": "Missing deployment name in header"}, 401
-                    if "api_version" not in headers or headers["api_version"] == "":
-                        return {"error": "Missing api version in header"}, 401
-                    deployment_name = headers["deployment_name"]
-                    api_version = headers["api_version"]
-
-                    forward_url = (
-                        f"{base_url}/{deployment_name}/{path}"
-                        f"?api-version={api_version}"
-                    )
-                    forward_url = forward_url[:8] + forward_url[8:].replace("//", "/")
-
-                    proxy_headers = {
-                        "api-key": headers["api_key"],
-                        "Content-Type": "application/json"
-                    }
-                else:
-                    proxy_headers = {
-                        "Authorization": headers["Authorization"],
-                        "Content-Type": "application/json"
-                    }
-                    forward_url = f"{base_url}/{path}"
-            else:
-                model_id = model_api_id if model_api_id is not None else model_provider_id
-                model_data = db.get_model(model_id)
-                model_name = model_data["name"]
-                endpoint = model_data["endpoint"]
-                if not base_url.endswith("/") and not endpoint.startswith("/"):
-                    forward_url = f"{base_url}/{endpoint}"
-                elif base_url.endswith("/") and endpoint.startswith("/"):
-                    forward_url = f"{base_url[:-1]}/{endpoint[1:]}"
-                else:
-                    forward_url = f"{base_url}{endpoint}"
-
-                # forward_url = forward_url.replace("///", "/")
-                auth_name = llm_info["auth_name"]
-                auth_format = llm_info["auth_format"].format(api_key)
-                proxy_headers = {
-                    auth_name: auth_format,
-                    "Content-Type": "application/json"
-                }
-        return proxy_headers, forward_url, model_id, model_name
-    except PermissionError as e:
-        return {"error": str(e)}, 401
-    except ValueError as e:
-        return {"error": str(e)}, 401
 
 
 @app.api_route("/v1/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
@@ -250,10 +200,3 @@ def request2json(request_data: bytes) -> dict:
         return {}
     string = request_data.decode('utf8').replace("'", '"')
     return json.loads(string)
-
-
-def get_client_ip(request: Request) -> str:
-    forwarded_for = request.headers.get("x-forwarded-for")
-    if forwarded_for:
-        return forwarded_for.split(",")[0].strip()
-    return request.client.host

@@ -24,17 +24,21 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0bmodel.proto\x12\x08src.grpclocal\"u\n\x0fGenerateRequest\x12\x0c\n\x04json\x18\x01 \x01(\t\x12\x17\n\x0f\x64\x65ployment_name\x18\x02 \x01(\t\x12\x0f\n\x07\x61pi_key\x18\x03 \x01(\t\x12\x13\n\x0b\x61pi_version\x18\x04 \x01(\t\x12\x15\n\rauthorization\x18\x05 \x01(\t\"&\n\x10GenerateResponse\x12\x12\n\ntext_chunk\x18\x01 \x01(\t2S\n\x0cModelService\x12\x43\n\x08Generate\x12\x19.src.grpclocal.GenerateRequest\x1a\x1a.src.grpclocal.GenerateResponse0\x01\x62\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0bmodel.proto\x12\nlogos.grpc\"\x9e\x01\n\x0fGenerateRequest\x12\x0c\n\x04path\x18\x01 \x01(\t\x12;\n\x08metadata\x18\x02 \x03(\x0b\x32).logos.grpc.GenerateRequest.MetadataEntry\x12\x0f\n\x07payload\x18\x03 \x01(\t\x1a/\n\rMetadataEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\"!\n\x10GenerateResponse\x12\r\n\x05\x63hunk\x18\x01 \x01(\x0c\x32P\n\x05Logos\x12G\n\x08Generate\x12\x1b.logos.grpc.GenerateRequest\x1a\x1c.logos.grpc.GenerateResponse0\x01\x62\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
 _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'model_pb2', _globals)
 if not _descriptor._USE_C_DESCRIPTORS:
   DESCRIPTOR._loaded_options = None
-  _globals['_GENERATEREQUEST']._serialized_start=25
-  _globals['_GENERATEREQUEST']._serialized_end=142
-  _globals['_GENERATERESPONSE']._serialized_start=144
-  _globals['_GENERATERESPONSE']._serialized_end=182
-  _globals['_MODELSERVICE']._serialized_start=184
-  _globals['_MODELSERVICE']._serialized_end=267
+  _globals['_GENERATEREQUEST_METADATAENTRY']._loaded_options = None
+  _globals['_GENERATEREQUEST_METADATAENTRY']._serialized_options = b'8\001'
+  _globals['_GENERATEREQUEST']._serialized_start=28
+  _globals['_GENERATEREQUEST']._serialized_end=186
+  _globals['_GENERATEREQUEST_METADATAENTRY']._serialized_start=139
+  _globals['_GENERATEREQUEST_METADATAENTRY']._serialized_end=186
+  _globals['_GENERATERESPONSE']._serialized_start=188
+  _globals['_GENERATERESPONSE']._serialized_end=221
+  _globals['_LOGOS']._serialized_start=223
+  _globals['_LOGOS']._serialized_end=303
 # @@protoc_insertion_point(module_scope)

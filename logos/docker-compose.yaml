@@ -12,6 +12,7 @@ services:
       -   data_volume:/src/logos
     ports:
       - "8080"
+      - "50051:50051"
     networks:
       - internal
   logos-db:

@@ -23,7 +23,7 @@ psycopg2-binary = "^2.9.10"
 SQLAlchemy = "^2.0.40"
 grpcio = "^1.71.0"
 grpcio-tools = "^1.71.0"
-protobuf = "^6.31.0"
+protobuf = "^5.27.2"
 tiktoken = "^0.9.0"
 
 [tool.poetry]
