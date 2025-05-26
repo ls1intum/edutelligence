@@ -17,10 +17,8 @@ from iris.domain.ingestion.ingestion_pipeline_execution_dto import (
     IngestionPipelineExecutionDto,
 )
 from iris.llm import (
-    BasicRequestHandler,
-    CapabilityRequestHandler,
     CompletionArguments,
-    RequirementList,
+    ModelVersionRequestHandler,
 )
 from iris.llm.langchain import IrisLangchainChatModel
 from iris.pipeline import Pipeline
@@ -59,15 +57,9 @@ class TranscriptionIngestionPipeline(Pipeline):
         self.dto = dto
         self.callback = callback
         self.collection = init_lecture_transcription_schema(client)
-        self.llm_embedding = BasicRequestHandler("embedding-small")
+        self.llm_embedding = ModelVersionRequestHandler("text-embedding-3-small")
 
-        request_handler = CapabilityRequestHandler(
-            requirements=RequirementList(
-                gpt_version_equivalent=4.5,
-                context_length=16385,
-                privacy_compliance=True,
-            )
-        )
+        request_handler = ModelVersionRequestHandler(version="gpt-4.1-mini")
         completion_args = CompletionArguments(temperature=0, max_tokens=2000)
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler, completion_args=completion_args
