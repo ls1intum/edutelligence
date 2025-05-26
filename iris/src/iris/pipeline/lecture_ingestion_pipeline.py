@@ -3,7 +3,7 @@ import os
 import tempfile
 import threading
 from asyncio.log import logger
-from typing import Optional
+from typing import List, Optional
 
 import fitz
 from langchain_core.output_parsers import StrOutputParser
@@ -14,6 +14,7 @@ from weaviate import WeaviateClient
 from weaviate.classes.query import Filter
 
 from iris.common.pipeline_enum import PipelineEnum
+from iris.domain import FeatureDTO
 from iris.domain.ingestion.ingestion_pipeline_execution_dto import (
     IngestionPipelineExecutionDto,
 )
@@ -25,11 +26,10 @@ from ..domain.data.text_message_content_dto import TextMessageContentDTO
 from ..domain.lecture.lecture_unit_dto import LectureUnitDTO
 from ..ingestion.abstract_ingestion import AbstractIngestion
 from ..llm import (
-    BasicRequestHandler,
-    CapabilityRequestHandler,
     CompletionArguments,
-    RequirementList,
+    ModelVersionRequestHandler,
 )
+from ..llm.external.model import LanguageModel
 from ..llm.langchain import IrisLangchainChatModel
 from ..vector_database.lecture_unit_page_chunk_schema import (
     LectureUnitPageChunkSchema,
@@ -105,17 +105,10 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         super().__init__()
         self.collection = init_lecture_unit_page_chunk_schema(client)
         self.dto = dto
-        self.llm_vision = BasicRequestHandler("azure-gpt-4-omni")
-        self.llm_chat = BasicRequestHandler("azure-gpt-4-omni")
-        self.llm_embedding = BasicRequestHandler("embedding-small")
+        self.llm_chat = ModelVersionRequestHandler("gpt-4.1-mini")
+        self.llm_embedding = ModelVersionRequestHandler("text-embedding-3-small")
         self.callback = callback
-        request_handler = CapabilityRequestHandler(
-            requirements=RequirementList(
-                gpt_version_equivalent=3.5,
-                context_length=16385,
-                privacy_compliance=True,
-            )
-        )
+        request_handler = ModelVersionRequestHandler("gpt-4.1-mini")
         completion_args = CompletionArguments(temperature=0.2, max_tokens=2000)
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler, completion_args=completion_args
@@ -123,6 +116,25 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         self.pipeline = self.llm | StrOutputParser()
         self.tokens = []
         self.course_language = None
+
+    @classmethod
+    def get_variants(cls, available_llms: List[LanguageModel]) -> List[FeatureDTO]:
+        """
+        Returns available variants for the LectureUnitPageIngestionPipeline based on available LLMs.
+
+        Args:
+            _available_llms: List of available language models
+
+        Returns:
+            List of FeatureDTO objects representing available variants
+        """
+        return [
+            FeatureDTO(
+                id="default",
+                name="Default Variant",
+                description="Default lecture ingestion variant.",
+            )
+        ]
 
     def __call__(self) -> bool:
         try:
@@ -279,7 +291,7 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
             contents=[image_interpretation_prompt, image],
         )
         try:
-            response = self.llm_vision.chat(
+            response = self.llm_chat.chat(
                 [iris_message],
                 CompletionArguments(temperature=0, max_tokens=512),
                 tools=[],

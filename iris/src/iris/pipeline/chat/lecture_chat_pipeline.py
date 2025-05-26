@@ -14,6 +14,7 @@ from ...common.message_converters import (
 )
 from ...common.pipeline_enum import PipelineEnum
 from ...common.pyris_message import PyrisMessage
+from ...domain import FeatureDTO
 from ...domain.chat.lecture_chat.lecture_chat_pipeline_execution_dto import (
     LectureChatPipelineExecutionDTO,
 )
@@ -21,16 +22,20 @@ from ...domain.retrieval.lecture.lecture_retrieval_dto import (
     LectureRetrievalDTO,
 )
 from ...llm import (
-    BasicRequestHandler,
     CompletionArguments,
+    ModelVersionRequestHandler,
 )
+from ...llm.external.model import LanguageModel
 from ...llm.langchain import IrisLangchainChatModel
 from ...retrieval.lecture.lecture_retrieval import LectureRetrieval
 from ...vector_database.database import VectorDatabase
 from ...web.status.status_update import LectureChatCallback
 from ..pipeline import Pipeline
 from ..shared.citation_pipeline import CitationPipeline
-from ..shared.utils import format_custom_instructions
+from ..shared.utils import (
+    filter_variants_by_available_models,
+    format_custom_instructions,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -73,22 +78,29 @@ class LectureChatPipeline(Pipeline):
     pipeline: Runnable
     prompt: ChatPromptTemplate
     callback: LectureChatCallback
+    variant: str
 
     def __init__(
         self,
         callback: LectureChatCallback,
         dto: LectureChatPipelineExecutionDTO,
-        variant: str,
+        variant: str = "default",
     ):
         super().__init__(implementation_id="lecture_chat_pipeline")
-        # Set the langchain chat model
-        request_handler = BasicRequestHandler(model_id="azure-gpt-41")
 
         self.callback = callback
         self.dto = dto
         self.variant = variant
 
         completion_args = CompletionArguments(temperature=0, max_tokens=2000)
+
+        if variant == "advanced":
+            model = "gpt-4.1"
+        else:
+            model = "gpt-4.1-nano"
+
+        request_handler = ModelVersionRequestHandler(version=model)
+
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler, completion_args=completion_args
         )
@@ -98,6 +110,31 @@ class LectureChatPipeline(Pipeline):
         self.pipeline = self.llm | StrOutputParser()
         self.citation_pipeline = CitationPipeline()
         self.tokens = []
+
+    @classmethod
+    def get_variants(cls, available_llms: List[LanguageModel]) -> List[FeatureDTO]:
+        variant_specs = [
+            (
+                ["gpt-4.1-nano"],
+                FeatureDTO(
+                    id="default",
+                    name="Default",
+                    description="Uses a smaller model for faster and cost-efficient responses.",
+                ),
+            ),
+            (
+                ["gpt-4.1"],
+                FeatureDTO(
+                    id="advanced",
+                    name="Advanced",
+                    description="Uses a larger chat model, balancing speed and quality.",
+                ),
+            ),
+        ]
+
+        return filter_variants_by_available_models(
+            available_llms, variant_specs, pipeline_name="LectureChatPipeline"
+        )
 
     def __repr__(self):
         return f"{self.__class__.__name__}(llm={self.llm})"

@@ -21,15 +21,16 @@ from ...common.message_converters import (
 )
 from ...common.pipeline_enum import PipelineEnum
 from ...common.pyris_message import PyrisMessage
-from ...domain import CourseChatPipelineExecutionDTO
+from ...domain import CourseChatPipelineExecutionDTO, FeatureDTO
 from ...domain.data.metrics.competency_jol_dto import CompetencyJolDTO
 from ...domain.retrieval.lecture.lecture_retrieval_dto import (
     LectureRetrievalDTO,
 )
 from ...llm import (
-    BasicRequestHandler,
     CompletionArguments,
+    ModelVersionRequestHandler,
 )
+from ...llm.external.model import LanguageModel
 from ...llm.langchain import IrisLangchainChatModel
 from ...retrieval.faq_retrieval import FaqRetrieval
 from ...retrieval.faq_retrieval_utils import format_faqs, should_allow_faq_tool
@@ -56,6 +57,7 @@ from ..prompts.iris_course_chat_prompts_elicit import (
 )
 from ..shared.citation_pipeline import CitationPipeline, InformationType
 from ..shared.utils import (
+    filter_variants_by_available_models,
     format_custom_instructions,
     generate_structured_tools_from_functions,
 )
@@ -81,7 +83,7 @@ def get_mastery(progress, confidence):
 class CourseChatPipeline(Pipeline):
     """Course chat pipeline that answers course related questions from students."""
 
-    llm_big: IrisLangchainChatModel
+    llm: IrisLangchainChatModel
     llm_small: IrisLangchainChatModel
     pipeline: Runnable
     lecture_pipeline: LectureChatPipeline
@@ -107,12 +109,21 @@ class CourseChatPipeline(Pipeline):
 
         # Set the langchain chat model
         completion_args = CompletionArguments(temperature=0.5, max_tokens=2000)
+
+        if variant == "advanced":
+            model = "gpt-4.1"
+            model_small = "gpt-4.1-mini"
+        else:
+            model = "gpt-4.1-nano"
+            model_small = "gpt-4.1-nano"
+
         self.llm_big = IrisLangchainChatModel(
-            request_handler=BasicRequestHandler(model_id="azure-gpt-41"),
+            request_handler=ModelVersionRequestHandler(version=model),
             completion_args=completion_args,
         )
+
         self.llm_small = IrisLangchainChatModel(
-            request_handler=BasicRequestHandler(model_id="azure-gpt-41-mini"),
+            request_handler=ModelVersionRequestHandler(version=model_small),
             completion_args=completion_args,
         )
         self.callback = callback
@@ -124,14 +135,14 @@ class CourseChatPipeline(Pipeline):
         self.citation_pipeline = CitationPipeline()
 
         # Create the pipeline
-        self.pipeline = self.llm_big | JsonOutputParser()
+        self.pipeline = self.llm | JsonOutputParser()
         self.tokens = []
 
     def __repr__(self):
-        return f"{self.__class__.__name__}(llm_big={self.llm_big}, llm_small={self.llm_small})"
+        return f"{self.__class__.__name__}(llm={self.llm}, llm_small={self.llm_small})"
 
     def __str__(self):
-        return f"{self.__class__.__name__}(llm_big={self.llm_big}, llm_small={self.llm_small})"
+        return f"{self.__class__.__name__}(llm={self.llm}, llm_small={self.llm_small})"
 
     @traceable(name="Course Chat Pipeline")
     def __call__(self, dto: CourseChatPipelineExecutionDTO, **kwargs):
@@ -453,6 +464,10 @@ class CourseChatPipeline(Pipeline):
             if self.should_allow_lecture_tool(dto.course.id):
                 tool_list.append(lecture_content_retrieval)
 
+            print(
+                "Allowing lecture tool:", self.should_allow_lecture_tool(dto.course.id)
+            )
+
             if should_allow_faq_tool(self.db, dto.course.id):
                 tool_list.append(faq_content_retrieval)
 
@@ -460,7 +475,7 @@ class CourseChatPipeline(Pipeline):
             # No idea why we need this extra contrary to exercise chat agent in this case, but solves the issue.
             params.update({"tools": tools})
             agent = create_tool_calling_agent(
-                llm=self.llm_big, tools=tools, prompt=self.prompt
+                llm=self.llm, tools=tools, prompt=self.prompt
             )
             agent_executor = AgentExecutor(agent=agent, tools=tools, verbose=False)
 
@@ -469,7 +484,7 @@ class CourseChatPipeline(Pipeline):
             for step in agent_executor.iter(params):
                 print("STEP:", step)
                 self._append_tokens(
-                    self.llm_big.tokens, PipelineEnum.IRIS_CHAT_COURSE_MESSAGE
+                    self.llm.tokens, PipelineEnum.IRIS_CHAT_COURSE_MESSAGE
                 )
                 if step.get("output", None):
                     out = step["output"]
@@ -540,6 +555,31 @@ class CourseChatPipeline(Pipeline):
             )
             return len(result.objects) > 0
         return False
+
+    @classmethod
+    def get_variants(cls, available_llms: List[LanguageModel]) -> List[FeatureDTO]:
+        variant_specs = [
+            (
+                ["gpt-4.1-nano"],
+                FeatureDTO(
+                    id="default",
+                    name="Default",
+                    description="Uses a smaller model for faster and cost-efficient responses.",
+                ),
+            ),
+            (
+                ["gpt-4.1", "gpt-4.1-mini"],
+                FeatureDTO(
+                    id="advanced",
+                    name="Advanced",
+                    description="Uses a larger chat model, balancing speed and quality.",
+                ),
+            ),
+        ]
+
+        return filter_variants_by_available_models(
+            available_llms, variant_specs, pipeline_name="CourseChatPipeline"
+        )
 
 
 def datetime_to_string(dt: Optional[datetime]) -> str:
