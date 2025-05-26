@@ -3,11 +3,11 @@ import grpc
 from grpclocal import model_pb2, model_pb2_grpc
 
 def run_grpc_client(headers, path, payload):
-    # gRPC-Channel zur Logos-Instanz
-    channel = grpc.insecure_channel("0.0.0.0:50051")  # passe Port ggf. an
+    """
+    Creates a gRPC-Client that can communicate with Logos Server via gRPC.
+    """
+    channel = grpc.insecure_channel("0.0.0.0:50051")
     stub = model_pb2_grpc.LogosStub(channel)
-
-    # JSON-String mit Chat-Komplettierungsdaten (z. B. OpenAI-kompatibel)
 
     request = model_pb2.GenerateRequest(
         path=path,
@@ -15,9 +15,8 @@ def run_grpc_client(headers, path, payload):
         payload=payload
     )
 
-    print("==> Streaming Antwort:")
     try:
         for response in stub.Generate(request):
-            print(response.chunk.decode(), end="")
+            yield response.chunk.decode()
     except grpc.RpcError as e:
-        print(f"\nRPC error: {e.code()}: {e.details()}")
+        yield f"\nRPC error: {e.code()}: {e.details()}"

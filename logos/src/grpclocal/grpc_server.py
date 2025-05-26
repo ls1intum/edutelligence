@@ -9,8 +9,7 @@ from logos.responses import request_setup, get_client_ip_address_from_context
 
 class LogosServicer(model_pb2_grpc.LogosServicer):
     async def Generate(self, request, context):
-        # 1) Extract metadata & payload
-        # meta = dict(context.invocation_metadata())
+        # Metadata (aka Header in REST)
         meta = dict()
         for k, v in request.metadata.items():
             meta[k] = v
@@ -35,7 +34,7 @@ class LogosServicer(model_pb2_grpc.LogosServicer):
                 context.set_details("Key not found")
                 return
 
-        # 2) Compute forward_url + HTTP headers via your existing logic
+        # Standard request setup
         try:
             tmp = request_setup(meta, path, llm_info)
             if isinstance(tmp[0], dict) and "error" in tmp[0]:
@@ -56,36 +55,45 @@ class LogosServicer(model_pb2_grpc.LogosServicer):
         data["stream"] = True
         last_blob = None
         try:
-            async with httpx.AsyncClient(timeout=None) as client:
-                async with client.stream("POST", forward_url, headers=proxy_headers, json=data) as resp:
-                    async for raw_line in resp.aiter_lines():
-                        if not raw_line:
-                            continue
+            # Try streaming first, fall back to standard response on failure
+            for _ in range(2):
+                try:
+                    async with httpx.AsyncClient(timeout=None) as client:
+                        async with client.stream("POST", forward_url, headers=proxy_headers, json=data) as resp:
+                            async for raw_line in resp.aiter_lines():
+                                if not raw_line:
+                                    continue
 
-                        # Daten-Chunk parsen
-                        if raw_line.startswith("data: "):
-                            payload = raw_line.removeprefix("data: ").strip()
-                            if payload == "[DONE]":
-                                break
-                            try:
-                                blob = json.loads(payload)
-                                choices = blob.get("choices", [])
-                                if choices and "delta" in choices[0]:
-                                    content = choices[0]["delta"].get("content")
-                                    if content:
-                                        full_text += content
-                                last_blob = blob
-                            except Exception:
-                                pass
+                                # Parse Data-Chunk
+                                if raw_line.startswith("data: "):
+                                    payload = raw_line.removeprefix("data: ").strip()
+                                    if payload == "[DONE]":
+                                        break
+                                    try:
+                                        blob = json.loads(payload)
+                                        choices = blob.get("choices", [])
+                                        if choices and "delta" in choices[0]:
+                                            content = choices[0]["delta"].get("content")
+                                            if content:
+                                                full_text += content
+                                        last_blob = blob
+                                    except Exception:
+                                        pass
 
-                        # Weiterleiten an gRPC-Client
-                        yield model_pb2.GenerateResponse(chunk=(raw_line + "\n").encode())
+                                # Yield to gRPC-Client
+                                yield model_pb2.GenerateResponse(chunk=(raw_line + "\n").encode())
+                    break
+                except:
+                    traceback.print_exc()
+                    print("Falling back to Standard Request")
+                    data["stream"] = False
         except Exception as e:
             traceback.print_exc()
             context.set_code(grpc.StatusCode.UNAVAILABLE)
             context.set_details(f"Upstream error: {e}")
             return
 
+        # Usage-Logging
         if request_id is not None:
             try:
                 try:
