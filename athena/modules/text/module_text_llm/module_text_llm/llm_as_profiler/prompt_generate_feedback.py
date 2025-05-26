@@ -1,35 +1,51 @@
 from pydantic import BaseModel, Field
+from enum import Enum
 from typing import List, Optional
 
 system_message = """
-You are a grading assistant at a prestigious university tasked with assessing student submissions for exercises. Your goal is to be as helpful as possible while providing constructive feedback based on predefined grading criteria, without revealing the correct solution.
+You are a grading assistant at a university. Your task is to assess student submissions for text-based exercises and provide constructive, respectful, and helpful feedback without revealing the correct solution.
 
 You will receive:
 - A problem statement
-- A sample solution
+- A sample solution (for internal reference only)
 - Grading instructions
-- A structured summary of the student's performance, including demonstrated competencies and learning challenges
-- The maximum achievable score
+- A structured analysis of the student's response
+- The maximum score
+- The student's feedback preferences
 
-Your task:
-1. Carefully study the problem statement to understand what is expected from the student.
-2. If a sample solution is provided, use it to understand the intended reasoning or structure.
-3. Use the grading instructions to identify relevant assessment criteria.
-4. Review the student's submission in light of the student_assessment, which includes:
-- competencies: things the student did well
-- challenges: areas that need improvement, with line references and suggestions
-- current_level: current Bloom's Taxonomy level
-- target_level: desired Bloom's level of learning
+Instructions:
+1. Read the problem statement to understand what the student was asked to do.
+2. Use the sample solution only to understand the intended reasoning and structure.
+3. Review the grading instructions to identify how responses are evaluated.
+4. Read the structured analysis. Each item includes:
+   - A description of what the student did well or struggled with
+   - A response quality level (Off-Target, Missing Points, Partially Correct, Correct)
+   - A grading instruction ID (optional)
+   - Line references from the student submission (optional)
 
-Additional Guidelines
-- Total credit awarded must not exceed {max_points}.
-- Feedback should be constructive, respectful, and clear.
-- Do not copy-paste grading instructions, student's submission, or solutions.
-- Do not include any metadata or extra commentary outside the expected JSON schema.
+For each point of feedback:
+- Write a short title summarizing the issue
+- Write a clear explanation directly addressed to the student
+- Choose one feedback type:
+    - REVISIT_LECTURE: Review the material to understand the concept
+    - ELABORATION: Your answer is mostly right but needs more explanation
+    - HINT: You are partly right; here is a nudge to improve
+    - VERIFICATION: Your answer is correct; please reflect or review further
+- Include line_start and line_end if the feedback refers to a specific part of the answer
+- Include credits (points awarded or deducted)
+- Include grading_instruction_id if related to a rubric item
+
+You may also provide general feedback that does not refer to any specific line. In that case, set line_start and line_end to null, and credits to 0.
+
+Guidelines:
+- Do not exceed the maximum total score: {max_points}
+- Do not copy text from the student's answer, rubric, or solution
+- Do not repeat the student's sentences
+- Do not include metadata or extra commentary
 
 <Inputs>
 
-Student's Performance:
+Student Response Analysis:
 {student_assessment}
 
 Max Score:
@@ -68,14 +84,35 @@ Features cit available: **{initial_feedback}**, **{max_points}**, **{student_gra
 
 # Output Object
 
+class FeedbackType(str, Enum):
+    REVISIT_LECTURE = "Revisit Lecture"  # The student lacks conceptual understanding and should revisit the related material
+    ELABORATION = "Elaboration"          # The student’s idea is on the right track but needs further explanation, depth, or precision
+    HINT = "Hint"                        # The student made a partially correct attempt; give a nudge or suggestion without revealing the answer
+    VERIFICATION = "Verification"        # The student gave a correct or mostly correct answer; invite them to double-check or reflect to reinforce learning
+
+
 class FeedbackModel(BaseModel):
-    title: str = Field(description="Very short title, i.e. feedback category or similar", example="Logic Error")
-    description: str = Field(description="Student-friendly description, written to be read by the student directly.")
-    line_start: Optional[int] = Field(description="Referenced starting line number from the student's submission, or empty if unreferenced")
-    line_end: Optional[int] = Field(description="Referenced ending line number from the student's submission, or empty if unreferenced")
-    credits: float = Field(0.0, description="Number of points received/deducted")
+    title: str = Field(
+        description="A very short label summarizing the issue or focus of the feedback (e.g., 'Missing Concept', 'Strong Start')."
+    )
+    description: str = Field(
+        description="Student-facing feedback message that explains the issue or suggestion in a constructive and clear way."
+    )
+    type: FeedbackType = Field(
+        description="The purpose or instructional intent of the feedback, used to adapt tone and guidance (i.e., verification, elaboration, hint, revisit lecture)."
+    )
+    line_start: Optional[int] = Field(
+        description="Referenced starting line number from the student's submission, or empty if unreferenced"
+    )
+    line_end: Optional[int] = Field(
+        description="Referenced ending line number from the student's submission, or empty if unreferenced"
+    )
+    credits: float = Field(
+        default=0.0,
+        description="The number of points awarded or deducted for this feedback item."
+    )
     grading_instruction_id: Optional[int] = Field(
-        description="ID of the grading instruction that was used to generate this feedback, or empty if no grading instruction was used"
+        description="The ID of the grading instruction or rubric item related to this feedback, if applicable."
     )
 
 

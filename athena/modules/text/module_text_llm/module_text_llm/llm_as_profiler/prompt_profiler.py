@@ -74,7 +74,7 @@ _Note: **{problem_statement}**, **{example_solution}**, or **{grading_instructio
 class ResponseQualityLevel(str, Enum):
     OFF_TARGET = "Off-Target"  # The response is irrelevant or unrelated to the task
     INSUFFICIENT_KNOWLEDGE = "Insufficient Knowledge"  # Shows lack of understanding of key concepts
-    INCOMPLETE_ANSWER = "Missing Points"  # Leaves out required parts of the answer
+    INCOMPLETE_ANSWER = "Incomplete Answer"  # Leaves out required parts of the answer
     PARTIALLY_CORRECT = "Partially Correct"  # Contains some correct information but is incomplete or poorly explained
     FULLY_CORRECT = "Correct"  # Accurate, complete, and well-structured answer
 
