@@ -4,14 +4,16 @@ import tiktoken
 
 from grpclocal import model_pb2, model_pb2_grpc
 from logos.dbutils.dbmanager import DBManager
-from logos.responses import get_client_ip, request_setup
+from logos.responses import request_setup, get_client_ip_address_from_context
 
 
 class LogosServicer(model_pb2_grpc.LogosServicer):
     async def Generate(self, request, context):
         # 1) Extract metadata & payload
         # meta = dict(context.invocation_metadata())
-        meta = request.metadata
+        meta = dict()
+        for k, v in request.metadata.items():
+            meta[k] = v
         if "logos_key" not in meta:
             context.set_code(grpc.StatusCode.UNAUTHENTICATED)
             context.set_details("Missing logos_key")
@@ -47,10 +49,12 @@ class LogosServicer(model_pb2_grpc.LogosServicer):
             context.set_details(f"Routing error: {e}")
             return
         if db.log(llm_info["process_id"]):
-            request_id = db.log_request(llm_info["process_id"], get_client_ip(request), data, llm_info["provider_id"], model_id, meta)
+            request_id = db.log_request(llm_info["process_id"], get_client_ip_address_from_context(context), data, llm_info["provider_id"], model_id, meta)
         else:
             request_id = None
         full_text = ""
+        data["stream"] = True
+        last_blob = None
         try:
             async with httpx.AsyncClient(timeout=None) as client:
                 async with client.stream("POST", forward_url, headers=proxy_headers, json=data) as resp:

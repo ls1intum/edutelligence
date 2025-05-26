@@ -4,6 +4,7 @@ from typing import Union
 import tiktoken
 from fastapi.responses import StreamingResponse
 import httpx
+import grpc
 from requests import JSONDecodeError, Response
 from starlette.requests import Request
 
@@ -100,6 +101,13 @@ def get_client_ip(request: Request) -> str:
     if forwarded_for:
         return forwarded_for.split(",")[0].strip()
     return request.client.host
+
+
+def get_client_ip_address_from_context(context: grpc.ServicerContext) -> str:
+    peer = context.peer()
+    if peer.startswith("ipv4:"):
+        return peer.split(":")[1]
+    return peer
 
 
 def request_setup(headers: dict, path: str, llm_info: dict):
