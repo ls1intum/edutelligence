@@ -11,29 +11,29 @@ You will receive:
 - Grading instructions
 - A structured analysis of the student's response
 - The maximum score
-- The student's feedback preferences
 
 Instructions:
 1. Read the problem statement to understand what the student was asked to do.
 2. Use the sample solution only to understand the intended reasoning and structure.
 3. Review the grading instructions to identify how responses are evaluated.
-4. Read the structured analysis. Each item includes:
+4. Read the structured student response analysis. Each item includes:
    - A description of what the student did well or struggled with
-   - A response quality level (Off-Target, Missing Points, Partially Correct, Correct)
+   - A diagnosis (Off-Target, Missing Points, Partially Correct, Correct)
+   - A call-to-action for student (Review Concept, Improve Explanation, Extend Thinking)
    - A grading instruction ID (optional)
    - Line references from the student submission (optional)
-
-For each point of feedback:
-- Write a short title summarizing the issue
-- Write a clear explanation directly addressed to the student
-- Choose one feedback type:
-    - REVISIT_LECTURE: Review the material to understand the concept
-    - ELABORATION: Your answer is mostly right but needs more explanation
-    - HINT: You are partly right; here is a nudge to improve
-    - VERIFICATION: Your answer is correct; please reflect or review further
-- Include line_start and line_end if the feedback refers to a specific part of the answer
-- Include credits (points awarded or deducted)
-- Include grading_instruction_id if related to a rubric item
+5. Follow the below steps for generating the each point of feedback:
+    - Ensure feedback adds value beyond what the student already wrote - avoid simply agreeing or repeating. 
+    - Write a short title summarizing the issue
+    - Write a clear explanation directly addressed to the student
+    - Choose one feedback type:
+        - Conceptual Clarification: Used when the student's misunderstanding is rooted in core concepts
+        - Request Elaboration: The student's response is on track but needs more detail or clarity
+        - Provide Hint: A subtle nudge to guide the student forward without giving away the answer
+        - Confirm Understanding: Reinforce correct reasoning and optionally invite reflection or extension
+    - Include line_start and line_end if the feedback refers to a specific part of the answer
+    - Include credits (points awarded or deducted)
+    - Include grading_instruction_id if related to a rubric item
 
 You may also provide general feedback that does not refer to any specific line. In that case, set line_start and line_end to null, and credits to 0.
 
@@ -85,10 +85,10 @@ Features cit available: **{initial_feedback}**, **{max_points}**, **{student_gra
 # Output Object
 
 class FeedbackType(str, Enum):
-    REVISIT_LECTURE = "Revisit Lecture"  # The student lacks conceptual understanding and should revisit the related material
-    ELABORATION = "Elaboration"          # The student’s idea is on the right track but needs further explanation, depth, or precision
-    HINT = "Hint"                        # The student made a partially correct attempt; give a nudge or suggestion without revealing the answer
-    VERIFICATION = "Verification"        # The student gave a correct or mostly correct answer; invite them to double-check or reflect to reinforce learning
+    CONCEPTUAL_CLARIFICATION = "Conceptual Clarification"  # Used when the student's misunderstanding is rooted in core concepts
+    REQUEST_ELABORATION = "Request Elaboration"            # The student's response is on track but needs more detail or clarity
+    PROVIDE_HINT = "Provide Hint"                          # A subtle nudge to guide the student forward without giving away the answer
+    CONFIRM_UNDERSTANDING = "Confirm Understanding"        # Reinforce correct reasoning and optionally invite reflection or extension
 
 
 class FeedbackModel(BaseModel):

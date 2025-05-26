@@ -10,8 +10,8 @@ Your task is to:
 1. Identify the student's demonstrated competencies (what they understand or do well).
 2. Identify the student's challenges (misconceptions, errors, or difficulties).
 3. Identify missing components in the student's response (important points that were not addressed).
-4. Estimate the student's level of understanding using the response quality levels below.
-5. Suggest the next level the student should aim for, based on the current response.
+4. Estimate the student's level of understanding using the diagnosis levels.
+5. Generate next step suggestions for students according to the diagnosis levels.
 
 You will receive:
 - The student's submission (with line numbers)
@@ -19,18 +19,27 @@ You will receive:
 - Grading instructions or rubric (if available)
 
 Instructions:
+1. Start by carefully reading the problem statement, identify what exactly is asked to do.
+2. If a sample solution is provided, analyze it to understand the logic and approach used to solve the problem.
+3. Analyze the grading instructions, see how they would fit into the sample solution.
+4. Read the student's submission and compare it to the sample solution and grading instructions.
+5. Diagnose student's situation based on the sample solution, grading instructions, and student's submission. Use the 
+predefined diagnosis levels (Off-Target, Insufficient Knowledge, Incomplete Answer, Partially Correct, Correct)
+    - Off-Target: The response is irrelevant or not aligned with the question or course content.
+    - Insufficient Knowledge: The response attempts to address the question but lacks key concepts or terminology.
+    - Incomplete Answer: The student covers only part of the required answer or omits key elements.
+    - Partially Correct: The response includes relevant and partially accurate content, but lacks completeness or clarity.
+    - Correct: The response is accurate, complete, and well-structured.
+6. Suggest the action student should take regarding the diagnosis (Review Concept, Improve Explanation, Extend Thinking)
+    - Review Concept: When student faces conceptual misunderstandings; suggest them to revisit foundational material
+    - Improve Explanation: When student is partially correct; suggest to elaborate or clarify to strengthen understanding
+    - Extend Thinking: When student is fully or mostly correct; deepen insight or explore related ideas
+
+Guidelines:
 - Be specific in describing competencies and challenges.
 - Use line numbers when referencing issues in the submission.
 - Include a response quality level only if it is reasonably clear.
-- Suggest a next-level learning target only if it is helpful.
 - If students miss some parts of the question, point that out without referencing their submission (no line_end, line_start)
-
-Response Quality Levels:
-- Off-Target: The response is irrelevant or not aligned with the question or course content.
-- Insufficient Knowledge: The response attempts to address the question but lacks key concepts or terminology.
-- Incomplete Answer: The student covers only part of the required answer or omits key elements.
-- Partially Correct: The response includes relevant and partially accurate content, but lacks completeness or clarity.
-- Correct: The response is accurate, complete, and well-structured.
 
 Output Format:
 Return only valid JSON. Do not include any explanation or comments outside the JSON.
@@ -71,7 +80,7 @@ _Note: **{problem_statement}**, **{example_solution}**, or **{grading_instructio
 
 # Output Object
 
-class ResponseQualityLevel(str, Enum):
+class ResponseDiagnosis(str, Enum):
     OFF_TARGET = "Off-Target"  # The response is irrelevant or unrelated to the task
     INSUFFICIENT_KNOWLEDGE = "Insufficient Knowledge"  # Shows lack of understanding of key concepts
     INCOMPLETE_ANSWER = "Incomplete Answer"  # Leaves out required parts of the answer
@@ -79,12 +88,21 @@ class ResponseQualityLevel(str, Enum):
     FULLY_CORRECT = "Correct"  # Accurate, complete, and well-structured answer
 
 
+class SuggestedAction(str, Enum):
+    REVIEW_CONCEPT = "Review Concept"     # For conceptual misunderstandings; revisit foundational material
+    IMPROVE_EXPLANATION = "Improve Explanation"  # Partially correct; elaborate or clarify to strengthen understanding
+    EXTEND_THINKING = "Extend Thinking"   # Fully or mostly correct; deepen insight or explore related ideas
+
+
 class ResponseAnalysisItem(BaseModel):
     description: str = Field(
         description="Detailed explanation of a specific issue or observation in the student's response, such as a misconception, omission, or vague explanation."
     )
-    response_quality_level: ResponseQualityLevel = Field(
-        description="Estimated level of the student's understanding based on the current response, using the custom response quality levels."
+    diagnosis: ResponseDiagnosis = Field(
+        description="Estimated diagnosis of the student's understanding based on the current response, using the custom levels."
+    )
+    suggested_action: SuggestedAction = Field(
+        description="Suggested action for the student as a next step."
     )
     grading_instruction_id: Optional[int] = Field(
         default=None,
