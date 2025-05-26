@@ -11,9 +11,8 @@ from iris.domain.retrieval.lecture.lecture_retrieval_dto import (
     LectureRetrievalDTO,
 )
 from iris.llm import (
-    CapabilityRequestHandler,
     CompletionArguments,
-    RequirementList,
+    ModelVersionRequestHandler,
 )
 from iris.llm.langchain import IrisLangchainChatModel
 from iris.pipeline import Pipeline
@@ -35,12 +34,7 @@ class CitationPipeline(Pipeline):
 
     def __init__(self):
         super().__init__(implementation_id="citation_pipeline")
-        request_handler = CapabilityRequestHandler(
-            requirements=RequirementList(
-                gpt_version_equivalent=4.25,
-                context_length=16385,
-            )
-        )
+        request_handler = ModelVersionRequestHandler(version="gpt-4.1-mini")
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler,
             completion_args=CompletionArguments(temperature=0, max_tokens=4000),

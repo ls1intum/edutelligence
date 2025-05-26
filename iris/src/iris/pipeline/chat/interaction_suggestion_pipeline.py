@@ -23,9 +23,8 @@ from ...common.message_converters import (
 )
 from ...common.pyris_message import PyrisMessage
 from ...llm import (
-    CapabilityRequestHandler,
     CompletionArguments,
-    RequirementList,
+    ModelVersionRequestHandler,
 )
 from ...llm.langchain import IrisLangchainChatModel
 from ..pipeline import Pipeline
@@ -49,7 +48,9 @@ class Questions(BaseModel):
 
 
 class InteractionSuggestionPipeline(Pipeline):
-    """Course chat pipeline that answers course related questions from students."""
+    """
+    Interaction suggestion pipeline that suggests next chat interactions, either for exercises or courses.
+    """
 
     llm: IrisLangchainChatModel
     pipeline: Runnable
@@ -63,12 +64,9 @@ class InteractionSuggestionPipeline(Pipeline):
         self.variant = variant
 
         # Set the langchain chat model
-        request_handler = CapabilityRequestHandler(
-            requirements=RequirementList(
-                gpt_version_equivalent=4.25,
-                json_mode=True,
-            )
-        )
+        model = "gpt-4.1-nano"  # Default model for all variants
+
+        request_handler = ModelVersionRequestHandler(version=model)
         completion_args = CompletionArguments(
             temperature=0.6, max_tokens=2000, response_format="JSON"
         )
