@@ -1,5 +1,6 @@
 import traceback
 from asyncio.log import logger
+from multiprocessing import Process
 from threading import Semaphore, Thread
 
 from fastapi import APIRouter, Depends, status
@@ -19,6 +20,7 @@ from ...domain.ingestion.deletion_pipeline_execution_dto import (
 from ...domain.ingestion.transcription_ingestion.transcription_ingestion_pipeline_execution_dto import (
     TranscriptionIngestionPipelineExecutionDto,
 )
+from ...ingestion.ingestion_job_handler import IngestionJobHandler
 from ...pipeline.delete_lecture_units_pipeline import LectureUnitDeletionPipeline
 from ...pipeline.faq_ingestion_pipeline import FaqIngestionPipeline
 from ...pipeline.lecture_ingestion_pipeline import (
@@ -40,6 +42,8 @@ from ..status.transcription_ingestion_callback import (
 router = APIRouter(prefix="/api/v1/webhooks", tags=["webhooks"])
 
 semaphore = Semaphore(5)
+
+ingestion_job_handler = IngestionJobHandler()
 
 
 def run_lecture_update_pipeline_worker(dto: IngestionPipelineExecutionDto):
@@ -166,8 +170,13 @@ def lecture_ingestion_webhook(dto: IngestionPipelineExecutionDto):
     """
     validate_pipeline_variant(dto.settings, LectureUnitPageIngestionPipeline)
 
-    thread = Thread(target=run_lecture_update_pipeline_worker, args=(dto,))
-    thread.start()
+    process = Process(target=run_lecture_update_pipeline_worker, args=(dto,))
+    ingestion_job_handler.add_job(
+        process=process,
+        course_id=dto.lecture_unit.course_id,
+        lecture_id=dto.lecture_unit.lecture_id,
+        lecture_unit_id=dto.lecture_unit.lecture_unit_id,
+    )
 
 
 @router.post(
