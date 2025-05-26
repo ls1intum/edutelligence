@@ -3,20 +3,22 @@ from datetime import datetime
 from typing import List, Optional, Tuple
 
 from iris.common.pyris_message import IrisMessageRole, PyrisMessage
+from iris.domain import FeatureDTO
 from iris.domain.text_exercise_chat_pipeline_execution_dto import (
     TextExerciseChatPipelineExecutionDTO,
 )
 from iris.llm import (
-    CapabilityRequestHandler,
     CompletionArguments,
-    RequirementList,
+    ModelVersionRequestHandler,
 )
+from iris.llm.external.model import LanguageModel
 from iris.pipeline import Pipeline
 from iris.pipeline.prompts.text_exercise_chat_prompts import (
     fmt_extract_sentiments_prompt,
     fmt_sentiment_analysis_prompt,
     fmt_system_prompt,
 )
+from iris.pipeline.shared.utils import filter_variants_by_available_models
 from iris.web.status.status_update import TextExerciseChatCallback
 
 logger = logging.getLogger(__name__)
@@ -28,13 +30,48 @@ class TextExerciseChatPipeline(Pipeline):
     """
 
     callback: TextExerciseChatCallback
-    request_handler: CapabilityRequestHandler
+    request_handler: ModelVersionRequestHandler
+    variant: str
 
-    def __init__(self, callback: Optional[TextExerciseChatCallback] = None):
+    def __init__(
+        self,
+        callback: Optional[TextExerciseChatCallback] = None,
+        variant: str = "default",
+    ):
         super().__init__(implementation_id="text_exercise_chat_pipeline_reference_impl")
         self.callback = callback
-        self.request_handler = CapabilityRequestHandler(
-            requirements=RequirementList(context_length=8000)
+        self.variant = variant
+
+        if variant == "advanced":
+            model = "gpt-4.1"
+        else:
+            model = "gpt-4.1-nano"
+
+        self.request_handler = ModelVersionRequestHandler(version=model)
+
+    @classmethod
+    def get_variants(cls, available_llms: List[LanguageModel]) -> List[FeatureDTO]:
+        variant_specs = [
+            (
+                ["gpt-4.1-nano"],
+                FeatureDTO(
+                    id="default",
+                    name="Default",
+                    description="Uses a smaller model for faster and cost-efficient responses.",
+                ),
+            ),
+            (
+                ["gpt-4.1"],
+                FeatureDTO(
+                    id="advanced",
+                    name="Advanced",
+                    description="Uses a larger chat model, balancing speed and quality.",
+                ),
+            ),
+        ]
+
+        return filter_variants_by_available_models(
+            available_llms, variant_specs, pipeline_name="TextExerciseChatPipeline"
         )
 
     def __call__(

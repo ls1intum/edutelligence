@@ -20,7 +20,6 @@ class OpenAIEmbeddingModel(EmbeddingModel):
     It implements retry logic to handle API errors and supports semantic text splitting.
     """
 
-    model: str
     api_key: str
     _client: OpenAIEmbeddings
 

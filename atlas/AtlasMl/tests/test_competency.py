@@ -12,8 +12,14 @@ client = TestClient(app)
 @pytest.fixture
 def mock_weaviate_client():
     mock_client = MagicMock()
+    mock_filter = MagicMock()
+    
+    # Create a mock for the Filter class
+    mock_filter.by_property.return_value.equal.return_value = mock_filter
+    
     with patch('atlasml.clients.weaviate.get_weaviate_client') as mock_getter, \
-         patch('atlasml.clients.weaviate.WeaviateClient') as mock_class:
+         patch('atlasml.clients.weaviate.WeaviateClient') as mock_class, \
+         patch('atlasml.clients.weaviate.Filter', return_value=mock_filter):
         mock_getter.return_value = mock_client
         mock_class.return_value = mock_client
         yield mock_client
