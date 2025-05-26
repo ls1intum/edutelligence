@@ -1,4 +1,4 @@
-from typing import Any, Callable, Dict, Optional, Sequence, Type, Union
+from typing import Any, Callable, Dict, Literal, Optional, Sequence, Type, Union
 
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, ConfigDict
@@ -59,6 +59,24 @@ class ModelVersionRequestHandler(RequestHandler):
     def embed(self, text: str) -> list[float]:
         llm = self._select_model(EmbeddingModel)
         return llm.embed(text)
+
+    def split_text_semantically(
+        self,
+        text: str,
+        breakpoint_threshold_type: Literal[
+            "percentile", "standard_deviation", "interquartile", "gradient"
+        ] = "gradient",
+        breakpoint_threshold_amount: float = 95.0,
+        min_chunk_size: int = 512,
+    ):
+        llm = self._select_model(EmbeddingModel)
+
+        return llm.split_text_semantically(
+            text,
+            breakpoint_threshold_type,
+            breakpoint_threshold_amount,
+            min_chunk_size,
+        )
 
     def _select_model(self, type_filter: type) -> LanguageModel:
         """Select the first model that matches the requested version"""

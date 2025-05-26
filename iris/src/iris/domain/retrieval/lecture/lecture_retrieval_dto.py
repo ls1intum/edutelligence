@@ -19,6 +19,7 @@ class LectureUnitRetrievalDTO:
     lecture_unit_id: Optional[int]
     lecture_unit_name: Optional[str]
     lecture_unit_link: Optional[str]
+    video_link: Optional[str]
     base_url: str
     lecture_unit_summary: str
 
@@ -39,6 +40,7 @@ class LectureUnitSegmentRetrievalDTO:
     lecture_unit_id: int
     lecture_unit_name: str
     lecture_unit_link: str
+    video_link: str
     page_number: int
     segment_summary: str
     base_url: str
@@ -59,7 +61,7 @@ class LectureTranscriptionRetrievalDTO:
     lecture_name: str
     lecture_unit_id: int
     lecture_unit_name: str
-    lecture_unit_link: str
+    video_link: str
     language: str
     segment_start_time: float
     segment_end_time: float
