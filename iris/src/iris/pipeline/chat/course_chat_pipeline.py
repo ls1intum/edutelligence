@@ -22,6 +22,9 @@ from ...common.message_converters import (
 from ...common.pipeline_enum import PipelineEnum
 from ...common.pyris_message import PyrisMessage
 from ...domain import CourseChatPipelineExecutionDTO, FeatureDTO
+from ...domain.chat.interaction_suggestion_dto import (
+    InteractionSuggestionPipelineExecutionDTO,
+)
 from ...domain.data.metrics.competency_jol_dto import CompetencyJolDTO
 from ...domain.retrieval.lecture.lecture_retrieval_dto import (
     LectureRetrievalDTO,
@@ -58,6 +61,7 @@ from ..prompts.iris_course_chat_prompts_elicit import (
 from ..shared.citation_pipeline import CitationPipeline, InformationType
 from ..shared.utils import (
     filter_variants_by_available_models,
+    format_custom_instructions,
     generate_structured_tools_from_functions,
 )
 from .interaction_suggestion_pipeline import (
@@ -107,24 +111,18 @@ class CourseChatPipeline(Pipeline):
         self.event = event
 
         # Set the langchain chat model
-        completion_args = CompletionArguments(temperature=0.1, max_tokens=2000)
+        completion_args = CompletionArguments(temperature=0.5, max_tokens=2000)
 
         if variant == "advanced":
             model = "gpt-4.1"
-            model_small = "gpt-4.1-mini"
         else:
             model = "gpt-4.1-nano"
-            model_small = "gpt-4.1-nano"
 
         self.llm = IrisLangchainChatModel(
             request_handler=ModelVersionRequestHandler(version=model),
             completion_args=completion_args,
         )
 
-        self.llm_small = IrisLangchainChatModel(
-            request_handler=ModelVersionRequestHandler(version=model_small),
-            completion_args=completion_args,
-        )
         self.callback = callback
 
         self.db = VectorDatabase()
@@ -138,10 +136,10 @@ class CourseChatPipeline(Pipeline):
         self.tokens = []
 
     def __repr__(self):
-        return f"{self.__class__.__name__}(llm={self.llm}, llm_small={self.llm_small})"
+        return f"{self.__class__.__name__}(llm={self.llm})"
 
     def __str__(self):
-        return f"{self.__class__.__name__}(llm={self.llm}, llm_small={self.llm_small})"
+        return f"{self.__class__.__name__}(llm={self.llm})"
 
     @traceable(name="Course Chat Pipeline")
     def __call__(self, dto: CourseChatPipelineExecutionDTO, **kwargs):
@@ -416,6 +414,8 @@ class CourseChatPipeline(Pipeline):
                     ),
                 }
 
+            custom_instructions = format_custom_instructions(dto.custom_instructions)
+
             if query is not None:
                 # Add the conversation to the prompt
                 chat_history_messages = [
@@ -430,6 +430,8 @@ class CourseChatPipeline(Pipeline):
                             + chat_history_exists_prompt
                             + "\n"
                             + agent_prompt
+                            + "\n"
+                            + custom_instructions
                         ),
                         *chat_history_messages,
                         ("placeholder", "{agent_scratchpad}"),
@@ -439,7 +441,12 @@ class CourseChatPipeline(Pipeline):
                 self.prompt = ChatPromptTemplate.from_messages(
                     [
                         SystemMessage(
-                            initial_prompt_with_date + "\n" + agent_prompt + "\n"
+                            initial_prompt_with_date
+                            + "\n"
+                            + agent_prompt
+                            + "\n"
+                            + custom_instructions
+                            + "\n"
                         ),
                         ("placeholder", "{agent_scratchpad}"),
                     ]
@@ -496,26 +503,26 @@ class CourseChatPipeline(Pipeline):
                 )
             self.callback.done("Response created", final_result=out, tokens=self.tokens)
 
-            # try:
-            #     self.callback.skip("Skipping suggestion generation.")
-            # if out:
-            #     suggestion_dto = InteractionSuggestionPipelineExecutionDTO()
-            #     suggestion_dto.chat_history = dto.chat_history
-            #     suggestion_dto.last_message = out
-            #     suggestions = self.suggestion_pipeline(suggestion_dto)
-            #     self.callback.done(final_result=None, suggestions=suggestions)
-            # else:
-            #     # This should never happen but whatever
-            #     self.callback.skip(
-            #         "Skipping suggestion generation as no output was generated."
-            #     )
-            # except Exception as e:
-            #     logger.error(
-            #         "An error occurred while running the course chat interaction suggestion pipeline",
-            #         exc_info=e,
-            #     )
-            #     traceback.print_exc()
-            #     self.callback.error("Generating interaction suggestions failed.")
+            try:
+                self.callback.skip("Skipping suggestion generation.")
+                if out:
+                    suggestion_dto = InteractionSuggestionPipelineExecutionDTO()
+                    suggestion_dto.chat_history = dto.chat_history
+                    suggestion_dto.last_message = out
+                    suggestions = self.suggestion_pipeline(suggestion_dto)
+                    self.callback.done(final_result=None, suggestions=suggestions)
+                else:
+                    # This should never happen but whatever
+                    self.callback.skip(
+                        "Skipping suggestion generation as no output was generated."
+                    )
+            except Exception as e:
+                logger.error(
+                    "An error occurred while running the course chat interaction suggestion pipeline",
+                    exc_info=e,
+                )
+                traceback.print_exc()
+                self.callback.error("Generating interaction suggestions failed.")
         except Exception as e:
             logger.error(
                 "An error occurred while running the course chat pipeline",

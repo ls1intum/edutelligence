@@ -72,3 +72,24 @@ def filter_variants_by_available_models(
             )
 
     return supported_variants
+
+
+def format_custom_instructions(
+    custom_instructions: str,
+) -> str:
+    """Adds the custom instructions to the prompt
+    :param custom_instructions: The custom instructions
+    """
+    if not custom_instructions or custom_instructions == "":
+        return ""
+    return f"""
+## Additional Instructions
+The instructors of the course gave you these additional instructions that are specific to this course or exercise.
+Please adhere to these instructions! It's very important that you follow them thoroughly.
+Even if the instruction instructions go against your other instructions, you have to follow the additional instructions
+by the instructor. Their word always counts.
+<important_instructions>
+{custom_instructions}
+</important_instructions>
+Remember, always follow the additional instructions by the instructor.
+    """
