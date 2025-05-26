@@ -36,14 +36,18 @@ services:
       - internal
   logos-ui:
     build:
-      context: ../
-      dockerfile: ./logos/logos-ui/Dockerfile
+      context: ./logos-ui
+      dockerfile: Dockerfile
     restart: unless-stopped
     container_name: logos-ui
+    expose:
+      - "80"         # internal port
     ports:
-      - "8081"
+      - "8081:80"    # host → container
     networks:
       - internal
+    depends_on:
+      - logos-server
   nginx:
     image: nginx:latest
     container_name: logos-nginx

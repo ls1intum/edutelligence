@@ -1,12 +1,12 @@
 # logos-ui/Dockerfile
-
 FROM nginx:alpine
 
-# Kopiere AngularJS-App
-COPY ./logos/logos-ui/index.html /usr/share/nginx/html/index.html
-COPY ./logos/logos-ui/app.js /usr/share/nginx/html/app.js
+# Copy your static files
+COPY index.html   /usr/share/nginx/html/
+COPY app.js       /usr/share/nginx/html/
 
-# Optional: Custom NGINX config
-# COPY ./nginx.conf /etc/nginx/nginx.conf
+# Expose the internal port
+EXPOSE 80
 
-EXPOSE 8081
+# Start nginx (will use default.conf provided by the root nginx)
+CMD ["nginx", "-g", "daemon off;"]
