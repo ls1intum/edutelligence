@@ -1,12 +1,32 @@
-# logos-ui/Dockerfile
+# ---- Build Stage ----
+FROM node:20-alpine AS builder
+
+# Arbeitsverzeichnis im Container
+WORKDIR /app
+
+# Package-Dateien kopieren
+COPY logos-ui/package*.json ./
+
+# Abhängigkeiten installieren
+RUN npm install -g @angular/cli@19 \
+ && npm install
+
+# Restliche Dateien kopieren und App bauen
+COPY logos-ui/ ./
+
+RUN ng build --configuration=production --base-href /
+
+# ---- Nginx Stage ----
 FROM nginx:alpine
 
-# Copy your static files
-COPY index.html   /usr/share/nginx/html/
-COPY app.js       /usr/share/nginx/html/
+# Angular Build-Dateien in den Standard-Nginx-Webroot kopieren
+COPY --from=builder /app/dist/ /usr/share/nginx/html/
 
-# Expose the internal port
+
+FROM nginx:alpine
+
+COPY ./src/   /usr/share/nginx/html/
+
 EXPOSE 80
 
-# Start nginx (will use default.conf provided by the root nginx)
 CMD ["nginx", "-g", "daemon off;"]
