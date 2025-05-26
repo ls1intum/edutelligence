@@ -139,7 +139,7 @@ class ExerciseChatAgentPipeline(Pipeline):
             model = "gpt-4.1-nano"
             model_small = "gpt-4.1-nano"
 
-        self.llm_big = IrisLangchainChatModel(
+        self.llm = IrisLangchainChatModel(
             request_handler=ModelVersionRequestHandler(version=model),
             completion_args=completion_args,
         )

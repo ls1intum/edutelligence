@@ -22,6 +22,9 @@ from ...common.message_converters import (
 from ...common.pipeline_enum import PipelineEnum
 from ...common.pyris_message import PyrisMessage
 from ...domain import CourseChatPipelineExecutionDTO, FeatureDTO
+from ...domain.chat.interaction_suggestion_dto import (
+    InteractionSuggestionPipelineExecutionDTO,
+)
 from ...domain.data.metrics.competency_jol_dto import CompetencyJolDTO
 from ...domain.retrieval.lecture.lecture_retrieval_dto import (
     LectureRetrievalDTO,
@@ -112,20 +115,14 @@ class CourseChatPipeline(Pipeline):
 
         if variant == "advanced":
             model = "gpt-4.1"
-            model_small = "gpt-4.1-mini"
         else:
             model = "gpt-4.1-nano"
-            model_small = "gpt-4.1-nano"
 
-        self.llm_big = IrisLangchainChatModel(
+        self.llm = IrisLangchainChatModel(
             request_handler=ModelVersionRequestHandler(version=model),
             completion_args=completion_args,
         )
 
-        self.llm_small = IrisLangchainChatModel(
-            request_handler=ModelVersionRequestHandler(version=model_small),
-            completion_args=completion_args,
-        )
         self.callback = callback
 
         self.db = VectorDatabase()
@@ -139,10 +136,10 @@ class CourseChatPipeline(Pipeline):
         self.tokens = []
 
     def __repr__(self):
-        return f"{self.__class__.__name__}(llm={self.llm}, llm_small={self.llm_small})"
+        return f"{self.__class__.__name__}(llm={self.llm})"
 
     def __str__(self):
-        return f"{self.__class__.__name__}(llm={self.llm}, llm_small={self.llm_small})"
+        return f"{self.__class__.__name__}(llm={self.llm})"
 
     @traceable(name="Course Chat Pipeline")
     def __call__(self, dto: CourseChatPipelineExecutionDTO, **kwargs):
@@ -506,26 +503,26 @@ class CourseChatPipeline(Pipeline):
                 )
             self.callback.done("Response created", final_result=out, tokens=self.tokens)
 
-            # try:
-            #     self.callback.skip("Skipping suggestion generation.")
-            # if out:
-            #     suggestion_dto = InteractionSuggestionPipelineExecutionDTO()
-            #     suggestion_dto.chat_history = dto.chat_history
-            #     suggestion_dto.last_message = out
-            #     suggestions = self.suggestion_pipeline(suggestion_dto)
-            #     self.callback.done(final_result=None, suggestions=suggestions)
-            # else:
-            #     # This should never happen but whatever
-            #     self.callback.skip(
-            #         "Skipping suggestion generation as no output was generated."
-            #     )
-            # except Exception as e:
-            #     logger.error(
-            #         "An error occurred while running the course chat interaction suggestion pipeline",
-            #         exc_info=e,
-            #     )
-            #     traceback.print_exc()
-            #     self.callback.error("Generating interaction suggestions failed.")
+            try:
+                self.callback.skip("Skipping suggestion generation.")
+                if out:
+                    suggestion_dto = InteractionSuggestionPipelineExecutionDTO()
+                    suggestion_dto.chat_history = dto.chat_history
+                    suggestion_dto.last_message = out
+                    suggestions = self.suggestion_pipeline(suggestion_dto)
+                    self.callback.done(final_result=None, suggestions=suggestions)
+                else:
+                    # This should never happen but whatever
+                    self.callback.skip(
+                        "Skipping suggestion generation as no output was generated."
+                    )
+            except Exception as e:
+                logger.error(
+                    "An error occurred while running the course chat interaction suggestion pipeline",
+                    exc_info=e,
+                )
+                traceback.print_exc()
+                self.callback.error("Generating interaction suggestions failed.")
         except Exception as e:
             logger.error(
                 "An error occurred while running the course chat pipeline",
