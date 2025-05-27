@@ -52,7 +52,7 @@ from iris.web.status.status_update import (
     TutorSuggestionCallback,
 )
 
-from iris.src.iris.domain.rewriting_pipeline_execution_dto import RewritingVariant
+from iris.domain.rewriting_pipeline_execution_dto import RewritingVariant
 
 router = APIRouter(prefix="/api/v1/pipelines", tags=["pipelines"])
 logger = logging.getLogger(__name__)
