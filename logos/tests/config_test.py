@@ -9,7 +9,9 @@ Simple config test for a single root user
 import unittest
 import requests
 
-global VALID_LOGOS_KEY
+from scripts.file_utilities import export_to_json
+from scripts.grpc_client import run_grpc_client
+
 VALID_LOGOS_KEY = ""
 VALID_SERVICE_KEY = ""
 
@@ -26,12 +28,14 @@ class TestOpenAIForwardingProxy(unittest.TestCase):
             "Content-Type": "application/json",
         }
 
-        response = requests.post("http://logos.ase.cit.tum.de:8080/logosdb/setup", json=dict(), headers=headers)
+        data = {
+            "provider_name": "azure",
+            "base_url": BASE_URL,
+        }
+
+        response = requests.post("http://0.0.0.0:8080/logosdb/setup", json=data, headers=headers)
         from pprint import pprint
         pprint(response.json())
-        assert response.status_code == 200
-        global VALID_LOGOS_KEY
-        VALID_LOGOS_KEY = response.json().get("api_key")
 
     def test_add_provider(self):
         headers = {
@@ -49,7 +53,7 @@ class TestOpenAIForwardingProxy(unittest.TestCase):
             "auth_format": "{}"
         }
 
-        response = requests.post("http://logos.ase.cit.tum.de:8080/logosdb/add_provider", json=data, headers=headers)
+        response = requests.post("http://0.0.0.0:8080/logosdb/add_provider", json=data, headers=headers)
         from pprint import pprint
         pprint(response.json())
         assert response.status_code == 200
@@ -67,7 +71,7 @@ class TestOpenAIForwardingProxy(unittest.TestCase):
             "endpoint": f"{MODEL_ENDPOINT}",
         }
 
-        response = requests.post("http://logos.ase.cit.tum.de:8080/logosdb/add_model", json=data, headers=headers)
+        response = requests.post("http://0.0.0.0:8080/logosdb/add_model", json=data, headers=headers)
         from pprint import pprint
         pprint(response.json())
         assert response.status_code == 200
@@ -85,7 +89,7 @@ class TestOpenAIForwardingProxy(unittest.TestCase):
             "process_id": 1,
         }
 
-        response = requests.post("http://logos.ase.cit.tum.de:8080/logosdb/add_profile", json=data, headers=headers)
+        response = requests.post("http://0.0.0.0:8080/logosdb/add_profile", json=data, headers=headers)
         from pprint import pprint
         pprint(response.json())
         assert response.status_code == 200
@@ -103,7 +107,7 @@ class TestOpenAIForwardingProxy(unittest.TestCase):
             "api_id": 1,
         }
 
-        response = requests.post("http://logos.ase.cit.tum.de:8080/logosdb/connect_process_provider", json=data,
+        response = requests.post("http://0.0.0.0:8080/logosdb/connect_process_provider", json=data,
                                  headers=headers)
         from pprint import pprint
         pprint(response.json())
@@ -122,7 +126,7 @@ class TestOpenAIForwardingProxy(unittest.TestCase):
             "model_id": 1,
         }
 
-        response = requests.post("http://logos.ase.cit.tum.de:8080/logosdb/connect_process_model", json=data,
+        response = requests.post("http://0.0.0.0:8080/logosdb/connect_process_model", json=data,
                                  headers=headers)
         from pprint import pprint
         pprint(response.json())
@@ -141,7 +145,7 @@ class TestOpenAIForwardingProxy(unittest.TestCase):
             "model_id": 1,
         }
 
-        response = requests.post("http://logos.ase.cit.tum.de:8080/logosdb/connect_model_provider", json=data,
+        response = requests.post("http://0.0.0.0:8080/logosdb/connect_model_provider", json=data,
                                  headers=headers)
         from pprint import pprint
         pprint(response.json())
@@ -160,7 +164,7 @@ class TestOpenAIForwardingProxy(unittest.TestCase):
             "model_id": 1,
         }
 
-        response = requests.post("http://logos.ase.cit.tum.de:8080/logosdb/connect_model_api", json=data,
+        response = requests.post("http://0.0.0.0:8080/logosdb/connect_model_api", json=data,
                                  headers=headers)
         from pprint import pprint
         pprint(response.json())
@@ -177,7 +181,7 @@ class TestOpenAIForwardingProxy(unittest.TestCase):
             "temperature": 0.5
         }
 
-        response = requests.post("http://logos.ase.cit.tum.de:8080/v1/chat/completions", json=data, headers=headers)
+        response = requests.post("http://0.0.0.0:8080/v1/chat/completions", json=data, headers=headers)
         from pprint import pprint
         pprint(response.json())
         assert response.status_code == 200
@@ -195,7 +199,7 @@ class TestOpenAIForwardingProxy(unittest.TestCase):
             "name": "service_proxy"
         }
 
-        response = requests.post("http://logos.ase.cit.tum.de:8080/logosdb/add_service", json=data, headers=headers)
+        response = requests.post("http://0.0.0.0:8080/logosdb/add_service", json=data, headers=headers)
         from pprint import pprint
         pprint(response.json())
         assert response.status_code == 200
@@ -214,7 +218,7 @@ class TestOpenAIForwardingProxy(unittest.TestCase):
             "process_id": 2,
         }
 
-        response = requests.post("http://logos.ase.cit.tum.de:8080/logosdb/add_profile", json=data, headers=headers)
+        response = requests.post("http://0.0.0.0:8080/logosdb/add_profile", json=data, headers=headers)
         from pprint import pprint
         pprint(response.json())
         assert response.status_code == 200
@@ -236,7 +240,7 @@ class TestOpenAIForwardingProxy(unittest.TestCase):
             "auth_format": "{}"
         }
 
-        response = requests.post("http://logos.ase.cit.tum.de:8080/logosdb/add_provider", json=data, headers=headers)
+        response = requests.post("http://0.0.0.0:8080/logosdb/add_provider", json=data, headers=headers)
         from pprint import pprint
         pprint(response.json())
         assert response.status_code == 200
@@ -255,7 +259,7 @@ class TestOpenAIForwardingProxy(unittest.TestCase):
             "profile_id": 2,
         }
 
-        response = requests.post("http://logos.ase.cit.tum.de:8080/logosdb/connect_process_provider", json=data, headers=headers)
+        response = requests.post("http://0.0.0.0:8080/logosdb/connect_process_provider", json=data, headers=headers)
         from pprint import pprint
         pprint(response.json())
         assert response.status_code == 200
@@ -263,7 +267,7 @@ class TestOpenAIForwardingProxy(unittest.TestCase):
     def test_proxy(self):
         headers = {
             "Content-Type": "application/json",
-            "logos_key": f"{VALID_SERVICE_KEY}",
+            "logos_key": f"{VALID_LOGOS_KEY}",
             "api_key": f"{API_KEY}",
             "deployment_name": f"{DEPLOYMENT_NAME}",
             "api_version": f"{API_VERSION}",
@@ -274,25 +278,46 @@ class TestOpenAIForwardingProxy(unittest.TestCase):
             "temperature": 0.5
         }
 
-        response = requests.post("http://logos.ase.cit.tum.de:8080/v1/chat/completions", json=data, headers=headers)
+        response = requests.post("http://0.0.0.0:8080/v1/chat/completions", json=data, headers=headers)
         from pprint import pprint
         pprint(response.json())
         assert response.status_code == 200
 
     def test_export(self):
+        export_to_json("http://0.0.0.0:8080", VALID_LOGOS_KEY, "vm.json")
+
+    def test_log(self):
         headers = {
             "Content-Type": "application/json",
             "logos_key": f"{VALID_LOGOS_KEY}",
+            "api_key": f"{API_KEY}",
+            "deployment_name": f"{DEPLOYMENT_NAME}",
+            "api_version": f"{API_VERSION}",
         }
-
         data = {
             "logos_key": f"{VALID_LOGOS_KEY}",
+            "set_log": True,
+            "process_id": 1,
         }
-
-        response = requests.post("http://logos.ase.cit.tum.de:8080/logosdb/export", json=data, headers=headers)
+        response = requests.post("http://0.0.0.0:8080/logosdb/set_log", json=data, headers=headers)
         from pprint import pprint
         pprint(response.json())
         assert response.status_code == 200
+
+    def test_grpc_client(self):
+        headers = {
+            "Content-Type": "application/json",
+            "logos_key": f"{VALID_LOGOS_KEY}",
+            "api_key": f"{API_KEY}",
+            "deployment_name": f"{DEPLOYMENT_NAME}",
+            "api_version": f"{API_VERSION}",
+        }
+        payload = """{
+            "messages": [{"role": "user", "content": "Tell me a fun fact about the western roman empire!"}],
+            "temperature": 0.5
+        }"""
+        for chunk in run_grpc_client(headers, "chat/completions", payload):
+            print(chunk)
 
 
 if __name__ == '__main__':

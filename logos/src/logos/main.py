@@ -12,7 +12,7 @@ from logos.responses import get_streaming_response, get_standard_response, get_c
 
 from scripts.setup_proxy import setup
 
-app = FastAPI()
+app = FastAPI(docs_url="/docs", openapi_url="/openapi.json")
 _grpc_server = None
 
 @app.on_event("startup")

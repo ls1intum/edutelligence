@@ -6,7 +6,7 @@ def run_grpc_client(headers: dict, path: str, payload: str):
     """
     Creates a gRPC-Client that can communicate with Logos Server via gRPC.
     :param headers: Headers as sent in REST
-    :param path: Path to the Logos-Endpoint
+    :param path: Path to the Logos-Endpoint, e.g. "chat/completions"
     :param payload: Payload as sent in REST, provided as string
     """
     channel = grpc.insecure_channel("0.0.0.0:50051")

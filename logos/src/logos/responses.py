@@ -128,7 +128,7 @@ def request_setup(headers: dict, path: str, llm_info: dict):
             model_provider_id = db.get_model_from_provider(key, llm_info["provider_id"])
             if model_api_id is None and model_provider_id is None or "proxy" in headers:
                 # Model not in the database, change to normal proxy
-                if provider == "azure":
+                if "azure" in provider.lower():
                     if "deployment_name" not in headers or headers["deployment_name"] == "":
                         return {"error": "Missing deployment name in header"}, 401
                     if "api_version" not in headers or headers["api_version"] == "":
