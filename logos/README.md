@@ -81,9 +81,13 @@ Follow these steps to install and configure **Logos** as your intelligent routin
 
 ### ✅ Step 1: Initialize the Database
 
-Start by creating the initial database schema and a root user.
+Start by creating the initial database schema and a root user. This also sets up
+a first provider whose LLMs you can use directly after setup.
 
 - **Endpoint**: `POST /logosdb/setup`
+- **Required Data Fields**:
+  - `base_url` – Base-URL of the first provider
+  - `provider_name` – Name of the provider (e.g., `OpenAI`, `Azure`)
 - **What it does**:
   - Creates the necessary tables.
   - Adds a default `root` user.
@@ -91,6 +95,7 @@ Start by creating the initial database schema and a root user.
 - **Response**:  
   Returns the **Logos API Key** for the `root` user. This key is required to authenticate the following setup requests.
 
+> ✅ If you're using Logos **just as a proxy**, you're done here! 🎉
 ---
 
 ### ✅ Step 2: Add a Provider
@@ -122,8 +127,6 @@ now what models you want to have access to over Logos. Therefore, define the mod
   - `logos_key`
   - `name` – A model name (e.g., `gpt-4`)
   - `endpoint` – The relative path (without base URL)
-
-If you're using Logos as a pure proxy, this step can be skipped.
 
 ---
 
@@ -157,8 +160,6 @@ is obtained by calling the `get_api_id`-Endpoint for a given api-key.
   - `logos_key`
   - `profile_id`
   - `api_id` – Retrieved via `GET /logosdb/get_api_id` using a provider's API key
-
-> ✅ If you're using Logos **just as a proxy**, you're done here! 🎉
 
 ---
 
