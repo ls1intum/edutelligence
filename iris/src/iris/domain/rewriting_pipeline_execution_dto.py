@@ -14,4 +14,4 @@ class RewritingPipelineExecutionDTO(BaseModel):
 
 class RewritingVariant(str, Enum):
     FAQ = "FAQ"
-    PROGRAMMING_EXERCISE = "PROGRAMMING_EXERCISE"
+    PROBLEM_STATEMENT = "PROBLEM_STATEMENT"
