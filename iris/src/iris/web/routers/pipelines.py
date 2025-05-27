@@ -310,14 +310,13 @@ def run_rewriting_pipeline_worker(dto: RewritingPipelineExecutionDTO, variant: s
 
 
 @router.post(
-    "/rewriting/{variant}/run",
+    "/rewriting/run",
     status_code=status.HTTP_202_ACCEPTED,
     dependencies=[Depends(TokenValidator())],
 )
-def run_rewriting_pipeline(variant: str, dto: RewritingPipelineExecutionDTO):
-    variant = variant.lower()
-    logger.info("Rewriting pipeline started with variant: %s and dto: %s", variant, dto)
-    thread = Thread(target=run_rewriting_pipeline_worker, args=(dto, variant))
+def run_rewriting_pipeline(dto: RewritingPipelineExecutionDTO):
+    logger.info("Rewriting pipeline started with variant: %s and dto: %s", dto.variant, dto)
+    thread = Thread(target=run_rewriting_pipeline_worker, args=(dto, dto.variant))
     thread.start()
 
 
