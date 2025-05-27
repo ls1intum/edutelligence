@@ -29,5 +29,6 @@ RUN poetry run python -m grpc_tools.protoc \
 
 
 EXPOSE 8080
+EXPOSE 50051
 
 CMD ["poetry", "run", "uvicorn", "logos.main:app", "--host", "0.0.0.0", "--port", "8080"]
