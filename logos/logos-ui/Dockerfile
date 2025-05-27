@@ -1,32 +1,18 @@
-# ---- Build Stage ----
-FROM node:20-alpine AS builder
+FROM node:alpine as build
 
-# Arbeitsverzeichnis im Container
 WORKDIR /app
+RUN npm install -g @angular/cli
 
-# Package-Dateien kopieren
-COPY logos-ui/package*.json ./
+# Copy UI
+COPY ./logos/logos-ui/ ./
+RUN npm ci
 
-# Abhängigkeiten installieren
-RUN npm install -g @angular/cli@19 \
- && npm install
+# Run production environment
+RUN ng build --configuration=production
 
-# Restliche Dateien kopieren und App bauen
-COPY logos-ui/ ./
-
-RUN ng build --configuration=production --base-href /
-
-# ---- Nginx Stage ----
-FROM nginx:alpine
-
-# Angular Build-Dateien in den Standard-Nginx-Webroot kopieren
-COPY --from=builder /app/dist/ /usr/share/nginx/html/
-
-
-FROM nginx:alpine
-
-COPY ./src/   /usr/share/nginx/html/
+# Get nginx
+FROM nginx:stable AS final
 
 EXPOSE 80
 
-CMD ["nginx", "-g", "daemon off;"]
+COPY --from=build app/dist/logos-ui/browser  /usr/share/nginx/html
