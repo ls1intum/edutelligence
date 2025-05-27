@@ -9,3 +9,4 @@ class LectureChatPipelineExecutionDTO(ChatPipelineExecutionDTO):
     course_id: int = Field(alias="courseId")
     lecture_id: Optional[int] = Field(alias="lectureId", default=None)
     lecture_unit_id: Optional[int] = Field(alias="lectureUnitId", default=None)
+    custom_instructions: Optional[str] = Field(default="", alias="customInstructions")
