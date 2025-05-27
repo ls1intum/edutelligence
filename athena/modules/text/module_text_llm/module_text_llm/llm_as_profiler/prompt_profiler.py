@@ -122,4 +122,3 @@ class StudentResponseAnalysis(BaseModel):
     analyses: List[ResponseAnalysisItem] = Field(
         description="A list of issues, gaps, or errors identified in the student's response, each with a quality assessment and optional references."
     )
-
