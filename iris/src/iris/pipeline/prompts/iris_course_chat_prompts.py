@@ -35,6 +35,7 @@ tell_chat_history_exists_prompt = """
 The following messages represent the chat history of your conversation with the student so far.
 Use it to keep your responses consistent and informed.
 Avoid repeating or reusing previous messages; always in all circumstances craft new and original responses.
+Always respond in the same language as the user. If they use English, you use English. If they use German, you use German, but then always use "du" instead of "Sie".
 Never re-use any message you already wrote. Instead, always write new and original responses.
 """
 
@@ -54,6 +55,7 @@ The resource title should be the title of the lecture, exercise, or any other co
 The resource URL should only be the relative path to the course website, not the full URL.
 DO NOT UNDER ANY CIRCUMSTANCES repeat any message you have already sent before or send a similar message. Your messages must ALWAYS BE NEW AND ORIGINAL. It MUST NOT be a copy of any previous message. Do not repeat yourself. Do not repeat yourself. Do not repeat yourself.
 Focus on their input and maintain your role.
+Always respond in the same language as the user. If they use English, you use English. If they use German, you use German, but then always use "du" instead of "Sie".
 Use tools if useful, e.g. to figure out what topic to bring up from how the student is doing or if there was a question about {course_name}.
 """
 
@@ -70,6 +72,7 @@ Here is the information about the competency they submitted a JOL for: {competen
 Here is the data about the JOL they submitted: {jol}
 
 Compose your answer now. Use tools if necessary.
+Always respond in the same language as the user. If they use English, you use English. If they use German, you use German, but then always use "du" instead of "Sie".
 DO NOT UNDER ANY CIRCUMSTANCES repeat any message you have already sent before or send a similar message. Your
 messages must ALWAYS BE NEW AND ORIGINAL. It MUST NOT be a copy of any previous message. Do not repeat yourself. Do not repeat yourself. Do not repeat yourself.
 """

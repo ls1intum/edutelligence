@@ -21,7 +21,7 @@ from ...common.message_converters import (
 )
 from ...common.pipeline_enum import PipelineEnum
 from ...common.pyris_message import IrisMessageRole, PyrisMessage
-from ...domain import ExerciseChatPipelineExecutionDTO
+from ...domain import ExerciseChatPipelineExecutionDTO, FeatureDTO
 from ...domain.chat.interaction_suggestion_dto import (
     InteractionSuggestionPipelineExecutionDTO,
 )
@@ -29,10 +29,10 @@ from ...domain.retrieval.lecture.lecture_retrieval_dto import (
     LectureRetrievalDTO,
 )
 from ...llm import (
-    CapabilityRequestHandler,
     CompletionArguments,
-    RequirementList,
+    ModelVersionRequestHandler,
 )
+from ...llm.external.model import LanguageModel
 from ...llm.langchain import IrisLangchainChatModel
 from ...retrieval.faq_retrieval import FaqRetrieval
 from ...retrieval.faq_retrieval_utils import format_faqs, should_allow_faq_tool
@@ -52,8 +52,11 @@ from ..prompts.iris_exercise_chat_agent_prompts import (
     tell_progress_stalled_system_prompt,
 )
 from ..shared.citation_pipeline import CitationPipeline, InformationType
-from ..shared.reranker_pipeline import RerankerPipeline
-from ..shared.utils import generate_structured_tools_from_functions
+from ..shared.utils import (
+    filter_variants_by_available_models,
+    format_custom_instructions,
+    generate_structured_tools_from_functions,
+)
 from .code_feedback_pipeline import CodeFeedbackPipeline
 from .interaction_suggestion_pipeline import InteractionSuggestionPipeline
 
@@ -106,7 +109,7 @@ def convert_chat_history_to_str(chat_history: List[PyrisMessage]) -> str:
 class ExerciseChatAgentPipeline(Pipeline):
     """Exercise chat agent pipeline that answers exercises related questions from students."""
 
-    llm_big: IrisLangchainChatModel
+    llm: IrisLangchainChatModel
     llm_small: IrisLangchainChatModel
     pipeline: Runnable
     callback: ExerciseChatStatusCallback
@@ -125,25 +128,26 @@ class ExerciseChatAgentPipeline(Pipeline):
         event: str | None = None,
     ):
         super().__init__(implementation_id="exercise_chat_pipeline")
+
         # Set the langchain chat model
         completion_args = CompletionArguments(temperature=0.5, max_tokens=2000)
-        self.llm_big = IrisLangchainChatModel(
-            request_handler=CapabilityRequestHandler(
-                requirements=RequirementList(
-                    gpt_version_equivalent=4.5,
-                ),
-            ),
+
+        if variant == "advanced":
+            model = "gpt-4.1"
+            model_small = "gpt-4.1-mini"
+        else:
+            model = "gpt-4.1-nano"
+            model_small = "gpt-4.1-nano"
+
+        self.llm = IrisLangchainChatModel(
+            request_handler=ModelVersionRequestHandler(version=model),
             completion_args=completion_args,
         )
+
         self.llm_small = IrisLangchainChatModel(
-            request_handler=CapabilityRequestHandler(
-                requirements=RequirementList(
-                    gpt_version_equivalent=4.25,
-                ),
-            ),
+            request_handler=ModelVersionRequestHandler(version=model_small),
             completion_args=completion_args,
         )
-        self.variant = variant
         self.event = event
         self.callback = callback
 
@@ -152,17 +156,41 @@ class ExerciseChatAgentPipeline(Pipeline):
         self.suggestion_pipeline = InteractionSuggestionPipeline(variant="exercise")
         self.lecture_retriever = LectureRetrieval(self.db.client)
         self.faq_retriever = FaqRetrieval(self.db.client)
-        self.reranker_pipeline = RerankerPipeline()
         self.code_feedback_pipeline = CodeFeedbackPipeline()
-        self.pipeline = self.llm_big | JsonOutputParser()
+        self.pipeline = self.llm | JsonOutputParser()
         self.citation_pipeline = CitationPipeline()
         self.tokens = []
 
     def __repr__(self):
-        return f"{self.__class__.__name__}(llm_big={self.llm_big}, llm_small={self.llm_small})"
+        return f"{self.__class__.__name__}(llm={self.llm}, llm_small={self.llm_small})"
 
     def __str__(self):
-        return f"{self.__class__.__name__}(llm_big={self.llm_big}, llm_small={self.llm_small})"
+        return f"{self.__class__.__name__}(llm={self.llm}, llm_small={self.llm_small})"
+
+    @classmethod
+    def get_variants(cls, available_llms: List[LanguageModel]) -> List[FeatureDTO]:
+        variant_specs = [
+            (
+                ["gpt-4.1-nano"],
+                FeatureDTO(
+                    id="default",
+                    name="Default",
+                    description="Uses a smaller model for faster and cost-efficient responses.",
+                ),
+            ),
+            (
+                ["gpt-4.1", "gpt-4.1-mini"],
+                FeatureDTO(
+                    id="advanced",
+                    name="Advanced",
+                    description="Uses a larger chat model, balancing speed and quality.",
+                ),
+            ),
+        ]
+
+        return filter_variants_by_available_models(
+            available_llms, variant_specs, pipeline_name="ExerciseChatAgentPipeline"
+        )
 
     @traceable(name="Exercise Chat Agent Pipeline")
     def __call__(self, dto: ExerciseChatPipelineExecutionDTO):
@@ -494,6 +522,10 @@ class ExerciseChatAgentPipeline(Pipeline):
             exercise_title: str = dto.exercise.name
             programming_language = dto.exercise.programming_language.lower()
 
+            custom_instructions = format_custom_instructions(
+                custom_instructions=dto.custom_instructions
+            )
+
             params = {}
 
             if len(chat_history) > 0 and query is not None and self.event is None:
@@ -511,6 +543,8 @@ class ExerciseChatAgentPipeline(Pipeline):
                             )
                             + "\n"
                             + agent_prompt
+                            + "\n"
+                            + custom_instructions
                             + "\n"
                             + format_reminder_prompt,
                         ),
@@ -535,6 +569,8 @@ class ExerciseChatAgentPipeline(Pipeline):
                                 )
                                 + agent_prompt
                                 + "\n"
+                                + custom_instructions
+                                + "\n"
                                 + format_reminder_prompt,
                             ),
                             HumanMessage(
@@ -557,6 +593,8 @@ class ExerciseChatAgentPipeline(Pipeline):
                                 )
                                 + agent_prompt
                                 + "\n"
+                                + custom_instructions
+                                + "\n"
                                 + format_reminder_prompt,
                             ),
                             ("placeholder", "{agent_scratchpad}"),
@@ -578,14 +616,14 @@ class ExerciseChatAgentPipeline(Pipeline):
 
             tools = generate_structured_tools_from_functions(tool_list)
             agent = create_tool_calling_agent(
-                llm=self.llm_big, tools=tools, prompt=self.prompt
+                llm=self.llm, tools=tools, prompt=self.prompt
             )
             agent_executor = AgentExecutor(agent=agent, tools=tools, verbose=False)
             self.callback.in_progress("Thinking ...")
             out = None
             for step in agent_executor.iter(params):
                 self._append_tokens(
-                    self.llm_big.tokens,
+                    self.llm.tokens,
                     PipelineEnum.IRIS_CHAT_EXERCISE_AGENT_MESSAGE,
                 )
                 if step.get("output", None):
@@ -608,7 +646,7 @@ class ExerciseChatAgentPipeline(Pipeline):
                     }
                 )
                 self._append_tokens(
-                    self.llm_big.tokens,
+                    self.llm.tokens,
                     PipelineEnum.IRIS_CHAT_EXERCISE_AGENT_MESSAGE,
                 )
                 if "!ok!" in guide_response:

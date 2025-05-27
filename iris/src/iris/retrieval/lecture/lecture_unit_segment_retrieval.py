@@ -9,12 +9,12 @@ from iris.domain.retrieval.lecture.lecture_retrieval_dto import (
     LectureUnitSegmentRetrievalDTO,
 )
 from iris.llm import (
-    BasicRequestHandler,
-    CapabilityRequestHandler,
     CompletionArguments,
-    RequirementList,
 )
 from iris.llm.langchain import IrisLangchainChatModel
+from iris.llm.request_handler.model_version_request_handler import (
+    ModelVersionRequestHandler,
+)
 from iris.llm.request_handler.rerank_request_handler import (
     RerankRequestHandler,
 )
@@ -35,18 +35,12 @@ class LectureUnitSegmentRetrieval(Pipeline):
 
     def __init__(self, client: WeaviateClient):
         super().__init__(implementation_id="lecture_unit_segment_retrieval_pipeline")
-        request_handler = CapabilityRequestHandler(
-            requirements=RequirementList(
-                gpt_version_equivalent=4.25,
-                context_length=16385,
-                privacy_compliance=True,
-            )
-        )
+        request_handler = ModelVersionRequestHandler(version="gpt-4.1-mini")
         completion_args = CompletionArguments(temperature=0, max_tokens=2000)
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler, completion_args=completion_args
         )
-        self.llm_embedding = BasicRequestHandler("embedding-small")
+        self.llm_embedding = ModelVersionRequestHandler("text-embedding-3-small")
         self.pipeline = self.llm | StrOutputParser()
         self.collection = init_lecture_unit_segment_schema(client)
         self.lecture_unit_collection = init_lecture_unit_schema(client)

@@ -1,11 +1,13 @@
+from logging import getLogger
 import requests
 from functools import partialmethod
 from typing import Sequence
 from langchain_openai.chat_models import AzureChatOpenAI
 
 from app.settings import settings
-from app.logger import logger
 from app.models.model_provider import ModelProvider
+
+logger = getLogger(__name__)
 
 
 class AzureOpenAIProvider(ModelProvider):
