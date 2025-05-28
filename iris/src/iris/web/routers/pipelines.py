@@ -317,6 +317,7 @@ def run_rewriting_pipeline_worker(dto: RewritingPipelineExecutionDTO, variant: s
     dependencies=[Depends(TokenValidator())],
 )
 def run_rewriting_pipeline(dto: RewritingPipelineExecutionDTO):
+    logger.info("Received rewriting pipeline request: %s", dto)
     variant = validate_pipeline_variant(
         dto.execution.settings, RewritingPipeline
     ).lower()

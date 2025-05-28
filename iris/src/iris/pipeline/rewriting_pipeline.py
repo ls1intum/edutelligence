@@ -1,5 +1,5 @@
 import logging
-from typing import Literal, Optional
+from typing import Literal, Optional, List
 
 from langchain.output_parsers import PydanticOutputParser
 from langchain_core.prompts import (
@@ -22,6 +22,9 @@ from iris.pipeline.prompts.rewriting_prompts import (
     system_prompt_problem_statement,
 )
 from iris.web.status.status_update import RewritingCallback
+
+from ..llm.external.model import LanguageModel
+from ..domain import FeatureDTO
 
 logger = logging.getLogger(__name__)
 
@@ -87,3 +90,27 @@ class RewritingPipeline(Pipeline):
 
         final_result = response
         self.callback.done(final_result=final_result, tokens=self.tokens)
+
+    @classmethod
+    def get_variants(cls, available_llms: List[LanguageModel]) -> List[FeatureDTO]:
+        """
+        Returns available variants for the FaqIngestionPipeline based on available LLMs.
+
+        Args:
+            available_llms: List of available language models
+
+        Returns:
+            List of FeatureDTO objects representing available variants
+        """
+        return [
+            FeatureDTO(
+                id="faq",
+                name="Default FAQ Variant",
+                description="Default FAQ rewriting variant.",
+            ),
+            FeatureDTO(
+                id="problem_statement",
+                name="Default Variant",
+                description="Default Problem statement rewriting variant.",
+            )
+        ]
