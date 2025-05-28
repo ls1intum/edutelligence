@@ -9,14 +9,14 @@ from iris.domain.ingestion.ingestion_pipeline_execution_dto import (
     FaqIngestionPipelineExecutionDto,
 )
 
+from ..domain import FeatureDTO
 from ..domain.data.faq_dto import FaqDTO
 from ..ingestion.abstract_ingestion import AbstractIngestion
 from ..llm import (
-    BasicRequestHandler,
-    CapabilityRequestHandler,
     CompletionArguments,
-    RequirementList,
+    ModelVersionRequestHandler,
 )
+from ..llm.external.model import LanguageModel
 from ..llm.langchain import IrisLangchainChatModel
 from ..vector_database.database import batch_update_lock
 from ..vector_database.faq_schema import FaqSchema, init_faq_schema
@@ -41,21 +41,34 @@ class FaqIngestionPipeline(AbstractIngestion, Pipeline):
         self.client = client
         self.collection = init_faq_schema(client)
         self.dto = dto
-        self.llm_embedding = BasicRequestHandler("embedding-small")
         self.callback = callback
-        request_handler = CapabilityRequestHandler(
-            requirements=RequirementList(
-                gpt_version_equivalent=4.25,
-                context_length=16385,
-                privacy_compliance=True,
-            )
-        )
+        self.llm_embedding = ModelVersionRequestHandler("text-embedding-3-small")
+        request_handler = ModelVersionRequestHandler(version="gpt-4.1-mini")
         completion_args = CompletionArguments(temperature=0.2, max_tokens=2000)
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler, completion_args=completion_args
         )
         self.pipeline = self.llm | StrOutputParser()
         self.tokens = []
+
+    @classmethod
+    def get_variants(cls, available_llms: List[LanguageModel]) -> List[FeatureDTO]:
+        """
+        Returns available variants for the FaqIngestionPipeline based on available LLMs.
+
+        Args:
+            available_llms: List of available language models
+
+        Returns:
+            List of FeatureDTO objects representing available variants
+        """
+        return [
+            FeatureDTO(
+                id="default",
+                name="Default Variant",
+                description="Default FAQ ingestion variant.",
+            )
+        ]
 
     def __call__(self) -> bool:
         try:

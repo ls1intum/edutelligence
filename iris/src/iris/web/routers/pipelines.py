@@ -52,8 +52,6 @@ from iris.web.status.status_update import (
     TutorSuggestionCallback,
 )
 
-from iris.domain.rewriting_pipeline_execution_dto import RewritingVariant
-
 router = APIRouter(prefix="/api/v1/pipelines", tags=["pipelines"])
 logger = logging.getLogger(__name__)
 
@@ -285,7 +283,7 @@ def run_competency_extraction_pipeline(
     thread.start()
 
 
-def run_rewriting_pipeline_worker(dto: RewritingPipelineExecutionDTO, variant: RewritingVariant):
+def run_rewriting_pipeline_worker(dto: RewritingPipelineExecutionDTO, variant: str):
     try:
         callback = RewritingCallback(
             run_id=dto.execution.settings.authentication_token,
@@ -293,9 +291,7 @@ def run_rewriting_pipeline_worker(dto: RewritingPipelineExecutionDTO, variant: R
             initial_stages=dto.execution.initial_stages,
         )
         match variant:
-            case RewritingVariant.FAQ:
-                pipeline = RewritingPipeline(callback=callback, variant=variant)
-            case RewritingVariant.PROBLEM_STATEMENT:
+            case "faq" | "problem_statement":
                 pipeline = RewritingPipeline(callback=callback, variant=variant)
             case _:
                 raise ValueError(f"Unknown variant: {variant}")
@@ -319,8 +315,12 @@ def run_rewriting_pipeline_worker(dto: RewritingPipelineExecutionDTO, variant: R
     dependencies=[Depends(TokenValidator())],
 )
 def run_rewriting_pipeline(dto: RewritingPipelineExecutionDTO):
-    logger.info("Rewriting pipeline started with variant: %s and dto: %s", dto.variant, dto)
-    thread = Thread(target=run_rewriting_pipeline_worker, args=(dto, dto.variant))
+    variant = validate_pipeline_variant(
+        dto.execution.settings, RewritingPipeline
+    ).lower()
+    logger.info("Rewriting pipeline started with variant: %s and dto: %s", variant, dto)
+
+    thread = Thread(target=run_rewriting_pipeline_worker, args=(dto, variant))
     thread.start()
 
 

@@ -91,9 +91,9 @@ class IrisLangchainChatModel(BaseChatModel):
         self.tokens = TokenUsageDTO(
             model=iris_message.token_usage.model_info,
             numInputTokens=iris_message.token_usage.num_input_tokens,
-            costPerMillionInputToken=iris_message.token_usage.cost_per_input_token,
+            costPerMillionInputToken=iris_message.token_usage.cost_per_million_input_token,
             numOutputTokens=iris_message.token_usage.num_output_tokens,
-            costPerMillionOutputToken=iris_message.token_usage.cost_per_output_token,
+            costPerMillionOutputToken=iris_message.token_usage.cost_per_million_output_token,
             pipeline=PipelineEnum.NOT_SET,
         )
         return ChatResult(generations=[chat_generation])

@@ -1,6 +1,5 @@
-import json
 import logging
-from typing import Literal, Optional, List, Dict
+from typing import Literal, Optional
 
 from langchain.output_parsers import PydanticOutputParser
 from langchain_core.prompts import (
@@ -23,13 +22,7 @@ from iris.pipeline.prompts.rewriting_prompts import (
     system_prompt_faq,
     system_prompt_problem_statement,
 )
-
 from iris.web.status.status_update import RewritingCallback
-
-from .prompts.faq_consistency_prompt import faq_consistency_prompt
-from ..vector_database.database import VectorDatabase
-
-from ..retrieval.faq_retrieval import FaqRetrieval
 
 logger = logging.getLogger(__name__)
 
@@ -54,17 +47,9 @@ class RewritingPipeline(Pipeline):
     ):
         super().__init__(implementation_id="rewriting_pipeline_reference_impl")
         self.callback = callback
-        self.request_handler = CapabilityRequestHandler(
-            requirements=RequirementList(
-                gpt_version_equivalent=4.5,
-                context_length=16385,
-            )
-        )
-
-        self.db = VectorDatabase()
+        self.request_handler = ModelVersionRequestHandler(version="gpt-4.1")
         self.tokens = []
         self.variant = variant
-        self.faq_retriever = FaqRetrieval(self.db.client)
 
     def __call__(
         self,
@@ -79,10 +64,10 @@ class RewritingPipeline(Pipeline):
             "faq": system_prompt_faq,
             "problem_statement": system_prompt_problem_statement,
         }
-
-        format_args = {"rewritten_text": dto.to_be_rewritten}
-
-        prompt = variant_prompts[self.variant].format(**format_args)
+        print(variant_prompts[self.variant])
+        prompt = variant_prompts[self.variant].format(
+            rewritten_text=dto.to_be_rewritten,
+        )
         prompt = PyrisMessage(
             sender=IrisMessageRole.SYSTEM,
             contents=[TextMessageContentDTO(text_content=prompt)],
@@ -102,82 +87,4 @@ class RewritingPipeline(Pipeline):
             response = response.strip()
 
         final_result = response
-        inconsistencies = []
-        improvement = ""
-        suggestions = []
-
-        if self.variant == "faq":
-            faqs = self.faq_retriever.get_faqs_from_db(
-                course_id=dto.course_id, search_text=response, result_limit=10
-            )
-            consistency_result = self.check_faq_consistency(faqs, final_result)
-            faq_type = consistency_result.get("type", "").lower()
-            if "inconsistent" in faq_type:
-                logging.warning("Detected inconsistencies in FAQ retrieval.")
-                inconsistencies = parse_inconsistencies(consistency_result.get("faqs", []))
-                improvement = consistency_result.get("improved version", "")
-                suggestions = consistency_result.get("suggestion", [])
-
-        self.callback.done(
-            final_result=final_result,
-            tokens=self.tokens,
-            inconsistencies=inconsistencies,
-            improvement=improvement,
-            suggestions=suggestions,
-        )
-
-    def check_faq_consistency(
-        self, faqs: List[dict], final_result: str
-    ) -> Dict[str, str]:
-        """
-        Checks the consistency of the given FAQs with the provided final_result.
-        Returns "consistent" if there are no inconsistencies, otherwise returns "inconsistent".
-
-        :param faqs: List of retrieved FAQs.
-        :param final_result: The result to compare the FAQs against.
-
-        """
-        properties_list = [entry["properties"] for entry in faqs]
-
-        consistency_prompt = faq_consistency_prompt.format(
-            faqs=properties_list, final_result=final_result
-        )
-
-        prompt = PyrisMessage(
-            sender=IrisMessageRole.SYSTEM,
-            contents=[TextMessageContentDTO(text_content=consistency_prompt)],
-        )
-
-        response = self.request_handler.chat(
-            [prompt], CompletionArguments(temperature=0.0), tools=None
-        )
-
-        self._append_tokens(response.token_usage, PipelineEnum.IRIS_REWRITING_PIPELINE)
-        result = response.contents[0].text_content
-        logging.info(f"Consistency FAQ consistency check response: {result}")
-
-        if result.startswith("```json"):
-            result = result.removeprefix("```json").removesuffix("```").strip()
-        elif result.startswith("```"):
-            result = result.removeprefix("```").removesuffix("```").strip()
-
-        data = json.loads(result)
-
-        result_dict = {}
-        keys_to_check = ["type", "message", "faqs", "suggestion", "improved version"]
-        for key in keys_to_check:
-            if key in data:
-                result_dict[key] = data[key]
-
-        logging.info(f"Consistency FAQ consistency check result: {result_dict}")
-
-        return result_dict
-
-
-def parse_inconsistencies(inconsistencies: List[Dict[str, str]]) -> List[str]:
-    logging.info(f"Parsing inconsistencies: {inconsistencies}")
-    parsed_inconsistencies = [
-        f"FAQ ID: {entry["faq_id"]}, Title: {entry["faq_question_title"]}, Answer: {entry["faq_question_answer"]}"
-        for entry in inconsistencies
-    ]
-    return parsed_inconsistencies
+        self.callback.done(final_result=final_result, tokens=self.tokens)
