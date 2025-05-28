@@ -52,6 +52,8 @@ from iris.web.status.status_update import (
     TutorSuggestionCallback,
 )
 
+from iris.web.utils import validate_pipeline_variant
+
 router = APIRouter(prefix="/api/v1/pipelines", tags=["pipelines"])
 logger = logging.getLogger(__name__)
 

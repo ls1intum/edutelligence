@@ -13,9 +13,8 @@ from iris.domain.rewriting_pipeline_execution_dto import (
     RewritingPipelineExecutionDTO,
 )
 from iris.llm import (
-    CapabilityRequestHandler,
     CompletionArguments,
-    RequirementList,
+    ModelVersionRequestHandler,
 )
 from iris.pipeline import Pipeline
 from iris.pipeline.prompts.rewriting_prompts import (
@@ -36,7 +35,7 @@ class RewritingPipeline(Pipeline):
     """
 
     callback: RewritingCallback
-    request_handler: CapabilityRequestHandler
+    request_handler: ModelVersionRequestHandler
     output_parser: PydanticOutputParser
     variant: Literal["faq", "problem_statement"]
 
