@@ -1,6 +1,5 @@
 import json
 import logging
-import time
 import traceback
 import typing
 from datetime import datetime
@@ -155,7 +154,6 @@ class CourseChatPipeline(Pipeline):
             :param dto: The pipeline execution data transfer object
             :param kwargs: The keyword arguments
         """
-        logger.debug(dto.model_dump_json(indent=4))
 
         # Define tools
         def get_exercise_list() -> list[dict]:
@@ -171,8 +169,6 @@ class CourseChatPipeline(Pipeline):
             A 100% score means the student solved the exercise correctly and completed it.
             """
             self.callback.in_progress("Reading exercise list ...")
-            # for debug sleep a second
-            time.sleep(1)
             current_time = datetime.now(tz=pytz.UTC)
             exercises = []
             for exercise in dto.course.exercises:
@@ -198,8 +194,6 @@ class CourseChatPipeline(Pipeline):
             self.callback.in_progress(
                 f"Reading exercise problem statement (id: {exercise_id}) ..."
             )
-            # for debug sleep a second
-            time.sleep(1)
             exercise = next(
                 (ex for ex in dto.course.exercises if ex.id == exercise_id), None
             )
@@ -297,9 +291,6 @@ class CourseChatPipeline(Pipeline):
             added their JoL assessment.
             """
             self.callback.in_progress("Reading competency list ...")
-            print(dto.course.competencies)
-            # for debug sleep a second
-            time.sleep(1)
             if not dto.metrics or not dto.metrics.competency_metrics:
                 return dto.course.competencies
             competency_metrics = dto.metrics.competency_metrics
@@ -463,7 +454,6 @@ class CourseChatPipeline(Pipeline):
 
             if self.event == "jol":
                 event_payload = CompetencyJolDTO.model_validate(dto.event_payload.event)
-                logger.debug("Event Payload: %s", event_payload)
                 comp = next(
                     (
                         c
@@ -545,8 +535,6 @@ class CourseChatPipeline(Pipeline):
             messages_for_template.append(("placeholder", "{agent_scratchpad}"))
             self.prompt = ChatPromptTemplate.from_messages(messages_for_template)
 
-            print("Allowing lecture tool:", allow_lecture_tool)
-
             if allow_faq_tool:
                 tool_list.append(faq_content_retrieval)
 
@@ -559,7 +547,7 @@ class CourseChatPipeline(Pipeline):
             out = None
             self.callback.in_progress()
             for step in agent_executor.iter(params):
-                print("STEP:", step)
+                logger.debug("STEP: %s", step)
                 self._append_tokens(
                     self.llm.tokens, PipelineEnum.IRIS_CHAT_COURSE_MESSAGE
                 )
