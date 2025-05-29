@@ -45,18 +45,16 @@ from ...web.status.status_update import (
 )
 from ..pipeline import Pipeline
 from ..prompts.iris_course_chat_prompts import (
-    tell_begin_agent_jol_prompt,
-    tell_begin_agent_prompt,
-    tell_chat_history_exists_prompt,
-    tell_iris_initial_system_prompt,
-    tell_no_chat_history_prompt,
-)
-from ..prompts.iris_course_chat_prompts_elicit import (
-    elicit_begin_agent_jol_prompt,
-    elicit_begin_agent_prompt,
-    elicit_chat_history_exists_prompt,
-    elicit_iris_initial_system_prompt,
-    elicit_no_chat_history_prompt,
+    iris_base_system_prompt,
+    iris_begin_agent_jol_prompt,
+    iris_begin_agent_prompt,
+    iris_chat_history_exists_prompt,
+    iris_competency_block,
+    iris_course_meta_block,
+    iris_exercise_block,
+    iris_faq_block,
+    iris_lecture_block,
+    iris_no_chat_history_prompt_no_metrics,
 )
 from ..shared.citation_pipeline import CitationPipeline, InformationType
 from ..shared.utils import (
@@ -354,18 +352,34 @@ class CourseChatPipeline(Pipeline):
             result = format_faqs(self.retrieved_faqs)
             return result
 
-        if dto.user.id % 3 < 2:
-            iris_initial_system_prompt = tell_iris_initial_system_prompt
-            begin_agent_prompt = tell_begin_agent_prompt
-            chat_history_exists_prompt = tell_chat_history_exists_prompt
-            no_chat_history_prompt = tell_no_chat_history_prompt
-            begin_agent_jol_prompt = tell_begin_agent_jol_prompt
-        else:
-            iris_initial_system_prompt = elicit_iris_initial_system_prompt
-            begin_agent_prompt = elicit_begin_agent_prompt
-            chat_history_exists_prompt = elicit_chat_history_exists_prompt
-            no_chat_history_prompt = elicit_no_chat_history_prompt
-            begin_agent_jol_prompt = elicit_begin_agent_jol_prompt
+        # Cache results of tool allowance checks
+        allow_lecture_tool = self.should_allow_lecture_tool(dto.course.id)
+        allow_faq_tool = should_allow_faq_tool(self.db, dto.course.id)
+
+        # Construct the base system prompt
+        system_prompt_parts = [
+            iris_base_system_prompt.replace(
+                "{current_date}",
+                datetime.now(tz=pytz.UTC).strftime("%Y-%m-%d %H:%M:%S"),
+            )
+        ]
+
+        # Conditionally add modular blocks based on data availability
+        system_prompt_parts.append(iris_course_meta_block)
+
+        if dto.course.competencies:
+            system_prompt_parts.append(iris_competency_block)
+
+        if dto.course.exercises:
+            system_prompt_parts.append(iris_exercise_block)
+
+        if allow_lecture_tool:
+            system_prompt_parts.append(iris_lecture_block)
+
+        if allow_faq_tool:
+            system_prompt_parts.append(iris_faq_block)
+
+        initial_prompt_with_date_and_modules = "\n".join(system_prompt_parts)
 
         try:
             logger.info("Running course chat pipeline...")
@@ -375,10 +389,6 @@ class CourseChatPipeline(Pipeline):
             )
 
             # Set up the initial prompt
-            initial_prompt_with_date = iris_initial_system_prompt.replace(
-                "{current_date}",
-                datetime.now(tz=pytz.UTC).strftime("%Y-%m-%d %H:%M:%S"),
-            )
 
             if self.event == "jol":
                 event_payload = CompetencyJolDTO.model_validate(dto.event_payload.event)
@@ -391,7 +401,7 @@ class CourseChatPipeline(Pipeline):
                     ),
                     None,
                 )
-                agent_prompt = begin_agent_jol_prompt
+                agent_prompt = iris_begin_agent_jol_prompt
                 params = {
                     "jol": json.dumps(
                         {
@@ -406,12 +416,12 @@ class CourseChatPipeline(Pipeline):
                 }
             else:
                 agent_prompt = (
-                    begin_agent_prompt if query is not None else no_chat_history_prompt
+                    iris_begin_agent_prompt
+                    if query is not None
+                    else iris_no_chat_history_prompt_no_metrics
                 )
                 params = {
-                    "course_name": (
-                        dto.course.name if dto.course else "<Unknown course name>"
-                    ),
+                    "course_name": dto.course.name,
                 }
 
             custom_instructions = format_custom_instructions(dto.custom_instructions)
@@ -425,9 +435,9 @@ class CourseChatPipeline(Pipeline):
                 self.prompt = ChatPromptTemplate.from_messages(
                     [
                         SystemMessage(
-                            initial_prompt_with_date
+                            initial_prompt_with_date_and_modules
                             + "\n"
-                            + chat_history_exists_prompt
+                            + iris_chat_history_exists_prompt
                             + "\n"
                             + agent_prompt
                             + "\n"
@@ -441,7 +451,7 @@ class CourseChatPipeline(Pipeline):
                 self.prompt = ChatPromptTemplate.from_messages(
                     [
                         SystemMessage(
-                            initial_prompt_with_date
+                            initial_prompt_with_date_and_modules
                             + "\n"
                             + agent_prompt
                             + "\n"
@@ -458,19 +468,15 @@ class CourseChatPipeline(Pipeline):
                 get_student_exercise_metrics,
                 get_competency_list,
             ]
-            if self.should_allow_lecture_tool(dto.course.id):
+            if allow_lecture_tool:
                 tool_list.append(lecture_content_retrieval)
 
-            print(
-                "Allowing lecture tool:", self.should_allow_lecture_tool(dto.course.id)
-            )
+            print("Allowing lecture tool:", allow_lecture_tool)
 
-            if should_allow_faq_tool(self.db, dto.course.id):
+            if allow_faq_tool:
                 tool_list.append(faq_content_retrieval)
 
             tools = generate_structured_tools_from_functions(tool_list)
-            # No idea why we need this extra contrary to exercise chat agent in this case, but solves the issue.
-            params.update({"tools": tools})
             agent = create_tool_calling_agent(
                 llm=self.llm, tools=tools, prompt=self.prompt
             )
@@ -541,17 +547,19 @@ class CourseChatPipeline(Pipeline):
         :param course_id: The course ID
         :return: True if there are indexed lectures for the course, False otherwise
         """
-        if course_id:
-            # Fetch the first object that matches the course ID with the language property
-            result = self.db.lecture_units.query.fetch_objects(
-                filters=Filter.by_property(LectureUnitSchema.COURSE_ID.value).equal(
-                    course_id
-                ),
-                limit=1,
-                return_properties=[LectureUnitSchema.COURSE_NAME.value],
-            )
-            return len(result.objects) > 0
-        return False
+        if not course_id:
+            return False
+        # Fetch the first object that matches the course ID with the language property
+        result = self.db.lecture_units.query.fetch_objects(
+            filters=Filter.by_property(LectureUnitSchema.COURSE_ID.value).equal(
+                course_id
+            ),
+            limit=1,
+            return_properties=[
+                LectureUnitSchema.COURSE_NAME.value
+            ],  # Requesting a minimal property
+        )
+        return len(result.objects) > 0
 
     @classmethod
     def get_variants(cls, available_llms: List[LanguageModel]) -> List[FeatureDTO]:
