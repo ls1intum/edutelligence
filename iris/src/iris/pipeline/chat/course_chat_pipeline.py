@@ -53,6 +53,8 @@ from ..prompts.iris_course_chat_prompts import (
     iris_chat_history_exists_prompt,
     iris_competency_block,
     iris_course_meta_block,
+    iris_examples_general_block,
+    iris_examples_metrics_block,
     iris_exercise_block,
     iris_faq_block,
     iris_lecture_block,
@@ -398,6 +400,18 @@ class CourseChatPipeline(Pipeline):
         else:
             system_prompt_parts.append(iris_no_faq_block_prompt)
 
+        # Conditionally add example blocks
+        # Condition based on logic for choosing initial agent prompt (lines 476-480 in user\'s context)
+        metrics_enabled = (
+            dto.metrics
+            and dto.course.competencies
+            and dto.course.student_analytics_dashboard_enabled
+        )
+        if metrics_enabled:
+            system_prompt_parts.append(iris_examples_metrics_block)
+        else:
+            system_prompt_parts.append(iris_examples_general_block)
+
         initial_prompt_main_block = "\n".join(system_prompt_parts)
         custom_instructions_formatted = format_custom_instructions(
             dto.custom_instructions
@@ -467,11 +481,7 @@ class CourseChatPipeline(Pipeline):
                 params["course_name"] = (
                     dto.course.name if dto.course and dto.course.name else "the course"
                 )
-                if (
-                    dto.metrics
-                    and dto.course.competencies
-                    and dto.course.student_analytics_dashboard_enabled
-                ):
+                if metrics_enabled:
                     agent_specific_primary_instruction = (
                         iris_no_chat_history_prompt_with_metrics_begin_agent_prompt
                     )
