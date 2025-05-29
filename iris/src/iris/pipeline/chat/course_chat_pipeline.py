@@ -180,8 +180,33 @@ class CourseChatPipeline(Pipeline):
                 exercise_dict["due_date_over"] = (
                     exercise.due_date < current_time if exercise.due_date else None
                 )
+                # remove the problem statement from the exercise dict
+                exercise_dict.pop("problem_statement", None)
                 exercises.append(exercise_dict)
             return exercises
+
+        def get_exercise_problem_statement(exercise_id: int) -> str:
+            """
+            Get the problem statement of the exercise with the given ID.
+            Use this if the student asks you about the problem statement of an exercise or if you need
+            to know more about the content of an exercise to provide more informed advice.
+            Important: You have to pass the correct exercise ID here.
+            DO IT ONLY IF YOU KNOW THE ID DEFINITELY. NEVER GUESS THE ID.
+            Note: This operation is idempotent. Repeated calls with the same ID will return the same output.
+            You can only use this if you first queried the exercise list and looked up the ID of the exercise.
+            """
+            self.callback.in_progress(
+                f"Reading exercise problem statement (id: {exercise_id}) ..."
+            )
+            # for debug sleep a second
+            time.sleep(1)
+            exercise = next(
+                (ex for ex in dto.course.exercises if ex.id == exercise_id), None
+            )
+            if exercise:
+                return exercise.problem_statement or "No problem statement provided"
+            else:
+                return "Exercise not found"
 
         def get_course_details() -> dict:
             """
@@ -272,6 +297,7 @@ class CourseChatPipeline(Pipeline):
             added their JoL assessment.
             """
             self.callback.in_progress("Reading competency list ...")
+            print(dto.course.competencies)
             # for debug sleep a second
             time.sleep(1)
             if not dto.metrics or not dto.metrics.competency_metrics:
@@ -490,6 +516,19 @@ class CourseChatPipeline(Pipeline):
                     )
                 # No iris_chat_history_exists_prompt here as history is empty / not relevant for initiation
 
+            tool_list = [
+                get_course_details,
+            ]
+            if dto.course.exercises:
+                tool_list.append(get_exercise_list)
+                tool_list.append(get_exercise_problem_statement)
+            if dto.metrics and dto.metrics.exercise_metrics and dto.course.exercises:
+                tool_list.append(get_student_exercise_metrics)
+            if dto.course.competencies and len(dto.course.competencies) > 0:
+                tool_list.append(get_competency_list)
+            if allow_lecture_tool:
+                tool_list.append(lecture_content_retrieval)
+
             system_message_parts.append(agent_specific_primary_instruction)
             system_message_parts.append(iris_begin_agent_suffix_prompt)
             if custom_instructions_formatted:
@@ -505,15 +544,6 @@ class CourseChatPipeline(Pipeline):
 
             messages_for_template.append(("placeholder", "{agent_scratchpad}"))
             self.prompt = ChatPromptTemplate.from_messages(messages_for_template)
-
-            tool_list = [
-                get_course_details,
-                get_exercise_list,
-                get_student_exercise_metrics,
-                get_competency_list,
-            ]
-            if allow_lecture_tool:
-                tool_list.append(lecture_content_retrieval)
 
             print("Allowing lecture tool:", allow_lecture_tool)
 
