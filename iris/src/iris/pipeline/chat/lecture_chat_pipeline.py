@@ -97,7 +97,7 @@ class LectureChatPipeline(Pipeline):
         if variant == "advanced":
             model = "gpt-4.1"
         else:
-            model = "gpt-4.1-nano"
+            model = "gpt-4.1-mini"
 
         request_handler = ModelVersionRequestHandler(version=model)
 
@@ -115,7 +115,7 @@ class LectureChatPipeline(Pipeline):
     def get_variants(cls, available_llms: List[LanguageModel]) -> List[FeatureDTO]:
         variant_specs = [
             (
-                ["gpt-4.1-nano"],
+                ["gpt-4.1-mini"],
                 FeatureDTO(
                     id="default",
                     name="Default",
