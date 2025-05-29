@@ -37,5 +37,5 @@ class ExtendedCourseDTO(BaseModel):
     exams: List[ExamDTO] = Field(alias="exams", default=[])
     competencies: List[CompetencyDTO] = Field(alias="competencies", default=[])
     student_analytics_dashboard_enabled: bool = Field(
-        alias="studentAnalyticsDashboardEnabled", default=True
+        alias="studentAnalyticsDashboardEnabled", default=False
     )
