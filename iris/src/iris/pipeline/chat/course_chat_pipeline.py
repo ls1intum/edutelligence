@@ -467,7 +467,11 @@ class CourseChatPipeline(Pipeline):
                 params["course_name"] = (
                     dto.course.name if dto.course and dto.course.name else "the course"
                 )
-                if dto.metrics and dto.course.competencies:
+                if (
+                    dto.metrics
+                    and dto.course.competencies
+                    and dto.course.student_analytics_dashboard_enabled
+                ):
                     agent_specific_primary_instruction = (
                         iris_no_chat_history_prompt_with_metrics_begin_agent_prompt
                     )

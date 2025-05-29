@@ -36,3 +36,6 @@ class ExtendedCourseDTO(BaseModel):
     exercises: List[ExerciseWithSubmissionsDTO] = Field(alias="exercises", default=[])
     exams: List[ExamDTO] = Field(alias="exams", default=[])
     competencies: List[CompetencyDTO] = Field(alias="competencies", default=[])
+    student_analytics_dashboard_enabled: bool = Field(
+        alias="studentAnalyticsDashboardEnabled", default=True
+    )
