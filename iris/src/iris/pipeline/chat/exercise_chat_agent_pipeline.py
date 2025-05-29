@@ -136,7 +136,7 @@ class ExerciseChatAgentPipeline(Pipeline):
             model = "gpt-4.1"
             model_small = "gpt-4.1-mini"
         else:
-            model = "gpt-4.1-nano"
+            model = "gpt-4.1-mini"
             model_small = "gpt-4.1-nano"
 
         self.llm = IrisLangchainChatModel(
@@ -171,7 +171,7 @@ class ExerciseChatAgentPipeline(Pipeline):
     def get_variants(cls, available_llms: List[LanguageModel]) -> List[FeatureDTO]:
         variant_specs = [
             (
-                ["gpt-4.1-nano"],
+                ["gpt-4.1-mini", "gpt-4.1-nano"],
                 FeatureDTO(
                     id="default",
                     name="Default",
