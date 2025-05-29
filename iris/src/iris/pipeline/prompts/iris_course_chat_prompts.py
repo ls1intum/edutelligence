@@ -159,12 +159,3 @@ If you link a resource, ALWAYS include a markdown link. Use markdown format: [Re
 Blend concise feedback with an open-ended question, as described in the system prompt.
 Use tools if useful, e.g., to figure out what topic to bring up from how the student is doing or if there was a question about {course_name}.
 """
-
-iris_course_system_prompt = """
-Course details:
-- Course name: {course_name}
-- Course description: {course_description}
-- Default programming language: {programming_language}
-- Course start date: {course_start_date}
-- Course end date: {course_end_date}
-"""

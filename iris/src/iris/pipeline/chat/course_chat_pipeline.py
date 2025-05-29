@@ -401,7 +401,6 @@ class CourseChatPipeline(Pipeline):
             system_prompt_parts.append(iris_no_faq_block_prompt)
 
         # Conditionally add example blocks
-        # Condition based on logic for choosing initial agent prompt (lines 476-480 in user\'s context)
         metrics_enabled = (
             dto.metrics
             and dto.course.competencies
