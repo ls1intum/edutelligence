@@ -4,45 +4,27 @@ from pydantic import BaseModel, Field
 
 
 system_message = """
-You are an educational analyst evaluating a student's answer to a text-based exercise.
+You are an educational analyst evaluating a student's response to a text-based exercise. 
+Your goal is to compare the expected competencies for solving the exercise with what the student has demonstrated.
 
 Your task is to:
-1. Identify the student's demonstrated competencies (what they understand or do well).
-2. Identify the student's challenges (misconceptions, errors, or difficulties).
-3. Identify missing components in the student's response (important points that were not addressed).
-4. Estimate the student's level of understanding using the diagnosis levels.
-5. Generate next step suggestions for students according to the diagnosis levels.
-
-You will receive:
-- The student's submission (with line numbers)
-- The correct solution (if available)
-- Grading instructions or rubric (if available)
-
-Instructions:
-1. Start by carefully reading the problem statement, identify what exactly is asked to do.
-2. If a sample solution is provided, analyze it to understand the logic and approach used to solve the problem.
-3. Analyze the grading instructions, see how they would fit into the sample solution.
-4. Read the student's submission and compare it to the sample solution and grading instructions.
-5. Diagnose student's situation based on the sample solution, grading instructions, and student's submission. Use the 
-predefined diagnosis levels (Off-Target, Insufficient Knowledge, Incomplete Answer, Partially Correct, Correct)
-    - Off-Target: The response is irrelevant or not aligned with the question or course content.
-    - Insufficient Knowledge: The response attempts to address the question but lacks key concepts or terminology.
-    - Incomplete Answer: The student covers only part of the required answer or omits key elements.
-    - Partially Correct: The response includes relevant and partially accurate content, but lacks completeness or clarity.
-    - Correct: The response is accurate, complete, and well-structured.
-6. Suggest the action student should take regarding the diagnosis (Review Concept, Improve Explanation, Extend Thinking)
-    - Review Concept: When student faces conceptual misunderstandings; suggest them to revisit foundational material
-    - Improve Explanation: When student is partially correct; suggest to elaborate or clarify to strengthen understanding
-    - Extend Thinking: When student is fully or mostly correct; deepen insight or explore related ideas
+1. Analyze the exercise based on the problem statement, sample solution, and grading instructions.
+2. Extract the core competencies a student must demonstrate to fully answer the question. For each, specify the expected cognitive level (e.g., Recall, Understand, Apply, Analyze, Evaluate, Create) and relate it to grading instructions if available.
+3. Compare each required competency to the student's submission:
+   - Identify if the student demonstrated this competency.
+   - Mark the competency as one of:
+     - Correct: Accurately demonstrated with clear evidence.
+     - Partially Correct: Some understanding shown, but incomplete or unclear.
+     - Attempted Incorrectly: Tried to address the competency but misunderstood it.
+     - Not Attempted: No trace of the required competency.
+   - Provide textual evidence from the student's submission (quote or paraphrase) and line numbers if possible.
 
 Guidelines:
-- Be specific in describing competencies and challenges.
-- Use line numbers when referencing issues in the submission.
-- Include a response quality level only if it is reasonably clear.
-- If students miss some parts of the question, point that out without referencing their submission (no line_end, line_start)
-
-Output Format:
-Return only valid JSON. Do not include any explanation or comments outside the JSON.
+- Be exhaustive: list all core competencies needed to solve the task, cover all the grading instructions and questions.
+- Use only the student's submission, not your own interpretation, when evaluating evidence.
+- Use clear and concise language.
+- Do not repeat identical evidence for multiple competencies unless strictly necessary.
+- If students miss some parts of the question, create not attempted competencies.
 
 <Exercise Details>
 
@@ -80,45 +62,54 @@ _Note: **{problem_statement}**, **{example_solution}**, or **{grading_instructio
 
 # Output Object
 
-class ResponseDiagnosis(str, Enum):
-    OFF_TARGET = "Off-Target"  # The response is irrelevant or unrelated to the task
-    INSUFFICIENT_KNOWLEDGE = "Insufficient Knowledge"  # Shows lack of understanding of key concepts
-    INCOMPLETE_ANSWER = "Incomplete Answer"  # Leaves out required parts of the answer
-    PARTIALLY_CORRECT = "Partially Correct"  # Contains some correct information but is incomplete or poorly explained
-    FULLY_CORRECT = "Correct"  # Accurate, complete, and well-structured answer
+class CompetencyStatus(str, Enum):
+    NOT_ATTEMPTED = "Not Attempted"
+    ATTEMPTED_INCORRECTLY = "Attempted Incorrectly"
+    PARTIALLY_CORRECT = "Partially Correct"
+    CORRECT = "Correct"
 
 
-class SuggestedAction(str, Enum):
-    REVIEW_CONCEPT = "Review Concept"     # For conceptual misunderstandings; revisit foundational material
-    IMPROVE_EXPLANATION = "Improve Explanation"  # Partially correct; elaborate or clarify to strengthen understanding
-    EXTEND_THINKING = "Extend Thinking"   # Fully or mostly correct; deepen insight or explore related ideas
+class CognitiveLevel(str, Enum):
+    RECALL = "Recall"
+    UNDERSTAND = "Understand"
+    APPLY = "Apply"
+    ANALYZE = "Analyze"
+    EVALUATE = "Evaluate"
+    CREATE = "Create"
 
 
-class ResponseAnalysisItem(BaseModel):
+class RequiredCompetency(BaseModel):
     description: str = Field(
-        description="Detailed explanation of a specific issue or observation in the student's response, such as a misconception, omission, or vague explanation."
+        description="What the student needs to demonstrate (e.g., define a term, apply a method, justify a claim)."
     )
-    diagnosis: ResponseDiagnosis = Field(
-        description="Estimated diagnosis of the student's understanding based on the current response, using the custom levels."
-    )
-    suggested_action: SuggestedAction = Field(
-        description="Suggested action for the student as a next step."
+    cognitive_level: Optional[CognitiveLevel] = Field(
+        default=None,
+        description="Cognitive demand required by the question (Bloom level)."
     )
     grading_instruction_id: Optional[int] = Field(
         default=None,
-        description="Optional reference ID to the grading instruction or rubric item that this analysis relates to."
+        description="Reference to the corresponding grading instruction (if available)."
+    )
+
+
+class CompetencyEvaluation(BaseModel):
+    competency: RequiredCompetency
+    status: CompetencyStatus
+    evidence: Optional[str] = Field(
+        default=None,
+        description="Quote or paraphrase from the student's submission that supports this evaluation."
     )
     line_start: Optional[int] = Field(
         default=None,
-        description="Line number in the student's submission where this issue begins, if applicable."
+        description="Start line number in the student's submission where the competency is (partially) demonstrated."
     )
     line_end: Optional[int] = Field(
         default=None,
-        description="Line number in the student's submission where this issue ends, if applicable."
+        description="End line number in the student's submission where the competency is (partially) demonstrated."
     )
 
 
-class StudentResponseAnalysis(BaseModel):
-    analyses: List[ResponseAnalysisItem] = Field(
-        description="A list of issues, gaps, or errors identified in the student's response, each with a quality assessment and optional references."
+class SubmissionCompetencyProfile(BaseModel):
+    competencies: List[CompetencyEvaluation] = Field(
+        description="List of all required competencies and how well the student fulfilled them."
     )

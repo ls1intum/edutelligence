@@ -1,4 +1,3 @@
-import logging
 from typing import List
 
 from athena import emit_meta
@@ -13,7 +12,7 @@ from llm_core.utils.predict_and_parse import predict_and_parse
 from module_text_llm.approach_config import ApproachConfig
 from module_text_llm.helpers.utils import add_sentence_numbers, get_index_range_from_line_range, \
     format_grading_instructions
-from module_text_llm.llm_as_profiler.prompt_profiler import StudentResponseAnalysis
+from module_text_llm.llm_as_profiler.prompt_profiler import SubmissionCompetencyProfile
 from module_text_llm.llm_as_profiler.prompt_generate_feedback import AssessmentModel
 
 async def generate_suggestions(exercise: Exercise, submission: Submission, config: ApproachConfig, debug: bool,
@@ -32,7 +31,7 @@ async def generate_suggestions(exercise: Exercise, submission: Submission, confi
         model=model,
         system_message=config.profiler_prompt.system_message,
         human_message=config.profiler_prompt.human_message,
-        pydantic_object=StudentResponseAnalysis
+        pydantic_object=SubmissionCompetencyProfile
     )
 
     # Check if the prompt is too long and omit features if necessary (in order of importance)
@@ -58,7 +57,7 @@ async def generate_suggestions(exercise: Exercise, submission: Submission, confi
         model=model,
         chat_prompt=chat_prompt,
         prompt_input=prompt_input,
-        pydantic_object=StudentResponseAnalysis,
+        pydantic_object=SubmissionCompetencyProfile,
         tags=[
             f"exercise-{exercise.id}",
             f"submission-{submission.id}",
@@ -66,18 +65,14 @@ async def generate_suggestions(exercise: Exercise, submission: Submission, confi
         use_function_calling=True
     )
 
-    logging.info(f"Extracted profile is: {initial_result}")
-    print(f"Extracted profile is: {initial_result}")
-
     second_prompt_input = {
         "max_points": exercise.max_points,
-        "student_assessment": initial_result.dict(),
+        "competency_analysis": initial_result.dict(),
         "submission": add_sentence_numbers(submission.text),
         "grading_instructions": format_grading_instructions(exercise.grading_instructions, exercise.grading_criteria),
         "problem_statement": exercise.problem_statement or "No problem statement.",
         "example_solution": exercise.example_solution
     }
-
 
     second_chat_prompt = get_chat_prompt_with_formatting_instructions(
         model=model,

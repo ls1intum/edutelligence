@@ -9,44 +9,47 @@ You will receive:
 - A problem statement
 - A sample solution (for internal reference only)
 - Grading instructions
-- A structured analysis of the student's response
+- The student's submission (with line numbers)
 - The maximum score
+- A structured analysis of the competencies required to solve the task, and how the student performed for each one
 
 Instructions:
 1. Read the problem statement to understand what the student was asked to do.
 2. Use the sample solution only to understand the intended reasoning and structure.
 3. Review the grading instructions to identify how responses are evaluated.
-4. Read the structured student response analysis. Each item includes:
-   - A description of what the student did well or struggled with
-   - A diagnosis (Off-Target, Missing Points, Partially Correct, Correct)
-   - A call-to-action for student (Review Concept, Improve Explanation, Extend Thinking)
-   - A grading instruction ID (optional)
-   - Line references from the student submission (optional)
+4. Review the structured competency analysis. Each item includes:
+   - A competency the student was expected to demonstrate
+   - The associated cognitive level (e.g., Understand, Apply, Analyze)
+   - An evaluation of how well the student demonstrated it (Correct, Partially Correct, Attempted Incorrectly, Not Attempted)
+   - Optional evidence with line numbers
 5. Follow the below steps for generating the each point of feedback:
-    - Ensure feedback adds value beyond what the student already wrote - avoid simply agreeing or repeating. 
-    - Write a short title summarizing the issue
-    - Write a clear explanation directly addressed to the student
-    - Choose one feedback type:
-        - Conceptual Clarification: Used when the student's misunderstanding is rooted in core concepts
-        - Request Elaboration: The student's response is on track but needs more detail or clarity
-        - Provide Hint: A subtle nudge to guide the student forward without giving away the answer
-        - Confirm Understanding: Reinforce correct reasoning and optionally invite reflection or extension
+    - Write a short title summarizing the feedback
     - Include line_start and line_end if the feedback refers to a specific part of the answer
     - Include credits (points awarded or deducted)
+    - Suggest the action student should take regarding the diagnosis (Review Concept, Improve Explanation, Extend Thinking)
+        - Review Concept: When student faces conceptual misunderstandings; suggest them to revisit foundational material. Tell them "Go over this subject/topic" without explaining/revealing answer.
+        - Improve Explanation: When student is partially correct; suggest to elaborate or clarify and try again to strengthen their answer. Tell them what they should do better, do not reveal the solution
+        - Extend Thinking: When student is fully or mostly correct; deepen insight or explore related ideas. Provide a clear actionable follow-up question or things they can they take a look further.
+    - Write a clear explanation directly addressed to the student according to the suggested action
+    - Assign credits gained or lost for this competency, aligned with grading instruction (if available)
     - Include grading_instruction_id if related to a rubric item
+    - Ensure feedback adds value beyond what the student already wrote - avoid simply agreeing or repeating. 
 
 You may also provide general feedback that does not refer to any specific line. In that case, set line_start and line_end to null, and credits to 0.
 
 Guidelines:
+- Do not, no matter what, reveal the solution
 - Do not exceed the maximum total score: {max_points}
 - Do not copy text from the student's answer, rubric, or solution
 - Do not repeat the student's sentences
 - Do not include metadata or extra commentary
+- Do not limit the feedback to structured competency analysis items
+- Cover all the grading instructions and questions
 
 <Inputs>
 
-Student Response Analysis:
-{student_assessment}
+Structured Competency Analysis:
+{competency_analysis}
 
 Max Score:
 {max_points}
@@ -84,11 +87,10 @@ Features cit available: **{initial_feedback}**, **{max_points}**, **{student_gra
 
 # Output Object
 
-class FeedbackType(str, Enum):
-    CONCEPTUAL_CLARIFICATION = "Conceptual Clarification"  # Used when the student's misunderstanding is rooted in core concepts
-    REQUEST_ELABORATION = "Request Elaboration"            # The student's response is on track but needs more detail or clarity
-    PROVIDE_HINT = "Provide Hint"                          # A subtle nudge to guide the student forward without giving away the answer
-    CONFIRM_UNDERSTANDING = "Confirm Understanding"        # Reinforce correct reasoning and optionally invite reflection or extension
+class SuggestedAction(str, Enum):
+    REVIEW_CONCEPT = "Review Concept"     # For conceptual misunderstandings; revisit foundational material
+    IMPROVE_EXPLANATION = "Improve Explanation"  # Partially correct; elaborate or clarify to strengthen understanding
+    EXTEND_THINKING = "Extend Thinking"   # Fully or mostly correct; deepen insight or explore related ideas
 
 
 class FeedbackModel(BaseModel):
@@ -98,8 +100,8 @@ class FeedbackModel(BaseModel):
     description: str = Field(
         description="Student-facing feedback message that explains the issue or suggestion in a constructive and clear way."
     )
-    type: FeedbackType = Field(
-        description="The purpose or instructional intent of the feedback, used to adapt tone and guidance (i.e., verification, elaboration, hint, revisit lecture)."
+    suggested_action: SuggestedAction = Field(
+        description="Suggested action for the student as a next step."
     )
     line_start: Optional[int] = Field(
         description="Referenced starting line number from the student's submission, or empty if unreferenced"
