@@ -17,6 +17,7 @@ expressions within the course context. Do not assume equivalence between terms u
 {final_result}
 
 ### Output:
+
 Generate the following response dictionary:
 "type": "consistent" or "inconsistent"
 
