@@ -19,7 +19,7 @@ async def mock_config():
         max_input_tokens=5000,
         model=OpenAIModelConfig(
             model_name="mock_model",
-            get_model=None
+            get_model=lambda: MockLanguageModel()
         )
     )
     return config
@@ -33,15 +33,6 @@ def mock_llm():
 def mock_assessment_model():
     """Fixture providing a mock assessment model."""
     return MockAssessmentModel()
-
-@pytest.fixture
-def mock_config():
-    """Create a mock configuration for testing."""
-    return MockApproachConfig(
-        max_input_tokens=5000,
-        model=MockModelConfig(),
-        type="basic"
-    )
 
 class MockPrompt:
     def __init__(self, graded_feedback_system_message="Test system message", graded_feedback_human_message="Test human message"):

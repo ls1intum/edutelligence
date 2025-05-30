@@ -19,7 +19,7 @@ HOSPITAL_GRADING_CRITERIA = [
         structured_grading_instructions=[
             StructuredGradingInstruction(
                 id=2, credits=2.0, grading_scale="Good",
-                instruction_description="Doctor must inherit from Person AND have both specialization and licenseNumber attributes. No partial credit.",
+                instruction_description="Doctor must inherit from Person.",
                 feedback="Doctor correctly inherits from Person and has both required attributes.", usage_count=0
             )
         ]
@@ -73,9 +73,9 @@ HOSPITAL_PROBLEM_STATEMENT = (
 
 HOSPITAL_GRADING_INSTRUCTIONS = (
     "1. Appointment class must have date and status attributes.\n"
-    "2. Doctor must inherit from Person and have specialization and licenseNumber attributes.\n"
+    "2. Doctor must inherit from Person."
     "3. Nurse must inherit from Person and have department and shift attributes.\n"
-    "4. Patient class must have a name attribute for identification.\n"
+    "4. Patient class must have patientId and medicalHistory attributes.\n"
     "5. Department must have a composition relationship with Staff.\n"
 )
 
