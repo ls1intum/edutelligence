@@ -1,10 +1,10 @@
 # Import OpenAI mocks first to ensure they're in place before any other imports
-from tests.modules.text.utils.mock_openai import mock_openai, mock_openai_client
+from tests.utils.mock_openai import mock_openai, mock_openai_client
 
 import pytest
-from tests.modules.text.utils.mock_llm import MockLanguageModel, MockStructuredMockLanguageModel, MockAssessmentModel
-from tests.modules.text.utils.mock_config import MockApproachConfig, MockModelConfig
-from tests.modules.text.utils.mock_env import mock_sent_tokenize
+from tests.utils.mock_llm import MockLanguageModel, MockStructuredMockLanguageModel, MockAssessmentModel
+from tests.utils.mock_config import MockApproachConfig, MockModelConfig
+from tests.utils.mock_env import mock_sent_tokenize
 
 
 @pytest.fixture
