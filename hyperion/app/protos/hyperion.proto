@@ -7,19 +7,16 @@ option objc_class_prefix = "Hyperion";
 
 package hyperion;
 
+/***********************
+ ***   Core types    ***
+ ***********************/
 
-// Represents a file in a repository with content
 message RepositoryFile {
-  // File path relative to the repository root
   string path = 1;
-  
-  // File content
   string content = 2;
 }
 
-// Represents a collection of files that form a repository
 message Repository {
-  // Files contained in the repository
   repeated RepositoryFile files = 1;
 }
 
@@ -59,51 +56,134 @@ enum ProjectType {
   GCC = 8;
 }
 
-// Represents a programming exercise with all associated data
-message ProgrammingExercise {
-  // Unique identifier for the exercise
-  int32 id = 1;
-
-  // Title of the exercise
-  string title = 2;
-  
-  // Programming language used
-  ProgrammingLanguage programming_language = 3;
-
-  // Package name for the exercise
-  string package_name = 4;
-
-  // Type of project (e.g., Maven, Gradle)
-  ProjectType project_type = 5;
-
-  // Repository containing template files
-  Repository template_repository = 6;
-
-  // Repository containing solution files
-  Repository solution_repository = 7;
-
-  // Repository containing test files (optional)
-  Repository test_repository = 8;
-  
-  // Problem statement describing the exercise requirements
-  string problem_statement = 9;
-  
+enum BuildStatus {
+  BUILD_SUCCESS = 0;
+  BUILD_FAILURE = 1;
+  BUILD_TIMEOUT = 2;
+  BUILD_ERROR = 3;
 }
 
-// Health check service
+enum ReviewCommentType {
+  SUGGESTION = 0;
+  ISSUE = 1;
+  IMPROVEMENT = 2;
+  QUESTION = 3;
+}
+
+/******************************
+ ***   Exercise Messages    ***
+ ******************************/
+
+message ProgrammingExercise {
+  int32 id = 1;
+  string title = 2;
+  ProgrammingLanguage programming_language = 3;
+  string package_name = 4;
+  ProjectType project_type = 5;
+  Repository template_repository = 6;
+  Repository solution_repository = 7;
+  Repository test_repository = 8;
+  string problem_statement = 9;
+}
+
+message BuildResult {
+  BuildStatus status = 1;
+  string output = 2;
+  repeated string errors = 3;
+  repeated string warnings = 4;
+  string test_results = 5;
+}
+
+message ReviewComment {
+  ReviewCommentType type = 1;
+  string file_path = 2;
+  int32 line_number = 3;
+  string comment = 4;
+  string suggested_code = 5;
+  int32 severity = 6;
+}
+
+message ReviewComments {
+  repeated ReviewComment comments = 1;
+  string summary = 2;
+  string recommendation = 3;
+}
+
+message ImplementCommentsRequest {
+  Repository solution_repository = 1;
+  ReviewComments review_comments = 2;
+  ProgrammingLanguage programming_language = 3;
+  repeated int32 comment_indices = 4;
+}
+
+message ImplementCommentsResponse {
+  Repository improved_solution_repository = 1;
+  bool success = 2;
+  string changes_description = 3;
+  string error_message = 4;
+}
+
+message CreateInitialSolutionRequest {
+  string problem_statement = 1;
+  ProgrammingLanguage programming_language = 2;
+  ProjectType project_type = 3;
+  repeated string competencies = 4;
+  repeated string constraints = 5;
+}
+
+message CreateInitialSolutionResponse {
+  Repository solution_repository = 1;
+  bool success = 2;
+  string error_message = 3;
+}
+
+message AutoFixSolutionRequest {
+  Repository solution_repository = 1;
+  BuildResult build_result = 2;
+  ProgrammingLanguage programming_language = 3;
+  ProjectType project_type = 4;
+}
+
+message AutoFixSolutionResponse {
+  Repository fixed_solution_repository = 1;
+  bool success = 2;
+  string changes_description = 3;
+  string error_message = 4;
+}
+
+message ReviewSolutionRequest {
+  Repository solution_repository = 1;
+  string problem_statement = 2;
+  ProgrammingLanguage programming_language = 3;
+}
+
+message ReviewSolutionResponse {
+  ReviewComments review_comments = 1;
+  bool success = 2;
+  string error_message = 3;
+}
+
+/******************************
+ ***   Service Definitions  ***
+ ******************************/
+
 service Health {
-  // Check if the server is running
   rpc Ping (PingRequest) returns (PingResponse) {}
 }
 
 // Exercise Creation Step 1: Define Boundary Conditions
-service DefineBoundaryCondition { }
+service DefineBoundaryCondition {}
 
 // Exercise Creation Step 2: Create Draft Problem Statement
 service DraftProblemStatement {}
 
 // Exercise Creation Step 3: Create Solution Repository
-service CreateSolutionRepository {}
+service CreateSolutionRepository {
+  rpc ImplementComments(ImplementCommentsRequest) returns (ImplementCommentsResponse) {}
+  rpc CreateInitialSolution(CreateInitialSolutionRequest) returns (CreateInitialSolutionResponse) {}
+  rpc AutoFixSolution(AutoFixSolutionRequest) returns (AutoFixSolutionResponse) {}
+  rpc ReviewSolution(ReviewSolutionRequest) returns (ReviewSolutionResponse) {}
+}
 
 // Exercise Creation Step 4: Create Template Repository
 service CreateTemplateRepository {}
@@ -122,6 +202,10 @@ service VerifyConfiguration {
   rpc CheckInconsistencies(InconsistencyCheckRequest) returns (InconsistencyCheckResponse) {}
 }
 
+/*****************************
+ ***   Utility Messages    ***
+ *****************************/
+
 message InconsistencyCheckRequest {
   string problem_statement = 1;
   Repository solution_repository = 2;
@@ -133,18 +217,12 @@ message InconsistencyCheckResponse {
   string inconsistencies = 1;
 }
 
-// Simple ping request message
 message PingRequest {
-  // Optional client identifier 
   string client_id = 1;
 }
 
-// Ping response with server status
 message PingResponse {
-  // Server status message
   string status = 1;
-  // Server version
   string version = 2;
-  // Timestamp of the server response
   int64 timestamp = 3;
 }
