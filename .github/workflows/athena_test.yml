@@ -40,4 +40,10 @@ jobs:
         
     - name: Run tests
       working-directory: athena
+      env:
+        LLM_DEFAULT_MODEL: ${{ secrets.LLM_DEFAULT_MODEL }}
+        LLM_EVALUATION_MODEL: ${{ secrets.LLM_EVALUATION_MODEL }}
+        AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
+        AZURE_OPENAI_ENDPOINT: ${{ secrets.AZURE_OPENAI_ENDPOINT }}
+        AZURE_OPENAI_API_VERSION: ${{ secrets.AZURE_OPENAI_API_VERSION }}
       run: poetry run test_all
