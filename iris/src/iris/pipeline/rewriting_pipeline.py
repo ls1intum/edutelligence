@@ -152,7 +152,6 @@ class RewritingPipeline(Pipeline):
 
         self._append_tokens(response.token_usage, PipelineEnum.IRIS_REWRITING_PIPELINE)
         result = response.contents[0].text_content
-        logging.info(f"Consistency FAQ consistency check response: {result}")
 
         if result.startswith("```json"):
             result = result.removeprefix("```json").removesuffix("```").strip()
@@ -166,9 +165,6 @@ class RewritingPipeline(Pipeline):
         for key in keys_to_check:
             if key in data:
                 result_dict[key] = data[key]
-
-        logging.info(f"Consistency FAQ consistency check result: {result_dict}")
-
         return result_dict
 
 
@@ -198,7 +194,6 @@ class RewritingPipeline(Pipeline):
         ]
 
 def parse_faq_inconsistencies(inconsistencies: List[Dict[str, str]]) -> List[str]:
-    logging.info(f"Parsing inconsistencies: {inconsistencies}")
     parsed_inconsistencies = [
         f"FAQ ID: {entry["faq_id"]}, Title: {entry["faq_question_title"]}, Answer: {entry["faq_question_answer"]}"
         for entry in inconsistencies
