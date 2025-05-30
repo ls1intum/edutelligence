@@ -138,7 +138,7 @@ class InconsistencyCheckPipeline(Pipeline):
         """
         variant_specs = [
             (
-                ["gpt-4.1-nano"],
+                ["gpt-o3-mini"],
                 FeatureDTO(
                     id="default",
                     name="Default",
