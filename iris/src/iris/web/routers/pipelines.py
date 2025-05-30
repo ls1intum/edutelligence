@@ -10,6 +10,7 @@ from iris.domain import (
     CompetencyExtractionPipelineExecutionDTO,
     CourseChatPipelineExecutionDTO,
     ExerciseChatPipelineExecutionDTO,
+    FeatureDTO,
     InconsistencyCheckPipelineExecutionDTO,
 )
 from iris.domain.chat.lecture_chat.lecture_chat_pipeline_execution_dto import (
@@ -24,7 +25,6 @@ from iris.domain.rewriting_pipeline_execution_dto import (
 from iris.domain.text_exercise_chat_pipeline_execution_dto import (
     TextExerciseChatPipelineExecutionDTO,
 )
-from iris.llm.llm_manager import LlmManager
 from iris.pipeline.chat.course_chat_pipeline import CourseChatPipeline
 from iris.pipeline.chat.exercise_chat_agent_pipeline import (
     ExerciseChatAgentPipeline,
@@ -34,11 +34,9 @@ from iris.pipeline.chat_gpt_wrapper_pipeline import ChatGPTWrapperPipeline
 from iris.pipeline.competency_extraction_pipeline import (
     CompetencyExtractionPipeline,
 )
-from iris.pipeline.faq_ingestion_pipeline import FaqIngestionPipeline
 from iris.pipeline.inconsistency_check_pipeline import (
     InconsistencyCheckPipeline,
 )
-from iris.pipeline.lecture_ingestion_pipeline import LectureUnitPageIngestionPipeline
 from iris.pipeline.rewriting_pipeline import RewritingPipeline
 from iris.pipeline.text_exercise_chat_pipeline import TextExerciseChatPipeline
 from iris.pipeline.tutor_suggestion_pipeline import TutorSuggestionPipeline
@@ -53,6 +51,7 @@ from iris.web.status.status_update import (
     TextExerciseChatCallback,
     TutorSuggestionCallback,
 )
+
 from iris.web.utils import validate_pipeline_variant
 
 router = APIRouter(prefix="/api/v1/pipelines", tags=["pipelines"])
@@ -113,21 +112,18 @@ def run_chatgpt_wrapper_pipeline_worker(
 
 
 @router.post(
-    "/programming-exercise-chat/run",
+    "/tutor-chat/{variant}/run",
     status_code=status.HTTP_202_ACCEPTED,
     dependencies=[Depends(TokenValidator())],
 )
 def run_exercise_chat_pipeline(
+    variant: str,
     event: str | None = Query(None, description="Event query parameter"),
     dto: ExerciseChatPipelineExecutionDTO = Body(
         description="Exercise Chat Pipeline Execution DTO"
     ),
 ):
-    variant = validate_pipeline_variant(dto.settings, ExerciseChatAgentPipeline)
-
     if variant == "chat-gpt-wrapper":
-        # Additional validation for ChatGPT wrapper variant
-        validate_pipeline_variant(dto.settings, ChatGPTWrapperPipeline)
         thread = Thread(target=run_chatgpt_wrapper_pipeline_worker, args=(dto, variant))
     else:
         thread = Thread(
@@ -160,18 +156,17 @@ def run_course_chat_pipeline_worker(dto, variant, event):
 
 
 @router.post(
-    "/course-chat/run",
+    "/course-chat/{variant}/run",
     status_code=status.HTTP_202_ACCEPTED,
     dependencies=[Depends(TokenValidator())],
 )
 def run_course_chat_pipeline(
+    variant: str,
     event: str | None = Query(None, description="Event query parameter"),
     dto: CourseChatPipelineExecutionDTO = Body(
         description="Course Chat Pipeline Execution DTO"
     ),
 ):
-    variant = validate_pipeline_variant(dto.settings, CourseChatPipeline)
-
     thread = Thread(target=run_course_chat_pipeline_worker, args=(dto, variant, event))
     thread.start()
 
@@ -183,7 +178,11 @@ def run_text_exercise_chat_pipeline_worker(dto, variant):
             base_url=dto.execution.settings.artemis_base_url,
             initial_stages=dto.execution.initial_stages,
         )
-        pipeline = TextExerciseChatPipeline(callback=callback, variant=variant)
+        match variant:
+            case "default" | "text_exercise_chat_pipeline_reference_impl":
+                pipeline = TextExerciseChatPipeline(callback=callback)
+            case _:
+                raise ValueError(f"Unknown variant: {variant}")
     except Exception as e:
         logger.error("Error preparing text exercise chat pipeline: %s", e)
         logger.error(traceback.format_exc())
@@ -205,7 +204,13 @@ def run_lecture_chat_pipeline_worker(dto, variant):
             base_url=dto.settings.artemis_base_url,
             initial_stages=dto.initial_stages,
         )
-        pipeline = LectureChatPipeline(callback=callback, dto=dto, variant=variant)
+        match variant:
+            case "default" | "lecture_chat_pipeline_reference_impl":
+                pipeline = LectureChatPipeline(
+                    callback=callback, dto=dto, variant=variant
+                )
+            case _:
+                raise ValueError(f"Unknown variant: {variant}")
     except Exception as e:
         logger.error("Error preparing lecture chat pipeline: %s", e)
         logger.error(traceback.format_exc())
@@ -221,27 +226,23 @@ def run_lecture_chat_pipeline_worker(dto, variant):
 
 
 @router.post(
-    "/text-exercise-chat/run",
+    "/text-exercise-chat/{variant}/run",
     status_code=status.HTTP_202_ACCEPTED,
     dependencies=[Depends(TokenValidator())],
 )
-def run_text_exercise_chat_pipeline(dto: TextExerciseChatPipelineExecutionDTO):
-    variant = validate_pipeline_variant(
-        dto.execution.settings, TextExerciseChatPipeline
-    )
-
+def run_text_exercise_chat_pipeline(
+    variant: str, dto: TextExerciseChatPipelineExecutionDTO
+):
     thread = Thread(target=run_text_exercise_chat_pipeline_worker, args=(dto, variant))
     thread.start()
 
 
 @router.post(
-    "/lecture-chat/run",
+    "/lecture-chat/{variant}/run",
     status_code=status.HTTP_202_ACCEPTED,
     dependencies=[Depends(TokenValidator())],
 )
-def run_lecture_chat_pipeline(dto: LectureChatPipelineExecutionDTO):
-    variant = validate_pipeline_variant(dto.settings, LectureChatPipeline)
-
+def run_lecture_chat_pipeline(variant: str, dto: LectureChatPipelineExecutionDTO):
     thread = Thread(target=run_lecture_chat_pipeline_worker, args=(dto, variant))
     thread.start()
 
@@ -271,15 +272,13 @@ def run_competency_extraction_pipeline_worker(
 
 
 @router.post(
-    "/competency-extraction/run",
+    "/competency-extraction/{variant}/run",
     status_code=status.HTTP_202_ACCEPTED,
     dependencies=[Depends(TokenValidator())],
 )
-def run_competency_extraction_pipeline(dto: CompetencyExtractionPipelineExecutionDTO):
-    variant = validate_pipeline_variant(
-        dto.execution.settings, CompetencyExtractionPipeline
-    )
-
+def run_competency_extraction_pipeline(
+    variant: str, dto: CompetencyExtractionPipelineExecutionDTO
+):
     thread = Thread(
         target=run_competency_extraction_pipeline_worker, args=(dto, variant)
     )
@@ -318,6 +317,7 @@ def run_rewriting_pipeline_worker(dto: RewritingPipelineExecutionDTO, variant: s
     dependencies=[Depends(TokenValidator())],
 )
 def run_rewriting_pipeline(dto: RewritingPipelineExecutionDTO):
+    logger.info("Received rewriting pipeline request: %s", dto)
     variant = validate_pipeline_variant(
         dto.execution.settings, RewritingPipeline
     ).lower()
@@ -349,15 +349,13 @@ def run_inconsistency_check_pipeline_worker(
 
 
 @router.post(
-    "/inconsistency-check/run",
+    "/inconsistency-check/{variant}/run",
     status_code=status.HTTP_202_ACCEPTED,
     dependencies=[Depends(TokenValidator())],
 )
-def run_inconsistency_check_pipeline(dto: InconsistencyCheckPipelineExecutionDTO):
-    variant = validate_pipeline_variant(
-        dto.execution.settings, InconsistencyCheckPipeline
-    )
-
+def run_inconsistency_check_pipeline(
+    variant: str, dto: InconsistencyCheckPipelineExecutionDTO
+):
     thread = Thread(target=run_inconsistency_check_pipeline_worker, args=(dto, variant))
     thread.start()
 
@@ -385,15 +383,13 @@ def run_communication_tutor_suggestions_pipeline_worker(
 
 
 @router.post(
-    "/tutor-suggestion/run",
+    "/tutor-suggestion/{variant}/run",
     status_code=status.HTTP_202_ACCEPTED,
     dependencies=[Depends(TokenValidator())],
 )
 def run_communication_tutor_suggestions_pipeline(
-    dto: CommunicationTutorSuggestionPipelineExecutionDTO,
+    variant: str, dto: CommunicationTutorSuggestionPipelineExecutionDTO
 ):
-    variant = validate_pipeline_variant(dto.settings, TutorSuggestionPipeline)
-
     thread = Thread(
         target=run_communication_tutor_suggestions_pipeline_worker, args=(dto, variant)
     )
@@ -405,34 +401,110 @@ def get_pipeline(feature: str):
     """
     Get the pipeline variants for the given feature.
     """
-    # Get available LLMs from LlmManager
-    llm_manager = LlmManager()
-    available_llms = llm_manager.entries
-
     match feature:
         case "CHAT":
-            return ChatGPTWrapperPipeline.get_variants(available_llms)
+            return [
+                FeatureDTO(
+                    id="default",
+                    name="Default Variant",
+                    description="Default chat variant.",
+                )
+            ]
         case "PROGRAMMING_EXERCISE_CHAT":
-            return ExerciseChatAgentPipeline.get_variants(available_llms)
+            return [
+                FeatureDTO(
+                    id="default",
+                    name="Default Variant",
+                    description="Default programming exercise chat variant.",
+                )
+            ]
         case "TEXT_EXERCISE_CHAT":
-            return TextExerciseChatPipeline.get_variants(available_llms)
+            return [
+                FeatureDTO(
+                    id="default",
+                    name="Default Variant",
+                    description="Default text exercise chat variant.",
+                )
+            ]
         case "COURSE_CHAT":
-            return CourseChatPipeline.get_variants(available_llms)
+            return [
+                FeatureDTO(
+                    id="default",
+                    name="Default Variant",
+                    description="Default course chat variant.",
+                )
+            ]
         case "COMPETENCY_GENERATION":
-            return CompetencyExtractionPipeline.get_variants(available_llms)
-        case "LECTURE_CHAT":
-            return LectureChatPipeline.get_variants(available_llms)
-        case "INCONSISTENCY_CHECK":
-            return InconsistencyCheckPipeline.get_variants(available_llms)
-        case "REWRITING":
-            return RewritingPipeline.get_variants(available_llms)
-        case "CHAT_GPT_WRAPPER":
-            return ChatGPTWrapperPipeline.get_variants(available_llms)
+            return [
+                FeatureDTO(
+                    id="default",
+                    name="Default Variant",
+                    description="Default competency generation variant.",
+                )
+            ]
         case "LECTURE_INGESTION":
-            return LectureUnitPageIngestionPipeline.get_variants(available_llms)
+            return [
+                FeatureDTO(
+                    id="default",
+                    name="Default Variant",
+                    description="Default lecture ingestion variant.",
+                )
+            ]
+        case "LECTURE_CHAT":
+            return [
+                FeatureDTO(
+                    id="default",
+                    name="Default Variant",
+                    description="Default lecture chat variant.",
+                )
+            ]
+        case "INCONSISTENCY_CHECK":
+            return [
+                FeatureDTO(
+                    id="default",
+                    name="Default Variant",
+                    description="Default inconsistency check variant.",
+                )
+            ]
+        case "REWRITING":
+            return [
+                FeatureDTO(
+                    id="faq",
+                    name="FAQ Variant",
+                    description="FAQ rewriting variant.",
+                ),
+                FeatureDTO(
+                    id="problem_statement",
+                    name="Problem Statement Variant",
+                    description="Problem statement rewriting variant.",
+                ),
+            ]
+        case "CHAT_GPT_WRAPPER":
+            return [
+                FeatureDTO(
+                    id="chat_gpt_wrapper",
+                    name="Default Variant",
+                    description="Default ChatGPT wrapper variant.",
+                )
+            ]
+
         case "FAQ_INGESTION":
-            return FaqIngestionPipeline.get_variants(available_llms)
+            return [
+                FeatureDTO(
+                    id="default",
+                    name="Default Variant",
+                    description="Default faq ingestion variant.",
+                )
+            ]
+
         case "TUTOR_SUGGESTION":
-            return TutorSuggestionPipeline.get_variants(available_llms)
+            return [
+                FeatureDTO(
+                    id="default",
+                    name="Default Variant",
+                    description="Default tutor suggestion variant.",
+                )
+            ]
+
         case _:
             return Response(status_code=status.HTTP_400_BAD_REQUEST)
