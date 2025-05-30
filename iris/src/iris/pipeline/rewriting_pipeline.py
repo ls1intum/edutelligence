@@ -108,7 +108,7 @@ class RewritingPipeline(Pipeline):
             faq_type = consistency_result.get("type", "").lower()
             if "inconsistent" in faq_type:
                 logging.warning("Detected inconsistencies in FAQ retrieval.")
-                inconsistencies = self.parse_inconsistencies(consistency_result.get("faqs", []))
+                inconsistencies = parse_faq_inconsistencies(consistency_result.get("faqs", []))
                 improvement = consistency_result.get("improved version", "")
                 suggestions = consistency_result.get("suggestion", [])
 
@@ -120,14 +120,6 @@ class RewritingPipeline(Pipeline):
             improvement=improvement,
             suggestions=suggestions,
         )
-
-    def parse_inconsistencies(inconsistencies: List[Dict[str, str]]) -> List[str]:
-        logging.info(f"Parsing inconsistencies: {inconsistencies}")
-        parsed_inconsistencies = [
-            f"FAQ ID: {entry["faq_id"]}, Title: {entry["faq_question_title"]}, Answer: {entry["faq_question_answer"]}"
-            for entry in inconsistencies
-        ]
-        return parsed_inconsistencies
 
     def check_faq_consistency(
             self, faqs: List[dict], final_result: str
@@ -141,6 +133,9 @@ class RewritingPipeline(Pipeline):
 
         """
         properties_list = [entry["properties"] for entry in faqs]
+
+        if not faqs:
+            return {"type": "consistent", "message": "No FAQs to check"}
 
         consistency_prompt = faq_consistency_prompt.format(
             faqs=properties_list, final_result=final_result
@@ -201,3 +196,11 @@ class RewritingPipeline(Pipeline):
                 description="Default Problem statement rewriting variant.",
             )
         ]
+
+def parse_faq_inconsistencies(inconsistencies: List[Dict[str, str]]) -> List[str]:
+    logging.info(f"Parsing inconsistencies: {inconsistencies}")
+    parsed_inconsistencies = [
+        f"FAQ ID: {entry["faq_id"]}, Title: {entry["faq_question_title"]}, Answer: {entry["faq_question_answer"]}"
+        for entry in inconsistencies
+    ]
+    return parsed_inconsistencies
