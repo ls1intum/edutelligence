@@ -1,3 +1,4 @@
+from module_text_llm.in_context_learning import InContextLearningConfig
 from module_text_llm.self_consistency import SelfConsistencyConfig
 from pydantic import BaseModel, Field
 from typing import Union
@@ -8,7 +9,8 @@ from module_text_llm.basic_approach import BasicApproachConfig
 from module_text_llm.divide_and_conquer import DivideAndConquerConfig
 from module_text_llm.cot_learner_profile import COTLearnerProfileConfig
 
-ApproachConfigUnion = Union[BasicApproachConfig, ChainOfThoughtConfig, DivideAndConquerConfig, SelfConsistencyConfig, COTLearnerProfileConfig]
+ApproachConfigUnion = Union[BasicApproachConfig, ChainOfThoughtConfig, DivideAndConquerConfig, SelfConsistencyConfig, InContextLearningConfig, COTLearnerProfileConfig]
+
 
 @config_schema_provider
 class Configuration(BaseModel):
