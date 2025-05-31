@@ -1423,6 +1423,18 @@ spelling = ["pyenchant (>=3.2,<4.0)"]
 testutils = ["gitpython (>3)"]
 
 [[package]]
+name = "pylint-per-file-ignores"
+version = "1.4.0"
+description = "A pylint plugin to ignore error codes per file."
+optional = false
+python-versions = "<4.0.0,>=3.8.1"
+groups = ["main"]
+files = [
+    {file = "pylint_per_file_ignores-1.4.0-py3-none-any.whl", hash = "sha256:0cd82d22551738b4e63a0aa1dab2a1fc4016e8f27f1429159616483711e122fd"},
+    {file = "pylint_per_file_ignores-1.4.0.tar.gz", hash = "sha256:c0de7b3d0169571aefaa1ac3a82a265641b8825b54a0b6f5ef27c3b76b988609"},
+]
+
+[[package]]
 name = "pytest"
 version = "8.3.5"
 description = "pytest: simple powerful testing with Python"
@@ -1933,4 +1945,4 @@ dev = ["doc8", "flake8", "flake8-import-order", "rstcheck[sphinx]", "sphinx"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.12,<4.0.0"
-content-hash = "aa16d168d60053718f2e6ac832044e0e8f1efb5467f630a64803b5bfdfe84dcb"
+content-hash = "dfe01f22cee8b61bade07aedcfd82d53f03110be44d5c49464bb4dbd80820a68"

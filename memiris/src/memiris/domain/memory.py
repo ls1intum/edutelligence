@@ -15,6 +15,7 @@ class Memory:
     learnings: List[
         UUID
     ]  # The learning object(s) that this memory object was created from.
+    connections: List[UUID] = []  # The memory connections this memory is part of.
     vectors: Dict[
         str, Sequence[float]
     ]  # The vector representations of the memory object,
@@ -30,9 +31,12 @@ class Memory:
         vectors: Optional[Dict[str, Sequence[float]]] = None,
         slept_on: bool = False,
         deleted: bool = False,
+        connections: Optional[List[UUID]] = None,
     ) -> None:
         if vectors is None:
             vectors = {}
+        if connections is None:
+            connections = []
         self.id = uid
         self.title = title
         self.content = content
@@ -40,6 +44,7 @@ class Memory:
         self.vectors = vectors
         self.slept_on = slept_on
         self.deleted = deleted
+        self.connections = connections
 
     def __str__(self) -> str:
         return f"{self.title}: {self.content} ({self.learnings})"
@@ -52,4 +57,5 @@ class Memory:
             self.title == other.title
             and self.content == other.content
             and self.learnings == other.learnings
+            and self.connections == other.connections
         )

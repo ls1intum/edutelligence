@@ -19,13 +19,6 @@ class TestLearningDeduplicator:
         return mock_service
 
     @pytest.fixture
-    def mock_template(self):
-        """Create a mock template."""
-        mock = MagicMock()
-        mock.render.return_value = "Rendered template content"
-        return mock
-
-    @pytest.fixture
     def sample_learnings(self):
         """Create a list of sample learnings for testing."""
         return [

@@ -1,4 +1,4 @@
-from typing import Mapping, Sequence
+from typing import Mapping, Sequence, Union
 from uuid import UUID
 
 from weaviate import WeaviateClient
@@ -31,7 +31,7 @@ class WeaviateMemoryRepository(MemoryRepository, _WeaviateBaseRepository):
     def save(self, tenant: str, entity: Memory) -> Memory:
         """Save a Memory entity to Weaviate."""
 
-        properties = {
+        properties: dict[str, Union[str, bool]] = {
             "title": entity.title,
             "content": entity.content,
             "slept_on": entity.slept_on,
@@ -75,11 +75,14 @@ class WeaviateMemoryRepository(MemoryRepository, _WeaviateBaseRepository):
             result = self.collection.with_tenant(tenant).query.fetch_object_by_id(
                 uuid=entity_id,
                 include_vector=True,
-                return_references=QueryReference(link_on="learnings"),
+                return_references=[
+                    QueryReference(link_on="learnings"),
+                    QueryReference(link_on="connections"),
+                ],
             )
 
             if not result:
-                raise ValueError(f"Learning with id {entity_id} not found")
+                raise ValueError(f"Memory with id {entity_id} not found")
 
             # Create Memory object
             return self.object_to_memory(result)
@@ -91,6 +94,10 @@ class WeaviateMemoryRepository(MemoryRepository, _WeaviateBaseRepository):
         try:
             result = self.collection.with_tenant(tenant).query.fetch_objects(
                 filters=Filter.by_property("deleted").equal(False),
+                return_references=[
+                    QueryReference(link_on="learnings"),
+                    QueryReference(link_on="connections"),
+                ],
             )
 
             if not result:
@@ -119,7 +126,10 @@ class WeaviateMemoryRepository(MemoryRepository, _WeaviateBaseRepository):
                 filters=Filter.by_property("deleted").equal(False),
                 limit=count,
                 include_vector=True,
-                return_references=QueryReference(link_on="learnings"),
+                return_references=[
+                    QueryReference(link_on="learnings"),
+                    QueryReference(link_on="connections"),
+                ],
             )
 
             if not result:
@@ -144,7 +154,10 @@ class WeaviateMemoryRepository(MemoryRepository, _WeaviateBaseRepository):
                 filters=Filter.by_property("deleted").equal(False),
                 limit=count,
                 include_vector=True,
-                return_references=QueryReference(link_on="learnings"),
+                return_references=[
+                    QueryReference(link_on="learnings"),
+                    QueryReference(link_on="connections"),
+                ],
             )
 
             if not result:
@@ -163,7 +176,10 @@ class WeaviateMemoryRepository(MemoryRepository, _WeaviateBaseRepository):
                 & Filter.by_property("deleted").equal(False),
                 limit=-1,
                 include_vector=True,
-                return_references=QueryReference(link_on="learnings"),
+                return_references=[
+                    QueryReference(link_on="learnings"),
+                    QueryReference(link_on="connections"),
+                ],
             )
 
             if not result:

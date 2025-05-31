@@ -1,3 +1,4 @@
+import uuid
 from unittest.mock import MagicMock
 
 import pytest
@@ -9,6 +10,9 @@ from memiris.domain.memory import Memory
 from memiris.dto.memory_deduplication_dto import MemoryDeduplicationDto
 from memiris.repository.weaviate.weaviate_learning_repository import (
     WeaviateLearningRepository,
+)
+from memiris.repository.weaviate.weaviate_memory_connection_repository import (
+    WeaviateMemoryConnectionRepository,
 )
 from memiris.repository.weaviate.weaviate_memory_repository import (
     WeaviateMemoryRepository,
@@ -31,7 +35,7 @@ class TestMemorySleeper(WeaviateTest):
     def mock_vectorizer(self):
         """Create a mock Vectorizer."""
         mock_vectorizer = MagicMock(spec=Vectorizer)
-        mock_vectorizer.vectorize.return_value = mock_vector()
+        mock_vectorizer.vectorize.return_value = {"vector_0": mock_vector()}
         return mock_vectorizer
 
     @pytest.fixture
@@ -50,6 +54,11 @@ class TestMemorySleeper(WeaviateTest):
     def memory_repository(self, weaviate_client):
         """Create a real memory repository backed by Weaviate."""
         return WeaviateMemoryRepository(weaviate_client)
+
+    @pytest.fixture
+    def memory_connection_repository(self, weaviate_client):
+        """Create a real memory connection repository backed by Weaviate."""
+        return WeaviateMemoryConnectionRepository(weaviate_client)
 
     @pytest.fixture
     def tenant(self):
@@ -121,6 +130,7 @@ class TestMemorySleeper(WeaviateTest):
         mock_ollama_service,
         learning_repository,
         memory_repository,
+        memory_connection_repository,
         mock_vectorizer,
     ):
         """Create a MemorySleeper instance for testing."""
@@ -129,6 +139,7 @@ class TestMemorySleeper(WeaviateTest):
             response_llm="test-response-model",
             learning_repository=learning_repository,
             memory_repository=memory_repository,
+            memory_connection_repository=memory_connection_repository,
             vectorizer=mock_vectorizer,
             ollama_service=mock_ollama_service,
             template_deduplication="",
@@ -297,3 +308,270 @@ class TestMemorySleeper(WeaviateTest):
         for memory in sample_memories:
             retrieved_memory = memory_repository.find(tenant, memory.id)
             assert retrieved_memory.deleted is False
+
+    def test_deduplicate_with_existing_memories_empty_list(
+        self, memory_sleeper, tenant
+    ):
+        """Test _deduplicate_with_existing_memories with an empty memory list."""
+        result = memory_sleeper._deduplicate_with_existing_memories([], tenant)
+        assert result == []
+
+    def test_deduplicate_with_existing_memories_no_vectors(
+        self, memory_sleeper, tenant
+    ):
+        """Test _deduplicate_with_existing_memories when memories don't have vectors."""
+        memories = [
+            Memory(
+                uid=uuid.uuid4(),
+                title="Memory without vectors",
+                content="Content",
+                learnings=[],
+            )
+        ]
+        result = memory_sleeper._deduplicate_with_existing_memories(memories, tenant)
+        assert result == memories
+
+    def test_deduplicate_with_existing_memories_functionality(
+        self,
+        memory_sleeper,
+        tenant,
+        sample_memories,
+    ):
+        """Test functionality of _deduplicate_with_existing_memories without mocking threading."""
+        # Mock memory_repository's search_multi method
+        memory_sleeper.memory_repository.search_multi = MagicMock(
+            return_value=[sample_memories[2]]
+        )
+
+        # Create a mock for the process_chunk method that will use _deduplicate_memories
+        original_process_chunk = memory_sleeper._process_chunk
+        memory_sleeper._process_chunk = MagicMock(
+            return_value=[sample_memories[0], sample_memories[2]]
+        )
+
+        try:
+            # Call the method with only memories that have vectors
+            memories_with_vectors = [m for m in sample_memories if m.vectors]
+            result = memory_sleeper._deduplicate_with_existing_memories(
+                memories_with_vectors, tenant
+            )
+
+            # Verify _process_chunk was called
+            assert memory_sleeper._process_chunk.called
+            assert len(result) > 0
+        finally:
+            # Restore the original method
+            memory_sleeper._process_chunk = original_process_chunk
+
+    def test_process_chunk_without_similar_memories(
+        self,
+        memory_sleeper,
+        tenant,
+        sample_memories,
+    ):
+        """Test _process_chunk when no similar memories are found."""
+        # Mock memory_repository's search_multi to return empty list
+        memory_sleeper.memory_repository.search_multi = MagicMock(return_value=[])
+
+        # Store the original method to restore later
+        original_deduplicate_memories = memory_sleeper._deduplicate_memories
+        # Replace with a mock to check if it's called
+        memory_sleeper._deduplicate_memories = MagicMock(return_value=[])
+
+        try:
+            # Call the method with a chunk of memories
+            chunk = [sample_memories[0]]
+            result = memory_sleeper._process_chunk(chunk, tenant)
+
+            # Verify result and that search_multi was called
+            assert result == chunk
+            memory_sleeper.memory_repository.search_multi.assert_called()
+            # _deduplicate_memories should not be called since no similar memories found
+            assert not memory_sleeper._deduplicate_memories.called
+        finally:
+            # Restore the original method
+            memory_sleeper._deduplicate_memories = original_deduplicate_memories
+
+    def test_process_chunk_with_similar_memories(
+        self,
+        memory_sleeper,
+        tenant,
+        sample_memories,
+    ):
+        """Test _process_chunk when similar memories are found."""
+        # Mock memory_repository's search_multi to return a memory
+        memory_sleeper.memory_repository.search_multi = MagicMock(
+            return_value=[sample_memories[2]]
+        )
+
+        # Create a mock for _deduplicate_memories
+        memory_sleeper._deduplicate_memories = MagicMock(
+            return_value=[sample_memories[0], sample_memories[2]]
+        )
+
+        # Call the method with a chunk of memories
+        chunk = [sample_memories[0]]
+        memory_sleeper._process_chunk(chunk, tenant)
+
+        # Verify _deduplicate_memories was called with combined memories
+        memory_sleeper._deduplicate_memories.assert_called_once()
+        call_args = memory_sleeper._deduplicate_memories.call_args[0]
+        assert len(call_args[0]) == 2  # Combined memories (chunk + similar)
+        assert call_args[1] == tenant  # Tenant
+
+    def test_deduplicate_with_existing_memories_integration(
+        self,
+        memory_sleeper,
+        tenant,
+        sample_memories,
+        mock_ollama_service,
+    ):
+        """Integration test for _deduplicate_with_existing_memories with real method calls."""
+        # Create a new memory similar to existing ones
+        new_memory = Memory(
+            uid=None,
+            title="New Python Memory",
+            content="The user is learning about Python programming concepts.",
+            learnings=[],
+            vectors={"vector_0": mock_vector()},
+        )
+
+        # Save the new memory
+        new_memory = memory_sleeper.memory_repository.save(tenant, new_memory)
+
+        # Mock memory_repository's search_multi to return our sample memory
+        memory_sleeper.memory_repository.search_multi = MagicMock(
+            return_value=[sample_memories[0]]
+        )
+
+        # Mock response from LLM for deduplicate_memories
+        deduplicated_dto = [
+            MemoryDeduplicationDto(
+                title="Combined Python Memory",
+                content="The user is interested in learning Python programming language.",
+                memories=[new_memory.id, sample_memories[0].id],
+            ),
+        ]
+
+        # Configure mock LLM response
+        mock_message = MagicMock()
+        mock_message.content = MemoryDeduplicationDto.json_array_type().dump_json(
+            deduplicated_dto
+        )
+        mock_response = MagicMock(spec=WrappedChatResponse)
+        mock_response.message = mock_message
+        mock_ollama_service.chat.return_value = mock_response
+
+        # Call the method with our new memory
+        result = memory_sleeper._deduplicate_with_existing_memories(
+            [new_memory], tenant
+        )
+
+        # Verify that search_multi was called for vector similarity search
+        memory_sleeper.memory_repository.search_multi.assert_called()
+
+        # Verify that a combined memory was created
+        combined_memory = next(
+            (m for m in result if m.title == "Combined Python Memory"), None
+        )
+        assert combined_memory is not None
+
+    def test_run_sleep_with_existing_memories(
+        self,
+        memory_sleeper,
+        tenant,
+        sample_memories,
+    ):
+        """Test the run_sleep method with deduplication against existing memories."""
+        # Mock the memory repository to return our sample memories
+        memory_sleeper.memory_repository.find_unslept_memories = MagicMock(
+            return_value=sample_memories[:2]  # Return first two memories
+        )
+
+        # Mock the deduplicate methods
+        original_deduplicate = memory_sleeper._deduplicate_memories
+        memory_sleeper._deduplicate_memories = MagicMock(
+            return_value=sample_memories[:2]
+        )
+
+        original_deduplicate_with_existing = (
+            memory_sleeper._deduplicate_with_existing_memories
+        )
+        memory_sleeper._deduplicate_with_existing_memories = MagicMock(
+            return_value=[sample_memories[0]]
+        )
+
+        # Save original run_sleep to restore later
+        original_method = memory_sleeper.run_sleep
+
+        # Call the method - no need to patch since deduplicate_with_existing_memories is already activated
+        # in the code now
+        try:
+            # Call the method
+            memory_sleeper.run_sleep(tenant)
+
+            # Verify that both deduplication methods were called
+            memory_sleeper._deduplicate_memories.assert_called_once()
+            memory_sleeper._deduplicate_with_existing_memories.assert_called_once()
+
+        finally:
+            # Restore original methods
+            memory_sleeper._deduplicate_memories = original_deduplicate
+            memory_sleeper._deduplicate_with_existing_memories = (
+                original_deduplicate_with_existing
+            )
+            memory_sleeper.run_sleep = original_method
+
+    def test_deduplicate_with_existing_memories_calls_method_per_chunk(
+        self,
+        memory_sleeper,
+        tenant,
+    ):
+        """Test that _deduplicate_memories is called once for each memory chunk."""
+        # Create many memories to ensure we get multiple chunks
+        num_memories = 15  # With chunk size 5, this should create 3 chunks
+        memories = []
+        for i in range(num_memories):
+            memory = Memory(
+                uid=f"test-id-{i}",
+                title=f"Memory {i}",
+                content=f"Content {i}",
+                learnings=[],
+                vectors={"vector_0": mock_vector()},
+            )
+            memories.append(memory)
+
+        # Mock the search_multi method to return some results
+        memory_sleeper.memory_repository.search_multi = MagicMock(
+            return_value=[memories[0]]
+        )
+
+        # Mock the _deduplicate_memories method
+        memory_sleeper._deduplicate_memories = MagicMock(
+            side_effect=lambda memories, *args, **kwargs: memories
+        )
+
+        # Override the _process_chunk method to track actual calls to _deduplicate_memories
+        original_process_chunk = memory_sleeper._process_chunk
+        memory_sleeper._process_chunk = MagicMock(side_effect=original_process_chunk)
+
+        # Call the method
+        memory_sleeper._deduplicate_with_existing_memories(memories, tenant)
+
+        # Verify that _process_chunk was called for each chunk (should be 3)
+        assert memory_sleeper._process_chunk.call_count == 3
+
+        # Get the call args for all three calls
+        call_args_list = memory_sleeper._process_chunk.call_args_list
+
+        # We know the total number should be 15 memories
+        total_memories = 0
+        for call_args in call_args_list:
+            chunk = call_args[0][0]  # First arg, first param is the chunk
+            # Each chunk should have at least 1 memory but no more than 5
+            assert len(chunk) > 0
+            assert len(chunk) <= 5
+            total_memories += len(chunk)
+
+        # Verify that all memories were processed
+        assert total_memories == num_memories
