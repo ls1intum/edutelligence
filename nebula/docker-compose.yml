@@ -1,0 +1,34 @@
+version: "3.9"
+
+services:
+  transcriber:
+    build:
+      context: .
+      dockerfile: docker/transcriber/Dockerfile
+    container_name: nebula-transcriber
+    ports:
+      - "5000:5000"
+    environment:
+      - APPLICATION_YML_PATH=/app/application_local.nebula.yml
+      - LLM_CONFIG_PATH=/app/llm_config.nebula.yml
+    volumes:
+      - ./application_local.nebula.yml:/app/application_local.nebula.yml:ro
+      - ./llm_config.nebula.yml:/app/llm_config.nebula.yml:ro
+      - ./temp:/app/temp
+    restart: unless-stopped
+
+  gateway:
+    build:
+      context: .
+      dockerfile: docker/gateway/Dockerfile
+    container_name: nebula-gateway
+    ports:
+      - "8000:8000"
+    environment:
+      - TRANSCRIBE_SERVICE_URL=http://transcriber:5000
+      - APPLICATION_YML_PATH=/app/application_local.nebula.yml
+    volumes:
+      - ./application_local.nebula.yml:/app/application_local.nebula.yml:ro
+    depends_on:
+      - transcriber
+    restart: unless-stopped
