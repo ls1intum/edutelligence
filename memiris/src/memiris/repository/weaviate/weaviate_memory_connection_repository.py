@@ -37,7 +37,7 @@ class WeaviateMemoryConnectionRepository(
         properties = {
             "connection_type": entity.connection_type.value,
             "description": entity.description,
-            "confidence": entity.confidence,
+            "weight": entity.weight,
         }
 
         if not entity.id:

@@ -156,9 +156,9 @@ class _WeaviateBaseRepository(ABC):
                         description="Description of the connection",
                     ),
                     Property(
-                        name="confidence",
+                        name="weight",
                         data_type=DataType.NUMBER,
-                        description="Confidence score for this connection (0.0 - 1.0)",
+                        description="Weight score for this connection (0.0 - 1.0)",
                     ),
                 ],
             )
@@ -298,5 +298,5 @@ class _WeaviateBaseRepository(ABC):
                 else []
             ),
             description=str(obj.properties.get("description", "")),
-            confidence=float(obj.properties.get("confidence", 1.0)),
+            weight=float(obj.properties.get("weight", 1.0)),
         )

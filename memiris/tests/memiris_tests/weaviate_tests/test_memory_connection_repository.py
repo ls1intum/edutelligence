@@ -52,7 +52,7 @@ class TestWeaviateMemoryConnectionRepository(WeaviateTest):
             MemoryConnection(
                 connection_type=ConnectionType.PRECEDES,
                 description="Memory 1 happened before Memory 2",
-                confidence=0.95,
+                weight=0.95,
                 memories=[memory1.id, memory2.id],
             ),
         )
@@ -87,7 +87,7 @@ class TestWeaviateMemoryConnectionRepository(WeaviateTest):
         assert retrieved_connection.id == memory_connection.id
         assert retrieved_connection.connection_type == memory_connection.connection_type
         assert retrieved_connection.description == memory_connection.description
-        assert retrieved_connection.confidence == memory_connection.confidence
+        assert retrieved_connection.weight == memory_connection.weight
         assert len(retrieved_connection.memories) == 2
         assert set(memory_connection.memories) == set(retrieved_connection.memories)
 
@@ -101,7 +101,7 @@ class TestWeaviateMemoryConnectionRepository(WeaviateTest):
         additional_memory = self.create_test_memory(memory_repository)
 
         memory_connection.description = "Updated Description"
-        memory_connection.confidence = 0.80
+        memory_connection.weight = 0.80
         memory_connection.connection_type = ConnectionType.CAUSES
         memory_connection.memories.append(additional_memory.id)
 
@@ -114,7 +114,7 @@ class TestWeaviateMemoryConnectionRepository(WeaviateTest):
         assert updated_connection is not None
         assert updated_connection.id == memory_connection.id
         assert updated_connection.description == "Updated Description"
-        assert updated_connection.confidence == 0.80
+        assert updated_connection.weight == 0.80
         assert updated_connection.connection_type == ConnectionType.CAUSES
         assert len(updated_connection.memories) == 3
         assert set(memory_connection.memories) == set(updated_connection.memories)
@@ -152,7 +152,7 @@ class TestWeaviateMemoryConnectionRepository(WeaviateTest):
             MemoryConnection(
                 connection_type=ConnectionType.PRECEDES,
                 description="Memory 1 and 2 sequential",
-                confidence=0.9,
+                weight=0.9,
                 memories=[memory1.id, memory2.id],
             ),
         )
@@ -162,7 +162,7 @@ class TestWeaviateMemoryConnectionRepository(WeaviateTest):
             MemoryConnection(
                 connection_type=ConnectionType.CAUSES,
                 description="Memory 3 caused Memory 4",
-                confidence=0.85,
+                weight=0.85,
                 memories=[memory3.id, memory4.id],
             ),
         )
@@ -172,7 +172,7 @@ class TestWeaviateMemoryConnectionRepository(WeaviateTest):
             MemoryConnection(
                 connection_type=ConnectionType.CAUSES,
                 description="Memory 1 caused Memory 3",
-                confidence=0.75,
+                weight=0.75,
                 memories=[memory1.id, memory3.id],
             ),
         )
@@ -211,7 +211,7 @@ class TestWeaviateMemoryConnectionRepository(WeaviateTest):
             MemoryConnection(
                 connection_type=ConnectionType.PRECEDES,
                 description="Memory 1 happened before Memory 2",
-                confidence=0.95,
+                weight=0.95,
                 memories=[memory1.id, memory2.id],
             ),
         )

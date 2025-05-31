@@ -40,7 +40,7 @@ class MemoryConnection:
         memories: List[UUID] = None,
         description: str = "",
         context: Optional[dict] = None,
-        confidence: float = 1.0,
+        weight: float = 1.0,
     ):
         """
         Initialize a MemoryConnection object.
@@ -51,14 +51,14 @@ class MemoryConnection:
             memories: List of memory IDs that are part of this connection
             description: Optional text describing the nature of the connection
             context: Additional structured information about the connection
-            confidence: Confidence score of this connection (0.0 - 1.0)
+            weight: Weight score of this connection (0.0 - 1.0)
         """
         self.id = uid
         self.connection_type = connection_type
         self.memories = memories or []
         self.description = description
         self.context = context or {}
-        self.confidence = confidence
+        self.weight = weight
 
     def __repr__(self):
         memory_count = len(self.memories) if self.memories else 0

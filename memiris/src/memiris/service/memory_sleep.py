@@ -526,7 +526,7 @@ class MemorySleeper:
                     connection_type=connection_type,
                     memories=connection_dto.memories,
                     description=connection_dto.description,
-                    confidence=connection_dto.confidence or 0.5,
+                    weight=connection_dto.weight or 0.5,
                 )
 
                 connections.append(connection)

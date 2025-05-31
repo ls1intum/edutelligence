@@ -18,9 +18,9 @@ class MemoryConnectionDto(BaseModel):
         ...,
         description="A description explaining the nature of the connection in detail",
     )
-    confidence: Optional[float] = Field(
+    weight: Optional[float] = Field(
         default=0.5,
-        description="Confidence score for this connection, between 0.0 and 1.0",
+        description="Weight score for this connection, between 0.0 and 1.0",
         ge=0.0,
         le=1.0,
     )
