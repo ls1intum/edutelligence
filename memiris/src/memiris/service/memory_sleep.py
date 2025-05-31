@@ -514,18 +514,14 @@ class MemorySleeper:
             connections = []
 
             for connection_dto in connection_dtos:
-                # Only create connections that have at least 2 memory IDs
                 if len(connection_dto.memories) < 2:
                     continue
 
-                # Convert string type to enum
                 try:
                     connection_type = ConnectionType(connection_dto.connection_type)
                 except ValueError:
-                    # If the connection type is not in our enum, use the default RELATED type
                     connection_type = ConnectionType.RELATED
 
-                # Create the memory connection
                 connection = MemoryConnection(
                     connection_type=connection_type,
                     memories=connection_dto.memories,
@@ -535,12 +531,24 @@ class MemorySleeper:
 
                 connections.append(connection)
 
-            # Save the connections to the repository
             if connections:
-                # This will need to be implemented in memory_repository
-                self.memory_connection_repository.save_all(tenant, connections)
+                connections = self.memory_connection_repository.save_all(
+                    tenant, connections
+                )
 
-            # Return the original memories as connections are stored separately
+            memories_dict = {
+                memory.id: memory for memory in valid_memories if memory.id
+            }
+
+            # Update each memory with its connections
+            for connection in connections:
+                for memory_id in connection.memories:
+                    if str(memory_id) in memories_dict:
+                        memory = memories_dict[memory_id]
+                        if not memory.connections:
+                            memory.connections = []
+                        memory.connections.append(connection.id)  # type: ignore
+
             return memories
 
         except Exception as e:
