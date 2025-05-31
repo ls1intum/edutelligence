@@ -1,0 +1,13 @@
+.container {
+  text-align: center;
+  padding: 2rem;
+}
+
+.image-container {
+  margin-top: 1rem;
+}
+
+.image-container img {
+  width: 200px;
+  height: auto;
+}
