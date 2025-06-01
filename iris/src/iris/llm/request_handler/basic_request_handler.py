@@ -52,7 +52,14 @@ class BasicRequestHandler(RequestHandler):
         ],
     ) -> PyrisMessage:
         llm = self.llm_manager.get_llm_by_id(self.model_id)
-        return llm.chat(messages, arguments, tools)
+        message = llm.chat(messages, arguments, tools)
+        message.token_usage.cost_per_million_input_token = (
+            llm.cost_per_million_input_token
+        )
+        message.token_usage.cost_per_million_output_token = (
+            llm.cost_per_million_output_token
+        )
+        return message
 
     def embed(self, text: str) -> list[float]:
         llm = self.llm_manager.get_llm_by_id(self.model_id)

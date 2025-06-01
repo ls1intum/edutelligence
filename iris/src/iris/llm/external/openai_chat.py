@@ -215,7 +215,6 @@ def convert_to_iris_message(
 class OpenAIChatModel(ChatModel):
     """A chat model implementation that uses the OpenAI API for generating completions."""
 
-    model: str
     api_key: str
 
     def chat(
@@ -262,7 +261,6 @@ class OpenAIChatModel(ChatModel):
                 response = client.chat.completions.create(**params)
                 choice = response.choices[0]
                 usage = response.usage
-                model = response.model
                 if choice.finish_reason == "content_filter":
                     # I figured that an openai error would be automatically raised if the content filter activated,
                     # but it seems that that is not the case.
@@ -283,7 +281,7 @@ class OpenAIChatModel(ChatModel):
                     ):
                         logging.error("Refusal: %s", choice.message.refusal)
 
-                return convert_to_iris_message(choice.message, usage, model)
+                return convert_to_iris_message(choice.message, usage, self.model)
             except (
                 APIError,
                 APITimeoutError,

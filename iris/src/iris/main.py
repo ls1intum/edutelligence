@@ -80,3 +80,8 @@ app.include_router(health_router)
 app.include_router(pipelines_router)
 app.include_router(webhooks_router)
 app.include_router(ingestion_status_router)
+
+# Initialize the LLM manager
+from iris.llm.llm_manager import LlmManager  # noqa: E402
+
+LlmManager()
