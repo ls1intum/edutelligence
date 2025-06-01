@@ -137,3 +137,30 @@ class PipelineWorkflows:
         } ] }
         self.weaviate_client.add_embeddings(CollectionNames.TEXT.value, embedding, properties)
         return similarity_scores
+
+
+    def feedbackLoopPipeline(self, text_id: str, cluster_id: str):
+        text = self.weaviate_client.get_embeddings_by_property(CollectionNames.TEXT.value, "text_id", text_id)
+        cluster = self.weaviate_client.get_embeddings_by_property(CollectionNames.CLUSTERCENTER.value, "cluster_id", cluster_id)
+
+        new_text_competencyID = text["properties"]["competencyIDs"]
+        new_text_competencyID.append(cluster_id)
+
+        new_text = { "properties": [{
+                    "text_id":  text["properties"]["text_id"],
+                    "text":  text["properties"]["text"] ,
+                    "competencyIDs": new_text_competencyID
+        }]}
+
+        self.weaviate_client.add_embeddings(CollectionNames.TEXT.value, text["vector"], new_text)
+
+        new_members = cluster["properties"]["members"]
+        new_members.append(text_id)
+
+        new_cluster = {"properties": [{
+            "cluster_id": cluster["properties"]["cluster_id"],
+            "name": cluster["properties"]["name"],
+            "members": new_members,
+        }]}
+        self.weaviate_client.add_embeddings(CollectionNames.CLUSTERCENTER.value, cluster["vector"], new_cluster)
+
