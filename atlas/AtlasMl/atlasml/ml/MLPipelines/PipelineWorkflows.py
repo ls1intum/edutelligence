@@ -42,7 +42,7 @@ class PipelineWorkflows:
                 "competency_id": uuid ,
                 "name" : competency["properties"]["name"],
                 "text": competency["properties"]["text"],
-                "competencyID": clusters[best_medoid_idx]["properties"]["uuid"]
+                "clusterID": clusters[best_medoid_idx]["properties"]["uuid"]
             }]}
             self.weaviate_client.add_embeddings(CollectionNames.COMPETENCY.value, embedding, properties)
 
@@ -133,7 +133,7 @@ class PipelineWorkflows:
         properties = { "properties": [{
                     "text_id": uuid,
                     "text": text ,
-                    "competencyID": clusters[best_medoid_idx]["properties"]["cluster_id"]
+                    "competencyIDs": clusters[best_medoid_idx]["properties"]["cluster_id"]
         } ] }
         self.weaviate_client.add_embeddings(CollectionNames.TEXT.value, embedding, properties)
         return similarity_scores
