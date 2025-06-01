@@ -44,14 +44,14 @@ class WeaviateClient:
         collection_schemas = {
             CollectionNames.TEXT.value: {
                 "properties": [
-                    {"name": "uuid", "dataType": ["string"], "indexFilterable": True},
+                    {"name": "text_id", "dataType": ["string"], "indexFilterable": True},
                     {"name": "text", "dataType": ["text"]},
-                    {"name": "competencyID", "dataType": ["string"], "indexFilterable": True},
+                    {"name": "competencyIDs", "dataType": ["string[]"], "indexFilterable": True},
                 ]
             },
             CollectionNames.COMPETENCY.value: {
                 "properties": [
-                    {"name": "uuid", "dataType": ["string"], "indexFilterable": True},
+                    {"name": "competency_id", "dataType": ["string"], "indexFilterable": True},
                     {"name": "name", "dataType": ["string"]},
                     {"name": "text", "dataType": ["text"]},
                     {"name": "clusterID", "dataType": ["string"], "indexFilterable": True},
@@ -59,7 +59,7 @@ class WeaviateClient:
             },
             CollectionNames.CLUSTERCENTER.value: {
                 "properties": [
-                    {"name": "uuid", "dataType": ["string"], "indexFilterable": True},
+                    {"name": "cluster_id", "dataType": ["string"], "indexFilterable": True},
                     {"name": "name", "dataType": ["string"], "indexFilterable": True},
                     {"name": "members", "dataType": ["string[]"], "indexFilterable": True}
                 ]
