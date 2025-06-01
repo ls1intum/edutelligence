@@ -1,0 +1,1 @@
+"""Test fixtures for Step 3 solution repository creation.""" 
