@@ -1,10 +1,9 @@
 import logging
 import re
 from typing import Dict
+from langchain_core.language_models.chat_models import BaseLanguageModel
 
 from app.grpc import hyperion_pb2_grpc
-from app.models import get_model
-from app.settings import settings
 from langchain_core.prompts import PromptTemplate
 
 from .models import (
@@ -17,6 +16,14 @@ logger = logging.getLogger(__name__)
 
 
 class VerifyConfigurationServicer(hyperion_pb2_grpc.VerifyConfigurationServicer):
+    """Step 8: Verify Configuration Servicer."""
+    
+    def __init__(self, model: BaseLanguageModel) -> None:
+        """
+        Args:
+            model: The AI language model to use for configuration verification
+        """
+        self.model = model
 
     def CheckInconsistencies(self, request, context):
         # Convert from gRPC to Pydantic model
@@ -24,8 +31,7 @@ class VerifyConfigurationServicer(hyperion_pb2_grpc.VerifyConfigurationServicer)
 
         logger.info("Running inconsistency check...")
 
-        # Get the language model
-        model = get_model(settings.MODEL_NAME)()
+        model = self.model
 
         # Set up the prompts and chains
         checker_prompt_template = PromptTemplate.from_template(checker_prompt)
