@@ -153,8 +153,17 @@ class DBManager:
         # Check if database already exists
         if os.path.exists("./logos/db/.env"):
             return {"error": "Database already initialized"}
-        self.__exec_init()
 
+        if sqlalchemy.inspect(self.engine).has_table("users"):
+            sql = text("""
+                       SELECT *
+                       FROM users
+                       WHERE username = 'root'
+                       """)
+            exc = self.session.execute(sql).fetchone()
+            if exc is not None:
+                return {"error": "Database already initialized"}
+        self.__exec_init()
         self.create_all()
         # Create user
         user_id = self.insert("users", {"username": "root", "prename": "postgres", "name": "root"})

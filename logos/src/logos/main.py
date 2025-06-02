@@ -37,10 +37,12 @@ async def setup_db(data: LogosSetupRequest):
         if not DBManager.is_initialized():
             # If we run logos for the first time automatically run a basic setup skript
             lk = setup(**data.dict())
+            if "error" in lk:
+                return lk, 500
             return {"logos-key": lk}
-        return {"error": "Database already initialized"}
+        return {"error": "Database already initialized"}, 500
     except Exception as e:
-        return {"error": f"{str(e)}"}, 401
+        return {"error": f"{str(e)}"}, 500
 
 
 @app.post("/logosdb/set_log")
