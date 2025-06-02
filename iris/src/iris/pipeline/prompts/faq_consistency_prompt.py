@@ -40,11 +40,11 @@ Include only FAQs that contradict the final_result. Do not include FAQs that are
 The "faqs" field should contain only inconsistent FAQs with their faq_id, faq_question_title, and faq_question_answer.
 Make sure to not include any additional FAQs that are consistent with the final_result.
 
--"suggestion": This entry is a list of strings, each string represents a suggestion to improve the final result.\n
+-"suggestion": This entry is a list of strings, each string represents a suggestion to improve the final result.
 - Each suggestion should focus on a different inconsistency.
 - Each suggestions highlights what is the inconsistency and how it can be improved.
 - Do not mention the term final result, call it provided text
-- Please ensure that at no time, you have a different amount of suggestions than inconsistencies.\n
+- Please ensure that at no time, you have a different amount of suggestions than inconsistencies.
 - Highlight how you can improve the rewritten text to be consistent with the existing FAQs.
 Both should have the same amount of entries.
 
