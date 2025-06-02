@@ -1,18 +1,24 @@
+# 1. Build Stage
 FROM node:alpine AS build
 
 WORKDIR /app
-RUN npm install -g @angular/cli
 
-# Copy UI
+# Copy React UI source code
 COPY ./logos/logos-ui/ ./
+
+# Install dependencies
 RUN npm ci
 
-# Run production environment
-RUN ng build --configuration=production
+# Build React app (defaults to production mode)
+RUN npx expo export --platform web --output-dir web-build
 
-# Get nginx
+# 2. NGINX Stage
 FROM nginx:stable AS final
 
 EXPOSE 80
 
-COPY --from=build app/dist/logos-ui/browser  /usr/share/nginx/html
+# Copy build output to NGINX html directory
+COPY --from=build /app/web-build /usr/share/nginx/html
+
+# Optional: Replace default nginx.conf if needed
+# COPY ./nginx.conf /etc/nginx/nginx.conf
