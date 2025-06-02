@@ -156,16 +156,16 @@ class DBManager:
 
         if sqlalchemy.inspect(self.engine).has_table("users"):
             sql = text("""
-                       SELECT *
-                       FROM users
-                       WHERE username = 'root'
+                       SELECT logos_key
+                       FROM process
+                       WHERE name = 'root'
                        """)
             exc = self.session.execute(sql).fetchone()
             if exc is not None:
                 with open("./logos/db/.env", "w") as file:
                     file.write("Setup Completed")
                     file.write("\n")
-                return {"error": "Database already initialized"}
+                return {"error": f"Database already initialized"}
         self.__exec_init()
         self.create_all()
         # Create user
@@ -185,7 +185,7 @@ class DBManager:
         pk = self.insert("providers", {"name": provider_name, "base_url": base_url,
                                        "auth_name": auth_name, "auth_format": auth_format})
         pk_api = self.insert("model_api_keys", {"api_key": api_key, "provider_id": pk})
-        return {"result": f"Created Provider.", "provider-id": {pk_api}}, 200
+        return {"result": f"Created Provider.", "provider-id": pk_api}, 200
 
     def add_profile(self, logos_key: str, profile_name: str, process_id: int):
         if not self.check_authorization(logos_key):
@@ -215,7 +215,7 @@ class DBManager:
         pk = self.insert("services", {"name": name})
         api_key = generate_logos_api_key(name)
         ppk = self.insert("process", {"logos_key": api_key, "service_id": pk, "name": name})
-        return {"result": f"Created Service.", "service-id": pk, "process-id": ppk, "logos-key": {api_key}}, 200
+        return {"result": f"Created Service.", "service-id": pk, "process-id": ppk, "logos-key": api_key}, 200
 
     def get_role(self, logos_key: str):
         sql = text("""

@@ -47,7 +47,7 @@ async def setup_db(data: LogosSetupRequest):
 
 
 @app.post("/logosdb/add_service_proxy")
-async def setup_db(data: AddServiceProxyRequest):
+async def add_service_proxy(data: AddServiceProxyRequest):
     try:
         if not DBManager.is_initialized():
             return {"error": "Database not initialized"}, 500
