@@ -19,13 +19,16 @@ expressions within the course context. Do not assume equivalence between terms u
 ### Output:
 
 Generate the following response dictionary:
-"type": "consistent" or "inconsistent"
+{
+  "type": "consistent" or "inconsistent",
+  // Additional fields below are required only if type is "inconsistent"
+  // The addition al fields are defined below
+  "faqs": [...],
+  "message": "...",
+  "suggestion": [...],
+  "improved version": "..."
+}
 
-Firstly, identify the language of the course. The language of the course is either german or english. You can extract
-the language from the existing FAQs. Your output should be in the same language as the course language.
-If you are unsure, choose english. 
-
-The following four entries are optional and should only be set if inconsistencies are detected.
 "faqs" must be a JSON array of objects. Each entry must be a JSON dictionary with exactly the following fields:
 "faq_id" (string or number)
 "faq_question_title" (string)
@@ -37,9 +40,8 @@ Include only FAQs that contradict the final_result. Do not include FAQs that are
 
 "message": "The provided text was rephrased, however it contains inconsistent information with existing FAQs."
 -Make sure to always insert two new lines after the last character of this sentences.
-The affected FAQs can only contain the faq_id, faq_question_title, and faq_question_answer of inconsistent FAQs.
-Make sure to not include any additional FAQs, that are consistent with the final_result.
-Insert the faq_id, faq_question_title, and faq_question_answer of the inconsistent FAQ in the placeholder.
+The "faqs" field should contain only the inconsistent FAQs with their faq_id, faq_question_title, and faq_question_answer.
+Make sure to not include any additional FAQs that are consistent with the final_result.
 
 -"suggestion": This entry is a list of strings, each string represents a suggestion to improve the final result.\n
 - Each suggestion should focus on a different inconsistency.
