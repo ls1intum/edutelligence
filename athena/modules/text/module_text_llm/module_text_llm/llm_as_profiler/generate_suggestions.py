@@ -19,7 +19,6 @@ async def generate_suggestions(exercise: Exercise, submission: Submission, confi
                                is_graded: bool) -> List[Feedback]:
     model = config.model.get_model()  # type: ignore[attr-defined]
 
-    # Inject student preferences into the prompt
     prompt_input = {
         "grading_instructions": format_grading_instructions(exercise.grading_instructions, exercise.grading_criteria),
         "problem_statement": exercise.problem_statement or "No problem statement.",
@@ -53,7 +52,7 @@ async def generate_suggestions(exercise: Exercise, submission: Submission, confi
                       f"Input too long {num_tokens_from_prompt(chat_prompt, prompt_input)} > {config.max_input_tokens}")
         return []
 
-    initial_result = await predict_and_parse(
+    initial_result: SubmissionCompetencyProfile = await predict_and_parse(
         model=model,
         chat_prompt=chat_prompt,
         prompt_input=prompt_input,
@@ -67,7 +66,7 @@ async def generate_suggestions(exercise: Exercise, submission: Submission, confi
 
     second_prompt_input = {
         "max_points": exercise.max_points,
-        "competency_analysis": initial_result.dict(),
+        "competency_analysis": initial_result.dict() if initial_result is not None else None,
         "submission": add_sentence_numbers(submission.text),
         "grading_instructions": format_grading_instructions(exercise.grading_instructions, exercise.grading_criteria),
         "problem_statement": exercise.problem_statement or "No problem statement.",
@@ -80,7 +79,7 @@ async def generate_suggestions(exercise: Exercise, submission: Submission, confi
         human_message=config.generate_suggestions_prompt.answer_message,
         pydantic_object=AssessmentModel)
 
-    result = await predict_and_parse(
+    result: AssessmentModel = await predict_and_parse(
         model=model,
         chat_prompt=second_chat_prompt,
         prompt_input=second_prompt_input,
@@ -94,7 +93,7 @@ async def generate_suggestions(exercise: Exercise, submission: Submission, confi
 
     if debug:
         emit_meta("generate_suggestions", {
-            "prompt": chat_prompt.format(**prompt_input),
+            "prompt": second_chat_prompt.format(**second_prompt_input),
             "result": result.dict() if result is not None else None
         })
 

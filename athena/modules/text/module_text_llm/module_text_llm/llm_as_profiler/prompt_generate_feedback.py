@@ -76,10 +76,12 @@ Student\'s submission to grade (with sentence numbers <number>: <sentence>):
 # Input Prompt
 
 class GenerateSuggestionsPrompt(BaseModel):
-    """\
-Features cit available: **{initial_feedback}**, **{max_points}**, **{student_grade}**, **{learner_profile}**
-
-"""
+    """A prompt model for generating structured feedback on student submissions.
+    
+    This class provides the system and human messages used to instruct an LLM to analyze
+    student submissions and generate constructive feedback based on competency analysis,
+    grading instructions, and problem requirements.
+    """
     second_system_message: str = Field(default=system_message,
                                        description="Message for priming AI behavior and instructing it what to do.")
     answer_message: str = Field(default=human_message,
