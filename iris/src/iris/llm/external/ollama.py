@@ -11,9 +11,12 @@ from typing import (
     Union,
 )
 
+from httpx import Client as HTTPXClient
+from httpx import HTTPTransport, Timeout
 from langchain_core.tools import BaseTool
 from ollama import Client, Message
 from pydantic import BaseModel, Field
+from requests.auth import HTTPBasicAuth
 
 from ...common.message_converters import map_role_to_str, map_str_to_role
 from ...common.pyris_message import PyrisMessage
@@ -99,14 +102,31 @@ class OllamaModel(
     """
 
     type: Literal["ollama"]
-    model: str
     host: str
     options: dict[str, Any] = Field(default={})
+    username: str
+    password: str
     _client: Client
 
     def model_post_init(self, __context: Any) -> None:
-        self._client = Client(host=self.host)  # TODO: Add authentication (httpx auth?)
-        self._client._client.base_url = self.host  # pylint: disable=protected-access
+        self._client = Client()
+
+        # Use custom HTTP transport to speed up request performance and avoid default retry/backoff behavior
+        timeout = Timeout(connect=10.0, read=60.0, write=10.0, pool=5.0)
+
+        transport = HTTPTransport(retries=1)
+        # Override the internal HTTPX client used by Ollama to enable HTTP/2 and ensure consistent authentication
+        self._client._client = HTTPXClient(  # pylint: disable=protected-access
+            base_url=self.host,
+            http2=True,
+            transport=transport,
+            timeout=timeout,
+            auth=(
+                HTTPBasicAuth(self.username, self.password)
+                if self.username and self.password
+                else None
+            ),
+        )
 
     def complete(
         self,
