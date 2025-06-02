@@ -9,6 +9,7 @@ from grpclocal.grpc_server import LogosServicer
 from logos.dbutils.dbmanager import DBManager
 from logos.dbutils.dbrequest import *
 from logos.responses import get_streaming_response, get_standard_response, get_client_ip, request_setup
+from scripts import setup_proxy
 
 from scripts.setup_proxy import setup
 
@@ -41,6 +42,19 @@ async def setup_db(data: LogosSetupRequest):
                 return lk, 500
             return {"logos-key": lk}
         return {"error": "Database already initialized"}, 500
+    except Exception as e:
+        return {"error": f"{str(e)}"}, 500
+
+
+@app.post("/logosdb/add_service_proxy")
+async def setup_db(data: AddServiceProxyRequest):
+    try:
+        if not DBManager.is_initialized():
+            return {"error": "Database not initialized"}, 500
+        lk = setup_proxy.add_service(**data.dict())
+        if "error" in lk:
+            return lk, 500
+        return {"service-key": lk,}, 200
     except Exception as e:
         return {"error": f"{str(e)}"}, 500
 

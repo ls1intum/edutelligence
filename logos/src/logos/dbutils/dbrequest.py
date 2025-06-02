@@ -15,6 +15,11 @@ class SetLogRequest(LogosKeyModel):
     process_id: int
 
 
+class AddServiceProxyRequest(LogosKeyModel):
+    base_url: str
+    provider_name: str
+
+
 class AddProviderRequest(LogosKeyModel):
     provider_name: str
     base_url: str
