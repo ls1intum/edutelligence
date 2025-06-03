@@ -2,21 +2,19 @@
 import React, { useContext } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, useWindowDimensions } from 'react-native';
 import { ThemeContext } from '../';
-import {Image} from "expo-image";
 
 export default function Section01() {
   const { theme } = useContext(ThemeContext);
   const isLight = theme === 'light';
-  const { width } = useWindowDimensions();
 
   return (
-    <View style={[styles.container, { backgroundColor: isLight ? '#f9f9f9' : '#0a0a0a' }]}>
+    <View style={[styles.container, { backgroundColor: isLight ? '#e8e8e8' : '#212121' }]}>
       <View style={styles.content}>
         <Text style={[styles.headline, { color: isLight ? '#000' : '#fff' }]}>
-          Your Gateway to AI Infrastructure
+          Your Gateway to Scalable AI Infrastructure
         </Text>
         <Text style={[styles.subtext, { color: isLight ? '#333' : '#ccc' }]}>
-          Connect, classify, and control prompt routing for efficient LLM usage across providers
+          Connect, log, and control prompt routing for efficient LLM usage across providers
         </Text>
 
         <View style={styles.buttonRow}>
@@ -24,9 +22,9 @@ export default function Section01() {
             <Text style={[styles.buttonText, { color: isLight ? '#fff' : '#000' }]}>Get Started →</Text>
           </TouchableOpacity>
 
-          <TouchableOpacity style={[styles.buttonSecondary, { borderColor: isLight ? '#000' : '#fff' }]}>
+          {/*<TouchableOpacity style={[styles.buttonSecondary, { borderColor: isLight ? '#000' : '#fff' }]}>
             <Text style={[styles.buttonText, { color: isLight ? '#000' : '#fff' }]}>Learn More ⌄</Text>
-          </TouchableOpacity>
+          </TouchableOpacity>*/}
         </View>
       </View>
     </View>

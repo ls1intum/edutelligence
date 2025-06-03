@@ -1,40 +1,42 @@
-import React from 'react';
+import React, {useContext} from 'react';
 import { View, Text, StyleSheet, useWindowDimensions } from 'react-native';
 import { Trophy, Bot, Check } from 'lucide-react';
+import { ThemeContext } from '../';
 
-export default function FeaturesSection() {
+export default function Section02() {
   const { width } = useWindowDimensions();
+  const { theme } = useContext(ThemeContext);
+  const isLight = theme === 'light';
   const isMobile = width < 768;
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, { backgroundColor: isLight ? '#ffffff' : '#000000' }]}>
       <View style={styles.header}>
-        <Text style={styles.badge}>Key Features</Text>
-        <Text style={styles.headline}>Tools for Team Growth</Text>
-        <Text style={styles.subtext}>
-          Features designed to elevate your engineering team's collaboration and learning
+        <Text style={[styles.badge, {backgroundColor: isLight ? '#ececec' : '#111827', color: isLight ? '#000' : '#fff'}]}>Key Features</Text>
+        <Text style={[styles.headline, {color: isLight ? '#000' : '#fff'}]}>Your Central Hub for LLM Management</Text>
+        <Text style={[styles.subtext, {color: isLight ? '#000' : '#fff'}]}>
+          Streamline your LLM workflows and gain actionable intelligence
         </Text>
       </View>
-
       <View style={[styles.cardContainer, { flexDirection: isMobile ? 'column' : 'row' }]}>
         <FeatureCard
           icon={<Trophy color="#facc15" size={24} />}
-          title="Code Review Gamification"
-          description="Transform code reviews into learning opportunities"
+          title="Available Tools"
+          description="Control your entire LLM workflow"
           bullets={[
-            'Weekly leaderboards with GitHub integration',
-            'Team competitions across multiple repositories',
-            'Structured league system for ongoing engagement',
+            'Prompt Classification',
+            'Policy Classification',
+            'Provider Routing',
           ]}
         />
         <FeatureCard
           icon={<Bot color="#38bdf8" size={24} />}
-          title="AI-Powered Mentorship"
-          description="Personalized guidance for improvement"
+          title="Data & APIs"
+          description="Analyze and observe AI usage"
           bullets={[
-            'Weekly reflective sessions for improvement',
-            'GitHub activity analysis for context-aware feedback',
-            'Goal-setting framework with progress tracking',
+            'gRPC Interface',
+            'Prompt Logging',
+            'Model Analytics',
           ]}
         />
       </View>
@@ -42,19 +44,22 @@ export default function FeaturesSection() {
   );
 }
 
+// @ts-ignore
 function FeatureCard({ icon, title, description, bullets }) {
+  const { theme } = useContext(ThemeContext);
+  const isLight = theme === 'light';
   return (
-    <View style={styles.card}>
+    <View style={[styles.card, { backgroundColor: isLight ? '#dedede' : '#111827' }]}>
       <View style={styles.cardHeader}>
         {icon}
-        <Text style={styles.cardTitle}>{title}</Text>
+        <Text style={[styles.cardTitle, {color: isLight ? '#000' : '#fff'}]}>{title}</Text>
       </View>
-      <Text style={styles.cardDescription}>{description}</Text>
+      <Text style={[styles.cardDescription, {color: isLight ? '#000' : '#fff'}]}>{description}</Text>
       <View style={styles.bulletList}>
-        {bullets.map((text, i) => (
+        {bullets.map((text: string | number | bigint | boolean | React.ReactElement<unknown, string | React.JSXElementConstructor<any>> | Iterable<React.ReactNode> | React.ReactPortal | Promise<string | number | bigint | boolean | React.ReactPortal | React.ReactElement<unknown, string | React.JSXElementConstructor<any>> | Iterable<React.ReactNode> | null | undefined> | null | undefined, i: React.Key | null | undefined) => (
           <View key={i} style={styles.bulletItem}>
             <Check color="#22c55e" size={18} />
-            <Text style={styles.bulletText}>{text}</Text>
+            <Text style={[styles.bulletText, {color: isLight ? '#000' : '#fff'}]}>{text}</Text>
           </View>
         ))}
       </View>
@@ -102,7 +107,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#111827',
     borderRadius: 16,
     padding: 24,
-    width: 360,
+    width: 560,
   },
   cardHeader: {
     flexDirection: 'row',
@@ -116,7 +121,7 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
   },
   cardDescription: {
-    color: '#9ca3af',
+    color: '#545454',
     marginBottom: 16,
   },
   bulletList: {

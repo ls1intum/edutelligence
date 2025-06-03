@@ -4,6 +4,9 @@ import { StyleSheet, Text, View, ScrollView, ImageBackground, Image, Dimensions,
 import { ThemeContext } from '../';
 import Section01 from './section01';
 import Section02 from './section02';
+import Section03 from './section03';
+import Section04 from './section04';
+import Section05 from './section05';
 
 const { width } = Dimensions.get('window');
 
@@ -56,28 +59,13 @@ export default function Main() {
  */}
       <Section02/>
       {/* Section 3: Why Logos? */}
-      <View style={styles.section}>
-        <Text style={[styles.sectionTitle, { color: isLight ? '#000' : '#fff' }]}>Our Approach</Text>
-        <Text style={[styles.sectionText, { color: isLight ? '#444' : '#ccc' }]}>
-          Logos focuses on clarity, configurability, and extensibility. With unified APIs and routing policies,
-          developers and organizations can integrate multiple LLMs seamlessly – securely and transparently.
-        </Text>
-      </View>
+      <Section03/>
 
       {/* Section 4: FAQ */}
-      <View style={styles.section}>
-        <Text style={[styles.sectionTitle, { color: isLight ? '#000' : '#fff' }]}>FAQ</Text>
-        {faqData.map((item, idx) => (
-          <View key={idx} style={styles.faqItem}>
-            <TouchableOpacity onPress={() => toggleFAQ(idx)}>
-              <Text style={[styles.faqQuestion, { color: isLight ? '#000' : '#fff' }]}>{item.question}</Text>
-            </TouchableOpacity>
-            {openIndex === idx && (
-              <Text style={[styles.faqAnswer, { color: isLight ? '#333' : '#bbb' }]}>{item.answer}</Text>
-            )}
-          </View>
-        ))}
-      </View>
+      <Section04/>
+
+      {/* Section 5: Get started */}
+      <Section05/>
     </ScrollView>
   );
 }
