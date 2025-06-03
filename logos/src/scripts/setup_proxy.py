@@ -12,10 +12,28 @@ def setup(base_url: str, provider_name: str) -> Union[tuple, dict]:
         if "error" in su:
             return su
         logos_key = su["api_key"]
-    print("Logos-Root-Key: ", logos_key)
-    print(endpoint_add_provider(logos_key, base_url=base_url, provider_name=provider_name, api_key=""))
-    print(endpoint_add_profile(logos_key, "root", 1))
-    print(endpoint_connect_process_provider(logos_key, 1, 1))
+        data = {
+            "logos_key": f"{logos_key}",
+            "provider_name": f"{provider_name}",
+            "base_url": f"{base_url}",
+            "api_key": f"",
+            "auth_name": "api-key",
+            "auth_format": "{}"
+        }
+        print(man.add_provider(**data), flush=True)
+        data = {
+            "logos_key": f"{logos_key}",
+            "profile_name": "root",
+            "process_id": 1,
+        }
+        print(man.add_profile(**data), flush=True)
+        data = {
+            "logos_key": f"{logos_key}",
+            "profile_id": 1,
+            "api_id": 1,
+        }
+        print(man.connect_process_provider(**data), flush=True)
+    print("Logos-Root-Key: ", logos_key, flush=True)
     return logos_key
 
 
