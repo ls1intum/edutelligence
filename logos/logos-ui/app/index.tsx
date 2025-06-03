@@ -26,20 +26,23 @@ export default function App() {
   }, [theme]);
 
   return (
-    <ThemeContext.Provider value={{ theme, toggleTheme }}>
-      <SafeAreaView
-        style={[
-          styles.safeArea,
-          theme === 'light' ? styles.lightBackground : styles.darkBackground
-        ]}
-      >
-        <View style={styles.container}>
-          <Header />
-          <Main />
-          <Footer />
-        </View>
-      </SafeAreaView>
-    </ThemeContext.Provider>
+      <ThemeContext.Provider value={{theme, toggleTheme}}>
+        <meta charSet="UTF-8"/>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+        <title>LogosUI</title>
+        <SafeAreaView
+            style={[
+              styles.safeArea,
+              theme === 'light' ? styles.lightBackground : styles.darkBackground
+            ]}
+        >
+          <View style={styles.container}>
+            <Header/>
+            <Main/>
+            <Footer/>
+          </View>
+        </SafeAreaView>
+      </ThemeContext.Provider>
   );
 }
 

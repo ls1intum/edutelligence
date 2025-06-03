@@ -24,7 +24,7 @@ export default function Footer() {
               </Text>
           </Text>
           <Text style={[styles.footerRight, isLight ? styles.lightText : styles.darkText]}>
-            &copy; {new Date().getFullYear()} Logos Platform. Built by <a href="https://github.com/flbrgit" style={styles.citeText}><b>Florian Briksa</b></a> at <a href="https://www.tum.de/en/" style={styles.citeText}><b>TUM</b></a>.
+            Built by <a href="https://github.com/flbrgit" style={styles.citeText}><b>Florian Briksa</b></a> at <a href="https://www.tum.de/en/" style={styles.citeText}><b>TUM</b></a>.
             The source code is available on <a href="https://github.com/ls1intum/edutelligence" style={styles.citeText}><b>Github</b></a>.
           </Text>
       </Text>
