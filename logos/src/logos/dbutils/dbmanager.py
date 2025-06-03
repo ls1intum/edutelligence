@@ -129,17 +129,17 @@ class DBManager:
         return None
 
     def __exec_init(self):
-        with self.engine.connect() as conn:
-            with open("./logos/db/init.sql", "r", encoding="utf-8") as file:
-                sql = file.read()
-                for statement in sql.split(";"):
-                    stmt = statement.strip()
-                    if stmt:
-                        try:
-                            conn.execute(text(stmt))
-                        except sqlalchemy.exc.ProgrammingError:
-                            pass
-            conn.commit()
+        with open("./logos/db/init.sql", "r", encoding="utf-8") as file:
+            sql = file.read()
+            for statement in sql.split(";"):
+                stmt = statement.strip()
+                if stmt:
+                    try:
+                        self.session.execute(text(stmt))
+                    except sqlalchemy.exc.ProgrammingError:
+                        pass
+
+        self.session.commit()
 
     @staticmethod
     def is_initialized():
