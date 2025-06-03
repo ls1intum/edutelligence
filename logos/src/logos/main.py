@@ -35,8 +35,10 @@ async def stop_grpc():
 @app.post("/logosdb/setup")
 async def setup_db(data: LogosSetupRequest):
     try:
+        print("Recieving setup request...", flush=True)
         with DBManager() as db:
             db.is_root_initialized()
+        print("Processing setup request. Initialized: " + str(DBManager.is_initialized()), flush=True)
         if not DBManager.is_initialized():
             # If we run logos for the first time automatically run a basic setup skript
             lk = setup(**data.dict())
