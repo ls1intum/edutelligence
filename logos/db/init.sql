@@ -70,7 +70,8 @@ CREATE TABLE models (
     weight_latency INTEGER DEFAULT(0),
     weight_accuracy INTEGER DEFAULT(0),
     weight_cost INTEGER DEFAULT(0),
-    weight_quality INTEGER DEFAULT(0)
+    weight_quality INTEGER DEFAULT(0),
+    tags TEXT
 );
 
 CREATE TABLE model_provider (

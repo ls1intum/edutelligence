@@ -7,7 +7,6 @@ export default function Section02() {
   const { width } = useWindowDimensions();
   const { theme } = useContext(ThemeContext);
   const isLight = theme === 'light';
-  const isMobile = width < 768;
 
   return (
     <View style={[styles.container, { backgroundColor: isLight ? '#ffffff' : '#000000' }]}>
@@ -18,7 +17,7 @@ export default function Section02() {
           Streamline your LLM workflows and gain actionable intelligence
         </Text>
       </View>
-      <View style={[styles.cardContainer, { flexDirection: isMobile ? 'column' : 'row' }]}>
+      <View style={[styles.cardContainer]}>
         <FeatureCard
           icon={<Trophy color="#facc15" size={24} />}
           title="Available Tools"
@@ -99,15 +98,13 @@ const styles = StyleSheet.create({
     fontSize: 16,
     textAlign: 'center',
   },
-  cardContainer: {
-    gap: 24,
-    justifyContent: 'center',
-  },
   card: {
     backgroundColor: '#111827',
     borderRadius: 16,
     padding: 24,
-    width: 560,
+    width: 500,
+    display: "flex",
+    justifyContent: "space-between",
   },
   cardHeader: {
     flexDirection: 'row',
@@ -135,5 +132,10 @@ const styles = StyleSheet.create({
   bulletText: {
     color: '#e5e7eb',
     fontSize: 14,
+  },
+  cardContainer: {
+    gap: 24,
+    justifyContent: 'center',
+    flexDirection: "row"
   },
 });

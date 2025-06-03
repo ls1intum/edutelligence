@@ -61,6 +61,7 @@ class Model(Base):
     weight_accuracy = Column(Integer)
     weight_cost = Column(Integer)
     weight_quality = Column(Integer)
+    tags = Column(Text)
 
 
 class Provider(Base):
