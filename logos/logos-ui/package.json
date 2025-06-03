@@ -28,6 +28,8 @@
     "expo-symbols": "~0.4.4",
     "expo-system-ui": "~5.0.7",
     "expo-web-browser": "~14.1.6",
+    "lucide-react": "^0.511.0",
+    "lucide-react-native": "^0.511.0",
     "react": "19.0.0",
     "react-dom": "19.0.0",
     "react-native": "0.79.2",
@@ -41,9 +43,9 @@
   "devDependencies": {
     "@babel/core": "^7.25.2",
     "@types/react": "~19.0.10",
-    "typescript": "~5.8.3",
     "eslint": "^9.25.0",
-    "eslint-config-expo": "~9.2.0"
+    "eslint-config-expo": "~9.2.0",
+    "typescript": "~5.8.3"
   },
   "private": true
 }
