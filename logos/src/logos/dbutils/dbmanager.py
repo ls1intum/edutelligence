@@ -145,15 +145,7 @@ class DBManager:
     def is_initialized():
         return os.path.exists("./logos/db/.env")
 
-    def setup(self) -> dict:
-        """
-        Sets up the initial database. Creates a root-user.
-        :return: Initial API-Key
-        """
-        # Check if database already exists
-        if os.path.exists("./logos/db/.env"):
-            return {"error": "Database already initialized"}
-
+    def is_root_initialized(self):
         if sqlalchemy.inspect(self.engine).has_table("users"):
             sql = text("""
                        SELECT logos_key
@@ -165,7 +157,20 @@ class DBManager:
                 with open("./logos/db/.env", "w") as file:
                     file.write("Setup Completed")
                     file.write("\n")
-                return {"error": f"Database already initialized"}
+                return True
+        return False
+
+    def setup(self) -> dict:
+        """
+        Sets up the initial database. Creates a root-user.
+        :return: Initial API-Key
+        """
+        # Check if database already exists
+        if os.path.exists("./logos/db/.env"):
+            return {"error": "Database already initialized"}
+
+        if self.is_root_initialized():
+            return {"error": f"Database already initialized"}
         self.__exec_init()
         self.create_all()
         # Create user
@@ -438,9 +443,20 @@ class DBManager:
                 return {"error": f"Missing table in json: {table_name}"}, 500
             rows = json_data[table_name]
             table = Base.metadata.tables.get(table_name)
-            if table is not None and rows:
-                self.session.execute(table.delete())
-                self.session.execute(table.insert(), rows)
+            if table is not None:
+                if rows:
+                    self.session.execute(table.delete())
+                    self.session.execute(table.insert(), rows)
+                else:
+                    self.session.execute(table.delete())
+            if table_name == "process":
+                found = False
+                for row in rows:
+                    if row["name"] == "root":
+                        found = True
+                        break
+                if not found:
+                    return {"error": "Try to delete root user detected. Aborting"}, 500
         self.session.commit()
         return {"result": f"Imported data"}, 200
 

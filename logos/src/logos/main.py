@@ -35,6 +35,8 @@ async def stop_grpc():
 @app.post("/logosdb/setup")
 async def setup_db(data: LogosSetupRequest):
     try:
+        with DBManager() as db:
+            db.is_root_initialized()
         if not DBManager.is_initialized():
             # If we run logos for the first time automatically run a basic setup skript
             lk = setup(**data.dict())
@@ -49,6 +51,8 @@ async def setup_db(data: LogosSetupRequest):
 @app.post("/logosdb/add_service_proxy")
 async def add_service_proxy(data: AddServiceProxyRequest):
     try:
+        with DBManager() as db:
+            db.is_root_initialized()
         if not DBManager.is_initialized():
             return {"error": "Database not initialized"}, 500
         lk = setup_proxy.add_service(**data.dict())
