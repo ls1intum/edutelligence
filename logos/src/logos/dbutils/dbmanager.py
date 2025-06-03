@@ -166,11 +166,13 @@ class DBManager:
         :return: Initial API-Key
         """
         # Check if database already exists
+        print(".env exists?", os.path.exists("./logos/db/.env"), flush=True)
         if os.path.exists("./logos/db/.env"):
             return {"error": "Database already initialized"}
-
+        print("Is root initialized?", self.is_root_initialized(), flush=True)
         if self.is_root_initialized():
             return {"error": f"Database already initialized"}
+        print("Setting up DB", flush=True)
         self.__exec_init()
         self.create_all()
         # Create user
