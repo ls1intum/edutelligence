@@ -9,6 +9,8 @@ from grpclocal.grpc_server import LogosServicer
 from logos.dbutils.dbmanager import DBManager
 from logos.dbutils.dbrequest import *
 from logos.responses import get_streaming_response, get_standard_response, get_client_ip, request_setup
+from logos.scheduling.scheduling_fcfs import FCFSScheduler
+from logos.scheduling.scheduling_manager import SchedulingManager
 from scripts import setup_proxy
 
 from scripts.setup_proxy import setup
@@ -30,6 +32,8 @@ async def stop_grpc():
     global _grpc_server
     if _grpc_server:
         await _grpc_server.stop(0)
+    sm = SchedulingManager(FCFSScheduler())
+    sm.stop()
 
 
 @app.post("/logosdb/setup")
@@ -186,10 +190,11 @@ async def logos_service(path: str, request: Request):
         llm_info = db.fetch_llm_key(key)
         if llm_info is None:
             return {"error": "Key not found"}, 401
-        tmp = request_setup(headers, path, llm_info)
-        if isinstance(tmp[0], dict) and "error" in tmp[0]:
-            return tmp
-        proxy_headers, forward_url, model_id, model_name = tmp
+    tmp = request_setup(headers, path, json_data)
+    if isinstance(tmp[0], dict) and "error" in tmp[0]:
+        return tmp
+    proxy_headers, forward_url, model_id, model_name = tmp
+    with DBManager() as db:
         if db.log(llm_info["process_id"]):
             request_id = db.log_request(llm_info["process_id"], get_client_ip(request), json_data, llm_info["provider_id"], model_id, headers)
         else:

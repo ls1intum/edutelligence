@@ -35,14 +35,16 @@ class ClassificationManager:
     def __init__(self, models) -> None:
         self.models = models
 
-    def classify(self, prompt: str, policy: dict, classifier: Callable) -> List[Tuple[int, int, int]]:
+    def classify(self, prompt: str, policy: dict) -> List[Tuple[int, int, int]]:
         """
         Classify prompts and assign them to a model.
         Returns a sorted list with the best suited model-id at the front together with
         a weight describing how well the LLM is suited for the given prompt
         and a priority of the given policy.
         """
-        filtered = classifier(self.models).classify(prompt, policy)
+        filtered = PolicyClassifier(self.models).classify(prompt, policy)
+        filtered = TokenClassifier(filtered).classify(prompt, policy)
+        filtered = AIClassifier(filtered).classify(prompt, policy)
         return sorted([(i["id"], self.calc_weight(i), policy["priority"]) for i in filtered], key=lambda x: x[1], reverse=True)
 
     def calc_weight(self, model):
@@ -108,4 +110,4 @@ if __name__ == "__main__":
     ]
     select = ClassificationManager(models)
     from pprint import pprint
-    pprint(select.classify("absolutely no idea", ProxyPolicy(), PolicyClassifier)) # type: ignore
+    pprint(select.classify("absolutely no idea", ProxyPolicy())) # type: ignore

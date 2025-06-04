@@ -107,7 +107,7 @@ class DBManager:
                     process.id as process_id
                 FROM providers, model_api_keys, profiles, process
                 WHERE process.logos_key = :logos_key
-                    and process.profile_id = profiles.id 
+                    and profiles.process_id = process.id 
                     and profiles.id = model_api_keys.profile_id 
                     and model_api_keys.provider_id = providers.id
             """)
@@ -197,17 +197,7 @@ class DBManager:
     def add_profile(self, logos_key: str, profile_name: str, process_id: int):
         if not self.check_authorization(logos_key):
             return {"error": "Database changes only allowed for root user."}, 500
-        pk = self.insert("profiles", {"name": profile_name})
-        sql = text("""
-                    UPDATE process
-                    SET profile_id = :pk
-                    WHERE id = :process_id
-                """)
-        self.session.execute(sql, {
-            "pk": pk,
-            "process_id": int(process_id)
-        })
-        self.session.commit()
+        pk = self.insert("profiles", {"name": profile_name, "process_id": process_id})
         return {"result": f"Added profile", "profile-id": pk}, 200
 
     def add_model(self, logos_key: str, name: str, endpoint: str):
@@ -215,6 +205,18 @@ class DBManager:
             return {"error": "Database changes only allowed for root user."}, 500
         pk = self.insert("models", {"name": name, "endpoint": endpoint})
         return {"result": f"Created Model. ID: {pk}"}, 200
+
+    def add_profile_model_permission(self, logos_key: str, model_id: int, profile_id: int):
+        if not self.check_authorization(logos_key):
+            return {"error": "Database changes only allowed for root user."}, 500
+        pk = self.insert("profile_model_permissions", {"model_id": model_id, "profile_id": profile_id})
+        return {"result": f"Created Permission. ID: {pk}"}, 200
+
+    def add_model_provider(self, logos_key: str, model_id: int, provider_id: int):
+        if not self.check_authorization(logos_key):
+            return {"error": "Database changes only allowed for root user."}, 500
+        pk = self.insert("model_provider", {"model_id": model_id, "provider_id": provider_id})
+        return {"result": f"Linked model to provider. ID: {pk}"}, 200
 
     def add_service(self, logos_key: str, name: str):
         if not self.check_authorization(logos_key):
@@ -327,43 +329,39 @@ class DBManager:
             return {"error": "Key not found"}
         return {"result": f"API-ID: {exc[0]}"}, 200
 
-    def get_model_from_api(self, logos_key: str, api_id: int) -> Union[int, None]:
+    def get_models(self, logos_key: str):
         """
-        Get model ID from a provided api key.
+        Get a list of models accessible by a given key.
         """
         sql = text("""
-                    SELECT models.id as id
-                    FROM process, profiles, profile_model_permissions, models
-                    WHERE process.logos_key = :logos_key
-                        and process.profile_id = profiles.id
-                        and profile_model_permissions.profile_id = profiles.id
-                        and profile_model_permissions.model_id = models.id
-                        and models.api_id = :api_id
+            SELECT models.id
+            FROM models, process, profiles, profile_model_permissions, model_provider, model_api_keys, providers
+            WHERE process.logos_key = :logos_key
+                and process.id = profiles.process_id
+                and profiles.id = profile_model_permissions.profile_id
+                and profile_model_permissions.model_id = model_provider.model_id
+                and model_api_keys.id = models.api_id
+                and model_api_keys.profile_id = profiles.id
+                and model_api_keys.provider_id = providers.id
+                and providers.id = model_provider.provider_id
         """)
-        result = self.session.execute(sql, {"logos_key": logos_key, "api_id": int(api_id)}).fetchone()
-        if result is None:
-            return None
-        return result.id
+        result = self.session.execute(sql, {"logos_key": logos_key}).fetchall()
+        return [i.id for i in result]
 
-    def get_model_from_provider(self, logos_key: str, provider_id: int) -> Union[int, None]:
+    def get_providers(self, logos_key: str):
         """
-        Get model ID from a provided provider ID.
+        Get a list of providers accessible by a given key.
         """
         sql = text("""
-                    SELECT models.id as id
-                    FROM process, profiles, model_api_keys, models, providers, model_provider
-                    WHERE process.logos_key = :logos_key
-                        and process.profile_id = profiles.id
-                        and model_api_keys.profile_id = profiles.id
-                        and model_api_keys.provider_id = providers.id
-                        and providers.id = :provider_id
-                        and model_provider.provider_id = providers.id
-                        and model_provider.model_id = models.id
+            SELECT providers.id
+            FROM providers, model_api_keys, profiles, process
+            WHERE process.logos_key = :logos_key
+                and process.id = profiles.process_id
+                and profiles.id = model_api_keys.profile_id
+                and model_api_keys.provider_id = providers.id
         """)
-        result = self.session.execute(sql, {"logos_key": logos_key, "provider_id": int(provider_id)}).fetchone()
-        if result is None:
-            return None
-        return result.id
+        result = self.session.execute(sql, {"logos_key": logos_key}).fetchall()
+        return [i.id for i in result]
 
     def get_model(self, model_id: int):
         sql = text("""
@@ -372,7 +370,64 @@ class DBManager:
             WHERE id = :model_id
         """)
         result = self.session.execute(sql, {"model_id": int(model_id)}).fetchone()
-        return {"name": result.name, "endpoint": result.endpoint}
+        if result is None:
+            return None
+        return {
+            "id": result.id,
+            "name": result.name,
+            "endpoint": result.endpoint,
+            "api_id": result.api_id,
+            "weight_privacy": result.weight_privacy,
+            "weight_latency": result.weight_latency,
+            "weight_accuracy": result.weight_accuracy,
+            "weight_cost": result.weight_cost,
+            "weight_quality": result.weight_quality,
+            "tags": result.tags
+        }
+
+    def get_provider(self, provider_id: int):
+        sql = text("""
+            SELECT *
+            FROM providers
+            WHERE id = :provider_id
+        """)
+        result = self.session.execute(sql, {"provider_id": int(provider_id)}).fetchone()
+        if result is None:
+            return None
+        return {
+            "id": result.id,
+            "name": result.name,
+            "base_url": result.base_url,
+            "auth_name": result.auth_name,
+            "auth_format": result.auth_format,
+        }
+
+    def get_policy(self, logos_key: str, policy_id: int):
+        sql = text("""
+                   SELECT policy.id, policy.name, policy.entity_id, policy.description, policy.threshold_privacy, 
+                          policy.threshold_latency, policy.threshold_accuracy, policy.threshold_cost, 
+                          policy.threshold_quality, policy.priority, policy.topic
+                   FROM process, policies
+                   WHERE process.logos_key = :logos_key
+                       and process.id = policies.entity_id
+                       and policy.id = :policy_id
+                   """)
+        result = self.session.execute(sql, {"logos_key": logos_key, "policy_id": int(policy_id)}).fetchone()
+        if result is None:
+            return None
+        return {
+            "id": result.id,
+            "name": result.name,
+            "entity_id": result.entity_id,
+            "description": result.description,
+            "threshold_privacy": result.threshold_privacy,
+            "threshold_latency": result.threshold_latency,
+            "threshold_accuracy": result.threshold_accuracy,
+            "threshold_cost": result.threshold_cost,
+            "threshold_quality": result.threshold_quality,
+            "priority": result.priority,
+            "topic": result.topic,
+        }
 
     def log(self, process_id: int):
         sql = text("""

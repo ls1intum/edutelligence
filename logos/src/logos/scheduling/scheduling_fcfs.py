@@ -1,8 +1,7 @@
 """
 Module implementing a basic FCFS-Scheduler for requests.
 """
-import time
-from typing import Dict, Any
+from typing import Dict
 
 from scheduler import Scheduler, Task
 

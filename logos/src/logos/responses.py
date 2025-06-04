@@ -8,7 +8,11 @@ import grpc
 from requests import JSONDecodeError, Response
 from starlette.requests import Request
 
+from logos.classification.classification_manager import ClassificationManager
+from logos.classification.proxy_policy import ProxyPolicy
 from logos.dbutils.dbmanager import DBManager
+from logos.scheduling.scheduling_fcfs import FCFSScheduler
+from logos.scheduling.scheduling_manager import SchedulingManager
 
 
 def get_streaming_response(forward_url, proxy_headers, json_data, model_name, request_id, provider_id, model_id):
@@ -110,74 +114,112 @@ def get_client_ip_address_from_context(context: grpc.ServicerContext) -> str:
     return peer
 
 
-def proxy_behaviour(headers, provider, base_url, path):
-    # Model not in the database, change to normal proxy
-    if "azure" in provider.lower():
-        if "deployment_name" not in headers or headers["deployment_name"] == "":
-            return {"error": "Missing deployment name in header"}, 401
-        if "api_version" not in headers or headers["api_version"] == "":
-            return {"error": "Missing api version in header"}, 401
-        deployment_name = headers["deployment_name"]
-        api_version = headers["api_version"]
-
-        forward_url = (
-            f"{base_url}/{deployment_name}/{path}"
-            f"?api-version={api_version}"
-        )
-        forward_url = forward_url[:8] + forward_url[8:].replace("//", "/")
-
-        proxy_headers = {
-            "api-key": headers["api_key"],
-            "Content-Type": "application/json"
+def proxy_behaviour(headers, providers, path):
+    """
+    Adopt normal proxy behaviour. If we have multiple suitable providers, check the one that fits to the headers.
+    """
+    proxy_headers = None
+    forward_url = None
+    for provider in providers:
+        with DBManager() as db:
+            provider_info = db.get_provider(provider)
+        """
+        {
+            "id": result.id,
+            "name": result.name,
+            "base_url": result.base_url,
+            "auth_name": result.auth_name,
+            "auth_format": result.auth_format,
         }
-    else:
-        proxy_headers = {
-            "Authorization": headers["Authorization"],
-            "Content-Type": "application/json"
-        }
-        forward_url = f"{base_url}/{path}"
+        """
+        if "azure" in provider_info["name"].lower() and "deployment_name" in headers and "api_version" in headers:
+            # Azure is suitable
+            deployment_name = headers["deployment_name"]
+            api_version = headers["api_version"]
+
+            forward_url = (
+                f"{provider_info["base_url"]}/{deployment_name}/{path}"
+                f"?api-version={api_version}"
+            )
+            forward_url = forward_url[:8] + forward_url[8:].replace("//", "/")
+
+            proxy_headers = {
+                "api-key": headers["api_key"],
+                "Content-Type": "application/json"
+            }
+        elif "openwebui" in provider_info["name"].lower() and "Authorization" in headers and "Bearer" in headers["Authorization"]:
+            proxy_headers = {
+                "Authorization": headers["Authorization"],
+                "Content-Type": "application/json"
+            }
+            forward_url = f"{provider_info["base_url"]}/{path}"
+    if proxy_headers is None:
+        return {"error": "Could not identify suitable provider. Please check you header and registered provider names"}, 500
     return proxy_headers, forward_url
 
 
-def request_setup(headers: dict, path: str, llm_info: dict):
+def request_setup(headers: dict, path: str, data: dict):
     try:
-        key = headers["logos_key"] if "logos_key" in headers else (
+        logos_key = headers["logos_key"] if "logos_key" in headers else (
             headers["Authorization"].replace("Bearer ", "") if "Authorization" in headers else "")
+        # Check if Logos is used as proxy or resource
         with DBManager() as db:
-            # For now, we only redirect to saved models in the db if
-            # it is present in the db and no further info is provided
-            model_id = None
-            model_name = None
-            api_key = llm_info["api_key"]
-            base_url: str = llm_info["base_url"]
-            provider = llm_info["provider_name"]
-            # Check if model is in db
-            # Check for api-key
-            model_api_id = db.get_model_from_api(key, llm_info["api_id"])
-            model_provider_id = db.get_model_from_provider(key, llm_info["provider_id"])
-            if model_api_id is None and model_provider_id is None or "proxy" in headers:
-                proxy_headers, forward_url = proxy_behaviour(headers, provider, base_url, path)
+            # Get available models for this key
+            models = db.get_models(logos_key)
+        if not models or "proxy" in headers:
+            with DBManager() as db:
+                # Get available providers for this key
+                providers = db.get_providers(logos_key)
+            return *proxy_behaviour(headers, providers, path), None, None
+        else:
+            # The interesting part: Classification and scheduling
+            # First, retrieve our used policy. If no one is given, use default ProxyPolicy
+            select = ClassificationManager(models)
+            if "policy" in headers:
+                with DBManager() as db:
+                    policy = db.get_policy(logos_key, headers["policy"])
             else:
-                model_id = model_api_id if model_api_id is not None else model_provider_id
-                model_data = db.get_model(model_id)
-                model_name = model_data["name"]
-                endpoint = model_data["endpoint"]
-                if not base_url.endswith("/") and not endpoint.startswith("/"):
-                    forward_url = f"{base_url}/{endpoint}"
-                elif base_url.endswith("/") and endpoint.startswith("/"):
-                    forward_url = f"{base_url[:-1]}/{endpoint[1:]}"
-                else:
-                    forward_url = f"{base_url}{endpoint}"
+                policy = ProxyPolicy()
+            prompt = extract_prompt(data)
+            models = select.classify(prompt, policy)
+            sm = SchedulingManager(FCFSScheduler())
+            sm.run()
+            tid = sm.add_request(data, models)
+            while not sm.is_finished(tid):
+                pass
 
-                # forward_url = forward_url.replace("///", "/")
-                auth_name = llm_info["auth_name"]
-                auth_format = llm_info["auth_format"].format(api_key)
-                proxy_headers = {
-                    auth_name: auth_format,
-                    "Content-Type": "application/json"
-                }
+            sm.get_result()
+            return "", ""
+        """
+            model_data = db.get_model(model_id)
+            model_name = model_data["name"]
+            endpoint = model_data["endpoint"]
+            if not base_url.endswith("/") and not endpoint.startswith("/"):
+                forward_url = f"{base_url}/{endpoint}"
+            elif base_url.endswith("/") and endpoint.startswith("/"):
+                forward_url = f"{base_url[:-1]}/{endpoint[1:]}"
+            else:
+                forward_url = f"{base_url}{endpoint}"
+
+            # forward_url = forward_url.replace("///", "/")
+            auth_name = llm_info["auth_name"]
+            auth_format = llm_info["auth_format"].format(api_key)
+            proxy_headers = {
+                auth_name: auth_format,
+                "Content-Type": "application/json"
+            }
         return proxy_headers, forward_url, model_id, model_name
+        """
     except PermissionError as e:
         return {"error": str(e)}, 401
     except ValueError as e:
         return {"error": str(e)}, 401
+
+
+def extract_prompt(json_data: dict) -> str:
+    if "input_payload" in json_data:
+        if "messages" in json_data["input_payload"]:
+            if json_data["input_payload"]["messages"]:
+                if "content" in json_data["input_payload"]["messages"][0]:
+                    return json_data["input_payload"]["messages"][0]["content"]
+    return ""

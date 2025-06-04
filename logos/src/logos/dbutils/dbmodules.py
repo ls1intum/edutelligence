@@ -33,6 +33,8 @@ class Profile(Base):
     __tablename__ = 'profiles'
     id = Column(Integer, primary_key=True)
     name = Column(String, nullable=False)
+    process_id = Column(Integer, ForeignKey('process.id'), nullable=False)
+    profile = relationship("Process")
 
 
 class Process(Base):
@@ -42,12 +44,10 @@ class Process(Base):
     name = Column(String, nullable=False)
     user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
     service_id = Column(Integer, ForeignKey('services.id'), nullable=False)
-    profile_id = Column(Integer, ForeignKey('profiles.id'), nullable=False)
     log = Column(Boolean, default=False)
 
     user = relationship("User")
     service = relationship("Service")
-    profile = relationship("Profile")
 
 
 class Model(Base):

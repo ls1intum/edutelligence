@@ -33,6 +33,8 @@ class LogosServicer(model_pb2_grpc.LogosServicer):
                 context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
                 context.set_details("Key not found")
                 return
+            else:
+                llm_info = llm_info[0]
 
         # Standard request setup
         try:
