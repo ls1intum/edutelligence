@@ -112,11 +112,10 @@ class PlanningPhase:
         
         Problem Statement:
         Title: {context.problem_statement.title}
-        Description: {context.problem_statement.problem_statement}
+        Description: {context.problem_statement.description}
         
         Boundary Conditions:
         - Programming Language: {context.boundary_conditions.programming_language}
-        - Technical Environment: {context.boundary_conditions.technical_environment}
         - Project Type: {context.boundary_conditions.project_type}
         - Difficulty: {context.boundary_conditions.difficulty}
         - Points: {context.boundary_conditions.points}

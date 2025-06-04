@@ -3,6 +3,7 @@
 import os
 import shutil
 import logging
+import stat
 from typing import List, Optional, Dict, Any, Union
 from pathlib import Path
 
@@ -14,10 +15,16 @@ logger = logging.getLogger(__name__)
 
 
 class FileManager:
-    """Manager for file operations in the workspace."""
+    """Manager for file operations in the workspace.
+    
+    Provides secure file operations within the workspace boundaries,
+    preventing directory traversal attacks and ensuring proper error handling.
+    """
 
     def __init__(self) -> None:
-        pass
+        """Initialize the FileManager."""
+        self.encoding = 'utf-8'
+        logger.debug("FileManager initialized")
 
     def create_file_structure(self, context: SolutionCreationContext, structure: FileStructure) -> None:
         """Create the file structure in the workspace.
@@ -29,14 +36,46 @@ class FileManager:
         Raises:
             FileSystemException: If file structure creation fails
         """
+        logger.info(f"Creating file structure in workspace: {context.workspace_path}")
+        
         try:
-            # TODO: Implement file structure creation
-            # - Create directories from structure.directories
-            # - Create files from structure.files
-            # - Create build files from structure.build_files
-            # - Set appropriate permissions
-            pass
+            # Create directories first
+            if hasattr(structure, 'directories') and structure.directories:
+                for directory in structure.directories:
+                    self.create_directory(context, directory)
+                    logger.debug(f"Created directory: {directory}")
+            
+            # Create regular files
+            if hasattr(structure, 'files') and structure.files:
+                for file_info in structure.files:
+                    if isinstance(file_info, dict):
+                        file_path = file_info.get('path', '')
+                        content = file_info.get('content', '')
+                    else:
+                        file_path = str(file_info)
+                        content = ''
+                    
+                    if file_path:
+                        self.write_file(context, file_path, content)
+                        logger.debug(f"Created file: {file_path}")
+            
+            if hasattr(structure, 'build_files') and structure.build_files:
+                for build_file in structure.build_files:
+                    if isinstance(build_file, dict):
+                        file_path = build_file.get('path', '')
+                        content = build_file.get('content', '')
+                    else:
+                        file_path = str(build_file)
+                        content = ''
+                    
+                    if file_path:
+                        self.write_file(context, file_path, content)
+                        logger.debug(f"Created build file: {file_path}")
+            
+            logger.info("File structure created successfully")
+            
         except Exception as e:
+            logger.error(f"Failed to create file structure: {e}")
             raise FileSystemException(f"Failed to create file structure: {str(e)}", file_path="")
 
     def write_file(self, context: SolutionCreationContext, file_path: str, content: str) -> None:
@@ -50,14 +89,22 @@ class FileManager:
         Raises:
             FileSystemException: If file writing fails
         """
+        if not file_path:
+            raise FileSystemException("File path cannot be empty", file_path=file_path)
+        
         try:
-            # TODO: Implement file writing
-            # - Resolve full path in workspace
-            # - Create parent directories if needed
-            # - Write content to file
-            # - Handle encoding properly
-            pass
+            full_path = self._resolve_workspace_path(context, file_path)
+            self._validate_path_in_workspace(context, full_path)
+            
+            full_path.parent.mkdir(parents=True, exist_ok=True)
+            
+            with open(full_path, 'w', encoding=self.encoding) as f:
+                f.write(content)
+            
+            logger.debug(f"Written {len(content)} characters to file: {file_path}")
+            
         except Exception as e:
+            logger.error(f"Failed to write file {file_path}: {e}")
             raise FileSystemException(f"Failed to write file: {str(e)}", file_path=file_path)
 
     def read_file(self, context: SolutionCreationContext, file_path: str) -> str:
@@ -73,14 +120,29 @@ class FileManager:
         Raises:
             FileSystemException: If file reading fails
         """
+        if not file_path:
+            raise FileSystemException("File path cannot be empty", file_path=file_path)
+        
         try:
-            # TODO: Implement file reading
-            # - Resolve full path in workspace
-            # - Read file content
-            # - Handle encoding properly
-            # - Return content as string
-            return ""
+            full_path = self._resolve_workspace_path(context, file_path)
+            self._validate_path_in_workspace(context, full_path)
+            
+            if not full_path.exists():
+                raise FileSystemException(f"File does not exist: {file_path}", file_path=file_path)
+            
+            if not full_path.is_file():
+                raise FileSystemException(f"Path is not a file: {file_path}", file_path=file_path)
+            
+            with open(full_path, 'r', encoding=self.encoding) as f:
+                content = f.read()
+            
+            logger.debug(f"Read {len(content)} characters from file: {file_path}")
+            return content
+            
+        except FileSystemException:
+            raise
         except Exception as e:
+            logger.error(f"Failed to read file {file_path}: {e}")
             raise FileSystemException(f"Failed to read file: {str(e)}", file_path=file_path)
 
     def copy_file(self, context: SolutionCreationContext, source_path: str, dest_path: str) -> None:
@@ -94,14 +156,32 @@ class FileManager:
         Raises:
             FileSystemException: If file copying fails
         """
+        if not source_path or not dest_path:
+            raise FileSystemException("Source and destination paths cannot be empty", file_path=source_path)
+        
         try:
-            # TODO: Implement file copying
-            # - Resolve full paths in workspace
-            # - Copy file with metadata
-            # - Create destination directories if needed
-            # - Handle overwrite scenarios
-            pass
+            source_full = self._resolve_workspace_path(context, source_path)
+            dest_full = self._resolve_workspace_path(context, dest_path)
+            
+            self._validate_path_in_workspace(context, source_full)
+            self._validate_path_in_workspace(context, dest_full)
+            
+            if not source_full.exists():
+                raise FileSystemException(f"Source file does not exist: {source_path}", file_path=source_path)
+            
+            if not source_full.is_file():
+                raise FileSystemException(f"Source path is not a file: {source_path}", file_path=source_path)
+            
+            dest_full.parent.mkdir(parents=True, exist_ok=True)
+            
+            shutil.copy2(source_full, dest_full)
+            
+            logger.debug(f"Copied file from {source_path} to {dest_path}")
+            
+        except FileSystemException:
+            raise
         except Exception as e:
+            logger.error(f"Failed to copy file from {source_path} to {dest_path}: {e}")
             raise FileSystemException(f"Failed to copy file: {str(e)}", file_path=source_path)
 
     def move_file(self, context: SolutionCreationContext, source_path: str, dest_path: str) -> None:
@@ -115,14 +195,29 @@ class FileManager:
         Raises:
             FileSystemException: If file moving fails
         """
+        if not source_path or not dest_path:
+            raise FileSystemException("Source and destination paths cannot be empty", file_path=source_path)
+        
         try:
-            # TODO: Implement file moving
-            # - Resolve full paths in workspace
-            # - Move file to new location
-            # - Create destination directories if needed
-            # - Handle overwrite scenarios
-            pass
+            source_full = self._resolve_workspace_path(context, source_path)
+            dest_full = self._resolve_workspace_path(context, dest_path)
+            
+            self._validate_path_in_workspace(context, source_full)
+            self._validate_path_in_workspace(context, dest_full)
+            
+            if not source_full.exists():
+                raise FileSystemException(f"Source file does not exist: {source_path}", file_path=source_path)
+            
+            dest_full.parent.mkdir(parents=True, exist_ok=True)
+            
+            shutil.move(str(source_full), str(dest_full))
+            
+            logger.debug(f"Moved file from {source_path} to {dest_path}")
+            
+        except FileSystemException:
+            raise
         except Exception as e:
+            logger.error(f"Failed to move file from {source_path} to {dest_path}: {e}")
             raise FileSystemException(f"Failed to move file: {str(e)}", file_path=source_path)
 
     def delete_file(self, context: SolutionCreationContext, file_path: str) -> None:
@@ -135,13 +230,29 @@ class FileManager:
         Raises:
             FileSystemException: If file deletion fails
         """
+        if not file_path:
+            raise FileSystemException("File path cannot be empty", file_path=file_path)
+        
         try:
-            # TODO: Implement file deletion
-            # - Resolve full path in workspace
-            # - Delete file safely
-            # - Handle file not found gracefully
-            pass
+            full_path = self._resolve_workspace_path(context, file_path)
+            self._validate_path_in_workspace(context, full_path)
+            
+            if not full_path.exists():
+                logger.warning(f"File does not exist, skipping deletion: {file_path}")
+                return
+            
+            if full_path.is_file():
+                full_path.unlink()
+                logger.debug(f"Deleted file: {file_path}")
+            elif full_path.is_dir():
+                raise FileSystemException(f"Path is a directory, not a file: {file_path}", file_path=file_path)
+            else:
+                raise FileSystemException(f"Path is neither file nor directory: {file_path}", file_path=file_path)
+            
+        except FileSystemException:
+            raise
         except Exception as e:
+            logger.error(f"Failed to delete file {file_path}: {e}")
             raise FileSystemException(f"Failed to delete file: {str(e)}", file_path=file_path)
 
     def create_directory(self, context: SolutionCreationContext, dir_path: str) -> None:
@@ -154,14 +265,22 @@ class FileManager:
         Raises:
             FileSystemException: If directory creation fails
         """
+        if not dir_path:
+            raise FileSystemException("Directory path cannot be empty", file_path=dir_path)
+        
         try:
-            # TODO: Implement directory creation
-            # - Resolve full path in workspace
-            # - Create directory with parents
-            # - Set appropriate permissions
-            # - Handle existing directory gracefully
-            pass
+            full_path = self._resolve_workspace_path(context, dir_path)
+            self._validate_path_in_workspace(context, full_path)
+            
+            full_path.mkdir(parents=True, exist_ok=True)
+            
+            if not os.name == 'nt':  # Not Windows
+                full_path.chmod(0o755)
+            
+            logger.debug(f"Created directory: {dir_path}")
+            
         except Exception as e:
+            logger.error(f"Failed to create directory {dir_path}: {e}")
             raise FileSystemException(f"Failed to create directory: {str(e)}", file_path=dir_path)
 
     def list_files(self, context: SolutionCreationContext, dir_path: str = "") -> List[str]:
@@ -178,13 +297,28 @@ class FileManager:
             FileSystemException: If directory listing fails
         """
         try:
-            # TODO: Implement file listing
-            # - Resolve full path in workspace
-            # - List files and directories
-            # - Return relative paths
-            # - Handle empty directories
-            return []
+            full_path = self._resolve_workspace_path(context, dir_path)
+            self._validate_path_in_workspace(context, full_path)
+            
+            if not full_path.exists():
+                raise FileSystemException(f"Directory does not exist: {dir_path}", file_path=dir_path)
+            
+            if not full_path.is_dir():
+                raise FileSystemException(f"Path is not a directory: {dir_path}", file_path=dir_path)
+            
+            items = []
+            for item in full_path.iterdir():
+                relative_path = item.name
+                items.append(relative_path)
+            
+            items.sort()
+            logger.debug(f"Listed {len(items)} items in directory: {dir_path or 'root'}")
+            return items
+            
+        except FileSystemException:
+            raise
         except Exception as e:
+            logger.error(f"Failed to list files in directory {dir_path}: {e}")
             raise FileSystemException(f"Failed to list files: {str(e)}", file_path=dir_path)
 
     def file_exists(self, context: SolutionCreationContext, file_path: str) -> bool:
@@ -197,13 +331,15 @@ class FileManager:
         Returns:
             True if file exists, False otherwise
         """
-        try:
-            # TODO: Implement file existence check
-            # - Resolve full path in workspace
-            # - Check if file exists
-            # - Return boolean result
+        if not file_path:
             return False
-        except Exception:
+        
+        try:
+            full_path = self._resolve_workspace_path(context, file_path)
+            self._validate_path_in_workspace(context, full_path)
+            return full_path.exists() and full_path.is_file()
+        except Exception as e:
+            logger.debug(f"Error checking file existence for {file_path}: {e}")
             return False
 
     def get_file_size(self, context: SolutionCreationContext, file_path: str) -> int:
@@ -219,13 +355,27 @@ class FileManager:
         Raises:
             FileSystemException: If getting file size fails
         """
+        if not file_path:
+            raise FileSystemException("File path cannot be empty", file_path=file_path)
+        
         try:
-            # TODO: Implement file size retrieval
-            # - Resolve full path in workspace
-            # - Get file size
-            # - Return size in bytes
-            return 0
+            full_path = self._resolve_workspace_path(context, file_path)
+            self._validate_path_in_workspace(context, full_path)
+            
+            if not full_path.exists():
+                raise FileSystemException(f"File does not exist: {file_path}", file_path=file_path)
+            
+            if not full_path.is_file():
+                raise FileSystemException(f"Path is not a file: {file_path}", file_path=file_path)
+            
+            size = full_path.stat().st_size
+            logger.debug(f"File {file_path} size: {size} bytes")
+            return size
+            
+        except FileSystemException:
+            raise
         except Exception as e:
+            logger.error(f"Failed to get file size for {file_path}: {e}")
             raise FileSystemException(f"Failed to get file size: {str(e)}", file_path=file_path)
 
     def set_file_permissions(self, context: SolutionCreationContext, file_path: str, permissions: int) -> None:
@@ -239,13 +389,30 @@ class FileManager:
         Raises:
             FileSystemException: If setting permissions fails
         """
+        if not file_path:
+            raise FileSystemException("File path cannot be empty", file_path=file_path)
+        
+        if os.name == 'nt':
+            logger.debug(f"Skipping permission setting on Windows for: {file_path}")
+            return
+        
         try:
-            # TODO: Implement file permission setting
-            # - Resolve full path in workspace
-            # - Set file permissions
-            # - Handle permission errors
-            pass
+            full_path = self._resolve_workspace_path(context, file_path)
+            self._validate_path_in_workspace(context, full_path)
+            
+            if not full_path.exists():
+                raise FileSystemException(f"File does not exist: {file_path}", file_path=file_path)
+            
+            if not isinstance(permissions, int) or permissions < 0 or permissions > 0o777:
+                raise FileSystemException(f"Invalid permissions value: {permissions}", file_path=file_path)
+            
+            full_path.chmod(permissions)
+            logger.debug(f"Set permissions {oct(permissions)} for file: {file_path}")
+            
+        except FileSystemException:
+            raise
         except Exception as e:
+            logger.error(f"Failed to set permissions for {file_path}: {e}")
             raise FileSystemException(f"Failed to set file permissions: {str(e)}", file_path=file_path)
 
     def _resolve_workspace_path(self, context: SolutionCreationContext, relative_path: str) -> Path:
@@ -262,12 +429,20 @@ class FileManager:
             FileSystemException: If path resolution fails
         """
         try:
-            # TODO: Implement path resolution
-            # - Combine workspace path with relative path
-            # - Normalize path
-            # - Validate path is within workspace
-            return Path(context.workspace_path) / relative_path
+            if not context.workspace_path:
+                raise FileSystemException("Workspace path is not set in context", file_path=relative_path)
+            
+            workspace_path = Path(context.workspace_path).resolve()
+            
+            if not relative_path or relative_path == ".":
+                return workspace_path
+            
+            full_path = (workspace_path / relative_path).resolve()
+            
+            return full_path
+            
         except Exception as e:
+            logger.error(f"Failed to resolve path {relative_path}: {e}")
             raise FileSystemException(f"Failed to resolve path: {str(e)}", file_path=relative_path)
 
     def _validate_path_in_workspace(self, context: SolutionCreationContext, path: Union[str, Path]) -> None:
@@ -280,8 +455,30 @@ class FileManager:
         Raises:
             FileSystemException: If path is outside workspace
         """
-        # TODO: Implement path validation
-        # - Check path is within workspace boundaries
-        # - Prevent directory traversal attacks
-        # - Validate path format
-        pass 
+        try:
+            if not context.workspace_path:
+                raise FileSystemException("Workspace path is not set in context", file_path=str(path))
+            
+            workspace_path = Path(context.workspace_path).resolve()
+            target_path = Path(path).resolve()
+            
+            try:
+                target_path.relative_to(workspace_path)
+            except ValueError:
+                raise FileSystemException(
+                    f"Path is outside workspace boundaries: {path}",
+                    file_path=str(path)
+                )
+            
+            path_str = str(target_path)
+            
+            suspicious_components = ['..', '.git', '.ssh', '/etc', '/root', '/home']
+            for component in suspicious_components:
+                if component in path_str:
+                    logger.warning(f"Suspicious path component detected: {component} in {path}")
+            
+        except FileSystemException:
+            raise
+        except Exception as e:
+            logger.error(f"Failed to validate path {path}: {e}")
+            raise FileSystemException(f"Failed to validate path: {str(e)}", file_path=str(path)) 

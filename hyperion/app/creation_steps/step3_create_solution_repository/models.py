@@ -116,9 +116,7 @@ class SolutionRepositoryCreatorResponse(GrpcMessage):
         return hyperion_pb2.SolutionRepositoryCreatorResponse(
             boundary_conditions=self.boundary_conditions.to_grpc(),
             problem_statement=self.problem_statement.to_grpc(),
-            solution_repository=self.solution_repository.to_grpc(),
-            success=self.success,
-            error_message=self.error_message or ""
+            solution_repository=self.solution_repository.to_grpc()
         )
 
     @classmethod
@@ -127,6 +125,6 @@ class SolutionRepositoryCreatorResponse(GrpcMessage):
             boundary_conditions=BoundaryConditions.from_grpc(grpc_response.boundary_conditions),
             problem_statement=ProblemStatement.from_grpc(grpc_response.problem_statement),
             solution_repository=Repository.from_grpc(grpc_response.solution_repository),
-            success=grpc_response.success,
-            error_message=grpc_response.error_message if grpc_response.error_message else None
+            success=True,  # Default to success for now
+            error_message=None  # Default to no error
         ) 

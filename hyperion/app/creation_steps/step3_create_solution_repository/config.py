@@ -1,7 +1,8 @@
 """Configuration settings for Step 3: Create Solution Repository."""
 
 from typing import Dict, Any
-from pydantic import BaseSettings, Field
+from pydantic import Field
+from pydantic_settings import BaseSettings
 
 
 class SolutionCreatorConfig(BaseSettings):
