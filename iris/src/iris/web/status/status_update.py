@@ -1,10 +1,9 @@
 import logging
 from abc import ABC
-from typing import List, Optional
-
+from typing import Optional, List
 import requests
-from sentry_sdk import capture_exception, capture_message
 
+from sentry_sdk import capture_exception, capture_message
 from iris.common.token_usage_dto import TokenUsageDTO
 from iris.domain.chat.course_chat.course_chat_status_update_dto import (
     CourseChatStatusUpdateDTO,
@@ -116,6 +115,8 @@ class StatusCallback(ABC):
         tokens: Optional[List[TokenUsageDTO]] = None,
         next_stage_message: Optional[str] = None,
         start_next_stage: bool = True,
+        inconsistencies: Optional[List[str]] = None,
+        improvement: Optional[str] = None,
     ):
         """
         Transition the current stage to DONE and update the status.
@@ -128,6 +129,11 @@ class StatusCallback(ABC):
         self.status.tokens = tokens or self.status.tokens
         if hasattr(self.status, "suggestions"):
             self.status.suggestions = suggestions
+
+        if hasattr(self.status, "inconsistencies"):
+            self.status.inconsistencies = inconsistencies
+        if hasattr(self.status, "improvement"):
+            self.status.improvement = improvement
         next_stage = self.get_next_stage()
         if next_stage is not None:
             self.stage = next_stage
@@ -139,6 +145,8 @@ class StatusCallback(ABC):
         self.status.result = None
         if hasattr(self.status, "suggestions"):
             self.status.suggestions = None
+        if hasattr(self.status, "inconsistencies"):
+            self.status.inconsistencies = None
 
     def error(
         self,
@@ -240,9 +248,7 @@ class ExerciseChatStatusCallback(StatusCallback):
                 name="Checking available information",
             ),
             StageDTO(
-                weight=10,
-                state=StageStateEnum.NOT_STARTED,
-                name="Creating suggestions",
+                weight=10, state=StageStateEnum.NOT_STARTED, name="Creating suggestions"
             ),
         ]
         status = ExerciseChatStatusUpdateDTO(stages=stages)
