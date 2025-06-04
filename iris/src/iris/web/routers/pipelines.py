@@ -123,12 +123,8 @@ def run_exercise_chat_pipeline(
         description="Exercise Chat Pipeline Execution DTO"
     ),
 ):
-    variant = validate_pipeline_variant(dto.settings, ExerciseChatAgentPipeline)
-
-    if variant == "chat-gpt-wrapper":
-        # Additional validation for ChatGPT wrapper variant
-        validate_pipeline_variant(dto.settings, ChatGPTWrapperPipeline)
-        thread = Thread(target=run_chatgpt_wrapper_pipeline_worker, args=(dto, variant))
+    if True:
+        logging.info("Test")
     else:
         thread = Thread(
             target=run_exercise_chat_pipeline_worker,
