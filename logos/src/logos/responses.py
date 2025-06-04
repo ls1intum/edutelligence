@@ -110,6 +110,35 @@ def get_client_ip_address_from_context(context: grpc.ServicerContext) -> str:
     return peer
 
 
+def proxy_behaviour(headers, provider, base_url, path):
+    # Model not in the database, change to normal proxy
+    if "azure" in provider.lower():
+        if "deployment_name" not in headers or headers["deployment_name"] == "":
+            return {"error": "Missing deployment name in header"}, 401
+        if "api_version" not in headers or headers["api_version"] == "":
+            return {"error": "Missing api version in header"}, 401
+        deployment_name = headers["deployment_name"]
+        api_version = headers["api_version"]
+
+        forward_url = (
+            f"{base_url}/{deployment_name}/{path}"
+            f"?api-version={api_version}"
+        )
+        forward_url = forward_url[:8] + forward_url[8:].replace("//", "/")
+
+        proxy_headers = {
+            "api-key": headers["api_key"],
+            "Content-Type": "application/json"
+        }
+    else:
+        proxy_headers = {
+            "Authorization": headers["Authorization"],
+            "Content-Type": "application/json"
+        }
+        forward_url = f"{base_url}/{path}"
+    return proxy_headers, forward_url
+
+
 def request_setup(headers: dict, path: str, llm_info: dict):
     try:
         key = headers["logos_key"] if "logos_key" in headers else (
@@ -127,31 +156,7 @@ def request_setup(headers: dict, path: str, llm_info: dict):
             model_api_id = db.get_model_from_api(key, llm_info["api_id"])
             model_provider_id = db.get_model_from_provider(key, llm_info["provider_id"])
             if model_api_id is None and model_provider_id is None or "proxy" in headers:
-                # Model not in the database, change to normal proxy
-                if "azure" in provider.lower():
-                    if "deployment_name" not in headers or headers["deployment_name"] == "":
-                        return {"error": "Missing deployment name in header"}, 401
-                    if "api_version" not in headers or headers["api_version"] == "":
-                        return {"error": "Missing api version in header"}, 401
-                    deployment_name = headers["deployment_name"]
-                    api_version = headers["api_version"]
-
-                    forward_url = (
-                        f"{base_url}/{deployment_name}/{path}"
-                        f"?api-version={api_version}"
-                    )
-                    forward_url = forward_url[:8] + forward_url[8:].replace("//", "/")
-
-                    proxy_headers = {
-                        "api-key": headers["api_key"],
-                        "Content-Type": "application/json"
-                    }
-                else:
-                    proxy_headers = {
-                        "Authorization": headers["Authorization"],
-                        "Content-Type": "application/json"
-                    }
-                    forward_url = f"{base_url}/{path}"
+                proxy_headers, forward_url = proxy_behaviour(headers, provider, base_url, path)
             else:
                 model_id = model_api_id if model_api_id is not None else model_provider_id
                 model_data = db.get_model(model_id)
