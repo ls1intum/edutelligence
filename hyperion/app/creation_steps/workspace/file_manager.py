@@ -1,4 +1,4 @@
-"""File manager for solution repository creation."""
+"""File manager for workspace operations."""
 
 import os
 import shutil
@@ -7,9 +7,8 @@ import stat
 from typing import List, Optional, Dict, Any, Union
 from pathlib import Path
 
-from ..models import SolutionCreationContext, FileStructure
+from ..step3_create_solution_repository.models import SolutionCreationContext, FileStructure
 from ..exceptions import FileSystemException
-from ..config import config
 
 logger = logging.getLogger(__name__)
 

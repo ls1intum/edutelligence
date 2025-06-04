@@ -8,17 +8,18 @@ import shutil
 import pytest
 from pathlib import Path
 from unittest.mock import Mock, patch, mock_open
+import stat
 
 import sys
 from pathlib import Path
 
 # Add project root to path for imports
-project_root = Path(__file__).parent.parent.parent.parent.parent.parent
+project_root = Path(__file__).parent.parent.parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-from app.creation_steps.step3_create_solution_repository.workspace.file_manager import FileManager
+from app.creation_steps.workspace.file_manager import FileManager
 from app.creation_steps.step3_create_solution_repository.models import SolutionCreationContext, FileStructure
-from app.creation_steps.step3_create_solution_repository.exceptions import FileSystemException
+from app.creation_steps.exceptions import FileSystemException
 
 
 class TestFileManager:

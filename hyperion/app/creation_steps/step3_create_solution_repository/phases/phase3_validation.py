@@ -6,7 +6,7 @@ from langchain_core.language_models.chat_models import BaseLanguageModel
 
 from ..models import SolutionCreationContext, TestExecutionResult, FixAttempt
 from ..exceptions import SolutionCreatorException, MaxIterationsExceededException
-from ..config import config
+from ...config import config
 
 logger = logging.getLogger(__name__)
 

@@ -12,10 +12,10 @@ from .models import (
     SolutionCreationStep
 )
 from .phases import PlanningPhase, TestingPhase, ValidationPhase
-from .workspace import TempWorkspaceManager
+from ..workspace import TempWorkspaceManager
 from .language_handlers import registry as language_registry
 from .exceptions import SolutionCreatorException, LanguageHandlerException
-from .config import config
+from ..config import config
 
 logger = logging.getLogger(__name__)
 
@@ -132,7 +132,7 @@ class SolutionRepositoryCreatorServicer(hyperion_pb2_grpc.SolutionRepositoryCrea
         # Determine success based on context
         success = (
             context.solution_repository is not None and
-            len(context.fix_attempts) < config.max_iterations
+            len(context.fix_attempts) < config.solution_creator_max_iterations
         )
         
         # Create error message if failed
@@ -140,8 +140,8 @@ class SolutionRepositoryCreatorServicer(hyperion_pb2_grpc.SolutionRepositoryCrea
         if not success:
             if context.solution_repository is None:
                 error_message = "Failed to generate solution repository"
-            elif len(context.fix_attempts) >= config.max_iterations:
-                error_message = f"Maximum iterations ({config.max_iterations}) exceeded"
+            elif len(context.fix_attempts) >= config.solution_creator_max_iterations:
+                error_message = f"Maximum iterations ({config.solution_creator_max_iterations}) exceeded"
         
         return SolutionRepositoryCreatorResponse(
             boundary_conditions=request.boundary_conditions,
