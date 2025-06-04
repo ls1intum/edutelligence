@@ -4,11 +4,11 @@ Module handling all classification tasks in Logos.
 import functools
 from typing import List, Tuple, Callable
 
-from classifier import Classifier
-from classify_policy import PolicyClassifier
-from classify_token import TokenClassifier
-from classify_ai import AIClassifier
-from proxy_policy import ProxyPolicy
+from logos.classification.classifier import Classifier
+from logos.classification.classify_policy import PolicyClassifier
+from logos.classification.classify_token import TokenClassifier
+from logos.classification.classify_ai import AIClassifier
+from logos.classification.proxy_policy import ProxyPolicy
 
 def singleton(cls):
     """
@@ -108,4 +108,4 @@ if __name__ == "__main__":
     ]
     select = ClassificationManager(models)
     from pprint import pprint
-    pprint(select.classify("absolutely no idea", ProxyPolicy(), PolicyClassifier))
+    pprint(select.classify("absolutely no idea", ProxyPolicy(), PolicyClassifier)) # type: ignore

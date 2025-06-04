@@ -2,7 +2,7 @@
 Classifier using AI to classify prompts to keywords.
 """
 from typing import List
-from classifier import Classifier
+from logos.classification.classifier import Classifier
 
 
 class AIClassifier(Classifier):

@@ -5,7 +5,13 @@ import functools
 import logging
 import time
 from threading import Thread, Event
+from typing import Union
+from logos.classification.classification_manager import ClassificationManager
+from logos.classification.classify_policy import PolicyClassifier
+import data
+from logos.classification.proxy_policy import ProxyPolicy
 from scheduler import Scheduler, Task
+from scheduling_fcfs import FCFSScheduler
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -28,44 +34,106 @@ def singleton(cls):
 @singleton
 class SchedulingManager:
     def __init__(self, scheduler: Scheduler):
-        self.scheduler = scheduler
-        self.thread = None
-        self.return_value = None
-        self.has_finished = False
-        self.stop_event = Event()
-        self.run()
+        self.__scheduler = scheduler
+        self.__thread = None
+        self.__return_value = None
+        self.__has_finished = False
+        self.__running = False
+        self.__stop_event = Event()
+        self.__ticket = 0
+        self.__finished_ticket = -1
+        self.__is_free = dict()
 
     def add_request(self, data: dict, model_id: int, weight: int, priority: int):
-        self.scheduler.enqueue(Task(data, model_id, weight, priority))
+        if model_id not in self.__is_free:
+            self.__is_free[model_id] = True
+        self.__scheduler.enqueue(Task(data, model_id, weight, priority, self.__ticket))
+        self.__ticket += 1
+        return self.__ticket - 1
 
     def run(self):
-        self.thread = Thread(target=self.__run)
-        self.thread.start()
+        if self.__running:
+            return
+        self.__thread = Thread(target=self.__run)
+        self.__thread.start()
+        self.__running = True
 
     def stop(self):
         """Signal the thread to stop and wait for it to finish."""
-        self.stop_event.set()
-        if self.thread:
-            self.thread.join()  # Wait for thread to exit gracefully
+        self.__stop_event.set()
+        if self.__thread:
+            self.__thread.join()  # Wait for thread to exit gracefully
         logging.info("Scheduling Manager stopped.")
 
     def __run(self):
-        """Main loop for processing requests."""
-        while not self.stop_event.is_set():
+        """
+        Main loop for processing requests.
+        """
+        while not self.__stop_event.is_set():
             try:
-                if not self.scheduler.is_empty() and not self.has_finished:
-                    task = self.scheduler.schedule()
+                if not self.__scheduler.is_empty() and not self.__has_finished:
+                    task = self.__scheduler.schedule(self.__is_free)
                     if task:
                         logging.info(f"Scheduling task: {task.data} for model {task.model_id}")
-                        self.return_value = task
-                        self.has_finished = True
+                        self.__return_value = task
+                        self.__has_finished = True
+                        self.__finished_ticket = task.get_id()
+                        self.__is_free[task.model_id] = False
                         logging.info(f"Task completed: {task.data}")
-                    else:
-                        time.sleep(0.1)
                 else:
                     # No tasks in queue
                     time.sleep(0.1)
             except Exception as e:
                 logging.error(f"Error in scheduling loop: {e}", exc_info=True)
-                self.has_finished = False
+                self.__has_finished = False
                 time.sleep(1)
+
+    def get_result(self) -> Union[Task, None]:
+        try:
+            if not self.__has_finished:
+                return None
+            return self.__return_value
+        finally:
+            self.__has_finished = False
+            self.__finished_ticket = -1
+
+    def set_free(self, model_id: int):
+        self.__is_free[model_id] = True
+
+    def is_finished(self, tid: int) -> bool:
+        return self.__has_finished and self.__finished_ticket == tid
+
+
+if __name__ == "__main__":
+    select = ClassificationManager(data.models)
+    tasks = select.classify("absolutely no idea", ProxyPolicy(), PolicyClassifier)
+    tasks = [(2, 387.0, 0), (3, 371.0, 0), (1, 365.0, 0), (2, 365.0, 0), (1, 360.0, 0), (2, 350.0, 0)]
+    print(tasks)
+    def exec_task(data, model_id, weight, priority):
+        sm = SchedulingManager(FCFSScheduler())
+        sm.run()
+        tid = sm.add_request(data, model_id, weight, priority)
+        while not sm.is_finished(tid):
+            pass
+
+        out = sm.get_result()
+        # -- DO SOMETHING --
+        if model_id == 2:
+            time.sleep(1)
+        if model_id == 1:
+            time.sleep(0.5)
+        if out is not None:
+            print(out.data)
+        sm.set_free(model_id)
+
+    ts = list()
+    for (model_id, weight, priority), text in zip(tasks, ["a", "b", "c", "d", "e", "f"]):
+        t = Thread(target=exec_task, args=(text, model_id, weight, priority))
+        t.start()
+        ts.append(t)
+    
+    while ts:
+        ts = [i for i in ts if i.is_alive()]
+
+    sm = SchedulingManager(FCFSScheduler())
+    sm.stop()

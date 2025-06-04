@@ -4,7 +4,7 @@ Module filtering available LLMs by a given policy.
 from copy import deepcopy
 from typing import List
 
-from classifier import Classifier
+from logos.classification.classifier import Classifier
 
 
 class PolicyClassifier(Classifier):

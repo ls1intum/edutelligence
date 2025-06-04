@@ -2,7 +2,7 @@
 Classifier using keywords in prompts.
 """
 from typing import List
-from classifier import Classifier
+from logos.classification.classifier import Classifier
 
 
 class TokenClassifier(Classifier):
