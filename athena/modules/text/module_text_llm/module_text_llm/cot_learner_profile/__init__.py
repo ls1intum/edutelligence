@@ -37,7 +37,7 @@ class COTLearnerProfileConfig(ApproachConfig):
 
         from module_text_llm.cot_learner_profile.generate_suggestions import (
             generate_suggestions,
-        )
+        )  # pylint: disable=import-outside-toplevel
 
         return await generate_suggestions(
             exercise,

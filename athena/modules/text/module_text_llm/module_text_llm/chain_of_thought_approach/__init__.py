@@ -28,7 +28,7 @@ class ChainOfThoughtConfig(ApproachConfig):
 
         from module_text_llm.chain_of_thought_approach.generate_suggestions import (
             generate_suggestions,
-        )
+        )  # pylint: disable=import-outside-toplevel
 
         return await generate_suggestions(
             exercise, submission, config, debug, is_graded

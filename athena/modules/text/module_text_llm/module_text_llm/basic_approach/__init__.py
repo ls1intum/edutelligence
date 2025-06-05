@@ -24,7 +24,7 @@ class BasicApproachConfig(ApproachConfig):
     ):
         from module_text_llm.basic_approach.generate_suggestions import (
             generate_suggestions,
-        )
+        )  # pylint: disable=import-outside-toplevel
 
         return await generate_suggestions(
             exercise, submission, config, debug, is_graded

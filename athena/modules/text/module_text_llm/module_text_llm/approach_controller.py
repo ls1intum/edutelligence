@@ -1,16 +1,8 @@
-from typing import List, Optional
-
+from typing import Any, Dict, List, Optional
 from athena.text import Exercise, Submission, Feedback
 from module_text_llm.approach_config import ApproachConfig
 from athena.schemas.learner_profile import LearnerProfile
 import inspect
-
-
-import inspect
-from typing import Any, Dict, List, Optional
-
-from athena.text import Exercise, Submission
-from module_text_llm.approach_config import ApproachConfig
 
 
 async def generate_suggestions(
