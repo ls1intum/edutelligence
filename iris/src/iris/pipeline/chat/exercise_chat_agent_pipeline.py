@@ -54,6 +54,7 @@ from ..prompts.iris_exercise_chat_agent_prompts import (
 from ..shared.citation_pipeline import CitationPipeline, InformationType
 from ..shared.utils import (
     filter_variants_by_available_models,
+    format_custom_instructions,
     generate_structured_tools_from_functions,
 )
 from .code_feedback_pipeline import CodeFeedbackPipeline
@@ -129,13 +130,13 @@ class ExerciseChatAgentPipeline(Pipeline):
         super().__init__(implementation_id="exercise_chat_pipeline")
 
         # Set the langchain chat model
-        completion_args = CompletionArguments(temperature=0.1, max_tokens=2000)
+        completion_args = CompletionArguments(temperature=0.5, max_tokens=2000)
 
         if variant == "advanced":
             model = "gpt-4.1"
             model_small = "gpt-4.1-mini"
         else:
-            model = "gpt-4.1-nano"
+            model = "gpt-4.1-mini"
             model_small = "gpt-4.1-nano"
 
         self.llm = IrisLangchainChatModel(
@@ -170,7 +171,7 @@ class ExerciseChatAgentPipeline(Pipeline):
     def get_variants(cls, available_llms: List[LanguageModel]) -> List[FeatureDTO]:
         variant_specs = [
             (
-                ["gpt-4.1-nano"],
+                ["gpt-4.1-mini", "gpt-4.1-nano"],
                 FeatureDTO(
                     id="default",
                     name="Default",
@@ -521,6 +522,10 @@ class ExerciseChatAgentPipeline(Pipeline):
             exercise_title: str = dto.exercise.name
             programming_language = dto.exercise.programming_language.lower()
 
+            custom_instructions = format_custom_instructions(
+                custom_instructions=dto.custom_instructions
+            )
+
             params = {}
 
             if len(chat_history) > 0 and query is not None and self.event is None:
@@ -538,6 +543,8 @@ class ExerciseChatAgentPipeline(Pipeline):
                             )
                             + "\n"
                             + agent_prompt
+                            + "\n"
+                            + custom_instructions
                             + "\n"
                             + format_reminder_prompt,
                         ),
@@ -562,6 +569,8 @@ class ExerciseChatAgentPipeline(Pipeline):
                                 )
                                 + agent_prompt
                                 + "\n"
+                                + custom_instructions
+                                + "\n"
                                 + format_reminder_prompt,
                             ),
                             HumanMessage(
@@ -583,6 +592,8 @@ class ExerciseChatAgentPipeline(Pipeline):
                                     programming_language,
                                 )
                                 + agent_prompt
+                                + "\n"
+                                + custom_instructions
                                 + "\n"
                                 + format_reminder_prompt,
                             ),
