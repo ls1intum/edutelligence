@@ -193,7 +193,7 @@ class DBManager:
         pk = self.insert("providers", {"name": provider_name, "base_url": base_url,
                                        "auth_name": auth_name, "auth_format": auth_format})
         pk_api = self.insert("model_api_keys", {"api_key": api_key, "provider_id": pk})
-        return {"result": f"Created Provider.", "provider-id": pk_api}, 200
+        return {"result": f"Created Provider.", "provider-id": pk, "api-id": pk_api}, 200
 
     def add_profile(self, logos_key: str, profile_name: str, process_id: int):
         if not self.check_authorization(logos_key):
@@ -205,19 +205,7 @@ class DBManager:
         if not self.check_authorization(logos_key):
             return {"error": "Database changes only allowed for root user."}, 500
         pk = self.insert("models", {"name": name, "endpoint": endpoint})
-        return {"result": f"Created Model. ID: {pk}"}, 200
-
-    def add_profile_model_permission(self, logos_key: str, model_id: int, profile_id: int):
-        if not self.check_authorization(logos_key):
-            return {"error": "Database changes only allowed for root user."}, 500
-        pk = self.insert("profile_model_permissions", {"model_id": model_id, "profile_id": profile_id})
-        return {"result": f"Created Permission. ID: {pk}"}, 200
-
-    def add_model_provider(self, logos_key: str, model_id: int, provider_id: int):
-        if not self.check_authorization(logos_key):
-            return {"error": "Database changes only allowed for root user."}, 500
-        pk = self.insert("model_provider", {"model_id": model_id, "provider_id": provider_id})
-        return {"result": f"Linked model to provider. ID: {pk}"}, 200
+        return {"result": f"Created Model", "model_id": pk}, 200
 
     def add_service(self, logos_key: str, name: str):
         if not self.check_authorization(logos_key):
@@ -264,6 +252,12 @@ class DBManager:
                          {"profile_id": int(profile_id), "model_id": int(model_id)})
         return {"result": f"Connected process to model. ID: {pk}"}, 200
 
+    def connect_profile_model(self, logos_key: str, model_id: int, profile_id: int):
+        if not self.check_authorization(logos_key):
+            return {"error": "Database changes only allowed for root user."}, 500
+        pk = self.insert("profile_model_permissions", {"model_id": model_id, "profile_id": profile_id})
+        return {"result": f"Created Permission. ID: {pk}"}, 200
+
     def connect_service_process(self, logos_key: str, service_id: int, process_name: str):
         if not self.check_authorization(logos_key):
             return {"error": "Database changes only allowed for root user."}, 500
@@ -292,6 +286,24 @@ class DBManager:
         })
         self.session.commit()
         return {"result": f"Added api-connection to model."}, 200
+
+    def add_model_provider_profile(self, logos_key: str, model_name: str, model_endpoint: str, provider_id: int, profile_id: int, api_id: int):
+        if not self.check_authorization(logos_key):
+            return {"error": "Database changes only allowed for root user."}, 500
+        r, c = self.add_model(logos_key, model_name, model_endpoint)
+        if c != 200:
+            return r, c
+        model_id = r["model_id"]
+        r, c = self.connect_model_provider(logos_key, model_id, provider_id)
+        if c != 200:
+            return r, c
+        r, c = self.connect_profile_model(logos_key, model_id, profile_id)
+        if c != 200:
+            return r, c
+        r, c = self.connect_model_api(logos_key, model_id, api_id)
+        if c != 200:
+            return r, c
+        return {"result": f"Successfully added model and connected to profile {profile_id}"}, 200
 
     def set_process_log(self, process_id: int, log: bool):
         sql = text("""
@@ -330,7 +342,33 @@ class DBManager:
             return {"error": "Key not found"}
         return {"result": f"API-ID: {exc[0]}"}, 200
 
-    def get_models(self, logos_key: str):
+    def get_models_by_profile(self, logos_key: str, profile_id: int):
+        """
+        Get a list of models accessible by a given profile-ID.
+        """
+        sql = text("""
+                   SELECT models.id
+                   FROM models,
+                        process,
+                        profiles,
+                        profile_model_permissions,
+                        model_provider,
+                        model_api_keys,
+                        providers
+                   WHERE process.logos_key = :logos_key
+                        and process.id = profiles.process_id
+                        and profiles.id = profile_model_permissions.profile_id
+                        and profile_model_permissions.model_id = model_provider.model_id
+                        and model_api_keys.id = models.api_id
+                        and model_api_keys.profile_id = profiles.id
+                        and model_api_keys.provider_id = providers.id
+                        and providers.id = model_provider.provider_id
+                        and profiles.id = :profile_id
+                   """)
+        result = self.session.execute(sql, {"logos_key": logos_key, "profile_id": profile_id}).fetchall()
+        return [i.id for i in result]
+
+    def get_models_with_key(self, logos_key: str):
         """
         Get a list of models accessible by a given key.
         """

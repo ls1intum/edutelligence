@@ -238,7 +238,10 @@ def request_setup(headers: dict, logos_key: str):
         # Check if Logos is used as proxy or resource
         with DBManager() as db:
             # Get available models for this key
-            models = db.get_models(logos_key)
+            if "use_profile" in headers:
+                models = db.get_models_by_profile(logos_key, int(headers["profile_id"]))
+            else:
+                models = db.get_models_with_key(logos_key)
         if not models or "proxy" in headers:
             return list()
         else:
