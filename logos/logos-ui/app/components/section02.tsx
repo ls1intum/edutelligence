@@ -34,7 +34,7 @@ export default function Section02() {
           description="Analyze and observe AI usage"
           bullets={[
             'gRPC Interface',
-            'Prompt Logging',
+            'Detailed Usage Statistics',
             'Model Analytics',
           ]}
         />

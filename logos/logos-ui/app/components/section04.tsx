@@ -14,7 +14,7 @@ const faqData = [
   },
   {
     question: 'What data formats does your API support for requests and responses?',
-    answer: 'Our API primarily supports JSON and gRPC for both requests and responses. JSON is the recommended and most actively maintained format. Please refer to the specific endpoint documentation for any format-specific details or constraints. For communicating with AI-models, Logos uses the OpenAPI or Azure-API, respectively.'
+    answer: 'Our API primarily supports JSON and gRPC for both requests and responses. JSON is the recommended and most actively maintained format. Please refer to the specific endpoint documentation for any format-specific details or constraints.'
   },
   {
     question: 'How do I handle authentication with your API?',

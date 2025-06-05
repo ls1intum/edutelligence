@@ -31,7 +31,7 @@ export default function Section03() {
           <View style={styles.bullet}>
             <Users color="#6366f1" size={20} style={styles.icon} />
             <View>
-              <Text style={[styles.bulletTitle, {color: isLight ? '#000' : '#fff'}]}>Track LLM utilization and identify areas for improvement</Text>
+              <Text style={[styles.bulletTitle, {color: isLight ? '#000' : '#fff'}]}>Enhance observability and identify areas for improvement</Text>
               <Text style={[styles.bulletDescription, {color: isLight ? '#000' : '#fff'}]}>
                 Optimize your LLM usage for performance and cost
               </Text>
