@@ -38,7 +38,6 @@ class MemorySleeper:
     ollama_service: OllamaService
 
     template_deduplication: Template
-    template_deduplication_with_tools: Template
     template_connector: Template
 
     def __init__(
@@ -51,7 +50,6 @@ class MemorySleeper:
         vectorizer: Vectorizer,
         ollama_service: OllamaService,
         template_deduplication: Optional[str] = None,
-        template_deduplication_with_tools: Optional[str] = None,
         template_connector: Optional[str] = None,
     ) -> None:
         """
@@ -79,10 +77,6 @@ class MemorySleeper:
 
         self.template_deduplication = create_template(
             template_deduplication, "memory_sleep/memory_deduplication.md.j2"
-        )
-        self.template_deduplication_with_tools = create_template(
-            template_deduplication_with_tools,
-            "memory_sleep/memory_deduplication_with_tools.md.j2",
         )
         self.template_connector = create_template(
             template_connector, "memory_sleep/memory_connector.md.j2"

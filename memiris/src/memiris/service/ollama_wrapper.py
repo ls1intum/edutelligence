@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Union
 
 from ollama import ChatResponse as OllamaChatResponse
-from ollama import Client, EmbedResponse, Message
+from ollama import Client, EmbedResponse, ListResponse, Message
 
 
 @dataclass
@@ -62,7 +62,7 @@ class WrappedEmbeddingResponse:
         """Create an WrappedEmbeddingResponse from an ollama response"""
         response_dict = response.__dict__ if hasattr(response, "__dict__") else response
         return cls(
-            embeddings=response_dict.get("embedding", []),
+            embeddings=response_dict.get("embeddings", []),
             model=response_dict.get("model", ""),
             raw_response=response,
         )
@@ -72,21 +72,13 @@ class WrappedEmbeddingResponse:
 class ModelInfo:
     """Model information"""
 
-    model: str
-    modified_at: str
-    size: int
-    digest: str
-    raw_data: Any
+    name: str
 
     @classmethod
-    def from_ollama_model(cls, data: Dict[str, Any]) -> "ModelInfo":
+    def from_ollama_model(cls, data: ListResponse.Model) -> "ModelInfo":
         """Create a ModelInfo from ollama model data"""
         return cls(
-            model=data.get("name", ""),
-            modified_at=data.get("modified_at", ""),
-            size=data.get("size", 0),
-            digest=data.get("digest", ""),
-            raw_data=data,
+            name=data.model or "unknown",
         )
 
 
@@ -200,7 +192,7 @@ class OllamaService:
         Args:
             model: The name of the model to ensure is present.
         """
-        models = [model_info.model for model_info in self.list()]
+        models = [model_info.name for model_info in self.list()]
         if model not in models:
             print(f"Model {model} not found. Pulling...")
             self.pull(model)
@@ -217,7 +209,7 @@ class OllamaService:
         Returns:
             bool: True if the model is loaded, False otherwise.
         """
-        models = [model_info.model for model_info in self.ps()]
+        models = [model_info.name for model_info in self.ps()]
         return model in models
 
     def load_model(self, model: str, duration: str = "5m") -> None:
