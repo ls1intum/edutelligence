@@ -41,16 +41,9 @@ class PlanningPhase:
         """
         logger.info("Starting Phase 1: Solution Planning & Structure")
         
-        # Step 1.1: Generate Solution Plan
         context = await self._step_1_1_generate_solution_plan(context)
-        
-        # Step 1.2: Define File Structure
         context = await self._step_1_2_define_file_structure(context)
-        
-        # Step 1.3: Generate Class and Function Headers
         context = await self._step_1_3_generate_headers(context)
-        
-        # Step 1.4: Generate Core Logic
         context = await self._step_1_4_generate_core_logic(context)
         
         logger.info("Completed Phase 1: Solution Planning & Structure")
@@ -70,26 +63,13 @@ class PlanningPhase:
         """
         logger.info("Step 1.1: Generating solution plan")
         
-        # Example of using the AI model for solution planning
         try:
-            # Construct prompt for solution planning
             prompt = self._build_solution_planning_prompt(context)
             
-            # Use the AI model to generate solution plan
-            # response = await self.model.ainvoke(prompt)
-            # solution_plan = self._parse_solution_plan_response(response.content)
-            # context.solution_plan = solution_plan
-            
-            # TODO: Implement full solution plan generation
-            # For now, create a placeholder plan
-            context.solution_plan = SolutionPlan(
-                architecture_description="Generated solution architecture",
-                required_classes=["MainClass", "HelperClass"],
-                required_functions=["main", "helper_function"],
-                algorithms=["algorithm1", "algorithm2"],
-                design_patterns=["Factory", "Strategy"]
-            )
-            
+            response = await self.model.ainvoke(prompt)
+            solution_plan = self._parse_solution_plan_response(response.content)
+            context.solution_plan = solution_plan
+        
             logger.info("Solution plan generated successfully")
             
         except Exception as e:
@@ -131,6 +111,25 @@ class PlanningPhase:
         """
         return prompt.strip()
 
+    def _parse_solution_plan_response(self, response: str) -> SolutionPlan:
+        """Parse the response from the AI model into a SolutionPlan object.
+        
+        Args:
+            response: The response from the AI model
+            
+        Returns:
+            SolutionPlan object
+        """
+        # TODO: Implement solution plan parsing
+        solution_plan = SolutionPlan(
+            architecture_description="Generated solution architecture",
+            required_classes=["MainClass", "HelperClass"],
+            required_functions=["main", "helper_function"],
+            algorithms=["algorithm1", "algorithm2"],
+            design_patterns=["Factory", "Strategy"]
+        )
+        return solution_plan
+    
     async def _step_1_2_define_file_structure(self, context: SolutionCreationContext) -> SolutionCreationContext:
         """Step 1.2: Define File Structure.
         
