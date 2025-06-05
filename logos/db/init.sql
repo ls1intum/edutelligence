@@ -29,19 +29,19 @@ CREATE TABLE services (
     name TEXT NOT NULL
 );
 
-CREATE TABLE profiles (
-    id SERIAL PRIMARY KEY,
-    name TEXT NOT NULL
-);
-
 CREATE TABLE process (
     id SERIAL PRIMARY KEY,
     logos_key TEXT NOT NULL UNIQUE,
     name TEXT NOT NULL,
     user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
     service_id INTEGER REFERENCES services(id) ON DELETE CASCADE,
-    profile_id INTEGER REFERENCES profiles(id) ON DELETE SET NULL,
     log BOOLEAN default(FALSE)
+);
+
+CREATE TABLE profiles (
+    id SERIAL PRIMARY KEY,
+    name TEXT NOT NULL,
+    process_id INTEGER REFERENCES process(id) ON DELETE SET NULL
 );
 
 CREATE TABLE providers (

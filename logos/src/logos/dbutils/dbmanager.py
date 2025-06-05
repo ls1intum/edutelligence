@@ -550,8 +550,8 @@ class DBManager:
         table_names = [
             "users",
             "services",
-            "profiles",
             "process",
+            "profiles",
             "providers",
             "model_api_keys",
             "models",

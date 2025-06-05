@@ -16,6 +16,7 @@ COPY ./logos/db/ ./logos/db/
 COPY ../shared/ ./shared/
 COPY ./logos/README.md ./logos/README.md
 COPY ./logos/docker-compose.yaml ./logos/docker-compose.yaml
+COPY ./logos/config/ ./logos/config/
 
 RUN pip install poetry && \
     poetry self update && \

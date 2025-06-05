@@ -206,17 +206,23 @@ async def logos_service(path: str, request: Request):
         proxy_headers, forward_url, model_id, model_name, provider_id = out
 
     with DBManager() as db:
-        process_id = db.get_process_id(logos_key)
-        if db.log(process_id):
-            request_id = db.log_request(process_id, get_client_ip(request), json_data, provider_id, model_id, headers)
-        else:
+        r, c = db.get_process_id(logos_key)
+        if c != 200:
+            print("Error while logging a request: ", r)
             request_id = None
+        else:
+            process_id = r["result"]
+            if db.log(process_id):
+                request_id = db.log_request(process_id, get_client_ip(request), json_data, provider_id, model_id, headers)
+            else:
+                request_id = None
     # Forward Request
     # Try multiple requesting methods. Start with streaming
     try:
-        print("Sending Streaming Request")
-        json_data["stream"] = True
-        return get_streaming_response(forward_url, proxy_headers, json_data, model_name, request_id, provider_id, model_id)
+        if "stream" not in json_data or json_data["stream"]:
+            print("Sending Streaming Request")
+            json_data["stream"] = True
+            return get_streaming_response(forward_url, proxy_headers, json_data, model_name, request_id, provider_id, model_id)
     except:
         traceback.print_exc()
     # Fall back to naive request method

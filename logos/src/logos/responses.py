@@ -124,7 +124,7 @@ def get_client_ip_address_from_context(context: grpc.ServicerContext) -> str:
 
 
 def parse_provider_config(name):
-    with open(f"config-{name}.yaml") as stream:
+    with open(f"./logos/config/config-{name}.yaml") as stream:
         try:
             return yaml.safe_load(stream)
         except yaml.YAMLError:
@@ -163,14 +163,15 @@ def proxy_behaviour(headers, providers, path):
                 break
         if not check:
             continue
+        req_headers = {i: headers[i] for i in req_headers}
         req_headers["base_url"] = provider_info["base_url"]
         req_headers["path"] = path
 
-        forward_url = config["forward_url"].format(**{i: headers[i] for i in req_headers})
+        forward_url = config["forward_url"].format(**req_headers)
         forward_url = forward_url[:8] + forward_url[8:].replace("//", "/")
 
         proxy_headers = {
-            config["auth"]["header"]: config["auth"]["format"].format(**{i: headers[i] for i in req_headers}),
+            config["auth"]["header"]: config["auth"]["format"].format(**req_headers),
             "Content-Type": "application/json"
         }
     if proxy_headers is None:
