@@ -2,13 +2,11 @@
 Module handling all classification tasks in Logos.
 """
 import functools
-from typing import List, Tuple, Callable
+from typing import List, Tuple
 
-from logos.classification.classifier import Classifier
 from logos.classification.classify_policy import PolicyClassifier
 from logos.classification.classify_token import TokenClassifier
 from logos.classification.classify_ai import AIClassifier
-from logos.classification.proxy_policy import ProxyPolicy
 
 def singleton(cls):
     """
@@ -35,7 +33,7 @@ class ClassificationManager:
     def __init__(self, models) -> None:
         self.models = models
 
-    def classify(self, prompt: str, policy: dict) -> List[Tuple[int, int, int]]:
+    def classify(self, prompt: str, policy: dict) -> List[Tuple[int, int, int, int]]:
         """
         Classify prompts and assign them to a model.
         Returns a sorted list with the best suited model-id at the front together with
@@ -45,7 +43,7 @@ class ClassificationManager:
         filtered = PolicyClassifier(self.models).classify(prompt, policy)
         filtered = TokenClassifier(filtered).classify(prompt, policy)
         filtered = AIClassifier(filtered).classify(prompt, policy)
-        return sorted([(i["id"], self.calc_weight(i), policy["priority"]) for i in filtered], key=lambda x: x[1], reverse=True)
+        return sorted([(i["id"], self.calc_weight(i), policy["priority"], i["parallel"]) for i in filtered], key=lambda x: x[1], reverse=True)
 
     def calc_weight(self, model):
         """

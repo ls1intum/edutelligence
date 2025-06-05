@@ -23,6 +23,8 @@ models = [
         "weight_accuracy": 70,
         "weight_cost": 80,
         "weight_quality": 60,
+        "tags": "",
+        "parallel": 2,
     },
     {
         "id": 2,
@@ -34,6 +36,8 @@ models = [
         "weight_accuracy": 90,
         "weight_cost": 70,
         "weight_quality": 80,
+        "tags": "",
+        "parallel": 2,
     },
     {
         "id": 3,
@@ -45,5 +49,7 @@ models = [
         "weight_accuracy": 60,
         "weight_cost": 100,
         "weight_quality": 70,
+        "tags": "",
+        "parallel": 2,
     },
 ]

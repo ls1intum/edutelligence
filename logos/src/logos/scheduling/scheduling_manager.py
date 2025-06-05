@@ -6,6 +6,7 @@ import logging
 import time
 from threading import Thread, Event
 from typing import Union, List, Tuple
+
 from logos.scheduling.scheduler import Scheduler, Task
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -39,10 +40,10 @@ class SchedulingManager:
         self.__finished_ticket = -1
         self.__is_free = dict()
 
-    def add_request(self, data: dict, models: List[Tuple[int, float, int]]):
-        for (mid, wgt, pri) in models:
+    def add_request(self, data: dict, models: List[Tuple[int, float, int, int]]):
+        for (mid, _, _, par) in models:
             if mid not in self.__is_free:
-                self.__is_free[mid] = True
+                self.__is_free[mid] = par
         self.__scheduler.enqueue(Task(data, models, self.__ticket))
         self.__ticket += 1
         return self.__ticket - 1
@@ -71,13 +72,12 @@ class SchedulingManager:
                 if not self.__scheduler.is_empty() and not self.__has_finished:
                     task = self.__scheduler.schedule(self.__is_free)
                     if task is not None:
-                        mid = task.models[0][0]
-                        logging.info(f"Scheduling task: {task.get_id()} for model {mid}")
+                        mid = task.get_best_model_id()
                         self.__return_value = task
                         self.__has_finished = True
                         self.__finished_ticket = task.get_id()
-                        self.__is_free[mid] = False
-                        logging.info(f"Task completed: {task.get_id()}")
+                        self.__is_free[mid] -= 1
+                        logging.info(f"Task {task.get_id()} scheduled for model {mid}")
                 else:
                     # No tasks in queue
                     time.sleep(0.1)
@@ -96,7 +96,7 @@ class SchedulingManager:
             self.__finished_ticket = -1
 
     def set_free(self, model_id: int):
-        self.__is_free[model_id] = True
+        self.__is_free[model_id] += 1
 
     def is_finished(self, tid: int) -> bool:
         return self.__has_finished and self.__finished_ticket == tid

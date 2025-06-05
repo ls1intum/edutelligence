@@ -12,6 +12,6 @@ class FCFSScheduler(Scheduler):
 
     def schedule(self, work_table: Dict[int, bool]) -> Task | None:
         for key in self.tasks:
-            if self.tasks[key] and work_table[key]:
+            if self.tasks[key] and work_table[key] > 0:
                 return self.tasks[key].pop()
         return None

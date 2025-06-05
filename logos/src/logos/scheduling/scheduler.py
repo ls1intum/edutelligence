@@ -6,7 +6,7 @@ from typing import Dict, List, Tuple
 
 
 class Task:
-    def __init__(self, data: dict, models: List[Tuple[int, float, int]], task_id: int) -> None:
+    def __init__(self, data: dict, models: List[Tuple[int, float, int, int]], task_id: int) -> None:
         self.data = data
         self.models = models
         self.__id = task_id

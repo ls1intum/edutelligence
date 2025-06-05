@@ -49,6 +49,9 @@ def get_streaming_response(forward_url, proxy_headers, json_data, model_name, re
 
     # Logging-Funktion
     def after_streaming():
+        if model_id is not None:
+            sm = SchedulingManager(FCFSScheduler())
+            sm.set_free(model_id)
         if request_id is None:
             return
         try:
@@ -65,45 +68,44 @@ def get_streaming_response(forward_url, proxy_headers, json_data, model_name, re
             else:
                 response = full_text
             db.log_usage(request_id, response, prompt_tokens, completion_tokens, total_tokens, provider_id, model_id)
-        if model_id is not None:
-            sm = SchedulingManager(FCFSScheduler())
-            sm.set_free(model_id)
 
     # Response + call_on_close
     return StreamingResponse(streamer(), media_type="application/json")
 
 
 async def get_standard_response(forward_url, proxy_headers, json_data, model_name, request_id, provider_id, model_id):
-    async with httpx.AsyncClient() as client:
-        response: Response = await client.request(
-            method="POST",
-            url=forward_url,
-            json=json_data,
-            headers=proxy_headers,
-            timeout=30,
-        )
     try:
-        response: dict = response.json()
-    except JSONDecodeError:
-        response: dict = {"error": response.text}
-    if request_id is not None:
+        async with httpx.AsyncClient() as client:
+            response: Response = await client.request(
+                method="POST",
+                url=forward_url,
+                json=json_data,
+                headers=proxy_headers,
+                timeout=30,
+            )
         try:
-            enc = tiktoken.encoding_for_model(model_name)
-        except:
-            enc = tiktoken.get_encoding("cl100k_base")
-        if "choices" in response and response["choices"] and "delta" in response["choices"][0] and "content" in response["choices"][0][
-            "delta"]:
-            completion_tokens = len(enc.encode(response["choices"][0]["delta"]["content"]))
-            prompt_tokens = len(enc.encode(json_data.get("messages", [{}])[0].get("content", "")))
-            total_tokens = prompt_tokens + completion_tokens
-        else:
-            completion_tokens = prompt_tokens = total_tokens = 0
-        with DBManager() as db:
-            db.log_usage(request_id, response, prompt_tokens, completion_tokens, total_tokens, provider_id, model_id)
-    if model_id is not None:
-        sm = SchedulingManager(FCFSScheduler())
-        sm.set_free(model_id)
-    return response
+            response: dict = response.json()
+        except JSONDecodeError:
+            response: dict = {"error": response.text}
+        if request_id is not None:
+            try:
+                enc = tiktoken.encoding_for_model(model_name)
+            except:
+                enc = tiktoken.get_encoding("cl100k_base")
+            if "choices" in response and response["choices"] and "delta" in response["choices"][0] and "content" in response["choices"][0][
+                "delta"]:
+                completion_tokens = len(enc.encode(response["choices"][0]["delta"]["content"]))
+                prompt_tokens = len(enc.encode(json_data.get("messages", [{}])[0].get("content", "")))
+                total_tokens = prompt_tokens + completion_tokens
+            else:
+                completion_tokens = prompt_tokens = total_tokens = 0
+            with DBManager() as db:
+                db.log_usage(request_id, response, prompt_tokens, completion_tokens, total_tokens, provider_id, model_id)
+        return response
+    finally:
+        if model_id is not None:
+            sm = SchedulingManager(FCFSScheduler())
+            sm.set_free(model_id)
 
 
 def get_client_ip(request: Request) -> str:
