@@ -146,6 +146,7 @@ class WeaviateLearningRepository(LearningRepository, _WeaviateBaseRepository):
             # Use proper filter syntax with Weaviate's filter classes
             result = self.collection.with_tenant(tenant).query.fetch_objects(
                 filters=Filter.by_id().contains_any(id_strings),
+                limit=len(ids),
                 include_vector=True,
                 return_references=QueryReference(link_on="memories"),
             )

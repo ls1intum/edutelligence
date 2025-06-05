@@ -143,7 +143,6 @@ class TestMemorySleeper(WeaviateTest):
             vectorizer=mock_vectorizer,
             ollama_service=mock_ollama_service,
             template_deduplication="",
-            template_deduplication_with_tools="",
             template_connector="",
         )
 

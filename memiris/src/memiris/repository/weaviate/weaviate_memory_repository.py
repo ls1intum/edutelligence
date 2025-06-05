@@ -174,7 +174,7 @@ class WeaviateMemoryRepository(MemoryRepository, _WeaviateBaseRepository):
             result = self.collection.with_tenant(tenant).query.fetch_objects(
                 filters=Filter.by_property("slept_on").equal(False)
                 & Filter.by_property("deleted").equal(False),
-                limit=-1,
+                limit=10000,
                 include_vector=True,
                 return_references=[
                     QueryReference(link_on="learnings"),
