@@ -8,7 +8,7 @@ class SimilarityMetric(Enum):
     jaccard = 'jaccard'
 
 
-def apply_hdbscan(matrix, eps=0.5, min_samples=5, metric='euclidean',  min_cluster_size=10):
+def apply_hdbscan(matrix, eps=0.5, min_samples=5, metric='cosine',  min_cluster_size=10):
     """
     Applies HDBSCAN clustering algorithm to a given nxn matrix.
 

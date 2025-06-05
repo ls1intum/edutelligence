@@ -1,6 +1,7 @@
 import numpy as np
 from atlasml.clients.weaviate import get_weaviate_client, CollectionNames, WeaviateClient
 from atlasml.ml.Clustering.HDBSCAN import apply_hdbscan, SimilarityMetric
+from atlasml.ml.FeedbackLoop.FeedbackLoop import update_cluster_centroid
 from atlasml.ml.VectorEmbeddings.FallbackModel import generate_embeddings_local
 from atlasml.ml.SimilarityMeasurement.Cosine import compute_cosine_similarity
 from sklearn.metrics.pairwise import cosine_similarity
@@ -157,10 +158,12 @@ class PipelineWorkflows:
         new_members = cluster["properties"]["members"]
         new_members.append(text_id)
 
+        newMedoid = update_cluster_centroid(cluster["vector"], len(new_members) - 1, text["vector"])
+
         new_cluster = {"properties": [{
             "cluster_id": cluster["properties"]["cluster_id"],
             "name": cluster["properties"]["name"],
             "members": new_members,
         }]}
-        self.weaviate_client.add_embeddings(CollectionNames.CLUSTERCENTER.value, cluster["vector"], new_cluster)
+        self.weaviate_client.add_embeddings(CollectionNames.CLUSTERCENTER.value, newMedoid.tolist(), new_cluster)
 
