@@ -5,6 +5,7 @@ import tiktoken
 from fastapi.responses import StreamingResponse
 import httpx
 import grpc
+import yaml
 from requests import JSONDecodeError, Response
 from starlette.requests import Request
 
@@ -122,6 +123,19 @@ def get_client_ip_address_from_context(context: grpc.ServicerContext) -> str:
     return peer
 
 
+def parse_provider_config(name):
+    with open(f"config-{name}.yaml") as stream:
+        try:
+            return yaml.safe_load(stream)
+        except yaml.YAMLError:
+            return {
+                'provider': 'openwebui',
+                'forward_url': '{base_url}/{path}',
+                'required_headers': ['Authorization'],
+                'auth': {'header': 'Authorization', 'format': '{Authorization}'}
+            }
+
+
 def proxy_behaviour(headers, providers, path):
     """
     Adopt normal proxy behaviour. If we have multiple suitable providers, check the one that fits to the headers.
@@ -131,36 +145,34 @@ def proxy_behaviour(headers, providers, path):
     for provider in providers:
         with DBManager() as db:
             provider_info = db.get_provider(provider)
-        """
-        {
-            "id": result.id,
-            "name": result.name,
-            "base_url": result.base_url,
-            "auth_name": result.auth_name,
-            "auth_format": result.auth_format,
+
+        if "azure" in provider_info["name"].lower():
+            config = parse_provider_config("azure")
+        elif "openwebui" in provider_info["name"].lower():
+            config = parse_provider_config("openwebui")
+        elif "openai" in provider_info["name"].lower() and "Authorization" in headers and "sk-" in headers["Authorization"]:
+            config = parse_provider_config("openai")
+        else:
+            continue
+
+        req_headers = config["required_headers"]
+        check = True
+        for req_header in req_headers:
+            if req_header not in headers:
+                check = False
+                break
+        if not check:
+            continue
+        req_headers["base_url"] = provider_info["base_url"]
+        req_headers["path"] = path
+
+        forward_url = config["forward_url"].format(**{i: headers[i] for i in req_headers})
+        forward_url = forward_url[:8] + forward_url[8:].replace("//", "/")
+
+        proxy_headers = {
+            config["auth"]["header"]: config["auth"]["format"].format(**{i: headers[i] for i in req_headers}),
+            "Content-Type": "application/json"
         }
-        """
-        if "azure" in provider_info["name"].lower() and "deployment_name" in headers and "api_version" in headers:
-            # Azure is suitable
-            deployment_name = headers["deployment_name"]
-            api_version = headers["api_version"]
-
-            forward_url = (
-                f"{provider_info["base_url"]}/{deployment_name}/{path}"
-                f"?api-version={api_version}"
-            )
-            forward_url = forward_url[:8] + forward_url[8:].replace("//", "/")
-
-            proxy_headers = {
-                "api-key": headers["api_key"],
-                "Content-Type": "application/json"
-            }
-        elif "openwebui" in provider_info["name"].lower() and "Authorization" in headers and "Bearer" in headers["Authorization"]:
-            proxy_headers = {
-                "Authorization": headers["Authorization"],
-                "Content-Type": "application/json"
-            }
-            forward_url = f"{provider_info["base_url"]}/{path}"
     if proxy_headers is None:
         return {"error": "Could not identify suitable provider. Please check you header and registered provider names"}, 500
     return proxy_headers, forward_url, int(provider_info["id"])

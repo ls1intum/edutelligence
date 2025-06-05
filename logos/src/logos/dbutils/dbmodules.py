@@ -53,7 +53,6 @@ class Process(Base):
 
 class Model(Base):
     __tablename__ = 'models'
-    __
     id = Column(Integer, primary_key=True)
     name = Column(String, nullable=False)
     endpoint = Column(Text)
