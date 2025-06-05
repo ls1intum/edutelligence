@@ -4,7 +4,10 @@ import tiktoken
 
 from grpclocal import model_pb2, model_pb2_grpc
 from logos.dbutils.dbmanager import DBManager
-from logos.responses import request_setup, get_client_ip_address_from_context
+from logos.responses import request_setup, get_client_ip_address_from_context, proxy_behaviour, resource_behaviour, \
+    get_client_ip
+from logos.scheduling.scheduling_fcfs import FCFSScheduler
+from logos.scheduling.scheduling_manager import SchedulingManager
 
 
 class LogosServicer(model_pb2_grpc.LogosServicer):
@@ -27,32 +30,42 @@ class LogosServicer(model_pb2_grpc.LogosServicer):
             context.set_details("Invalid JSON payload")
             return
 
-        with DBManager() as db:
-            llm_info = db.fetch_llm_key(meta["logos_key"])
-            if llm_info is None:
-                context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
-                context.set_details("Key not found")
+        models = request_setup(meta, meta["logos_key"])
+        if not models:
+            with DBManager() as db:
+                # Get available providers for this key
+                providers = db.get_providers(meta["logos_key"])
+            # Find most suitable provider
+            out = proxy_behaviour(meta, providers, path)
+            if isinstance(out[0], dict) and "error" in out[0]:
+                context.set_code(grpc.StatusCode.UNAVAILABLE)
+                context.set_details(f"Upstream error: {out[0]["error"]}")
                 return
-            else:
-                llm_info = llm_info[0]
+            proxy_headers, forward_url, provider_id = out
+            model_id, model_name = None, None
+        else:
+            out = resource_behaviour(meta["logos_key"], meta, data, models)
+            if isinstance(out[0], dict) and "error" in out[0]:
+                context.set_code(grpc.StatusCode.UNAVAILABLE)
+                context.set_details(f"Upstream error: {out[0]["error"]}")
+                return
+            proxy_headers, forward_url, model_id, model_name, provider_id = out
 
         # Standard request setup
-        try:
-            tmp = request_setup(meta, path, llm_info)
-            if isinstance(tmp[0], dict) and "error" in tmp[0]:
-                context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
-                context.set_details(tmp[0]["error"])
-                return
-            proxy_headers, forward_url, model_id, model_name = tmp
-        except Exception as e:
-            traceback.print_exc()
-            context.set_code(grpc.StatusCode.UNAVAILABLE)
-            context.set_details(f"Routing error: {e}")
-            return
-        if db.log(llm_info["process_id"]):
-            request_id = db.log_request(llm_info["process_id"], get_client_ip_address_from_context(context), data, llm_info["provider_id"], model_id, meta)
-        else:
-            request_id = None
+
+        with DBManager() as db:
+            r, c = db.get_process_id(meta["logos_key"])
+            if c != 200:
+                print("Error while logging a request: ", r)
+                request_id = None
+            else:
+                process_id = r["result"]
+                if db.log(process_id):
+                    request_id = db.log_request(process_id, get_client_ip_address_from_context(context), data,
+                                                provider_id, model_id, meta)
+                else:
+                    request_id = None
+
         full_text = ""
         data["stream"] = True
         last_blob = None
@@ -120,8 +133,12 @@ class LogosServicer(model_pb2_grpc.LogosServicer):
                         prompt_tokens=prompt_tokens,
                         completion_tokens=completion_tokens,
                         total_tokens=total_tokens,
-                        provider_id=llm_info["provider_id"],
+                        provider_id=provider_id,
                         model_id=model_id,
                     )
             except Exception:
                 traceback.print_exc()
+
+        if model_id is not None:
+            sm = SchedulingManager(FCFSScheduler())
+            sm.set_free(model_id)
