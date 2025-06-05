@@ -3,7 +3,7 @@ Module implementing a basic FCFS-Scheduler for requests.
 """
 from typing import Dict
 
-from scheduler import Scheduler, Task
+from logos.scheduling.scheduler import Scheduler, Task
 
 
 class FCFSScheduler(Scheduler):

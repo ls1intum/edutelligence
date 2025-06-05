@@ -65,6 +65,9 @@ def get_streaming_response(forward_url, proxy_headers, json_data, model_name, re
             else:
                 response = full_text
             db.log_usage(request_id, response, prompt_tokens, completion_tokens, total_tokens, provider_id, model_id)
+        if model_id is not None:
+            sm = SchedulingManager(FCFSScheduler())
+            sm.set_free(model_id)
 
     # Response + call_on_close
     return StreamingResponse(streamer(), media_type="application/json")
@@ -97,6 +100,9 @@ async def get_standard_response(forward_url, proxy_headers, json_data, model_nam
             completion_tokens = prompt_tokens = total_tokens = 0
         with DBManager() as db:
             db.log_usage(request_id, response, prompt_tokens, completion_tokens, total_tokens, provider_id, model_id)
+    if model_id is not None:
+        sm = SchedulingManager(FCFSScheduler())
+        sm.set_free(model_id)
     return response
 
 
@@ -155,61 +161,75 @@ def proxy_behaviour(headers, providers, path):
             forward_url = f"{provider_info["base_url"]}/{path}"
     if proxy_headers is None:
         return {"error": "Could not identify suitable provider. Please check you header and registered provider names"}, 500
-    return proxy_headers, forward_url
+    return proxy_headers, forward_url, int(provider_info["id"])
 
 
-def request_setup(headers: dict, path: str, data: dict):
+def resource_behaviour(logos_key, headers, data, models):
+    # The interesting part: Classification and scheduling
+    # First, retrieve our used policy. If no one is given, use default ProxyPolicy
+    select = ClassificationManager(models)
+    if "policy" in headers:
+        with DBManager() as db:
+            policy = db.get_policy(logos_key, headers["policy"])
+    else:
+        policy = ProxyPolicy()
+
+    # Extract our prompt (needed for classification)
+    prompt = extract_prompt(data)
+    models = select.classify(prompt, policy)
+    sm = SchedulingManager(FCFSScheduler())
+    sm.run()
+    tid = sm.add_request(data, models)
+
+    # Wait for this task to be executed
+    while not sm.is_finished(tid):
+        pass
+
+    out = sm.get_result()
+    if out is None:
+        return {"error": f"No executable found for task {tid}"}, 500
+    # Get final model-ID
+    model_id = out.get_best_model_id()
+    if model_id is None:
+        return {"error": f"No executable found for task {tid}"}, 500
+    with DBManager() as db:
+        model = db.get_model(model_id)
+        provider = db.get_provider(model_id)
+        api_key = db.get_key_to_model_provider(model_id, provider["id"])
+    if api_key is None:
+        return {"error": f"No api_key found for task {tid} with model {model_id} and provider {provider["name"]}"}, 500
+    model_name = model["name"]
+    forward_url = merge_url(provider["base_url"], model["endpoint"])
+    auth_name = provider["auth_name"]
+    auth_format = provider["auth_format"].format(api_key)
+    proxy_headers = {
+        auth_name: auth_format,
+        "Content-Type": "application/json"
+    }
+    return proxy_headers, forward_url, model_id, model_name, int(provider["id"])
+
+
+def merge_url(base_url, endpoint):
+    if not base_url.endswith("/") and not endpoint.startswith("/"):
+        forward_url = f"{base_url}/{endpoint}"
+    elif base_url.endswith("/") and endpoint.startswith("/"):
+        forward_url = f"{base_url[:-1]}/{endpoint[1:]}"
+    else:
+        forward_url = f"{base_url}{endpoint}"
+    return forward_url
+
+
+def request_setup(headers: dict, logos_key: str):
     try:
-        logos_key = headers["logos_key"] if "logos_key" in headers else (
-            headers["Authorization"].replace("Bearer ", "") if "Authorization" in headers else "")
         # Check if Logos is used as proxy or resource
         with DBManager() as db:
             # Get available models for this key
             models = db.get_models(logos_key)
         if not models or "proxy" in headers:
-            with DBManager() as db:
-                # Get available providers for this key
-                providers = db.get_providers(logos_key)
-            return *proxy_behaviour(headers, providers, path), None, None
+            return list()
         else:
-            # The interesting part: Classification and scheduling
-            # First, retrieve our used policy. If no one is given, use default ProxyPolicy
-            select = ClassificationManager(models)
-            if "policy" in headers:
-                with DBManager() as db:
-                    policy = db.get_policy(logos_key, headers["policy"])
-            else:
-                policy = ProxyPolicy()
-            prompt = extract_prompt(data)
-            models = select.classify(prompt, policy)
-            sm = SchedulingManager(FCFSScheduler())
-            sm.run()
-            tid = sm.add_request(data, models)
-            while not sm.is_finished(tid):
-                pass
 
-            sm.get_result()
-            return "", ""
-        """
-            model_data = db.get_model(model_id)
-            model_name = model_data["name"]
-            endpoint = model_data["endpoint"]
-            if not base_url.endswith("/") and not endpoint.startswith("/"):
-                forward_url = f"{base_url}/{endpoint}"
-            elif base_url.endswith("/") and endpoint.startswith("/"):
-                forward_url = f"{base_url[:-1]}/{endpoint[1:]}"
-            else:
-                forward_url = f"{base_url}{endpoint}"
-
-            # forward_url = forward_url.replace("///", "/")
-            auth_name = llm_info["auth_name"]
-            auth_format = llm_info["auth_format"].format(api_key)
-            proxy_headers = {
-                auth_name: auth_format,
-                "Content-Type": "application/json"
-            }
-        return proxy_headers, forward_url, model_id, model_name
-        """
+            return models
     except PermissionError as e:
         return {"error": str(e)}, 401
     except ValueError as e:

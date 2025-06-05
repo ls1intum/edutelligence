@@ -14,6 +14,11 @@ class Task:
     def get_id(self):
         return self.__id
 
+    def get_best_model_id(self):
+        if len(self.models) == 0:
+            return None
+        return self.models[0][0]
+
 
 class Scheduler:
     def __init__(self) -> None:

@@ -6,12 +6,7 @@ import logging
 import time
 from threading import Thread, Event
 from typing import Union, List, Tuple
-from logos.classification.classification_manager import ClassificationManager
-from logos.classification.classify_policy import PolicyClassifier
-import data
-from logos.classification.proxy_policy import ProxyPolicy
-from scheduler import Scheduler, Task
-from scheduling_fcfs import FCFSScheduler
+from logos.scheduling.scheduler import Scheduler, Task
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -105,39 +100,3 @@ class SchedulingManager:
 
     def is_finished(self, tid: int) -> bool:
         return self.__has_finished and self.__finished_ticket == tid
-
-
-if __name__ == "__main__":
-    select = ClassificationManager(data.models)
-    tasks = select.classify("absolutely no idea", ProxyPolicy())
-    tasks = [(2, 387.0, 0), (3, 371.0, 0), (1, 365.0, 0), (2, 365.0, 0), (1, 360.0, 0), (2, 350.0, 0)]
-    print(tasks)
-    def exec_task(data, model_id, weight, priority):
-        sm = SchedulingManager(FCFSScheduler())
-        sm.run()
-        tid = sm.add_request(data, tasks)
-        while not sm.is_finished(tid):
-            pass
-
-        out = sm.get_result()
-        # -- DO SOMETHING --
-        if model_id == 2:
-            time.sleep(1)
-        if model_id == 1:
-            time.sleep(0.5)
-        if out is not None:
-            print(out.data)
-        sm.set_free(model_id)
-
-    ts = list()
-    for (model_id, weight, priority), text in zip(tasks, ["a", "b", "c", "d", "e", "f"]):
-        t = Thread(target=exec_task, args=(text, model_id, weight, priority))
-        t.start()
-        ts.append(t)
-    start = time.time()
-    while ts:
-        ts = [i for i in ts if i.is_alive()]
-    print("{:.2f}".format(time.time() - start))
-
-    sm = SchedulingManager(FCFSScheduler())
-    sm.stop()

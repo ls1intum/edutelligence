@@ -38,6 +38,7 @@ def generate_logos_api_key(process: str) -> str:
     return "lg-" + process + "-" + secrets.token_urlsafe(96)
 
 
+# noinspection PyUnresolvedReferences
 class DBManager:
     def __init__(self):
         pass
@@ -401,6 +402,33 @@ class DBManager:
             "auth_name": result.auth_name,
             "auth_format": result.auth_format,
         }
+
+    def get_provider_to_model(self, model_id: int):
+        sql = text("""
+                   SELECT provider_id
+                   FROM model_providers
+                   WHERE model_id = :model_id
+                   """)
+        result = self.session.execute(sql, {"model_id": int(model_id)}).fetchone()
+        if result is None:
+            return None
+        return self.get_provider(result.id)
+
+    def get_key_to_model_provider(self, model_id: int, provider_id: int):
+        sql = text("""
+                   SELECT api_key
+                   FROM model_api_keys, models, model_provider, providers
+                   WHERE models.api_id = model_api_keys.id
+                       and provider.id = model_provider.provider_id
+                       and model_provider.model_id = models.id
+                       and model_api_keys.provider_id = providers.id
+                       and models.id = :model_id
+                       and providers.id = :provider_id
+                   """)
+        result = self.session.execute(sql, {"model_id": int(model_id), "provider_id": int(provider_id)}).fetchone()
+        if result is None:
+            return None
+        return result.api_key
 
     def get_policy(self, logos_key: str, policy_id: int):
         sql = text("""

@@ -8,7 +8,8 @@ from grpclocal import model_pb2_grpc
 from grpclocal.grpc_server import LogosServicer
 from logos.dbutils.dbmanager import DBManager
 from logos.dbutils.dbrequest import *
-from logos.responses import get_streaming_response, get_standard_response, get_client_ip, request_setup
+from logos.responses import get_streaming_response, get_standard_response, get_client_ip, request_setup, \
+    proxy_behaviour, resource_behaviour
 from logos.scheduling.scheduling_fcfs import FCFSScheduler
 from logos.scheduling.scheduling_manager import SchedulingManager
 from scripts import setup_proxy
@@ -183,20 +184,31 @@ async def logos_service(path: str, request: Request):
     data = await request.body()
     json_data = request2json(data)
     # logos-API-check
-    key = headers["logos_key"] if "logos_key" in headers else (
+    logos_key = headers["logos_key"] if "logos_key" in headers else (
         headers["Authorization"].replace("Bearer ", "") if "Authorization" in headers else "")
-    # Get an api key for a llm. This is the starting point for classification later
+
+    # Check if Logos is used as proxy or resource
+    models = request_setup(headers, logos_key)
+    if not models:
+        with DBManager() as db:
+            # Get available providers for this key
+            providers = db.get_providers(logos_key)
+        # Find most suitable provider
+        out = proxy_behaviour(headers, providers, path)
+        if isinstance(out[0], dict) and "error" in out[0]:
+            return out
+        proxy_headers, forward_url, provider_id = out
+        model_id, model_name = None, None
+    else:
+        out = resource_behaviour(logos_key, headers, json_data, models)
+        if isinstance(out[0], dict) and "error" in out[0]:
+            return out
+        proxy_headers, forward_url, model_id, model_name, provider_id = out
+
     with DBManager() as db:
-        llm_info = db.fetch_llm_key(key)
-        if llm_info is None:
-            return {"error": "Key not found"}, 401
-    tmp = request_setup(headers, path, json_data)
-    if isinstance(tmp[0], dict) and "error" in tmp[0]:
-        return tmp
-    proxy_headers, forward_url, model_id, model_name = tmp
-    with DBManager() as db:
-        if db.log(llm_info["process_id"]):
-            request_id = db.log_request(llm_info["process_id"], get_client_ip(request), json_data, llm_info["provider_id"], model_id, headers)
+        process_id = db.get_process_id(logos_key)
+        if db.log(process_id):
+            request_id = db.log_request(process_id, get_client_ip(request), json_data, provider_id, model_id, headers)
         else:
             request_id = None
     # Forward Request
@@ -204,14 +216,14 @@ async def logos_service(path: str, request: Request):
     try:
         print("Sending Streaming Request")
         json_data["stream"] = True
-        return get_streaming_response(forward_url, proxy_headers, json_data, model_name, request_id, llm_info["provider_id"], model_id)
+        return get_streaming_response(forward_url, proxy_headers, json_data, model_name, request_id, provider_id, model_id)
     except:
         traceback.print_exc()
     # Fall back to naive request method
     try:
         print("Falling back to Standard Request")
         json_data["stream"] = False
-        return await get_standard_response(forward_url, proxy_headers, json_data, model_name, request_id, llm_info["provider_id"], model_id)
+        return await get_standard_response(forward_url, proxy_headers, json_data, model_name, request_id, provider_id, model_id)
     except:
         traceback.print_exc()
     return {"error": "provider not reachable"}, 500
