@@ -47,6 +47,11 @@ class ConnectProcessModelRequest(LogosKeyModel):
     model_id: int
 
 
+class ConnectProfileModelRequest(LogosKeyModel):
+    profile_id: int
+    model_id: int
+
+
 class ConnectServiceProcessRequest(LogosKeyModel):
     service_id: int
     process_name: str

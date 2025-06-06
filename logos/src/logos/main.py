@@ -105,6 +105,12 @@ async def connect_process_model(data: ConnectProcessModelRequest):
         return db.connect_process_model(**data.dict())
 
 
+@app.post("/logosdb/connect_profile_model")
+async def connect_profile_model(data: ConnectProcessModelRequest):
+    with DBManager() as db:
+        return db.connect_profile_model(**data.dict())
+
+
 @app.post("/logosdb/connect_service_process")
 async def connect_service_process(data: ConnectServiceProcessRequest):
     with DBManager() as db:
@@ -204,7 +210,6 @@ async def logos_service(path: str, request: Request):
         if isinstance(out[0], dict) and "error" in out[0]:
             return out
         proxy_headers, forward_url, model_id, model_name, provider_id = out
-
     with DBManager() as db:
         r, c = db.get_process_id(logos_key)
         if c != 200:

@@ -246,8 +246,8 @@ def request_setup(headers: dict, logos_key: str):
         if not models or "proxy" in headers:
             return list()
         else:
-
-            return models
+            with DBManager() as db:
+                return [i for i in [db.get_model(i) for i in models] if i is not None]
     except PermissionError as e:
         return {"error": str(e)}, 401
     except ValueError as e:

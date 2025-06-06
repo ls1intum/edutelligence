@@ -77,7 +77,8 @@ class SchedulingManager:
                         self.__has_finished = True
                         self.__finished_ticket = task.get_id()
                         self.__is_free[mid] -= 1
-                        logging.info(f"Task {task.get_id()} scheduled for model {mid}")
+                        # logging.info(f"Task {task.get_id()} scheduled for model {mid}")
+                        print(f"Task {task.get_id()} scheduled for model {mid}", flush=True)
                 else:
                     # No tasks in queue
                     time.sleep(0.1)

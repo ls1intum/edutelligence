@@ -421,7 +421,8 @@ class DBManager:
             "weight_accuracy": result.weight_accuracy,
             "weight_cost": result.weight_cost,
             "weight_quality": result.weight_quality,
-            "tags": result.tags
+            "tags": result.tags,
+            "parallel": result.parallel
         }
 
     def get_provider(self, provider_id: int):
@@ -457,7 +458,7 @@ class DBManager:
                    SELECT api_key
                    FROM model_api_keys, models, model_provider, providers
                    WHERE models.api_id = model_api_keys.id
-                       and provider.id = model_provider.provider_id
+                       and providers.id = model_provider.provider_id
                        and model_provider.model_id = models.id
                        and model_api_keys.provider_id = providers.id
                        and models.id = :model_id
