@@ -16,6 +16,8 @@ DROP TABLE IF EXISTS services CASCADE;
 DROP TABLE IF EXISTS users CASCADE;
 DROP TABLE IF EXISTS request_log CASCADE;
 DROP TABLE IF EXISTS usage_log CASCADE;
+DROP TABLE IF EXISTS token_types CASCADE;
+DROP TABLE IF EXISTS usage_tokens CASCADE;
 
 CREATE TABLE users (
     id SERIAL PRIMARY KEY,
@@ -116,10 +118,21 @@ CREATE TABLE usage_log (
     id SERIAL PRIMARY KEY,
     request_id INTEGER NOT NULL REFERENCES request_log(id) ON DELETE CASCADE,
     timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    time_at_first_token TIMESTAMPTZ NOT NULL,
     response_payload JSONB,
-    prompt_tokens INTEGER,
-    completion_tokens INTEGER,
-    total_tokens INTEGER,
     provider_id INTEGER,
     model_id INTEGER
+);
+
+CREATE TABLE token_types (
+    id SERIAL PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT
+);
+
+CREATE TABLE usage_tokens (
+    id SERIAL PRIMARY KEY,
+    type_id INTEGER NOT NULL REFERENCES token_types(id),
+    usage_id INTEGER NOT NULL REFERENCES usage_log(id),
+    token_count INTEGER DEFAULT(0)
 );

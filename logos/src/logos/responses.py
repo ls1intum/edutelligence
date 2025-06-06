@@ -1,4 +1,6 @@
+import datetime
 import json
+import time
 from typing import Union
 
 import tiktoken
@@ -19,12 +21,15 @@ from logos.scheduling.scheduling_manager import SchedulingManager
 def get_streaming_response(forward_url, proxy_headers, json_data, model_name, request_id, provider_id, model_id):
     json_data = json_data.copy()
     json_data["stream"] = True
+    json_data["stream_options"] = {"include_usage": True}
 
     full_text = ""
     response: Union[None, dict] = None
+    first_response = None
+    ttft = None
 
     async def streamer():
-        nonlocal full_text, response
+        nonlocal full_text, response, first_response, ttft
         try:
             async with httpx.AsyncClient(timeout=None) as client:
                 async with client.stream("POST", forward_url, headers=proxy_headers, json=json_data) as resp:
@@ -32,16 +37,20 @@ def get_streaming_response(forward_url, proxy_headers, json_data, model_name, re
                         if not raw_line:
                             continue
                         if raw_line.startswith("data: "):
+                            if ttft is None:
+                                ttft = datetime.datetime.now(datetime.timezone.utc)
                             payload = raw_line.removeprefix("data: ").strip()
                             if payload == "[DONE]":
                                 break
                             try:
                                 blob = json.loads(payload)
+                                response = blob
                                 if "choices" in blob and blob["choices"] and "delta" in blob["choices"][0] and "content" in blob["choices"][0]["delta"]:
                                     content = blob["choices"][0]["delta"]["content"]
+                                    if first_response is None:
+                                        first_response = blob
                                     if content:
                                         full_text += content
-                                    response = blob
                             except:
                                 pass
                         yield (raw_line + "\n").encode()
@@ -55,20 +64,33 @@ def get_streaming_response(forward_url, proxy_headers, json_data, model_name, re
             sm.set_free(model_id)
         if request_id is None:
             return
-        try:
-            enc = tiktoken.encoding_for_model(model_name)
-        except:
-            enc = tiktoken.get_encoding("cl100k_base")
-        completion_tokens = len(enc.encode(full_text))
-        prompt_tokens = len(enc.encode(json_data.get("messages", [{}])[0].get("content", "")))
-        total_tokens = prompt_tokens + completion_tokens
+
+
+
         with DBManager() as db:
-            nonlocal response
-            if response is not None:
-                response["choices"][0]["delta"]["content"] = full_text
+            nonlocal response, ttft, first_response
+            if first_response is not None:
+                usage = response["usage"] if response is not None else dict()
+                first_response["choices"][0]["delta"]["content"] = full_text
+                usage_tokens = dict()
+                for name in usage:
+                    if "tokens_details" in name:
+                        continue
+                    usage_tokens[name] = usage[name]
+                if "prompt_tokens_details" in usage:
+                    for name in usage["prompt_tokens_details"]:
+                        usage_tokens[name] = usage["prompt_tokens_details"][name]
+                if "completion_tokens_details" in usage:
+                    for name in usage["completion_tokens_details"]:
+                        usage_tokens[name] = usage["completion_tokens_details"][name]
+                first_response["usage"] = response["usage"]
             else:
-                response = full_text
-            db.log_usage(request_id, response, prompt_tokens, completion_tokens, total_tokens, provider_id, model_id)
+                response = {"content": full_text}
+                first_response = {"content": full_text}
+                usage_tokens = dict()
+            if ttft is None:
+                ttft = datetime.datetime.now(datetime.timezone.utc)
+            db.log_usage(request_id, first_response, usage_tokens, provider_id, model_id, ttft)
 
     # Response + call_on_close
     return StreamingResponse(streamer(), media_type="application/json")
@@ -76,6 +98,7 @@ def get_streaming_response(forward_url, proxy_headers, json_data, model_name, re
 
 async def get_standard_response(forward_url, proxy_headers, json_data, model_name, request_id, provider_id, model_id):
     try:
+        ttft = datetime.datetime.now(datetime.timezone.utc)
         async with httpx.AsyncClient() as client:
             response: Response = await client.request(
                 method="POST",
@@ -89,19 +112,8 @@ async def get_standard_response(forward_url, proxy_headers, json_data, model_nam
         except JSONDecodeError:
             response: dict = {"error": response.text}
         if request_id is not None:
-            try:
-                enc = tiktoken.encoding_for_model(model_name)
-            except:
-                enc = tiktoken.get_encoding("cl100k_base")
-            if "choices" in response and response["choices"] and "delta" in response["choices"][0] and "content" in response["choices"][0][
-                "delta"]:
-                completion_tokens = len(enc.encode(response["choices"][0]["delta"]["content"]))
-                prompt_tokens = len(enc.encode(json_data.get("messages", [{}])[0].get("content", "")))
-                total_tokens = prompt_tokens + completion_tokens
-            else:
-                completion_tokens = prompt_tokens = total_tokens = 0
             with DBManager() as db:
-                db.log_usage(request_id, response, prompt_tokens, completion_tokens, total_tokens, provider_id, model_id)
+                db.log_usage(request_id, response, dict(), provider_id, model_id, ttft)
         return response
     finally:
         if model_id is not None:

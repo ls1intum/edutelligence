@@ -148,11 +148,26 @@ class UsageLog(Base):
     id = Column(Integer, primary_key=True)
     request_id = Column(Integer, ForeignKey("request_log.id", ondelete="CASCADE"), nullable=False)
     timestamp = Column(TIMESTAMP(timezone=True), server_default=func.now(), nullable=False)
+    time_at_first_token = Column(TIMESTAMP(timezone=True), nullable=False)
     response_payload = Column(JSON)
-    prompt_tokens = Column(Integer)
-    completion_tokens = Column(Integer)
-    total_tokens = Column(Integer)
     provider_id = Column(Integer)
     model_id = Column(Integer)
 
     request = relationship("RequestLog", back_populates="usages")
+
+
+class TokenTypes(Base):
+    __tablename__ = "token_types"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(Text, nullable=False)
+    description = Column(Text)
+
+
+class UsageTokens(Base):
+    __tablename__ = "usage_tokens"
+
+    id = Column(Integer, primary_key=True)
+    type_id = Column(Integer, ForeignKey("token_types.id"), nullable=False)
+    usage_id = Column(Integer, ForeignKey("usage_log.id"), nullable=False)
+    token_count = Column(Integer, default=0)

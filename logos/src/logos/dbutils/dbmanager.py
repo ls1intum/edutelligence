@@ -1,7 +1,7 @@
 """
 Central Manager for all Database-related actions for Logos
 """
-import json
+import datetime
 import os
 import secrets
 from typing import Dict, Any, Optional, Tuple, Union
@@ -214,6 +214,26 @@ class DBManager:
         api_key = generate_logos_api_key(name)
         ppk = self.insert("process", {"logos_key": api_key, "service_id": pk, "name": name})
         return {"result": f"Created Service.", "service-id": pk, "process-id": ppk, "logos-key": api_key}, 200
+
+    def add_token_type(self, name: str, description: str = "", exist_ok = True):
+        if token_id := self.get_token_name(name):
+            if not exist_ok:
+                return {"error": "Token name already exists"}, 500
+            else:
+                return {"result": f"Created Token Type.", "token-type-id": token_id}, 200
+        pk = self.insert("token_types", {"name": name, "description": description})
+        return {"result": f"Created Token Type.", "token-type-id": pk}, 200
+
+    def get_token_name(self, name):
+        sql = text("""
+                   SELECT *
+                   FROM token_types
+                   WHERE name = :name
+                   """)
+        entity = self.session.execute(sql, {"name": name}).fetchone()
+        if entity is not None:
+            return entity.id
+        return None
 
     def get_role(self, logos_key: str):
         sql = text("""
@@ -519,18 +539,26 @@ class DBManager:
         })
         return log_id
 
-    def log_usage(self, request_id: int, response_body: dict, prompt_tokens: int, completion_tokens: int,
-                  total_tokens: int, provider_id: int, model_id: int):
+    def log_usage(self, request_id: int, response_body: dict, usage: dict, provider_id: int, model_id: int, ttft: datetime.datetime):
         payload_json = response_body
+        type_ids = dict()
+        for token_type, token_count in usage.items():
+            r, c = self.add_token_type(token_type, "")
+            if "error" in r:
+                return r, c
+            type_ids[token_type] = r["token-type-id"]
+
         log_id = self.insert("usage_log", {
             "request_id": request_id,
             "response_payload": payload_json,
-            "prompt_tokens": prompt_tokens,
-            "completion_tokens": completion_tokens,
-            "total_tokens": total_tokens,
             "provider_id": provider_id,
-            "model_id": model_id
+            "model_id": model_id,
+            "time_at_first_token": ttft
         })
+
+        for token_type in type_ids:
+            if usage[token_type]:
+                _ = self.insert("usage_tokens", {"usage_id": log_id, "type_id": type_ids[token_type], "token_count": usage[token_type]})
         return log_id
 
     def export(self, logos_key: str):
@@ -560,7 +588,9 @@ class DBManager:
             "profile_model_permissions",
             "policies",
             "request_log",
-            "usage_log"
+            "usage_log",
+            "token_types",
+            "usage_tokens",
         ]
         for table_name in table_names:
             if table_name not in json_data:
