@@ -10,6 +10,9 @@ services:
         condition: service_healthy
     volumes:
       -   data_volume:/src/logos
+    environment:
+      PROVIDER_NAME: azure
+      BASE_URL: https://ase-se01.openai.azure.com/openai/deployments/
     ports:
       - "8080"
       - "50051:50051"
@@ -41,6 +44,8 @@ services:
       dockerfile: ./logos/logos-ui/Dockerfile
     restart: unless-stopped
     container_name: logos-ui
+    environment:
+      - NODE_OPTIONS=--max-old-space-size=1024
     expose:
       - "80"         # internal port
     ports:

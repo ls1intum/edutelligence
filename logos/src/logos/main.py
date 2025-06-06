@@ -1,4 +1,5 @@
 import json
+import os
 import traceback
 
 import grpc
@@ -26,7 +27,21 @@ async def start_grpc():
     model_pb2_grpc.add_LogosServicer_to_server(LogosServicer(), _grpc_server)
     _grpc_server.add_insecure_port("[::]:50051")
     await _grpc_server.start()
-
+    DEFAULT_PROVIDER = os.getenv("PROVIDER_NAME")
+    DEFAULT_BASE_URL = os.getenv("BASE_URL")
+    if DEFAULT_PROVIDER and len(DEFAULT_BASE_URL) > 5:
+        print("Creating Proxy Configuration...", flush=True)
+        with DBManager() as db:
+            db.is_root_initialized()
+        print("Processing setup. Initialized: " + str(DBManager.is_initialized()), flush=True)
+        if not DBManager.is_initialized():
+            lk = setup(DEFAULT_BASE_URL, DEFAULT_PROVIDER)
+            if "error" in lk:
+                print("Error during proxy setup: ", lk, flush=True)
+            else:
+                print("Created proxy configuration.", lk, flush=True)
+    else:
+        print("Proxy Configuration not provided in docker compose, please setup via endpoint")
 
 @app.on_event("shutdown")
 async def stop_grpc():
@@ -40,7 +55,7 @@ async def stop_grpc():
 @app.post("/logosdb/setup")
 async def setup_db(data: LogosSetupRequest):
     try:
-        print("Recieving setup request...", flush=True)
+        print("Receiving setup request...", flush=True)
         with DBManager() as db:
             db.is_root_initialized()
         print("Processing setup request. Initialized: " + str(DBManager.is_initialized()), flush=True)
