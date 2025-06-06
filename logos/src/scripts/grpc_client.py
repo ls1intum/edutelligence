@@ -9,7 +9,7 @@ def run_grpc_client(headers: dict, path: str, payload: str):
     :param path: Path to the Logos-Endpoint, e.g. "chat/completions"
     :param payload: Payload as sent in REST, provided as string
     """
-    channel = grpc.insecure_channel("logos.ase.cit.tum.de:50051")
+    channel = grpc.insecure_channel("0.0.0.0:50051")
     stub = model_pb2_grpc.LogosStub(channel)
 
     request = model_pb2.GenerateRequest(

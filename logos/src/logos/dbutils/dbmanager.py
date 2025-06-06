@@ -225,10 +225,10 @@ class DBManager:
         entity = self.session.execute(sql, {"logos_key": logos_key}).fetchone() is not None
         admin = self.check_authorization(logos_key)
         if admin:
-            return {"role": "root"}
+            return {"role": "root"}, 200
         elif entity:
-            return {"role": "entity"}
-        return {"error": "unknown key"}
+            return {"role": "entity"}, 200
+        return {"error": "unknown key"}, 500
 
     def connect_process_provider(self, logos_key: str, profile_id: int, api_id: int):
         if not self.check_authorization(logos_key):
