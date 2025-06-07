@@ -1,10 +1,8 @@
 import hashlib
 import json
-from typing import Any, Dict, List, Optional
-from athena import logger
+from typing import List, Optional
 from athena.metadata import emit_meta
 from athena.storage.structured_grading_criterion_storage import get_structured_grading_criterion, store_structured_grading_criterion
-from langchain_core.output_parsers import PydanticOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 
 from athena.schemas import GradingCriterion, StructuredGradingCriterion
