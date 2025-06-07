@@ -3,7 +3,6 @@ from pydantic import BaseModel
 
 class FilterFeedbackInputs(BaseModel):
     original_feedback: str
-    feedback_output_format: str
 
 
 filter_feedback_system_message = """
@@ -45,9 +44,6 @@ Filtered and rewritten feedback:
 "description": "Class 'Car' is correctly defined."
 
 Remember, the goal is to guide the student towards improvement without providing a complete solution or grading information in the feedback. Also keep the original structure of the feedback. Just modify the title and description values.
-
-<Output Format>
-{feedback_output_format}
 """
 
 filter_feedback_human_message = """

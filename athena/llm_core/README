@@ -1,0 +1,214 @@
+## Content
+
+- [Overview](#overview)
+- [Key Features](#key-features)
+- [Core Components](#core-components)
+  - [1. Configuration Files](#1-configuration-files)
+  - [2. `ModelConfig` and Type System](#2-modelconfig-and-type-system)
+  - [3. Loaders](#3-loaders)
+  - [4. Utils](#4-utils)
+  - [5. Core Logic](#5-core-logic)
+  - [6. Callbacks](#6-callbacks)
+- [Usage](#usage)
+  - [1. Configuration](#1-configuration)
+  - [2. Using LLMs in Modules](#2-using-llms-in-modules)
+- [Extending with New Providers](#extending-with-new-providers)
+
+## Overview
+
+The `llm_core` module provides a robust and extensible system for configuring and managing Large Language Models (LLMs) within the Athena framework. It allows for defining task-specific LLM models, configure their capabilities, and seamlessly integrate new LLM providers. This README provides a comprehensive guide to understanding and utilizing the `llm_core` module's features.
+
+## Key Features
+
+1. **Granular LLM Model Selection for Tasks:**
+    *   Define different LLM models for distinct tasks within each module (e.g., `module_modeling_llm`, `module_programming_llm`).
+2. **Flexible and Comprehensive LLM Model Configuration:**
+    *    Support a diverse range of LLM models with varying capabilities by configuring model settings (e.g., `temperature`, `top_p`) and capability flags (e.g., `supports_function_calling`, `supports_structured_output`) through YAML files.
+3. **Preserved Dynamic Configuration Overrides:**
+    *   Retain the ability to dynamically override LLM configurations via `x-` headers in API requests (used in the Athena playground).
+4. **Multi-Provider Support:**
+    *   Easily add support for new LLM providers by extending the `ModelConfig` class.
+5. **Version-Controlled Configuration:**
+    *   LLM configurations are managed through YAML files under version control, ensuring consistent deployments and eliminating environment-specific discrepancies.
+
+## Core Components
+
+### 1. Configuration Files
+
+The `llm_core` module uses two types of YAML files to manage LLM configurations:
+
+*   **`llm_capabilities.yml` (llm\_core level):**
+    *   Defines the core capabilities and default settings for different LLM models.
+    *   Specifies model-specific overrides to default settings.
+    *   Resides at the top level of the `llm_core` directory, shared across all modules.
+    *   Example:
+
+        ```yaml
+        defaults:
+          temperature: 0.7
+          top_p: 1.0
+          supports_function_calling: true
+          supports_structured_output: true
+
+        models:
+          openai_o1-mini:
+            max_completion_tokens: 8000
+            temperature: 1.0
+            top_p: 1.0
+            n: 1
+            presence_penalty: 0.0
+            frequency_penalty: 0.0
+            supports_system_messages: false
+            supports_function_calling: false
+            supports_structured_output: false
+        ```
+
+*   **`llm_config.yml` (Module-specific):**
+    *   Defines the concrete LLM models to be used for different tasks within a specific module (e.g., `module_modeling_llm`).
+    *   Located at the root level of each module.
+    *   Example (in `module_modeling_llm/llm_config.yml`):
+
+        ```yaml
+        models:
+          base_model: "azure_openai_gpt-4o"
+          mini_model: "openai_o1-mini"
+        ```
+
+### 2. `ModelConfig` and Type System
+
+The `ModelConfig` class serves as an abstraction layer for different LLM providers. It defines a common interface for interacting with LLMs and explicitly declares their capabilities.
+
+*   **`model_config.py` (llm\_core/models):**
+    *   Contains the abstract `ModelConfig` class.
+    *   Defines abstract methods like:
+        *   `get_model()`: Returns an instance of the configured LLM.
+        *   `supports_system_messages()`: Indicates if the model supports system messages.
+        *   `supports_function_calling()`: Indicates if the model supports function calling.
+        *   `supports_structured_output()`: Indicates if the model supports structured output.
+
+*   **`providers/` (llm\_core/models/providers):**
+    *   Contains provider-specific implementations of `ModelConfig`.
+    *   **`openai_model_config.py`:**
+        *   Implements `ModelConfig` for OpenAI models (including Azure OpenAI).
+        *   `get_model()` constructs `ChatOpenAI` or `AzureChatOpenAI` objects based on YAML configurations.
+        *   Implements capability flag methods based on the model's features.
+        *   Uses the `get_model_capabilities` function from `llm_capabilities_loader.py` to merge default and model-specific settings.
+    *   Adding new providers:
+        *   Create a new subclass of `ModelConfig` in the `providers` directory.
+        *   Implement the abstract methods to define the provider's capabilities and model instantiation logic.
+
+### 3. Loaders
+
+*   **`llm_capabilities_loader.py` (llm\_core/loaders):**
+    *   Loads the `llm_capabilities.yml` file.
+    *   Provides the `get_model_capabilities(model_key)` function to retrieve the merged capabilities (defaults and overrides) for a given model.
+
+*   **`llm_config_loader.py` (llm\_core/loaders):**
+    *   Loads the module-specific `llm_config.yml` file.
+    *   Uses the `create_config_for_model` function to create `ModelConfig` instances based on the model names specified in the YAML file.
+    *   Caches the loaded `LLMConfig` to avoid reloading on subsequent calls.
+    *   `get_llm_config(path: Optional[str] = None) -> LLMConfig` is the public function for accessing the cached `LLMConfig` instance. If not loaded yet, loads from YAML and materializes it.
+
+*   **`openai_loader.py` (llm\_core/loaders):**
+    *   Discovers available OpenAI and Azure OpenAI models using environment variables (`OPENAI_API_KEY`, `AZURE_OPENAI_API_KEY`, etc.).
+    *   Creates an `OpenAIModel` Enum for referencing discovered models.
+
+### 4. Utils
+
+*   **`model_factory.py` (llm\_core/utils):**
+    *   Provides the `create_config_for_model(model_name)` function.
+    *   Determines the provider (OpenAI, Azure, etc.) based on the `model_name` prefix.
+    *   Creates the appropriate `ModelConfig` subclass instance (e.g., `OpenAIModelConfig`).
+    *   Handles unknown providers by raising a `ValueError`.
+
+*   **`append_format_instructions.py` (llm\_core/utils):**
+    *   Appends format instructions to the chat prompts
+
+*   **`llm_utils.py` (llm\_core/utils):**
+    *   Provides utility functions for:
+        *   Calculating the number of tokens in a string or prompt (`num_tokens_from_string`, `num_tokens_from_prompt`).
+        *   Checking prompt length and omitting features if necessary (`check_prompt_length_and_omit_features_if_necessary`).
+        *   Removing system messages if the model doesn't support them (`remove_system_message`).
+
+### 5. Core Logic
+
+*   **`predict_and_parse.py` (llm\_core/core):**
+    *   Provides the `predict_and_parse` function for making LLM predictions and parsing the output using a Pydantic model.
+    *   Handles models with and without native structured output/function calling support.
+    *   Adds appropriate tags to the LLM run based on the experiment environment.
+
+### 6. Callbacks
+
+*   **`callbacks.py` (llm\_core/models):**
+    *   Provides the `UsageHandler` callback to track and emit LLM usage metadata (input/output tokens, cost).
+
+## Usage
+
+### 1. Configuration
+
+1. **Define LLM Capabilities (`llm_capabilities.yml`):**
+
+    *   Specify default settings and capability flags for different LLM models.
+    *   Add model-specific overrides as needed.
+2. **Define Task-Specific Models (`llm_config.yml`):**
+
+    *   In each module directory (e.g., `module_modeling_llm`), create an `llm_config.yml` file.
+    *   Specify the `base_model`, `mini_model`, `fast_reasoning_model`, and `long_reasoning_model` to use for different tasks within that module.
+3. **Set Environment Variables:**
+
+    *   Define necessary environment variables for your LLM providers (e.g., `OPENAI_API_KEY`, `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_ENDPOINT`).
+    *   Use the `.env.example` file as a template.
+
+### 2. Using LLMs in Modules
+
+1. **Import `get_llm_config`:**
+
+    ```python
+    from llm_core.loaders.llm_config_loader import get_llm_config
+    ```
+
+2. **Load the LLM Configuration:**
+
+    ```python
+    llm_config = get_llm_config()  # Loads the llm_config.yml from the current module's directory
+    ```
+
+3. **Access `ModelConfig` Instances:**
+
+    ```python
+    base_model_config = llm_config.models.base_model_config
+    mini_model_config = llm_config.models.mini_model_config
+    ```
+
+4. **Use `ModelConfig` to Get LLM Instances and Check Capabilities:**
+
+    ```python
+    base_model = base_model_config.get_model()
+
+    if base_model_config.supports_function_calling():
+        # Use function calling features
+    ```
+
+## Extending with New Providers
+
+1. **Create a new `ModelConfig` subclass:**
+
+    *   In `llm_core/models/providers`, create a new Python file (e.g., `my_provider_model_config.py`).
+    *   Define a new class that inherits from `llm_core.models.model_config.ModelConfig`.
+    *   Implement the abstract methods:
+        *   `get_model()`: Instantiate and return your provider's LLM object.
+        *   `supports_system_messages()`: Return `True` if the provider supports system messages, `False` otherwise.
+        *   `supports_function_calling()`: Return `True` if the provider supports function calling, `False` otherwise.
+        *   `supports_structured_output()`: Return `True` if the provider supports structured output, `False` otherwise.
+2. **Update `model_factory.py`:**
+
+    *   Add a new `elif` block to `find_provider_for_model` to recognize your provider's model name prefix.
+    *   Add a corresponding `elif` block to `create_config_for_model` to instantiate your new `ModelConfig` subclass.
+3. **Define Capabilities in `llm_capabilities.yml`:**
+
+    *   Add entries for your provider's models, specifying their default settings and capabilities.
+4. **Use Your New Provider:**
+
+    *   In your module's `llm_config.yml`, specify the model name using your provider's prefix.
+    *   The `llm_core` system will automatically use your new `ModelConfig` implementation.
+
