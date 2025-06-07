@@ -13,12 +13,14 @@ from module_text_llm.divide_and_conquer.prompt_generate_suggestions import (
     get_human_message,
 )
 from module_text_llm.approach_config import ApproachConfig
+from module_text_llm.registry import register_approach
 from module_text_llm.helpers.utils import (
     add_sentence_numbers,
     get_index_range_from_line_range,
 )
 
 
+@register_approach("divide_and_conquer")
 async def generate_suggestions(
     exercise: Exercise,
     submission: Submission,

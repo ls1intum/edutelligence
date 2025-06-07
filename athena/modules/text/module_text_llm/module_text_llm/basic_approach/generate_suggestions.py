@@ -9,7 +9,7 @@ from llm_core.utils.llm_utils import (
 )
 from llm_core.core.predict_and_parse import predict_and_parse
 from module_text_llm.basic_approach import BasicApproachConfig
-
+from module_text_llm.registry import register_approach
 
 from module_text_llm.helpers.utils import (
     add_sentence_numbers,
@@ -19,6 +19,7 @@ from module_text_llm.helpers.utils import (
 from module_text_llm.basic_approach.prompt_generate_suggestions import AssessmentModel
 
 
+@register_approach("basic")
 async def generate_suggestions(
     exercise: Exercise,
     submission: Submission,
@@ -66,6 +67,8 @@ async def generate_suggestions(
                 f"Input too long {num_tokens_from_prompt(chat_prompt, prompt_input)} > {config.max_input_tokens}",
             )
         return []
+
+    print(f"Model: {config.model.get_model()}")
 
     result = await predict_and_parse(
         model=config.model,

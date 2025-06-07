@@ -11,6 +11,7 @@ from llm_core.utils.llm_utils import (
 )
 from llm_core.core.predict_and_parse import predict_and_parse
 from module_text_llm.cot_learner_profile import COTLearnerProfileConfig
+from module_text_llm.registry import register_approach
 from module_text_llm.helpers.utils import (
     add_sentence_numbers,
     get_index_range_from_line_range,
@@ -20,6 +21,7 @@ from module_text_llm.cot_learner_profile.prompt_thinking import InitialAssessmen
 from module_text_llm.cot_learner_profile.prompt_generate_feedback import AssessmentModel
 
 
+@register_approach("cot_learner_profile")
 async def generate_suggestions(
     exercise: Exercise,
     submission: Submission,

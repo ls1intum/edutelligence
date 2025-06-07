@@ -13,6 +13,7 @@ from llm_core.core.predict_and_parse import predict_and_parse
 from module_text_llm.chain_of_thought_approach import (
     ChainOfThoughtConfig,
 )
+from module_text_llm.registry import register_approach
 from module_text_llm.helpers.utils import (
     add_sentence_numbers,
     get_index_range_from_line_range,
@@ -26,6 +27,7 @@ from module_text_llm.chain_of_thought_approach.prompt_generate_feedback import (
 )
 
 
+@register_approach("chain_of_thought")
 async def generate_suggestions(
     exercise: Exercise,
     submission: Submission,

@@ -1,7 +1,14 @@
 import dotenv
-from athena.approach_discovery.strategy_factory import SuggestionStrategyFactory
 
 dotenv.load_dotenv(override=True)
 
-def get_strategy_factory(base_class):
-    return SuggestionStrategyFactory("module_text_llm", base_class)
+# Approach Discovery
+# By importing these modules, we trigger the @register_approach decorators
+# within them, populating our central registry.
+print("Registering text assessment approaches...")
+from .basic_approach import generate_suggestions
+from .chain_of_thought_approach import generate_suggestions
+from .cot_learner_profile import generate_suggestions
+from .divide_and_conquer import generate_suggestions
+from .self_consistency import generate_suggestions
+print("Registration complete.")
