@@ -1,11 +1,9 @@
-from enum import Enum
 from typing import Any, Callable, Dict, Optional, Sequence, Type, Union
 
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, ConfigDict
 
 from iris.common.pyris_message import PyrisMessage
-from iris.llm.capability import RequirementList
 from iris.llm.completion_arguments import CompletionArguments
 from iris.llm.external.model import (
     ChatModel,
@@ -17,33 +15,22 @@ from iris.llm.llm_manager import LlmManager
 from iris.llm.request_handler.request_handler_interface import RequestHandler
 
 
-class CapabilityRequestHandlerSelectionMode(Enum):
-    """Enum for the selection mode of the capability request handler"""
+class ModelVersionRequestHandler(RequestHandler):
+    """Request handler that selects the first model with a matching version."""
 
-    BEST = "best"
-    WORST = "worst"
-
-
-class CapabilityRequestHandler(RequestHandler):
-    """Request handler that selects the best/worst model based on the requirements"""
-
-    requirements: RequirementList
-    selection_mode: CapabilityRequestHandlerSelectionMode
+    version: str
     llm_manager: LlmManager | None = None
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     def __init__(
         self,
-        requirements: RequirementList,
-        selection_mode: CapabilityRequestHandlerSelectionMode = CapabilityRequestHandlerSelectionMode.WORST,
+        version: str,
     ) -> None:
         super().__init__(
-            requirements=requirements,
-            selection_mode=selection_mode,
+            version=version,
             llm_manager=None,
         )
-        self.requirements = requirements
-        self.selection_mode = selection_mode
+        self.version = version
         self.llm_manager = LlmManager()
 
     def complete(self, prompt: str, arguments: CompletionArguments) -> str:
@@ -60,8 +47,13 @@ class CapabilityRequestHandler(RequestHandler):
     ) -> PyrisMessage:
         llm = self._select_model(ChatModel)
         message = llm.chat(messages, arguments, tools)
-        message.token_usage.cost_per_input_token = llm.capabilities.input_cost.value
-        message.token_usage.cost_per_output_token = llm.capabilities.output_cost.value
+        message.token_usage.model_info = llm.model
+        message.token_usage.cost_per_million_input_token = (
+            llm.cost_per_million_input_token
+        )
+        message.token_usage.cost_per_million_output_token = (
+            llm.cost_per_million_output_token
+        )
         return message
 
     def embed(self, text: str) -> list[float]:
@@ -69,17 +61,24 @@ class CapabilityRequestHandler(RequestHandler):
         return llm.embed(text)
 
     def _select_model(self, type_filter: type) -> LanguageModel:
-        """Select the best/worst model based on the requirements and the selection mode"""
-        llms = self.llm_manager.get_llms_sorted_by_capabilities_score(
-            self.requirements,
-            self.selection_mode == CapabilityRequestHandlerSelectionMode.WORST,
-        )
-        llms = [llm for llm in llms if isinstance(llm, type_filter)]
+        """Select the first model that matches the requested version"""
+        # Get all LLMs from the manager
+        all_llms = self.llm_manager.entries
 
-        if self.selection_mode == CapabilityRequestHandlerSelectionMode.BEST:
-            llm = llms[0]
-        else:
-            llm = llms[-1]
+        # Filter LLMs by type and model name
+        matching_llms = [
+            llm
+            for llm in all_llms
+            if isinstance(llm, type_filter) and llm.model == self.version
+        ]
+
+        if not matching_llms:
+            raise ValueError(
+                f"No {type_filter.__name__} found with model name {self.version}"
+            )
+
+        # Select the first matching LLM
+        llm = matching_llms[0]
 
         # Print the selected model for the logs
         print(f"Selected {llm.description}")

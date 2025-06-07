@@ -18,9 +18,9 @@ class COTLearnerProfileConfig(ApproachConfig):
     )
     profile: LearnerProfile = Field(
         default=LearnerProfile(
-            feedback_alternative_standard=3,
-            feedback_followup_summary=3,
-            feedback_brief_detailed=3,
+            feedback_alternative_standard=2,
+            feedback_followup_summary=2,
+            feedback_brief_detailed=2,
         )
     )
 
