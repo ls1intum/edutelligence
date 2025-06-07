@@ -89,11 +89,16 @@ class WeaviateMemoryRepository(MemoryRepository, _WeaviateBaseRepository):
         except Exception as e:
             raise ValueError(f"Error retrieving Memory with id {entity_id}") from e
 
-    def all(self, tenant: str) -> list[Memory]:
+    def all(self, tenant: str, include_deleted: bool = False) -> list[Memory]:
         """Get all Memory objects."""
         try:
             result = self.collection.with_tenant(tenant).query.fetch_objects(
-                filters=Filter.by_property("deleted").equal(False),
+                filters=(
+                    Filter.by_property("deleted").equal(False)
+                    if not include_deleted
+                    else None
+                ),
+                limit=10000,
                 return_references=[
                     QueryReference(link_on="learnings"),
                     QueryReference(link_on="connections"),

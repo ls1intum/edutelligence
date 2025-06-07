@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Mapping, Sequence
+from typing import List, Mapping, Sequence
 from uuid import UUID
 
 from memiris.domain.memory import Memory
@@ -10,6 +10,13 @@ class MemoryRepository(BaseRepository[Memory, UUID], ABC):
     """
     MemoryRepository is an abstract class that defines the database operations for memory objects.
     """
+
+    @abstractmethod
+    def all(self, tenant: str, include_deleted: bool = False) -> List[Memory]:
+        """
+        Retrieve all entities for a given tenant.
+        """
+        return []
 
     @abstractmethod
     def search(

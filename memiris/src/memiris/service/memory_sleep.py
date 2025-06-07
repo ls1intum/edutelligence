@@ -1,3 +1,4 @@
+import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Optional
 from uuid import UUID
@@ -90,19 +91,39 @@ class MemorySleeper:
 
         # 1. Load recent memories
         recent_memories = self.memory_repository.find_unslept_memories(tenant)
+        logging.debug(
+            "Loaded %s unslept memories for tenant %s", len(recent_memories), tenant
+        )
 
         # 2. Deduplicate memories within themselves
         deduplicated_memories = self._deduplicate_memories(
             recent_memories, tenant, **kwargs
+        )
+        logging.debug(
+            "Deduplicated %s memories down to %s memories within themselves for tenant %s",
+            len(recent_memories),
+            len(deduplicated_memories),
+            tenant,
         )
 
         # 3. Deduplicate memories with existing memories
         deduplicated_memories2 = self._deduplicate_with_existing_memories(
             deduplicated_memories, tenant, **kwargs
         )
+        logging.debug(
+            "Deduplicated %s memories with existing memories down to %s memories for tenant %s",
+            len(deduplicated_memories),
+            len(deduplicated_memories2),
+            tenant,
+        )
 
         # 4. Connect memories with each other
         self._connect_memories(deduplicated_memories2, tenant, **kwargs)
+        logging.debug(
+            "Connected %s memories with each other for tenant %s",
+            len(deduplicated_memories2),
+            tenant,
+        )
 
         # 5. Connect memories with existing memories
         # self._connect_memories(saved_memories, tenant, **kwargs)
@@ -132,10 +153,12 @@ class MemorySleeper:
             List of deduplicated memories
         """
         if not recent_memories:
+            logging.warning("No recent memories to deduplicate.")
             return []
 
         # If there's only one memory, no need to deduplicate
         if len(recent_memories) == 1:
+            logging.warning("Only one memory found, no deduplication needed.")
             return recent_memories
 
         # Collect all learning IDs from all memories
@@ -144,12 +167,27 @@ class MemorySleeper:
             if memory.id:  # Only include memories that have an ID
                 all_learning_ids.extend(memory.learnings)
 
+        logging.debug(
+            "Found %s learning IDs across %s recent memories for tenant %s",
+        )
+
         # Fetch all learnings in a single batch operation to minimize DB calls
         all_learnings = (
-            self.learning_repository.find_by_ids(tenant, all_learning_ids)
+            self.learning_repository.find_by_ids(tenant, list(set(all_learning_ids)))
             if all_learning_ids
             else []
         )
+
+        logging.debug(
+            "Fetched %s learnings for %s learning IDs in tenant %s",
+            len(all_learnings),
+            len(list(set(all_learning_ids))),
+            tenant,
+        )
+
+        logging.debug("Current state is:")
+        logging.debug("Memories: %s", recent_memories)
+        logging.debug("Learnings: %s", all_learnings)
 
         # Create a lookup dictionary for quick access to learning objects
         learning_lookup = {str(learning.id): learning for learning in all_learnings}
@@ -158,8 +196,11 @@ class MemorySleeper:
         memory_input_dtos = []
         valid_memories = []
 
+        logging.debug("Converting recent memories to input DTOs for deduplication.")
+
         for memory in recent_memories:
             if not memory.id:
+                logging.warning("Skipping memory without ID: %s", memory)
                 continue
 
             valid_memories.append(memory)
@@ -187,8 +228,15 @@ class MemorySleeper:
 
             memory_input_dtos.append(memory_input_dto)
 
+        logging.debug(
+            "Converted %s valid memories to %s input DTOs for deduplication.",
+            len(valid_memories),
+            len(memory_input_dtos),
+        )
+
         # If no valid memories with IDs, return original list
         if not memory_input_dtos:
+            logging.debug("No valid memories with IDs found for deduplication.")
             return recent_memories
 
         # Prepare the prompt for the LLM
@@ -201,15 +249,21 @@ class MemorySleeper:
             **kwargs,
         )
 
+        logging.debug("System message for LLM deduplication: %s", system_message)
+
         # Use type adapter for proper JSON serialization
         memory_input_json = MemoryDeduplicationInputDto.json_array_type().dump_json(
             memory_input_dtos
         )
 
+        logging.debug("Memory input JSON for LLM deduplication: %s", memory_input_json)
+
         messages = [
             Message(role="system", content=system_message),
             Message(role="user", content=str(memory_input_json)),
         ]
+
+        logging.debug("Sending messages to LLM for deduplication")
 
         # Call the LLM to deduplicate memories
         response = self.ollama_service.chat(
@@ -219,14 +273,26 @@ class MemorySleeper:
             options={"temperature": 0.05},
         )
 
+        logging.debug(
+            "Received response from LLM for deduplication: %s", response.message.content
+        )
+
         # Process LLM response
         if not response or not response.message or not response.message.content:
+            logging.warning("No valid response from LLM for deduplication.")
             return recent_memories
 
         try:
+            logging.debug("Parsing deduplicated memories from LLM response.")
+
             # Parse the deduplicated memories from the LLM response
             memory_dtos = MemoryDeduplicationDto.json_array_type().validate_json(
                 response.message.content
+            )
+
+            logging.debug(
+                "Parsed %s deduplicated memory DTOs from LLM response.",
+                len(memory_dtos),
             )
 
             # Create a lookup of original memories by ID for easy access
@@ -239,6 +305,10 @@ class MemorySleeper:
             for memory_dto in memory_dtos:
                 # Skip if no memories are referenced (shouldn't happen)
                 if not memory_dto.memories:
+                    logging.warning(
+                        "Skipping memory DTO with no referenced memories: %s",
+                        memory_dto,
+                    )
                     continue
 
                 # If only one memory is referenced, it wasn't deduplicated
@@ -246,6 +316,9 @@ class MemorySleeper:
                     memory_id = memory_dto.memories[0]
                     if str(memory_id) in memory_lookup:
                         deduplicated_results.append(memory_lookup[str(memory_id)])
+                    logging.warning(
+                        "Skipping memory DTO with single reference: %s", memory_dto
+                    )
                     continue
 
                 # Multiple memories were combined - create a new consolidated memory
@@ -255,7 +328,17 @@ class MemorySleeper:
                     if str(mid) in memory_lookup
                 ]
 
+                logging.debug(
+                    "Found %s original memories for memory DTO: %s",
+                    len(original_memories),
+                    memory_dto,
+                )
+
                 if not original_memories:
+                    logging.warning(
+                        "No valid original memories found for memory DTO: %s",
+                        memory_dto,
+                    )
                     continue
 
                 # Combine all learnings from the original memories
@@ -263,6 +346,14 @@ class MemorySleeper:
                 for memory in original_memories:
                     combined_learnings.extend(memory.learnings)
                     used_memory_ids.add(str(memory.id))
+
+                logging.debug(
+                    "Combined %s learnings from original memories.",
+                    len(combined_learnings),
+                )
+                logging.debug(
+                    "We have used the following memory IDs so far: %s", used_memory_ids
+                )
 
                 # Create new memory with combined information
                 new_memory = Memory(
@@ -272,14 +363,14 @@ class MemorySleeper:
                     slept_on=True,  # Mark as slept on since we're processing it
                 )
 
+                logging.debug(
+                    "Creating new memory with title: %s and content: %s",
+                )
+
                 # Vectorize the new memory
                 new_memory.vectors = self.vectorizer.vectorize(new_memory.content)
 
                 deduplicated_results.append(new_memory)
-
-            deduplicated_results = self.memory_repository.save_all(
-                tenant, deduplicated_results
-            )
 
             # Add memories that weren't used in any deduplication
             for memory in valid_memories:
@@ -287,6 +378,14 @@ class MemorySleeper:
                     # Mark as slept on since we're processing it
                     memory.slept_on = True
                     deduplicated_results.append(memory)
+                    logging.debug(
+                        "Adding unused memory with ID %s to deduplicated results.",
+                        memory.id,
+                    )
+
+            deduplicated_results = self.memory_repository.save_all(
+                tenant, deduplicated_results
+            )
 
             # Mark the original memories as deleted instead of actually deleting them
             for memory_id in used_memory_ids:
@@ -296,6 +395,7 @@ class MemorySleeper:
                         tenant, UUID(memory_id)
                     )
                     # Mark as deleted
+                    memory_to_mark.slept_on = True
                     memory_to_mark.deleted = True
                     # Save the updated memory
                     self.memory_repository.save(tenant, memory_to_mark)
@@ -331,12 +431,25 @@ class MemorySleeper:
             List of deduplicated memories after comparing with existing memories
         """
         if not deduplicated_memories:
+            logging.warning(
+                "No deduplicated memories to process for existing memory deduplication."
+            )
             return []
 
         # If we don't have any vectors, we can't find similar memories
         memories_with_vectors = [m for m in deduplicated_memories if m.vectors]
         if not memories_with_vectors:
+            logging.warning(
+                "No memories with vectors found for deduplication with existing memories."
+            )
             return deduplicated_memories
+
+        logging.debug(
+            "Found %s/%s memories with vectors for deduplication with existing memories in tenant %s",
+            len(memories_with_vectors),
+            len(deduplicated_memories),
+            tenant,
+        )
 
         # Process memories in chunks to avoid overwhelming the vector database or LLM
         chunk_size = 5  # Can be adjusted based on performance needs
@@ -344,6 +457,12 @@ class MemorySleeper:
             memories_with_vectors[i : i + chunk_size]
             for i in range(0, len(memories_with_vectors), chunk_size)
         ]
+
+        logging.debug(
+            "Split deduplicated memories into %s chunks of size %s for processing.",
+            len(memory_chunks),
+            chunk_size,
+        )
 
         final_deduplicated_memories = []
         memories_without_vectors = [m for m in deduplicated_memories if not m.vectors]
@@ -359,8 +478,20 @@ class MemorySleeper:
                 try:
                     deduplicated_chunk = future.result()
                     final_deduplicated_memories.extend(deduplicated_chunk)
+
+                    logging.debug(
+                        "Processed chunk with %s memories, resulting in %s deduplicated memories.",
+                        len(future_to_chunk[future]),
+                        len(deduplicated_chunk),
+                    )
                 except Exception as e:
                     print(f"Error processing chunk: {e}")
+
+        logging.debug(
+            "Processed all chunks, resulting in %s -> %s total deduplicated memories.",
+            len(deduplicated_memories),
+            len(final_deduplicated_memories),
+        )
 
         # Add back memories without vectors that couldn't be deduplicated
         final_deduplicated_memories.extend(memories_without_vectors)
@@ -386,6 +517,7 @@ class MemorySleeper:
         for memory in memory_chunk:
             # Find existing memories with similar vectors
             if not memory.vectors:
+                logging.warning("Skipping memory without vectors: %s", memory)
                 continue
 
             found_memories = self.memory_repository.search_multi(
@@ -393,6 +525,13 @@ class MemorySleeper:
                 vectors=memory.vectors,
                 count=5,
                 # min_similarity=0.7  # Minimum similarity threshold
+            )
+
+            logging.debug(
+                "Found %s similar memories for memory ID %s in tenant %s",
+                len(found_memories),
+                memory.id,
+                tenant,
             )
 
             # Exclude memories that are already in our input set
@@ -405,7 +544,17 @@ class MemorySleeper:
 
         # If no similar memories found, just keep the original chunk
         if not similar_memories:
+            logging.debug(
+                "No similar memories found for chunk, returning original memory chunk."
+            )
             return memory_chunk
+
+        logging.debug(
+            "Found %s similar memories for chunk of size %s in tenant %s",
+            len(similar_memories),
+            len(memory_chunk),
+            tenant,
+        )
 
         # Combine the chunk and similar memories for deduplication
         combined_memories = memory_chunk + similar_memories
@@ -413,6 +562,13 @@ class MemorySleeper:
         # Deduplicate using the same method as for internal deduplication
         deduplicated_chunk = self._deduplicate_memories(
             combined_memories, tenant, **kwargs
+        )
+
+        logging.debug(
+            "Deduplicated chunk of size %s down to %s memories after comparing with existing memories in tenant %s",
+            len(combined_memories),
+            len(deduplicated_chunk),
+            tenant,
         )
 
         return deduplicated_chunk
@@ -438,17 +594,19 @@ class MemorySleeper:
         Returns:
             The original list of memories (connections are stored separately)
         """
-        if (
-            not memories or len(memories) < 2
-        ):  # Need at least 2 memories to form connections
+        if not memories or len(memories) < 2:
+            logging.warning("Not enough memories to connect. Returning original list.")
             return memories
 
         # Prepare memory data for LLM processing
         memory_input_dtos = []
         valid_memories = []
 
+        logging.debug("Converting memories to input DTOs for connection analysis.")
+
         for memory in memories:
             if not memory.id:
+                logging.warning("Skipping memory without ID: %s", memory)
                 continue
 
             valid_memories.append(memory)
@@ -465,7 +623,16 @@ class MemorySleeper:
 
         # If insufficient valid memories, return original list
         if len(memory_input_dtos) < 2:
+            logging.warning(
+                "Not enough valid memories with IDs for connection analysis."
+            )
             return memories
+
+        logging.debug(
+            "Converted %s valid memories to %s input DTOs for connection analysis.",
+            len(valid_memories),
+            len(memory_input_dtos),
+        )
 
         # Prepare the prompt for the LLM
         memory_connection_json_schema = MemoryConnectionDto.json_array_schema()
@@ -474,6 +641,10 @@ class MemorySleeper:
             memory_connection_json_schema=memory_connection_json_schema,
             connection_types=get_enum_values_with_descriptions(ConnectionType),
             **kwargs,
+        )
+
+        logging.debug(
+            "System message for LLM connection analysis: \n%s", system_message
         )
 
         # Use type adapter for proper JSON serialization
@@ -486,6 +657,8 @@ class MemorySleeper:
             Message(role="user", content=str(memory_input_json)),
         ]
 
+        logging.debug("Sending messages to LLM for connection analysis")
+
         # Call the LLM to identify connections between memories
         response = self.ollama_service.chat(
             model=self.tool_llm,
@@ -496,12 +669,25 @@ class MemorySleeper:
 
         # Process LLM response
         if not response or not response.message or not response.message.content:
+            logging.warning("No valid response from LLM for memory connections.")
             return memories
 
+        logging.debug(
+            "Received response from LLM for connection analysis: %s",
+            response.message.content,
+        )
+
         try:
+            logging.debug("Parsing memory connections from LLM response.")
+
             # Parse the connections from the LLM response
             connection_dtos = MemoryConnectionDto.json_array_type().validate_json(
                 response.message.content
+            )
+
+            logging.debug(
+                "Parsed %s memory connection DTOs from LLM response.",
+                len(connection_dtos),
             )
 
             # Create memory connections from DTOs
@@ -509,6 +695,10 @@ class MemorySleeper:
 
             for connection_dto in connection_dtos:
                 if len(connection_dto.memories) < 2:
+                    logging.warning(
+                        "Skipping connection DTO with less than 2 memories: %s",
+                        connection_dto,
+                    )
                     continue
 
                 try:
@@ -523,16 +713,31 @@ class MemorySleeper:
                     weight=connection_dto.weight or 0.5,
                 )
 
+                logging.debug(
+                    "Creating connection: %s with type %s, memories %s, description '%s', weight %s",
+                )
+
                 connections.append(connection)
 
             if connections:
+                logging.debug(
+                    "Saving %s memories connections to the repository.",
+                    len(connections),
+                )
                 connections = self.memory_connection_repository.save_all(
                     tenant, connections
+                )
+                logging.debug(
+                    "Saved %s memories connections to the repository.", len(connections)
                 )
 
             memories_dict = {
                 memory.id: memory for memory in valid_memories if memory.id
             }
+
+            logging.debug(
+                "Updating %s memories with their connections.", len(memories_dict)
+            )
 
             # Update each memory with its connections
             for connection in connections:
@@ -542,6 +747,11 @@ class MemorySleeper:
                         if not memory.connections:
                             memory.connections = []
                         memory.connections.append(connection.id)  # type: ignore
+
+            logging.debug(
+                "Updated memories with their connections. Total memories: %s",
+                len(memories_dict),
+            )
 
             return memories
 

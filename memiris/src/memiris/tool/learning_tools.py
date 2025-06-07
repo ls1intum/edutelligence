@@ -1,20 +1,20 @@
 from typing import Callable, List
-from uuid import UUID
 
 from memiris.dto.learning_main_dto import LearningDto
 from memiris.repository.learning_repository import LearningRepository
 from memiris.service.vectorizer import Vectorizer
 from memiris.util.learning_util import learning_to_dto
+from memiris.util.uuid_util import is_valid_uuid, to_uuid
 
 
 def create_tool_find_learnings_by_id(
     learning_repository: LearningRepository, tenant: str
-) -> Callable[[List[UUID]], List[LearningDto]]:
+) -> Callable[[List[str]], List[LearningDto]]:
     """
     Create a tool to find learnings by their IDs.
     """
 
-    def find_learnings_by_id(learning_ids: List[UUID]) -> List[LearningDto]:
+    def find_learnings_by_id(learning_ids: List[str]) -> List[LearningDto]:
         """
         Find learnings by their IDs. Can be used to get unknown learnings of a memory.
 
@@ -26,8 +26,11 @@ def create_tool_find_learnings_by_id(
         """
         print(f"TOOL: Finding learnings by ID in {tenant}: {learning_ids}")
         return [
-            learning_to_dto(learning_repository.find(tenant, learning_id))
+            learning_to_dto(learning)
             for learning_id in learning_ids
+            if is_valid_uuid(learning_id)
+            and (learning := learning_repository.find(tenant, to_uuid(learning_id)))
+            is not None  # type: ignore
         ]
 
     return find_learnings_by_id
@@ -35,12 +38,12 @@ def create_tool_find_learnings_by_id(
 
 def create_tool_find_similar_learnings(
     learning_repository: LearningRepository, tenant: str
-) -> Callable[[UUID], List[LearningDto]]:
+) -> Callable[[str], List[LearningDto]]:
     """
     Create a tool to find similar learnings.
     """
 
-    def find_similar_learnings(learning_id: UUID) -> List[LearningDto]:
+    def find_similar_learnings(learning_id: str) -> List[LearningDto]:
         """
         Find learnings that are similar to the given learning.
         Yous should call this for each learning object you want to find similar learnings for.
@@ -52,17 +55,25 @@ def create_tool_find_similar_learnings(
         Returns:
             List[LearningDto]: A list of similar learning objects.
         """
-        print(f"TOOL: Finding similar learnings for {learning_id} in {tenant}")
-        learning = learning_repository.find(tenant, learning_id)
+        if (learning_uuid := to_uuid(learning_id)) is not None:
+            print(f"TOOL: Finding similar learnings for {learning_uuid} in {tenant}")
+            learning = learning_repository.find(tenant, learning_uuid)
 
-        return [
-            learning_to_dto(learning)
-            for learning in learning_repository.search_multi(
-                tenant,
-                {x: y for x, y in learning.vectors.items() if y is not None},
-                5,
-            )
-        ]
+            if learning is None:
+                print(f"TOOL: Learning with ID {learning_uuid} not found in {tenant}")
+                return []
+
+            return [
+                learning_to_dto(learning)
+                for learning in learning_repository.search_multi(
+                    tenant,
+                    {x: y for x, y in learning.vectors.items() if y is not None},
+                    5,
+                )
+            ]
+        else:
+            print(f"TOOL: Invalid learning ID {learning_id} provided in {tenant}")
+            return []
 
     return find_similar_learnings
 
