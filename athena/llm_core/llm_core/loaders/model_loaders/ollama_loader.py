@@ -57,6 +57,6 @@ if ollama_available_models:
 else:
 
     class OllamaModel(str, Enum):
-        """Empty placeholder enum when no Ollama server is reachable."""
+        """Fallback enum used when no Ollama server is reachable."""
 
-        pass
+        PLACEHOLDER = "ollama_not_available"
