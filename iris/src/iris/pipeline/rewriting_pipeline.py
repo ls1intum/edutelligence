@@ -108,7 +108,9 @@ class RewritingPipeline(Pipeline):
             faq_type = consistency_result.get("type", "").lower()
             if "inconsistent" in faq_type:
                 logging.warning("Detected inconsistencies in FAQ retrieval.")
-                inconsistencies = parse_faq_inconsistencies(consistency_result.get("faqs", []))
+                inconsistencies = parse_faq_inconsistencies(
+                    consistency_result.get("faqs", [])
+                )
                 improvement = consistency_result.get("improved version", "")
                 suggestions = consistency_result.get("suggestion", [])
 
@@ -122,7 +124,7 @@ class RewritingPipeline(Pipeline):
         )
 
     def check_faq_consistency(
-            self, faqs: List[dict], final_result: str
+        self, faqs: List[dict], final_result: str
     ) -> Dict[str, str]:
         """
         Checks the consistency of the given FAQs with the provided final_result.
@@ -167,8 +169,6 @@ class RewritingPipeline(Pipeline):
                 result_dict[key] = data[key]
         return result_dict
 
-
-
     @classmethod
     def get_variants(cls, available_llms: List[LanguageModel]) -> List[FeatureDTO]:
         """
@@ -190,8 +190,9 @@ class RewritingPipeline(Pipeline):
                 id="problem_statement",
                 name="Default Variant",
                 description="Default Problem statement rewriting variant.",
-            )
+            ),
         ]
+
 
 def parse_faq_inconsistencies(inconsistencies: List[Dict[str, str]]) -> List[str]:
     parsed_inconsistencies = [
