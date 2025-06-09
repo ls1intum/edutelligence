@@ -1,5 +1,5 @@
 import grpc
-from . import faq_pb2, faq_pb2_grpc
+from nebula.services.faq_service import faq_pb2, faq_pb2_grpc
 
 def send_input():
     channel = grpc.insecure_channel("localhost:50051")

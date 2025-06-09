@@ -1,32 +1,30 @@
-# Dockerfile to build a container image for a Python 3.12 gRPC application
+# Basisimage: schlankes Python
 FROM python:3.12.3-slim
 
-# Set working directory
+# Setze Arbeitsverzeichnis
 WORKDIR /app
 
-# Copy dependency files
+# Installiere Poetry
+RUN pip install --no-cache-dir poetry
+
+# Kopiere Poetry-Konfiguration
 COPY pyproject.toml poetry.lock ./
 
-# Install poetry and dependencies
-RUN pip install poetry && \
-    poetry config virtualenvs.create false && \
-    poetry install --with dev --no-root
+# Installiere Abhängigkeiten (ohne virtuelle Umgebung)
+RUN poetry config virtualenvs.create false && poetry install --no-root
 
-# Copy source code
+# Kopiere Quellcode
 COPY src ./src
 
-# Compile .proto file
+# Kompiliere Protobuf (optional, falls du das im Container willst)
 RUN python -m grpc_tools.protoc \
-    -I src/nebula/services/faq_service \
+    -I=src \
     --python_out=src \
     --grpc_python_out=src \
     src/nebula/services/faq_service/faq.proto
 
-# Expose gRPC port
-EXPOSE 50051
-
-# Add src to PYTHONPATH so "nebula" is recognized
+# Füge Python-Importpfad hinzu
 ENV PYTHONPATH=/app/src
 
-# Run gRPC server
-CMD ["python", "-m", "nebula.main"]
+# Starte die main.py
+CMD ["python", "src/nebula/main.py"]
