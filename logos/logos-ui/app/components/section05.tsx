@@ -1,11 +1,15 @@
 import React, {useContext} from 'react';
-import {View, Text, StyleSheet, useWindowDimensions, TouchableOpacity} from 'react-native';
+import {View, Text, StyleSheet, useWindowDimensions, TouchableOpacity, Linking} from 'react-native';
 import { ThemeContext } from '../';
 
 export default function Section05() {
   const { width } = useWindowDimensions();
   const { theme } = useContext(ThemeContext);
   const isLight = theme === 'light';
+
+  const openExternalLink = () => {
+    Linking.openURL('https://github.com/ls1intum/edutelligence');
+  };
 
   return (
     <View style={[styles.container, { backgroundColor: isLight ? '#000000' : '#ffffff' }]}>
@@ -16,7 +20,7 @@ export default function Section05() {
         </Text>
       </View>
     <View style={styles.buttonRow}>
-      <TouchableOpacity style={[styles.buttonPrimary, { backgroundColor: isLight ? '#fff' : '#000' }]}>
+      <TouchableOpacity style={[styles.buttonPrimary, { backgroundColor: isLight ? '#fff' : '#000' }]} onPress={openExternalLink}>
         <Text style={[styles.buttonText, { color: isLight ? '#000' : '#fff' }]}>Get Started →</Text>
       </TouchableOpacity>
 

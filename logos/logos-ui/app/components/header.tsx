@@ -2,6 +2,9 @@ import React, { useContext } from 'react';
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { Image } from 'react-native';
 import { ThemeContext } from '../';
+import { useState, useEffect } from 'react';
+import { Image as ExpoImage } from 'expo-image';
+
 
 export default function Header() {
   const { theme, toggleTheme } = useContext(ThemeContext);
@@ -9,16 +12,25 @@ export default function Header() {
   // Theme-abhängige Styles holen
   const isLight = theme === 'light';
 
+  const [hue, setHue] = useState(0);
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setHue(h => (h + 1) % 360);
+    }, 1000);
+    return () => clearInterval(interval);
+  }, []);
+
   return (
     <View style={[styles.header, isLight ? styles.lightHeader : styles.darkHeader]}>
       <View style={styles.headerContainer}>
-        <Image
+        <ExpoImage
           source={require('../../assets/images/logos_full.png')}
-          style={styles.header_left}
-          resizeMode="contain"
+          style={[styles.header_left, { filter: `hue-rotate(${hue}deg)` }]}
+          contentFit="contain"
         />
         <Text style={styles.version}>
-             0.0.1
+             0.0.2
         </Text>
       </View>
       <TouchableOpacity

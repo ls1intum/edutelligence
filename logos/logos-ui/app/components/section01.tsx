@@ -1,11 +1,15 @@
 // HeroSection.tsx
 import React, { useContext } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, useWindowDimensions } from 'react-native';
+import {View, Text, StyleSheet, TouchableOpacity, useWindowDimensions, Linking} from 'react-native';
 import { ThemeContext } from '../';
 
 export default function Section01() {
   const { theme } = useContext(ThemeContext);
   const isLight = theme === 'light';
+
+  const openExternalLink = () => {
+    Linking.openURL('https://github.com/ls1intum/edutelligence');
+  };
 
   return (
     <View style={[styles.container, { backgroundColor: isLight ? '#e8e8e8' : '#212121' }]}>
@@ -18,7 +22,7 @@ export default function Section01() {
         </Text>
 
         <View style={styles.buttonRow}>
-          <TouchableOpacity style={[styles.buttonPrimary, { backgroundColor: isLight ? '#000' : '#fff' }]}>
+          <TouchableOpacity style={[styles.buttonPrimary, { backgroundColor: isLight ? '#000' : '#fff' }]} onPress={openExternalLink}>
             <Text style={[styles.buttonText, { color: isLight ? '#fff' : '#000' }]}>Get Started →</Text>
           </TouchableOpacity>
 
