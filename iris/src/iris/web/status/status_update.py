@@ -1,9 +1,10 @@
 import logging
 from abc import ABC
-from typing import Optional, List
-import requests
+from typing import List, Optional
 
+import requests
 from sentry_sdk import capture_exception, capture_message
+
 from iris.common.token_usage_dto import TokenUsageDTO
 from iris.domain.chat.course_chat.course_chat_status_update_dto import (
     CourseChatStatusUpdateDTO,

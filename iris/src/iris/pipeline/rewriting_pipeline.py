@@ -1,6 +1,6 @@
 import json
 import logging
-from typing import Literal, Optional, List, Dict
+from typing import Dict, List, Literal, Optional
 
 from langchain.output_parsers import PydanticOutputParser
 from langchain_core.prompts import (
@@ -24,13 +24,11 @@ from iris.pipeline.prompts.rewriting_prompts import (
 )
 from iris.web.status.status_update import RewritingCallback
 
-from ..llm.external.model import LanguageModel
 from ..domain import FeatureDTO
-
-from .prompts.faq_consistency_prompt import faq_consistency_prompt
-from ..vector_database.database import VectorDatabase
-
+from ..llm.external.model import LanguageModel
 from ..retrieval.faq_retrieval import FaqRetrieval
+from ..vector_database.database import VectorDatabase
+from .prompts.faq_consistency_prompt import faq_consistency_prompt
 
 logger = logging.getLogger(__name__)
 

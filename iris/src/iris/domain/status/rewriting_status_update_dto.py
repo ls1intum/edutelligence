@@ -1,5 +1,6 @@
-from iris.domain.status.status_update_dto import StatusUpdateDTO
 from typing import List
+
+from iris.domain.status.status_update_dto import StatusUpdateDTO
 
 
 class RewritingStatusUpdateDTO(StatusUpdateDTO):
