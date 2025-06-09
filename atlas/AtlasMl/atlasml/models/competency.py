@@ -1,7 +1,6 @@
-from pydantic import BaseModel 
-from typing import List
 from enum import Enum
-from fastapi.responses import JSONResponse
+
+from pydantic import BaseModel
 
 
 class CompetencyTaxonomy(str, Enum):
@@ -12,13 +11,15 @@ class CompetencyTaxonomy(str, Enum):
     EVALUATE = "E"
     CREATE = "C"
 
+
 class Competency(BaseModel):
-    # id 
+    # id
     title: str
     description: str
     taxonomy: CompetencyTaxonomy
-    
-class CompetencyRelationType(str, Enum): #TOBE DETERMINED LATER
+
+
+class CompetencyRelationType(str, Enum):  # TOBE DETERMINED LATER
     SUPERSET = "SUPERSET"
     SUBSET = "SUBSET"
 
@@ -28,16 +29,42 @@ class CompetencyRelation(BaseModel):
     head_competency_id: str
     relation_type: CompetencyRelationType
 
+
 class GenerateCompetencyRequest(BaseModel):
     id: str
     description: str
 
+
 class GenerateCompetencyRequestBatch(BaseModel):
-    competencies: List[GenerateCompetencyRequest]
+    competencies: list[GenerateCompetencyRequest]
+
 
 class GenerateCompetencyResponse(BaseModel):
-    competencies: List[Competency]
-    competency_relations: List[CompetencyRelation]
+    competencies: list[Competency]
+    competency_relations: list[CompetencyRelation]
+
 
 class GenerateEmbedingsResponse(BaseModel):
-    embedings: List
+    embedings: list
+
+
+class SuggestCompetencyRequest(BaseModel):
+    id: str
+    description: str
+
+
+class SuggestCompetencyResponse(BaseModel):
+    competencies: list[Competency]
+    competency_relations: list[CompetencyRelation]
+
+
+class SaveCompetencyRequest(BaseModel):
+    id: str
+    description: str
+    competencies: list[Competency]
+    competency_relations: list[CompetencyRelation]
+
+
+class SaveCompetencyResponse(BaseModel):
+    competencies: list[Competency]
+    competency_relations: list[CompetencyRelation]

@@ -7,14 +7,17 @@ from weaviate.classes.query import Filter
 from atlasml.config import settings
 
 
-# TODO: ARDA: Add proper collection names according to your use cases. If you define all the
-# collections here all the collections will be created automatically when you run the project.
+# TODO: ARDA: Add proper collection names according to your use cases.
+# If you define all the collections here all the collections will be created
+# automatically when you run the project.
 class CollectionNames(str, Enum):
     COMPETENCY = "Competency"
     CLUSTER = "Cluster"
     COURSE = "Course"
 
+
 logger = logging.getLogger(__name__)
+
 
 class WeaviateClient:
     def __init__(
@@ -36,26 +39,38 @@ class WeaviateClient:
         if not self.client.collections.exists(collection_name):
             raise ValueError(f"Collection '{collection_name}' does not exist")
 
-
     def _ensure_collections_exist(self):
         """Ensure collections exist with proper schema."""
         # Define schemas for each collection
         # TODO: ARDA: Add properties for each collection
-        # After, schema updated automatically and u can fetch the data from the collection with the new properties
+        # After, schema updated automatically and u can fetch the data from the
+        # collection with the new properties
         collection_schemas = {
             CollectionNames.COMPETENCY.value: {
                 "properties": [
                     {"name": "text", "dataType": ["text"]},
-                    {"name": "unit_id", "dataType": ["string"], "indexFilterable": True},
+                    {
+                        "name": "unit_id",
+                        "dataType": ["string"],
+                        "indexFilterable": True,
+                    },
                     {"name": "name", "dataType": ["string"], "indexFilterable": True},
-                    {"name": "category", "dataType": ["string"], "indexFilterable": True},
+                    {
+                        "name": "category",
+                        "dataType": ["string"],
+                        "indexFilterable": True,
+                    },
                 ]
             },
             CollectionNames.CLUSTER.value: {
                 "properties": [
                     {"name": "name", "dataType": ["string"], "indexFilterable": True},
                     {"name": "size", "dataType": ["int"], "indexFilterable": True},
-                    {"name": "members", "dataType": ["string[]"], "indexFilterable": True}
+                    {
+                        "name": "members",
+                        "dataType": ["string[]"],
+                        "indexFilterable": True,
+                    },
                 ]
             },
             CollectionNames.COURSE.value: {
@@ -64,32 +79,38 @@ class WeaviateClient:
                     {"name": "description", "dataType": ["text"]},
                     {"name": "author", "dataType": ["string"], "indexFilterable": True},
                     {"name": "level", "dataType": ["string"], "indexFilterable": True},
-                    {"name": "competencies", "dataType": ["string[]"], "indexFilterable": True}
+                    {
+                        "name": "competencies",
+                        "dataType": ["string[]"],
+                        "indexFilterable": True,
+                    },
                 ]
-            }
+            },
         }
-        
+
         for collection_name, schema in collection_schemas.items():
             if not self.client.collections.exists(collection_name):
                 self.client.collections.create(
                     name=collection_name,
                     vectorizer_config=weaviate.classes.config.Configure.Vectorizer.none(),
-                    properties=schema["properties"]
+                    properties=schema["properties"],
                 )
                 logger.info(f"✅ {collection_name} collection created with schema.")
             else:
                 collection = self.client.collections.get(collection_name)
                 existing_props = {prop.name for prop in collection.properties}
-                
+
                 for prop in schema["properties"]:
                     if prop["name"] not in existing_props:
                         collection.config.add_property(
                             name=prop["name"],
                             data_type=prop["dataType"],
-                            index_filterable=prop.get("indexFilterable", False)
+                            index_filterable=prop.get("indexFilterable", False),
                         )
-                        logger.info(f"✅ Added property {prop['name']} to {collection_name}.")
-        
+                        logger.info(
+                            f"✅ Added property {prop['name']} to {collection_name}."
+                        )
+
         logger.info("--- All collections initialized with schemas ---")
 
     def is_alive(self):
@@ -104,41 +125,48 @@ class WeaviateClient:
         """Close the Weaviate client."""
         self.client.close()
 
-    def add_embeddings(self, collection_name: str, embeddings: list[float], properties: dict = None):
+    def add_embeddings(
+        self,
+        collection_name: str,
+        embeddings: list[float],
+        properties: dict | None = None,
+    ):
         """
-        Add an embedding with a custom ID, description, and additional properties to the specified collection.
-        
+        Add an embedding with a custom ID, description, 
+        and additional properties to the specified collection.
+
         Args:
             collection_name: Name of the collection to add embeddings to.
             id: Unique identifier for the embedding.
             description: Text description associated with the embedding.
             embeddings: Vector representation of the data.
             properties: Additional properties to store with the embedding (optional).
-        
+
         Returns:
             UUID of the inserted object.
         """
-        logger.info(f"--- ADDING EMBEDDING TO WEAVIATE COLLECTION '{collection_name}' ---")
+        logger.info(
+            f"--- ADDING EMBEDDING TO WEAVIATE COLLECTION '{collection_name}' ---"
+        )
         self._check_if_collection_exists(collection_name)
         collection = self.client.collections.get(collection_name)
-        
+
         data_properties = {}
-        
+
         if properties and isinstance(properties, dict):
             data_properties.update(properties)
-            
-        uuid = collection.data.insert(
-            properties=data_properties,
-            vector=embeddings
-        )
+
+        uuid = collection.data.insert(properties=data_properties, vector=embeddings)
 
         logger.info("--- EMBEDDING ADDED TO WEAVIATE ---")
         logger.info(f"UUID: {uuid}")
         return uuid
-    
+
     def get_embeddings(self, collection_name: str, id: str):
         """Get embeddings for a given ID from the specified collection."""
-        logger.info(f"--- GETTING EMBEDDINGS FROM WEAVIATE COLLECTION '{collection_name}' ---")
+        logger.info(
+            f"--- GETTING EMBEDDINGS FROM WEAVIATE COLLECTION '{collection_name}' ---"
+        )
         self._check_if_collection_exists(collection_name)
 
         embedding = self.get_embeddings_rest(collection_name, id)
@@ -146,14 +174,17 @@ class WeaviateClient:
         logger.info("--- EMBEDDINGS RETRIEVED FROM WEAVIATE ---")
 
         return embedding
-    
-    def get_all_embeddings(self, collection_name: str = CollectionNames.COMPETENCY.value):
+
+    def get_all_embeddings(
+        self, collection_name: str = CollectionNames.COMPETENCY.value
+    ):
         """
-        Fetch all objects and their vectors from the specified collection using REST (no gRPC).
+        Fetch all objects and their vectors from the specified collection using REST
 
         Args:
-            collection_name: Name of the collection to fetch embeddings from. Defaults to 'Competency'.
-            
+            collection_name: Name of the collection to fetch embeddings from. 
+                Defaults to 'Competency'.
+
         Returns:
             List of dictionaries containing id, text, and vector for each object.
         """
@@ -166,65 +197,80 @@ class WeaviateClient:
         )
 
         for obj in response:
-            results.append({
-                "id": obj.uuid,
-                "text": obj.properties.get("text"),
-                "vector": obj.vector,
-                "properties": obj.properties
-            })
+            results.append(
+                {
+                    "id": obj.uuid,
+                    "text": obj.properties.get("text"),
+                    "vector": obj.vector,
+                    "properties": obj.properties,
+                }
+            )
 
         return results
-    
-    def get_embeddings_by_property(self, collection_name: str, property_name: str, property_value: str):
+
+    def get_embeddings_by_property(
+        self, collection_name: str, property_name: str, property_value: str
+    ):
         """
-        Fetch objects and their vectors from the specified collection that match a property value.
-        
+        Fetch objects and their vectors from the collection that match a property value.
+
         Args:
             collection_name: Name of the collection to fetch embeddings from.
             property_name: The property name to filter by (e.g., 'name', 'course_id').
             property_value: The value of the property to match.
-            
+
         Returns:
-            List of dictionaries containing id, properties, and vector for each matching object.
+            List of dictionaries containing id, properties, and vector for each matching
+            object.
         """
-        logger.info(f"--- GETTING EMBEDDINGS BY PROPERTY FROM WEAVIATE COLLECTION '{collection_name}' ---")
+        logger.info(
+            f"--- GETTING EMBEDDINGS BY PROPERTY FROM WEAVIATE "
+            f"COLLECTION '{collection_name}' ---"
+        )
         self._check_if_collection_exists(collection_name)
-        
+
         collection = self.client.collections.get(collection_name)
-        
+
         response = collection.query.fetch_objects(
             filters=Filter.by_property(property_name).equal(property_value),
-            include_vector=True
+            include_vector=True,
         )
-        
+
         results = []
         for obj in response.objects:
-            results.append({
-                "id": obj.uuid,
-                "properties": obj.properties,
-                "vector": obj.vector
-            })
-            
-        logger.info(f"--- FOUND {len(results)} EMBEDDINGS MATCHING {property_name}={property_value} ---")
+            results.append(
+                {"id": obj.uuid, "properties": obj.properties, "vector": obj.vector}
+            )
+
+        logger.info(
+            f"--- FOUND {len(results)} EMBEDDINGS MATCHING "
+            f"{property_name}={property_value} ---"
+        )
         return results
-    
-    def search_by_multiple_properties(self, collection_name: str, property_filters: dict):
+
+    def search_by_multiple_properties(
+        self, collection_name: str, property_filters: dict
+    ):
         """
         Search for objects that match multiple property filters.
-        
+
         Args:
             collection_name: Name of the collection to search in.
             property_filters: Dictionary of property names and values to filter by.
                 Example: {"category": "math", "difficulty": 3}
-                
+
         Returns:
-            List of dictionaries containing id, properties, and vector for each matching object.
+            List of dictionaries containing id, properties,
+            and vector for each matching object.
         """
-        logger.info(f"--- SEARCHING BY MULTIPLE PROPERTIES IN COLLECTION '{collection_name}' --- {property_filters}")
+        logger.info(
+            f"--- SEARCHING BY MULTIPLE PROPERTIES IN COLLECTION "
+            f"'{collection_name}' --- {property_filters}"
+        )
         self._check_if_collection_exists(collection_name)
-        
+
         collection = self.client.collections.get(collection_name)
-        
+
         # Build filters for each property
         filters = []
         for prop_name, prop_value in property_filters.items():
@@ -232,53 +278,55 @@ class WeaviateClient:
                 filter_obj = {
                     "path": [prop_name],
                     "operator": "Equal",
-                    "valueText": prop_value
+                    "valueText": prop_value,
                 }
             elif isinstance(prop_value, int):
                 filter_obj = {
                     "path": [prop_name],
                     "operator": "Equal",
-                    "valueNumber": prop_value
+                    "valueNumber": prop_value,
                 }
             elif isinstance(prop_value, list):
                 # For array properties like tags
                 filter_obj = {
                     "path": [prop_name],
                     "operator": "ContainsAny",
-                    "valueTextArray": prop_value if all(isinstance(v, str) for v in prop_value) else None
+                    "valueTextArray": (
+                        prop_value
+                        if all(isinstance(v, str) for v in prop_value)
+                        else None
+                    ),
                 }
             else:
-                logger.warning(f"Unsupported property type for {prop_name}: {type(prop_value)}")
+                logger.warning(
+                    f"Unsupported property type for {prop_name}: {type(prop_value)}"
+                )
                 continue
-                
+
             filters.append(filter_obj)
-        
+
         # Combine filters with AND operator
         if len(filters) > 1:
-            combined_filter = {
-                "operator": "And",
-                "operands": filters
-            }
+            combined_filter = {"operator": "And", "operands": filters}
         elif len(filters) == 1:
             combined_filter = filters[0]
         else:
             logger.warning("No valid filters provided")
             return []
-        
+
         response = collection.query.fetch_objects(
-            filters=combined_filter,
-            include_vector=True
+            filters=combined_filter, include_vector=True
         )
-        
+
         results = []
         for obj in response.objects:
-            results.append({
-                "id": obj.uuid,
-                "properties": obj.properties,
-                "vector": obj.vector
-            })
-            
-        logger.info(f"--- FOUND {len(results)} EMBEDDINGS MATCHING MULTIPLE PROPERTIES ---")
+            results.append(
+                {"id": obj.uuid, "properties": obj.properties, "vector": obj.vector}
+            )
+
+        logger.info(
+            f"--- FOUND {len(results)} EMBEDDINGS MATCHING MULTIPLE PROPERTIES ---"
+        )
         return results
 
     def _check_if_collection_exists(self, collection_name: str):
@@ -287,11 +335,17 @@ class WeaviateClient:
             raise ValueError(f"Collection '{collection_name}' does not exist")
 
 
-_weaviate_client_instance = None
+class WeaviateClientSingleton:
+    _instance = None
+
+    @classmethod
+    def get_instance(cls) -> WeaviateClient:
+        """Get a Weaviate client instance using singleton pattern."""
+        if cls._instance is None:
+            cls._instance = WeaviateClient()
+        return cls._instance
+
 
 def get_weaviate_client() -> WeaviateClient:
     """Get a Weaviate client instance using singleton pattern."""
-    global _weaviate_client_instance
-    if _weaviate_client_instance is None:
-        _weaviate_client_instance = WeaviateClient()
-    return _weaviate_client_instance
+    return WeaviateClientSingleton.get_instance()

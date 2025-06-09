@@ -1,10 +1,12 @@
 """
 Scheduler module for managing cron jobs and scheduled tasks.
 """
-from datetime import datetime
+
 import logging
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
+
 
 def periodic_task():
     """Task that runs every 60 seconds."""
