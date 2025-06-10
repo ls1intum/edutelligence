@@ -60,8 +60,7 @@ class WeaviateClient:
             CollectionNames.CLUSTERCENTER.value: {
                 "properties": [
                     {"name": "cluster_id", "dataType": ["string"], "indexFilterable": True},
-                    {"name": "name", "dataType": ["string"], "indexFilterable": True},
-                    {"name": "members", "dataType": ["string[]"], "indexFilterable": True}
+                    {"name": "name", "dataType": ["string"], "indexFilterable": True}
                 ]
             },
         }
