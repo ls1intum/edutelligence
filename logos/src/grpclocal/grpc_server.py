@@ -1,4 +1,4 @@
-import json, traceback, httpx, grpc
+import json, traceback, httpx, grpc, datetime
 
 import tiktoken
 
@@ -69,6 +69,7 @@ class LogosServicer(model_pb2_grpc.LogosServicer):
         full_text = ""
         data["stream"] = True
         last_blob = None
+        ttft = None
         try:
             # Try streaming first, fall back to standard response on failure
             for _ in range(2):
@@ -82,6 +83,8 @@ class LogosServicer(model_pb2_grpc.LogosServicer):
                                 # Parse Data-Chunk
                                 if raw_line.startswith("data: "):
                                     payload = raw_line.removeprefix("data: ").strip()
+                                    if ttft is None:
+                                        ttft = datetime.datetime.now(datetime.timezone.utc)
                                     if payload == "[DONE]":
                                         break
                                     try:
@@ -108,18 +111,12 @@ class LogosServicer(model_pb2_grpc.LogosServicer):
             context.set_details(f"Upstream error: {e}")
             return
 
+        if ttft is None:
+            ttft = datetime.datetime.now(datetime.timezone.utc)
+
         # Usage-Logging
         if request_id is not None:
             try:
-                try:
-                    enc = tiktoken.encoding_for_model(model_name)
-                except:
-                    enc = tiktoken.get_encoding("cl100k_base")
-
-                prompt_tokens = len(enc.encode(data.get("messages", [{}])[0].get("content", "")))
-                completion_tokens = len(enc.encode(full_text))
-                total_tokens = prompt_tokens + completion_tokens
-
                 response_for_log = last_blob
                 if response_for_log:
                     response_for_log["choices"][0]["delta"]["content"] = full_text
@@ -127,15 +124,7 @@ class LogosServicer(model_pb2_grpc.LogosServicer):
                     response_for_log = {"full_text": full_text}
 
                 with DBManager() as db:
-                    db.log_usage(
-                        request_id=request_id,
-                        response_body=response_for_log,
-                        prompt_tokens=prompt_tokens,
-                        completion_tokens=completion_tokens,
-                        total_tokens=total_tokens,
-                        provider_id=provider_id,
-                        model_id=model_id,
-                    )
+                    db.log_usage(request_id, response_for_log, dict(), provider_id, model_id, ttft)
             except Exception:
                 traceback.print_exc()
 
