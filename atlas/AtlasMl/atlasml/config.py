@@ -56,7 +56,4 @@ class Settings(BaseModel):
     def get_api_keys(cls):
         return cls.get_settings().api_keys
 
-
-        return cls.model_validate(settings_file)
-
 settings = Settings.get_settings()

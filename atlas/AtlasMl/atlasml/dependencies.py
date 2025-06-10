@@ -29,7 +29,7 @@ class TokenValidator:
         logger.info(f"Available API keys in settings: {[key for key in settings.get_api_keys()]}")
         
         for key in settings.get_api_keys():
-            if key == api_key:
+            if key.token == api_key:
                 logger.info(f"Found matching API key: {key}")
                 return key
                 
