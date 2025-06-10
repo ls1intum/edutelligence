@@ -14,7 +14,7 @@ from atlasml.models.competency import (
     Competency,
     GenerateCompetencyRequest,
     GenerateCompetencyRequestBatch,
-    GenerateEmbedingsResponse,
+    GenerateEmbeddingsResponse,
     SaveCompetencyRequest,
     SuggestCompetencyRequest,
     SuggestCompetencyResponse,
@@ -23,28 +23,28 @@ from atlasml.models.competency import (
 router = APIRouter(prefix="/api/v1/competency", tags=["competency"])
 
 
-@router.post("/generate-embedings", response_model=GenerateEmbedingsResponse)
-async def generate_embedings(request: GenerateCompetencyRequest):
+@router.post("/generate-embeddings", response_model=GenerateEmbeddingsResponse)
+async def generate_embeddings(request: GenerateCompetencyRequest):
     print("GENERATING EMBEDDING FOR ==> ", request.id)
-    uuid, embedings = FallbackModel.generate_embeddings(request.id, request.description)
+    uuid, embeddings = FallbackModel.generate_embeddings(request.id, request.description)
 
     print("EMBEDDING GENERATED WITH UUID ==> ", uuid)
-    print("EMBEDDING's VECTOR LENGTH ==> ", len(embedings))
+    print("EMBEDDING's VECTOR LENGTH ==> ", len(embeddings))
 
-    return GenerateEmbedingsResponse(embedings=[])
+    return GenerateEmbeddingsResponse(embeddings=[])
 
 
-@router.post("/generate-embedings-batch", response_model=GenerateEmbedingsResponse)
-async def generate_embedings_batch(request: GenerateCompetencyRequestBatch):
+@router.post("/generate-embeddings-batch", response_model=GenerateEmbeddingsResponse)
+async def generate_embeddings_batch(request: GenerateCompetencyRequestBatch):
     response = []
     for req in request.competencies:
         print("GENERATING EMBEDDING FOR ==> ", req.id)
-        embedings = FallbackModel.generate_embeddings(req.id, req.description)
-        response.append(embedings)
+        embeddings = FallbackModel.generate_embeddings(req.id, req.description)
+        response.append(embeddings)
         print("EMBEDDING GENERATED")
     print("EMBEDING ARE HERE ==> ", len(response))
 
-    return GenerateEmbedingsResponse(embedings=response)
+    return GenerateEmbeddingsResponse(embeddings=response)
 
 
 @router.get("/competency/{id}", response_model=Competency)

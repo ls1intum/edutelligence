@@ -368,6 +368,18 @@ class WeaviateClient:
         collection.data.delete(id)
         logger.info(f"--- DATA DELETED FROM {collection_name} ---")
 
+    def update_property_by_id(self, collection_name: str, id: str, properties: dict):
+        """Update a property by ID."""
+        self._check_if_collection_exists(collection_name)
+        collection = self.client.collections.get(collection_name)
+        collection.data.update(
+            id,
+            properties={
+                **properties,
+            },
+        )
+        logger.info(f"--- PROPERTY UPDATED IN {collection_name} ---")
+
 class WeaviateClientSingleton:
     _instance = None
 

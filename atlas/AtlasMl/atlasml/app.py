@@ -9,7 +9,6 @@ from fastapi import FastAPI
 from atlasml.clients.weaviate import get_weaviate_client
 from atlasml.routers.competency import router as competency_router
 from atlasml.routers.health import router as health_router
-from atlasml.tasks.scheduler import periodic_task
 
 # Configure logging
 logging.basicConfig(
@@ -20,7 +19,6 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 ENV = os.getenv("ENV", "dev")
-scheduler = BackgroundScheduler()
 
 
 @asynccontextmanager
@@ -29,26 +27,11 @@ async def lifespan(app):
     logger.info(
         f"🔌 Weaviate client status: {'Connected' if get_weaviate_client().is_alive() else 'Disconnected'}"
     )
-
-    """Lifespan context manager for scheduler."""
-    if not scheduler.running:
-        scheduler.start()
-
-        # TODO: configure this for the future
-        scheduler.add_job(
-            periodic_task,
-            trigger=IntervalTrigger(seconds=60),
-            id="periodic_task",
-            replace_existing=True,
-        )
-        logger.info("Scheduler started")
-    else:
-        logger.info("Scheduler is already running")
-
+    logger.info(f"🌐 API running on port {os.getenv('PORT', '8000')}")
     yield
 
     logger.info("Shutting down AtlasML API...")
-    weaviate_client.close()
+    get_weaviate_client().close()
     logger.info("Weaviate client closed.")
 
 

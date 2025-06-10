@@ -44,8 +44,8 @@ class GenerateCompetencyResponse(BaseModel):
     competency_relations: list[CompetencyRelation]
 
 
-class GenerateEmbedingsResponse(BaseModel):
-    embedings: list
+class GenerateEmbeddingsResponse(BaseModel):
+    embeddings: list
 
 
 class SuggestCompetencyRequest(BaseModel):
