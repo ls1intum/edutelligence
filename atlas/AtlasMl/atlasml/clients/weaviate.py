@@ -3,6 +3,8 @@ from enum import Enum
 
 import weaviate
 from weaviate.classes.query import Filter
+from weaviate.classes.config import Property
+from weaviate.collections.classes.config import DataType
 
 from atlasml.config import settings
 
@@ -22,9 +24,9 @@ logger = logging.getLogger(__name__)
 class WeaviateClient:
     def __init__(
         self,
-        host: str = settings.WEAVIATE_HOST,
-        port: int = settings.WEAVIATE_PORT,
-        grpc_port: int = settings.WEAVIATE_GRPC_PORT,
+        host: str = settings.weaviate.host,
+        port: int = settings.weaviate.port,
+        grpc_port: int = settings.weaviate.grpc_port,
     ):
         self.client = weaviate.connect_to_local(
             host=host,
@@ -48,40 +50,40 @@ class WeaviateClient:
         collection_schemas = {
             CollectionNames.COMPETENCY.value: {
                 "properties": [
-                    {"name": "text", "dataType": ["text"]},
+                    {"name": "text", "dataType": "text"},
                     {
                         "name": "unit_id",
-                        "dataType": ["string"],
+                        "dataType": "text",
                         "indexFilterable": True,
                     },
-                    {"name": "name", "dataType": ["string"], "indexFilterable": True},
+                    {"name": "name", "dataType": "text", "indexFilterable": True},
                     {
                         "name": "category",
-                        "dataType": ["string"],
+                        "dataType": "text",
                         "indexFilterable": True,
                     },
                 ]
             },
             CollectionNames.CLUSTER.value: {
                 "properties": [
-                    {"name": "name", "dataType": ["string"], "indexFilterable": True},
-                    {"name": "size", "dataType": ["int"], "indexFilterable": True},
+                    {"name": "name", "dataType": "text", "indexFilterable": True},
+                    {"name": "size", "dataType": "int"},
                     {
                         "name": "members",
-                        "dataType": ["string[]"],
+                        "dataType": "text[]",
                         "indexFilterable": True,
                     },
                 ]
             },
             CollectionNames.COURSE.value: {
                 "properties": [
-                    {"name": "title", "dataType": ["string"], "indexFilterable": True},
-                    {"name": "description", "dataType": ["text"]},
-                    {"name": "author", "dataType": ["string"], "indexFilterable": True},
-                    {"name": "level", "dataType": ["string"], "indexFilterable": True},
+                    {"name": "title", "dataType": "text", "indexFilterable": True},
+                    {"name": "description", "dataType": "text"},
+                    {"name": "author", "dataType": "text", "indexFilterable": True},
+                    {"name": "level", "dataType": "text", "indexFilterable": True},
                     {
                         "name": "competencies",
-                        "dataType": ["string[]"],
+                        "dataType": "text[]",
                         "indexFilterable": True,
                     },
                 ]
@@ -98,14 +100,29 @@ class WeaviateClient:
                 logger.info(f"✅ {collection_name} collection created with schema.")
             else:
                 collection = self.client.collections.get(collection_name)
-                existing_props = {prop.name for prop in collection.properties}
+                existing_props = {prop.name for prop in collection.config.get(simple=False).properties}
 
                 for prop in schema["properties"]:
                     if prop["name"] not in existing_props:
+                        # Convert string data type to DataType enum
+                        data_type_str = prop["dataType"]
+                        if data_type_str == "text":
+                            data_type = DataType.TEXT
+                        elif data_type_str == "int":
+                            data_type = DataType.INT
+                        elif data_type_str == "text[]":
+                            data_type = DataType.TEXT_ARRAY
+                        elif data_type_str == "number":
+                            data_type = DataType.NUMBER
+                        else:
+                            data_type = DataType.TEXT  # Default to TEXT for unknown types
+
                         collection.config.add_property(
-                            name=prop["name"],
-                            data_type=prop["dataType"],
-                            index_filterable=prop.get("indexFilterable", False),
+                            Property(
+                                name=prop["name"],
+                                data_type=data_type,
+                                index_searchable=prop.get("indexFilterable", False),
+                            )
                         )
                         logger.info(
                             f"✅ Added property {prop['name']} to {collection_name}."
@@ -334,6 +351,22 @@ class WeaviateClient:
         if not self.client.collections.exists(collection_name):
             raise ValueError(f"Collection '{collection_name}' does not exist")
 
+    def delete_all_data_from_collection(self, collection_name: str):
+        """Delete all data from a collection."""
+
+        self._check_if_collection_exists(collection_name)
+
+        collection = self.client.collections.get(collection_name)
+        collection.data.delete_all()
+        logger.info(f"--- ALL DATA DELETED FROM {collection_name} ---")
+
+    def delete_data_by_id(self, collection_name: str, id: str):
+        """Delete data from a collection by ID."""
+        self._check_if_collection_exists(collection_name)
+
+        collection = self.client.collections.get(collection_name)
+        collection.data.delete(id)
+        logger.info(f"--- DATA DELETED FROM {collection_name} ---")
 
 class WeaviateClientSingleton:
     _instance = None

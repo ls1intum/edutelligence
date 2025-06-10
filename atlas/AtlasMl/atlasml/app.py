@@ -6,7 +6,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from fastapi import FastAPI
 
-from atlasml.clients.weaviate import weaviate_client
+from atlasml.clients.weaviate import get_weaviate_client
 from atlasml.routers.competency import router as competency_router
 from atlasml.routers.health import router as health_router
 from atlasml.tasks.scheduler import periodic_task
@@ -27,7 +27,7 @@ scheduler = BackgroundScheduler()
 async def lifespan(app):
     logger.info("🚀 Starting AtlasML API...")
     logger.info(
-        f"🔌 Weaviate client status: {'Connected' if weaviate_client.is_alive() else 'Disconnected'}"
+        f"🔌 Weaviate client status: {'Connected' if get_weaviate_client().is_alive() else 'Disconnected'}"
     )
 
     """Lifespan context manager for scheduler."""

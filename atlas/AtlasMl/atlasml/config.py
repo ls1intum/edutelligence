@@ -35,3 +35,5 @@ class Settings(BaseModel):
             raise FileNotFoundError(
                 f"Configuration file not found at {file_path}."
             ) from e
+
+settings = Settings.get_settings()
