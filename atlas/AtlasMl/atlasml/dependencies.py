@@ -25,13 +25,8 @@ def _get_api_key(request: Request) -> str:
 
 class TokenValidator:
     async def __call__(self, api_key: str = Depends(_get_api_key)) -> APIKeyConfig:
-        logger.info(f"Validating API key: {api_key}")
-        logger.info(f"Available API keys in settings: {[key for key in settings.get_api_keys()]}")
-        
         for key in settings.get_api_keys():
             if key.token == api_key:
-                logger.info(f"Found matching API key: {key}")
                 return key
                 
-        logger.warning(f"No matching API key found for: {api_key}")
         raise PermissionDeniedException
