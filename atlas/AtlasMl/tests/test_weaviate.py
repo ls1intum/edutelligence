@@ -1,6 +1,7 @@
 from unittest.mock import MagicMock, patch
 
 import pytest
+from weaviate.exceptions import WeaviateConnectionError
 
 from atlasml.clients.weaviate import (
     CollectionNames,
@@ -46,13 +47,8 @@ def mock_weaviate():
     mock_client.collections.exists.return_value = True
     mock_client.is_live.return_value = True
 
-    with (
-        patch(
-            "atlasml.clients.weaviate.weaviate.connect_to_local",
-            return_value=mock_client,
-        ),
-        patch("atlasml.clients.weaviate.Filter", return_value=mock_filter),
-    ):
+    # Mock the weaviate.connect_to_local function
+    with patch('weaviate.connect_to_local', return_value=mock_client) as mock_connect:
         yield mock_client
 
 
@@ -142,9 +138,10 @@ def test_search_by_multiple_properties(mock_weaviate):
 
 def test_get_weaviate_client_singleton():
     """Test that get_weaviate_client returns a singleton instance."""
-    client1 = get_weaviate_client()
-    client2 = get_weaviate_client()
-    assert client1 is client2
+    with patch('weaviate.connect_to_local') as mock_connect:
+        client1 = get_weaviate_client()
+        client2 = get_weaviate_client()
+        assert client1 is client2
 
 
 def test_collection_does_not_exist(mock_weaviate):
