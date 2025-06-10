@@ -1,6 +1,13 @@
-import pytest
 import os
 from pathlib import Path
+
+# Set environment variables before any other imports
+test_dir = Path(__file__).parent
+test_config_path = test_dir / "test_config.yml"
+os.environ["APPLICATION_YML_PATH"] = str(test_config_path)
+os.environ["TESTING"] = "true"
+
+import pytest
 from unittest.mock import patch
 import logging
 import asyncio
@@ -26,13 +33,6 @@ def event_loop():
 @pytest.fixture(autouse=True)
 def test_env():
     """Setup test environment variables and configuration"""
-    # Set test environment
-    os.environ["TESTING"] = "true"
-    
-    # Get the path to the test config file
-    test_dir = Path(__file__).parent
-    test_config_path = test_dir / "test_config.yml"
-    
     # Mock only os.environ.get
     original_get = os.environ.get
     def mock_get(key, default=None):
