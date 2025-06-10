@@ -15,10 +15,8 @@ from weaviate.classes.query import Filter
 from iris.common.pipeline_enum import PipelineEnum
 from iris.common.token_usage_dto import TokenUsageDTO
 from iris.llm import (
-    BasicRequestHandler,
-    CapabilityRequestHandler,
     CompletionArguments,
-    RequirementList,
+    ModelVersionRequestHandler,
 )
 
 from ..common.message_converters import (
@@ -80,24 +78,17 @@ class BaseRetrieval(Pipeline, ABC):
     @abstractmethod
     def __call__(self, *args, **kwargs):
         """Muss in der konkreten Implementierung überschrieben werden"""
-        pass
 
     def __init__(self, client: WeaviateClient, schema_init_func, **kwargs):
         super().__init__(
             implementation_id=kwargs.get("implementation_id", "base_retrieval_pipeline")
         )
-        request_handler = CapabilityRequestHandler(
-            requirements=RequirementList(
-                gpt_version_equivalent=4.25,
-                context_length=16385,
-                privacy_compliance=True,
-            )
-        )
+        request_handler = ModelVersionRequestHandler(version="gpt-4.1-mini")
         completion_args = CompletionArguments(temperature=0, max_tokens=2000)
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler, completion_args=completion_args
         )
-        self.llm_embedding = BasicRequestHandler("embedding-small")
+        self.llm_embedding = ModelVersionRequestHandler("text-embedding-3-small")
         self.pipeline = self.llm | StrOutputParser()
         self.collection = schema_init_func(client)
         self.tokens = []

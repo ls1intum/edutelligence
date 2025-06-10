@@ -1,4 +1,3 @@
----
 name: Iris - Build
 
 on:
@@ -10,7 +9,7 @@ on:
   push:
     branches:
       - main
-    paths-ignore:
+    paths:
       - "iris/**"
       - ".github/workflows/iris_build-and-push-docker.yml"
       - "!iris/README.md"
@@ -25,6 +24,8 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       result: ${{ steps.compute-tag.outputs.result }}
+      is_release: ${{ steps.compute-tag.outputs.is_release }}
+      release_tag: ${{ steps.compute-tag.outputs.release_tag }}
     steps:
       - name: Compute Tag
         uses: actions/github-script@v7
@@ -32,20 +33,31 @@ jobs:
         with:
           result-encoding: string
           script: |
+            function stripVPrefix(tag) {
+              return tag.startsWith('v') ? tag.substring(1) : tag;
+            }
+            
             if (context.eventName === "pull_request") {
+              core.setOutput("is_release", "false");
               return "pr-" + context.issue.number;
             }
             if (context.eventName === "release") {
+              const cleanTag = stripVPrefix(context.payload.release.tag_name);
+              core.setOutput("is_release", "true");
+              core.setOutput("release_tag", cleanTag);
               return "latest";
             }
             if (context.eventName === "push") {
+              core.setOutput("is_release", "false");
               if (context.ref.startsWith("refs/tags/")) {
-                return context.ref.slice(10);
+                const tag = context.ref.slice(10);
+                return stripVPrefix(tag);
               }
               if (context.ref === "refs/heads/main") {
                 return "latest";
               }
             }
+            core.setOutput("is_release", "false");
             return "FALSE";
 
   build-and-push:
@@ -56,4 +68,4 @@ jobs:
       image-name: ghcr.io/ls1intum/edutelligence/iris
       docker-file: ./iris/Dockerfile
       docker-context: .
-      tags: ghcr.io/ls1intum/edutelligence:${{ needs.compute-tag.outputs.result }}
+      tags: ${{ needs.compute-tag.outputs.is_release == 'true' && format('ghcr.io/ls1intum/edutelligence/iris:latest,ghcr.io/ls1intum/edutelligence/iris:{0}', needs.compute-tag.outputs.release_tag) || format('ghcr.io/ls1intum/edutelligence/iris:{0}', needs.compute-tag.outputs.result) }}

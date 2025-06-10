@@ -29,10 +29,9 @@ async def generate_suggestions(exercise: Exercise, submission: Submission, confi
     if learner_profile is None:
         logger.info("Learner profile was not provided - continuing with the default values.")
         learner_profile = LearnerProfile(
-            feedback_practical_theoretical=3,
-            feedback_alternative_standard=3,
-            feedback_followup_summary=3,
-            feedback_brief_detailed=3
+            feedback_alternative_standard=2,
+            feedback_followup_summary=2,
+            feedback_brief_detailed=2
         )
 
     # Inject student preferences into the prompt
