@@ -27,13 +27,17 @@ class Settings(BaseModel):
             raise OSError("APPLICATION_YML_PATH environment variable is not set.")
 
         file_path = Path(file_path_env)
+        if not file_path.exists():
+            raise FileNotFoundError(f"Configuration file not found at {file_path}.")
+
         try:
             with open(file_path, encoding="utf-8") as file:
                 settings_file = yaml.safe_load(file)
-            return cls.model_validate(settings_file)
-        except FileNotFoundError as e:
-            raise FileNotFoundError(
-                f"Configuration file not found at {file_path}."
+        except yaml.YAMLError as e:
+            raise ValueError(
+                f"YAML parsing error in configuration file {file_path}: {e}"
             ) from e
+
+        return cls.model_validate(settings_file)
 
 settings = Settings.get_settings()
