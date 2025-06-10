@@ -8,10 +8,9 @@ from .models import (
     SolutionRepositoryCreatorRequest, 
     SolutionRepositoryCreatorResponse,
     SolutionCreationContext,
-    SolutionCreationPhase,
     SolutionCreationStep
 )
-from .phases import PlanningPhase, TestingPhase, ValidationPhase
+from .code_generator import CodeGenerator
 from ..workspace import TempWorkspaceManager
 from .language_handlers import registry as language_registry
 from .exceptions import SolutionCreatorException, LanguageHandlerException
@@ -41,9 +40,7 @@ class SolutionRepositoryCreatorServicer(hyperion_pb2_grpc.SolutionRepositoryCrea
         """
         self.model = model
         self.workspace_manager = TempWorkspaceManager()
-        self.planning_phase = PlanningPhase(model=model)
-        self.testing_phase = TestingPhase(model=model)
-        self.validation_phase = ValidationPhase(model=model)
+        self.code_generator = CodeGenerator(model=model)
 
     async def CreateSolutionRepository(self, request: hyperion_pb2.SolutionRepositoryCreatorRequest, 
                                      context: Any) -> hyperion_pb2.SolutionRepositoryCreatorResponse:
@@ -62,15 +59,15 @@ class SolutionRepositoryCreatorServicer(hyperion_pb2_grpc.SolutionRepositoryCrea
         try:
             request_model = SolutionRepositoryCreatorRequest.from_grpc(request)
             
-            solution_context = self._initialize_context(request_model)
+            solution_context: SolutionCreationContext = self._initialize_context(request_model)
             self._validate_language_support(solution_context)
             
-            workspace_path = self.workspace_manager.create_workspace(solution_context)
+            workspace_path: str = self.workspace_manager.create_workspace(solution_context)
             solution_context.workspace_path = workspace_path
             
-            solution_context = await self._execute_solution_creation(solution_context)
+            solution_context = await self.code_generator.execute(solution_context)
             
-            response = self._create_response(solution_context, request_model)
+            response: SolutionRepositoryCreatorResponse = self._create_response(solution_context, request_model)
             
             self._cleanup_workspace(solution_context)
             
@@ -94,7 +91,6 @@ class SolutionRepositoryCreatorServicer(hyperion_pb2_grpc.SolutionRepositoryCrea
             boundary_conditions=request.boundary_conditions,
             problem_statement=request.problem_statement,
             workspace_path="",  # Will be set after workspace creation
-            current_phase=SolutionCreationPhase.PLANNING,
             current_step=SolutionCreationStep.GENERATE_PLAN,
             model=self.model
         )
@@ -108,24 +104,6 @@ class SolutionRepositoryCreatorServicer(hyperion_pb2_grpc.SolutionRepositoryCrea
                 language=language,
                 details={"supported_languages": supported_languages}
             )
-
-    async def _execute_solution_creation(self, context: SolutionCreationContext) -> SolutionCreationContext:
-        logger.info("Starting solution creation process")
-        
-        # Phase 1: Planning & Structure
-        context.current_phase = SolutionCreationPhase.PLANNING
-        context = await self.planning_phase.execute(context)
-        
-        # Phase 2: Test Creation
-        context.current_phase = SolutionCreationPhase.TESTING
-        context = await self.testing_phase.execute(context)
-        
-        # Phase 3: Validation & Refinement
-        context.current_phase = SolutionCreationPhase.VALIDATION
-        context = await self.validation_phase.execute(context)
-        
-        logger.info("Solution creation process completed")
-        return context
 
     def _create_response(self, context: SolutionCreationContext, 
                         request: SolutionRepositoryCreatorRequest) -> SolutionRepositoryCreatorResponse:
@@ -150,7 +128,6 @@ class SolutionRepositoryCreatorServicer(hyperion_pb2_grpc.SolutionRepositoryCrea
             success=success,
             error_message=error_message,
             metadata={
-                "phases_completed": context.current_phase,
                 "final_step": context.current_step,
                 "fix_attempts": len(context.fix_attempts),
                 "workspace_path": context.workspace_path

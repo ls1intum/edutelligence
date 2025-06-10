@@ -9,13 +9,6 @@ from app.grpc import hyperion_pb2
 from app.grpc.models import GrpcMessage, BoundaryConditions, ProblemStatement, Repository
 
 
-class SolutionCreationPhase(str, Enum):
-    """Phases of solution creation."""
-    PLANNING = "planning"
-    TESTING = "testing"
-    VALIDATION = "validation"
-
-
 class SolutionCreationStep(str, Enum):
     """Individual steps in solution creation."""
     GENERATE_PLAN = "generate_plan"
@@ -70,7 +63,6 @@ class SolutionCreationContext(BaseModel):
     boundary_conditions: BoundaryConditions = Field(..., description="Exercise boundary conditions")
     problem_statement: ProblemStatement = Field(..., description="Problem statement")
     workspace_path: str = Field(..., description="Path to temporary workspace")
-    current_phase: SolutionCreationPhase = Field(..., description="Current phase")
     current_step: SolutionCreationStep = Field(..., description="Current step")
     model: Optional[BaseLanguageModel] = Field(None, description="AI language model for generation", exclude=True)
     solution_plan: Optional[SolutionPlan] = Field(None, description="Generated solution plan")

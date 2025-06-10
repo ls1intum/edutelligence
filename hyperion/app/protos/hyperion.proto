@@ -11,7 +11,7 @@ package hyperion;
  ***   Core types    ***
  ***********************/
 
- message ProgrammingExercise {
+message ProgrammingExercise {
   int32 id = 1;
   Repository template_repository = 2;
   Repository solution_repository = 3;
@@ -176,6 +176,9 @@ message InconsistencyCheckResponse {
 /******************************
  ***   Service Definitions  ***
  ******************************/
+
+// TODO: The return value should be the specific solution to this function, not all prev results.
+//       => Independence between steps.
 
 service Health {
   rpc Ping (PingRequest) returns (PingResponse) {}

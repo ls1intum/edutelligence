@@ -15,51 +15,10 @@ sys.path.insert(0, str(project_root))
 
 servicer = None
 
-try:
-    from app.creation_steps.step3_create_solution_repository.servicer import SolutionRepositoryCreatorServicer
-    from app.creation_steps.step3_create_solution_repository.models import SolutionCreationPhase
-    from app.grpc.models import Repository, RepositoryFile, ProblemStatement, BoundaryConditions, ProgrammingLanguage, ProjectType
-    from app.creation_steps.step3_create_solution_repository import servicer
-except ImportError as e:
-    # Create mock classes if imports fail
-    class SolutionRepositoryCreatorServicer:
-        def __init__(self, model): 
-            self.model = model
-        async def CreateSolutionRepository(self, request, context): 
-            return Mock()
-    
-    class SolutionCreationPhase:
-        PLANNING = "planning"
-        TESTING = "testing"
-        VALIDATION = "validation"
-    
-    class Repository:
-        def __init__(self, **kwargs):
-            for k, v in kwargs.items():
-                setattr(self, k, v)
-    
-    class RepositoryFile:
-        def __init__(self, **kwargs):
-            for k, v in kwargs.items():
-                setattr(self, k, v)
-    
-    class ProblemStatement:
-        def __init__(self, **kwargs):
-            for k, v in kwargs.items():
-                setattr(self, k, v)
-    
-    class BoundaryConditions:
-        def __init__(self, **kwargs):
-            for k, v in kwargs.items():
-                setattr(self, k, v)
-    
-    class ProgrammingLanguage:
-        PYTHON = "PYTHON"
-    
-    class ProjectType:
-        PLAIN = "PLAIN"
-    
-    servicer = Mock()
+from app.creation_steps.step3_create_solution_repository.servicer import SolutionRepositoryCreatorServicer
+from app.grpc.models import Repository, RepositoryFile, ProblemStatement, BoundaryConditions, ProgrammingLanguage, ProjectType
+from app.creation_steps.step3_create_solution_repository import servicer
+
 
 
 MOCK_RESPONSES = {
@@ -107,36 +66,7 @@ MOCK_RESPONSES = {
             else:
                 right = mid - 1
         
-        return -1""",
-    
-    "tests": """
-        import pytest
-        from binary_search import binary_search
-
-
-        def test_binary_search_found():
-            \"\"\"Test binary search when target is found.\"\"\"
-            assert binary_search([1, 3, 5, 7, 9], 5) == 2
-            assert binary_search([1, 3, 5, 7, 9], 1) == 0
-            assert binary_search([1, 3, 5, 7, 9], 9) == 4
-
-
-        def test_binary_search_not_found():
-            \"\"\"Test binary search when target is not found.\"\"\"
-            assert binary_search([1, 3, 5, 7, 9], 4) == -1
-            assert binary_search([1, 3, 5, 7, 9], 0) == -1
-            assert binary_search([1, 3, 5, 7, 9], 10) == -1
-
-
-        def test_binary_search_empty_array():
-            \"\"\"Test binary search with empty array.\"\"\"
-            assert binary_search([], 5) == -1
-
-
-        def test_binary_search_single_element():
-            \"\"\"Test binary search with single element.\"\"\"
-            assert binary_search([5], 5) == 0
-            assert binary_search([5], 3) == -1"""
+        return -1"""
 }
 
 
@@ -159,8 +89,6 @@ def test_complete_solution_creation():
             response = Mock()
             if "plan" in prompt.lower() or "architecture" in prompt.lower():
                 response.content = MOCK_RESPONSES["planning"]
-            elif "test" in prompt.lower():
-                response.content = MOCK_RESPONSES["tests"]
             else:
                 response.content = MOCK_RESPONSES["code"]
             return response

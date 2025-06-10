@@ -101,28 +101,28 @@ class GrpcServer:
         hyperion_pb2_grpc.add_HealthServicer_to_server(
             HealthServicer(version=project_meta.version), self.server
         )
-        hyperion_pb2_grpc.add_DefineBoundaryConditionServicer_to_server(
+        hyperion_pb2_grpc.add_BoundaryConditionsDefinerServicer_to_server(
             DefineBoundaryConditionServicer(model=self.model), self.server
         )
-        hyperion_pb2_grpc.add_DraftProblemStatementServicer_to_server(
+        hyperion_pb2_grpc.add_ProblemStatementDrafterServicer_to_server(
             DraftProblemStatementServicer(model=self.model), self.server
         )
         hyperion_pb2_grpc.add_SolutionRepositoryCreatorServicer_to_server(
             SolutionRepositoryCreatorServicer(model=self.model), self.server
         )
-        hyperion_pb2_grpc.add_CreateTemplateRepositoryServicer_to_server(
+        hyperion_pb2_grpc.add_TemplateRepositoryCreatorServicer_to_server(
             CreateTemplateRepositoryServicer(model=self.model), self.server
         )
-        hyperion_pb2_grpc.add_CreateTestRepositoryServicer_to_server(
+        hyperion_pb2_grpc.add_TestRepositoryCreatorServicer_to_server(
             CreateTestRepositoryServicer(model=self.model), self.server
         )
-        hyperion_pb2_grpc.add_FinalizeProblemStatementServicer_to_server(
+        hyperion_pb2_grpc.add_ProblemStatementFinalizerServicer_to_server(
             FinalizeProblemStatementServicer(model=self.model), self.server
         )
-        hyperion_pb2_grpc.add_ConfigureGradingServicer_to_server(
+        hyperion_pb2_grpc.add_GradingConfiguratorServicer_to_server(
             ConfigureGradingServicer(model=self.model), self.server
         )
-        hyperion_pb2_grpc.add_VerifyConfigurationServicer_to_server(
+        hyperion_pb2_grpc.add_ConfigurationVerifierServicer_to_server(
             VerifyConfigurationServicer(model=self.model), self.server
         )
 
