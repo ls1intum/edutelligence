@@ -1,7 +1,7 @@
 import grpc
 from concurrent import futures
 from . import faq_pb2, faq_pb2_grpc
-from ...services.faq_service.FaqRewritingService import FaqRewritingService
+from ...services.faq_service.faq_rewriting_service import FaqRewritingService
 
 class FAQService(faq_pb2_grpc.FAQServiceServicer):
 

@@ -1,8 +1,10 @@
+import json
 from typing import Literal, List
 
 from langchain_core.output_parsers import PydanticOutputParser
 
 from .faq_rewriting import system_prompt_faq
+from . import faq_pb2, faq_pb2_grpc
 
 
 class FaqRewritingService:
@@ -28,19 +30,17 @@ class FaqRewritingService:
 
     def rewrite_faq(
         self,
-        #faqs: List[],
         to_be_rewritten: str,
+        faqs: List[faq_pb2.FAQ] = None,
         **kwargs,
     ):
-        #if not dto.to_be_rewritten:
-        #    raise ValueError("You need to provide a text to rewrite")
-
 
         # Select the appropriate system prompt based on the variant
         variant_prompts = {
             "faq": system_prompt_faq,
         }
         system_prompt = variant_prompts.get(self.variant, system_prompt_faq)
+        faqs_text = self.format_faqs_for_openai(faqs)
 
         # Here, we would typically call the language model to process the rewriting.
 
@@ -51,5 +51,13 @@ class FaqRewritingService:
         #For demonstration purposes, we will simulate the rewriting process.
         final_result = "this is the result of the rewriting"
         return final_result
+
+    def format_faqs_for_openai(faqs: List[faq_pb2.FAQ]) -> str:
+        return json.dumps([
+            {
+                "question_title": faq.question_title,
+                "question_answer": faq.question_answer
+            } for faq in faqs
+        ], indent=2)
 
 
