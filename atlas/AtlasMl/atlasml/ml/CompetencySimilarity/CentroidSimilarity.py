@@ -63,10 +63,4 @@ def generate_competency_relationship(medoids_emb, descriptions):
             elif p_ji >= P_ENTAIL and p_ij < P_ENTAIL:
                 relation[i, j] = "EXTEND"
 
-    # TODO: Sanity Check
-    # for i in range(k):
-    #     for j in range(k):
-    #         if relation[i, j] != "NONE":
-    #             print(f"{i} --{relation[i, j]}→ {j}")
-
     return relation
