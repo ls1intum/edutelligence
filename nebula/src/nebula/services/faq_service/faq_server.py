@@ -5,7 +5,7 @@ from . import faq_pb2, faq_pb2_grpc
 class FAQService(faq_pb2_grpc.FAQServiceServicer):
     def ProcessInput(self, request, context):
         print("Received:", request.input_text)
-        return faq_pb2.FaqRewritingResponse(result="Processed: " + request.input_text)
+        return faq_pb2.FaqRewritingResponse(result="Processed the stuff: " + request.input_text)
 
 def serve():
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
