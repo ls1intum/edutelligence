@@ -59,7 +59,7 @@ const styles = StyleSheet.create({
   },
     footerContent: {
       alignSelf: 'center',
-      width: '60%',
+      width: '80%',
       display: "flex",
       justifyContent: "space-between",
       alignItems: "center",
