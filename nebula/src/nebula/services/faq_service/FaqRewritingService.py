@@ -35,11 +35,20 @@ class FaqRewritingService:
         #if not dto.to_be_rewritten:
         #    raise ValueError("You need to provide a text to rewrite")
 
+
+        # Select the appropriate system prompt based on the variant
         variant_prompts = {
             "faq": system_prompt_faq,
         }
+        system_prompt = variant_prompts.get(self.variant, system_prompt_faq)
+
+        # Here, we would typically call the language model to process the rewriting.
 
 
+        ##LLM Magic Placeholder
+
+
+        #For demonstration purposes, we will simulate the rewriting process.
         final_result = "this is the result of the rewriting"
         return final_result
 
