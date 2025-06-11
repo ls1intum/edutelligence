@@ -84,8 +84,8 @@ class CitationPipeline(Pipeline):
             if not paragraph.page_text_content:
                 continue
             # Temporary fix for wrong links, e.g. https://artemis.tum.deattachments/...
-            if ".deattachment" in paragraph.page_text_content:
-                paragraph.page_text_content = paragraph.page_text_content.replace(
+            if ".deattachment" in paragraph.lecture_unit_link:
+                paragraph.lecture_unit_link = paragraph.lecture_unit_link.replace(
                     ".deattachment", ".de/attachment"
                 )
             lct = (
