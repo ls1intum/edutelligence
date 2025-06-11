@@ -46,7 +46,7 @@ class WeaviateClient:
                 "properties": [
                     {"name": "text_id", "dataType": ["string"], "indexFilterable": True},
                     {"name": "text", "dataType": ["text"]},
-                    {"name": "competencyIDs", "dataType": ["string[]"], "indexFilterable": True},
+                    {"name": "competency_ids", "dataType": ["string[]"], "indexFilterable": True},
                 ]
             },
             CollectionNames.COMPETENCY.value: {
@@ -54,13 +54,12 @@ class WeaviateClient:
                     {"name": "competency_id", "dataType": ["string"], "indexFilterable": True},
                     {"name": "name", "dataType": ["string"]},
                     {"name": "text", "dataType": ["text"]},
-                    {"name": "clusterID", "dataType": ["string"], "indexFilterable": True},
+                    {"name": "cluster_id", "dataType": ["string"], "indexFilterable": True},
                 ]
             },
             CollectionNames.CLUSTERCENTER.value: {
                 "properties": [
-                    {"name": "cluster_id", "dataType": ["string"], "indexFilterable": True},
-                    {"name": "name", "dataType": ["string"], "indexFilterable": True}
+                    {"name": "cluster_id", "dataType": ["string"], "indexFilterable": True}
                 ]
             },
         }
@@ -281,6 +280,15 @@ class WeaviateClient:
         """Check if a collection exists and create it if it doesn't."""
         if not self.client.collections.exists(collection_name):
             raise ValueError(f"Collection '{collection_name}' does not exist")
+
+    def delete_data_by_id(self, collection_name: str, id: str):
+        pass
+
+    def delete_all_data_from_collection(self, collection_name: str):
+        pass
+
+    def update_property_by_id(self, collection_name: str, id: str, properties: dict):
+        pass
 
 
 _weaviate_client_instance = None
