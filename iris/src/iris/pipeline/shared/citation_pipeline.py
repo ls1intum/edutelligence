@@ -86,7 +86,7 @@ class CitationPipeline(Pipeline):
             # Temporary fix for wrong links, e.g. https://artemis.tum.deattachments/...
             if ".deattachment" in paragraph.lecture_unit_link:
                 paragraph.lecture_unit_link = paragraph.lecture_unit_link.replace(
-                    ".deattachment", ".de/attachment"
+                    ".deattachment", ".de/api/core/files/attachment"
                 )
             lct = (
                 f"Lecture: {paragraph.lecture_name},"
