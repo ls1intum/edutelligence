@@ -39,6 +39,7 @@ from ...retrieval.faq_retrieval import FaqRetrieval
 from ...retrieval.faq_retrieval_utils import format_faqs, should_allow_faq_tool
 from ...retrieval.lecture.lecture_retrieval import LectureRetrieval
 from ...vector_database.database import VectorDatabase
+from ...vector_database.lecture_transcription_schema import LectureTranscriptionSchema
 from ...vector_database.lecture_unit_schema import LectureUnitSchema
 from ...web.status.status_update import (
     CourseChatStatusCallback,
@@ -56,7 +57,8 @@ from ..prompts.iris_course_chat_prompts import (
     iris_examples_metrics_block,
     iris_exercise_block,
     iris_faq_block,
-    iris_lecture_block,
+    iris_lecture_slides_only_block,
+    iris_lecture_with_transcriptions_block,
     iris_no_chat_history_prompt_no_metrics_begin_agent_prompt,
     iris_no_chat_history_prompt_with_metrics_begin_agent_prompt,
     iris_no_competency_block_prompt,
@@ -316,10 +318,10 @@ class CourseChatPipeline(Pipeline):
         def lecture_content_retrieval() -> str:
             """
             Retrieve content from indexed lecture content.
-            This will run a RAG retrieval based on the chat history on the indexed lecture slides,
-            the indexed lecture transcriptions and the indexed lecture segments,
-            which are summaries of the lecture slide content and lecture transcription content from one slide a
-            nd return the most relevant paragraphs.
+            This will run a RAG retrieval based on the chat history on the indexed lecture slides
+            and, if available, the indexed lecture transcriptions and the indexed lecture segments,
+            which are summaries of the lecture slide content and lecture transcription content from one slide
+            and return the most relevant paragraphs.
             Use this if you think it can be useful to answer the student's question, or if the student explicitly asks
             a question about the lecture content or slides.
             Only use this once.
@@ -341,12 +343,13 @@ class CourseChatPipeline(Pipeline):
                     f"Page: {paragraph.page_number}\nContent:\n---{paragraph.page_text_content}---\n\n"
                 )
 
-            result += "Lecture transcription content:\n"
-            for paragraph in self.lecture_content.lecture_transcriptions:
-                result += (
-                    f"Lecture: {paragraph.lecture_name}, Unit: {paragraph.lecture_unit_name}, "
-                    f"Page: {paragraph.page_number}\nContent:\n---{paragraph.segment_text}---\n\n"
-                )
+            if self.lecture_content.lecture_transcriptions:
+                result += "Lecture transcription content:\n"
+                for paragraph in self.lecture_content.lecture_transcriptions:
+                    result += (
+                        f"Lecture: {paragraph.lecture_name}, Unit: {paragraph.lecture_unit_name}, "
+                        f"Page: {paragraph.page_number}\nContent:\n---{paragraph.segment_text}---\n\n"
+                    )
 
             result += "Lecture segment content:\n"
             for paragraph in self.lecture_content.lecture_unit_segments:
@@ -384,6 +387,7 @@ class CourseChatPipeline(Pipeline):
 
         # Cache results of tool allowance checks
         allow_lecture_tool = self.should_allow_lecture_tool(dto.course.id)
+        allow_transcriptions = self.should_allow_transcriptions(dto.course.id)
         allow_faq_tool = should_allow_faq_tool(self.db, dto.course.id)
 
         # Construct the base system prompt
@@ -408,7 +412,10 @@ class CourseChatPipeline(Pipeline):
             system_prompt_parts.append(iris_no_exercise_block_prompt)
 
         if allow_lecture_tool:
-            system_prompt_parts.append(iris_lecture_block)
+            if allow_transcriptions:
+                system_prompt_parts.append(iris_lecture_with_transcriptions_block)
+            else:
+                system_prompt_parts.append(iris_lecture_slides_only_block)
         else:
             system_prompt_parts.append(iris_no_lecture_block_prompt)
 
@@ -619,6 +626,27 @@ class CourseChatPipeline(Pipeline):
             limit=1,
             return_properties=[
                 LectureUnitSchema.COURSE_NAME.value
+            ],  # Requesting a minimal property
+        )
+        return len(result.objects) > 0
+
+    def should_allow_transcriptions(self, course_id: int) -> bool:
+        """
+        Checks if there are indexed transcriptions for the given course
+
+        :param course_id: The course ID
+        :return: True if there are indexed transcriptions for the course, False otherwise
+        """
+        if not course_id:
+            return False
+        # Fetch the first object that matches the course ID from transcriptions
+        result = self.db.transcriptions.query.fetch_objects(
+            filters=Filter.by_property(
+                LectureTranscriptionSchema.COURSE_ID.value
+            ).equal(course_id),
+            limit=1,
+            return_properties=[
+                LectureTranscriptionSchema.COURSE_ID.value
             ],  # Requesting a minimal property
         )
         return len(result.objects) > 0
