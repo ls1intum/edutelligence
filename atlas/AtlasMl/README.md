@@ -52,6 +52,13 @@ poetry run uvicorn atlasml.app:app --reload
 poetry run pytest -v
 ```
 
+6. Lint the code
+
+```bash
+poetry run ruff check .
+poetry run black .
+```
+
 ## Environment Variables
 
 Please create a `.env` file in the root directory and add the the environment variables according to the `.env.example` file. If you add new environment variables, please update the `.env.example` file.

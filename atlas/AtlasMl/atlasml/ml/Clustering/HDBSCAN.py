@@ -1,14 +1,17 @@
-import numpy as np
-from sklearn.cluster import HDBSCAN
 from enum import Enum
 
+from sklearn.cluster import HDBSCAN
+
+
 class SimilarityMetric(Enum):
-    euclidean = 'euclidean'
-    cosine = 'cosine'
-    jaccard = 'jaccard'
+    euclidean = "euclidean"
+    cosine = "cosine"
+    jaccard = "jaccard"
 
 
-def apply_hdbscan(matrix, eps=0.5, min_samples=5, metric='euclidean',  min_cluster_size=10):
+def apply_hdbscan(
+    matrix, eps=0.5, min_samples=5, metric="euclidean", min_cluster_size=10
+):
     """
     Applies HDBSCAN clustering algorithm to a given nxn matrix.
 
@@ -21,6 +24,11 @@ def apply_hdbscan(matrix, eps=0.5, min_samples=5, metric='euclidean',  min_clust
     Returns:
         numpy.ndarray: The cluster labels assigned to each data point.
     """
-    clusterer = HDBSCAN(min_samples=min_samples, metric=metric, cluster_selection_epsilon=eps, min_cluster_size=min_cluster_size)
+    clusterer = HDBSCAN(
+        min_samples=min_samples,
+        metric=metric,
+        cluster_selection_epsilon=eps,
+        min_cluster_size=min_cluster_size,
+    )
     clusterer.fit(matrix)
     return clusterer.labels_

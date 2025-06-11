@@ -1,5 +1,6 @@
 from enum import Enum
 
+
 class ModelDimension(Enum):
     text_embedding_three_small = 1536
     text_embedding_three_large = 3072
