@@ -1,12 +1,40 @@
-from typing import List, Optional
-
+from typing import Any, Dict, List, Optional
 from athena.text import Exercise, Submission, Feedback
-from module_text_llm.approach_config import ApproachConfig
-from module_text_llm import get_strategy_factory 
 from athena.schemas.learner_profile import LearnerProfile
+import inspect
 
+from module_text_llm.registry import APPROACH_IMPLEMENTATIONS
+from module_text_llm.approach_config import ApproachConfig
 
-async def generate_suggestions(exercise: Exercise, submission: Submission, config: ApproachConfig, *, debug: bool, is_graded: bool, learner_profile: Optional[LearnerProfile] = None) -> List[Feedback]:
-    strategy_factory = get_strategy_factory(ApproachConfig)
-    strategy = strategy_factory.get_strategy(config)
-    return await strategy.generate_suggestions(exercise, submission, config, debug=debug, is_graded=is_graded, learner_profile=learner_profile)
+async def generate_suggestions(
+    exercise: Exercise,
+    submission: Submission,
+    config: ApproachConfig,
+    *,
+    debug: bool,
+    is_graded: bool,
+    learner_profile: Optional[LearnerProfile] = None,
+) -> List[Feedback]:
+    implementation_func = APPROACH_IMPLEMENTATIONS.get(config.type)
+    if implementation_func is None:
+        raise NotImplementedError(
+            f"Approach type '{config.type}' has not been registered. "
+            "Ensure the module is imported in module_text_llm/__init__.py."
+        )
+
+    sig = inspect.signature(implementation_func)
+    
+    kwargs: Dict[str, Any] = {
+        "debug": debug,
+        "is_graded": is_graded,
+    }
+
+    if "learner_profile" in sig.parameters:
+        kwargs["learner_profile"] = learner_profile
+
+    return await implementation_func(
+        exercise,
+        submission,
+        config,
+        **kwargs,
+    )

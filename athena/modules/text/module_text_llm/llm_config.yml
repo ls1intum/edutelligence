@@ -1,0 +1,5 @@
+models:
+  base_model: openai_gpt-4o
+  mini_model: openai_gpt-4o-mini
+  fast_reasoning_model: openai_o1-mini
+  long_reasoning_model: openai_o1-preview
