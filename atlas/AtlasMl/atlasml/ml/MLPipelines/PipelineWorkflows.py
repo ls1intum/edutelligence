@@ -141,6 +141,32 @@ class PipelineWorkflows:
 
 
     def feedbackLoopPipeline(self, text_id: str, cluster_id: str):
+        """Update text-cluster associations based on feedback and recalculate cluster medoids.
+
+        This function implements a feedback loop mechanism that allows updating text-cluster
+        associations and dynamically adjusts cluster medoids based on new assignments.
+
+        Args:
+            text_id (str): The unique identifier of the text entry to be reassigned
+            cluster_id (str): The identifier of the cluster to which the text should be assigned
+
+        The pipeline performs:
+        1. Retrieves the text entry and target cluster from the database
+        2. Updates the text's competency associations to include the new cluster
+        3. Updates the cluster's member list to include the text
+        4. Recalculates the cluster medoid considering the new text
+        5. Persists all changes back to the database
+
+        Note:
+            - This function modifies both TEXT and CLUSTERCENTER collections
+            - The text's previous competency associations are preserved
+            - The cluster medoid is updated using a weighted average approach
+            - All changes are atomic - either all succeed or none are applied
+
+        Warning:
+            Ensure both text_id and cluster_id exist in the database before calling
+            this function to avoid potential errors.
+        """
         text = self.weaviate_client.get_embeddings_by_property(CollectionNames.TEXT.value, "text_id", text_id)
         cluster = self.weaviate_client.get_embeddings_by_property(CollectionNames.CLUSTERCENTER.value, "cluster_id", cluster_id)
 
