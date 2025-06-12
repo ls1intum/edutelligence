@@ -1,10 +1,22 @@
 import json
-from typing import Literal, List
+from typing import Literal, List, Optional
 
 from langchain_core.output_parsers import PydanticOutputParser
 
-from .faq_rewriting import system_prompt_faq
-from . import faq_pb2, faq_pb2_grpc
+from nebula.src.nebula.prompts.faq_rewriting import system_prompt_faq
+from nebula.src.nebula.services.faq_service import faq_pb2
+
+
+def format_faqs_for_openai(faqs: Optional[List[faq_pb2.FAQ]]) -> str:
+    faqs = faqs or []
+    print(f"Formatting {len(faqs)} FAQs for OpenAI")
+    print (f"FAQs: {faqs}")
+    return json.dumps([
+        {
+            "question_title": faq.question_title,
+            "question_answer": faq.question_answer
+        } for faq in faqs
+    ], indent=2)
 
 
 class FaqRewritingService:
@@ -40,7 +52,7 @@ class FaqRewritingService:
             "faq": system_prompt_faq,
         }
         system_prompt = variant_prompts.get(self.variant, system_prompt_faq)
-        faqs_text = self.format_faqs_for_openai(faqs)
+        faqs_text = format_faqs_for_openai(faqs)
 
         # Here, we would typically call the language model to process the rewriting.
 
@@ -51,13 +63,5 @@ class FaqRewritingService:
         #For demonstration purposes, we will simulate the rewriting process.
         final_result = "this is the result of the rewriting"
         return final_result
-
-    def format_faqs_for_openai(faqs: List[faq_pb2.FAQ]) -> str:
-        return json.dumps([
-            {
-                "question_title": faq.question_title,
-                "question_answer": faq.question_answer
-            } for faq in faqs
-        ], indent=2)
 
 
