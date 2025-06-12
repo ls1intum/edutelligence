@@ -3,8 +3,8 @@ from typing import Literal, List, Optional
 
 from langchain_core.output_parsers import PydanticOutputParser
 
-from nebula.src.nebula.prompts.faq_rewriting import system_prompt_faq
-from nebula.src.nebula.services.faq_service import faq_pb2
+from nebula.src.prompts.faq_rewriting import system_prompt_faq
+from nebula.src.services import faq_pb2
 
 
 def format_faqs_for_openai(faqs: Optional[List[faq_pb2.FAQ]]) -> str:

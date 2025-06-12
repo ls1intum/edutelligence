@@ -1,36 +1,30 @@
-FROM python:3.12.3-slim
+FROM python:3.13-alpine
+
+RUN apk update && \
+    apk add --no-cache gcc musl-dev postgresql-dev rust cargo curl
+
+RUN pip install poetry==2.1.1
 
 WORKDIR /app
 
-# Install system dependencies first
-RUN apt-get update && apt-get install -y \
-    build-essential \
-    && rm -rf /var/lib/apt/lists/*
+# Create the proper directory structure
+RUN mkdir -p /app/nebula /app/shared
 
-# Install Poetry
-RUN pip install --no-cache-dir poetry
+# Copy shared library into the right location
+COPY shared/ /app/shared/
 
-# Copy dependency files
-COPY pyproject.toml poetry.lock ./
+# Copy nebula files
+COPY nebula/pyproject.toml nebula/poetry.lock /app/nebula/
+COPY nebula/src/ /app/nebula/src/
 
-# Install project dependencies
-RUN poetry config virtualenvs.create false && \
-    poetry install --no-root --no-interaction --no-ansi
+# Set working directory to hyperion folder where the poetry config is
+WORKDIR /app/nebula/
 
-# Copy source code
-COPY src ./src
+# Install dependencies but don't try to install the current project
+RUN poetry install --no-root
 
-# Compile proto files
-RUN python -m grpc_tools.protoc \
-    -I=src \
-    --python_out=src \
-    --grpc_python_out=src \
-    src/nebula/services/faq_service/faq.proto
+# Expose the gRPC port
+EXPOSE 50051
 
-# Set Python path to include both /app and /app/src
-ENV PYTHONPATH="${PYTHONPATH}:/app:/app/src"
-
-# Install langchain-core explicitly (if needed)
-RUN pip install langchain-core
-
-CMD ["python", "src/nebula/main.py"]
+# Use our custom entrypoint script
+ENTRYPOINT ["poetry", "run", "nebula"]

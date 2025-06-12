@@ -1,7 +1,7 @@
 import grpc
 from concurrent import futures
-from nebula.src.nebula.services.faq_service import faq_pb2, faq_pb2_grpc
-from nebula.src.nebula.services.faq_rewriting_service import FaqRewritingService
+from nebula.src.services import faq_pb2, faq_pb2_grpc
+from nebula.src.services.faq_rewriting_service import FaqRewritingService
 
 class FAQService(faq_pb2_grpc.FAQServiceServicer):
 
