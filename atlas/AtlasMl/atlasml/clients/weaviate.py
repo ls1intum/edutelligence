@@ -10,9 +10,9 @@ from atlasml.config import settings
 # TODO: ARDA: Add proper collection names according to your use cases. If you define all the
 # collections here all the collections will be created automatically when you run the project.
 class CollectionNames(str, Enum):
+    TEXT = "Text"
     COMPETENCY = "Competency"
-    CLUSTER = "Cluster"
-    COURSE = "Course"
+    CLUSTERCENTER = "ClusterCenter"
 
 logger = logging.getLogger(__name__)
 
@@ -38,35 +38,30 @@ class WeaviateClient:
 
 
     def _ensure_collections_exist(self):
-        """Ensure collections exist with proper schema."""
+        """Ensure collections exist with a proper schema."""
         # Define schemas for each collection
-        # TODO: ARDA: Add properties for each collection
-        # After, schema updated automatically and u can fetch the data from the collection with the new properties
+        # After, schema updated automatically, and you can fetch the data from the collection with the new properties
         collection_schemas = {
+            CollectionNames.TEXT.value: {
+                "properties": [
+                    {"name": "text_id", "dataType": ["string"], "indexFilterable": True},
+                    {"name": "text", "dataType": ["text"]},
+                    {"name": "competency_ids", "dataType": ["string[]"], "indexFilterable": True},
+                ]
+            },
             CollectionNames.COMPETENCY.value: {
                 "properties": [
+                    {"name": "competency_id", "dataType": ["string"], "indexFilterable": True},
+                    {"name": "name", "dataType": ["string"]},
                     {"name": "text", "dataType": ["text"]},
-                    {"name": "unit_id", "dataType": ["string"], "indexFilterable": True},
-                    {"name": "name", "dataType": ["string"], "indexFilterable": True},
-                    {"name": "category", "dataType": ["string"], "indexFilterable": True},
+                    {"name": "cluster_id", "dataType": ["string"], "indexFilterable": True},
                 ]
             },
-            CollectionNames.CLUSTER.value: {
+            CollectionNames.CLUSTERCENTER.value: {
                 "properties": [
-                    {"name": "name", "dataType": ["string"], "indexFilterable": True},
-                    {"name": "size", "dataType": ["int"], "indexFilterable": True},
-                    {"name": "members", "dataType": ["string[]"], "indexFilterable": True}
+                    {"name": "cluster_id", "dataType": ["string"], "indexFilterable": True}
                 ]
             },
-            CollectionNames.COURSE.value: {
-                "properties": [
-                    {"name": "title", "dataType": ["string"], "indexFilterable": True},
-                    {"name": "description", "dataType": ["text"]},
-                    {"name": "author", "dataType": ["string"], "indexFilterable": True},
-                    {"name": "level", "dataType": ["string"], "indexFilterable": True},
-                    {"name": "competencies", "dataType": ["string[]"], "indexFilterable": True}
-                ]
-            }
         }
         
         for collection_name, schema in collection_schemas.items():
@@ -285,6 +280,15 @@ class WeaviateClient:
         """Check if a collection exists and create it if it doesn't."""
         if not self.client.collections.exists(collection_name):
             raise ValueError(f"Collection '{collection_name}' does not exist")
+
+    def delete_data_by_id(self, collection_name: str, id: str):
+        pass
+
+    def delete_all_data_from_collection(self, collection_name: str):
+        pass
+
+    def update_property_by_id(self, collection_name: str, id: str, properties: dict):
+        pass
 
 
 _weaviate_client_instance = None
