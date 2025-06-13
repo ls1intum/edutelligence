@@ -1,3 +1,5 @@
+import logging
+
 import grpc
 from concurrent import futures
 from nebula.src.services import faq_pb2, faq_pb2_grpc
@@ -12,7 +14,7 @@ class FAQService(faq_pb2_grpc.FAQServiceServicer):
 
 
     def ProcessInput(self, request, context):
-        print(f"Received request - Input: {request.input_text}, FAQs: {request.faqs}")
+        logging.info(f"Received request - Input: {request.input_text}, FAQs: {request.faqs}")
 
         result = self.faq_rewriter.rewrite_faq(
             to_be_rewritten=request.input_text,
@@ -27,7 +29,7 @@ class FAQService(faq_pb2_grpc.FAQServiceServicer):
 
 def serve():
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
-    faq_pb2_grpc.add_FAQServiceServicer_to_server(FAQService(), server)
+    faq_pb2_grpc.add_FAQServiceServicer_to_server(FaqRewritingService(), server)
     server.add_insecure_port('[::]:50051')
     server.start()
     print("Server started on port 50051")

@@ -4,8 +4,12 @@ import logging
 from typing import Optional
 from concurrent import futures
 from logging import StreamHandler, getLogger
+from settings import settings
 
-from app.settings import settings
+
+
+from grpc_stub import faq_pb2_grpc
+from services.faq_rewriting_service import FaqRewritingService
 
 logging.basicConfig(
     level=logging.INFO,
@@ -39,16 +43,15 @@ class GrpcServer:
         self.server = grpc.server(
             futures.ThreadPoolExecutor(max_workers=self.max_workers),
             options=[
-                ("grpc.max_send_message_length", 100 * 1024 * 1024),  # 100 MB
-                ("grpc.max_receive_message_length", 100 * 1024 * 1024),  # 100 MB
+                ("grpc_stub.max_send_message_length", 100 * 1024 * 1024),  # 100 MB
+                ("grpc_stub.max_receive_message_length", 100 * 1024 * 1024),  # 100 MB
             ],
         )
 
         # Add services to the server
         # First add the health check service
 
-
-        #faq_pb2_grpc.add_FAQServiceServicer_to_server(FAQService(), server)
+        faq_pb2_grpc.add_FAQServiceServicer_to_server(FaqRewritingService(), self.server)
 
         # Register listening port
         self.server.add_insecure_port(self._address)
@@ -63,7 +66,7 @@ class GrpcServer:
 
 
 def serve():
-    """Entry point for the grpc-server script."""
+    """Entry point for the grpc_stub-server script."""
     logger.info("Starting Nebula gRPC server...")
     try:
         server = GrpcServer(

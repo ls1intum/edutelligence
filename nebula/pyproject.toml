@@ -5,17 +5,23 @@ description = "An LLM microservice for the learning platform Artemis"
 authors = ["Timor Morrien <timor.morrien@tum.de>", "Patrick Bassner <patrick.bassner@tum.de>"]
 readme = "README.MD"
 packages = [
-    {include = "nebula", from = "src"},
+    {include = "src"},
 ]
 include = [
-    "src/nebula/py.typed",
+    "src/py.typed",
 ]
+
+[tool.poetry.scripts]
+nebula = "src.main:serve"
+generate-grpc = "src.grpc_stub.run_generate_stubs:main"
 
 [tool.poetry.dependencies]
 python = ">=3.12,<4.0.0"
 requests = "2.32.3"
 fastapi = "0.115.5"
 uvicorn = "0.32.0"
+python-dotenv = "^1.1.0"
+pydantic-settings = "^2.9.1"
 
 [tool.poetry.group.dev.dependencies]
 mypy = "^1.10.0"

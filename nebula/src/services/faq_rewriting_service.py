@@ -1,16 +1,12 @@
 import json
-from typing import Literal, List, Optional
-
-from langchain_core.output_parsers import PydanticOutputParser
-
-from nebula.src.prompts.faq_rewriting import system_prompt_faq
-from nebula.src.services import faq_pb2
+import logging
+from typing import List, Optional
+from grpc_stub import faq_pb2, faq_pb2_grpc
 
 
 def format_faqs_for_openai(faqs: Optional[List[faq_pb2.FAQ]]) -> str:
     faqs = faqs or []
     print(f"Formatting {len(faqs)} FAQs for OpenAI")
-    print (f"FAQs: {faqs}")
     return json.dumps([
         {
             "question_title": faq.question_title,
@@ -19,49 +15,30 @@ def format_faqs_for_openai(faqs: Optional[List[faq_pb2.FAQ]]) -> str:
     ], indent=2)
 
 
-class FaqRewritingService:
-    """FaqRewriter processes text rewriting requests by interfacing with a language model via a capability
-     request handler.
-
-    It formats the prompt according to the selected variant, processes the rewriting, and then notifies the callback
-     when complete.
+class FaqRewritingService(faq_pb2_grpc.FAQServiceServicer):
+    """
+    Implements the FAQService gRPC interface.
     """
 
-    #request_handler: ModelVersionRequestHandler
-    output_parser: PydanticOutputParser
-    variant: Literal["faq", "problem_statement"]
-
-    def __init__(
+    def ProcessInput(
         self,
-        variant: Literal["faq", "problem_statement"],
-    ):
-        #self.request_handler = ModelVersionRequestHandler(version="gpt-4.1")
-        self.tokens = []
-        self.variant = variant
+        request: faq_pb2.FaqRewritingRequest,
+        context
+    ) -> faq_pb2.FaqRewritingResponse:
+        """
+        Handles incoming gRPC requests to rewrite FAQ text.
+        """
+        # 1. Extrahiere Input
+        input_text = request.input_text
+        faqs = request.faqs
 
+        logging.info(f"Received request with input: {input_text} and {len(faqs)} FAQs")
+        logging.debug(f"FAQs: {faqs}")
+        # 2. Formatiere FAQs (z.B. für späteren LLM-Aufruf)
+        formatted_faqs = format_faqs_for_openai(faqs)
 
-    def rewrite_faq(
-        self,
-        to_be_rewritten: str,
-        faqs: List[faq_pb2.FAQ] = None,
-        **kwargs,
-    ):
+        # 3. Placeholder für LLM-Aufruf – später ersetzen
+        result = f"Processed input: {input_text}\nWith FAQs: {formatted_faqs}"
 
-        # Select the appropriate system prompt based on the variant
-        variant_prompts = {
-            "faq": system_prompt_faq,
-        }
-        system_prompt = variant_prompts.get(self.variant, system_prompt_faq)
-        faqs_text = format_faqs_for_openai(faqs)
-
-        # Here, we would typically call the language model to process the rewriting.
-
-
-        ##LLM Magic Placeholder
-
-
-        #For demonstration purposes, we will simulate the rewriting process.
-        final_result = "this is the result of the rewriting"
-        return final_result
-
-
+        # 4. Baue Antwort zurück
+        return faq_pb2.FaqRewritingResponse(result=result)

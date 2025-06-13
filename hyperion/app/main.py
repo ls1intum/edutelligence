@@ -66,8 +66,8 @@ class GrpcServer:
         self.server = grpc.server(
             futures.ThreadPoolExecutor(max_workers=self.max_workers),
             options=[
-                ("grpc.max_send_message_length", 100 * 1024 * 1024),  # 100 MB
-                ("grpc.max_receive_message_length", 100 * 1024 * 1024),  # 100 MB
+                ("grpc_stub.max_send_message_length", 100 * 1024 * 1024),  # 100 MB
+                ("grpc_stub.max_receive_message_length", 100 * 1024 * 1024),  # 100 MB
             ],
         )
 
@@ -115,7 +115,7 @@ class GrpcServer:
 
 
 def serve():
-    """Entry point for the grpc-server script."""
+    """Entry point for the grpc_stub-server script."""
     logger.info("Starting Hyperion gRPC server...")
     try:
         server = GrpcServer(

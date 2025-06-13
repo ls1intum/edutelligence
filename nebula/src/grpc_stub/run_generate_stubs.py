@@ -3,7 +3,7 @@
 Generate gRPC stubs from proto files.
 
 Usage:
-    poetry run generate-grpc
+    poetry run generate-grpc_stub
 """
 import logging
 import subprocess
@@ -15,7 +15,7 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
-logger = logging.getLogger("grpc-stub-generator")
+logger = logging.getLogger("grpc_stub-stub-generator")
 
 
 def main():
@@ -23,7 +23,7 @@ def main():
     # Get project root directory
     project_root = Path(__file__).parent.parent
     proto_dir = project_root / "protos"
-    output_dir = project_root / "grpc"
+    output_dir = project_root / "grpc_stub"
 
     # Check if proto directory exists
     if not proto_dir.exists():

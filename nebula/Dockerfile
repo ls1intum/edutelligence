@@ -5,26 +5,22 @@ RUN apk update && \
 
 RUN pip install poetry==2.1.1
 
+# Setze Arbeitsverzeichnis
 WORKDIR /app
 
-# Create the proper directory structure
-RUN mkdir -p /app/nebula /app/shared
+# Poetry config und Code kopieren
+COPY pyproject.toml poetry.lock /app/
+COPY src/ /app/src/
 
-# Copy shared library into the right location
-COPY shared/ /app/shared/
+# PYTHONPATH so setzen, dass "main" gefunden wird
+ENV PYTHONPATH=/app/src
 
-# Copy nebula files
-COPY nebula/pyproject.toml nebula/poetry.lock /app/nebula/
-COPY nebula/src/ /app/nebula/src/
-
-# Set working directory to hyperion folder where the poetry config is
-WORKDIR /app/nebula/
-
-# Install dependencies but don't try to install the current project
+# Installiere nur Abhängigkeiten, nicht das Projekt selbst
 RUN poetry install --no-root
 
-# Expose the gRPC port
+# Exponiere gRPC-Port
 EXPOSE 50051
 
-# Use our custom entrypoint script
-ENTRYPOINT ["poetry", "run", "nebula"]
+ENV PYTHONPATH="/app/src"
+# Starte das Hauptmodul
+CMD ["poetry", "run", "nebula"]
