@@ -24,19 +24,19 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\tfaq.proto\x12\x03\x66\x61q\"6\n\x03\x46\x41Q\x12\x16\n\x0equestion_title\x18\x01 \x01(\t\x12\x17\n\x0fquestion_answer\x18\x02 \x01(\t\"A\n\x13\x46\x61qRewritingRequest\x12\x16\n\x04\x66\x61qs\x18\x01 \x03(\x0b\x32\x08.faq.FAQ\x12\x12\n\ninput_text\x18\x02 \x01(\t\"&\n\x14\x46\x61qRewritingResponse\x12\x0e\n\x06result\x18\x01 \x01(\t2Q\n\nFAQService\x12\x43\n\x0cProcessInput\x12\x18.faq.FaqRewritingRequest\x1a\x19.faq.FaqRewritingResponseb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\tfaq.proto\x12\nfaqservice\"6\n\x03\x46\x41Q\x12\x16\n\x0equestion_title\x18\x01 \x01(\t\x12\x17\n\x0fquestion_answer\x18\x02 \x01(\t\"H\n\x13\x46\x61qRewritingRequest\x12\x1d\n\x04\x66\x61qs\x18\x01 \x03(\x0b\x32\x0f.faqservice.FAQ\x12\x12\n\ninput_text\x18\x02 \x01(\t\"&\n\x14\x46\x61qRewritingResponse\x12\x0e\n\x06result\x18\x01 \x01(\t2_\n\nFAQService\x12Q\n\x0cProcessInput\x12\x1f.faqservice.FaqRewritingRequest\x1a .faqservice.FaqRewritingResponseb\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
 _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'faq_pb2', _globals)
 if not _descriptor._USE_C_DESCRIPTORS:
   DESCRIPTOR._loaded_options = None
-  _globals['_FAQ']._serialized_start=18
-  _globals['_FAQ']._serialized_end=72
-  _globals['_FAQREWRITINGREQUEST']._serialized_start=74
-  _globals['_FAQREWRITINGREQUEST']._serialized_end=139
-  _globals['_FAQREWRITINGRESPONSE']._serialized_start=141
-  _globals['_FAQREWRITINGRESPONSE']._serialized_end=179
-  _globals['_FAQSERVICE']._serialized_start=181
-  _globals['_FAQSERVICE']._serialized_end=262
+  _globals['_FAQ']._serialized_start=25
+  _globals['_FAQ']._serialized_end=79
+  _globals['_FAQREWRITINGREQUEST']._serialized_start=81
+  _globals['_FAQREWRITINGREQUEST']._serialized_end=153
+  _globals['_FAQREWRITINGRESPONSE']._serialized_start=155
+  _globals['_FAQREWRITINGRESPONSE']._serialized_end=193
+  _globals['_FAQSERVICE']._serialized_start=195
+  _globals['_FAQSERVICE']._serialized_end=290
 # @@protoc_insertion_point(module_scope)

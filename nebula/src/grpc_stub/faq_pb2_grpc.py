@@ -35,7 +35,7 @@ class FAQServiceStub(object):
             channel: A grpc.Channel.
         """
         self.ProcessInput = channel.unary_unary(
-                '/faq.FAQService/ProcessInput',
+                '/faqservice.FAQService/ProcessInput',
                 request_serializer=faq__pb2.FaqRewritingRequest.SerializeToString,
                 response_deserializer=faq__pb2.FaqRewritingResponse.FromString,
                 _registered_method=True)
@@ -60,9 +60,9 @@ def add_FAQServiceServicer_to_server(servicer, server):
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
-            'faq.FAQService', rpc_method_handlers)
+            'faqservice.FAQService', rpc_method_handlers)
     server.add_generic_rpc_handlers((generic_handler,))
-    server.add_registered_method_handlers('faq.FAQService', rpc_method_handlers)
+    server.add_registered_method_handlers('faqservice.FAQService', rpc_method_handlers)
 
 
  # This class is part of an EXPERIMENTAL API.
@@ -83,7 +83,7 @@ class FAQService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/faq.FAQService/ProcessInput',
+            '/faqservice.FAQService/ProcessInput',
             faq__pb2.FaqRewritingRequest.SerializeToString,
             faq__pb2.FaqRewritingResponse.FromString,
             options,
