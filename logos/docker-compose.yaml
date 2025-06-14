@@ -19,17 +19,20 @@ services:
     labels:
       - "traefik.enable=true"
 
-      # === Route für /v1 ===
+      # === /v1 ===
       - "traefik.http.routers.logos-server-v1.rule=PathPrefix(`/v1`)"
-      - "traefik.http.routers.logos-server-v1.entrypoints=web"
+      - "traefik.http.routers.logos-server-v1.entrypoints=secure8080"
+      - "traefik.http.routers.logos-server-v1.tls=true"
+      - "traefik.http.routers.logos-server-v1.tls.certresolver=letsencrypt"
       - "traefik.http.routers.logos-server-v1.service=logos-server"
 
-      # === Route für /logosdb ===
+      # === /logosdb ===
       - "traefik.http.routers.logos-server-logosdb.rule=PathPrefix(`/logosdb`)"
-      - "traefik.http.routers.logos-server-logosdb.entrypoints=web"
+      - "traefik.http.routers.logos-server-logosdb.entrypoints=secure8080"
+      - "traefik.http.routers.logos-server-logosdb.tls=true"
+      - "traefik.http.routers.logos-server-logosdb.tls.certresolver=letsencrypt"
       - "traefik.http.routers.logos-server-logosdb.service=logos-server"
 
-      # === Service-Port für beide ===
       - "traefik.http.services.logos-server.loadbalancer.server.port=8080"
     networks:
       - internal
@@ -68,7 +71,9 @@ services:
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.logos-ui.rule=PathPrefix(`/`)"
-      - "traefik.http.routers.logos-ui.entrypoints=web"
+      - "traefik.http.routers.logos-ui.entrypoints=websecure"
+      - "traefik.http.routers.logos-ui.tls=true"
+      - "traefik.http.routers.logos-ui.tls.certresolver=letsencrypt"
       - "traefik.http.services.logos-ui.loadbalancer.server.port=80"
     depends_on:
       - logos-server
@@ -81,12 +86,18 @@ services:
     command:
       - "--providers.docker=true"
       - "--providers.docker.exposedbydefault=false"
-      - "--entrypoints.web.address=:8080"
+      - "--entrypoints.websecure.address=:443"
+      - "--entrypoints.secure8080.address=:8080"
+      - "--certificatesresolvers.letsencrypt.acme.tlschallenge=true"
+      - "--certificatesresolvers.letsencrypt.acme.email=admin@tum.de"
+      - "--certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json"
     ports:
+      - "443:443"
       - "8080:8080"
-      - "8082:8082" # Traefik-Dashboard (optional)
+      - "8082:8082"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./letsencrypt:/letsencrypt
     networks:
       - internal
 volumes:
