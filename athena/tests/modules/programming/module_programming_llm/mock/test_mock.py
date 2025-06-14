@@ -2,7 +2,7 @@ import pytest
 from typing import List, Optional, Dict
 from dataclasses import dataclass
 
-from module_programming_llm.config import (
+from tests.modules.programming.module_programming_llm.mock.utils.mock_module_config import (
     GradedBasicApproachConfig,
     NonGradedBasicApproachConfig,
 )
