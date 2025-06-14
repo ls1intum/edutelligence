@@ -1,0 +1,54 @@
+services:
+  landing-page:
+    build:
+      context: ../
+      dockerfile: ./logos/logos-landing/Dockerfile
+    container_name: logos-landing
+    restart: unless-stopped
+    environment:
+      - NODE_OPTIONS=--max-old-space-size=1024
+    expose:
+      - "80"
+    labels:
+      - "traefik.enable=true"
+
+      # PROD
+      - "traefik.http.routers.landing-prod.rule=Host(`logos.ase.cit.tum.de`) && PathPrefix(`/`)"
+      - "traefik.http.routers.landing-prod.entrypoints=websecure"
+      - "traefik.http.routers.landing-prod.tls=true"
+      - "traefik.http.routers.landing-prod.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.landing-prod.service=landing-prod"
+      - "traefik.http.services.landing-prod.loadbalancer.server.port=80"
+
+      # DEV
+      - "traefik.http.routers.landing-dev.rule=Host(`localhost`) && PathPrefix(`/`)"
+      - "traefik.http.routers.landing-dev.entrypoints=web"
+      - "traefik.http.routers.landing-dev.service=landing-dev"
+      - "traefik.http.services.landing-dev.loadbalancer.server.port=80"
+    networks:
+      - internal
+
+  traefik:
+    image: traefik:v2.10
+    container_name: traefik-landing
+    restart: unless-stopped
+    command:
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+      - "--certificatesresolvers.letsencrypt.acme.tlschallenge=true"
+      - "--certificatesresolvers.letsencrypt.acme.email=admin@tum.de"
+      - "--certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json"
+    ports:
+      - "443:443"
+      - "80:80"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./letsencrypt:/letsencrypt
+    networks:
+      - internal
+
+networks:
+  internal:
+    driver: bridge
