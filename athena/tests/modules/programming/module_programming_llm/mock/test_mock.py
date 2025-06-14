@@ -6,7 +6,11 @@ from module_programming_llm.config import (
     GradedBasicApproachConfig,
     NonGradedBasicApproachConfig,
 )
-from tests.modules.programming.module_programming_llm.mock.utils.mock_config import MockModelConfig
+from tests.modules.programming.module_programming_llm.mock.utils.mock_config import (
+    MockModelConfig,
+    create_mock_graded_config,
+    create_mock_non_graded_config,
+)
 
 @dataclass
 class MockFeedback:
@@ -25,42 +29,6 @@ class MockFeedback:
     def __post_init__(self):
         if self.meta is None:
             self.meta = {}
-
-def create_mock_graded_config() -> GradedBasicApproachConfig:
-    
-    model_config = MockModelConfig(
-        model_name="azure_openai_gpt-4-turbo",
-        model_params={
-            "temperature": 0.7,
-            "max_tokens": 1000,
-            "top_p": 1.0,
-            "frequency_penalty": 0.0,
-            "presence_penalty": 0.0
-        }
-    )
-    return GradedBasicApproachConfig(
-        model=model_config,
-        max_input_tokens=4000,
-        max_number_of_files=5,
-    )
-
-def create_mock_non_graded_config() -> NonGradedBasicApproachConfig:
-    
-    model_config = MockModelConfig(
-        model_name="azure_openai_gpt-4-turbo",
-        model_params={
-            "temperature": 0.7,
-            "max_tokens": 1000,
-            "top_p": 1.0,
-            "frequency_penalty": 0.0,
-            "presence_penalty": 0.0
-        }
-    )
-    return NonGradedBasicApproachConfig(
-        model=model_config,
-        max_input_tokens=4000,
-        max_number_of_files=5,
-    )
 
 async def mock_generate_graded_suggestions(exercise, submission, config) -> List[MockFeedback]:
     if not submission.files:
@@ -101,8 +69,8 @@ async def mock_generate_non_graded_suggestions(exercise, submission, config) -> 
 
 @pytest.mark.asyncio
 async def test_generate_graded_suggestions(mock_exercise, mock_submission):
-    
-    config = create_mock_graded_config()
+    model_config = MockModelConfig()
+    config = create_mock_graded_config(model_config)
     feedbacks = await mock_generate_graded_suggestions(mock_exercise, mock_submission, config)
     
     assert feedbacks is not None, "Feedbacks should not be None"
@@ -118,8 +86,8 @@ async def test_generate_graded_suggestions(mock_exercise, mock_submission):
 
 @pytest.mark.asyncio
 async def test_generate_non_graded_suggestions(mock_exercise, mock_submission):
-    
-    config = create_mock_non_graded_config()
+    model_config = MockModelConfig()
+    config = create_mock_non_graded_config(model_config)
     feedbacks = await mock_generate_non_graded_suggestions(mock_exercise, mock_submission, config)
     
     assert feedbacks is not None, "Feedbacks should not be None"
@@ -134,8 +102,8 @@ async def test_generate_non_graded_suggestions(mock_exercise, mock_submission):
 
 @pytest.mark.asyncio
 async def test_error_handling(mock_exercise, mock_empty_submission):
-    
-    config = create_mock_graded_config()
+    model_config = MockModelConfig()
+    config = create_mock_graded_config(model_config)
     feedbacks = await mock_generate_graded_suggestions(mock_exercise, mock_empty_submission, config)
     
     assert feedbacks is not None

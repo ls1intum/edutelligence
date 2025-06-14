@@ -1,10 +1,8 @@
-from typing import List, Optional, Dict, Any, Type
+from typing import List, Optional, Dict, Any
 from pydantic import BaseModel
-import asyncio
 from unittest.mock import AsyncMock
 
 class MockLanguageModel:
-    
     def __init__(self, responses: Optional[Dict[str, Any]] = None):
         self.responses = responses or {}
 
@@ -18,13 +16,7 @@ class MockLanguageModel:
         
         return """{"type": "Assessment", "title": "Logic Error", "description": "Doc important", "file_path": "test.py", "line_start": 1, "line_end": 1, "credits": 0.5}"""
 
-async def mock_predict(messages: List[Dict[str, str]], **kwargs) -> str:
-    loop = asyncio.get_event_loop()
-    model = MockLanguageModel()
-    return await loop.run_in_executor(None, lambda: model.predict(messages, **kwargs))
-
-class MockAssessmentModel:
-    
+class MockAssessmentModel(BaseModel):
     def __init__(self):
         self.assess = AsyncMock()
         self.assess.return_value = {
@@ -36,42 +28,3 @@ class MockAssessmentModel:
                 "documentation": 0.8
             }
         }
-
-def get_mock_response_for_model(model_type: Type[BaseModel]) -> Dict[str, Any]:
-    if model_type.__name__ == "AssessmentModel":
-        return {
-            "feedbacks": [
-                {
-                    "title": "Test Feedback",
-                    "description": "This is a test feedback with detailed explanation",
-                    "line_start": 1,
-                    "line_end": 2,
-                    "credits": 1.0,
-                    "grading_instruction_id": 1
-                }
-            ]
-        }
-    elif model_type.__name__ == "ImprovementModel":
-        return {
-            "feedbacks": [
-                {
-                    "title": "Improvement Suggestion",
-                    "description": "This is a test improvement suggestion",
-                    "line_start": 1,
-                    "line_end": 2
-                }
-            ]
-        }
-    return {}
-
-async def mock_predict_and_parse(pydantic_object: Optional[Type[BaseModel]] = None):
-    async def mock_predict(*args, **kwargs):
-        if pydantic_object is None:
-            return None
-        mock_data = get_mock_response_for_model(pydantic_object)
-        if not mock_data:
-            return None
-        return await asyncio.get_event_loop().run_in_executor(
-            None, lambda: pydantic_object(**mock_data)
-        )
-    return mock_predict

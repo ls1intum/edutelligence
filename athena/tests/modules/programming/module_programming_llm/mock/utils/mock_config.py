@@ -1,6 +1,3 @@
-from typing import Optional, Callable, Dict, Any
-from llm_core.models.model_config import ModelConfig
-from langchain.base_language import BaseLanguageModel
 from module_programming_llm.config import (
     GradedBasicApproachConfig,
     NonGradedBasicApproachConfig,
@@ -12,35 +9,9 @@ from module_programming_llm.config import (
     NonGradedFeedbackGenerationPrompt,
     FileSummaryPrompt
 )
-from tests.modules.programming.module_programming_llm.mock.utils.mock_llm import MockLanguageModel
-
-class MockModelConfig(ModelConfig):
-    
-    model_name: str = "azure_openai_gpt-4-turbo"
-    get_model_func: Optional[Callable[[], BaseLanguageModel]] = None
-    model_params: Dict[str, Any] = {
-        "temperature": 0.7,
-        "max_tokens": 1000,
-        "top_p": 1.0,
-        "frequency_penalty": 0.0,
-        "presence_penalty": 0.0
-    }
-
-    def get_model(self) -> BaseLanguageModel:
-        
-        if self.get_model_func is not None:
-            return self.get_model_func()
-        return MockLanguageModel()
-
-    def to_dict(self) -> Dict[str, Any]:
-
-        return {
-            "model_name": self.model_name,
-            **self.model_params
-        }
+from tests.modules.programming.module_programming_llm.mock.utils.mock_env import MockModelConfig
 
 def create_mock_graded_config(model_config: MockModelConfig) -> GradedBasicApproachConfig:
-    
     return GradedBasicApproachConfig(
         max_input_tokens=5000,
         model=model_config,
@@ -67,7 +38,6 @@ def create_mock_graded_config(model_config: MockModelConfig) -> GradedBasicAppro
     )
 
 def create_mock_non_graded_config(model_config: MockModelConfig) -> NonGradedBasicApproachConfig:
-    
     return NonGradedBasicApproachConfig(
         max_input_tokens=5000,
         model=model_config,
@@ -89,7 +59,6 @@ def create_mock_non_graded_config(model_config: MockModelConfig) -> NonGradedBas
     )
 
 def create_mock_module_config(model_config: MockModelConfig) -> Configuration:
-    
     return Configuration(
         debug=False,
         graded_approach=create_mock_graded_config(model_config),
@@ -97,13 +66,11 @@ def create_mock_module_config(model_config: MockModelConfig) -> Configuration:
     )
 
 def create_mock_debug_config(model_config: MockModelConfig) -> Configuration:
-    
     config = create_mock_module_config(model_config)
     config.debug = True
     return config
 
 def create_mock_config_with_custom_model(model_name: str = "mock_model", **model_params) -> Configuration:
-    
     model_config = MockModelConfig(
         model_name=model_name,
         model_params=model_params

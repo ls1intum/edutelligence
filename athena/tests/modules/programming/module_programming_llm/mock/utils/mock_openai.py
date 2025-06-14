@@ -1,8 +1,18 @@
-import pytest
-from unittest.mock import AsyncMock, MagicMock
+import sys
+from unittest.mock import Mock, patch
 from typing import Any, Dict, List
 import json
-from unittest.mock import patch
+
+# Mock OpenAI - this must be done before any other imports
+mock_openai = Mock()
+mock_openai.OpenAIModelConfig = Mock
+mock_openai.available_models = {'mock_model': Mock()}
+sys.modules['llm_core.models.openai'] = mock_openai
+
+# Mock OpenAI client
+mock_openai_client = Mock()
+mock_openai_client.models.list.return_value = []
+sys.modules['openai'] = mock_openai_client
 
 def get_tool_name_from_system_message(system_message: str) -> str:
     
@@ -60,22 +70,15 @@ async def mock_create(*args, **kwargs) -> MockChatCompletion:
 class MockClient:
     
     def __init__(self):
-        self.chat = MagicMock()
+        self.chat = Mock()
         self.chat.completions.create = mock_create
 
 class MockAsyncClient:
     
     def __init__(self):
-        self.chat = MagicMock()
+        self.chat = Mock()
         self.chat.completions.create = mock_create
 
-@pytest.fixture
-def mock_openai():
-    with patch("openai.OpenAI", return_value=MockClient()) as mock:
-        yield mock
-
-@pytest.fixture
-def mock_openai_client():
-    
-    with patch("openai.AsyncAzureOpenAI", return_value=MockAsyncClient()) as mock:
-        yield mock
+# Apply the patches
+patch("openai.OpenAI", return_value=MockClient()).start()
+patch("openai.AsyncAzureOpenAI", return_value=MockAsyncClient()).start()
