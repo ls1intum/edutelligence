@@ -91,7 +91,6 @@ class SolutionRepositoryCreatorServicer(hyperion_pb2_grpc.SolutionRepositoryCrea
             boundary_conditions=request.boundary_conditions,
             problem_statement=request.problem_statement,
             workspace_path="",  # Will be set after workspace creation
-            current_step=SolutionCreationStep.GENERATE_PLAN,
             model=self.model
         )
 
@@ -128,7 +127,6 @@ class SolutionRepositoryCreatorServicer(hyperion_pb2_grpc.SolutionRepositoryCrea
             success=success,
             error_message=error_message,
             metadata={
-                "final_step": context.current_step,
                 "fix_attempts": len(context.fix_attempts),
                 "workspace_path": context.workspace_path
             }

@@ -9,20 +9,6 @@ from app.grpc import hyperion_pb2
 from app.grpc.models import GrpcMessage, BoundaryConditions, ProblemStatement, Repository
 
 
-class SolutionCreationStep(str, Enum):
-    """Individual steps in solution creation."""
-    GENERATE_PLAN = "generate_plan"
-    DEFINE_STRUCTURE = "define_structure"
-    GENERATE_HEADERS = "generate_headers"
-    GENERATE_LOGIC = "generate_logic"
-    CREATE_TEST_INFRA = "create_test_infra"
-    WRITE_UNIT_TESTS = "write_unit_tests"
-    WRITE_E2E_TESTS = "write_e2e_tests"
-    EXECUTE_TESTS = "execute_tests"
-    EVALUATE_OUTPUT = "evaluate_output"
-    ITERATIVE_FIX = "iterative_fix"
-
-
 class SolutionPlan(BaseModel):
     """High-level solution architecture plan."""
     architecture_description: str = Field(..., description="High-level solution architecture")
@@ -53,7 +39,6 @@ class SolutionCreationContext(BaseModel):
     boundary_conditions: BoundaryConditions = Field(..., description="Exercise boundary conditions")
     problem_statement: ProblemStatement = Field(..., description="Problem statement")
     workspace_path: str = Field(..., description="Path to temporary workspace")
-    current_step: SolutionCreationStep = Field(..., description="Current step")
     model: Optional[BaseLanguageModel] = Field(None, description="AI language model for generation", exclude=True)
     solution_plan: Optional[SolutionPlan] = Field(None, description="Generated solution plan")
     file_structure: Optional[FileStructure] = Field(None, description="Defined file structure")
