@@ -1,6 +1,6 @@
 import sys
 from unittest.mock import Mock, patch
-from typing import Any, Dict, List
+from typing import Any, Dict
 import json
 
 # Mock OpenAI - this must be done before any other imports

@@ -1,7 +1,8 @@
 import sys
 from unittest.mock import Mock, patch
-from pydantic import BaseModel, Field
-from typing import Dict, Any, Optional, List
+from pydantic import BaseModel
+from typing import Any
+import pytest
 from athena.module_config import ModuleConfig
 from athena.schemas.exercise_type import ExerciseType
 
@@ -76,6 +77,10 @@ mock_module.GradedFeedbackGenerationPrompt = GradedFeedbackGenerationPrompt
 mock_module.NonGradedFeedbackGenerationPrompt = NonGradedFeedbackGenerationPrompt
 mock_module.FileSummaryPrompt = FileSummaryPrompt
 
-# Apply the patches
+# Apply the module patch
 sys.modules['module_programming_llm.config'] = mock_module
-patch("athena.module_config.get_module_config", return_value=mock_config).start() 
+
+@pytest.fixture(autouse=True)
+def mock_module_config():
+    with patch("athena.module_config.get_module_config", return_value=mock_config) as mock:
+        yield mock 

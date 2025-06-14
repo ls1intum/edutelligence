@@ -1,11 +1,7 @@
 import pytest
 from typing import List, Optional, Dict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
-from tests.modules.programming.module_programming_llm.mock.utils.mock_module_config import (
-    GradedBasicApproachConfig,
-    NonGradedBasicApproachConfig,
-)
 from tests.modules.programming.module_programming_llm.mock.utils.mock_config import (
     MockModelConfig,
     create_mock_graded_config,
@@ -24,11 +20,7 @@ class MockFeedback:
     line_end: Optional[int] = None
     credits: Optional[float] = None
     is_graded: bool = False
-    meta: Dict = None
-
-    def __post_init__(self):
-        if self.meta is None:
-            self.meta = {}
+    meta: Dict = field(default_factory=dict)
 
 async def mock_generate_graded_suggestions(exercise, submission, config) -> List[MockFeedback]:
     if not submission.files:

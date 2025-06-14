@@ -1,6 +1,6 @@
 import os
 import sys
-from unittest.mock import Mock, patch
+from unittest.mock import Mock
 from pydantic import BaseModel, Field
 from typing import Dict, Any, Optional, Callable
 from langchain.base_language import BaseLanguageModel
