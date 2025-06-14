@@ -1,45 +1,67 @@
 services:
-  logos-server:
+  traefik:
+    image: traefik:v2.10
+    container_name: traefik
     restart: unless-stopped
-    container_name: logos-server
+    command:
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.websecure.address=:443"
+      - "--entrypoints.secure8080.address=:8080"
+      - "--certificatesresolvers.letsencrypt.acme.tlschallenge=true"
+      - "--certificatesresolvers.letsencrypt.acme.email=admin@tum.de"
+      - "--certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json"
+    ports:
+      - "443:443"
+      - "8080:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./letsencrypt:/letsencrypt
+    networks:
+      - internal
+
+  logos-server:
     build:
       context: ../
       dockerfile: ./logos/Dockerfile
+    container_name: logos-server
+    restart: unless-stopped
     depends_on:
       logos-db:
         condition: service_healthy
     volumes:
-      -   data_volume:/src/logos
+      - data_volume:/src/logos
     environment:
       PROVIDER_NAME:
       BASE_URL:
-    ports:
+    expose:
       - "8080"
-      - "50051:50051"
     labels:
       - "traefik.enable=true"
 
-      # === /v1 ===
+      # === Routing: /v1 ===
       - "traefik.http.routers.logos-server-v1.rule=PathPrefix(`/v1`)"
       - "traefik.http.routers.logos-server-v1.entrypoints=secure8080"
       - "traefik.http.routers.logos-server-v1.tls=true"
       - "traefik.http.routers.logos-server-v1.tls.certresolver=letsencrypt"
       - "traefik.http.routers.logos-server-v1.service=logos-server"
 
-      # === /logosdb ===
+      # === Routing: /logosdb ===
       - "traefik.http.routers.logos-server-logosdb.rule=PathPrefix(`/logosdb`)"
       - "traefik.http.routers.logos-server-logosdb.entrypoints=secure8080"
       - "traefik.http.routers.logos-server-logosdb.tls=true"
       - "traefik.http.routers.logos-server-logosdb.tls.certresolver=letsencrypt"
       - "traefik.http.routers.logos-server-logosdb.service=logos-server"
 
+      # Service-Port
       - "traefik.http.services.logos-server.loadbalancer.server.port=8080"
     networks:
       - internal
+
   logos-db:
     image: postgres:17
-    restart: unless-stopped
     container_name: logos-db
+    restart: unless-stopped
     user: postgres
     environment:
       POSTGRES_USER: postgres
@@ -56,50 +78,58 @@ services:
       - postgres_data:/var/lib/postgresql/data
     networks:
       - internal
+
   logos-ui:
     build:
       context: ../
       dockerfile: ./logos/logos-ui/Dockerfile
-    restart: unless-stopped
     container_name: logos-ui
+    restart: unless-stopped
+    expose:
+      - "80"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.internal-ui.rule=PathPrefix(`/`)"
+      - "traefik.http.routers.internal-ui.entrypoints=secure8080"
+      - "traefik.http.routers.internal-ui.tls=true"
+      - "traefik.http.routers.internal-ui.tls.certresolver=letsencrypt"
+      - "traefik.http.services.internal-ui.loadbalancer.server.port=80"
+    networks:
+      - internal
+
+  landing-page:
+    build:
+      context: ../
+      dockerfile: ./logos/logos-landing/Dockerfile
+    container_name: logos-landing
+    restart: unless-stopped
     environment:
       - NODE_OPTIONS=--max-old-space-size=1024
     expose:
       - "80"
-    ports:
-      - "8081:80"    # host → container
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.logos-ui.rule=PathPrefix(`/`)"
-      - "traefik.http.routers.logos-ui.entrypoints=websecure"
-      - "traefik.http.routers.logos-ui.tls=true"
-      - "traefik.http.routers.logos-ui.tls.certresolver=letsencrypt"
-      - "traefik.http.services.logos-ui.loadbalancer.server.port=80"
-    depends_on:
-      - logos-server
+
+      # === Production domain: https://logos.ase.cit.tum.de/
+      - "traefik.http.routers.landing-prod.rule=Host(`logos.ase.cit.tum.de`) && PathPrefix(`/`)"
+      - "traefik.http.routers.landing-prod.entrypoints=websecure"
+      - "traefik.http.routers.landing-prod.tls=true"
+      - "traefik.http.routers.landing-prod.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.landing-prod.service=landing-prod-svc"
+
+      # === Local development: https://localhost/
+      - "traefik.http.routers.landing-dev.rule=Host(`localhost`) && PathPrefix(`/`)"
+      - "traefik.http.routers.landing-dev.entrypoints=websecure"
+      - "traefik.http.routers.landing-dev.tls=true"
+      - "traefik.http.routers.landing-dev.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.landing-dev.service=landing-dev-svc"
+
+      # Beide Services zeigen auf Port 80
+      - "traefik.http.services.landing-prod-svc.loadbalancer.server.port=80"
+      - "traefik.http.services.landing-dev-svc.loadbalancer.server.port=80"
     networks:
       - internal
-  traefik:
-    image: traefik:v2.10
-    container_name: traefik
-    restart: unless-stopped
-    command:
-      - "--providers.docker=true"
-      - "--providers.docker.exposedbydefault=false"
-      - "--entrypoints.websecure.address=:443"
-      - "--entrypoints.secure8080.address=:8080"
-      - "--certificatesresolvers.letsencrypt.acme.tlschallenge=true"
-      - "--certificatesresolvers.letsencrypt.acme.email=admin@tum.de"
-      - "--certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json"
-    ports:
-      - "443:443"
-      - "8080:8080"
-      - "8082:8082"
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-      - ./letsencrypt:/letsencrypt
-    networks:
-      - internal
+
 volumes:
   data_volume:
   postgres_data:
