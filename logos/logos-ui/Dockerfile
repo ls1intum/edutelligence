@@ -12,13 +12,18 @@ RUN npm ci
 # Build React app (defaults to production mode)
 RUN npx expo export --platform web --output-dir web-build
 
-# 2. NGINX Stage
-FROM nginx:stable AS final
+# 2. Serve Stage (no nginx needed)
+FROM node:alpine
+
+# Install a static file server
+RUN npm install -g serve
+
+WORKDIR /app
 
 EXPOSE 80
 
-# Copy build output to NGINX html directory
-COPY --from=build /app/web-build /usr/share/nginx/html
+# Copy exported web build from previous stage
+COPY --from=build /app/web-build ./web-build
 
-# Optional: Replace default nginx.conf if needed
-# COPY ./nginx.conf /etc/nginx/nginx.conf
+# Serve the app
+CMD ["serve", "-s", "web-build", "-l", "80"]

@@ -16,6 +16,21 @@ services:
     ports:
       - "8080"
       - "50051:50051"
+    labels:
+      - "traefik.enable=true"
+
+      # === Route für /v1 ===
+      - "traefik.http.routers.logos-server-v1.rule=PathPrefix(`/v1`)"
+      - "traefik.http.routers.logos-server-v1.entrypoints=web"
+      - "traefik.http.routers.logos-server-v1.service=logos-server"
+
+      # === Route für /logosdb ===
+      - "traefik.http.routers.logos-server-logosdb.rule=PathPrefix(`/logosdb`)"
+      - "traefik.http.routers.logos-server-logosdb.entrypoints=web"
+      - "traefik.http.routers.logos-server-logosdb.service=logos-server"
+
+      # === Service-Port für beide ===
+      - "traefik.http.services.logos-server.loadbalancer.server.port=8080"
     networks:
       - internal
   logos-db:
@@ -47,24 +62,31 @@ services:
     environment:
       - NODE_OPTIONS=--max-old-space-size=1024
     expose:
-      - "80"         # internal port
+      - "80"
     ports:
       - "8081:80"    # host → container
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.logos-ui.rule=PathPrefix(`/`)"
+      - "traefik.http.routers.logos-ui.entrypoints=web"
+      - "traefik.http.services.logos-ui.loadbalancer.server.port=80"
+    depends_on:
+      - logos-server
     networks:
       - internal
-    depends_on:
-      - logos-server
-  nginx:
-    image: nginx:latest
-    container_name: logos-nginx
+  traefik:
+    image: traefik:v2.10
+    container_name: traefik
+    restart: unless-stopped
+    command:
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:8080"
     ports:
       - "8080:8080"
+      - "8082:8082" # Traefik-Dashboard (optional)
     volumes:
-      - ./logos-ui/dist/:/usr/share/nginx/html:ro
-      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-    depends_on:
-      - logos-server
-      - logos-ui
+      - /var/run/docker.sock:/var/run/docker.sock:ro
     networks:
       - internal
 volumes:
