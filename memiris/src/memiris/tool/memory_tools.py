@@ -1,5 +1,7 @@
 from typing import Callable, List
 
+from langfuse import observe
+
 from memiris.dto.memory_main_dto import MemoryDto
 from memiris.repository.memory_repository import MemoryRepository
 from memiris.service.vectorizer import Vectorizer
@@ -14,6 +16,7 @@ def create_tool_find_similar(
     Create a tool to find similar memories.
     """
 
+    @observe("tool.memory.find_by_id")
     def find_similar_memories(memory_id: str) -> List[MemoryDto]:
         """
         Find memories that are similar to the given memory.
@@ -55,6 +58,7 @@ def create_tool_search_memories(
     Create a tool to search for memories.
     """
 
+    @observe("tool.memory.search")
     def search_memories(query: str) -> List[MemoryDto]:
         """
         Search for memories based on the given query.

@@ -14,6 +14,7 @@ jinja2 = "^3.1.6"
 ollama = "^0.4.8"
 cachetools = "^5.5.2"
 pylint-per-file-ignores = "^1.4.0"
+langfuse = "^3.0.1"
 
 [tool.poetry.group.dev.dependencies]
 mypy = "^1.10.0"
@@ -36,6 +37,15 @@ multi_line_output = 3
 
 [tool.bandit]
 exclude_dirs = ["tests"]
+
+[tool.mypy]
+
+[[tool.mypy.overrides]]
+module = "langfuse.*"
+ignore_missing_imports = true
+
+[tool.pylint."MESSAGES CONTROL"]
+disable = ["not-context-manager"]
 
 [tool.coverage.run]
 branch = true

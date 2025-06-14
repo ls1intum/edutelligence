@@ -1,6 +1,7 @@
 from typing import List, Optional
 
 from jinja2 import Template
+from langfuse import observe
 from ollama import Message
 
 from memiris.domain.learning import Learning
@@ -37,6 +38,7 @@ class LearningDeduplicator:
         self.template = create_template(template, "learning_deduplication.md.j2")
         self.ollama_service = ollama_service
 
+    @observe(name="learning-deduplication")
     def deduplicate(self, learnings: List[Learning], **kwargs) -> List[Learning]:
         """
         Deduplicate the given learnings using the LLM.

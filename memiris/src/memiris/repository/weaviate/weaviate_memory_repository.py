@@ -1,6 +1,7 @@
 from typing import Mapping, Sequence, Union
 from uuid import UUID
 
+from langfuse import observe
 from weaviate import WeaviateClient
 from weaviate.collections import Collection
 from weaviate.collections.classes.filters import Filter
@@ -28,6 +29,7 @@ class WeaviateMemoryRepository(MemoryRepository, _WeaviateBaseRepository):
         super().__init__(client)
         self.collection = self.memory_collection
 
+    @observe("weaviate.memory_repository.save")
     def save(self, tenant: str, entity: Memory) -> Memory:
         """Save a Memory entity to Weaviate."""
 
@@ -69,6 +71,7 @@ class WeaviateMemoryRepository(MemoryRepository, _WeaviateBaseRepository):
 
         return entity
 
+    @observe("weaviate.memory_repository.find")
     def find(self, tenant: str, entity_id: UUID) -> Memory:
         """Find a Memory by its ID."""
         try:
@@ -89,6 +92,7 @@ class WeaviateMemoryRepository(MemoryRepository, _WeaviateBaseRepository):
         except Exception as e:
             raise ValueError(f"Error retrieving Memory with id {entity_id}") from e
 
+    @observe("weaviate.memory_repository.all")
     def all(self, tenant: str, include_deleted: bool = False) -> list[Memory]:
         """Get all Memory objects."""
         try:
@@ -112,6 +116,7 @@ class WeaviateMemoryRepository(MemoryRepository, _WeaviateBaseRepository):
         except Exception as e:
             raise ValueError("Error retrieving all Memory objects") from e
 
+    @observe("weaviate.memory_repository.delete")
     def delete(self, tenant: str, entity_id: UUID) -> None:
         """Delete a Memory by its ID."""
         try:
@@ -119,6 +124,7 @@ class WeaviateMemoryRepository(MemoryRepository, _WeaviateBaseRepository):
         except Exception as e:
             raise ValueError(f"Error deleting Memory with id {entity_id}") from e
 
+    @observe("weaviate.memory_repository.search")
     def search(
         self, tenant: str, vector_name: str, vector: Sequence[float], count: int
     ) -> list[Memory]:
@@ -144,6 +150,7 @@ class WeaviateMemoryRepository(MemoryRepository, _WeaviateBaseRepository):
         except Exception as e:
             raise ValueError("Error searching for Memory objects") from e
 
+    @observe("weaviate.memory_repository.search_multi")
     def search_multi(
         self, tenant: str, vectors: Mapping[str, Sequence[float]], count: int
     ) -> list[Memory]:
@@ -173,6 +180,7 @@ class WeaviateMemoryRepository(MemoryRepository, _WeaviateBaseRepository):
         except Exception as e:
             raise ValueError("Error searching for Memory objects") from e
 
+    @observe("weaviate.memory_repository.find_unslept_memories")
     def find_unslept_memories(self, tenant: str) -> list[Memory]:
         try:
             # Combine filters for both unslept AND not deleted memories

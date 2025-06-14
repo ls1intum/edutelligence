@@ -1,6 +1,7 @@
 from typing import List, Optional
 
 from jinja2 import Template
+from langfuse import observe
 from ollama import Message
 
 from memiris.domain.learning import Learning
@@ -44,6 +45,7 @@ class LearningExtractor:
         self.ollama_service = ollama_service
         self.template = create_template(template, "learning_extraction.md.j2")
 
+    @observe(name="learning-extraction")
     def extract(
         self, text: str, previous_learnings: Optional[List[Learning]] = None, **kwargs
     ) -> list[Learning]:

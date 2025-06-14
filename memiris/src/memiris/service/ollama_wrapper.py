@@ -6,6 +6,7 @@ import os
 from dataclasses import dataclass
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Union
 
+import langfuse
 from ollama import ChatResponse as OllamaChatResponse
 from ollama import Client, EmbedResponse, ListResponse, Message
 
@@ -107,6 +108,7 @@ class OllamaService:
 
         auth_tuple = (username, password) if username and password else None
         self.client = Client(host, auth=auth_tuple)
+        self.langfuse_client = langfuse.get_client()
 
     def list(self) -> List[ModelInfo]:
         """
@@ -161,14 +163,22 @@ class OllamaService:
         Returns:
             WrappedChatResponse: The response from the model.
         """
-        response = self.client.chat(
-            model,
-            messages=messages,
-            format=response_format,
-            keep_alive=keep_alive,
-            options=options,
-            **kwargs,
-        )
+        # Create a nested generation
+        with self.langfuse_client.start_as_current_generation(
+            name="ollama-chat", model=model, input=messages, model_parameters=options
+        ) as generation:
+            response = self.client.chat(
+                model,
+                messages=messages,
+                format=response_format,
+                keep_alive=keep_alive,
+                options=options,
+                **kwargs,
+            )
+            generation.update(
+                output=response.message,
+                metadata=response,
+            )
         return WrappedChatResponse.from_ollama_response(response)
 
     def embed(self, model: str, text: str) -> WrappedEmbeddingResponse:

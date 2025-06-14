@@ -1,6 +1,7 @@
 from typing import Any, Callable, List, Mapping, Optional, Union
 
 from jinja2 import Template
+from langfuse import observe
 from ollama import Message
 
 from memiris.domain.learning import Learning
@@ -61,6 +62,7 @@ class MemoryCreator:
 
         self.template = create_template(template, "memory_creator.md.j2")
 
+    @observe(name="memory-creation")
     def create(self, learnings: List[Learning], tenant: str, **kwargs) -> List[Memory]:
         """
         Create a memory from the given learnings using the LLM.

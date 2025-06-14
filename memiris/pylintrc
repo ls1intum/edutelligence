@@ -132,6 +132,7 @@ disable=R,
         xrange-builtin,
         zip-builtin-not-iterating,
         broad-exception-caught,
+        not-context-manager,
 
 
 [REPORTS]

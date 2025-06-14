@@ -1,6 +1,7 @@
 from typing import List
 from uuid import UUID
 
+from langfuse import observe
 from weaviate import WeaviateClient
 from weaviate.collections import Collection
 from weaviate.collections.classes.filters import Filter
@@ -30,6 +31,7 @@ class WeaviateMemoryConnectionRepository(
         super().__init__(client)
         self.collection = self.memory_connection_collection
 
+    @observe("weaviate.memory_connection_repository.save")
     def save(self, tenant: str, entity: MemoryConnection) -> MemoryConnection:
         """Save a MemoryConnection entity to Weaviate."""
 
@@ -73,6 +75,7 @@ class WeaviateMemoryConnectionRepository(
 
         return entity
 
+    @observe("weaviate.memory_connection_repository.find")
     def find(self, tenant: str, entity_id: UUID) -> MemoryConnection:
         """Find a MemoryConnection by its ID."""
         try:
@@ -91,6 +94,7 @@ class WeaviateMemoryConnectionRepository(
                 f"Error retrieving MemoryConnection with id {entity_id}"
             ) from e
 
+    @observe("weaviate.memory_connection_repository.all")
     def all(self, tenant: str) -> List[MemoryConnection]:
         """Get all MemoryConnection objects."""
         try:
@@ -105,6 +109,7 @@ class WeaviateMemoryConnectionRepository(
         except Exception as e:
             raise ValueError("Error retrieving all MemoryConnection objects") from e
 
+    @observe("weaviate.memory_connection_repository.delete")
     def delete(self, tenant: str, entity_id: UUID) -> None:
         """Delete a MemoryConnection by its ID."""
         try:
@@ -114,6 +119,7 @@ class WeaviateMemoryConnectionRepository(
                 f"Error deleting MemoryConnection with id {entity_id}"
             ) from e
 
+    @observe("weaviate.memory_connection_repository.find_by_connection_type")
     def find_by_connection_type(
         self, tenant: str, connection_type: str
     ) -> List[MemoryConnection]:

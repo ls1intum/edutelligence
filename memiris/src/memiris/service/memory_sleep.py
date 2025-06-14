@@ -3,7 +3,10 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Optional
 from uuid import UUID
 
+import langfuse
 from jinja2 import Template
+from langfuse import observe
+from langfuse._client.client import Langfuse
 from ollama import Message
 
 from memiris.domain.memory import Memory
@@ -37,6 +40,7 @@ class MemorySleeper:
     memory_connection_repository: MemoryConnectionRepository
     vectorizer: Vectorizer
     ollama_service: OllamaService
+    langfuse_client: Langfuse
 
     template_deduplication: Template
     template_connector: Template
@@ -83,6 +87,9 @@ class MemorySleeper:
             template_connector, "memory_sleep/memory_connector.md.j2"
         )
 
+        self.langfuse_client = langfuse.get_client()
+
+    @observe(name="memory-sleep")
     def run_sleep(self, tenant: str, **kwargs):
         """
         Run the sleep service for the memory system.
@@ -131,6 +138,7 @@ class MemorySleeper:
         # 6. Resolve transitive connections
         # self._resolve_transitive_connections(saved_memories, tenant, **kwargs)
 
+    @observe(name="internal-only-memory-deduplication")
     def _deduplicate_memories(
         self, recent_memories: List[Memory], tenant: str, **kwargs
     ) -> List[Memory]:
@@ -408,6 +416,7 @@ class MemorySleeper:
             print(f"Error processing deduplicated memories: {e}")
         return recent_memories
 
+    @observe(name="with-existing-memory-deduplication")
     def _deduplicate_with_existing_memories(
         self,
         deduplicated_memories: List[Memory],
@@ -467,6 +476,8 @@ class MemorySleeper:
         final_deduplicated_memories = []
         memories_without_vectors = [m for m in deduplicated_memories if not m.vectors]
 
+        kwargs["langfuse_trace_id"] = self.langfuse_client.get_current_trace_id()
+
         # Process each chunk in parallel
         with ThreadPoolExecutor(max_workers=5) as executor:
             future_to_chunk = {
@@ -498,6 +509,7 @@ class MemorySleeper:
 
         return final_deduplicated_memories
 
+    @observe(name="process-memories-chunk")
     def _process_chunk(
         self, memory_chunk: List[Memory], tenant: str, **kwargs
     ) -> List[Memory]:
@@ -573,6 +585,7 @@ class MemorySleeper:
 
         return deduplicated_chunk
 
+    @observe(name="connect-memories")
     def _connect_memories(
         self, memories: List[Memory], tenant: str, **kwargs
     ) -> List[Memory]:

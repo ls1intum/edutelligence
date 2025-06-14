@@ -1,3 +1,4 @@
+from langfuse import observe
 from typing_extensions import Sequence
 
 from memiris.service.ollama_wrapper import OllamaService
@@ -24,6 +25,7 @@ class Vectorizer:
         }
         self.ollama_service = ollama_service
 
+    @observe(name="vectorization")
     def vectorize(self, query: str) -> dict[str, Sequence[float]]:
         """
         Vectorize the given query using the specified models.
