@@ -7,8 +7,7 @@ from app.grpc.models import Repository
 from .models import (
     SolutionRepositoryCreatorRequest, 
     SolutionRepositoryCreatorResponse,
-    SolutionCreationContext,
-    SolutionCreationStep
+    SolutionCreationContext
 )
 from .code_generator import CodeGenerator
 from ..workspace import TempWorkspaceManager

@@ -431,14 +431,19 @@ class TestSolutionRepositoryCreatorIntegration:
                 grpc_context = Mock()
 
                 # Execute the service
-                response = await servicer.CreateSolutionRepository(mock_request, grpc_context)
+                response: hyperion_pb2.SolutionRepositoryCreatorResponse = await servicer.CreateSolutionRepository(mock_request, grpc_context)
 
                 # Verify the response structure
                 assert response is not None
                 assert response.solution_repository is not None
 
+                print(f"\nWorkspace path: {temp_workspace}")
+                
+                for repository in response.solution_repository.files:
+                    print(f"\nRepository file: {repository.path}")
+                    print(f"Content: {repository.content}\n")
+
                 # Verify that files were created in the workspace
-                print(f"Workspace path: {temp_workspace}")
                 workspace_path = Path(temp_workspace)
                 assert (workspace_path / "src").is_dir()
                 assert (workspace_path / "tests").is_dir()
