@@ -39,16 +39,6 @@ class FileStructure(BaseModel):
     build_files: List[str] = Field(default_factory=list, description="Build configuration files")
 
 
-class TestExecutionResult(BaseModel):
-    """Result of test execution."""
-    success: bool = Field(..., description="Whether tests passed")
-    stdout: str = Field(default="", description="Standard output")
-    stderr: str = Field(default="", description="Standard error")
-    test_results: Dict[str, Any] = Field(default_factory=dict, description="Parsed test results")
-    compilation_errors: List[str] = Field(default_factory=list, description="Compilation errors")
-    runtime_errors: List[str] = Field(default_factory=list, description="Runtime errors")
-
-
 class FixAttempt(BaseModel):
     """Single fix attempt during iterative fixing."""
     iteration: int = Field(..., description="Iteration number")
@@ -68,7 +58,6 @@ class SolutionCreationContext(BaseModel):
     solution_plan: Optional[SolutionPlan] = Field(None, description="Generated solution plan")
     file_structure: Optional[FileStructure] = Field(None, description="Defined file structure")
     solution_repository: Optional[Repository] = Field(None, description="Generated solution repository")
-    test_results: List[TestExecutionResult] = Field(default_factory=list, description="Test execution results")
     fix_attempts: List[FixAttempt] = Field(default_factory=list, description="Fix attempts made")
     metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
 

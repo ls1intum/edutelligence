@@ -3,7 +3,7 @@
 from typing import List, Dict, Any
 
 from .base_handler import BaseLanguageHandler
-from ..models import SolutionCreationContext, FileStructure, TestExecutionResult
+from ..models import SolutionCreationContext, FileStructure
 
 
 class PythonHandler(BaseLanguageHandler):
@@ -39,35 +39,6 @@ class PythonHandler(BaseLanguageHandler):
         # TODO: Implement pytest test class generation
         return ""
 
-    def compile_solution(self, context: SolutionCreationContext) -> TestExecutionResult:
-        """Validate Python syntax (no compilation needed)."""
-        # TODO: Implement Python syntax validation
-        return TestExecutionResult(success=False)
-
-    def run_tests(self, context: SolutionCreationContext) -> TestExecutionResult:
-        """Run pytest tests."""
-        # TODO: Implement Python test execution
-        return TestExecutionResult(success=False)
-
-    def parse_compilation_errors(self, output: str) -> List[str]:
-        """Parse Python syntax errors."""
-        # TODO: Implement Python syntax error parsing
-        return []
-
-    def parse_test_failures(self, output: str) -> List[str]:
-        """Parse pytest test failures."""
-        # TODO: Implement pytest failure parsing
-        return []
-
-    def fix_syntax_error(self, error: str, context: SolutionCreationContext) -> str:
-        """Generate a fix for a Python syntax error."""
-        # TODO: Implement Python syntax error fixing
-        return ""
-
     def get_file_extension(self) -> str:
         """Get the Python file extension."""
         return ".py"
-
-    def get_test_framework(self) -> str:
-        """Get the default test framework for Python."""
-        return "pytest" 

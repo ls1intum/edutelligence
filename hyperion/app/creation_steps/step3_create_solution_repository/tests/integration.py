@@ -438,6 +438,7 @@ class TestSolutionRepositoryCreatorIntegration:
                 assert response.solution_repository is not None
 
                 # Verify that files were created in the workspace
+                print(f"Workspace path: {temp_workspace}")
                 workspace_path = Path(temp_workspace)
                 assert (workspace_path / "src").is_dir()
                 assert (workspace_path / "tests").is_dir()

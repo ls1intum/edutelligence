@@ -4,8 +4,7 @@ from abc import ABC, abstractmethod
 from typing import List, Dict, Any, Optional
 import logging
 
-from ..models import SolutionCreationContext, FileStructure, TestExecutionResult
-from ..exceptions import LanguageHandlerException
+from ..models import SolutionCreationContext, FileStructure
 
 logger = logging.getLogger(__name__)
 
@@ -84,67 +83,6 @@ class BaseLanguageHandler(ABC):
             
         Returns:
             Test class code as string
-        """
-        pass
-
-    @abstractmethod
-    def compile_solution(self, context: SolutionCreationContext) -> TestExecutionResult:
-        """Compile the solution code.
-        
-        Args:
-            context: The solution creation context
-            
-        Returns:
-            Compilation result
-        """
-        pass
-
-    @abstractmethod
-    def run_tests(self, context: SolutionCreationContext) -> TestExecutionResult:
-        """Run tests for the solution.
-        
-        Args:
-            context: The solution creation context
-            
-        Returns:
-            Test execution result
-        """
-        pass
-
-    @abstractmethod
-    def parse_compilation_errors(self, output: str) -> List[str]:
-        """Parse compilation errors from compiler output.
-        
-        Args:
-            output: Compiler output
-            
-        Returns:
-            List of parsed error messages
-        """
-        pass
-
-    @abstractmethod
-    def parse_test_failures(self, output: str) -> List[str]:
-        """Parse test failures from test runner output.
-        
-        Args:
-            output: Test runner output
-            
-        Returns:
-            List of parsed test failure messages
-        """
-        pass
-
-    @abstractmethod
-    def fix_syntax_error(self, error: str, context: SolutionCreationContext) -> str:
-        """Generate a fix for a syntax error.
-        
-        Args:
-            error: Syntax error description
-            context: The solution creation context
-            
-        Returns:
-            Fix description or code change
         """
         pass
 
