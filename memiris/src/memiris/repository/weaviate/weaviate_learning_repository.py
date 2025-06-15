@@ -26,7 +26,7 @@ class WeaviateLearningRepository(LearningRepository, _WeaviateBaseRepository):
         super().__init__(client)
         self.collection = self.learning_collection
 
-    @observe("weaviate.learning_repository.save")
+    @observe(name="weaviate.learning_repository.save")
     def save(self, tenant: str, entity: Learning) -> Learning:
         """Save a Learning entity to Weaviate."""
 
@@ -48,7 +48,7 @@ class WeaviateLearningRepository(LearningRepository, _WeaviateBaseRepository):
 
         return entity
 
-    @observe("weaviate.learning_repository.find")
+    @observe(name="weaviate.learning_repository.find")
     def find(self, tenant: str, entity_id: UUID) -> Learning:
         """Find a Learning by its ID."""
         try:
@@ -65,7 +65,7 @@ class WeaviateLearningRepository(LearningRepository, _WeaviateBaseRepository):
         except Exception as e:
             raise ValueError(f"Error retrieving Learning with id {entity_id}") from e
 
-    @observe("weaviate.learning_repository.all")
+    @observe(name="weaviate.learning_repository.all")
     def all(self, tenant: str) -> list[Learning]:
         """Get all Learning objects."""
         try:
@@ -80,7 +80,7 @@ class WeaviateLearningRepository(LearningRepository, _WeaviateBaseRepository):
         except Exception as e:
             raise ValueError("Error retrieving all Learning objects") from e
 
-    @observe("weaviate.learning_repository.delete")
+    @observe(name="weaviate.learning_repository.delete")
     def delete(self, tenant: str, entity_id: UUID) -> None:
         """Delete a Learning by its ID."""
         try:
@@ -88,7 +88,7 @@ class WeaviateLearningRepository(LearningRepository, _WeaviateBaseRepository):
         except Exception as e:
             raise ValueError(f"Error deleting Learning with id {entity_id}") from e
 
-    @observe("weaviate.learning_repository.search")
+    @observe(name="weaviate.learning_repository.search")
     def search(
         self, tenant: str, vector_name: str, vector: Sequence[float], count: int
     ) -> list[Learning]:
@@ -109,7 +109,7 @@ class WeaviateLearningRepository(LearningRepository, _WeaviateBaseRepository):
         except Exception as e:
             raise ValueError("Error finding similar Learning objects") from e
 
-    @observe("weaviate.learning_repository.search_multi")
+    @observe(name="weaviate.learning_repository.search_multi")
     def search_multi(
         self, tenant: str, vectors: Mapping[str, Sequence[float]], count: int
     ) -> list[Learning]:
@@ -132,7 +132,7 @@ class WeaviateLearningRepository(LearningRepository, _WeaviateBaseRepository):
         except Exception as e:
             raise ValueError("Error searching for Learning objects") from e
 
-    @observe("weaviate.learning_repository.find_by_ids")
+    @observe(name="weaviate.learning_repository.find_by_ids")
     def find_by_ids(self, tenant: str, ids: list[UUID]) -> list[Learning]:
         """
         Retrieve multiple learning objects by their IDs in a single batch operation.

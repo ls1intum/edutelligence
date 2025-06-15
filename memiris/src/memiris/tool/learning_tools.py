@@ -16,7 +16,7 @@ def create_tool_find_learnings_by_id(
     Create a tool to find learnings by their IDs.
     """
 
-    @observe("tool.learning.find_by_id")
+    @observe(name="tool.learning.find_by_id")
     def find_learnings_by_id(learning_ids: List[str]) -> List[LearningDto]:
         """
         Find learnings by their IDs. Can be used to get unknown learnings of a memory.
@@ -46,7 +46,7 @@ def create_tool_find_similar_learnings(
     Create a tool to find similar learnings.
     """
 
-    @observe("tool.learning.find_similar")
+    @observe(name="tool.learning.find_similar")
     def find_similar_learnings(learning_id: str) -> List[LearningDto]:
         """
         Find learnings that are similar to the given learning.
@@ -89,7 +89,7 @@ def create_tool_search_learnings(
     Create a tool to search for learnings.
     """
 
-    @observe("tool.learning.search")
+    @observe(name="tool.learning.search")
     def search_learnings(query: str) -> List[LearningDto]:
         """
         Search for learnings based on the given query.

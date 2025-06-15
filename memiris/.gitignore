@@ -11,6 +11,15 @@ llm_config.local.yml
 !/docker/.docker-data/artemis-data/.gitkeep
 /docker/.docker-data/weaviate-data/*
 !/docker/.docker-data/weaviate-data/.gitkeep
+/docker/.docker-data/langfuse/postgres/*
+!/docker/.docker-data/langfuse/postgres/.gitkeep
+/docker/.docker-data/langfuse/clickhouse/data/*
+!/docker/.docker-data/langfuse/clickhouse/data/.gitkeep
+/docker/.docker-data/langfuse/clickhouse/logs/*
+!/docker/.docker-data/langfuse/clickhouse/logs/.gitkeep
+/docker/.docker-data/langfuse/minio/*
+!/docker/.docker-data/langfuse/minio/.gitkeep
+
 
 ########################
 # Auto-generated rules #

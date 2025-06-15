@@ -3,7 +3,7 @@ name = "memiris"
 version = "0.1.0"
 description = ""
 authors = ["Timor Morrien <timor.morrien@tum.de>"]
-readme = "README.md"
+readme = "README.MD"
 packages = [{include = "memiris", from = "src"}]
 include = ["src/memiris/py.typed"]
 

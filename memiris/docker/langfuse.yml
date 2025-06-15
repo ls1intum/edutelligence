@@ -154,9 +154,25 @@ services:
 volumes:
   langfuse_postgres_data:
     driver: local
+    driver_opts:
+      type: none
+      device: ./.docker-data/langfuse/postgres
+      o: bind
   langfuse_clickhouse_data:
     driver: local
+    driver_opts:
+      type: none
+      device: ./.docker-data/langfuse/clickhouse/data
+      o: bind
   langfuse_clickhouse_logs:
     driver: local
+    driver_opts:
+      type: none
+      device: ./.docker-data/langfuse/clickhouse/logs
+      o: bind
   langfuse_minio_data:
     driver: local
+    driver_opts:
+      type: none
+      device: ./.docker-data/langfuse/minio
+      o: bind

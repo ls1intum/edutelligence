@@ -16,7 +16,7 @@ def create_tool_find_similar(
     Create a tool to find similar memories.
     """
 
-    @observe("tool.memory.find_by_id")
+    @observe(name="tool.memory.find_by_id")
     def find_similar_memories(memory_id: str) -> List[MemoryDto]:
         """
         Find memories that are similar to the given memory.
@@ -58,7 +58,7 @@ def create_tool_search_memories(
     Create a tool to search for memories.
     """
 
-    @observe("tool.memory.search")
+    @observe(name="tool.memory.search")
     def search_memories(query: str) -> List[MemoryDto]:
         """
         Search for memories based on the given query.
