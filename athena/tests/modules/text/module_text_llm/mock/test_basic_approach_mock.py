@@ -2,8 +2,8 @@ import pytest
 from module_text_llm.basic_approach.generate_suggestions import generate_suggestions
 from athena.text import Exercise, Submission, Feedback
 from athena.schemas.exercise_type import ExerciseType
-from tests.utils.mock_env import mock_sent_tokenize
-from tests.utils.mock_llm import MockLanguageModel, MockAssessmentModel, MockFeedbackModel
+from tests.modules.text.module_text_llm.mock.utils.mock_env import mock_sent_tokenize
+from tests.modules.text.module_text_llm.mock.utils.mock_llm import MockLanguageModel, MockAssessmentModel, MockFeedbackModel
 
 
 @pytest.fixture
