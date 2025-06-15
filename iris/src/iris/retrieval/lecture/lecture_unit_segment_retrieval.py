@@ -72,6 +72,9 @@ class LectureUnitSegmentRetrieval(Pipeline):
             lecture_unit_segment_retrieval_dto = self.generate_retrieval_dtos(
                 lecture_unit_segment.properties, str(lecture_unit_segment.uuid)
             )
+            if lecture_unit_segment_retrieval_dto is None:
+                continue
+
             lecture_unit_segment_retrieval_dtos.append(
                 lecture_unit_segment_retrieval_dto
             )
@@ -95,7 +98,10 @@ class LectureUnitSegmentRetrieval(Pipeline):
         """
         Search the database for the given query.
         """
-        logger.info("Searching in the database for query: %s", query)
+        logger.info(
+            "[LECTURE_UNIT_SEGMENT_RETRIEVAL]: Searching in the database for query: %s",
+            query,
+        )
         # Initialize filter to None by default
         filter_weaviate = None
 
