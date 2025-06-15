@@ -11,7 +11,7 @@ class LogosSetupRequest(BaseModel):
 
 
 class SetLogRequest(LogosKeyModel):
-    set_log: bool
+    set_log: str
     process_id: int
 
 

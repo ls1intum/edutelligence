@@ -1,6 +1,7 @@
 import json
 import os
 import traceback
+import datetime
 
 import grpc
 from fastapi import FastAPI, Request
@@ -207,7 +208,17 @@ async def logos_service(path: str, request: Request):
     # logos-API-check
     logos_key = headers["logos_key"] if "logos_key" in headers else (
         headers["Authorization"].replace("Bearer ", "") if "Authorization" in headers else "")
-
+    with DBManager() as db:
+        r, c = db.get_process_id(logos_key)
+        if c != 200:
+            print("Error while logging a request: ", r)
+            usage_id = None
+        else:
+            r, c = db.log_usage(int(r["result"]), get_client_ip(request), json_data, headers)
+            if c != 200:
+                usage_id = None
+            else:
+                usage_id = int(r["log-id"])
     # Check if Logos is used as proxy or resource
     models = request_setup(headers, logos_key)
     if not models:
@@ -226,30 +237,22 @@ async def logos_service(path: str, request: Request):
             return out
         proxy_headers, forward_url, model_id, model_name, provider_id = out
     with DBManager() as db:
-        r, c = db.get_process_id(logos_key)
-        if c != 200:
-            print("Error while logging a request: ", r)
-            request_id = None
-        else:
-            process_id = r["result"]
-            if db.log(process_id):
-                request_id = db.log_request(process_id, get_client_ip(request), json_data, provider_id, model_id, headers)
-            else:
-                request_id = None
+        if usage_id is not None:
+            db.set_forward_timestamp(usage_id)
     # Forward Request
     # Try multiple requesting methods. Start with streaming
     try:
         if "stream" not in json_data or json_data["stream"]:
             print("Sending Streaming Request")
             json_data["stream"] = True
-            return get_streaming_response(forward_url, proxy_headers, json_data, model_name, request_id, provider_id, model_id)
+            return get_streaming_response(forward_url, proxy_headers, json_data, usage_id, provider_id, model_id)
     except:
         traceback.print_exc()
     # Fall back to naive request method
     try:
         print("Falling back to Standard Request")
         json_data["stream"] = False
-        return await get_standard_response(forward_url, proxy_headers, json_data, model_name, request_id, provider_id, model_id)
+        return await get_standard_response(forward_url, proxy_headers, json_data, usage_id, provider_id, model_id)
     except:
         traceback.print_exc()
     return {"error": "provider not reachable"}, 500

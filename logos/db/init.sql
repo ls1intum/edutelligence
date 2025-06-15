@@ -4,6 +4,7 @@ GRANT ALL PRIVILEGES ON DATABASE logosdb TO postgres;
 ALTER DATABASE logosdb OWNER TO postgres;
 
 DROP TYPE IF EXISTS threshold_enum CASCADE;
+DROP TYPE IF EXISTS logging_enum CASCADE;
 DROP TABLE IF EXISTS profile_model_permissions CASCADE;
 DROP TABLE IF EXISTS policies CASCADE;
 DROP TABLE IF EXISTS model_api_keys CASCADE;
@@ -14,10 +15,10 @@ DROP TABLE IF EXISTS process CASCADE;
 DROP TABLE IF EXISTS profiles CASCADE;
 DROP TABLE IF EXISTS services CASCADE;
 DROP TABLE IF EXISTS users CASCADE;
-DROP TABLE IF EXISTS request_log CASCADE;
-DROP TABLE IF EXISTS usage_log CASCADE;
+DROP TABLE IF EXISTS log_entry CASCADE;
 DROP TABLE IF EXISTS token_types CASCADE;
 DROP TABLE IF EXISTS usage_tokens CASCADE;
+DROP TABLE IF EXISTS token_prices CASCADE;
 
 CREATE TABLE users (
     id SERIAL PRIMARY KEY,
@@ -31,13 +32,15 @@ CREATE TABLE services (
     name TEXT NOT NULL
 );
 
+CREATE TYPE logging_enum as ENUM ('BILLING', 'FULL');
+
 CREATE TABLE process (
     id SERIAL PRIMARY KEY,
     logos_key TEXT NOT NULL UNIQUE,
     name TEXT NOT NULL,
     user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
     service_id INTEGER REFERENCES services(id) ON DELETE CASCADE,
-    log BOOLEAN default(FALSE)
+    log logging_enum DEFAULT('BILLING')
 );
 
 CREATE TABLE profiles (
@@ -103,22 +106,20 @@ CREATE TABLE policies (
     topic TEXT
 );
 
-CREATE TABLE request_log (
+CREATE TABLE log_entry (
     id SERIAL PRIMARY KEY,
-    timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    process_id INTEGER NOT NULL REFERENCES process(id) ON DELETE CASCADE,
+    timestamp_request TIMESTAMPTZ NOT NULL,
+    timestamp_forwarding TIMESTAMPTZ,
+    timestamp_response TIMESTAMPTZ,
+    time_at_first_token TIMESTAMPTZ,
+    privacy_level logging_enum DEFAULT('BILLING'),
+
+    process_id INTEGER REFERENCES process(id) ON DELETE SET NULL,
+
     client_ip TEXT,
     input_payload JSONB,
-    provider_id INTEGER,
-    model_id INTEGER,
-    headers JSONB
-);
+    headers JSONB,
 
-CREATE TABLE usage_log (
-    id SERIAL PRIMARY KEY,
-    request_id INTEGER NOT NULL REFERENCES request_log(id) ON DELETE CASCADE,
-    timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    time_at_first_token TIMESTAMPTZ NOT NULL,
     response_payload JSONB,
     provider_id INTEGER,
     model_id INTEGER
@@ -133,6 +134,13 @@ CREATE TABLE token_types (
 CREATE TABLE usage_tokens (
     id SERIAL PRIMARY KEY,
     type_id INTEGER NOT NULL REFERENCES token_types(id),
-    usage_id INTEGER NOT NULL REFERENCES usage_log(id),
+    log_entry_id INTEGER NOT NULL REFERENCES log_entry(id),
     token_count INTEGER DEFAULT(0)
+);
+
+CREATE TABLE token_prices (
+    id SERIAL PRIMARY KEY,
+    type_id INTEGER NOT NULL REFERENCES token_types(id) ON DELETE CASCADE,
+    valid_from TIMESTAMPTZ NOT NULL,
+    price_per_k_token NUMERIC(10, 6) NOT NULL
 );

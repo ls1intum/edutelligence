@@ -325,18 +325,21 @@ class DBManager:
             return r, c
         return {"result": f"Successfully added model and connected to profile {profile_id}"}, 200
 
-    def set_process_log(self, process_id: int, log: bool):
+    def set_process_log(self, process_id: int, log_level: str):
+        if log_level not in {"BILLING", "FULL"}:
+            return {"error": "Invalid logging level. Choose between 'BILLING' and 'FULL'"}, 400
+
         sql = text("""
                    UPDATE process
-                   SET log = :log
+                   SET log_level = :log_level
                    WHERE id = :process_id
                    """)
         self.session.execute(sql, {
-            "log": log,
+            "log_level": log_level,
             "process_id": int(process_id)
         })
         self.session.commit()
-        return {"result": f"Updated log to {log}"}, 200
+        return {"result": f"Updated log level to {log_level}"}, 200
 
     def get_process_id(self, logos_key: str):
         sql = text("""
@@ -527,39 +530,120 @@ class DBManager:
             return False
         return result.log
 
-    def log_request(self, process_id: int, client_ip: str, input_payload: dict, provider_id: int, model_id: int,
-            headers: dict) -> int:
-        log_id = self.insert("request_log", {
-            "process_id": process_id,
-            "client_ip": client_ip,
-            "input_payload": input_payload,
-            "provider_id": provider_id,
-            "model_id": model_id,
-            "headers": headers
-        })
-        return log_id
+    def log_usage(self, process_id: int, client_ip: str = None, input_payload=None, headers=None):
+        # Hole log_level für den Prozess
+        log_level_result = self.session.execute(
+            text("SELECT log FROM process WHERE id = :pid"),
+            {"pid": process_id}
+        ).fetchone()
 
-    def log_usage(self, request_id: int, response_body: dict, usage: dict, provider_id: int, model_id: int, ttft: datetime.datetime):
-        payload_json = response_body
+        if log_level_result is None:
+            return {"error": "Invalid process ID"}, 404
+
+        log_level = log_level_result[0]  # 'BILLING' oder 'FULL'
+
+        sql = text("""
+                   INSERT INTO log_entry (timestamp_request, process_id, client_ip, input_payload, headers,
+                                          privacy_level)
+                   VALUES (:timestamp_request, :process_id, :client_ip, :input_payload, :headers,
+                           :privacy_level) RETURNING id
+                   """)
+        result = self.session.execute(sql, {
+            "timestamp_request": datetime.datetime.now(datetime.timezone.utc),
+            "process_id": process_id,
+            "client_ip": client_ip if log_level == "FULL" else None,
+            "input_payload": input_payload if log_level == "FULL" else None,
+            "headers": headers if log_level == "FULL" else None,
+            "privacy_level": log_level
+        })
+
+        log_id = result.scalar()
+        self.session.commit()
+        return {"result": f"Created Token Type.", "log-id": log_id}, 200
+
+    def set_time_at_first_token(self, log_id: int):
+        sql = text("""
+                   UPDATE log_entry
+                   SET time_at_first_token = :timestamp
+                   WHERE id = :log_id
+                   """)
+        self.session.execute(sql, {
+            "timestamp": datetime.datetime.now(datetime.timezone.utc),
+            "log_id": log_id
+        })
+        self.session.commit()
+        return {"result": "time_at_first_token set"}, 200
+
+    def set_forward_timestamp(self, log_id: int):
+        sql = text("""
+                   UPDATE log_entry
+                   SET timestamp_forwarding = :timestamp
+                   WHERE id = :log_id
+                   """)
+        self.session.execute(sql, {
+            "timestamp": datetime.datetime.now(datetime.timezone.utc),
+            "log_id": log_id
+        })
+        self.session.commit()
+        return {"result": "time_timestamp_forwarding set"}, 200
+
+    def set_response_timestamp(self, log_id: int):
+        sql = text("""
+                   UPDATE log_entry
+                   SET timestamp_response = :timestamp
+                   WHERE id = :log_id
+                   """)
+        self.session.execute(sql, {
+            "timestamp": datetime.datetime.now(datetime.timezone.utc),
+            "log_id": log_id
+        })
+        self.session.commit()
+        return {"result": "timestamp_response set"}, 200
+
+    def set_response_payload(self, log_id: int, payload: dict, provider_id=None, model_id=None, usage=None):
+        # Hole Privacy-Level
+        if usage is None:
+            usage = dict()
+        result = self.session.execute(
+            text("SELECT privacy_level FROM log_entry WHERE id = :log_id"),
+            {"log_id": log_id}
+        ).fetchone()
+
+        if result is None:
+            return {"error": "Log entry not found"}, 404
+
+        if result[0] != "FULL":
+            payload = None
+
         type_ids = dict()
-        for token_type, token_count in usage.items():
+        for token_type, token_count in usage.items() if usage is not None else dict().items():
             r, c = self.add_token_type(token_type, "")
             if "error" in r:
                 return r, c
             type_ids[token_type] = r["token-type-id"]
 
-        log_id = self.insert("usage_log", {
-            "request_id": request_id,
-            "response_payload": payload_json,
-            "provider_id": provider_id,
-            "model_id": model_id,
-            "time_at_first_token": ttft
-        })
-
         for token_type in type_ids:
             if usage[token_type]:
-                _ = self.insert("usage_tokens", {"usage_id": log_id, "type_id": type_ids[token_type], "token_count": usage[token_type]})
-        return log_id
+                _ = self.insert("usage_tokens",
+                                {"log_entry_id": log_id, "type_id": type_ids[token_type], "token_count": usage[token_type]})
+
+        sql = text("""
+                   UPDATE log_entry
+                   SET response_payload = :payload,
+                       provider_id      = COALESCE(:provider_id, provider_id),
+                       model_id         = COALESCE(:model_id, model_id),
+                       timestamp_response = :timestamp_response
+                   WHERE id = :log_id
+                   """)
+        self.session.execute(sql, {
+            "payload": payload,
+            "provider_id": provider_id,
+            "model_id": model_id,
+            "log_id": log_id,
+            "timestamp_response": datetime.datetime.now(datetime.timezone.utc)
+        })
+        self.session.commit()
+        return {"result": "response_payload set"}, 200
 
     def export(self, logos_key: str):
         if not self.check_authorization(logos_key):
@@ -587,10 +671,10 @@ class DBManager:
             "model_provider",
             "profile_model_permissions",
             "policies",
-            "request_log",
-            "usage_log",
+            "log_entry",
             "token_types",
             "usage_tokens",
+            "token_prices"
         ]
         for table_name in table_names:
             if table_name not in json_data:

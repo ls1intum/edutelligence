@@ -1,7 +1,5 @@
 import json, traceback, httpx, grpc, datetime
 
-import tiktoken
-
 from grpclocal import model_pb2, model_pb2_grpc
 from logos.dbutils.dbmanager import DBManager
 from logos.responses import request_setup, get_client_ip_address_from_context, proxy_behaviour, resource_behaviour, \
@@ -30,6 +28,18 @@ class LogosServicer(model_pb2_grpc.LogosServicer):
             context.set_details("Invalid JSON payload")
             return
 
+        with DBManager() as db:
+            r, c = db.get_process_id(meta["logos_key"])
+            if c != 200:
+                print("Error while logging a request: ", r)
+                usage_id = None
+            else:
+                r, c = db.log_usage(int(r["result"]), get_client_ip_address_from_context(request), data, meta)
+                if c != 200:
+                    usage_id = None
+                else:
+                    usage_id = int(r["log-id"])
+
         models = request_setup(meta, meta["logos_key"])
         if not models:
             with DBManager() as db:
@@ -54,20 +64,12 @@ class LogosServicer(model_pb2_grpc.LogosServicer):
         # Standard request setup
 
         with DBManager() as db:
-            r, c = db.get_process_id(meta["logos_key"])
-            if c != 200:
-                print("Error while logging a request: ", r)
-                request_id = None
-            else:
-                process_id = r["result"]
-                if db.log(process_id):
-                    request_id = db.log_request(process_id, get_client_ip_address_from_context(context), data,
-                                                provider_id, model_id, meta)
-                else:
-                    request_id = None
+            if usage_id is not None:
+                db.set_forward_timestamp(usage_id)
 
         full_text = ""
         data["stream"] = True
+        data["stream_options"] = {"include_usage": True}
         last_blob = None
         ttft = None
         try:
@@ -83,8 +85,10 @@ class LogosServicer(model_pb2_grpc.LogosServicer):
                                 # Parse Data-Chunk
                                 if raw_line.startswith("data: "):
                                     payload = raw_line.removeprefix("data: ").strip()
-                                    if ttft is None:
+                                    if ttft is None and usage_id is not None:
                                         ttft = datetime.datetime.now(datetime.timezone.utc)
+                                        with DBManager() as db:
+                                            db.set_time_at_first_token(usage_id)
                                     if payload == "[DONE]":
                                         break
                                     try:
@@ -111,20 +115,35 @@ class LogosServicer(model_pb2_grpc.LogosServicer):
             context.set_details(f"Upstream error: {e}")
             return
 
-        if ttft is None:
-            ttft = datetime.datetime.now(datetime.timezone.utc)
+        if ttft is None and usage_id is not None:
+            db.set_time_at_first_token(usage_id)
 
         # Usage-Logging
-        if request_id is not None:
+        if usage_id is not None:
             try:
                 response_for_log = last_blob
                 if response_for_log:
                     response_for_log["choices"][0]["delta"]["content"] = full_text
+
+                    usage = response_for_log["usage"] if response_for_log is not None else dict()
+                    usage_tokens = dict()
+                    for name in usage:
+                        if "tokens_details" in name:
+                            continue
+                        usage_tokens[name] = usage[name]
+                    if "prompt_tokens_details" in usage:
+                        for name in usage["prompt_tokens_details"]:
+                            usage_tokens[name] = usage["prompt_tokens_details"][name]
+                    if "completion_tokens_details" in usage:
+                        for name in usage["completion_tokens_details"]:
+                            usage_tokens[name] = usage["completion_tokens_details"][name]
+                    response_for_log["usage"] = response_for_log["usage"]
                 else:
                     response_for_log = {"full_text": full_text}
+                    usage_tokens = dict()
 
                 with DBManager() as db:
-                    db.log_usage(request_id, response_for_log, dict(), provider_id, model_id, ttft)
+                    db.set_response_payload(usage_id, response_for_log, provider_id, model_id, usage_tokens)
             except Exception:
                 traceback.print_exc()
 

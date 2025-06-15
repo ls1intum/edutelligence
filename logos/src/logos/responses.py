@@ -18,7 +18,7 @@ from logos.scheduling.scheduling_fcfs import FCFSScheduler
 from logos.scheduling.scheduling_manager import SchedulingManager
 
 
-def get_streaming_response(forward_url, proxy_headers, json_data, model_name, request_id, provider_id, model_id):
+def get_streaming_response(forward_url, proxy_headers, json_data, log_id, provider_id, model_id):
     json_data = json_data.copy()
     json_data["stream"] = True
     json_data["stream_options"] = {"include_usage": True}
@@ -39,6 +39,8 @@ def get_streaming_response(forward_url, proxy_headers, json_data, model_name, re
                         if raw_line.startswith("data: "):
                             if ttft is None:
                                 ttft = datetime.datetime.now(datetime.timezone.utc)
+                                with DBManager() as db:
+                                    db.set_time_at_first_token(log_id)
                             payload = raw_line.removeprefix("data: ").strip()
                             if payload == "[DONE]":
                                 break
@@ -62,7 +64,7 @@ def get_streaming_response(forward_url, proxy_headers, json_data, model_name, re
         if model_id is not None:
             sm = SchedulingManager(FCFSScheduler())
             sm.set_free(model_id)
-        if request_id is None:
+        if log_id is None:
             return
 
 
@@ -89,16 +91,15 @@ def get_streaming_response(forward_url, proxy_headers, json_data, model_name, re
                 first_response = {"content": full_text}
                 usage_tokens = dict()
             if ttft is None:
-                ttft = datetime.datetime.now(datetime.timezone.utc)
-            db.log_usage(request_id, first_response, usage_tokens, provider_id, model_id, ttft)
+                db.set_time_at_first_token(log_id)
+            db.set_response_payload(log_id, first_response, provider_id, model_id, usage_tokens)
 
     # Response + call_on_close
     return StreamingResponse(streamer(), media_type="application/json")
 
 
-async def get_standard_response(forward_url, proxy_headers, json_data, model_name, request_id, provider_id, model_id):
+async def get_standard_response(forward_url, proxy_headers, json_data, log_id, provider_id, model_id):
     try:
-        ttft = datetime.datetime.now(datetime.timezone.utc)
         async with httpx.AsyncClient() as client:
             response: Response = await client.request(
                 method="POST",
@@ -111,9 +112,23 @@ async def get_standard_response(forward_url, proxy_headers, json_data, model_nam
             response: dict = response.json()
         except JSONDecodeError:
             response: dict = {"error": response.text}
-        if request_id is not None:
+        if log_id is not None:
+            usage = response["usage"] if response is not None else dict()
+            usage_tokens = dict()
+            for name in usage:
+                if "tokens_details" in name:
+                    continue
+                usage_tokens[name] = usage[name]
+            if "prompt_tokens_details" in usage:
+                for name in usage["prompt_tokens_details"]:
+                    usage_tokens[name] = usage["prompt_tokens_details"][name]
+            if "completion_tokens_details" in usage:
+                for name in usage["completion_tokens_details"]:
+                    usage_tokens[name] = usage["completion_tokens_details"][name]
             with DBManager() as db:
-                db.log_usage(request_id, response, dict(), provider_id, model_id, ttft)
+                db.set_time_at_first_token(log_id)
+                db.set_response_timestamp(log_id)
+                db.set_response_payload(log_id, response, provider_id, model_id, usage_tokens)
         return response
     finally:
         if model_id is not None:

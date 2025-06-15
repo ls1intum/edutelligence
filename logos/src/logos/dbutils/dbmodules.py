@@ -16,6 +16,11 @@ class ThresholdLevel(enum.Enum):
     CLOUD_IN_EU_BY_EU_PROVIDER = 'CLOUD_IN_EU_BY_EU_PROVIDER'
 
 
+class LoggingLevel(enum.Enum):
+    BILLING = 'BILLING'
+    FULL = 'FULL'
+
+
 class User(Base):
     __tablename__ = 'users'
     id = Column(Integer, primary_key=True)
@@ -45,7 +50,7 @@ class Process(Base):
     name = Column(String, nullable=False)
     user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
     service_id = Column(Integer, ForeignKey('services.id'), nullable=False)
-    log = Column(Boolean, default=False)
+    log = Column(Enum(LoggingLevel))
 
     user = relationship("User")
     service = relationship("Service")
@@ -126,34 +131,26 @@ class ProfileModelPermission(Base):
     model = relationship("Model")
 
 
-class RequestLog(Base):
-    __tablename__ = "request_log"
+class LogEntry(Base):
+    __tablename__ = 'log_entry'
 
     id = Column(Integer, primary_key=True)
-    timestamp = Column(TIMESTAMP(timezone=True), server_default=func.now(), nullable=False)
-    process_id = Column(Integer, ForeignKey("process.id", ondelete="CASCADE"), nullable=False)
+    timestamp_request = Column(TIMESTAMP(timezone=True))
+    timestamp_forwarding = Column(TIMESTAMP(timezone=True))
+    timestamp_response = Column(TIMESTAMP(timezone=True))
+    time_at_first_token = Column(TIMESTAMP(timezone=True))
+
+    privacy_level = Column(Enum(LoggingLevel))
+
+    process_id = Column(Integer, ForeignKey("process.id", ondelete="SET NULL"))
     client_ip = Column(Text)
     input_payload = Column(JSON)
-    provider_id = Column(Integer)
-    model_id = Column(Integer)
     headers = Column(JSON)
-
-    # one-to-many to usage entries
-    usages = relationship("UsageLog", back_populates="request", cascade="all, delete-orphan")
-
-
-class UsageLog(Base):
-    __tablename__ = "usage_log"
-
-    id = Column(Integer, primary_key=True)
-    request_id = Column(Integer, ForeignKey("request_log.id", ondelete="CASCADE"), nullable=False)
-    timestamp = Column(TIMESTAMP(timezone=True), server_default=func.now(), nullable=False)
-    time_at_first_token = Column(TIMESTAMP(timezone=True), nullable=False)
     response_payload = Column(JSON)
     provider_id = Column(Integer)
     model_id = Column(Integer)
 
-    request = relationship("RequestLog", back_populates="usages")
+    usage_tokens = relationship("UsageToken", back_populates="log_entry")
 
 
 class TokenTypes(Base):
@@ -169,5 +166,16 @@ class UsageTokens(Base):
 
     id = Column(Integer, primary_key=True)
     type_id = Column(Integer, ForeignKey("token_types.id"), nullable=False)
-    usage_id = Column(Integer, ForeignKey("usage_log.id"), nullable=False)
+    log_entry_id = Column(Integer, ForeignKey("log_entry.id"), nullable=False)
     token_count = Column(Integer, default=0)
+
+
+class TokenPrice(Base):
+    __tablename__ = 'token_prices'
+
+    id = Column(Integer, primary_key=True)
+    type_id = Column(Integer, ForeignKey("token_types.id", ondelete="CASCADE"), nullable=False)
+    valid_from = Column(TIMESTAMP(timezone=True), nullable=False)
+    price_per_k_token = Column(Numeric(10, 6), nullable=False)
+
+    token_type = relationship("TokenTypes", back_populates="TokenPrice")
