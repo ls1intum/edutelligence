@@ -1,4 +1,4 @@
-from typing import Any, Callable, Dict, Optional, Sequence, Type, Union
+from typing import Any, Callable, Dict, List, Optional, Sequence, Type, Union
 
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, ConfigDict
@@ -52,21 +52,29 @@ class RerankRequestHandler(RequestHandler):
         """Bind tools"""
         raise NotImplementedError
 
-    def rerank(self, query, documents: [], top_n: int, content_field_name: str):
-        if len(documents) == 0:
+    def rerank(self, query, documents: List, top_n: int, content_field_name: str):
+        if not documents:
             return []
-        mapped_responses = list(
-            map(lambda x: getattr(x, content_field_name), documents)
+        valid_documents = [
+            doc
+            for doc in documents
+            if doc is not None and getattr(doc, content_field_name, None) is not None
+        ]
+        if not valid_documents:
+            return []
+
+        document_contents = list(
+            map(lambda x: getattr(x, content_field_name), valid_documents)
         )
 
         cohere_client = self.llm_manager.get_llm_by_id(self.model_id)
 
         _, reranked_results, _ = cohere_client.rerank(
             query=query,
-            documents=mapped_responses,
+            documents=document_contents,
             top_n=top_n,
         )
         ranked_documents = []
         for result in reranked_results[1]:
-            ranked_documents.append(documents[result.index])
+            ranked_documents.append(valid_documents[result.index])
         return ranked_documents
