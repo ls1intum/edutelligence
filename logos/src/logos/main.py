@@ -1,10 +1,10 @@
 import json
 import os
 import traceback
-import datetime
 
 import grpc
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 
 from grpclocal import model_pb2_grpc
 from grpclocal.grpc_server import LogosServicer
@@ -20,6 +20,16 @@ from scripts.setup_proxy import setup
 
 app = FastAPI(docs_url="/docs", openapi_url="/openapi.json")
 _grpc_server = None
+
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # In Produktion ggf. einschränken
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],  # logos_key etc.
+)
+
 
 @app.on_event("startup")
 async def start_grpc():

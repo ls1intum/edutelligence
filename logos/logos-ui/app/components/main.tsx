@@ -1,138 +1,178 @@
-// Main.tsx
-import React, { useContext } from 'react';
-import { StyleSheet, Text, View, ScrollView, ImageBackground, Image, Dimensions, TouchableOpacity } from 'react-native';
-import { ThemeContext } from '../';
-import Section01 from './section01';
-import Section02 from './section02';
-import Section03 from './section03';
-import Section04 from './section04';
-import Section05 from './section05';
+import React, {useContext, useEffect, useState} from 'react';
+import {
+  View,
+  Text,
+  TextInput,
+  Button,
+  StyleSheet,
+  Alert
+} from 'react-native';
+import { ThemeContext } from '../index';
+import { Image as ExpoImage } from 'expo-image';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
-const { width } = Dimensions.get('window');
-
-const toolsLeft = ['Prompt Classification', 'Provider Routing', 'gRPC Interface'];
-const toolsRight = ['REST API', 'Prompt Logging', 'Model Analytics'];
-
-const faqData = [
-  {
-    question: 'What is Logos?',
-    answer: 'Logos is a modular platform for processing, classifying, and routing prompts to large language models (LLMs).'
-  },
-  {
-    question: 'Which providers are supported?',
-    answer: 'Currently Azure, OpenWebUI, and OpenAI are supported with custom configuration.'
-  }
-];
+// Hier könntest du später eine richtige Auth-Logik einbauen
+const validateApiKey = (key: string) => {
+  return key.trim().length > 0; // Simpler Check
+};
 
 export default function Main() {
   const { theme } = useContext(ThemeContext);
-  const isLight = theme === 'light';
-  const [openIndex, setOpenIndex] = React.useState<number | null>(null);
+  const [apiKey, setApiKey] = useState('');
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
 
-  const toggleFAQ = (index: number) => {
-    setOpenIndex(openIndex === index ? null : index);
+  const [hue, setHue] = useState(0);
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setHue(h => (h + 1) % 360);
+    }, 1000);
+    return () => clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    const checkLogin = async () => {
+      const storedKey = await AsyncStorage.getItem('logos_api_key');
+      if (storedKey) {
+        const valid = await verifyApiKey(storedKey);
+        if (valid) {
+          setIsLoggedIn(true);
+        } else {
+          await AsyncStorage.removeItem('logos_api_key');
+        }
+      }
+    };
+    checkLogin();
+  }, []);
+
+  const verifyApiKey = async (key: string) => {
+    try {
+      const response = await fetch("http://logos.ase.cit.tum.de:8080/logosdb/get_role", {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'logos_key': key
+        },
+        body: JSON.stringify({
+          logos_key: key
+        })
+      });
+      return response.status === 200;
+    } catch (error) {
+      console.error('API-Fehler:', error);
+      return false;
+    }
   };
 
-  return (
-    <ScrollView style={[styles.wrapper, { backgroundColor: isLight ? '#fff' : '#121212' }]}>
-      {/* Section 1: Hero Message */}
-      <Section01/>
+  const handleLogin = async () => {
+    const isValid = await verifyApiKey(apiKey);
+    if (isValid) {
+      await AsyncStorage.setItem('logos_api_key', apiKey);
+      setIsLoggedIn(true);
+    } else {
+      Alert.alert('Login fehlgeschlagen', 'Ungültiger API-Key.');
+    }
+  };
 
-      {/* Section 2: Tools
-      <View style={styles.section}>
-        <Text style={[styles.sectionTitle, { color: isLight ? '#000' : '#fff' }]}>Available Tools</Text>
-        <View style={styles.toolGrid}>
-          <View style={styles.toolColumn}>
-            <Text style={[styles.toolColumnTitle, { color: isLight ? '#000' : '#fff' }]}>Core Routing</Text>
-            {toolsLeft.map((tool, idx) => (
-              <Text key={idx} style={[styles.toolItem, { color: isLight ? '#222' : '#ccc' }]}>{tool}</Text>
-            ))}
-          </View>
-          <View style={styles.toolColumn}>
-            <Text style={[styles.toolColumnTitle, { color: isLight ? '#000' : '#fff' }]}>Data & APIs</Text>
-            {toolsRight.map((tool, idx) => (
-              <Text key={idx} style={[styles.toolItem, { color: isLight ? '#222' : '#ccc' }]}>{tool}</Text>
-            ))}
-          </View>
+  const handleLogout = async () => {
+    await AsyncStorage.removeItem('logos_api_key');
+    setApiKey('');
+    setIsLoggedIn(false);
+  };
+
+  if (!isLoggedIn) {
+    return (
+      <View
+        style={[
+          styles.container,
+          theme === 'light' ? styles.lightBackground : styles.darkBackground
+        ]}
+      >
+        <ExpoImage
+          source={require('../../assets/images/logos_full.png')}
+          style={[styles.logo, { filter: `hue-rotate(${hue}deg)` }]}
+          contentFit="contain"
+        />
+        <Text
+          style={[
+            styles.title,
+            theme === 'light' ? styles.lightText : styles.darkText
+          ]}
+        >
+          Sign in to your account
+        </Text>
+        <TextInput
+          placeholder="Logos API-Key"
+          placeholderTextColor={theme === 'light' ? '#888' : '#aaa'}
+          value={apiKey}
+          onChangeText={setApiKey}
+          style={[
+            styles.input,
+            theme === 'light' ? styles.inputLight : styles.inputDark
+          ]}
+          secureTextEntry
+          autoCapitalize="none"
+        />
+        <View style={styles.buttonContainer}>
+          <Button title="Login" onPress={handleLogin} />
         </View>
       </View>
- */}
-      <Section02/>
-      {/* Section 3: Why Logos? */}
-      <Section03/>
+    );
+  }
 
-      {/* Section 4: FAQ */}
-      <Section04/>
-
-      {/* Section 5: Get started */}
-      <Section05/>
-    </ScrollView>
+  return (
+    <View style={styles.container}>
+      <Text style={theme === 'light' ? styles.lightText : styles.darkText}>
+        ✅ Erfolgreich eingeloggt – bald geht’s weiter mit der UI!
+      </Text>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  wrapper: {
-    flex: 1
-  },
-  heroSection: {
-    height: 300,
-    justifyContent: 'center',
-    alignItems: 'center'
-  },
-  overlay: {
-    padding: 24,
-    borderRadius: 12,
-    alignItems: 'center'
-  },
-  heroTitle: {
-    fontSize: 42,
-    fontWeight: 'bold',
-    textAlign: 'center'
-  },
-  heroSubtitle: {
-    fontSize: 16,
-    marginTop: 12,
-    textAlign: 'center',
-    maxWidth: '90%'
-  },
-  section: {
-    padding: 20
-  },
-  sectionTitle: {
-    fontSize: 22,
-    fontWeight: 'bold',
-    marginBottom: 16
-  },
-  sectionText: {
-    fontSize: 16,
-    lineHeight: 22
-  },
-  toolGrid: {
-    flexDirection: 'row',
-    justifyContent: 'space-between'
-  },
-  toolColumn: {
+  container: {
     flex: 1,
-    paddingHorizontal: 10
+    padding: 24,
+    alignItems: 'center',
+    justifyContent: 'center'
   },
-  toolColumnTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    marginBottom: 8
+  title: {
+    fontSize: 24,
+    marginBottom: 24,
+    fontWeight: 'bold'
   },
-  toolItem: {
-    fontSize: 16,
-    paddingVertical: 4
+  input: {
+    width: '50%',
+    padding: 12,
+    marginBottom: 16,
+    borderRadius: 8,
+    fontSize: 16
   },
-  faqItem: {
-    marginBottom: 12
+  inputLight: {
+    backgroundColor: '#f0f0f0',
+    color: '#000'
   },
-  faqQuestion: {
-    fontSize: 16,
-    fontWeight: '600'
+  inputDark: {
+    backgroundColor: '#333',
+    color: '#fff'
   },
-  faqAnswer: {
-    fontSize: 15,
-    marginTop: 4
+  lightBackground: {
+    backgroundColor: '#fff'
+  },
+  darkBackground: {
+    backgroundColor: '#1e1e1e'
+  },
+  lightText: {
+    color: '#000'
+  },
+  darkText: {
+    color: '#fff'
+  },
+  buttonContainer: {
+    width: '50%'
+  },
+  logo: {
+    width: 200,
+    height: 90
   }
 });

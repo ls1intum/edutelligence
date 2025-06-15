@@ -67,8 +67,6 @@ def get_streaming_response(forward_url, proxy_headers, json_data, log_id, provid
         if log_id is None:
             return
 
-
-
         with DBManager() as db:
             nonlocal response, ttft, first_response
             if first_response is not None:

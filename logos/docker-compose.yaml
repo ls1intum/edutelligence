@@ -11,6 +11,7 @@ services:
       - "--certificatesresolvers.letsencrypt.acme.tlschallenge=true"
       - "--certificatesresolvers.letsencrypt.acme.email=admin@tum.de"
       - "--certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json"
+      - "--api.dashboard=true"
     ports:
       - "443:443"
       - "8080:8080"
@@ -19,6 +20,7 @@ services:
       - ./letsencrypt:/letsencrypt
     networks:
       - internal
+      - extern
 
   logos-server:
     build:
@@ -89,11 +91,23 @@ services:
       - "80"
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.internal-ui.rule=PathPrefix(`/`)"
-      - "traefik.http.routers.internal-ui.entrypoints=secure8080"
-      - "traefik.http.routers.internal-ui.tls=true"
-      - "traefik.http.routers.internal-ui.tls.certresolver=letsencrypt"
-      - "traefik.http.services.internal-ui.loadbalancer.server.port=80"
+
+      # === Dev (https://localhost:8080) ===
+      - "traefik.http.routers.internal-ui-dev.rule=Host(`localhost`) && PathPrefix(`/`)"
+      - "traefik.http.routers.internal-ui-dev.entrypoints=secure8080"
+      - "traefik.http.routers.internal-ui-dev.tls=true"
+      - "traefik.http.routers.internal-ui-dev.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.internal-ui-dev.service=internal-ui-svc"
+
+      # === Prod (https://logos.ase.cit.tum.de:8080) ===
+      - "traefik.http.routers.internal-ui-prod.rule=Host(`logos.ase.cit.tum.de`) && PathPrefix(`/`)"
+      - "traefik.http.routers.internal-ui-prod.entrypoints=secure8080"
+      - "traefik.http.routers.internal-ui-prod.tls=true"
+      - "traefik.http.routers.internal-ui-prod.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.internal-ui-prod.service=internal-ui-svc"
+
+      # Shared service definition
+      - "traefik.http.services.internal-ui-svc.loadbalancer.server.port=80"
     networks:
       - internal
 
@@ -110,25 +124,26 @@ services:
     labels:
       - "traefik.enable=true"
 
-      # === Production domain: https://logos.ase.cit.tum.de/
+      # === Prod (https://logos.ase.cit.tum.de) ===
       - "traefik.http.routers.landing-prod.rule=Host(`logos.ase.cit.tum.de`) && PathPrefix(`/`)"
       - "traefik.http.routers.landing-prod.entrypoints=websecure"
       - "traefik.http.routers.landing-prod.tls=true"
       - "traefik.http.routers.landing-prod.tls.certresolver=letsencrypt"
-      - "traefik.http.routers.landing-prod.service=landing-prod-svc"
+      - "traefik.http.routers.landing-prod.service=landing-svc"
+      - "traefik.http.routers.landing-prod.priority=1"
 
-      # === Local development: https://localhost/
+      # === Dev (https://localhost) ===
       - "traefik.http.routers.landing-dev.rule=Host(`localhost`) && PathPrefix(`/`)"
       - "traefik.http.routers.landing-dev.entrypoints=websecure"
       - "traefik.http.routers.landing-dev.tls=true"
       - "traefik.http.routers.landing-dev.tls.certresolver=letsencrypt"
-      - "traefik.http.routers.landing-dev.service=landing-dev-svc"
+      - "traefik.http.routers.landing-dev.service=landing-svc"
+      - "traefik.http.routers.landing-dev.priority=1"
 
-      # Beide Services zeigen auf Port 80
-      - "traefik.http.services.landing-prod-svc.loadbalancer.server.port=80"
-      - "traefik.http.services.landing-dev-svc.loadbalancer.server.port=80"
+      # Shared service definition
+      - "traefik.http.services.landing-svc.loadbalancer.server.port=80"
     networks:
-      - internal
+      - extern
 
 volumes:
   data_volume:
@@ -136,4 +151,6 @@ volumes:
 
 networks:
   internal:
+    driver: bridge
+  extern:
     driver: bridge
