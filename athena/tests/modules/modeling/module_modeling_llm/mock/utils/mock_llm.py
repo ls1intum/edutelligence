@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import Any, List, Optional, Callable, Type
+from typing import Any, List, Optional, Type
 from langchain_core.language_models.base import BaseLanguageModel
 from langchain_core.runnables import RunnableConfig
 from langchain_core.prompt_values import PromptValue

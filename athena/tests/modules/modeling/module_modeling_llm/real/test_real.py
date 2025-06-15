@@ -1,7 +1,6 @@
 import pytest
 from athena.modeling import Exercise, Submission
 from athena.schemas.exercise_type import ExerciseType
-from athena.schemas.grading_criterion import GradingCriterion, StructuredGradingInstruction
 from module_modeling_llm.utils.get_exercise_model import get_exercise_model
 from module_modeling_llm.core.get_structured_grading_instructions import get_structured_grading_instructions
 from module_modeling_llm.core.generate_suggestions import generate_suggestions
