@@ -140,7 +140,9 @@ class LecturePageChunkRetrieval(Pipeline):
         """
         Search the database for the given query.
         """
-        logger.info("Searching in the database for query: %s", query)
+        logger.info(
+            "[PAGE_CHUNK_RETRIEVAL] Searching in the database for query: %s", query
+        )
         # Initialize filter to None by default
         filter_weaviate = None
 

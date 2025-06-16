@@ -31,4 +31,5 @@ def apply_hdbscan(
         min_cluster_size=min_cluster_size,
     )
     clusterer.fit(matrix)
-    return clusterer.labels_
+
+    return clusterer.labels_, clusterer.centroids_, clusterer.medoids_
