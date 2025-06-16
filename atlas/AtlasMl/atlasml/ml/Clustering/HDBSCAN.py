@@ -20,6 +20,7 @@ def apply_hdbscan(
         eps (float): Maximum distance between two samples for one to be considered as in the neighborhood of the other.
         min_samples (int): Minimum number of samples in a neighborhood for a point to be considered a core point.
         metric (str): The metric to use for distance computation.
+        min_cluster_size (int): The minimum size of clusters.
 
     Returns:
         numpy.ndarray: The cluster labels assigned to each data point.
@@ -32,4 +33,4 @@ def apply_hdbscan(
     )
     clusterer.fit(matrix)
 
-    return clusterer.labels_, clusterer.centroids_, clusterer.medoids_
+    return clusterer.labels_
