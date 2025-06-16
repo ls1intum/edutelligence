@@ -98,6 +98,9 @@ class WeaviateMemoryConnectionRepository(
     def all(self, tenant: str) -> List[MemoryConnection]:
         """Get all MemoryConnection objects."""
         try:
+            if not self.collection.with_tenant(tenant).exists():
+                return []
+
             result = self.collection.with_tenant(tenant).query.fetch_objects(
                 return_references=QueryReference(link_on="connected_memories"),
             )
@@ -107,6 +110,7 @@ class WeaviateMemoryConnectionRepository(
 
             return [self.object_to_memory_connection(item) for item in result.objects]
         except Exception as e:
+            print(e)
             raise ValueError("Error retrieving all MemoryConnection objects") from e
 
     @observe(name="weaviate.memory_connection_repository.delete")

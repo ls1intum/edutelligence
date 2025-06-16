@@ -69,6 +69,9 @@ class WeaviateLearningRepository(LearningRepository, _WeaviateBaseRepository):
     def all(self, tenant: str) -> list[Learning]:
         """Get all Learning objects."""
         try:
+            if not self.collection.with_tenant(tenant).exists():
+                return []
+
             result = self.collection.with_tenant(tenant).query.fetch_objects(
                 return_references=QueryReference(link_on="memories"),
             )

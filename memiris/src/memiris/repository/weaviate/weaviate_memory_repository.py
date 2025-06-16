@@ -96,6 +96,9 @@ class WeaviateMemoryRepository(MemoryRepository, _WeaviateBaseRepository):
     def all(self, tenant: str, include_deleted: bool = False) -> list[Memory]:
         """Get all Memory objects."""
         try:
+            if not self.collection.with_tenant(tenant).exists():
+                return []
+
             result = self.collection.with_tenant(tenant).query.fetch_objects(
                 filters=(
                     Filter.by_property("deleted").equal(False)
