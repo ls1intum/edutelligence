@@ -41,3 +41,24 @@ jobs:
     - name: Run tests
       working-directory: athena
       run: poetry run test_all
+
+    - name: Upload JUnit Test Results
+      if: success() || failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: Athena JUnit Test Results
+        path: athena/test-results/*.xml  
+
+    - name: Test Report Summary
+      if: always()
+      uses: mikepenz/action-junit-report@v5.5.0
+      id: test-report
+      with:
+        report_paths: 'athena/test-results/*.xml'
+        check_name: "Athena Test Report"
+        fail_on_failure: true
+        require_tests: true
+        require_passed_tests: true
+        detailed_summary: true
+        include_time_in_summary: true
+        group_suite: true    
