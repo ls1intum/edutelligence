@@ -51,8 +51,8 @@ async def start_grpc():
                 print("Error during proxy setup: ", lk, flush=True)
             else:
                 print("Created proxy configuration.", lk, flush=True)
-    else:
-        print("Proxy Configuration not provided in docker compose, please setup via endpoint")
+    # else:
+    #     print("Proxy Configuration not provided in docker compose, please setup via endpoint")
 
 @app.on_event("shutdown")
 async def stop_grpc():
@@ -201,6 +201,12 @@ async def import_json(data: GetImportDataRequest):
 def route_handler(request: Request):
     host = request.headers.get("x-forwarded-host") or request.headers.get("forwarded")
     return {"host": host}
+
+
+@app.post("/logosdb/add_billing")
+async def import_json(data: AddBillingRequest):
+    with DBManager() as db:
+        return db.add_billing(**data.dict())
 
 
 @app.api_route("/v1/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])

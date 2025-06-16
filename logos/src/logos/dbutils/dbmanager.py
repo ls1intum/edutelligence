@@ -5,6 +5,7 @@ import datetime
 import os
 import secrets
 from typing import Dict, Any, Optional, Tuple, Union
+from dateutil.parser import isoparse
 
 import sqlalchemy.exc
 import yaml
@@ -223,6 +224,20 @@ class DBManager:
                 return {"result": f"Created Token Type.", "token-type-id": token_id}, 200
         pk = self.insert("token_types", {"name": name, "description": description})
         return {"result": f"Created Token Type.", "token-type-id": pk}, 200
+
+    def add_billing(self, logos_key: str, type_name: str, type_cost: float, valid_from: str):
+        if not self.check_authorization(logos_key):
+            return {"error": "Database changes only allowed for root user."}, 500
+        if (token_id := self.get_token_name(type_name)) is None:
+            return {"error": "Token name not found"}, 500
+        try:
+            timestamp_clean = valid_from.rstrip("Z")
+            timestamp = isoparse(timestamp_clean)
+        except ValueError as e:
+            return {"error": f"Invalid timestamp format: {str(e)}"}, 500
+
+        billing_id = self.insert("token_prices", {"type_id": token_id, "valid_from": timestamp, "price_per_k_token": type_cost})
+        return {"result": "Successfully added billing", "billing-id": billing_id}, 200
 
     def get_token_name(self, name):
         sql = text("""

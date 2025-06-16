@@ -86,3 +86,9 @@ class GetAPIIdRequest(LogosKeyModel):
 
 class GetImportDataRequest(LogosKeyModel):
     json_data: dict
+
+
+class AddBillingRequest(LogosKeyModel):
+    type_name: str
+    type_cost: float
+    valid_from: str

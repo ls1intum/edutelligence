@@ -127,7 +127,7 @@ CREATE TABLE log_entry (
 
 CREATE TABLE token_types (
     id SERIAL PRIMARY KEY,
-    name TEXT NOT NULL,
+    name TEXT NOT NULL UNIQUE,
     description TEXT
 );
 
