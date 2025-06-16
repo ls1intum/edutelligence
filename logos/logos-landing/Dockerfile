@@ -4,13 +4,13 @@ FROM node:alpine AS build
 WORKDIR /app
 
 # Copy React UI source code
-COPY ./logos/logos-ui/ ./
+COPY ./logos/logos-landing/ ./
 
 # Install dependencies
 RUN npm ci
 
 # Build React app (defaults to production mode)
-RUN npx expo export --platform web --output-dir web-build
+RUN npx expo export --platform web --output-dir landing-build
 
 # 2. Serve Stage (no nginx needed)
 FROM node:alpine
@@ -23,7 +23,7 @@ WORKDIR /app
 EXPOSE 80
 
 # Copy exported web build from previous stage
-COPY --from=build /app/web-build ./web-build
+COPY --from=build /app/landing-build ./landing-build
 
 # Serve the app
-CMD ["serve", "-s", "web-build", "-l", "80"]
+CMD ["serve", "-s", "landing-build", "-l", "80"]

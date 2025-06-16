@@ -30,7 +30,7 @@ export default function Header() {
           contentFit="contain"
         />
         <Text style={styles.version}>
-             0.0.2
+             0.0.3
         </Text>
       </View>
       <TouchableOpacity
