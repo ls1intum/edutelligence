@@ -13,11 +13,31 @@ class MockLanguageModel:
         if system_message in self.responses:
             return self.responses[system_message]  
         elif "Create graded feedback" in system_message:
-            return """{"type": "Assessment", "title": "Logic Error", "description": "Doc important", "file_path": "test.py", "line_start": 1, "line_end": 1, "credits": 0.5}"""
+            return {
+                "type": "Assessment", 
+                "title": "Logic Error", 
+                "description": "Doc important", 
+                "file_path": "test.py", "line_start": 1, 
+                "line_end": 1, "credits": 0.5
+                }
         elif "Create non graded improvement suggestions" in system_message:
-            return """{"type": "Improvement", "title": "Logic Error", "description": "Doc important", "file_path": "test.py", "line_start": 1, "line_end": 1}"""
+            return {
+                "type": "Improvement", 
+                "title": "Logic Error", 
+                "description": "Doc important", 
+                "file_path": "test.py", 
+                "line_start": 1, 
+                "line_end": 1}
         
-        return """{"type": "Assessment", "title": "Logic Error", "description": "Doc important", "file_path": "test.py", "line_start": 1, "line_end": 1, "credits": 0.5}"""
+        return {
+            "type": "Assessment",
+            "title": "Logic Error",
+            "description": "Doc important",
+            "file_path": "test.py",
+            "line_start": 1,
+            "line_end": 1,
+            "credits": 0.5
+                }
 
 class MockAssessmentModel(BaseModel):
     class Config:
