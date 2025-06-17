@@ -7,6 +7,7 @@ package-mode = true
 
 [tool.poetry.dependencies]
 python = "3.11.*"
+python-dotenv = "^1.0.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.3.5"
@@ -20,6 +21,8 @@ test_all = "scripts.test_modules:main"
 
 [tool.pytest.ini_options]
 pythonpath = ["athena"]
+asyncio_mode = "strict"
+asyncio_default_fixture_loop_scope = "function"
 
 [build-system]
 requires = ["poetry-core"]
