@@ -10,8 +10,10 @@ from module_text_llm.self_consistency.self_consistency_utils import (
     select_best_approach,
 )
 from module_text_llm.approach_config import ApproachConfig
+from module_text_llm.registry import register_approach
 
 
+@register_approach("self_consistency")
 async def generate_suggestions(
     exercise: Exercise,
     submission: Submission,
