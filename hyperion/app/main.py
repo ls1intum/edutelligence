@@ -9,7 +9,6 @@ from logging import StreamHandler, getLogger
 from grpc_health.v1 import health, health_pb2, health_pb2_grpc
 
 from app.settings import settings
-from app.project_meta import project_meta
 from app.grpc import hyperion_pb2_grpc
 
 
