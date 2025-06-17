@@ -7,10 +7,11 @@ license = "MIT"
 
 [tool.poetry.dependencies]
 python = "3.11.*"
-athena = {path = "../athena", develop = true}
+athena = { path = "../athena", develop = true }
 fastapi = "^0.109.1"
 uvicorn = "^0.23.0"
 httpx = "^0.24.1"
+alembic = "^1.15.2"
 
 [tool.poetry.group.dev.dependencies]
 types-requests = "^2.31.0.8"

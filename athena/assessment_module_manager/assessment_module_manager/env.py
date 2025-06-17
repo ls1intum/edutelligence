@@ -1,4 +1,5 @@
 """Common place for environment variables with sensible defaults for local development."""
+
 import os
 
 from assessment_module_manager.deployment import list_deployments
@@ -11,18 +12,27 @@ MODULE_SECRETS = {}
 for module in list_modules():
     secret = os.environ.get(f"{module.name.upper()}_SECRET")
     if secret is None and PRODUCTION:
-        raise ValueError(f"Missing secret for module {module.name}. "
-                         f"Set the {module.name.upper()}_SECRET environment variable.")
+        raise ValueError(
+            f"Missing secret for module {module.name}. "
+            f"Set the {module.name.upper()}_SECRET environment variable."
+        )
     MODULE_SECRETS[module.name] = secret
 
 DEPLOYMENT_SECRETS = {}
 for deployment in list_deployments():
+    print(f"Processing deployment: {deployment.name} with URL: {deployment.url}")
     secret = os.environ.get(f"LMS_{deployment.name.upper()}_SECRET")
+    print(
+        f"Found secret for LMS_{deployment.name.upper()}_SECRET {deployment.name}: {secret}"
+    )
     if secret is None and PRODUCTION:
-        logger.warning("Missing secret for LMS deployment %s. "
-                       "Set the LMS_%s_SECRET environment variable to secure the communication "
-                       "between the LMS and the assessment module manager.",
-                       deployment.name, deployment.name.upper())
+        logger.warning(
+            "Missing secret for LMS deployment %s. "
+            "Set the LMS_%s_SECRET environment variable to secure the communication "
+            "between the LMS and the assessment module manager.",
+            deployment.name,
+            deployment.name.upper(),
+        )
     if secret is None and not PRODUCTION:
         secret = "abcdef12345"  # noqa: This secret is only used for development setups for simplicity
     DEPLOYMENT_SECRETS[deployment.url] = secret
