@@ -7,13 +7,14 @@ from module_text_llm.chain_of_thought_approach import ChainOfThoughtConfig
 from module_text_llm.basic_approach import BasicApproachConfig
 from module_text_llm.divide_and_conquer import DivideAndConquerConfig
 from module_text_llm.cot_learner_profile import COTLearnerProfileConfig
+from module_text_llm.cot_prev_submission import COTPrevSubmissionConfig
 
-ApproachConfigUnion = Union[BasicApproachConfig, ChainOfThoughtConfig, DivideAndConquerConfig, SelfConsistencyConfig, COTLearnerProfileConfig]
+ApproachConfigUnion = Union[BasicApproachConfig, ChainOfThoughtConfig, DivideAndConquerConfig, SelfConsistencyConfig, COTLearnerProfileConfig, COTPrevSubmissionConfig]
 
 @config_schema_provider
 class Configuration(BaseModel):
     debug: bool = Field(default=False, description="Enable debug mode.")
-    approach: ApproachConfigUnion = Field(default_factory=BasicApproachConfig)  # Default to BasicApproach
+    approach: ApproachConfigUnion = Field(default_factory=COTPrevSubmissionConfig)  # Default to BasicApproach
 
     class Config:
         smart_union = True 
