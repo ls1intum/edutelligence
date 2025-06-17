@@ -32,7 +32,6 @@ packages = [
 hyperion = "app.main:serve"
 health-check = "playground.check_health:main"
 generate-grpc = "app.grpc.run_generate_stubs:main"
-build-java-client = "app.grpc.build_java_client:main"
 
 [tool.poetry.group.dev.dependencies]
 black = "25.1.0"

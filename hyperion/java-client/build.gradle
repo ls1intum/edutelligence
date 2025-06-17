@@ -16,7 +16,6 @@ java {
 
 repositories {
     mavenCentral()
-    mavenLocal()
 }
 
 dependencies {
@@ -70,20 +69,58 @@ clean {
     delete protobuf.generatedFilesBaseDir
 }
 
-// Add task to check if proto file exists before building
-task checkProtoFile {
+// Incremental task to copy proto file from main Hyperion project
+task copyProtoFile {
+    def srcProto = file('../app/protos/hyperion.proto')
+    def destProto = file('proto/hyperion.proto')
+    
+    inputs.file(srcProto)
+    outputs.file(destProto)
+    
     doLast {
-        def protoFile = file('proto/hyperion.proto')
-        
-        if (!protoFile.exists()) {
-            println "ERROR: Proto file not found at ${protoFile.absolutePath}"
-            println "Run 'poetry run build-java-client' in the Hyperion project first."
-            throw new IllegalStateException("Proto file not found")
+        if (!srcProto.exists()) {
+            throw new IllegalStateException("Source proto file not found at ${srcProto.absolutePath}")
         }
+        
+        destProto.parentFile.mkdirs()
+        copy {
+            from srcProto
+            into destProto.parent
+        }
+        
+        println "✅ Proto file copied from ${srcProto} to ${destProto}"
     }
 }
 
-// Make all tasks that depend on the proto file also depend on the check
+// Single task to build and publish the Java client
+task buildClient {
+    group = 'build'
+    description = 'Builds the Hyperion Java gRPC client and publishes it to Maven Local'
+    
+    dependsOn copyProtoFile, build, publishToMavenLocal
+    
+    // Capture project properties at configuration time
+    def projectGroup = project.group
+    def projectName = project.name
+    def projectVersion = project.version
+    
+    doLast {
+        println ""
+        println "🎉 Hyperion Java gRPC client built and published successfully!"
+        println "📦 Use in your project with:"
+        println "   implementation '${projectGroup}:${projectName}:${projectVersion}'"
+    }
+}
+
+// Make protobuf and compile tasks depend on proto file copying
 tasks.withType(AbstractCompile) {
-    dependsOn checkProtoFile
+    dependsOn copyProtoFile
+}
+
+tasks.named('generateProto') {
+    dependsOn copyProtoFile
+}
+
+tasks.named('processResources') {
+    dependsOn copyProtoFile
 }

@@ -129,12 +129,13 @@ Hyperion provides a Java gRPC client library for integration with Java applicati
 To generate and build the Java client library:
 
 ```bash
-poetry run build-java-client
+cd java-client
+./gradlew buildClient
 ```
 
-This command will:
+This single command will automatically:
 
-1. Copy the `hyperion.proto` file to the Java client project
+1. Copy the `hyperion.proto` file from the main project
 2. Generate Java classes from the protobuf definitions
 3. Build the Java library using Gradle
 4. Publish the library to your local Maven repository
