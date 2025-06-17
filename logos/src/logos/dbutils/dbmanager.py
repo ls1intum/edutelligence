@@ -567,8 +567,8 @@ class DBManager:
             "timestamp_request": datetime.datetime.now(datetime.timezone.utc),
             "process_id": process_id,
             "client_ip": client_ip if log_level == "FULL" else None,
-            "input_payload": input_payload if log_level == "FULL" else None,
-            "headers": headers if log_level == "FULL" else None,
+            "input_payload": json.dumps(input_payload) if log_level == "FULL" else None,
+            "headers": json.dumps(headers) if log_level == "FULL" else None,
             "privacy_level": log_level
         })
 
