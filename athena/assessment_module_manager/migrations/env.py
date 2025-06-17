@@ -1,6 +1,7 @@
 from logging.config import fileConfig
 from alembic import context
 from athena.database import engine, Base
+from sqlalchemy import String
 
 config = context.config
 
@@ -21,7 +22,7 @@ def run_migrations_offline() -> None:
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
-        compare_type=True,  # detect type changes
+        compare_type=True,
     )
 
     with context.begin_transaction():

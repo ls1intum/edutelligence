@@ -6,31 +6,37 @@ class LearnerProfile(BaseModel):
     """
     Model representing learner profile.
 
-    Each preference is on a scale from 1 to 5, where:
+    Each preference is on a scale from 1 to 3, where:
     - 1 represents one extreme (e.g., focus on suggesting alternative solutions)
-    - 5 represents the opposite extreme (e.g., focus on the standards)
+    - 3 represents the opposite extreme (e.g., focus on the standards)
     """
     feedback_alternative_standard: Annotated[int, Field(
-        strict=True, ge=1, le=5,
-        description="Preference for creative exploration and alternatives (1) vs de-facto standards (5)."
+        strict=True, ge=1, le=3,
+        description="Preference for creative exploration and alternatives (1) vs de-facto standards (3)."
     )]
     feedback_followup_summary: Annotated[int, Field(
-        strict=True, ge=1, le=5,
-        description="Preference for follow-up questions (1) vs summary/conclusion (5)."
+        strict=True, ge=1, le=3,
+        description="Preference for follow-up questions (1) vs summary/conclusion (3)."
     )]
     feedback_brief_detailed: Annotated[int, Field(
-        strict=True, ge=1, le=5,
-        description="Preference for brief (1) vs detailed (5) feedback."
+        strict=True, ge=1, le=3,
+        description="Preference for brief (1) vs detailed (3) feedback."
     )]
 
+    class Config:
+        @staticmethod
+        def alias_generator(s: str) -> str:
+            return ''.join([s.split('_')[0]] + [word.capitalize() for word in s.split('_')[1:]])
+        allow_population_by_field_name = True
+
     def directive_alternative_standard(self) -> str:
-        if self.feedback_alternative_standard <= 2:
+        if self.feedback_alternative_standard == 1:
             return (
                 "Encourage exploration by suggesting alternative approaches or creative methods.\n"
                 "Example 1: Besides QuickSort, you could also explore MergeSort or InsertionSort depending on the dataset characteristics.\n"
                 "Example 2: Instead of writing a formal essay, you could experiment with a narrative storytelling approach to engage the reader differently.\n"
             )
-        if self.feedback_alternative_standard == 3:
+        if self.feedback_alternative_standard == 2:
             return (
                 "Present the standard solution clearly, but briefly mention one alternative approach.\n"
                 "Example 1: QuickSort is efficient for large datasets, but for nearly sorted data, InsertionSort could be faster.\n"
@@ -44,7 +50,7 @@ class LearnerProfile(BaseModel):
         )
 
     def directive_followup_summary(self) -> str:
-        if self.feedback_followup_summary <= 3:
+        if self.feedback_followup_summary <= 2:
             return (
                 "End the feedback with a clear, specific follow-up question that promotes reflection.\n"
                 "- If the answer is partially incorrect: Ask a focused question that hints at the mistake without giving away the solution.\n"
@@ -64,13 +70,13 @@ class LearnerProfile(BaseModel):
         )
 
     def directive_brief_detailed(self) -> str:
-        if self.feedback_brief_detailed <= 2:
+        if self.feedback_brief_detailed == 1:
             return (
                 "Keep the feedback short and direct — ideally 1 to 2 sentences.\n"
                 "Example 1: Add an index on the user_id column to improve performance.\n"
                 "Example 2: Clarify your thesis statement in the introduction to strengthen your argument.\n"
             )
-        if self.feedback_brief_detailed == 3:
+        if self.feedback_brief_detailed == 2:
             return (
                 "Provide moderately detailed feedback, giving clear explanations without unnecessary length.\n"
                 "Example 1: Consider indexing user_id to speed up lookups; it helps databases quickly find matching records\n."

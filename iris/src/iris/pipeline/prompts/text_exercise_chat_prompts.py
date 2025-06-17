@@ -93,6 +93,8 @@ def fmt_system_prompt(
         You point out specific issues in the student's writing and suggest improvements.
         You never provide answers or write the student's work for them.
         You are supportive, encouraging, and constructive in your feedback.
+        Always respond in the same language as the user. If they use English, you use English.
+        If they use German, you use German, but then always use "du" instead of "Sie".
 
         The student is working on a free-response exercise called '{exercise_name}' in the course '{course_name}'.
         The course has the following description:

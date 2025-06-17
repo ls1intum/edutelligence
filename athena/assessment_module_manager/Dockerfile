@@ -31,6 +31,5 @@ RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 # Use modules configuration file for docker
 RUN mv ./modules.docker.ini ./modules.ini
 
-# poetry scripts don't work here
 ENTRYPOINT ["docker-entrypoint.sh"]
 CMD ["poetry", "run", "python", "-m", "assessment_module_manager"]

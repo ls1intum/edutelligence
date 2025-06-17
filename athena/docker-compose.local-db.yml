@@ -9,42 +9,53 @@ services:
       POSTGRES_PASSWORD: athena
       POSTGRES_DB: athena
       PGDATA: /var/lib/postgresql/data/pgdata
-    ports:
-      - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: [ "CMD-SHELL", "pg_isready -U athena" ]
-      interval: 5s
+      test: ["CMD-SHELL", "pg_isready -U athena"]
+      interval: 10s
       timeout: 5s
-      retries: 10
-
-  athena:
-    environment:
-      - DATABASE_URL=postgresql+psycopg2://athena:athena@postgres:5432/athena
-      - PRODUCTION=1
-      - SECRET=dev-modeling-secret
+      retries: 5
+    ports:
+    - "5432:5432"
 
   assessment_module_manager:
     env_file:
-      - ${ATHENA_ENV_DIR:-./env_example}/assessment_module_manager.env
+      - ./assessment_module_manager/.env
     environment:
       - DATABASE_URL=postgresql+psycopg2://athena:athena@postgres:5432/athena
       - PRODUCTION=1
-      - MODULE_MODELING_LLM_SECRET=dev-modeling-secret
       - LMS_PLAYGROUND_SECRET=dev-playground-secret
-      - LMS_LOCAL_SECRET=dev-playground-secret
-
-  module_modeling_llm:
-    env_file:
-      - ${ATHENA_ENV_DIR:-./env_example}/module_modeling_llm.env
-    environment:
-      - DATABASE_URL=postgresql+psycopg2://athena:athena@postgres:5432/athena
-      - PRODUCTION=1
-      - SECRET=dev-modeling-secret
+      - MODULE_TEXT_LLM_SECRET=12345abcdef
+      - MODULE_PROGRAMMING_LLM_SECRET=12345abcdef
+      - MODULE_MODELING_LLM_SECRET=12345abcdef
+      - MODULE_TEXT_COFEE_SECRET=12345abcdef
+      - MODULE_PROGRAMMING_THEMISML_SECRET=12345abcdef
+      - MODULE_PROGRAMMING_APTED_SECRET=12345abcdef
+      - MODULE_PROGRAMMING_WINNOWING_SECRET=12345abcdef
+    build: ./assessment_module_manager
+    ports:
+      - "5100:5100"
     depends_on:
       postgres:
         condition: service_healthy
+
+  module_modeling_llm:
+    env_file:
+      - ./modules/modeling/module_modeling_llm/.env
+    environment:
+      - DATABASE_URL=postgresql+psycopg2://athena:athena@postgres:5432/athena
+      - PRODUCTION=1
+    depends_on:
+      postgres:
+        condition: service_healthy
+    build: ./modules/modeling/module_modeling_llm
+    ports:
+      - "5008:5008"
+    networks:
+      default:
+        aliases:
+          - module-modeling-llm
 
 volumes:
   postgres_data:

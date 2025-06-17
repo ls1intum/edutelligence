@@ -12,16 +12,18 @@ from iris.common.pipeline_enum import PipelineEnum
 from iris.common.token_usage_dto import TokenUsageDTO
 
 from ...common.pyris_message import PyrisMessage
+from ...domain import FeatureDTO
 from ...domain.data.build_log_entry import BuildLogEntryDTO
 from ...domain.data.feedback_dto import FeedbackDTO
 from ...llm import (
-    CapabilityRequestHandler,
     CompletionArguments,
-    RequirementList,
+    ModelVersionRequestHandler,
 )
+from ...llm.external.model import LanguageModel
 from ...llm.langchain import IrisLangchainChatModel
 from ...pipeline import Pipeline
 from ...web.status.status_update import StatusCallback
+from ..shared.utils import filter_variants_by_available_models
 
 logger = logging.getLogger(__name__)
 
@@ -47,24 +49,30 @@ class CodeFeedbackPipeline(Pipeline):
     default_prompt: PromptTemplate
     output_parser: StrOutputParser
     tokens: TokenUsageDTO
+    variant: str
 
-    def __init__(self, callback: Optional[StatusCallback] = None):
+    def __init__(
+        self, callback: Optional[StatusCallback] = None, variant: str = "default"
+    ):
         super().__init__(implementation_id="code_feedback_pipeline_reference_impl")
-        request_handler = CapabilityRequestHandler(
-            requirements=RequirementList(
-                gpt_version_equivalent=4.5,
-                context_length=64000,
-                vendor="OpenAI",
-                json_mode=True,
-            )
-        )
+        self.callback = callback
+        self.variant = variant
+
+        # Set up the language model
         completion_args = CompletionArguments(
             temperature=0, max_tokens=1024, response_format="text"
         )
+
+        if variant == "advanced":
+            model = "gpt-4.1"
+        else:
+            model = "gpt-4.1-mini"
+
+        request_handler = ModelVersionRequestHandler(version=model)
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler, completion_args=completion_args
         )
-        self.callback = callback
+
         # Load prompt from file
         dirname = os.path.dirname(__file__)
         with open(
@@ -82,6 +90,31 @@ class CodeFeedbackPipeline(Pipeline):
         )
         # Create the pipeline
         self.pipeline = self.llm | self.output_parser
+
+    @classmethod
+    def get_variants(cls, available_llms: List[LanguageModel]) -> List[FeatureDTO]:
+        variant_specs = [
+            (
+                ["gpt-4.1-mini"],
+                FeatureDTO(
+                    id="default",
+                    name="Default",
+                    description="Uses a smaller model for faster and cost-efficient responses.",
+                ),
+            ),
+            (
+                ["gpt-4.1"],
+                FeatureDTO(
+                    id="advanced",
+                    name="Advanced",
+                    description="Uses a larger chat model, balancing speed and quality.",
+                ),
+            ),
+        ]
+
+        return filter_variants_by_available_models(
+            available_llms, variant_specs, pipeline_name="CodeFeedbackPipeline"
+        )
 
     @traceable(name="Code Feedback Pipeline")
     def __call__(
