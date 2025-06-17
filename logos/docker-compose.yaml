@@ -34,10 +34,11 @@ services:
     volumes:
       - data_volume:/src/logos
     environment:
-      PROVIDER_NAME:
-      BASE_URL:
+      PROVIDER_NAME: azure
+      BASE_URL: https://ase-se01.openai.azure.com/openai/deployments
     expose:
       - "8080"
+      - "50051:50051"
     labels:
       - "traefik.enable=true"
 
@@ -47,6 +48,7 @@ services:
       - "traefik.http.routers.logos-server-v1.tls=true"
       - "traefik.http.routers.logos-server-v1.tls.certresolver=letsencrypt"
       - "traefik.http.routers.logos-server-v1.service=logos-server"
+      - "traefik.http.routers.logos-server-v1.priority=100"
 
       # === Routing: /logosdb ===
       - "traefik.http.routers.logos-server-logosdb.rule=PathPrefix(`/logosdb`)"
@@ -54,6 +56,15 @@ services:
       - "traefik.http.routers.logos-server-logosdb.tls=true"
       - "traefik.http.routers.logos-server-logosdb.tls.certresolver=letsencrypt"
       - "traefik.http.routers.logos-server-logosdb.service=logos-server"
+      - "traefik.http.routers.logos-server-logosdb.priority=100"
+
+      # === Routing: /docs ===
+      - "traefik.http.routers.logos-server-docs.rule=PathPrefix(`/docs`)"
+      - "traefik.http.routers.logos-server-docs.entrypoints=secure8080"
+      - "traefik.http.routers.logos-server-docs.tls=true"
+      - "traefik.http.routers.logos-server-docs.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.logos-server-docs.service=logos-server"
+      - "traefik.http.routers.logos-server-docs.priority=100"
 
       # Service-Port
       - "traefik.http.services.logos-server.loadbalancer.server.port=8080"
@@ -98,6 +109,7 @@ services:
       - "traefik.http.routers.internal-ui-dev.tls=true"
       - "traefik.http.routers.internal-ui-dev.tls.certresolver=letsencrypt"
       - "traefik.http.routers.internal-ui-dev.service=internal-ui-svc"
+      - "traefik.http.routers.internal-ui-dev.priority=0"
 
       # === Prod (https://logos.ase.cit.tum.de:8080) ===
       - "traefik.http.routers.internal-ui-prod.rule=Host(`logos.ase.cit.tum.de`) && PathPrefix(`/`)"
@@ -105,6 +117,7 @@ services:
       - "traefik.http.routers.internal-ui-prod.tls=true"
       - "traefik.http.routers.internal-ui-prod.tls.certresolver=letsencrypt"
       - "traefik.http.routers.internal-ui-prod.service=internal-ui-svc"
+      - "traefik.http.routers.internal-ui-prod.priority=0"
 
       # Shared service definition
       - "traefik.http.services.internal-ui-svc.loadbalancer.server.port=80"
