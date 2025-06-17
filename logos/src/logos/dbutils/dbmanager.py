@@ -652,7 +652,7 @@ class DBManager:
                    WHERE id = :log_id
                    """)
         self.session.execute(sql, {
-            "payload": payload,
+            "payload": json.dumps(payload),
             "provider_id": provider_id,
             "model_id": model_id,
             "log_id": log_id,
