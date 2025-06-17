@@ -1,0 +1,113 @@
+buildscript {
+    repositories {
+        mavenCentral()
+    }
+    dependencies {
+        classpath 'com.google.protobuf:protobuf-gradle-plugin:0.9.5'
+    }
+}
+
+plugins {
+    id 'java-library'
+    id 'maven-publish'
+}
+
+apply plugin: 'com.google.protobuf'
+
+group = 'de.tum.cit.aet'
+version = '0.1.0-SNAPSHOT'
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
+    withJavadocJar()
+    withSourcesJar()
+}
+
+repositories {
+    mavenCentral()
+    mavenLocal()
+}
+
+dependencies {
+    api 'io.grpc:grpc-protobuf:1.71.0'  // Protobuf serialization for gRPC
+    api 'io.grpc:grpc-stub:1.71.0'      // Base classes for generated gRPC stubs
+    implementation 'javax.annotation:javax.annotation-api:1.3.2'  // Required for @Generated annotations in generated gRPC code
+}
+
+// Configure duplicate handling for all tasks that might encounter duplicate files
+tasks.withType(Copy).configureEach {
+    duplicatesStrategy = DuplicatesStrategy.INCLUDE
+}
+
+// Explicitly configure sourcesJar task
+tasks.named('sourcesJar') {
+    duplicatesStrategy = DuplicatesStrategy.INCLUDE
+}
+
+protobuf {
+    protoc {
+        artifact = 'com.google.protobuf:protoc:3.25.5'
+    }
+    plugins {
+        grpc {
+            artifact = 'io.grpc:protoc-gen-grpc-java:1.71.0'
+        }
+    }
+    generateProtoTasks {
+        all()*.plugins {
+            grpc {}
+        }
+    }
+}
+
+sourceSets {
+    main {
+        proto {
+            srcDir 'proto'
+        }
+        java {
+            srcDirs 'build/generated/source/proto/main/grpc'
+            srcDirs 'build/generated/source/proto/main/java'
+        }
+    }
+}
+
+// Disable javadoc errors from generated code
+tasks.withType(Javadoc) {
+    options.addStringOption('Xdoclint:none', '-quiet')
+}
+
+test {
+    useJUnitPlatform()
+}
+
+publishing {
+    publications {
+        mavenJava(MavenPublication) {
+            from components.java
+        }
+    }
+}
+
+clean {
+    delete protobuf.generatedFilesBaseDir
+}
+
+// Add task to check if proto file exists before building
+task checkProtoFile {
+    doLast {
+        def protoFile = file('proto/hyperion.proto')
+        
+        if (!protoFile.exists()) {
+            println "ERROR: Proto file not found at ${protoFile.absolutePath}"
+            println "Run 'poetry run build-java-client' in the Hyperion project first."
+            throw new IllegalStateException("Proto file not found")
+        }
+    }
+}
+
+// Make all tasks that depend on the proto file also depend on the check
+tasks.withType(AbstractCompile) {
+    dependsOn checkProtoFile
+}

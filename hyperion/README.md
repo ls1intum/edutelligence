@@ -85,6 +85,7 @@ docker compose -f compose.hyperion.local.yaml up -d
 ```
 
 The local compose file:
+
 - Builds the image from your local source code
 - Maps port 50051 directly to your host machine
 - Sets default environment variables with fallbacks (e.g., OpenAI API keys)
@@ -106,20 +107,82 @@ docker compose -f compose.hyperion.local.yaml exec hyperion poetry run health-ch
 
 The Docker Compose files support the following environment variables:
 
-| Variable | Description | Default in Local Compose |
-|----------|-------------|-----------------------|
-| `MODEL_NAME` | OpenAI model to use | gpt-3.5-turbo |
-| `OPENAI_API_KEY` | OpenAI API key | sk-dummy-key |
-| `OPENAI_API_VERSION` | OpenAI API version | 2023-05-15 |
-| `AZURE_OPENAI_ENDPOINT` | Azure OpenAI endpoint URL | empty |
-| `AZURE_OPENAI_API_KEY` | Azure OpenAI API key | empty |
-| `OLLAMA_BASIC_AUTH_USERNAME` | Ollama authentication username | empty |
-| `OLLAMA_BASIC_AUTH_PASSWORD` | Ollama authentication password | empty |
-| `OLLAMA_HOST` | Ollama host address | empty |
+| Variable                     | Description                    | Default in Local Compose |
+| ---------------------------- | ------------------------------ | ------------------------ |
+| `MODEL_NAME`                 | OpenAI model to use            | gpt-3.5-turbo            |
+| `OPENAI_API_KEY`             | OpenAI API key                 | sk-dummy-key             |
+| `OPENAI_API_VERSION`         | OpenAI API version             | 2023-05-15               |
+| `AZURE_OPENAI_ENDPOINT`      | Azure OpenAI endpoint URL      | empty                    |
+| `AZURE_OPENAI_API_KEY`       | Azure OpenAI API key           | empty                    |
+| `OLLAMA_BASIC_AUTH_USERNAME` | Ollama authentication username | empty                    |
+| `OLLAMA_BASIC_AUTH_PASSWORD` | Ollama authentication password | empty                    |
+| `OLLAMA_HOST`                | Ollama host address            | empty                    |
 
 You can set these environment variables in your shell before running Docker Compose, or use a `.env` file.
 
+## Java Client
 
+Hyperion provides a Java gRPC client library for integration with Java applications like Artemis.
+
+### Building the Java Client
+
+To generate and build the Java client library:
+
+```bash
+poetry run build-java-client
+```
+
+This command will:
+
+1. Copy the `hyperion.proto` file to the Java client project
+2. Generate Java classes from the protobuf definitions
+3. Build the Java library using Gradle
+4. Publish the library to your local Maven repository
+
+### Using the Java Client
+
+Add the dependency to your Java project:
+
+**Gradle:**
+
+```gradle
+dependencies {
+    implementation 'de.tum.cit.aet:hyperion:0.1.0-SNAPSHOT'
+}
+```
+
+**Maven:**
+
+```xml
+<dependency>
+    <groupId>de.tum.cit.aet</groupId>
+    <artifactId>hyperion</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+</dependency>
+```
+
+### Basic Usage
+
+```java
+import de.tum.cit.aet.hyperion.*;
+import io.grpc.ManagedChannel;
+import io.grpc.ManagedChannelBuilder;
+
+// Create client
+ManagedChannel channel = ManagedChannelBuilder
+    .forAddress("localhost", 50051)
+    .usePlaintext()
+    .build();
+
+HealthGrpc.HealthBlockingStub healthStub = HealthGrpc.newBlockingStub(channel);
+
+// Health check
+PingResponse response = healthStub.ping(
+    PingRequest.newBuilder()
+        .setClientId("artemis-client")
+        .build()
+);
+```
 
 ## Generate gRPC stubs
 
@@ -138,7 +201,7 @@ The generated stubs will be placed in the `app/grpc` directory.
 To format the code, run the following command:
 
 ```bash
-poetry run black . 
+poetry run black .
 ```
 
 ### Flake8
