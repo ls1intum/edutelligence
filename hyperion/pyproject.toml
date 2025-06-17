@@ -19,8 +19,9 @@ langchain-ollama = "0.3.2"
 langsmith = "0.3.42"
 langfuse = "2.60.5"
 shared = { path = "../shared", develop = true }
-grpcio-tools = "1.71.0"
-grpcio = "1.71.0"
+grpcio-tools = "1.73.0"
+grpcio = "1.73.0"
+grpcio-health-checking = "1.73.0"
 
 [tool.poetry]
 packages = [
@@ -30,7 +31,6 @@ packages = [
 
 [tool.poetry.scripts]
 hyperion = "app.main:serve"
-health-check = "playground.check_health:main"
 generate-grpc = "app.grpc.run_generate_stubs:main"
 
 [tool.poetry.group.dev.dependencies]

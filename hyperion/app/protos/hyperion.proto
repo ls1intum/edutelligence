@@ -90,12 +90,6 @@ message ProgrammingExercise {
   
 }
 
-// Health check service
-service Health {
-  // Check if the server is running
-  rpc Ping (PingRequest) returns (PingResponse) {}
-}
-
 // Exercise Creation Step 1: Define Boundary Conditions
 service DefineBoundaryCondition { }
 
@@ -131,20 +125,4 @@ message InconsistencyCheckRequest {
 
 message InconsistencyCheckResponse {
   string inconsistencies = 1;
-}
-
-// Simple ping request message
-message PingRequest {
-  // Optional client identifier 
-  string client_id = 1;
-}
-
-// Ping response with server status
-message PingResponse {
-  // Server status message
-  string status = 1;
-  // Server version
-  string version = 2;
-  // Timestamp of the server response
-  int64 timestamp = 3;
 }

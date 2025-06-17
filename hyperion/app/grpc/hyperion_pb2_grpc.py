@@ -5,7 +5,7 @@ import warnings
 
 from . import hyperion_pb2 as hyperion__pb2
 
-GRPC_GENERATED_VERSION = "1.71.0"
+GRPC_GENERATED_VERSION = "1.73.0"
 GRPC_VERSION = grpc.__version__
 _version_not_supported = False
 
@@ -26,83 +26,6 @@ if _version_not_supported:
         + f" Please upgrade your grpc module to grpcio>={GRPC_GENERATED_VERSION}"
         + f" or downgrade your generated code using grpcio-tools<={GRPC_VERSION}."
     )
-
-
-class HealthStub(object):
-    """Health check service"""
-
-    def __init__(self, channel):
-        """Constructor.
-
-        Args:
-            channel: A grpc.Channel.
-        """
-        self.Ping = channel.unary_unary(
-            "/hyperion.Health/Ping",
-            request_serializer=hyperion__pb2.PingRequest.SerializeToString,
-            response_deserializer=hyperion__pb2.PingResponse.FromString,
-            _registered_method=True,
-        )
-
-
-class HealthServicer(object):
-    """Health check service"""
-
-    def Ping(self, request, context):
-        """Check if the server is running"""
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details("Method not implemented!")
-        raise NotImplementedError("Method not implemented!")
-
-
-def add_HealthServicer_to_server(servicer, server):
-    rpc_method_handlers = {
-        "Ping": grpc.unary_unary_rpc_method_handler(
-            servicer.Ping,
-            request_deserializer=hyperion__pb2.PingRequest.FromString,
-            response_serializer=hyperion__pb2.PingResponse.SerializeToString,
-        ),
-    }
-    generic_handler = grpc.method_handlers_generic_handler(
-        "hyperion.Health", rpc_method_handlers
-    )
-    server.add_generic_rpc_handlers((generic_handler,))
-    server.add_registered_method_handlers("hyperion.Health", rpc_method_handlers)
-
-
-# This class is part of an EXPERIMENTAL API.
-class Health(object):
-    """Health check service"""
-
-    @staticmethod
-    def Ping(
-        request,
-        target,
-        options=(),
-        channel_credentials=None,
-        call_credentials=None,
-        insecure=False,
-        compression=None,
-        wait_for_ready=None,
-        timeout=None,
-        metadata=None,
-    ):
-        return grpc.experimental.unary_unary(
-            request,
-            target,
-            "/hyperion.Health/Ping",
-            hyperion__pb2.PingRequest.SerializeToString,
-            hyperion__pb2.PingResponse.FromString,
-            options,
-            channel_credentials,
-            insecure,
-            call_credentials,
-            compression,
-            wait_for_ready,
-            timeout,
-            metadata,
-            _registered_method=True,
-        )
 
 
 class DefineBoundaryConditionStub(object):

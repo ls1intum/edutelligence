@@ -1,6 +1,6 @@
 # Hyperion: AI-Driven Programming Exercise Creation Assistance
 
-**Hyperion** is a microservice designed to bring AI-driven intelligence to Learning Management Systems (LMSs), such as [Artemis](https://github.com/ls1intum/Artemis). Inspired by the Titan of light and enlightenment, Hyperion illuminates the process of creating engaging, effective programming exercises. It assists instructors by refining problem statements, generating code stubs, and providing context-aware suggestions — all while integrating seamlessly with an LMS and CI build agents for validation.
+**Hyperion** is a gRPC microservice for AI-driven programming exercise creation, designed to integrate with Learning Management Systems like [Artemis](https://github.com/ls1intum/Artemis).
 
 ## Setup
 
@@ -120,6 +120,54 @@ The Docker Compose files support the following environment variables:
 
 You can set these environment variables in your shell before running Docker Compose, or use a `.env` file.
 
+### TLS Configuration
+
+Enable TLS for production:
+
+#### 1. Generate Certificates
+
+For development/testing, use the provided script:
+
+```bash
+./scripts/generate-certs.sh
+```
+
+For production, obtain certificates from a proper CA (Let's Encrypt, corporate CA, etc.) and place them in the `./certs/` directory.
+
+#### 2. Configure Environment
+
+Create a `.env` file from the template:
+
+```bash
+cp .env.production .env
+```
+
+Edit the `.env` file and set:
+
+```bash
+TLS_ENABLED=true
+TLS_CERT_PATH=/certs/server.crt
+TLS_KEY_PATH=/certs/server.key
+TLS_CA_PATH=/certs/ca.crt  # For client certificate verification (mTLS)
+```
+
+#### 3. Deploy with TLS
+
+```bash
+docker-compose -f docker/compose.hyperion.yaml -f docker/compose.proxy.yaml up -d
+```
+
+#### 4. Verify TLS Connection
+
+```bash
+# With certificate verification
+grpcurl -cacert ./certs/ca.crt your-domain.com:50051 hyperion.Health/Ping
+
+# With client certificate (mTLS)
+grpcurl -cacert ./certs/ca.crt -cert ./certs/client.crt -key ./certs/client.key \
+        your-domain.com:50051 hyperion.Health/Ping
+```
+
 ## Java Client
 
 Hyperion provides a Java gRPC client library for integration with Java applications like Artemis.
@@ -164,12 +212,14 @@ dependencies {
 
 ### Basic Usage
 
+#### Development (Plaintext)
+
 ```java
 import de.tum.cit.aet.hyperion.*;
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
 
-// Create client
+// Create client for development
 ManagedChannel channel = ManagedChannelBuilder
     .forAddress("localhost", 50051)
     .usePlaintext()
@@ -183,6 +233,29 @@ PingResponse response = healthStub.ping(
         .setClientId("artemis-client")
         .build()
 );
+```
+
+#### Production (TLS)
+
+```java
+import de.tum.cit.aet.hyperion.*;
+import io.grpc.ManagedChannel;
+import io.grpc.netty.NettyChannelBuilder;
+
+// Create client for production with TLS
+ManagedChannel channel = NettyChannelBuilder
+    .forAddress("hyperion.yourdomain.com", 50051)
+    .useTransportSecurity() // Enable TLS
+    .build();
+
+HealthGrpc.HealthBlockingStub healthStub = HealthGrpc.newBlockingStub(channel);
+
+// Health check with timeout
+PingResponse response = healthStub
+    .withDeadlineAfter(30, TimeUnit.SECONDS)
+    .ping(PingRequest.newBuilder()
+        .setClientId("artemis-client")
+        .build());
 ```
 
 ## Generate gRPC stubs
