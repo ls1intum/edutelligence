@@ -47,7 +47,7 @@ export default function Main() {
 
   const verifyApiKey = async (key: string) => {
     try {
-      const response = await fetch("http://logos.ase.cit.tum.de:8080/logosdb/get_role", {
+      const response = await fetch("https://logos.ase.cit.tum.de:8080/logosdb/get_role", {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
