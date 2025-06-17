@@ -4,10 +4,10 @@ from unittest.mock import AsyncMock
 
 class MockLanguageModel:
     def __init__(self, responses: Optional[Dict[str, Any]] = None):
-        # Map keywords → raw JSON strings
-        self.responses: Dict[str, str] = responses or {}
+        # Map system-prompt → mocked model payload (dict / serialisable)
+        self.responses: Dict[str, Any] = responses or {}
 
-    async def predict(self, messages: List[Dict[str, str]], **kwargs) -> str:
+    async def predict(self, messages: List[Dict[str, str]], **kwargs) -> Any:  
         system_message = next((msg["content"] for msg in messages if msg["role"] == "system"), "")
         
         if system_message in self.responses:
