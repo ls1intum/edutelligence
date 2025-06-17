@@ -59,4 +59,4 @@ else:
     class OllamaModel(str, Enum):
         """Fallback enum used when no Ollama server is reachable."""
 
-        PLACEHOLDER = "ollama_not_available"
+        pass
