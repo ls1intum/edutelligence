@@ -2,17 +2,18 @@
 	"folders": [
 		{
 			"name": "EduTelligence",
-			"path": "./"
+			"path": "."
 		},
 		{
 			"name": "Hyperion",
-			"path": "./hyperion"
+			"path": "hyperion"
 		},
 		{
 			"name": "Shared",
-			"path": "./shared"
+			"path": "shared"
 		},
 		{
+			"name": "Artemis",
 			"path": "../Artemis"
 		}
 	],
