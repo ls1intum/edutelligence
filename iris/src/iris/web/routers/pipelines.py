@@ -129,6 +129,7 @@ def run_exercise_chat_pipeline(
         # Additional validation for ChatGPT wrapper variant
         validate_pipeline_variant(dto.settings, ChatGPTWrapperPipeline)
         thread = Thread(target=run_chatgpt_wrapper_pipeline_worker, args=(dto, variant))
+
     else:
         thread = Thread(
             target=run_exercise_chat_pipeline_worker,
