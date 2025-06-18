@@ -20,17 +20,6 @@ sys.path.insert(0, str(project_root))
 from app.creation_steps.step3_create_solution_repository.servicer import (
     SolutionRepositoryCreatorServicer,
 )
-from app.creation_steps.step3_create_solution_repository.models import (
-    SolutionRepositoryCreatorRequest,
-    SolutionPlan,
-)
-from app.grpc import hyperion_pb2
-from app.grpc.models import (
-    BoundaryConditions,
-    ProblemStatement,
-    Repository,
-    RepositoryFile,
-)
 from langchain_core.language_models.chat_models import BaseLanguageModel
 
 
