@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 class VerifyConfigurationServicer(hyperion_pb2_grpc.VerifyConfigurationServicer):
     """Step 8: Verify Configuration Servicer."""
-    
+
     def __init__(self, model: BaseLanguageModel) -> None:
         """
         Args:

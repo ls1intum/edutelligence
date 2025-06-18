@@ -7,7 +7,7 @@ class FinalizeProblemStatementServicer(
     hyperion_pb2_grpc.FinalizeProblemStatementServicer
 ):
     """Step 6: Finalize Problem Statement Servicer."""
-    
+
     def __init__(self, model: BaseLanguageModel) -> None:
         """
         Args:

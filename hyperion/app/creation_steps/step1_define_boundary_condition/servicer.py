@@ -7,7 +7,7 @@ class DefineBoundaryConditionServicer(
     hyperion_pb2_grpc.DefineBoundaryConditionServicer
 ):
     """Step 1: Define Boundary Condition Servicer."""
-    
+
     def __init__(self, model: BaseLanguageModel) -> None:
         """
         Args:

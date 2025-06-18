@@ -18,7 +18,10 @@ project_root = Path(__file__).parent.parent.parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 from app.creation_steps.workspace.file_manager import FileManager
-from app.creation_steps.step3_create_solution_repository.models import SolutionCreationContext, FileStructure
+from app.creation_steps.step3_create_solution_repository.models import (
+    SolutionCreationContext,
+    FileStructure,
+)
 from app.creation_steps.exceptions import FileSystemException
 
 
@@ -47,30 +50,30 @@ class TestFileManager:
 
     def test_init(self, file_manager):
         """Test FileManager initialization."""
-        assert file_manager.encoding == 'utf-8'
+        assert file_manager.encoding == "utf-8"
 
     def test_write_file_success(self, file_manager, mock_context):
         """Test successful file writing."""
         content = "Hello, World!"
         file_path = "test.txt"
-        
+
         file_manager.write_file(mock_context, file_path, content)
-        
+
         # Verify file was created with correct content
         full_path = Path(mock_context.workspace_path) / file_path
         assert full_path.exists()
-        assert full_path.read_text(encoding='utf-8') == content
+        assert full_path.read_text(encoding="utf-8") == content
 
     def test_write_file_with_subdirectory(self, file_manager, mock_context):
         """Test writing file in subdirectory (should create parent dirs)."""
         content = "Test content"
         file_path = "subdir/nested/test.txt"
-        
+
         file_manager.write_file(mock_context, file_path, content)
-        
+
         full_path = Path(mock_context.workspace_path) / file_path
         assert full_path.exists()
-        assert full_path.read_text(encoding='utf-8') == content
+        assert full_path.read_text(encoding="utf-8") == content
         assert full_path.parent.exists()
 
     def test_write_file_empty_path(self, file_manager, mock_context):
@@ -82,7 +85,7 @@ class TestFileManager:
         """Test writing file with invalid workspace path."""
         context = Mock()
         context.workspace_path = "/nonexistent/path"
-        
+
         with pytest.raises(FileSystemException):
             file_manager.write_file(context, "test.txt", "content")
 
@@ -90,11 +93,11 @@ class TestFileManager:
         """Test successful file reading."""
         content = "Test file content"
         file_path = "test.txt"
-        
+
         # Create file first
         full_path = Path(mock_context.workspace_path) / file_path
-        full_path.write_text(content, encoding='utf-8')
-        
+        full_path.write_text(content, encoding="utf-8")
+
         # Read file
         result = file_manager.read_file(mock_context, file_path)
         assert result == content
@@ -109,7 +112,7 @@ class TestFileManager:
         dir_path = "testdir"
         full_path = Path(mock_context.workspace_path) / dir_path
         full_path.mkdir()
-        
+
         with pytest.raises(FileSystemException, match="Path is not a file"):
             file_manager.read_file(mock_context, dir_path)
 
@@ -123,36 +126,36 @@ class TestFileManager:
         content = "Original content"
         source_path = "source.txt"
         dest_path = "destination.txt"
-        
+
         # Create source file
         source_full = Path(mock_context.workspace_path) / source_path
-        source_full.write_text(content, encoding='utf-8')
-        
+        source_full.write_text(content, encoding="utf-8")
+
         # Copy file
         file_manager.copy_file(mock_context, source_path, dest_path)
-        
+
         # Verify both files exist with same content
         dest_full = Path(mock_context.workspace_path) / dest_path
         assert source_full.exists()
         assert dest_full.exists()
-        assert dest_full.read_text(encoding='utf-8') == content
+        assert dest_full.read_text(encoding="utf-8") == content
 
     def test_copy_file_with_subdirectory(self, file_manager, mock_context):
         """Test copying file to subdirectory (should create parent dirs)."""
         content = "Test content"
         source_path = "source.txt"
         dest_path = "subdir/destination.txt"
-        
+
         # Create source file
         source_full = Path(mock_context.workspace_path) / source_path
-        source_full.write_text(content, encoding='utf-8')
-        
+        source_full.write_text(content, encoding="utf-8")
+
         # Copy file
         file_manager.copy_file(mock_context, source_path, dest_path)
-        
+
         dest_full = Path(mock_context.workspace_path) / dest_path
         assert dest_full.exists()
-        assert dest_full.read_text(encoding='utf-8') == content
+        assert dest_full.read_text(encoding="utf-8") == content
 
     def test_copy_file_source_not_exists(self, file_manager, mock_context):
         """Test copying non-existent source file raises exception."""
@@ -164,16 +167,20 @@ class TestFileManager:
         dir_path = "testdir"
         full_path = Path(mock_context.workspace_path) / dir_path
         full_path.mkdir()
-        
+
         with pytest.raises(FileSystemException, match="Source path is not a file"):
             file_manager.copy_file(mock_context, dir_path, "dest.txt")
 
     def test_copy_file_empty_paths(self, file_manager, mock_context):
         """Test copying with empty paths raises exception."""
-        with pytest.raises(FileSystemException, match="Source and destination paths cannot be empty"):
+        with pytest.raises(
+            FileSystemException, match="Source and destination paths cannot be empty"
+        ):
             file_manager.copy_file(mock_context, "", "dest.txt")
-        
-        with pytest.raises(FileSystemException, match="Source and destination paths cannot be empty"):
+
+        with pytest.raises(
+            FileSystemException, match="Source and destination paths cannot be empty"
+        ):
             file_manager.copy_file(mock_context, "source.txt", "")
 
     def test_move_file_success(self, file_manager, mock_context):
@@ -181,19 +188,19 @@ class TestFileManager:
         content = "Original content"
         source_path = "source.txt"
         dest_path = "destination.txt"
-        
+
         # Create source file
         source_full = Path(mock_context.workspace_path) / source_path
-        source_full.write_text(content, encoding='utf-8')
-        
+        source_full.write_text(content, encoding="utf-8")
+
         # Move file
         file_manager.move_file(mock_context, source_path, dest_path)
-        
+
         # Verify source is gone and destination exists
         dest_full = Path(mock_context.workspace_path) / dest_path
         assert not source_full.exists()
         assert dest_full.exists()
-        assert dest_full.read_text(encoding='utf-8') == content
+        assert dest_full.read_text(encoding="utf-8") == content
 
     def test_move_file_source_not_exists(self, file_manager, mock_context):
         """Test moving non-existent source file raises exception."""
@@ -204,8 +211,8 @@ class TestFileManager:
         """Test successful file deletion."""
         file_path = "test.txt"
         full_path = Path(mock_context.workspace_path) / file_path
-        full_path.write_text("content", encoding='utf-8')
-        
+        full_path.write_text("content", encoding="utf-8")
+
         assert full_path.exists()
         file_manager.delete_file(mock_context, file_path)
         assert not full_path.exists()
@@ -220,8 +227,10 @@ class TestFileManager:
         dir_path = "testdir"
         full_path = Path(mock_context.workspace_path) / dir_path
         full_path.mkdir()
-        
-        with pytest.raises(FileSystemException, match="Path is a directory, not a file"):
+
+        with pytest.raises(
+            FileSystemException, match="Path is a directory, not a file"
+        ):
             file_manager.delete_file(mock_context, dir_path)
 
     def test_delete_file_empty_path(self, file_manager, mock_context):
@@ -233,7 +242,7 @@ class TestFileManager:
         """Test successful directory creation."""
         dir_path = "testdir"
         file_manager.create_directory(mock_context, dir_path)
-        
+
         full_path = Path(mock_context.workspace_path) / dir_path
         assert full_path.exists()
         assert full_path.is_dir()
@@ -242,7 +251,7 @@ class TestFileManager:
         """Test creating nested directory structure."""
         dir_path = "parent/child/grandchild"
         file_manager.create_directory(mock_context, dir_path)
-        
+
         full_path = Path(mock_context.workspace_path) / dir_path
         assert full_path.exists()
         assert full_path.is_dir()
@@ -252,7 +261,7 @@ class TestFileManager:
         dir_path = "testdir"
         full_path = Path(mock_context.workspace_path) / dir_path
         full_path.mkdir()
-        
+
         # Should not raise exception
         file_manager.create_directory(mock_context, dir_path)
         assert full_path.exists()
@@ -269,9 +278,9 @@ class TestFileManager:
         (workspace / "file1.txt").write_text("content1")
         (workspace / "file2.txt").write_text("content2")
         (workspace / "subdir").mkdir()
-        
+
         files = file_manager.list_files(mock_context, "")
-        
+
         assert len(files) == 3
         assert "file1.txt" in files
         assert "file2.txt" in files
@@ -286,9 +295,9 @@ class TestFileManager:
         subdir.mkdir()
         (subdir / "file1.txt").write_text("content1")
         (subdir / "file2.txt").write_text("content2")
-        
+
         files = file_manager.list_files(mock_context, "subdir")
-        
+
         assert len(files) == 2
         assert "file1.txt" in files
         assert "file2.txt" in files
@@ -308,7 +317,7 @@ class TestFileManager:
         file_path = "test.txt"
         full_path = Path(mock_context.workspace_path) / file_path
         full_path.write_text("content")
-        
+
         with pytest.raises(FileSystemException, match="Path is not a directory"):
             file_manager.list_files(mock_context, file_path)
 
@@ -317,7 +326,7 @@ class TestFileManager:
         file_path = "test.txt"
         full_path = Path(mock_context.workspace_path) / file_path
         full_path.write_text("content")
-        
+
         assert file_manager.file_exists(mock_context, file_path) is True
 
     def test_file_exists_false(self, file_manager, mock_context):
@@ -329,7 +338,7 @@ class TestFileManager:
         dir_path = "testdir"
         full_path = Path(mock_context.workspace_path) / dir_path
         full_path.mkdir()
-        
+
         assert file_manager.file_exists(mock_context, dir_path) is False
 
     def test_file_exists_empty_path(self, file_manager, mock_context):
@@ -341,10 +350,10 @@ class TestFileManager:
         content = "Hello, World!"
         file_path = "test.txt"
         full_path = Path(mock_context.workspace_path) / file_path
-        full_path.write_text(content, encoding='utf-8')
-        
+        full_path.write_text(content, encoding="utf-8")
+
         size = file_manager.get_file_size(mock_context, file_path)
-        assert size == len(content.encode('utf-8'))
+        assert size == len(content.encode("utf-8"))
 
     def test_get_file_size_not_exists(self, file_manager, mock_context):
         """Test getting size of non-existent file raises exception."""
@@ -356,7 +365,7 @@ class TestFileManager:
         dir_path = "testdir"
         full_path = Path(mock_context.workspace_path) / dir_path
         full_path.mkdir()
-        
+
         with pytest.raises(FileSystemException, match="Path is not a file"):
             file_manager.get_file_size(mock_context, dir_path)
 
@@ -365,26 +374,26 @@ class TestFileManager:
         with pytest.raises(FileSystemException, match="File path cannot be empty"):
             file_manager.get_file_size(mock_context, "")
 
-    @pytest.mark.skipif(os.name == 'nt', reason="Permissions not supported on Windows")
+    @pytest.mark.skipif(os.name == "nt", reason="Permissions not supported on Windows")
     def test_set_file_permissions_success(self, file_manager, mock_context):
         """Test successful file permission setting (Unix only)."""
         file_path = "test.txt"
         full_path = Path(mock_context.workspace_path) / file_path
         full_path.write_text("content")
-        
+
         file_manager.set_file_permissions(mock_context, file_path, 0o644)
-        
+
         # Check permissions were set
         stat_info = full_path.stat()
         assert stat_info.st_mode & 0o777 == 0o644
 
-    @pytest.mark.skipif(os.name != 'nt', reason="Windows-specific test")
+    @pytest.mark.skipif(os.name != "nt", reason="Windows-specific test")
     def test_set_file_permissions_windows_skip(self, file_manager, mock_context):
         """Test file permission setting is skipped on Windows."""
         file_path = "test.txt"
         full_path = Path(mock_context.workspace_path) / file_path
         full_path.write_text("content")
-        
+
         # Should not raise exception on Windows
         file_manager.set_file_permissions(mock_context, file_path, 0o644)
 
@@ -405,27 +414,27 @@ class TestFileManager:
         structure.files = [
             {"path": "src/main.py", "content": "print('Hello')"},
             {"path": "tests/test_main.py", "content": "import unittest"},
-            "README.md"  # File without content
+            "README.md",  # File without content
         ]
         structure.build_files = [
             {"path": "requirements.txt", "content": "pytest==7.0.0"},
-            "setup.py"  # Build file without content
+            "setup.py",  # Build file without content
         ]
-        
+
         file_manager.create_file_structure(mock_context, structure)
-        
+
         workspace = Path(mock_context.workspace_path)
-        
+
         # Check directories
         assert (workspace / "src").is_dir()
         assert (workspace / "tests").is_dir()
         assert (workspace / "docs").is_dir()
-        
+
         # Check files with content
         assert (workspace / "src/main.py").read_text() == "print('Hello')"
         assert (workspace / "tests/test_main.py").read_text() == "import unittest"
         assert (workspace / "README.md").exists()
-        
+
         # Check build files
         assert (workspace / "requirements.txt").read_text() == "pytest==7.0.0"
         assert (workspace / "setup.py").exists()
@@ -436,7 +445,7 @@ class TestFileManager:
         structure.directories = None
         structure.files = None
         structure.build_files = None
-        
+
         # Should not raise exception
         file_manager.create_file_structure(mock_context, structure)
 
@@ -444,7 +453,7 @@ class TestFileManager:
         """Test successful workspace path resolution."""
         relative_path = "subdir/file.txt"
         result = file_manager._resolve_workspace_path(mock_context, relative_path)
-        
+
         expected = Path(mock_context.workspace_path).resolve() / relative_path
         assert result == expected.resolve()
 
@@ -464,7 +473,7 @@ class TestFileManager:
         """Test resolving path with no workspace set raises exception."""
         context = Mock()
         context.workspace_path = None
-        
+
         with pytest.raises(FileSystemException, match="Workspace path is not set"):
             file_manager._resolve_workspace_path(context, "file.txt")
 
@@ -472,15 +481,17 @@ class TestFileManager:
         """Test successful path validation within workspace."""
         workspace_path = Path(mock_context.workspace_path)
         valid_path = workspace_path / "subdir" / "file.txt"
-        
+
         # Should not raise exception
         file_manager._validate_path_in_workspace(mock_context, valid_path)
 
     def test_validate_path_outside_workspace(self, file_manager, mock_context):
         """Test path validation fails for path outside workspace."""
         outside_path = "/tmp/outside.txt"
-        
-        with pytest.raises(FileSystemException, match="Path is outside workspace boundaries"):
+
+        with pytest.raises(
+            FileSystemException, match="Path is outside workspace boundaries"
+        ):
             file_manager._validate_path_in_workspace(mock_context, outside_path)
 
     def test_validate_path_traversal_attack(self, file_manager, mock_context):
@@ -488,27 +499,31 @@ class TestFileManager:
         workspace_path = Path(mock_context.workspace_path)
         # This would resolve to outside the workspace
         traversal_path = workspace_path / ".." / ".." / "etc" / "passwd"
-        
-        with pytest.raises(FileSystemException, match="Path is outside workspace boundaries"):
+
+        with pytest.raises(
+            FileSystemException, match="Path is outside workspace boundaries"
+        ):
             file_manager._validate_path_in_workspace(mock_context, traversal_path)
 
     def test_validate_path_no_workspace(self, file_manager):
         """Test path validation with no workspace set raises exception."""
         context = Mock()
         context.workspace_path = None
-        
+
         with pytest.raises(FileSystemException, match="Workspace path is not set"):
             file_manager._validate_path_in_workspace(context, "/some/path")
 
-    def test_validate_path_suspicious_components(self, file_manager, mock_context, caplog):
+    def test_validate_path_suspicious_components(
+        self, file_manager, mock_context, caplog
+    ):
         """Test path validation warns about suspicious components."""
         workspace_path = Path(mock_context.workspace_path)
         suspicious_path = workspace_path / ".git" / "config"
-        
+
         # Should not raise exception but should log warning
         file_manager._validate_path_in_workspace(mock_context, suspicious_path)
         assert "Suspicious path component detected" in caplog.text
 
 
 if __name__ == "__main__":
-    pytest.main([__file__, "-v"]) 
+    pytest.main([__file__, "-v"])

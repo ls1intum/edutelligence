@@ -65,17 +65,17 @@ class GrpcServer:
 
     def _initialize_model(self) -> BaseLanguageModel:
         """Initialize the AI model based on settings.
-        
+
         Returns:
             Initialized language model instance
-            
+
         Raises:
             ValueError: If model configuration is invalid
             EnvironmentError: If model provider is not found
         """
         if not settings.MODEL_NAME:
             raise ValueError("MODEL_NAME is not configured in settings")
-        
+
         logger.info(f"Initializing AI model: {settings.MODEL_NAME}")
         try:
             model = get_model(settings.MODEL_NAME)
@@ -88,7 +88,7 @@ class GrpcServer:
     def start(self):
         """Start the gRPC server."""
         self.model = self._initialize_model()
-        
+
         self.server = grpc.server(
             futures.ThreadPoolExecutor(max_workers=self.max_workers),
             options=[

@@ -17,10 +17,20 @@ import sys
 project_root = Path(__file__).parent.parent.parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-from app.creation_steps.step3_create_solution_repository.servicer import SolutionRepositoryCreatorServicer
-from app.creation_steps.step3_create_solution_repository.models import SolutionRepositoryCreatorRequest, SolutionPlan
+from app.creation_steps.step3_create_solution_repository.servicer import (
+    SolutionRepositoryCreatorServicer,
+)
+from app.creation_steps.step3_create_solution_repository.models import (
+    SolutionRepositoryCreatorRequest,
+    SolutionPlan,
+)
 from app.grpc import hyperion_pb2
-from app.grpc.models import BoundaryConditions, ProblemStatement, Repository, RepositoryFile
+from app.grpc.models import (
+    BoundaryConditions,
+    ProblemStatement,
+    Repository,
+    RepositoryFile,
+)
 from langchain_core.language_models.chat_models import BaseLanguageModel
 
 
@@ -31,24 +41,22 @@ class TestSolutionRepositoryCreatorIntegration:
     def mock_model(self):
         """Create a mock AI model with predefined responses for each step."""
         model = Mock(spec=BaseLanguageModel)
-        
+
         mock_responses = {
             # Step 1.1: Solution Plan (JSON response)
-            "solution_plan": '''{
+            "solution_plan": """{
                 "architecture_description": "A simple binary search implementation with input validation and comprehensive testing. The solution follows a modular approach with separate functions for validation and the core search algorithm.",
                 "required_classes": ["BinarySearchSolution"],
                 "required_functions": ["binary_search", "validate_input", "main"],
                 "algorithms": ["Binary Search", "Input Validation"],
                 "design_patterns": ["Guard Clause Pattern", "Single Responsibility Principle"]
-            }''',
-            
+            }""",
             # Step 1.2: File Structure (JSON response)
-            "file_structure": '''{
+            "file_structure": """{
                 "directories": ["src", "tests"],
                 "files": ["src/binary_search.py", "tests/test_binary_search.py"],
                 "build_files": ["requirements.txt"]
-            }''',
-            
+            }""",
             # Step 1.3: Headers for binary_search.py
             "headers_binary_search": '''
                 """
@@ -104,7 +112,6 @@ class TestSolutionRepositoryCreatorIntegration:
                 if __name__ == "__main__":
                     main()
             ''',
-           
             # Step 1.3: Headers for test_binary_search.py
             "headers_test": '''
                 """
@@ -146,7 +153,6 @@ class TestSolutionRepositoryCreatorIntegration:
                 if __name__ == "__main__":
                     unittest.main()
             ''',
-                            
             # Step 1.4: Implementation for binary_search.py
             "implementation_binary_search": '''"""
                 Binary Search Implementation
@@ -246,9 +252,8 @@ class TestSolutionRepositoryCreatorIntegration:
                 if __name__ == "__main__":
                     main()
                 ''',
-                            
-                # Step 1.4: Implementation for test_binary_search.py
-                "implementation_test": '''
+            # Step 1.4: Implementation for test_binary_search.py
+            "implementation_test": '''
                     """
                     Test module for binary search implementation.
                     """
@@ -313,24 +318,26 @@ class TestSolutionRepositoryCreatorIntegration:
 
                     if __name__ == "__main__":
                         unittest.main()
-                '''
+                ''',
         }
-        
+
         # Track call count to return appropriate response
         call_count = 0
-        
+
         async def mock_ainvoke(prompt):
             nonlocal call_count
             call_count += 1
-            
+
             response = Mock()
-            
+
             # Determine which response to return based on prompt content
             prompt_str = str(prompt).lower()
-            
+
             print(f"\n🔍 LLM Call #{call_count}:")
-            print(f"  Prompt contains: {[key for key in ['solution plan', 'architecture', 'file structure', 'directories', 'binary_search.py', 'test_binary_search.py', 'headers', 'no implementation'] if key in prompt_str]}")
-            
+            print(
+                f"  Prompt contains: {[key for key in ['solution plan', 'architecture', 'file structure', 'directories', 'binary_search.py', 'test_binary_search.py', 'headers', 'no implementation'] if key in prompt_str]}"
+            )
+
             # Use more specific matching based on the actual prompt content
             if "generate the complete header structure" in prompt_str.lower():
                 if "binary_search.py" in prompt_str:
@@ -340,7 +347,9 @@ class TestSolutionRepositoryCreatorIntegration:
                     response.content = mock_responses["headers_test"]
                     print(f"  → Returning: headers_test")
                 else:
-                    response.content = mock_responses["headers_binary_search"]  # Default
+                    response.content = mock_responses[
+                        "headers_binary_search"
+                    ]  # Default
                     print(f"  → Returning: headers_binary_search (default)")
             elif "generate the complete implementation" in prompt_str.lower():
                 if "binary_search.py" in prompt_str:
@@ -350,12 +359,18 @@ class TestSolutionRepositoryCreatorIntegration:
                     response.content = mock_responses["implementation_test"]
                     print(f"  → Returning: implementation_test")
                 else:
-                    response.content = mock_responses["implementation_binary_search"]  # Default
+                    response.content = mock_responses[
+                        "implementation_binary_search"
+                    ]  # Default
                     print(f"  → Returning: implementation_binary_search (default)")
-            elif ("file structure" in prompt_str or "directories" in prompt_str) and "generate the complete" not in prompt_str.lower():
+            elif (
+                "file structure" in prompt_str or "directories" in prompt_str
+            ) and "generate the complete" not in prompt_str.lower():
                 response.content = mock_responses["file_structure"]
                 print(f"  → Returning: file_structure")
-                print(f"  📄 File structure JSON: {mock_responses['file_structure'][:200]}...")
+                print(
+                    f"  📄 File structure JSON: {mock_responses['file_structure'][:200]}..."
+                )
             elif "solution plan" in prompt_str or "architecture" in prompt_str:
                 response.content = mock_responses["solution_plan"]
                 print(f"  → Returning: solution_plan")
@@ -363,9 +378,9 @@ class TestSolutionRepositoryCreatorIntegration:
                 # Default response
                 response.content = '{"default": "response"}'
                 print(f"  → Returning: default response")
-            
+
             return response
-        
+
         model.ainvoke = AsyncMock(side_effect=mock_ainvoke)
         return model
 
@@ -380,18 +395,18 @@ class TestSolutionRepositoryCreatorIntegration:
         boundary_conditions.points = 100
         boundary_conditions.bonus_points = 0
         boundary_conditions.constraints = []
-        
+
         # Create problem statement
         problem_statement = Mock()
         problem_statement.title = "Binary Search Implementation"
         problem_statement.short_title = "Binary Search"
         problem_statement.description = "Implement a binary search algorithm that can efficiently find elements in a sorted array. The implementation should include proper input validation and handle edge cases like empty arrays and single-element arrays."
-        
+
         # Create request
         request = Mock()
         request.boundary_conditions = boundary_conditions
         request.problem_statement = problem_statement
-        
+
         return request
 
     @pytest.fixture
@@ -403,7 +418,9 @@ class TestSolutionRepositoryCreatorIntegration:
         shutil.rmtree(temp_dir, ignore_errors=True)
 
     @pytest.mark.asyncio
-    async def test_complete_solution_repository_creation(self, mock_model, mock_request, temp_workspace):
+    async def test_complete_solution_repository_creation(
+        self, mock_model, mock_request, temp_workspace
+    ):
         """Test the complete integration flow from request to response."""
 
         # Mock the workspace manager instance that will be used
@@ -412,18 +429,22 @@ class TestSolutionRepositoryCreatorIntegration:
         mock_workspace_instance.cleanup_workspace.return_value = None
 
         # Mock the language registry to support Python
-        with patch('hyperion.app.creation_steps.step3_create_solution_repository.servicer.language_registry') as mock_registry:
+        with patch(
+            "hyperion.app.creation_steps.step3_create_solution_repository.servicer.language_registry"
+        ) as mock_registry:
             mock_registry.is_supported.return_value = True
 
             # Mock the config
-            with patch('hyperion.app.creation_steps.step3_create_solution_repository.servicer.config') as mock_config:
+            with patch(
+                "hyperion.app.creation_steps.step3_create_solution_repository.servicer.config"
+            ) as mock_config:
                 mock_config.solution_creator_max_iterations = 5
                 mock_config.cleanup_on_success = True
                 mock_config.cleanup_on_failure = False
 
                 # Create servicer with the real CodeGenerator and mocked model
                 servicer = SolutionRepositoryCreatorServicer(model=mock_model)
-                
+
                 # Now, after instantiation, we patch the instance's manager
                 servicer.workspace_manager = mock_workspace_instance
 
@@ -431,14 +452,16 @@ class TestSolutionRepositoryCreatorIntegration:
                 grpc_context = Mock()
 
                 # Execute the service
-                response: hyperion_pb2.SolutionRepositoryCreatorResponse = await servicer.CreateSolutionRepository(mock_request, grpc_context)
+                response: hyperion_pb2.SolutionRepositoryCreatorResponse = (
+                    await servicer.CreateSolutionRepository(mock_request, grpc_context)
+                )
 
                 # Verify the response structure
                 assert response is not None
                 assert response.solution_repository is not None
 
                 print(f"\nWorkspace path: {temp_workspace}")
-                
+
                 for repository in response.solution_repository.files:
                     print(f"\nRepository file: {repository.path}")
                     print(f"Content: {repository.content}\n")
@@ -450,45 +473,55 @@ class TestSolutionRepositoryCreatorIntegration:
                 assert (workspace_path / "src" / "binary_search.py").exists()
                 assert (workspace_path / "tests" / "test_binary_search.py").exists()
                 assert (workspace_path / "requirements.txt").exists()
-                
+
                 # Verify file contents are not empty
-                binary_search_content = (workspace_path / "src" / "binary_search.py").read_text()
+                binary_search_content = (
+                    workspace_path / "src" / "binary_search.py"
+                ).read_text()
                 assert len(binary_search_content) > 50
-                test_content = (workspace_path / "tests" / "test_binary_search.py").read_text()
+                test_content = (
+                    workspace_path / "tests" / "test_binary_search.py"
+                ).read_text()
                 assert len(test_content) > 50
-                
+
                 # Verify that the model was called the expected number of times
-                assert mock_model.ainvoke.call_count >= 4  # Plan, Structure, Headers, Implementation
+                assert (
+                    mock_model.ainvoke.call_count >= 4
+                )  # Plan, Structure, Headers, Implementation
 
     @pytest.mark.asyncio
-    async def test_error_handling_invalid_language(self, mock_model, mock_request, temp_workspace):
+    async def test_error_handling_invalid_language(
+        self, mock_model, mock_request, temp_workspace
+    ):
         """Test error handling when an unsupported language is specified."""
-        
+
         # Modify request to use unsupported language
         mock_request.boundary_conditions.programming_language = 999  # Invalid language
-        
-        with patch('hyperion.app.creation_steps.step3_create_solution_repository.servicer.TempWorkspaceManager') as mock_workspace_manager:
+
+        with patch(
+            "hyperion.app.creation_steps.step3_create_solution_repository.servicer.TempWorkspaceManager"
+        ) as mock_workspace_manager:
             mock_workspace_instance = Mock()
             mock_workspace_instance.create_workspace.return_value = temp_workspace
             mock_workspace_manager.return_value = mock_workspace_instance
-            
+
             # Mock language registry to reject the language
-            with patch('hyperion.app.creation_steps.step3_create_solution_repository.servicer.language_registry') as mock_registry:
+            with patch(
+                "hyperion.app.creation_steps.step3_create_solution_repository.servicer.language_registry"
+            ) as mock_registry:
                 mock_registry.is_supported.return_value = False
                 mock_registry.get_supported_languages.return_value = ["PYTHON", "JAVA"]
-                
+
                 servicer = SolutionRepositoryCreatorServicer(model=mock_model)
                 grpc_context = Mock()
-                
+
                 # Should raise an exception
                 with pytest.raises(Exception):
                     await servicer.CreateSolutionRepository(mock_request, grpc_context)
-                
+
                 # Verify gRPC context was set with error
                 grpc_context.set_code.assert_called()
                 grpc_context.set_details.assert_called()
-
-
 
 
 if __name__ == "__main__":

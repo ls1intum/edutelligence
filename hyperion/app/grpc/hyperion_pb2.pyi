@@ -2,7 +2,13 @@ from google.protobuf.internal import containers as _containers
 from google.protobuf.internal import enum_type_wrapper as _enum_type_wrapper
 from google.protobuf import descriptor as _descriptor
 from google.protobuf import message as _message
-from typing import ClassVar as _ClassVar, Iterable as _Iterable, Mapping as _Mapping, Optional as _Optional, Union as _Union
+from typing import (
+    ClassVar as _ClassVar,
+    Iterable as _Iterable,
+    Mapping as _Mapping,
+    Optional as _Optional,
+    Union as _Union,
+)
 
 DESCRIPTOR: _descriptor.FileDescriptor
 
@@ -17,6 +23,7 @@ class ProjectType(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     PLAIN: _ClassVar[ProjectType]
     MAVEN: _ClassVar[ProjectType]
     GRADLE: _ClassVar[ProjectType]
+
 EMPTY: ProgrammingLanguage
 JAVA: ProgrammingLanguage
 PYTHON: ProgrammingLanguage
@@ -25,7 +32,14 @@ MAVEN: ProjectType
 GRADLE: ProjectType
 
 class ProgrammingExercise(_message.Message):
-    __slots__ = ("id", "template_repository", "solution_repository", "test_repository", "problem_statement", "boundary_conditions")
+    __slots__ = (
+        "id",
+        "template_repository",
+        "solution_repository",
+        "test_repository",
+        "problem_statement",
+        "boundary_conditions",
+    )
     ID_FIELD_NUMBER: _ClassVar[int]
     TEMPLATE_REPOSITORY_FIELD_NUMBER: _ClassVar[int]
     SOLUTION_REPOSITORY_FIELD_NUMBER: _ClassVar[int]
@@ -38,7 +52,15 @@ class ProgrammingExercise(_message.Message):
     test_repository: Repository
     problem_statement: ProblemStatement
     boundary_conditions: BoundaryConditions
-    def __init__(self, id: _Optional[int] = ..., template_repository: _Optional[_Union[Repository, _Mapping]] = ..., solution_repository: _Optional[_Union[Repository, _Mapping]] = ..., test_repository: _Optional[_Union[Repository, _Mapping]] = ..., problem_statement: _Optional[_Union[ProblemStatement, _Mapping]] = ..., boundary_conditions: _Optional[_Union[BoundaryConditions, _Mapping]] = ...) -> None: ...
+    def __init__(
+        self,
+        id: _Optional[int] = ...,
+        template_repository: _Optional[_Union[Repository, _Mapping]] = ...,
+        solution_repository: _Optional[_Union[Repository, _Mapping]] = ...,
+        test_repository: _Optional[_Union[Repository, _Mapping]] = ...,
+        problem_statement: _Optional[_Union[ProblemStatement, _Mapping]] = ...,
+        boundary_conditions: _Optional[_Union[BoundaryConditions, _Mapping]] = ...,
+    ) -> None: ...
 
 class Repository(_message.Message):
     __slots__ = ("name", "files")
@@ -46,7 +68,11 @@ class Repository(_message.Message):
     FILES_FIELD_NUMBER: _ClassVar[int]
     name: str
     files: _containers.RepeatedCompositeFieldContainer[RepositoryFile]
-    def __init__(self, name: _Optional[str] = ..., files: _Optional[_Iterable[_Union[RepositoryFile, _Mapping]]] = ...) -> None: ...
+    def __init__(
+        self,
+        name: _Optional[str] = ...,
+        files: _Optional[_Iterable[_Union[RepositoryFile, _Mapping]]] = ...,
+    ) -> None: ...
 
 class RepositoryFile(_message.Message):
     __slots__ = ("path", "content")
@@ -54,7 +80,9 @@ class RepositoryFile(_message.Message):
     CONTENT_FIELD_NUMBER: _ClassVar[int]
     path: str
     content: str
-    def __init__(self, path: _Optional[str] = ..., content: _Optional[str] = ...) -> None: ...
+    def __init__(
+        self, path: _Optional[str] = ..., content: _Optional[str] = ...
+    ) -> None: ...
 
 class ProblemStatement(_message.Message):
     __slots__ = ("title", "short_title", "description")
@@ -64,10 +92,24 @@ class ProblemStatement(_message.Message):
     title: str
     short_title: str
     description: str
-    def __init__(self, title: _Optional[str] = ..., short_title: _Optional[str] = ..., description: _Optional[str] = ...) -> None: ...
+    def __init__(
+        self,
+        title: _Optional[str] = ...,
+        short_title: _Optional[str] = ...,
+        description: _Optional[str] = ...,
+    ) -> None: ...
 
 class BoundaryConditions(_message.Message):
-    __slots__ = ("language", "technical_environment", "project_type", "programming_language", "difficulty", "points", "bonus_points", "constraints")
+    __slots__ = (
+        "language",
+        "technical_environment",
+        "project_type",
+        "programming_language",
+        "difficulty",
+        "points",
+        "bonus_points",
+        "constraints",
+    )
     LANGUAGE_FIELD_NUMBER: _ClassVar[int]
     TECHNICAL_ENVIRONMENT_FIELD_NUMBER: _ClassVar[int]
     PROJECT_TYPE_FIELD_NUMBER: _ClassVar[int]
@@ -84,7 +126,17 @@ class BoundaryConditions(_message.Message):
     points: int
     bonus_points: int
     constraints: _containers.RepeatedScalarFieldContainer[str]
-    def __init__(self, language: _Optional[str] = ..., technical_environment: _Optional[str] = ..., project_type: _Optional[_Union[ProjectType, str]] = ..., programming_language: _Optional[_Union[ProgrammingLanguage, str]] = ..., difficulty: _Optional[str] = ..., points: _Optional[int] = ..., bonus_points: _Optional[int] = ..., constraints: _Optional[_Iterable[str]] = ...) -> None: ...
+    def __init__(
+        self,
+        language: _Optional[str] = ...,
+        technical_environment: _Optional[str] = ...,
+        project_type: _Optional[_Union[ProjectType, str]] = ...,
+        programming_language: _Optional[_Union[ProgrammingLanguage, str]] = ...,
+        difficulty: _Optional[str] = ...,
+        points: _Optional[int] = ...,
+        bonus_points: _Optional[int] = ...,
+        constraints: _Optional[_Iterable[str]] = ...,
+    ) -> None: ...
 
 class PingRequest(_message.Message):
     __slots__ = ("client_id",)
@@ -100,7 +152,12 @@ class PingResponse(_message.Message):
     status: str
     version: str
     timestamp: int
-    def __init__(self, status: _Optional[str] = ..., version: _Optional[str] = ..., timestamp: _Optional[int] = ...) -> None: ...
+    def __init__(
+        self,
+        status: _Optional[str] = ...,
+        version: _Optional[str] = ...,
+        timestamp: _Optional[int] = ...,
+    ) -> None: ...
 
 class BoundaryConditionsDefinerRequest(_message.Message):
     __slots__ = ()
@@ -110,13 +167,17 @@ class BoundaryConditionsDefinerResponse(_message.Message):
     __slots__ = ("boundary_conditions",)
     BOUNDARY_CONDITIONS_FIELD_NUMBER: _ClassVar[int]
     boundary_conditions: BoundaryConditions
-    def __init__(self, boundary_conditions: _Optional[_Union[BoundaryConditions, _Mapping]] = ...) -> None: ...
+    def __init__(
+        self, boundary_conditions: _Optional[_Union[BoundaryConditions, _Mapping]] = ...
+    ) -> None: ...
 
 class ProblemStatementDrafterRequest(_message.Message):
     __slots__ = ("boundary_conditions",)
     BOUNDARY_CONDITIONS_FIELD_NUMBER: _ClassVar[int]
     boundary_conditions: BoundaryConditions
-    def __init__(self, boundary_conditions: _Optional[_Union[BoundaryConditions, _Mapping]] = ...) -> None: ...
+    def __init__(
+        self, boundary_conditions: _Optional[_Union[BoundaryConditions, _Mapping]] = ...
+    ) -> None: ...
 
 class ProblemStatementDrafterResponse(_message.Message):
     __slots__ = ("boundary_conditions", "problem_statement")
@@ -124,7 +185,11 @@ class ProblemStatementDrafterResponse(_message.Message):
     PROBLEM_STATEMENT_FIELD_NUMBER: _ClassVar[int]
     boundary_conditions: BoundaryConditions
     problem_statement: ProblemStatement
-    def __init__(self, boundary_conditions: _Optional[_Union[BoundaryConditions, _Mapping]] = ..., problem_statement: _Optional[_Union[ProblemStatement, _Mapping]] = ...) -> None: ...
+    def __init__(
+        self,
+        boundary_conditions: _Optional[_Union[BoundaryConditions, _Mapping]] = ...,
+        problem_statement: _Optional[_Union[ProblemStatement, _Mapping]] = ...,
+    ) -> None: ...
 
 class SolutionRepositoryCreatorRequest(_message.Message):
     __slots__ = ("boundary_conditions", "problem_statement")
@@ -132,7 +197,11 @@ class SolutionRepositoryCreatorRequest(_message.Message):
     PROBLEM_STATEMENT_FIELD_NUMBER: _ClassVar[int]
     boundary_conditions: BoundaryConditions
     problem_statement: ProblemStatement
-    def __init__(self, boundary_conditions: _Optional[_Union[BoundaryConditions, _Mapping]] = ..., problem_statement: _Optional[_Union[ProblemStatement, _Mapping]] = ...) -> None: ...
+    def __init__(
+        self,
+        boundary_conditions: _Optional[_Union[BoundaryConditions, _Mapping]] = ...,
+        problem_statement: _Optional[_Union[ProblemStatement, _Mapping]] = ...,
+    ) -> None: ...
 
 class SolutionRepositoryCreatorResponse(_message.Message):
     __slots__ = ("boundary_conditions", "problem_statement", "solution_repository")
@@ -142,7 +211,12 @@ class SolutionRepositoryCreatorResponse(_message.Message):
     boundary_conditions: BoundaryConditions
     problem_statement: ProblemStatement
     solution_repository: Repository
-    def __init__(self, boundary_conditions: _Optional[_Union[BoundaryConditions, _Mapping]] = ..., problem_statement: _Optional[_Union[ProblemStatement, _Mapping]] = ..., solution_repository: _Optional[_Union[Repository, _Mapping]] = ...) -> None: ...
+    def __init__(
+        self,
+        boundary_conditions: _Optional[_Union[BoundaryConditions, _Mapping]] = ...,
+        problem_statement: _Optional[_Union[ProblemStatement, _Mapping]] = ...,
+        solution_repository: _Optional[_Union[Repository, _Mapping]] = ...,
+    ) -> None: ...
 
 class TemplateRepositoryCreatorRequest(_message.Message):
     __slots__ = ("boundary_conditions", "problem_statement", "solution_repository")
@@ -152,10 +226,20 @@ class TemplateRepositoryCreatorRequest(_message.Message):
     boundary_conditions: BoundaryConditions
     problem_statement: ProblemStatement
     solution_repository: Repository
-    def __init__(self, boundary_conditions: _Optional[_Union[BoundaryConditions, _Mapping]] = ..., problem_statement: _Optional[_Union[ProblemStatement, _Mapping]] = ..., solution_repository: _Optional[_Union[Repository, _Mapping]] = ...) -> None: ...
+    def __init__(
+        self,
+        boundary_conditions: _Optional[_Union[BoundaryConditions, _Mapping]] = ...,
+        problem_statement: _Optional[_Union[ProblemStatement, _Mapping]] = ...,
+        solution_repository: _Optional[_Union[Repository, _Mapping]] = ...,
+    ) -> None: ...
 
 class TemplateRepositoryCreatorResponse(_message.Message):
-    __slots__ = ("boundary_conditions", "problem_statement", "solution_repository", "template_repository")
+    __slots__ = (
+        "boundary_conditions",
+        "problem_statement",
+        "solution_repository",
+        "template_repository",
+    )
     BOUNDARY_CONDITIONS_FIELD_NUMBER: _ClassVar[int]
     PROBLEM_STATEMENT_FIELD_NUMBER: _ClassVar[int]
     SOLUTION_REPOSITORY_FIELD_NUMBER: _ClassVar[int]
@@ -164,10 +248,21 @@ class TemplateRepositoryCreatorResponse(_message.Message):
     problem_statement: ProblemStatement
     solution_repository: Repository
     template_repository: Repository
-    def __init__(self, boundary_conditions: _Optional[_Union[BoundaryConditions, _Mapping]] = ..., problem_statement: _Optional[_Union[ProblemStatement, _Mapping]] = ..., solution_repository: _Optional[_Union[Repository, _Mapping]] = ..., template_repository: _Optional[_Union[Repository, _Mapping]] = ...) -> None: ...
+    def __init__(
+        self,
+        boundary_conditions: _Optional[_Union[BoundaryConditions, _Mapping]] = ...,
+        problem_statement: _Optional[_Union[ProblemStatement, _Mapping]] = ...,
+        solution_repository: _Optional[_Union[Repository, _Mapping]] = ...,
+        template_repository: _Optional[_Union[Repository, _Mapping]] = ...,
+    ) -> None: ...
 
 class TestRepositoryCreatorRequest(_message.Message):
-    __slots__ = ("boundary_conditions", "problem_statement", "solution_repository", "template_repository")
+    __slots__ = (
+        "boundary_conditions",
+        "problem_statement",
+        "solution_repository",
+        "template_repository",
+    )
     BOUNDARY_CONDITIONS_FIELD_NUMBER: _ClassVar[int]
     PROBLEM_STATEMENT_FIELD_NUMBER: _ClassVar[int]
     SOLUTION_REPOSITORY_FIELD_NUMBER: _ClassVar[int]
@@ -176,10 +271,22 @@ class TestRepositoryCreatorRequest(_message.Message):
     problem_statement: ProblemStatement
     solution_repository: Repository
     template_repository: Repository
-    def __init__(self, boundary_conditions: _Optional[_Union[BoundaryConditions, _Mapping]] = ..., problem_statement: _Optional[_Union[ProblemStatement, _Mapping]] = ..., solution_repository: _Optional[_Union[Repository, _Mapping]] = ..., template_repository: _Optional[_Union[Repository, _Mapping]] = ...) -> None: ...
+    def __init__(
+        self,
+        boundary_conditions: _Optional[_Union[BoundaryConditions, _Mapping]] = ...,
+        problem_statement: _Optional[_Union[ProblemStatement, _Mapping]] = ...,
+        solution_repository: _Optional[_Union[Repository, _Mapping]] = ...,
+        template_repository: _Optional[_Union[Repository, _Mapping]] = ...,
+    ) -> None: ...
 
 class TestRepositoryCreatorResponse(_message.Message):
-    __slots__ = ("boundary_conditions", "problem_statement", "solution_repository", "template_repository", "test_repository")
+    __slots__ = (
+        "boundary_conditions",
+        "problem_statement",
+        "solution_repository",
+        "template_repository",
+        "test_repository",
+    )
     BOUNDARY_CONDITIONS_FIELD_NUMBER: _ClassVar[int]
     PROBLEM_STATEMENT_FIELD_NUMBER: _ClassVar[int]
     SOLUTION_REPOSITORY_FIELD_NUMBER: _ClassVar[int]
@@ -190,10 +297,23 @@ class TestRepositoryCreatorResponse(_message.Message):
     solution_repository: Repository
     template_repository: Repository
     test_repository: Repository
-    def __init__(self, boundary_conditions: _Optional[_Union[BoundaryConditions, _Mapping]] = ..., problem_statement: _Optional[_Union[ProblemStatement, _Mapping]] = ..., solution_repository: _Optional[_Union[Repository, _Mapping]] = ..., template_repository: _Optional[_Union[Repository, _Mapping]] = ..., test_repository: _Optional[_Union[Repository, _Mapping]] = ...) -> None: ...
+    def __init__(
+        self,
+        boundary_conditions: _Optional[_Union[BoundaryConditions, _Mapping]] = ...,
+        problem_statement: _Optional[_Union[ProblemStatement, _Mapping]] = ...,
+        solution_repository: _Optional[_Union[Repository, _Mapping]] = ...,
+        template_repository: _Optional[_Union[Repository, _Mapping]] = ...,
+        test_repository: _Optional[_Union[Repository, _Mapping]] = ...,
+    ) -> None: ...
 
 class ProblemStatementFinalizerRequest(_message.Message):
-    __slots__ = ("boundary_conditions", "problem_statement", "solution_repository", "template_repository", "test_repository")
+    __slots__ = (
+        "boundary_conditions",
+        "problem_statement",
+        "solution_repository",
+        "template_repository",
+        "test_repository",
+    )
     BOUNDARY_CONDITIONS_FIELD_NUMBER: _ClassVar[int]
     PROBLEM_STATEMENT_FIELD_NUMBER: _ClassVar[int]
     SOLUTION_REPOSITORY_FIELD_NUMBER: _ClassVar[int]
@@ -204,10 +324,23 @@ class ProblemStatementFinalizerRequest(_message.Message):
     solution_repository: Repository
     template_repository: Repository
     test_repository: Repository
-    def __init__(self, boundary_conditions: _Optional[_Union[BoundaryConditions, _Mapping]] = ..., problem_statement: _Optional[_Union[ProblemStatement, _Mapping]] = ..., solution_repository: _Optional[_Union[Repository, _Mapping]] = ..., template_repository: _Optional[_Union[Repository, _Mapping]] = ..., test_repository: _Optional[_Union[Repository, _Mapping]] = ...) -> None: ...
+    def __init__(
+        self,
+        boundary_conditions: _Optional[_Union[BoundaryConditions, _Mapping]] = ...,
+        problem_statement: _Optional[_Union[ProblemStatement, _Mapping]] = ...,
+        solution_repository: _Optional[_Union[Repository, _Mapping]] = ...,
+        template_repository: _Optional[_Union[Repository, _Mapping]] = ...,
+        test_repository: _Optional[_Union[Repository, _Mapping]] = ...,
+    ) -> None: ...
 
 class ProblemStatementFinalizerResponse(_message.Message):
-    __slots__ = ("boundary_conditions", "problem_statement", "solution_repository", "template_repository", "test_repository")
+    __slots__ = (
+        "boundary_conditions",
+        "problem_statement",
+        "solution_repository",
+        "template_repository",
+        "test_repository",
+    )
     BOUNDARY_CONDITIONS_FIELD_NUMBER: _ClassVar[int]
     PROBLEM_STATEMENT_FIELD_NUMBER: _ClassVar[int]
     SOLUTION_REPOSITORY_FIELD_NUMBER: _ClassVar[int]
@@ -218,10 +351,23 @@ class ProblemStatementFinalizerResponse(_message.Message):
     solution_repository: Repository
     template_repository: Repository
     test_repository: Repository
-    def __init__(self, boundary_conditions: _Optional[_Union[BoundaryConditions, _Mapping]] = ..., problem_statement: _Optional[_Union[ProblemStatement, _Mapping]] = ..., solution_repository: _Optional[_Union[Repository, _Mapping]] = ..., template_repository: _Optional[_Union[Repository, _Mapping]] = ..., test_repository: _Optional[_Union[Repository, _Mapping]] = ...) -> None: ...
+    def __init__(
+        self,
+        boundary_conditions: _Optional[_Union[BoundaryConditions, _Mapping]] = ...,
+        problem_statement: _Optional[_Union[ProblemStatement, _Mapping]] = ...,
+        solution_repository: _Optional[_Union[Repository, _Mapping]] = ...,
+        template_repository: _Optional[_Union[Repository, _Mapping]] = ...,
+        test_repository: _Optional[_Union[Repository, _Mapping]] = ...,
+    ) -> None: ...
 
 class GradingConfiguratorRequest(_message.Message):
-    __slots__ = ("boundary_conditions", "problem_statement", "solution_repository", "template_repository", "test_repository")
+    __slots__ = (
+        "boundary_conditions",
+        "problem_statement",
+        "solution_repository",
+        "template_repository",
+        "test_repository",
+    )
     BOUNDARY_CONDITIONS_FIELD_NUMBER: _ClassVar[int]
     PROBLEM_STATEMENT_FIELD_NUMBER: _ClassVar[int]
     SOLUTION_REPOSITORY_FIELD_NUMBER: _ClassVar[int]
@@ -232,10 +378,23 @@ class GradingConfiguratorRequest(_message.Message):
     solution_repository: Repository
     template_repository: Repository
     test_repository: Repository
-    def __init__(self, boundary_conditions: _Optional[_Union[BoundaryConditions, _Mapping]] = ..., problem_statement: _Optional[_Union[ProblemStatement, _Mapping]] = ..., solution_repository: _Optional[_Union[Repository, _Mapping]] = ..., template_repository: _Optional[_Union[Repository, _Mapping]] = ..., test_repository: _Optional[_Union[Repository, _Mapping]] = ...) -> None: ...
+    def __init__(
+        self,
+        boundary_conditions: _Optional[_Union[BoundaryConditions, _Mapping]] = ...,
+        problem_statement: _Optional[_Union[ProblemStatement, _Mapping]] = ...,
+        solution_repository: _Optional[_Union[Repository, _Mapping]] = ...,
+        template_repository: _Optional[_Union[Repository, _Mapping]] = ...,
+        test_repository: _Optional[_Union[Repository, _Mapping]] = ...,
+    ) -> None: ...
 
 class GradingConfiguratorResponse(_message.Message):
-    __slots__ = ("boundary_conditions", "problem_statement", "solution_repository", "template_repository", "test_repository")
+    __slots__ = (
+        "boundary_conditions",
+        "problem_statement",
+        "solution_repository",
+        "template_repository",
+        "test_repository",
+    )
     BOUNDARY_CONDITIONS_FIELD_NUMBER: _ClassVar[int]
     PROBLEM_STATEMENT_FIELD_NUMBER: _ClassVar[int]
     SOLUTION_REPOSITORY_FIELD_NUMBER: _ClassVar[int]
@@ -246,10 +405,23 @@ class GradingConfiguratorResponse(_message.Message):
     solution_repository: Repository
     template_repository: Repository
     test_repository: Repository
-    def __init__(self, boundary_conditions: _Optional[_Union[BoundaryConditions, _Mapping]] = ..., problem_statement: _Optional[_Union[ProblemStatement, _Mapping]] = ..., solution_repository: _Optional[_Union[Repository, _Mapping]] = ..., template_repository: _Optional[_Union[Repository, _Mapping]] = ..., test_repository: _Optional[_Union[Repository, _Mapping]] = ...) -> None: ...
+    def __init__(
+        self,
+        boundary_conditions: _Optional[_Union[BoundaryConditions, _Mapping]] = ...,
+        problem_statement: _Optional[_Union[ProblemStatement, _Mapping]] = ...,
+        solution_repository: _Optional[_Union[Repository, _Mapping]] = ...,
+        template_repository: _Optional[_Union[Repository, _Mapping]] = ...,
+        test_repository: _Optional[_Union[Repository, _Mapping]] = ...,
+    ) -> None: ...
 
 class InconsistencyCheckRequest(_message.Message):
-    __slots__ = ("boundary_conditions", "problem_statement", "solution_repository", "template_repository", "test_repository")
+    __slots__ = (
+        "boundary_conditions",
+        "problem_statement",
+        "solution_repository",
+        "template_repository",
+        "test_repository",
+    )
     BOUNDARY_CONDITIONS_FIELD_NUMBER: _ClassVar[int]
     PROBLEM_STATEMENT_FIELD_NUMBER: _ClassVar[int]
     SOLUTION_REPOSITORY_FIELD_NUMBER: _ClassVar[int]
@@ -260,7 +432,14 @@ class InconsistencyCheckRequest(_message.Message):
     solution_repository: Repository
     template_repository: Repository
     test_repository: Repository
-    def __init__(self, boundary_conditions: _Optional[_Union[BoundaryConditions, _Mapping]] = ..., problem_statement: _Optional[_Union[ProblemStatement, _Mapping]] = ..., solution_repository: _Optional[_Union[Repository, _Mapping]] = ..., template_repository: _Optional[_Union[Repository, _Mapping]] = ..., test_repository: _Optional[_Union[Repository, _Mapping]] = ...) -> None: ...
+    def __init__(
+        self,
+        boundary_conditions: _Optional[_Union[BoundaryConditions, _Mapping]] = ...,
+        problem_statement: _Optional[_Union[ProblemStatement, _Mapping]] = ...,
+        solution_repository: _Optional[_Union[Repository, _Mapping]] = ...,
+        template_repository: _Optional[_Union[Repository, _Mapping]] = ...,
+        test_repository: _Optional[_Union[Repository, _Mapping]] = ...,
+    ) -> None: ...
 
 class InconsistencyCheckResponse(_message.Message):
     __slots__ = ("inconsistencies",)

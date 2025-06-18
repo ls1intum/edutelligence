@@ -9,95 +9,93 @@ from google.protobuf import descriptor_pool as _descriptor_pool
 from google.protobuf import runtime_version as _runtime_version
 from google.protobuf import symbol_database as _symbol_database
 from google.protobuf.internal import builder as _builder
+
 _runtime_version.ValidateProtobufRuntimeVersion(
-    _runtime_version.Domain.PUBLIC,
-    5,
-    29,
-    0,
-    '',
-    'hyperion.proto'
+    _runtime_version.Domain.PUBLIC, 5, 29, 0, "", "hyperion.proto"
 )
 # @@protoc_insertion_point(imports)
 
 _sym_db = _symbol_database.Default()
 
 
-
-
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0ehyperion.proto\x12\x08hyperion\"\xa8\x02\n\x13ProgrammingExercise\x12\n\n\x02id\x18\x01 \x01(\x05\x12\x31\n\x13template_repository\x18\x02 \x01(\x0b\x32\x14.hyperion.Repository\x12\x31\n\x13solution_repository\x18\x03 \x01(\x0b\x32\x14.hyperion.Repository\x12-\n\x0ftest_repository\x18\x04 \x01(\x0b\x32\x14.hyperion.Repository\x12\x35\n\x11problem_statement\x18\x05 \x01(\x0b\x32\x1a.hyperion.ProblemStatement\x12\x39\n\x13\x62oundary_conditions\x18\x06 \x01(\x0b\x32\x1c.hyperion.BoundaryConditions\"C\n\nRepository\x12\x0c\n\x04name\x18\x01 \x01(\t\x12\'\n\x05\x66iles\x18\x02 \x03(\x0b\x32\x18.hyperion.RepositoryFile\"/\n\x0eRepositoryFile\x12\x0c\n\x04path\x18\x01 \x01(\t\x12\x0f\n\x07\x63ontent\x18\x02 \x01(\t\"K\n\x10ProblemStatement\x12\r\n\x05title\x18\x01 \x01(\t\x12\x13\n\x0bshort_title\x18\x02 \x01(\t\x12\x13\n\x0b\x64\x65scription\x18\x03 \x01(\t\"\xfe\x01\n\x12\x42oundaryConditions\x12\x10\n\x08language\x18\x01 \x01(\t\x12\x1d\n\x15technical_environment\x18\x02 \x01(\t\x12+\n\x0cproject_type\x18\x03 \x01(\x0e\x32\x15.hyperion.ProjectType\x12;\n\x14programming_language\x18\x04 \x01(\x0e\x32\x1d.hyperion.ProgrammingLanguage\x12\x12\n\ndifficulty\x18\x05 \x01(\t\x12\x0e\n\x06points\x18\x06 \x01(\x05\x12\x14\n\x0c\x62onus_points\x18\x07 \x01(\x05\x12\x13\n\x0b\x63onstraints\x18\x08 \x03(\t\" \n\x0bPingRequest\x12\x11\n\tclient_id\x18\x01 \x01(\t\"B\n\x0cPingResponse\x12\x0e\n\x06status\x18\x01 \x01(\t\x12\x0f\n\x07version\x18\x02 \x01(\t\x12\x11\n\ttimestamp\x18\x03 \x01(\x03\"\"\n BoundaryConditionsDefinerRequest\"^\n!BoundaryConditionsDefinerResponse\x12\x39\n\x13\x62oundary_conditions\x18\x01 \x01(\x0b\x32\x1c.hyperion.BoundaryConditions\"[\n\x1eProblemStatementDrafterRequest\x12\x39\n\x13\x62oundary_conditions\x18\x01 \x01(\x0b\x32\x1c.hyperion.BoundaryConditions\"\x93\x01\n\x1fProblemStatementDrafterResponse\x12\x39\n\x13\x62oundary_conditions\x18\x01 \x01(\x0b\x32\x1c.hyperion.BoundaryConditions\x12\x35\n\x11problem_statement\x18\x02 \x01(\x0b\x32\x1a.hyperion.ProblemStatement\"\x94\x01\n SolutionRepositoryCreatorRequest\x12\x39\n\x13\x62oundary_conditions\x18\x01 \x01(\x0b\x32\x1c.hyperion.BoundaryConditions\x12\x35\n\x11problem_statement\x18\x02 \x01(\x0b\x32\x1a.hyperion.ProblemStatement\"\xc8\x01\n!SolutionRepositoryCreatorResponse\x12\x39\n\x13\x62oundary_conditions\x18\x01 \x01(\x0b\x32\x1c.hyperion.BoundaryConditions\x12\x35\n\x11problem_statement\x18\x02 \x01(\x0b\x32\x1a.hyperion.ProblemStatement\x12\x31\n\x13solution_repository\x18\x03 \x01(\x0b\x32\x14.hyperion.Repository\"\xc7\x01\n TemplateRepositoryCreatorRequest\x12\x39\n\x13\x62oundary_conditions\x18\x01 \x01(\x0b\x32\x1c.hyperion.BoundaryConditions\x12\x35\n\x11problem_statement\x18\x02 \x01(\x0b\x32\x1a.hyperion.ProblemStatement\x12\x31\n\x13solution_repository\x18\x03 \x01(\x0b\x32\x14.hyperion.Repository\"\xfb\x01\n!TemplateRepositoryCreatorResponse\x12\x39\n\x13\x62oundary_conditions\x18\x01 \x01(\x0b\x32\x1c.hyperion.BoundaryConditions\x12\x35\n\x11problem_statement\x18\x02 \x01(\x0b\x32\x1a.hyperion.ProblemStatement\x12\x31\n\x13solution_repository\x18\x03 \x01(\x0b\x32\x14.hyperion.Repository\x12\x31\n\x13template_repository\x18\x04 \x01(\x0b\x32\x14.hyperion.Repository\"\xf6\x01\n\x1cTestRepositoryCreatorRequest\x12\x39\n\x13\x62oundary_conditions\x18\x01 \x01(\x0b\x32\x1c.hyperion.BoundaryConditions\x12\x35\n\x11problem_statement\x18\x02 \x01(\x0b\x32\x1a.hyperion.ProblemStatement\x12\x31\n\x13solution_repository\x18\x03 \x01(\x0b\x32\x14.hyperion.Repository\x12\x31\n\x13template_repository\x18\x04 \x01(\x0b\x32\x14.hyperion.Repository\"\xa6\x02\n\x1dTestRepositoryCreatorResponse\x12\x39\n\x13\x62oundary_conditions\x18\x01 \x01(\x0b\x32\x1c.hyperion.BoundaryConditions\x12\x35\n\x11problem_statement\x18\x02 \x01(\x0b\x32\x1a.hyperion.ProblemStatement\x12\x31\n\x13solution_repository\x18\x03 \x01(\x0b\x32\x14.hyperion.Repository\x12\x31\n\x13template_repository\x18\x04 \x01(\x0b\x32\x14.hyperion.Repository\x12-\n\x0ftest_repository\x18\x05 \x01(\x0b\x32\x14.hyperion.Repository\"\xa9\x02\n ProblemStatementFinalizerRequest\x12\x39\n\x13\x62oundary_conditions\x18\x01 \x01(\x0b\x32\x1c.hyperion.BoundaryConditions\x12\x35\n\x11problem_statement\x18\x02 \x01(\x0b\x32\x1a.hyperion.ProblemStatement\x12\x31\n\x13solution_repository\x18\x03 \x01(\x0b\x32\x14.hyperion.Repository\x12\x31\n\x13template_repository\x18\x04 \x01(\x0b\x32\x14.hyperion.Repository\x12-\n\x0ftest_repository\x18\x05 \x01(\x0b\x32\x14.hyperion.Repository\"\xaa\x02\n!ProblemStatementFinalizerResponse\x12\x39\n\x13\x62oundary_conditions\x18\x01 \x01(\x0b\x32\x1c.hyperion.BoundaryConditions\x12\x35\n\x11problem_statement\x18\x02 \x01(\x0b\x32\x1a.hyperion.ProblemStatement\x12\x31\n\x13solution_repository\x18\x03 \x01(\x0b\x32\x14.hyperion.Repository\x12\x31\n\x13template_repository\x18\x04 \x01(\x0b\x32\x14.hyperion.Repository\x12-\n\x0ftest_repository\x18\x05 \x01(\x0b\x32\x14.hyperion.Repository\"\xa3\x02\n\x1aGradingConfiguratorRequest\x12\x39\n\x13\x62oundary_conditions\x18\x01 \x01(\x0b\x32\x1c.hyperion.BoundaryConditions\x12\x35\n\x11problem_statement\x18\x02 \x01(\x0b\x32\x1a.hyperion.ProblemStatement\x12\x31\n\x13solution_repository\x18\x03 \x01(\x0b\x32\x14.hyperion.Repository\x12\x31\n\x13template_repository\x18\x04 \x01(\x0b\x32\x14.hyperion.Repository\x12-\n\x0ftest_repository\x18\x05 \x01(\x0b\x32\x14.hyperion.Repository\"\xa4\x02\n\x1bGradingConfiguratorResponse\x12\x39\n\x13\x62oundary_conditions\x18\x01 \x01(\x0b\x32\x1c.hyperion.BoundaryConditions\x12\x35\n\x11problem_statement\x18\x02 \x01(\x0b\x32\x1a.hyperion.ProblemStatement\x12\x31\n\x13solution_repository\x18\x03 \x01(\x0b\x32\x14.hyperion.Repository\x12\x31\n\x13template_repository\x18\x04 \x01(\x0b\x32\x14.hyperion.Repository\x12-\n\x0ftest_repository\x18\x05 \x01(\x0b\x32\x14.hyperion.Repository\"\xa2\x02\n\x19InconsistencyCheckRequest\x12\x39\n\x13\x62oundary_conditions\x18\x01 \x01(\x0b\x32\x1c.hyperion.BoundaryConditions\x12\x35\n\x11problem_statement\x18\x02 \x01(\x0b\x32\x1a.hyperion.ProblemStatement\x12\x31\n\x13solution_repository\x18\x03 \x01(\x0b\x32\x14.hyperion.Repository\x12\x31\n\x13template_repository\x18\x04 \x01(\x0b\x32\x14.hyperion.Repository\x12-\n\x0ftest_repository\x18\x05 \x01(\x0b\x32\x14.hyperion.Repository\"5\n\x1aInconsistencyCheckResponse\x12\x17\n\x0finconsistencies\x18\x01 \x01(\t*6\n\x13ProgrammingLanguage\x12\t\n\x05\x45MPTY\x10\x00\x12\x08\n\x04JAVA\x10\x01\x12\n\n\x06PYTHON\x10\x02*/\n\x0bProjectType\x12\t\n\x05PLAIN\x10\x00\x12\t\n\x05MAVEN\x10\x01\x12\n\n\x06GRADLE\x10\x02\x32\x41\n\x06Health\x12\x37\n\x04Ping\x12\x15.hyperion.PingRequest\x1a\x16.hyperion.PingResponse\"\x00\x32\x92\x01\n\x19\x42oundaryConditionsDefiner\x12u\n\x18\x44\x65\x66ineBoundaryConditions\x12*.hyperion.BoundaryConditionsDefinerRequest\x1a+.hyperion.BoundaryConditionsDefinerResponse\"\x00\x32\x89\x01\n\x17ProblemStatementDrafter\x12n\n\x15\x44raftProblemStatement\x12(.hyperion.ProblemStatementDrafterRequest\x1a).hyperion.ProblemStatementDrafterResponse\"\x00\x32\x92\x01\n\x19SolutionRepositoryCreator\x12u\n\x18\x43reateSolutionRepository\x12*.hyperion.SolutionRepositoryCreatorRequest\x1a+.hyperion.SolutionRepositoryCreatorResponse\"\x00\x32\x92\x01\n\x19TemplateRepositoryCreator\x12u\n\x18\x43reateTemplateRepository\x12*.hyperion.TemplateRepositoryCreatorRequest\x1a+.hyperion.TemplateRepositoryCreatorResponse\"\x00\x32\x82\x01\n\x15TestRepositoryCreator\x12i\n\x14\x43reateTestRepository\x12&.hyperion.TestRepositoryCreatorRequest\x1a\'.hyperion.TestRepositoryCreatorResponse\"\x00\x32\x92\x01\n\x19ProblemStatementFinalizer\x12u\n\x18\x46inalizeProblemStatement\x12*.hyperion.ProblemStatementFinalizerRequest\x1a+.hyperion.ProblemStatementFinalizerResponse\"\x00\x32x\n\x13GradingConfigurator\x12\x61\n\x10\x43onfigureGrading\x12$.hyperion.GradingConfiguratorRequest\x1a%.hyperion.GradingConfiguratorResponse\"\x00\x32|\n\x15\x43onfigurationVerifier\x12\x63\n\x14\x43heckInconsistencies\x12#.hyperion.InconsistencyCheckRequest\x1a$.hyperion.InconsistencyCheckResponse\"\x00\x42\x35\n\x17\x64\x65.tum.cit.aet.hyperionB\rHyperionProtoP\x01\xa2\x02\x08Hyperionb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(
+    b'\n\x0ehyperion.proto\x12\x08hyperion"\xa8\x02\n\x13ProgrammingExercise\x12\n\n\x02id\x18\x01 \x01(\x05\x12\x31\n\x13template_repository\x18\x02 \x01(\x0b\x32\x14.hyperion.Repository\x12\x31\n\x13solution_repository\x18\x03 \x01(\x0b\x32\x14.hyperion.Repository\x12-\n\x0ftest_repository\x18\x04 \x01(\x0b\x32\x14.hyperion.Repository\x12\x35\n\x11problem_statement\x18\x05 \x01(\x0b\x32\x1a.hyperion.ProblemStatement\x12\x39\n\x13\x62oundary_conditions\x18\x06 \x01(\x0b\x32\x1c.hyperion.BoundaryConditions"C\n\nRepository\x12\x0c\n\x04name\x18\x01 \x01(\t\x12\'\n\x05\x66iles\x18\x02 \x03(\x0b\x32\x18.hyperion.RepositoryFile"/\n\x0eRepositoryFile\x12\x0c\n\x04path\x18\x01 \x01(\t\x12\x0f\n\x07\x63ontent\x18\x02 \x01(\t"K\n\x10ProblemStatement\x12\r\n\x05title\x18\x01 \x01(\t\x12\x13\n\x0bshort_title\x18\x02 \x01(\t\x12\x13\n\x0b\x64\x65scription\x18\x03 \x01(\t"\xfe\x01\n\x12\x42oundaryConditions\x12\x10\n\x08language\x18\x01 \x01(\t\x12\x1d\n\x15technical_environment\x18\x02 \x01(\t\x12+\n\x0cproject_type\x18\x03 \x01(\x0e\x32\x15.hyperion.ProjectType\x12;\n\x14programming_language\x18\x04 \x01(\x0e\x32\x1d.hyperion.ProgrammingLanguage\x12\x12\n\ndifficulty\x18\x05 \x01(\t\x12\x0e\n\x06points\x18\x06 \x01(\x05\x12\x14\n\x0c\x62onus_points\x18\x07 \x01(\x05\x12\x13\n\x0b\x63onstraints\x18\x08 \x03(\t" \n\x0bPingRequest\x12\x11\n\tclient_id\x18\x01 \x01(\t"B\n\x0cPingResponse\x12\x0e\n\x06status\x18\x01 \x01(\t\x12\x0f\n\x07version\x18\x02 \x01(\t\x12\x11\n\ttimestamp\x18\x03 \x01(\x03""\n BoundaryConditionsDefinerRequest"^\n!BoundaryConditionsDefinerResponse\x12\x39\n\x13\x62oundary_conditions\x18\x01 \x01(\x0b\x32\x1c.hyperion.BoundaryConditions"[\n\x1eProblemStatementDrafterRequest\x12\x39\n\x13\x62oundary_conditions\x18\x01 \x01(\x0b\x32\x1c.hyperion.BoundaryConditions"\x93\x01\n\x1fProblemStatementDrafterResponse\x12\x39\n\x13\x62oundary_conditions\x18\x01 \x01(\x0b\x32\x1c.hyperion.BoundaryConditions\x12\x35\n\x11problem_statement\x18\x02 \x01(\x0b\x32\x1a.hyperion.ProblemStatement"\x94\x01\n SolutionRepositoryCreatorRequest\x12\x39\n\x13\x62oundary_conditions\x18\x01 \x01(\x0b\x32\x1c.hyperion.BoundaryConditions\x12\x35\n\x11problem_statement\x18\x02 \x01(\x0b\x32\x1a.hyperion.ProblemStatement"\xc8\x01\n!SolutionRepositoryCreatorResponse\x12\x39\n\x13\x62oundary_conditions\x18\x01 \x01(\x0b\x32\x1c.hyperion.BoundaryConditions\x12\x35\n\x11problem_statement\x18\x02 \x01(\x0b\x32\x1a.hyperion.ProblemStatement\x12\x31\n\x13solution_repository\x18\x03 \x01(\x0b\x32\x14.hyperion.Repository"\xc7\x01\n TemplateRepositoryCreatorRequest\x12\x39\n\x13\x62oundary_conditions\x18\x01 \x01(\x0b\x32\x1c.hyperion.BoundaryConditions\x12\x35\n\x11problem_statement\x18\x02 \x01(\x0b\x32\x1a.hyperion.ProblemStatement\x12\x31\n\x13solution_repository\x18\x03 \x01(\x0b\x32\x14.hyperion.Repository"\xfb\x01\n!TemplateRepositoryCreatorResponse\x12\x39\n\x13\x62oundary_conditions\x18\x01 \x01(\x0b\x32\x1c.hyperion.BoundaryConditions\x12\x35\n\x11problem_statement\x18\x02 \x01(\x0b\x32\x1a.hyperion.ProblemStatement\x12\x31\n\x13solution_repository\x18\x03 \x01(\x0b\x32\x14.hyperion.Repository\x12\x31\n\x13template_repository\x18\x04 \x01(\x0b\x32\x14.hyperion.Repository"\xf6\x01\n\x1cTestRepositoryCreatorRequest\x12\x39\n\x13\x62oundary_conditions\x18\x01 \x01(\x0b\x32\x1c.hyperion.BoundaryConditions\x12\x35\n\x11problem_statement\x18\x02 \x01(\x0b\x32\x1a.hyperion.ProblemStatement\x12\x31\n\x13solution_repository\x18\x03 \x01(\x0b\x32\x14.hyperion.Repository\x12\x31\n\x13template_repository\x18\x04 \x01(\x0b\x32\x14.hyperion.Repository"\xa6\x02\n\x1dTestRepositoryCreatorResponse\x12\x39\n\x13\x62oundary_conditions\x18\x01 \x01(\x0b\x32\x1c.hyperion.BoundaryConditions\x12\x35\n\x11problem_statement\x18\x02 \x01(\x0b\x32\x1a.hyperion.ProblemStatement\x12\x31\n\x13solution_repository\x18\x03 \x01(\x0b\x32\x14.hyperion.Repository\x12\x31\n\x13template_repository\x18\x04 \x01(\x0b\x32\x14.hyperion.Repository\x12-\n\x0ftest_repository\x18\x05 \x01(\x0b\x32\x14.hyperion.Repository"\xa9\x02\n ProblemStatementFinalizerRequest\x12\x39\n\x13\x62oundary_conditions\x18\x01 \x01(\x0b\x32\x1c.hyperion.BoundaryConditions\x12\x35\n\x11problem_statement\x18\x02 \x01(\x0b\x32\x1a.hyperion.ProblemStatement\x12\x31\n\x13solution_repository\x18\x03 \x01(\x0b\x32\x14.hyperion.Repository\x12\x31\n\x13template_repository\x18\x04 \x01(\x0b\x32\x14.hyperion.Repository\x12-\n\x0ftest_repository\x18\x05 \x01(\x0b\x32\x14.hyperion.Repository"\xaa\x02\n!ProblemStatementFinalizerResponse\x12\x39\n\x13\x62oundary_conditions\x18\x01 \x01(\x0b\x32\x1c.hyperion.BoundaryConditions\x12\x35\n\x11problem_statement\x18\x02 \x01(\x0b\x32\x1a.hyperion.ProblemStatement\x12\x31\n\x13solution_repository\x18\x03 \x01(\x0b\x32\x14.hyperion.Repository\x12\x31\n\x13template_repository\x18\x04 \x01(\x0b\x32\x14.hyperion.Repository\x12-\n\x0ftest_repository\x18\x05 \x01(\x0b\x32\x14.hyperion.Repository"\xa3\x02\n\x1aGradingConfiguratorRequest\x12\x39\n\x13\x62oundary_conditions\x18\x01 \x01(\x0b\x32\x1c.hyperion.BoundaryConditions\x12\x35\n\x11problem_statement\x18\x02 \x01(\x0b\x32\x1a.hyperion.ProblemStatement\x12\x31\n\x13solution_repository\x18\x03 \x01(\x0b\x32\x14.hyperion.Repository\x12\x31\n\x13template_repository\x18\x04 \x01(\x0b\x32\x14.hyperion.Repository\x12-\n\x0ftest_repository\x18\x05 \x01(\x0b\x32\x14.hyperion.Repository"\xa4\x02\n\x1bGradingConfiguratorResponse\x12\x39\n\x13\x62oundary_conditions\x18\x01 \x01(\x0b\x32\x1c.hyperion.BoundaryConditions\x12\x35\n\x11problem_statement\x18\x02 \x01(\x0b\x32\x1a.hyperion.ProblemStatement\x12\x31\n\x13solution_repository\x18\x03 \x01(\x0b\x32\x14.hyperion.Repository\x12\x31\n\x13template_repository\x18\x04 \x01(\x0b\x32\x14.hyperion.Repository\x12-\n\x0ftest_repository\x18\x05 \x01(\x0b\x32\x14.hyperion.Repository"\xa2\x02\n\x19InconsistencyCheckRequest\x12\x39\n\x13\x62oundary_conditions\x18\x01 \x01(\x0b\x32\x1c.hyperion.BoundaryConditions\x12\x35\n\x11problem_statement\x18\x02 \x01(\x0b\x32\x1a.hyperion.ProblemStatement\x12\x31\n\x13solution_repository\x18\x03 \x01(\x0b\x32\x14.hyperion.Repository\x12\x31\n\x13template_repository\x18\x04 \x01(\x0b\x32\x14.hyperion.Repository\x12-\n\x0ftest_repository\x18\x05 \x01(\x0b\x32\x14.hyperion.Repository"5\n\x1aInconsistencyCheckResponse\x12\x17\n\x0finconsistencies\x18\x01 \x01(\t*6\n\x13ProgrammingLanguage\x12\t\n\x05\x45MPTY\x10\x00\x12\x08\n\x04JAVA\x10\x01\x12\n\n\x06PYTHON\x10\x02*/\n\x0bProjectType\x12\t\n\x05PLAIN\x10\x00\x12\t\n\x05MAVEN\x10\x01\x12\n\n\x06GRADLE\x10\x02\x32\x41\n\x06Health\x12\x37\n\x04Ping\x12\x15.hyperion.PingRequest\x1a\x16.hyperion.PingResponse"\x00\x32\x92\x01\n\x19\x42oundaryConditionsDefiner\x12u\n\x18\x44\x65\x66ineBoundaryConditions\x12*.hyperion.BoundaryConditionsDefinerRequest\x1a+.hyperion.BoundaryConditionsDefinerResponse"\x00\x32\x89\x01\n\x17ProblemStatementDrafter\x12n\n\x15\x44raftProblemStatement\x12(.hyperion.ProblemStatementDrafterRequest\x1a).hyperion.ProblemStatementDrafterResponse"\x00\x32\x92\x01\n\x19SolutionRepositoryCreator\x12u\n\x18\x43reateSolutionRepository\x12*.hyperion.SolutionRepositoryCreatorRequest\x1a+.hyperion.SolutionRepositoryCreatorResponse"\x00\x32\x92\x01\n\x19TemplateRepositoryCreator\x12u\n\x18\x43reateTemplateRepository\x12*.hyperion.TemplateRepositoryCreatorRequest\x1a+.hyperion.TemplateRepositoryCreatorResponse"\x00\x32\x82\x01\n\x15TestRepositoryCreator\x12i\n\x14\x43reateTestRepository\x12&.hyperion.TestRepositoryCreatorRequest\x1a\'.hyperion.TestRepositoryCreatorResponse"\x00\x32\x92\x01\n\x19ProblemStatementFinalizer\x12u\n\x18\x46inalizeProblemStatement\x12*.hyperion.ProblemStatementFinalizerRequest\x1a+.hyperion.ProblemStatementFinalizerResponse"\x00\x32x\n\x13GradingConfigurator\x12\x61\n\x10\x43onfigureGrading\x12$.hyperion.GradingConfiguratorRequest\x1a%.hyperion.GradingConfiguratorResponse"\x00\x32|\n\x15\x43onfigurationVerifier\x12\x63\n\x14\x43heckInconsistencies\x12#.hyperion.InconsistencyCheckRequest\x1a$.hyperion.InconsistencyCheckResponse"\x00\x42\x35\n\x17\x64\x65.tum.cit.aet.hyperionB\rHyperionProtoP\x01\xa2\x02\x08Hyperionb\x06proto3'
+)
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
-_builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'hyperion_pb2', _globals)
+_builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, "hyperion_pb2", _globals)
 if not _descriptor._USE_C_DESCRIPTORS:
-  _globals['DESCRIPTOR']._loaded_options = None
-  _globals['DESCRIPTOR']._serialized_options = b'\n\027de.tum.cit.aet.hyperionB\rHyperionProtoP\001\242\002\010Hyperion'
-  _globals['_PROGRAMMINGLANGUAGE']._serialized_start=4150
-  _globals['_PROGRAMMINGLANGUAGE']._serialized_end=4204
-  _globals['_PROJECTTYPE']._serialized_start=4206
-  _globals['_PROJECTTYPE']._serialized_end=4253
-  _globals['_PROGRAMMINGEXERCISE']._serialized_start=29
-  _globals['_PROGRAMMINGEXERCISE']._serialized_end=325
-  _globals['_REPOSITORY']._serialized_start=327
-  _globals['_REPOSITORY']._serialized_end=394
-  _globals['_REPOSITORYFILE']._serialized_start=396
-  _globals['_REPOSITORYFILE']._serialized_end=443
-  _globals['_PROBLEMSTATEMENT']._serialized_start=445
-  _globals['_PROBLEMSTATEMENT']._serialized_end=520
-  _globals['_BOUNDARYCONDITIONS']._serialized_start=523
-  _globals['_BOUNDARYCONDITIONS']._serialized_end=777
-  _globals['_PINGREQUEST']._serialized_start=779
-  _globals['_PINGREQUEST']._serialized_end=811
-  _globals['_PINGRESPONSE']._serialized_start=813
-  _globals['_PINGRESPONSE']._serialized_end=879
-  _globals['_BOUNDARYCONDITIONSDEFINERREQUEST']._serialized_start=881
-  _globals['_BOUNDARYCONDITIONSDEFINERREQUEST']._serialized_end=915
-  _globals['_BOUNDARYCONDITIONSDEFINERRESPONSE']._serialized_start=917
-  _globals['_BOUNDARYCONDITIONSDEFINERRESPONSE']._serialized_end=1011
-  _globals['_PROBLEMSTATEMENTDRAFTERREQUEST']._serialized_start=1013
-  _globals['_PROBLEMSTATEMENTDRAFTERREQUEST']._serialized_end=1104
-  _globals['_PROBLEMSTATEMENTDRAFTERRESPONSE']._serialized_start=1107
-  _globals['_PROBLEMSTATEMENTDRAFTERRESPONSE']._serialized_end=1254
-  _globals['_SOLUTIONREPOSITORYCREATORREQUEST']._serialized_start=1257
-  _globals['_SOLUTIONREPOSITORYCREATORREQUEST']._serialized_end=1405
-  _globals['_SOLUTIONREPOSITORYCREATORRESPONSE']._serialized_start=1408
-  _globals['_SOLUTIONREPOSITORYCREATORRESPONSE']._serialized_end=1608
-  _globals['_TEMPLATEREPOSITORYCREATORREQUEST']._serialized_start=1611
-  _globals['_TEMPLATEREPOSITORYCREATORREQUEST']._serialized_end=1810
-  _globals['_TEMPLATEREPOSITORYCREATORRESPONSE']._serialized_start=1813
-  _globals['_TEMPLATEREPOSITORYCREATORRESPONSE']._serialized_end=2064
-  _globals['_TESTREPOSITORYCREATORREQUEST']._serialized_start=2067
-  _globals['_TESTREPOSITORYCREATORREQUEST']._serialized_end=2313
-  _globals['_TESTREPOSITORYCREATORRESPONSE']._serialized_start=2316
-  _globals['_TESTREPOSITORYCREATORRESPONSE']._serialized_end=2610
-  _globals['_PROBLEMSTATEMENTFINALIZERREQUEST']._serialized_start=2613
-  _globals['_PROBLEMSTATEMENTFINALIZERREQUEST']._serialized_end=2910
-  _globals['_PROBLEMSTATEMENTFINALIZERRESPONSE']._serialized_start=2913
-  _globals['_PROBLEMSTATEMENTFINALIZERRESPONSE']._serialized_end=3211
-  _globals['_GRADINGCONFIGURATORREQUEST']._serialized_start=3214
-  _globals['_GRADINGCONFIGURATORREQUEST']._serialized_end=3505
-  _globals['_GRADINGCONFIGURATORRESPONSE']._serialized_start=3508
-  _globals['_GRADINGCONFIGURATORRESPONSE']._serialized_end=3800
-  _globals['_INCONSISTENCYCHECKREQUEST']._serialized_start=3803
-  _globals['_INCONSISTENCYCHECKREQUEST']._serialized_end=4093
-  _globals['_INCONSISTENCYCHECKRESPONSE']._serialized_start=4095
-  _globals['_INCONSISTENCYCHECKRESPONSE']._serialized_end=4148
-  _globals['_HEALTH']._serialized_start=4255
-  _globals['_HEALTH']._serialized_end=4320
-  _globals['_BOUNDARYCONDITIONSDEFINER']._serialized_start=4323
-  _globals['_BOUNDARYCONDITIONSDEFINER']._serialized_end=4469
-  _globals['_PROBLEMSTATEMENTDRAFTER']._serialized_start=4472
-  _globals['_PROBLEMSTATEMENTDRAFTER']._serialized_end=4609
-  _globals['_SOLUTIONREPOSITORYCREATOR']._serialized_start=4612
-  _globals['_SOLUTIONREPOSITORYCREATOR']._serialized_end=4758
-  _globals['_TEMPLATEREPOSITORYCREATOR']._serialized_start=4761
-  _globals['_TEMPLATEREPOSITORYCREATOR']._serialized_end=4907
-  _globals['_TESTREPOSITORYCREATOR']._serialized_start=4910
-  _globals['_TESTREPOSITORYCREATOR']._serialized_end=5040
-  _globals['_PROBLEMSTATEMENTFINALIZER']._serialized_start=5043
-  _globals['_PROBLEMSTATEMENTFINALIZER']._serialized_end=5189
-  _globals['_GRADINGCONFIGURATOR']._serialized_start=5191
-  _globals['_GRADINGCONFIGURATOR']._serialized_end=5311
-  _globals['_CONFIGURATIONVERIFIER']._serialized_start=5313
-  _globals['_CONFIGURATIONVERIFIER']._serialized_end=5437
+    _globals["DESCRIPTOR"]._loaded_options = None
+    _globals["DESCRIPTOR"]._serialized_options = (
+        b"\n\027de.tum.cit.aet.hyperionB\rHyperionProtoP\001\242\002\010Hyperion"
+    )
+    _globals["_PROGRAMMINGLANGUAGE"]._serialized_start = 4150
+    _globals["_PROGRAMMINGLANGUAGE"]._serialized_end = 4204
+    _globals["_PROJECTTYPE"]._serialized_start = 4206
+    _globals["_PROJECTTYPE"]._serialized_end = 4253
+    _globals["_PROGRAMMINGEXERCISE"]._serialized_start = 29
+    _globals["_PROGRAMMINGEXERCISE"]._serialized_end = 325
+    _globals["_REPOSITORY"]._serialized_start = 327
+    _globals["_REPOSITORY"]._serialized_end = 394
+    _globals["_REPOSITORYFILE"]._serialized_start = 396
+    _globals["_REPOSITORYFILE"]._serialized_end = 443
+    _globals["_PROBLEMSTATEMENT"]._serialized_start = 445
+    _globals["_PROBLEMSTATEMENT"]._serialized_end = 520
+    _globals["_BOUNDARYCONDITIONS"]._serialized_start = 523
+    _globals["_BOUNDARYCONDITIONS"]._serialized_end = 777
+    _globals["_PINGREQUEST"]._serialized_start = 779
+    _globals["_PINGREQUEST"]._serialized_end = 811
+    _globals["_PINGRESPONSE"]._serialized_start = 813
+    _globals["_PINGRESPONSE"]._serialized_end = 879
+    _globals["_BOUNDARYCONDITIONSDEFINERREQUEST"]._serialized_start = 881
+    _globals["_BOUNDARYCONDITIONSDEFINERREQUEST"]._serialized_end = 915
+    _globals["_BOUNDARYCONDITIONSDEFINERRESPONSE"]._serialized_start = 917
+    _globals["_BOUNDARYCONDITIONSDEFINERRESPONSE"]._serialized_end = 1011
+    _globals["_PROBLEMSTATEMENTDRAFTERREQUEST"]._serialized_start = 1013
+    _globals["_PROBLEMSTATEMENTDRAFTERREQUEST"]._serialized_end = 1104
+    _globals["_PROBLEMSTATEMENTDRAFTERRESPONSE"]._serialized_start = 1107
+    _globals["_PROBLEMSTATEMENTDRAFTERRESPONSE"]._serialized_end = 1254
+    _globals["_SOLUTIONREPOSITORYCREATORREQUEST"]._serialized_start = 1257
+    _globals["_SOLUTIONREPOSITORYCREATORREQUEST"]._serialized_end = 1405
+    _globals["_SOLUTIONREPOSITORYCREATORRESPONSE"]._serialized_start = 1408
+    _globals["_SOLUTIONREPOSITORYCREATORRESPONSE"]._serialized_end = 1608
+    _globals["_TEMPLATEREPOSITORYCREATORREQUEST"]._serialized_start = 1611
+    _globals["_TEMPLATEREPOSITORYCREATORREQUEST"]._serialized_end = 1810
+    _globals["_TEMPLATEREPOSITORYCREATORRESPONSE"]._serialized_start = 1813
+    _globals["_TEMPLATEREPOSITORYCREATORRESPONSE"]._serialized_end = 2064
+    _globals["_TESTREPOSITORYCREATORREQUEST"]._serialized_start = 2067
+    _globals["_TESTREPOSITORYCREATORREQUEST"]._serialized_end = 2313
+    _globals["_TESTREPOSITORYCREATORRESPONSE"]._serialized_start = 2316
+    _globals["_TESTREPOSITORYCREATORRESPONSE"]._serialized_end = 2610
+    _globals["_PROBLEMSTATEMENTFINALIZERREQUEST"]._serialized_start = 2613
+    _globals["_PROBLEMSTATEMENTFINALIZERREQUEST"]._serialized_end = 2910
+    _globals["_PROBLEMSTATEMENTFINALIZERRESPONSE"]._serialized_start = 2913
+    _globals["_PROBLEMSTATEMENTFINALIZERRESPONSE"]._serialized_end = 3211
+    _globals["_GRADINGCONFIGURATORREQUEST"]._serialized_start = 3214
+    _globals["_GRADINGCONFIGURATORREQUEST"]._serialized_end = 3505
+    _globals["_GRADINGCONFIGURATORRESPONSE"]._serialized_start = 3508
+    _globals["_GRADINGCONFIGURATORRESPONSE"]._serialized_end = 3800
+    _globals["_INCONSISTENCYCHECKREQUEST"]._serialized_start = 3803
+    _globals["_INCONSISTENCYCHECKREQUEST"]._serialized_end = 4093
+    _globals["_INCONSISTENCYCHECKRESPONSE"]._serialized_start = 4095
+    _globals["_INCONSISTENCYCHECKRESPONSE"]._serialized_end = 4148
+    _globals["_HEALTH"]._serialized_start = 4255
+    _globals["_HEALTH"]._serialized_end = 4320
+    _globals["_BOUNDARYCONDITIONSDEFINER"]._serialized_start = 4323
+    _globals["_BOUNDARYCONDITIONSDEFINER"]._serialized_end = 4469
+    _globals["_PROBLEMSTATEMENTDRAFTER"]._serialized_start = 4472
+    _globals["_PROBLEMSTATEMENTDRAFTER"]._serialized_end = 4609
+    _globals["_SOLUTIONREPOSITORYCREATOR"]._serialized_start = 4612
+    _globals["_SOLUTIONREPOSITORYCREATOR"]._serialized_end = 4758
+    _globals["_TEMPLATEREPOSITORYCREATOR"]._serialized_start = 4761
+    _globals["_TEMPLATEREPOSITORYCREATOR"]._serialized_end = 4907
+    _globals["_TESTREPOSITORYCREATOR"]._serialized_start = 4910
+    _globals["_TESTREPOSITORYCREATOR"]._serialized_end = 5040
+    _globals["_PROBLEMSTATEMENTFINALIZER"]._serialized_start = 5043
+    _globals["_PROBLEMSTATEMENTFINALIZER"]._serialized_end = 5189
+    _globals["_GRADINGCONFIGURATOR"]._serialized_start = 5191
+    _globals["_GRADINGCONFIGURATOR"]._serialized_end = 5311
+    _globals["_CONFIGURATIONVERIFIER"]._serialized_start = 5313
+    _globals["_CONFIGURATIONVERIFIER"]._serialized_end = 5437
 # @@protoc_insertion_point(module_scope)
