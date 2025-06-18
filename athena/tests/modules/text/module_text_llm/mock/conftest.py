@@ -1,10 +1,14 @@
 # Import OpenAI mocks first to ensure they're in place before any other imports
-from tests.utils.mock_openai import mock_openai, mock_openai_client
+from utils.mock_openai import mock_openai, mock_openai_client
 
 import pytest
-from tests.utils.mock_llm import MockLanguageModel, MockStructuredMockLanguageModel, MockAssessmentModel
-from tests.utils.mock_config import MockApproachConfig, MockModelConfig
-from tests.utils.mock_env import mock_sent_tokenize
+from utils.mock_llm import (
+    MockLanguageModel,
+    MockStructuredMockLanguageModel,
+    MockAssessmentModel,
+)
+from utils.mock_config import MockApproachConfig, MockModelConfig
+from utils.mock_env import mock_sent_tokenize
 
 
 @pytest.fixture
@@ -29,7 +33,5 @@ def mock_assessment_model():
 def mock_config():
     """Create a mock configuration for testing."""
     return MockApproachConfig(
-        max_input_tokens=5000,
-        model=MockModelConfig(),
-        type="basic"
+        max_input_tokens=5000, model=MockModelConfig(), type="basic"
     )
