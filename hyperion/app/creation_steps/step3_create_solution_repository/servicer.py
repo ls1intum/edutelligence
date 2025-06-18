@@ -86,7 +86,9 @@ class SolutionRepositoryCreatorServicer(
 
         except SolutionCreatorException as e:
             logger.error(f"Solution creator error: {str(e)}")
-            context.abort(grpc.StatusCode.INTERNAL, f"Solution creation failed: {str(e)}")
+            context.abort(
+                grpc.StatusCode.INTERNAL, f"Solution creation failed: {str(e)}"
+            )
 
         except Exception as e:
             logger.error(f"Unexpected error creating solution repository: {str(e)}")
