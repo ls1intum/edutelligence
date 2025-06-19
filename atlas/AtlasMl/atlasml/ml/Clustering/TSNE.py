@@ -1,6 +1,4 @@
-import numpy as np
 from sklearn.manifold import TSNE
-import matplotlib.pyplot as plt
 
 
 def apply_tsne(matrix, n_components=2, perplexity=5, random_state=42):
@@ -16,6 +14,8 @@ def apply_tsne(matrix, n_components=2, perplexity=5, random_state=42):
     Returns:
         numpy.ndarray: The matrix after TSNE dimensionality reduction.
     """
-    tsne = TSNE(n_components=n_components, perplexity=perplexity, random_state=random_state)
+    tsne = TSNE(
+        n_components=n_components, perplexity=perplexity, random_state=random_state
+    )
     transformed = tsne.fit_transform(matrix)
     return transformed
