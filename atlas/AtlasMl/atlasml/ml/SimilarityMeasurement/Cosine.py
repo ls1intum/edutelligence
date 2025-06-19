@@ -1,5 +1,6 @@
 import numpy as np
 from scipy.spatial.distance import cosine
+
 from atlasml.ml.VectorEmbeddings.ModelDimension import ModelDimension
 
 
