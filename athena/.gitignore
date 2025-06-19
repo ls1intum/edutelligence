@@ -11,3 +11,4 @@ data/*
 .env
 **/.env
 **/data/*
+test-results/*
