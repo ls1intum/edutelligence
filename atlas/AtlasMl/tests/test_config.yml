@@ -1,0 +1,7 @@
+api_keys:
+  - token: 'secret-token'
+
+weaviate:
+  host: 'localhost'
+  port: 8080
+  grpc_port: 50051
