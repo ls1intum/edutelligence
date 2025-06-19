@@ -1,6 +1,6 @@
 from sentence_transformers import SentenceTransformer
 
-from atlasml.clients.weaviate import get_weaviate_client
+from atlasml.clients.weaviate import get_weaviate_client, CollectionNames
 
 
 def generate_embeddings(id: str, sentence: str):
@@ -9,5 +9,11 @@ def generate_embeddings(id: str, sentence: str):
     model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
     embeddings = model.encode(sentence)
 
-    uuid = weaviate_client.add_embeddings(id, sentence, embeddings)
+    properties = {"properties": [{
+        "text_id": "",
+        "text": sentence,
+        "competency_ids": ""
+    }]}
+
+    uuid = weaviate_client.add_embeddings(CollectionNames.TEXT.value, embeddings, )
     return uuid, embeddings
