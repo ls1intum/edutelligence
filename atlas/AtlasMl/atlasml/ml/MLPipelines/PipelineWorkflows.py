@@ -3,7 +3,7 @@ import numpy as np
 import uuid
 from atlasml.clients.weaviate import get_weaviate_client, CollectionNames, WeaviateClient
 from atlasml.ml.Clustering.HDBSCAN import apply_hdbscan, SimilarityMetric
-from atlasml.ml.VectorEmbeddings.FallbackModel import generate_embeddings_local
+from atlasml.ml.VectorEmbeddings.FallbackModel import generate_embeddings
 from atlasml.ml.SimilarityMeasurement.Cosine import compute_cosine_similarity
 from sklearn.metrics.pairwise import cosine_similarity
 from atlasml.ml.VectorEmbeddings.ModelDimension import ModelDimension
@@ -30,11 +30,11 @@ class PipelineWorkflows:
             - Its vector embedding
         """
         for text in texts:
-            text_id, embedding = generate_embeddings_local(str(uuid.uuid4()), text)
+            text_id, embedding = generate_embeddings(str(uuid.uuid4()), text)
             properties = {"properties": [{
                 "text_id": text_id,
                 "text": text,
-                "competencyIDs": []
+                "competency_ids": []
             }]}
             self.weaviate_client.add_embeddings(CollectionNames.TEXT.value, embedding, properties)
 
@@ -62,14 +62,14 @@ class PipelineWorkflows:
         competencies = self.weaviate_client.get_all_embeddings(CollectionNames.COMPETENCY.value)
 
         for competency in competencies:
-            uuid, embedding = generate_embeddings_local(competency["properties"]["competency_id"], competency["properties"]["text"])
+            uuid, embedding = generate_embeddings(competency["properties"]["competency_id"], competency["properties"]["text"])
             similarity_score = np.array(compute_cosine_similarity(embedding, medoid) for medoid in medoids)
             best_medoid_idx = int(np.argmax(similarity_score))
             properties = { "properties": [{
                 "competency_id": uuid ,
                 "name" : competency["properties"]["name"],
                 "text": competency["properties"]["text"],
-                "clusterID": clusters[best_medoid_idx]["properties"]["cluster_id"]
+                "cluster_id": clusters[best_medoid_idx]["properties"]["cluster_id"]
             }]}
             self.weaviate_client.add_embeddings(CollectionNames.COMPETENCY.value, embedding, properties)
 
@@ -119,7 +119,6 @@ class PipelineWorkflows:
         for index in range(len(medoids)):
             cluster = { "properties": [{
                 "cluster_id": str(uuid.uuid4())
-                # "members": embeddings_uuids[labels == index].tolist(),
                 }]}
             self.weaviate_client.add_embeddings(CollectionNames.CLUSTERCENTER.value, medoids[index].tolist(), cluster)
 
@@ -127,14 +126,14 @@ class PipelineWorkflows:
         clusters = self.weaviate_client.get_all_embeddings(CollectionNames.CLUSTERCENTER.value)
 
         for competency in competencies:
-            competency_id, embedding = generate_embeddings_local(competency["properties"]["competency_id"], competency["properties"]["text"])
+            competency_id, embedding = generate_embeddings(competency["properties"]["competency_id"], competency["properties"]["text"])
             similarity_score = np.array(compute_cosine_similarity(embedding, medoid) for medoid in medoids)
             best_medoid_idx = int(np.argmax(similarity_score))
             properties = { "properties": [{
                 "competency_id": competency_id,
                 "name" : competency["properties"]["name"],
                 "text": competency["properties"]["text"],
-                "clusterID": clusters[best_medoid_idx]["properties"]["cluster_id"]
+                "cluster_id": clusters[best_medoid_idx]["properties"]["cluster_id"]
             }]}
             self.weaviate_client.add_embeddings(CollectionNames.COMPETENCY.value, embedding, properties)
 
@@ -144,7 +143,7 @@ class PipelineWorkflows:
             properties = {"properties": [{
                 "text_id": text_entry["properties"]["text_id"],
                 "text": text_entry["properties"]["text"],
-                "competencyIDs": [competency_id]
+                "competency_ids": [competency_id]
             }]}
             self.weaviate_client.update_property_by_id(CollectionNames.TEXT.value, text_entry["properties"]["text_id"], properties)
 
@@ -174,7 +173,7 @@ class PipelineWorkflows:
             Adds the new text entry to the TEXT collection with its embedding
             and competency association.
         """
-        embedding_id, embedding = generate_embeddings_local(uuid, text)
+        embedding_id, embedding = generate_embeddings(uuid, text)
         clusters = self.weaviate_client.get_all_embeddings(CollectionNames.CLUSTERCENTER.value)
         medoids = np.array(entry["vector"] for entry in clusters)
         similarity_scores = np.array(compute_cosine_similarity(embedding, medoid) for medoid in medoids)
@@ -184,7 +183,7 @@ class PipelineWorkflows:
         properties = { "properties": [{
                     "text_id": uuid,
                     "text": text ,
-                    "competencyIDs": competency_to_match["properties"]["competency_id"]
+                    "competency_ids": competency_to_match["properties"]["competency_id"]
         } ] }
         self.weaviate_client.add_embeddings(CollectionNames.TEXT.value, embedding, properties)
         return competency_to_match["properties"]["competency_id"]
