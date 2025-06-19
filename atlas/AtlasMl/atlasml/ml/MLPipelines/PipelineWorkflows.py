@@ -1,6 +1,5 @@
 import uuid
 import numpy as np
-import uuid
 from atlasml.clients.weaviate import get_weaviate_client, CollectionNames, WeaviateClient
 from atlasml.ml.Clustering.HDBSCAN import apply_hdbscan, SimilarityMetric
 from atlasml.ml.FeedbackLoop.FeedbackLoop import update_cluster_centroid
