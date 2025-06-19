@@ -64,12 +64,12 @@ def test_hdbscan_noise_detection():
     # Cluster: 50 points around (0,0)
     cluster = np.random.randn(50, 2) * 0.1
     # Outliers: 10 points far from the cluster
-    noise = np.random.uniform(low=5, high=10, size=(10, 2))
+    noise = np.random.uniform(low=20, high=50, size=(10, 2))
     matrix = np.vstack([cluster, noise])
 
     # Run HDBSCAN with parameters tuned to detect noise.
     # Adjust parameters by using 'min_cluster_size' instead of 'eps' to better isolate the noise points.
-    labels, centroids, medoids = apply_hdbscan(matrix, min_samples=3, min_cluster_size=15)
+    labels, centroids, medoids = apply_hdbscan(matrix, min_samples=3, metric="euclidean", min_cluster_size=15)
 
     # HDBSCAN typically marks noise points as -1.
     # Check that some points have been labeled as noise and provide a debug message if not.
