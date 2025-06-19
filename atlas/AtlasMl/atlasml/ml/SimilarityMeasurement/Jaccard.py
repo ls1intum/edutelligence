@@ -1,5 +1,6 @@
 import numpy as np
 from scipy.spatial.distance import jaccard
+
 from atlasml.ml.VectorEmbeddings.ModelDimension import ModelDimension
 
 def compute_jaccard_similarity(embedding_vector, comparison_vector):
@@ -8,7 +9,6 @@ def compute_jaccard_similarity(embedding_vector, comparison_vector):
 
     Parameters:
         embedding_vector (iterable): The input vector.
-        model (ModelDimension): An enum member indicating the dimension of the embedding_vector.
         comparison_vector (iterable): The second embedding vector to compare with.
 
     Returns:

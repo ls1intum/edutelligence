@@ -1,10 +1,8 @@
-import pytest
 import numpy as np
-from enum import Enum
-from sklearn.manifold import TSNE
-from sklearn.cluster import HDBSCAN
-from atlasml.ml.Clustering.TSNE import apply_tsne
+import pytest
+
 from atlasml.ml.Clustering.HDBSCAN import apply_hdbscan
+from atlasml.ml.Clustering.TSNE import apply_tsne
 
 
 def test_tsne_output_shape_default():
@@ -75,4 +73,6 @@ def test_hdbscan_noise_detection():
 
     # HDBSCAN typically marks noise points as -1.
     # Check that some points have been labeled as noise and provide a debug message if not.
-    assert -1 in labels, f"Expected noise label (-1) in the output labels, but got: {np.unique(labels)}"
+    assert (
+        -1 in labels
+    ), f"Expected noise label (-1) in the output labels, but got: {np.unique(labels)}"

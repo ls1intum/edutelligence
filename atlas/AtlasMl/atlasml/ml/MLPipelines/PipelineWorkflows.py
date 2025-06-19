@@ -1,8 +1,10 @@
+import uuid
 import numpy as np
+import uuid
 from atlasml.clients.weaviate import get_weaviate_client, CollectionNames, WeaviateClient
 from atlasml.ml.Clustering.HDBSCAN import apply_hdbscan, SimilarityMetric
 from atlasml.ml.FeedbackLoop.FeedbackLoop import update_cluster_centroid
-from atlasml.ml.VectorEmbeddings.FallbackModel import generate_embeddings_local
+from atlasml.ml.VectorEmbeddings.FallbackModel import generate_embeddings
 from atlasml.ml.SimilarityMeasurement.Cosine import compute_cosine_similarity
 from sklearn.metrics.pairwise import cosine_similarity
 from atlasml.ml.VectorEmbeddings.ModelDimension import ModelDimension
@@ -12,66 +14,93 @@ class PipelineWorkflows:
     def __init__(self):
         self.weaviate_client = get_weaviate_client()
 
-    """
-    ClusterToCompetencyPipeline orchestrates the workflow of assigning new competency texts
-    to their closest existing cluster medoids and persisting those relationships in Weaviate.
+    def initial_texts(self, texts: list[str]):
+        """Process and store initial text entries in the database.
 
-    Attributes:
-        weaviate_client: A Weaviate client instance used to fetch and store embedding data.
-        clusters: A list of cluster entries, each containing a medoid embedding fetched from Weaviate.
-        competencies: A list of competency entries fetched from Weaviate to be processed.
+        Takes a list of texts, generates embeddings for each one, and stores them
+        in the Weaviate database with unique IDs and empty competency associations.
 
-    Methods:
-        run() -> None:
-            1. Fetches all cluster medoid embeddings and all competency records from Weaviate.
-            2. For each competency, generates a local embedding.
-            3. Computes cosine similarity between the competency embedding and each cluster medoid.
-            4. Identifies the most similar medoid (highest cosine similarity).
-            5. Associates the competency with that cluster by writing the embedding and linkage
-               back into the competency collection in Weaviate.
-    """
-    def clusterToCompetencyPipeline(self):
+        Args:
+            texts (list[str]): List of text strings to be processed and stored.
+
+        Note:
+            Each text is stored with:
+            - A randomly generated UUID
+            - The original text content
+            - An empty competencyIDs list
+            - Its vector embedding
+        """
+        for text in texts:
+            text_id, embedding = generate_embeddings(str(uuid.uuid4()), text)
+            properties = {"properties": [{
+                "text_id": text_id,
+                "text": text,
+                "competency_ids": []
+            }]}
+            self.weaviate_client.add_embeddings(CollectionNames.TEXT.value, embedding, properties)
+
+
+    def initial_cluster_to_competencyPipeline(self):
+        """Associate competencies with their closest cluster medoids.
+
+        Processes all competencies in the database and assigns them to their most
+        similar cluster based on cosine similarity with cluster medoids.
+
+        The process includes:
+        1. Fetching all cluster medoids from the database
+        2. Fetching all competencies
+        3. For each competency:
+            - Generating its embedding
+            - Finding the most similar cluster medoid
+            - Storing the association in the database
+
+        Note:
+            Updates the COMPETENCY collection with new embeddings and cluster associations.
+        """
+
         clusters = self.weaviate_client.get_all_embeddings(CollectionNames.CLUSTERCENTER.value)
         medoids = np.array(entry["vector"] for entry in clusters)
         competencies = self.weaviate_client.get_all_embeddings(CollectionNames.COMPETENCY.value)
 
         for competency in competencies:
-            uuid, embedding = generate_embeddings_local(competency["properties"]["uuid"], competency["properties"]["text"])
+            uuid, embedding = generate_embeddings(competency["properties"]["competency_id"], competency["properties"]["text"])
             similarity_score = np.array(compute_cosine_similarity(embedding, medoid) for medoid in medoids)
             best_medoid_idx = int(np.argmax(similarity_score))
             properties = { "properties": [{
                 "competency_id": uuid ,
                 "name" : competency["properties"]["name"],
                 "text": competency["properties"]["text"],
-                "clusterID": clusters[best_medoid_idx]["properties"]["uuid"]
+                "cluster_id": clusters[best_medoid_idx]["properties"]["cluster_id"]
             }]}
             self.weaviate_client.add_embeddings(CollectionNames.COMPETENCY.value, embedding, properties)
 
 
-    """
-    ReclusterPipeline orchestrates loading texts, clustering them, and computing similarity matrices.
-    
-    This pipeline performs the following steps:
-    1. Loads all text embeddings from the database
-    2. Retrieves existing cluster centers
-    3. Applies HDBSCAN clustering to create new clusters
-    4. Computes similarity matrix between cluster medoids
-    5. Stores new cluster information back to database
-    
-    Args:
-        eps (float): The maximum distance between two samples for one to be considered
-                    as in the neighborhood of the other. Default is 0.1
-        min_samples (int): The number of samples in a neighborhood for a point to be 
-                          considered as a core point. Default is 1
-        min_cluster_size (int): The minimum size of clusters. Default is 1
-    
-    Returns:
-        numpy.ndarray: A similarity matrix of cluster medoids where each element [i,j]
-                      represents the cosine similarity between medoids i and j
-    """
-    def reclusterPipeline(self, eps: float = 0.1, min_samples: int = 1, min_cluster_size: int = 1):
+    def initial_cluster_pipeline(self, eps: float = 0.1, min_samples: int = 1, min_cluster_size: int = 1):
+        """Initialize and perform complete clustering of all texts in the database.
+
+        This is the main pipeline for clustering text data and establishing relationships
+        between texts and competencies through clusters.
+
+        Args:
+            eps (float, optional): Maximum distance between points for HDBSCAN clustering.
+                Defaults to 0.1.
+            min_samples (int, optional): Minimum number of samples in a neighborhood.
+                Defaults to 1.
+            min_cluster_size (int, optional): Minimum number of points to form a cluster.
+                Defaults to 1.
+
+        The pipeline performs:
+        1. Text embedding retrieval
+        2. HDBSCAN clustering of embeddings
+        3. Cluster center calculation and storage
+        4. Competency-to-cluster association
+        5. Text-to-competency linking
+
+        Note:
+            - Deletes all existing cluster centers before creating new ones
+            - Updates both COMPETENCY and TEXT collections with new associations
+        """
         texts = self.weaviate_client.get_all_embeddings(CollectionNames.TEXT.value)
-        clusters = self.weaviate_client.get_all_embeddings(CollectionNames.CLUSTERCENTER.value)
 
         # Generate embeddings for each text entry and collect UUIDs
         embeddings_list = np.vstack([text["vector"] for text in texts])
@@ -86,58 +115,79 @@ class PipelineWorkflows:
             min_cluster_size=min_cluster_size
         )
 
-        # Compute pairwise cosine similarities between medoids
-        similarity_matrix = cosine_similarity(medoids)
-
-        # TODO: Delete all of the clusters here
+        self.weaviate_client.delete_all_data_from_collection(CollectionNames.CLUSTERCENTER.value)
         # Expose clusters and similarity matrix as instance variables
         for index in range(len(medoids)):
             cluster = { "properties": [{
-                "cluster_id": "",
-                "name": str(index),
-                "members": embeddings_uuids[labels == index].tolist(),
+                "cluster_id": str(uuid.uuid4())
                 }]}
             self.weaviate_client.add_embeddings(CollectionNames.CLUSTERCENTER.value, medoids[index].tolist(), cluster)
 
-        # Return the similarity matrix
-        return similarity_matrix
+        competencies = self.weaviate_client.get_all_embeddings(CollectionNames.COMPETENCY.value)
+        clusters = self.weaviate_client.get_all_embeddings(CollectionNames.CLUSTERCENTER.value)
+
+        for competency in competencies:
+            competency_id, embedding = generate_embeddings(competency["properties"]["competency_id"], competency["properties"]["text"])
+            similarity_score = np.array(compute_cosine_similarity(embedding, medoid) for medoid in medoids)
+            best_medoid_idx = int(np.argmax(similarity_score))
+            properties = { "properties": [{
+                "competency_id": competency_id,
+                "name" : competency["properties"]["name"],
+                "text": competency["properties"]["text"],
+                "cluster_id": clusters[best_medoid_idx]["properties"]["cluster_id"]
+            }]}
+            self.weaviate_client.add_embeddings(CollectionNames.COMPETENCY.value, embedding, properties)
+
+        for index in range(len(texts)):
+            text_entry = texts[index]
+            competency_id = self.weaviate_client.get_embeddings_by_property(CollectionNames.COMPETENCY.value, "cluster_id", labels[index])["properties"]["competency_id"]
+            properties = {"properties": [{
+                "text_id": text_entry["properties"]["text_id"],
+                "text": text_entry["properties"]["text"],
+                "competency_ids": [competency_id]
+            }]}
+            self.weaviate_client.update_property_by_id(CollectionNames.TEXT.value, text_entry["properties"]["text_id"], properties)
+
+        return
 
 
-    """
-    NewTextPipeline handles embedding generation for a single text input,  computes its similarity against existing cluster medoids,
-    and persists the association in Weaviate.
-
-    Args:
-        text (str): The input text to embed and process.
-        uuid (str): A unique identifier for the input text.
-
-    Attributes:
-        best_medoid_idx (int): Index of the most similar cluster medoid to the input embedding.
-        similarity_scores (numpy.ndarray): Array of cosine similarity scores between the input embedding and each medoid.
-
-    Methods:
-        run(text: str, uuid: str) -> numpy.ndarray:
-            1. Generates a local embedding for the provided text and UUID.
-            2. Retrieves all cluster medoid embeddings from Weaviate.
-            3. Computes cosine similarity between the input embedding and each medoid.
-            4. Identifies the medoid with the highest similarity score.
-            5. Stores the input embedding in the TEXT collection with a reference to the selected medoid.
-            6. Returns the array of similarity scores.
-    """
     def newTextPipeline(self, text: str, uuid: str):
-        embedding_id, embedding = generate_embeddings_local(uuid, text)
+        """Process a new text entry and associate it with existing clusters.
+
+        Takes a single text input, computes its embedding, and assigns it to the
+        most similar existing cluster based on medoid similarity.
+
+        Args:
+            text (str): The text content to be processed
+            uuid (str): Unique identifier for the text entry
+
+        Returns:
+            str: The competency ID of the best matching competency
+
+        The process includes:
+        1. Generating embedding for the input text
+        2. Finding the most similar cluster medoid
+        3. Retrieving the associated competency
+        4. Storing the text with its competency association
+
+        Note:
+            Adds the new text entry to the TEXT collection with its embedding
+            and competency association.
+        """
+        embedding_id, embedding = generate_embeddings(uuid, text)
         clusters = self.weaviate_client.get_all_embeddings(CollectionNames.CLUSTERCENTER.value)
         medoids = np.array(entry["vector"] for entry in clusters)
         similarity_scores = np.array(compute_cosine_similarity(embedding, medoid) for medoid in medoids)
         best_medoid_idx = int(np.argmax(similarity_scores))
+        competency_to_match = self.weaviate_client.get_embeddings_by_property(CollectionNames.COMPETENCY.value, "cluster_id", clusters[best_medoid_idx]["properties"]["cluster_id"])[0]
 
         properties = { "properties": [{
                     "text_id": uuid,
                     "text": text ,
-                    "competencyIDs": clusters[best_medoid_idx]["properties"]["cluster_id"]
+                    "competency_ids": competency_to_match["properties"]["competency_id"]
         } ] }
         self.weaviate_client.add_embeddings(CollectionNames.TEXT.value, embedding, properties)
-        return similarity_scores
+        return competency_to_match["properties"]["competency_id"]
 
 
     def feedbackLoopPipeline(self, text_id: str, cluster_id: str):
@@ -192,4 +242,3 @@ class PipelineWorkflows:
             "members": new_members,
         }]}
         self.weaviate_client.add_embeddings(CollectionNames.CLUSTERCENTER.value, newMedoid.tolist(), new_cluster)
-
