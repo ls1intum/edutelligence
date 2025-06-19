@@ -40,8 +40,7 @@ async def generate_suggestions(exercise: Exercise, submission: Submission, confi
         "problem_statement": exercise.problem_statement or "No problem statement.",
         "example_solution": exercise.example_solution,
         "submission": add_sentence_numbers(submission.text),
-        "latest_submission": result.submission_to_prompt() if result else None,
-        "latest_feedback": result.feedback_to_prompt() if result else None
+        "previous_submission": add_sentence_numbers(result.submission.text)
     }
 
     chat_prompt = get_chat_prompt_with_formatting_instructions(
@@ -83,9 +82,7 @@ async def generate_suggestions(exercise: Exercise, submission: Submission, confi
     )
 
     logger.info("---------------------------------")
-    logger.info(initial_result.feedback_analyses)
-    logger.info("---------------------------------")
-    logger.info(initial_result.changes)
+    logger.info(initial_result.comparison)
     logger.info("---------------------------------")
     logger.info(initial_result.dict())
 
