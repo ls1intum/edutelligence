@@ -40,7 +40,7 @@ class Profile(Base):
     id = Column(Integer, primary_key=True)
     name = Column(String, nullable=False)
     process_id = Column(Integer, ForeignKey('process.id'), nullable=False)
-    profile = relationship("Process")
+    process = relationship("Process")
 
 
 class Process(Base):
@@ -62,7 +62,7 @@ class Model(Base):
     name = Column(String, nullable=False)
     endpoint = Column(Text)
     api_id = Column(Integer, ForeignKey("model_api_keys.id", ondelete="SET NULL"))
-    weight_privacy = Column(Integer)
+    weight_privacy = Column(Enum(ThresholdLevel))
     weight_latency = Column(Integer)
     weight_accuracy = Column(Integer)
     weight_cost = Column(Integer)

@@ -10,4 +10,5 @@ class TokenClassifier(Classifier):
         super().__init__(models)
 
     def classify(self, prompt: str, _: dict) -> List:
+        # TODO: call token classification procedure to rank/filter models
         return self.models

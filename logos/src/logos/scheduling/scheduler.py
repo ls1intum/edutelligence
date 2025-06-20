@@ -27,7 +27,7 @@ class Scheduler:
     def enqueue(self, task: Task):
         self.tasks[task.models[0][0]].append(task)
 
-    def schedule(self, work_table: Dict[int, bool]) -> Task | None:
+    def schedule(self, work_table: Dict[int, int]) -> Task | None:
         raise NotImplementedError("Schedule must be overridden by classifiers")
     
     def is_empty(self):

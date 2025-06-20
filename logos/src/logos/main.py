@@ -204,7 +204,7 @@ def route_handler(request: Request):
 
 
 @app.post("/logosdb/add_billing")
-async def import_json(data: AddBillingRequest):
+async def add_billing(data: AddBillingRequest):
     with DBManager() as db:
         return db.add_billing(**data.dict())
 

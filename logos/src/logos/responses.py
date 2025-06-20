@@ -79,10 +79,10 @@ def get_streaming_response(forward_url, proxy_headers, json_data, log_id, provid
                     usage_tokens[name] = usage[name]
                 if "prompt_tokens_details" in usage:
                     for name in usage["prompt_tokens_details"]:
-                        usage_tokens[name] = usage["prompt_tokens_details"][name]
+                        usage_tokens["prompt_" + name] = usage["prompt_tokens_details"][name]
                 if "completion_tokens_details" in usage:
                     for name in usage["completion_tokens_details"]:
-                        usage_tokens[name] = usage["completion_tokens_details"][name]
+                        usage_tokens["completion_" + name] = usage["completion_tokens_details"][name]
                 first_response["usage"] = response["usage"]
             else:
                 response = {"content": full_text}
@@ -234,7 +234,7 @@ def resource_behaviour(logos_key, headers, data, models):
         return {"error": f"No executable found for task {tid}"}, 500
     with DBManager() as db:
         model = db.get_model(model_id)
-        provider = db.get_provider(model_id)
+        provider = db.get_provider_to_model(model_id)
         api_key = db.get_key_to_model_provider(model_id, provider["id"])
     if api_key is None:
         return {"error": f"No api_key found for task {tid} with model {model_id} and provider {provider["name"]}"}, 500
@@ -265,7 +265,7 @@ def request_setup(headers: dict, logos_key: str):
         with DBManager() as db:
             # Get available models for this key
             if "use_profile" in headers:
-                models = db.get_models_by_profile(logos_key, int(headers["profile_id"]))
+                models = db.get_models_by_profile(logos_key, int(headers["use_profile"]))
             else:
                 models = db.get_models_with_key(logos_key)
         if not models or "proxy" in headers:

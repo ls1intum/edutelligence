@@ -1,12 +1,14 @@
 """
 Base classifier for prompts.
 """
-from typing import List
+from abc import ABC, abstractmethod
+from typing import List, Dict
 
 
-class Classifier:
+class Classifier(ABC):
     def __init__(self, models: List[dict]) -> None:
         self.models = models
 
-    def classify(self, prompt: str, policy: dict) -> List:
-        raise NotImplementedError("Classify must be overridden by classifiers")
+    @abstractmethod
+    def classify(self, prompt: str, policy: dict) -> List[Dict]:
+        """Return the subset of `self.models` matching the prompt/policy."""

@@ -299,7 +299,7 @@ class DBManager:
             return {"error": "Database changes only allowed for root user."}, 500
         api_key = generate_logos_api_key("root")
         pk = self.insert("process", {"logos_key": api_key, "service_id": int(service_id),
-                                     "name": int(process_name)})
+                                     "name": str(process_name)})
         return {"result": f"Connected service. Process-ID: {pk}.", "api-key": api_key}, 200
 
     def connect_model_provider(self, logos_key: str, model_id: int, provider_id: int):
@@ -347,11 +347,11 @@ class DBManager:
 
         sql = text("""
                    UPDATE process
-                   SET log_level = :log_level
+                   SET log = :log_level
                    WHERE id = :process_id
                    """)
         self.session.execute(sql, {
-            "log_level": log_level,
+            "log": log_level,
             "process_id": int(process_id)
         })
         self.session.commit()
@@ -484,7 +484,7 @@ class DBManager:
     def get_provider_to_model(self, model_id: int):
         sql = text("""
                    SELECT provider_id
-                   FROM model_providers
+                   FROM model_provider
                    WHERE model_id = :model_id
                    """)
         result = self.session.execute(sql, {"model_id": int(model_id)}).fetchone()
@@ -510,13 +510,13 @@ class DBManager:
 
     def get_policy(self, logos_key: str, policy_id: int):
         sql = text("""
-                   SELECT policy.id, policy.name, policy.entity_id, policy.description, policy.threshold_privacy, 
-                          policy.threshold_latency, policy.threshold_accuracy, policy.threshold_cost, 
-                          policy.threshold_quality, policy.priority, policy.topic
+                   SELECT policies.id, policies.name, policies.entity_id, policies.description, policies.threshold_privacy, 
+                          policies.threshold_latency, policies.threshold_accuracy, policies.threshold_cost, 
+                          policies.threshold_quality, policies.priority, policies.topic
                    FROM process, policies
                    WHERE process.logos_key = :logos_key
                        and process.id = policies.entity_id
-                       and policy.id = :policy_id
+                       and policies.id = :policy_id
                    """)
         result = self.session.execute(sql, {"logos_key": logos_key, "policy_id": int(policy_id)}).fetchone()
         if result is None:
@@ -575,7 +575,7 @@ class DBManager:
 
         log_id = result.scalar()
         self.session.commit()
-        return {"result": f"Created Token Type.", "log-id": log_id}, 200
+        return {"result": f"Created log entry.", "log-id": log_id}, 200
 
     def set_time_at_first_token(self, log_id: int):
         sql = text("""

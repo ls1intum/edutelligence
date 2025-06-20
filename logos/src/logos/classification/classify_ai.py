@@ -10,4 +10,5 @@ class AIClassifier(Classifier):
         super().__init__(models)
 
     def classify(self, prompt: str, _: dict) -> List:
+        # TODO: call AI service to rank/filter models
         return self.models
