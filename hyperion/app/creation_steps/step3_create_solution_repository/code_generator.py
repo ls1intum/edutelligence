@@ -2,9 +2,8 @@
 
 import logging
 import json
-from typing import Optional, List, Dict, Any
+from typing import List, Dict, Any
 from langchain_core.language_models.chat_models import BaseLanguageModel
-from langchain_core.output_parsers import JsonOutputParser
 
 from .models import SolutionCreationContext, SolutionPlan, FileStructure
 from app.grpc.models import Repository, RepositoryFile
@@ -84,11 +83,14 @@ class CodeGenerator:
             - Project Type: {context.boundary_conditions.project_type}
             - Difficulty: {context.boundary_conditions.difficulty}
 
-            Please analyze the problem and provide a detailed solution plan. Consider the programming language, project type, and difficulty level when making your recommendations.
+            Please analyze the problem and provide a detailed solution plan.
+            Consider the programming language, project type, and difficulty
+            level when making your recommendations.
 
             Your response must be a valid JSON object with the following structure:
             {{
-                "architecture_description": "A detailed description of the high-level solution architecture and approach",
+                "architecture_description": "A detailed description of the "
+                "high-level solution architecture and approach",
                 "required_classes": ["List", "of", "class", "names", "needed"],
                 "required_functions": ["list", "of", "function", "names", "needed"],
                 "algorithms": ["list", "of", "algorithms", "to", "implement"],
@@ -102,7 +104,7 @@ class CodeGenerator:
             4. Algorithms should list specific algorithms or techniques to be implemented
             5. Design patterns should suggest appropriate patterns for the given language and problem complexity
 
-            Ensure your response is valid JSON and follows the exact structure specified above. 
+            Ensure your response is valid JSON and follows the exact structure specified above.
             The JSON needs to be in valid format and complete. Only output the JSON, no other text.
         """
         return prompt.strip()
@@ -204,7 +206,8 @@ class CodeGenerator:
         )
 
         prompt = f"""
-            You are an expert software engineer tasked with defining the file structure for a programming exercise solution.
+            You are an expert software engineer tasked with defining the file
+            structure for a programming exercise solution.
 
             Problem Statement:
             Title: {context.problem_statement.title}
@@ -222,8 +225,10 @@ class CodeGenerator:
 
             Based on the above information, create an appropriate file and directory structure. Consider:
 
-            1. **Programming Language Conventions**: Follow standard conventions for {context.boundary_conditions.programming_language}
-            2. **Project Type Requirements**: Structure according to {context.boundary_conditions.project_type} project type
+            1. **Programming Language Conventions**: Follow standard conventions
+            for {context.boundary_conditions.programming_language}
+            2. **Project Type Requirements**: Structure according to
+            {context.boundary_conditions.project_type} project type
             3. **Solution Architecture**: Organize files to support the planned solution architecture
             4. **Best Practices**: Use industry-standard project organization
 
@@ -269,7 +274,8 @@ class CodeGenerator:
             ]
 
             print(
-                f"Successfully parsed file structure: {len(directories)} dirs, {len(files)} files, {len(build_files)} build files"
+                f"Successfully parsed file structure: {len(directories)} dirs, "
+                f"{len(files)} files, {len(build_files)} build files"
             )
             return FileStructure(
                 directories=directories, files=files, build_files=build_files
@@ -340,7 +346,8 @@ class CodeGenerator:
         )
 
         prompt = f"""
-            You are an expert software engineer tasked with generating class and function headers for a specific file in a programming exercise solution.
+            You are an expert software engineer tasked with generating class and
+            function headers for a specific file in a programming exercise solution.
 
             Problem Statement:
             Title: {context.problem_statement.title}
@@ -379,7 +386,8 @@ class CodeGenerator:
 
             Requirements:
             - **NO IMPLEMENTATION**: Only signatures, headers, and documentation
-            - **Language Conventions**: Follow {context.boundary_conditions.programming_language} naming and style conventions
+            - **Language Conventions**: Follow
+            {context.boundary_conditions.programming_language} naming and style conventions
             - **Type Annotations**: Include proper type hints/annotations where supported
             - **Documentation**: Add docstrings/comments explaining purpose of each element
             - **Proper Structure**: Organize code logically within the file
@@ -512,7 +520,8 @@ class CodeGenerator:
         other_files_context: str = self._get_other_files_context(context, file_path)
 
         prompt = f"""
-            You are an expert software engineer tasked with implementing the complete solution for a programming exercise file.
+            You are an expert software engineer tasked with implementing the
+            complete solution for a programming exercise file.
 
             Problem Statement:
             Title: {context.problem_statement.title}
@@ -545,14 +554,17 @@ class CodeGenerator:
 
             Generate the COMPLETE implementation for the file "{file_path}". Requirements:
 
-            1. **Keep All Headers**: Preserve all existing imports, class definitions, function signatures, and documentation
+            1. **Keep All Headers**: Preserve all existing imports, class definitions,
+            function signatures, and documentation
             2. **Implement All Functions**: Add complete implementation bodies to all functions and methods
             3. **Follow Solution Plan**: Implement the algorithms and design patterns specified in the solution plan
-            4. **Solve the Problem**: Ensure the implementation actually solves the problem described in the problem statement
+            4. **Solve the Problem**: Ensure the implementation actually solves the
+            problem described in the problem statement
             5. **Maintain Consistency**: Ensure the implementation works cohesively with other files in the project
             6. **Handle Edge Cases**: Include proper error handling and edge case management
             7. **Code Quality**: Write clean, readable, and well-commented code
-            8. **Language Conventions**: Follow {context.boundary_conditions.programming_language} best practices and conventions
+            8. **Language Conventions**: Follow
+            {context.boundary_conditions.programming_language} best practices and conventions
 
             Implementation Guidelines:
             - Replace all "TODO" comments with actual implementation

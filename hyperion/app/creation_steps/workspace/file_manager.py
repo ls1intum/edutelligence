@@ -1,8 +1,8 @@
 """File manager for workspace operations."""
 
 import logging
+import os
 import shutil
-import stat
 from pathlib import Path
 from typing import List, Union
 

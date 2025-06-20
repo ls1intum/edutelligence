@@ -2,7 +2,6 @@
 
 from typing import List, Optional, Dict, Any
 from pydantic import BaseModel, Field
-from enum import Enum
 from langchain_core.language_models.chat_models import BaseLanguageModel
 
 from app.grpc import hyperion_pb2

@@ -4,7 +4,7 @@ import os
 import subprocess
 import logging
 import re
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Optional
 from pathlib import Path
 
 from ..step3_create_solution_repository.models import SolutionCreationContext

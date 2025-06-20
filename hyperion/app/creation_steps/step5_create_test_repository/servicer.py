@@ -1,4 +1,3 @@
-from typing import Optional
 from langchain_core.language_models.chat_models import BaseLanguageModel
 from app.grpc import hyperion_pb2_grpc
 

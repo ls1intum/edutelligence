@@ -1,5 +1,5 @@
 import logging
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, List
 from langchain_core.language_models.chat_models import BaseLanguageModel
 from app.grpc import hyperion_pb2_grpc, hyperion_pb2
 from app.grpc.models import Repository

@@ -3,26 +3,23 @@
 # python -m pytest test_file_manager.py
 
 import os
+import sys
 import tempfile
 import shutil
 import pytest
 from pathlib import Path
-from unittest.mock import Mock, patch, mock_open
-import stat
-
-import sys
-from pathlib import Path
+from unittest.mock import Mock
 
 # Add project root to path for imports
 project_root = Path(__file__).parent.parent.parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-from app.creation_steps.workspace.file_manager import FileManager
-from app.creation_steps.step3_create_solution_repository.models import (
+from app.creation_steps.workspace.file_manager import FileManager  # noqa: E402
+from app.creation_steps.step3_create_solution_repository.models import (  # noqa: E402
     SolutionCreationContext,
     FileStructure,
 )
-from app.creation_steps.exceptions import FileSystemException
+from app.creation_steps.exceptions import FileSystemException  # noqa: E402
 
 
 class TestFileManager:

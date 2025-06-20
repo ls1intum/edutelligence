@@ -33,7 +33,7 @@ class LanguageHandlerRegistry:
         """
         if not issubclass(handler_class, BaseLanguageHandler):
             raise LanguageHandlerException(
-                f"Handler class must inherit from BaseLanguageHandler",
+                "Handler class must inherit from BaseLanguageHandler",
                 language=language,
             )
 

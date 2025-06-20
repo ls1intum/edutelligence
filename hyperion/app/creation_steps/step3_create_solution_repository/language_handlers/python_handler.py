@@ -1,6 +1,6 @@
 """Python language handler for solution repository creation."""
 
-from typing import List, Dict, Any
+from typing import List, Dict
 
 from .base_handler import BaseLanguageHandler
 from ..models import SolutionCreationContext, FileStructure

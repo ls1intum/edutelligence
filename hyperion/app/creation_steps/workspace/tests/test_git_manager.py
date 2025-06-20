@@ -2,26 +2,23 @@
 
 # python -m pytest test_git_manager.py
 
-import os
+import sys
 import tempfile
 import shutil
 import pytest
 import subprocess
 from pathlib import Path
-from unittest.mock import Mock, patch, MagicMock
-
-import sys
-from pathlib import Path
+from unittest.mock import Mock, patch
 
 # Add project root to path for imports
 project_root = Path(__file__).parent.parent.parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-from app.creation_steps.workspace.git_manager import GitManager
-from app.creation_steps.step3_create_solution_repository.models import (
+from app.creation_steps.workspace.git_manager import GitManager  # noqa: E402
+from app.creation_steps.step3_create_solution_repository.models import (  # noqa: E402
     SolutionCreationContext,
 )
-from app.creation_steps.exceptions import GitException
+from app.creation_steps.exceptions import GitException  # noqa: E402
 
 
 class TestGitManager:
@@ -280,7 +277,10 @@ class TestGitManager:
         self, git_manager, mock_context, mock_subprocess_run
     ):
         """Test successful commit history retrieval."""
-        history_output = "abc123|John Doe|john@example.com|2023-01-01 12:00:00|Initial commit\ndef456|Jane Doe|jane@example.com|2023-01-02 13:00:00|Second commit"
+        history_output = (
+            "abc123|John Doe|john@example.com|2023-01-01 12:00:00|Initial commit\n"
+            "def456|Jane Doe|jane@example.com|2023-01-02 13:00:00|Second commit"
+        )
         mock_subprocess_run.return_value.stdout = history_output
 
         with patch.object(git_manager, "_ensure_repository_exists"):
@@ -617,7 +617,10 @@ class TestGitManager:
 
     def test_parse_commit_history(self, git_manager):
         """Test commit history parsing."""
-        output = "abc123|John Doe|john@example.com|2023-01-01 12:00:00|Initial commit\ndef456|Jane Doe|jane@example.com|2023-01-02 13:00:00|Second commit"
+        output = (
+            "abc123|John Doe|john@example.com|2023-01-01 12:00:00|Initial commit\n"
+            "def456|Jane Doe|jane@example.com|2023-01-02 13:00:00|Second commit"
+        )
 
         result = git_manager._parse_commit_history(output)
 
