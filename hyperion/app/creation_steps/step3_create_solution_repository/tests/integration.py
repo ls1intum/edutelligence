@@ -1,9 +1,9 @@
 """
-    Integration test for Step 3 Solution Repository Creator.
+Integration test for Step 3 Solution Repository Creator.
 
-    Run with: 
-        pytest -s app/creation_steps/step3_create_solution_repository/tests/integration.py      
-            
+Run with:
+    pytest -s app/creation_steps/step3_create_solution_repository/tests/integration.py
+
 """
 
 import pytest
