@@ -1,7 +1,6 @@
-// HeroSection.tsx
 import React, { useContext } from 'react';
 import {View, Text, StyleSheet, TouchableOpacity, useWindowDimensions, Linking} from 'react-native';
-import { ThemeContext } from '../';
+import { ThemeContext } from './theme';
 
 export default function Section01() {
   const { theme } = useContext(ThemeContext);

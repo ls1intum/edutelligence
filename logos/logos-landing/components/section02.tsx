@@ -1,7 +1,7 @@
 import React, {useContext} from 'react';
 import { View, Text, StyleSheet, useWindowDimensions } from 'react-native';
 import { Trophy, Bot, Check } from 'lucide-react';
-import { ThemeContext } from '../';
+import { ThemeContext } from './theme';
 
 export default function Section02() {
   const { width } = useWindowDimensions();

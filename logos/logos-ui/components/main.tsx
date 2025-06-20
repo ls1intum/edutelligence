@@ -7,7 +7,7 @@ import {
   StyleSheet,
   Alert
 } from 'react-native';
-import { ThemeContext } from '../index';
+import { ThemeContext } from './theme';
 import { Image as ExpoImage } from 'expo-image';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
@@ -57,7 +57,9 @@ export default function Main() {
           logos_key: key
         })
       });
-      return response.status === 200;
+      let [dict, code] = JSON.parse(await response.text());
+      console.log(dict);
+      return code === 200;
     } catch (error) {
       console.error('API-Fehler:', error);
       return false;
@@ -89,7 +91,7 @@ export default function Main() {
         ]}
       >
         <ExpoImage
-          source={require('../../assets/images/logos_full.png')}
+          source={require('../assets/images/logos_full.png')}
           style={[styles.logo, { filter: `hue-rotate(${hue}deg)` }]}
           contentFit="contain"
         />
@@ -123,7 +125,7 @@ export default function Main() {
   return (
     <View style={styles.container}>
       <Text style={theme === 'light' ? styles.lightText : styles.darkText}>
-        ✅ Erfolgreich eingeloggt – bald geht’s weiter mit der UI!
+        ✅ Login successful
       </Text>
     </View>
   );

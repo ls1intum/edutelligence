@@ -1,6 +1,6 @@
 import {Image, Text, View, StyleSheet, useColorScheme, useWindowDimensions} from "react-native";
 import { Bolt, Code2, Users } from "lucide-react";
-import { ThemeContext } from '../';
+import { ThemeContext } from './theme';
 import {useContext} from "react";
 
 export default function Section03() {

@@ -1,7 +1,7 @@
 import React, { useContext } from 'react';
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { Image } from 'react-native';
-import { ThemeContext } from '../';
+import { ThemeContext } from './theme';
 import { useState, useEffect } from 'react';
 import { Image as ExpoImage } from 'expo-image';
 
@@ -24,13 +24,14 @@ export default function Header() {
   return (
     <View style={[styles.header, isLight ? styles.lightHeader : styles.darkHeader]}>
       <View style={styles.headerContainer}>
+        <a href="/">
         <ExpoImage
-          source={require('../../assets/images/logos_full.png')}
+          source={require('../assets/images/logos_full.png')}
           style={[styles.header_left, { filter: `hue-rotate(${hue}deg)` }]}
           contentFit="contain"
-        />
+        /></a>
         <Text style={styles.version}>
-             0.0.3
+             0.0.4
         </Text>
       </View>
       <TouchableOpacity

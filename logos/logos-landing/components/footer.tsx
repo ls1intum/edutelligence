@@ -1,6 +1,6 @@
 import React, { useContext } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
-import { ThemeContext } from '../';
+import { ThemeContext } from './theme';
 
 export default function Footer() {
   const { theme } = useContext(ThemeContext);

@@ -1,6 +1,6 @@
 import React, {useContext} from 'react';
 import {View, Text, StyleSheet, useWindowDimensions, TouchableOpacity, Linking} from 'react-native';
-import { ThemeContext } from '../';
+import { ThemeContext } from './theme';
 
 export default function Section05() {
   const { width } = useWindowDimensions();

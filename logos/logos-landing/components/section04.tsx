@@ -1,7 +1,7 @@
 import React, {useContext} from 'react';
 import {View, Text, StyleSheet, useWindowDimensions, TouchableOpacity} from 'react-native';
 import { Linking } from 'react-native';
-import { ThemeContext } from '../';
+import { ThemeContext } from './theme';
 
 const faqData = [
   {

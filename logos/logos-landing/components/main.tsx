@@ -1,7 +1,7 @@
 // Main.tsx
 import React, { useContext } from 'react';
 import { StyleSheet, Text, View, ScrollView, ImageBackground, Image, Dimensions, TouchableOpacity } from 'react-native';
-import { ThemeContext } from '../';
+import { ThemeContext } from './theme';
 import Section01 from './section01';
 import Section02 from './section02';
 import Section03 from './section03';
