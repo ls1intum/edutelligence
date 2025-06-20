@@ -328,13 +328,22 @@ class TestSolutionRepositoryCreatorIntegration:
 
             print(f"\n🔍 LLM Call #{call_count}:")
             print(
-                "Prompt contains: {}".format([
-                    key for key in [
-                        'solution plan', 'architecture', 'file structure',
-                        'directories', 'binary_search.py', 'test_binary_search.py',
-                        'headers', 'no implementation'
-                    ] if key in prompt_str
-                ])
+                "Prompt contains: {}".format(
+                    [
+                        key
+                        for key in [
+                            "solution plan",
+                            "architecture",
+                            "file structure",
+                            "directories",
+                            "binary_search.py",
+                            "test_binary_search.py",
+                            "headers",
+                            "no implementation",
+                        ]
+                        if key in prompt_str
+                    ]
+                )
             )
 
             # Use more specific matching based on the actual prompt content
