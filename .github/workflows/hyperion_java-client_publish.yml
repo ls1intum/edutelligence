@@ -1,5 +1,9 @@
 name: Hyperion - Java Client Publish Snapshots
 
+permissions:
+  contents: read
+  packages: write
+
 on:
   push:
     paths:
