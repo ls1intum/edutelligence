@@ -111,9 +111,10 @@ service FinalizeProblemStatement {}
 // Exercise Creation Step 7: Configure Grading
 service ConfigureGrading {}
 
-// Exercise Creation Step 8: Verify Configuration
-service VerifyConfiguration {
+// Exercise Creation Step 8: Review and Refine
+service ReviewAndRefine {
   rpc CheckInconsistencies(InconsistencyCheckRequest) returns (InconsistencyCheckResponse) {}
+  rpc RewriteProblemStatement(RewriteProblemStatementRequest) returns (RewriteProblemStatementResponse) {}
 }
 
 message InconsistencyCheckRequest {
@@ -125,4 +126,12 @@ message InconsistencyCheckRequest {
 
 message InconsistencyCheckResponse {
   string inconsistencies = 1;
+}
+
+message RewriteProblemStatementRequest {
+  string text = 1;
+}
+
+message RewriteProblemStatementResponse {
+  string rewritten_text = 1;
 }

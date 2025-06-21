@@ -31,8 +31,8 @@ from app.creation_steps.step6_finalize_problem_statement.servicer import (
     FinalizeProblemStatementServicer,
 )
 from app.creation_steps.step7_configure_grading.servicer import ConfigureGradingServicer
-from app.creation_steps.step8_verify_configuration.servicer import (
-    VerifyConfigurationServicer,
+from app.creation_steps.step8_review_and_refine.servicer import (
+    ReviewAndRefineServicer,
 )
 
 
@@ -121,7 +121,7 @@ class GrpcServer:
             "CreateTestRepositoryServicer": CreateTestRepositoryServicer(),
             "FinalizeProblemStatementServicer": FinalizeProblemStatementServicer(),
             "ConfigureGradingServicer": ConfigureGradingServicer(),
-            "VerifyConfigurationServicer": VerifyConfigurationServicer(),
+            "ReviewAndRefineServicer": ReviewAndRefineServicer(),
         }
 
         # Register each servicer and set their health status

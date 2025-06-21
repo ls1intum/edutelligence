@@ -42,7 +42,6 @@ class ProjectType(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     XCODE: _ClassVar[ProjectType]
     FACT: _ClassVar[ProjectType]
     GCC: _ClassVar[ProjectType]
-
 EMPTY: ProgrammingLanguage
 ASSEMBLER: ProgrammingLanguage
 BASH: ProgrammingLanguage
@@ -80,30 +79,16 @@ class RepositoryFile(_message.Message):
     CONTENT_FIELD_NUMBER: _ClassVar[int]
     path: str
     content: str
-    def __init__(
-        self, path: _Optional[str] = ..., content: _Optional[str] = ...
-    ) -> None: ...
+    def __init__(self, path: _Optional[str] = ..., content: _Optional[str] = ...) -> None: ...
 
 class Repository(_message.Message):
     __slots__ = ("files",)
     FILES_FIELD_NUMBER: _ClassVar[int]
     files: _containers.RepeatedCompositeFieldContainer[RepositoryFile]
-    def __init__(
-        self, files: _Optional[_Iterable[_Union[RepositoryFile, _Mapping]]] = ...
-    ) -> None: ...
+    def __init__(self, files: _Optional[_Iterable[_Union[RepositoryFile, _Mapping]]] = ...) -> None: ...
 
 class ProgrammingExercise(_message.Message):
-    __slots__ = (
-        "id",
-        "title",
-        "programming_language",
-        "package_name",
-        "project_type",
-        "template_repository",
-        "solution_repository",
-        "test_repository",
-        "problem_statement",
-    )
+    __slots__ = ("id", "title", "programming_language", "package_name", "project_type", "template_repository", "solution_repository", "test_repository", "problem_statement")
     ID_FIELD_NUMBER: _ClassVar[int]
     TITLE_FIELD_NUMBER: _ClassVar[int]
     PROGRAMMING_LANGUAGE_FIELD_NUMBER: _ClassVar[int]
@@ -122,26 +107,10 @@ class ProgrammingExercise(_message.Message):
     solution_repository: Repository
     test_repository: Repository
     problem_statement: str
-    def __init__(
-        self,
-        id: _Optional[int] = ...,
-        title: _Optional[str] = ...,
-        programming_language: _Optional[_Union[ProgrammingLanguage, str]] = ...,
-        package_name: _Optional[str] = ...,
-        project_type: _Optional[_Union[ProjectType, str]] = ...,
-        template_repository: _Optional[_Union[Repository, _Mapping]] = ...,
-        solution_repository: _Optional[_Union[Repository, _Mapping]] = ...,
-        test_repository: _Optional[_Union[Repository, _Mapping]] = ...,
-        problem_statement: _Optional[str] = ...,
-    ) -> None: ...
+    def __init__(self, id: _Optional[int] = ..., title: _Optional[str] = ..., programming_language: _Optional[_Union[ProgrammingLanguage, str]] = ..., package_name: _Optional[str] = ..., project_type: _Optional[_Union[ProjectType, str]] = ..., template_repository: _Optional[_Union[Repository, _Mapping]] = ..., solution_repository: _Optional[_Union[Repository, _Mapping]] = ..., test_repository: _Optional[_Union[Repository, _Mapping]] = ..., problem_statement: _Optional[str] = ...) -> None: ...
 
 class InconsistencyCheckRequest(_message.Message):
-    __slots__ = (
-        "problem_statement",
-        "solution_repository",
-        "template_repository",
-        "test_repository",
-    )
+    __slots__ = ("problem_statement", "solution_repository", "template_repository", "test_repository")
     PROBLEM_STATEMENT_FIELD_NUMBER: _ClassVar[int]
     SOLUTION_REPOSITORY_FIELD_NUMBER: _ClassVar[int]
     TEMPLATE_REPOSITORY_FIELD_NUMBER: _ClassVar[int]
@@ -150,16 +119,22 @@ class InconsistencyCheckRequest(_message.Message):
     solution_repository: Repository
     template_repository: Repository
     test_repository: Repository
-    def __init__(
-        self,
-        problem_statement: _Optional[str] = ...,
-        solution_repository: _Optional[_Union[Repository, _Mapping]] = ...,
-        template_repository: _Optional[_Union[Repository, _Mapping]] = ...,
-        test_repository: _Optional[_Union[Repository, _Mapping]] = ...,
-    ) -> None: ...
+    def __init__(self, problem_statement: _Optional[str] = ..., solution_repository: _Optional[_Union[Repository, _Mapping]] = ..., template_repository: _Optional[_Union[Repository, _Mapping]] = ..., test_repository: _Optional[_Union[Repository, _Mapping]] = ...) -> None: ...
 
 class InconsistencyCheckResponse(_message.Message):
     __slots__ = ("inconsistencies",)
     INCONSISTENCIES_FIELD_NUMBER: _ClassVar[int]
     inconsistencies: str
     def __init__(self, inconsistencies: _Optional[str] = ...) -> None: ...
+
+class RewriteProblemStatementRequest(_message.Message):
+    __slots__ = ("text",)
+    TEXT_FIELD_NUMBER: _ClassVar[int]
+    text: str
+    def __init__(self, text: _Optional[str] = ...) -> None: ...
+
+class RewriteProblemStatementResponse(_message.Message):
+    __slots__ = ("rewritten_text",)
+    REWRITTEN_TEXT_FIELD_NUMBER: _ClassVar[int]
+    rewritten_text: str
+    def __init__(self, rewritten_text: _Optional[str] = ...) -> None: ...
