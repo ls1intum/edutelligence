@@ -1,8 +1,7 @@
-name: Hyperion Java Client - Publish Snapshots
+name: Hyperion - Java Client Publish Snapshots
 
 on:
   push:
-    branches: [main, develop]
     paths:
       - 'hyperion/java-client/**'
       - 'hyperion/app/protos/**'
@@ -12,11 +11,6 @@ on:
       - 'hyperion/java-client/**'
       - 'hyperion/app/protos/**'
   workflow_dispatch:
-    inputs:
-      force_publish:
-        description: 'Force publish (even on PR)'
-        required: false
-        default: 'false'
 
 jobs:
   validate:
@@ -33,7 +27,7 @@ jobs:
           distribution: 'temurin'
           
       - name: Setup Gradle
-        uses: gradle/gradle-build-action@v3
+        uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: wrapper
           
@@ -58,10 +52,7 @@ jobs:
     name: Publish Snapshot to GitHub Packages
     needs: validate
     runs-on: ubuntu-latest
-    if: |
-      (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop')) ||
-      (github.event_name == 'workflow_dispatch' && github.event.inputs.force_publish == 'true')
-    
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -70,10 +61,10 @@ jobs:
         uses: actions/setup-java@v4
         with:
           java-version: '17'
-          distribution: 'eclipse-temurin'
+          distribution: 'temurin'
           
       - name: Setup Gradle
-        uses: gradle/gradle-build-action@v3
+        uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: wrapper
           
