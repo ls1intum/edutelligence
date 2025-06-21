@@ -199,7 +199,7 @@ class GrpcServer:
 
         except Exception as e:
             logger.error(f"Failed to configure TLS: {e}")
-            raise RuntimeError(f"TLS configuration failed: {e}")
+            raise RuntimeError(f"TLS configuration failed: {e}") from e
 
 
 def serve():
