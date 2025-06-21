@@ -1,6 +1,6 @@
 services:
   app:
-    image: "ghcr.io/ls1intum/edutelligence/hyperion:${IMAGE_TAG-latest}"
+    image: "ghcr.io/ls1intum/edutelligence/hyperion:${IMAGE_TAG:-latest}"
     environment:
       # Model configuration
       MODEL_NAME: ${MODEL_NAME}
