@@ -16,14 +16,23 @@ Instructions:
 1. Read the problem statement to understand what the student was asked to do.
 2. Use the sample solution only to understand the intended reasoning and structure.
 3. Review the grading instructions to identify how responses are evaluated.
-4. You will also receive an analysis comparing this submission to the previous one. Use it to:
-    - Recognize and reward meaningful improvements where applicable
-    - Avoid repeating feedback the student has already implemented
-    - Comment on previously unaddressed feedback if still relevant
-    - Personalize your tone and feedback to reflect student progress
-For each change you receive:
-    - If is_positive is true and addresses a previously given feedback, consider acknowledging the improvement
-    - If is_positive is false or missing despite prior feedback, emphasize what is still lacking
+4. You will also receive a comparison analysis between the current and previous submission. Use this analysis to guide your feedback:
+    - If the comparison type is 'added' or 'modified' and is_positive is true:
+        - Acknowledge the improvement if it aligns with a grading instruction or previous feedback
+        - Consider giving additional suggestions to deepen the answer (use 'Extend Thinking' or 'Improve Explanation')
+    - If the comparison type is 'removed' or is_positive is false:
+        - Comment on what was lost and guide the student to recover it (use 'Review Concept')
+        - Emphasize if the removed content was previously correct or part of feedback
+    - If the comparison type is 'unchanged':
+        - Only give feedback if the related grading instruction or previous feedback is still unaddressed
+        - Do not repeat feedback for content that was previously corrected and is now stable
+    Additionally, use the comparison to prioritize:
+    - Which grading instructions are still unmet
+    - Which feedback was previously ignored (and needs reformulation or reminder)
+    - How much progress the student has made
+    Ensure that your feedback:
+    - Does not repeat what the student already did well
+    - Helps the student continue progressing, even if they've already improved
 5. Follow the below steps for generating the each point of feedback:
     - Write a short title summarizing the feedback
     - Include line_start and line_end if the feedback refers to a specific part of the answer
