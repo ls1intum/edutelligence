@@ -30,7 +30,7 @@ jobs:
         uses: actions/setup-java@v4
         with:
           java-version: '17'
-          distribution: 'eclipse-temurin'
+          distribution: 'temurin'
           
       - name: Setup Gradle
         uses: gradle/gradle-build-action@v3
