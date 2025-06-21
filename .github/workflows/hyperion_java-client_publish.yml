@@ -77,8 +77,16 @@ jobs:
           DATE=$(date -u +"%Y%m%d")
           COMMIT_SHA=${GITHUB_SHA:0:7}
           
-          # Get branch name and sanitize it for version compatibility
-          BRANCH_NAME=${GITHUB_REF#refs/heads/}
+          # Get meaningful branch name (handle PR refs properly)
+          if [[ "$GITHUB_REF" == refs/pull/* ]]; then
+            # For PRs, use the head branch name from the event
+            BRANCH_NAME="${GITHUB_HEAD_REF}"
+          else
+            # For regular pushes, extract from ref
+            BRANCH_NAME="${GITHUB_REF#refs/heads/}"
+          fi
+          
+          # Sanitize branch name for version compatibility
           BRANCH_SANITIZED=$(echo "$BRANCH_NAME" | sed 's/[^a-zA-Z0-9._-]/-/g' | sed 's/--*/-/g' | sed 's/^-\|-$//g')
           
           # Remove existing -SNAPSHOT suffix if present
