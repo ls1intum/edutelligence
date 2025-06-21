@@ -71,21 +71,30 @@ jobs:
       - name: Set snapshot version
         working-directory: hyperion/java-client
         run: |
-          # Extract current version and append timestamp for uniqueness
+          # Extract current version and build meaningful snapshot version
           CURRENT_VERSION=$(grep "^version = " build.gradle | sed "s/version = '\(.*\)'/\1/")
-          TIMESTAMP=$(date -u +"%Y%m%d%H%M%S")
+          DATE=$(date -u +"%Y%m%d")
           COMMIT_SHA=${GITHUB_SHA:0:7}
           
+          # Get branch name and sanitize it for version compatibility
+          BRANCH_NAME=${GITHUB_REF#refs/heads/}
+          BRANCH_SANITIZED=$(echo "$BRANCH_NAME" | sed 's/[^a-zA-Z0-9._-]/-/g' | sed 's/--*/-/g' | sed 's/^-\|-$//g')
+          
+          # Remove existing -SNAPSHOT suffix if present
           if [[ "$CURRENT_VERSION" == *"-SNAPSHOT" ]]; then
-            # Remove existing -SNAPSHOT and add our own with timestamp
             BASE_VERSION=${CURRENT_VERSION%-SNAPSHOT}
-            NEW_VERSION="${BASE_VERSION}-${TIMESTAMP}-${COMMIT_SHA}-SNAPSHOT"
           else
-            NEW_VERSION="${CURRENT_VERSION}-${TIMESTAMP}-${COMMIT_SHA}-SNAPSHOT"
+            BASE_VERSION=$CURRENT_VERSION
           fi
           
+          # Build semantic snapshot version: base-branch-date-commit-SNAPSHOT
+          NEW_VERSION="${BASE_VERSION}-${BRANCH_SANITIZED}-${DATE}-${COMMIT_SHA}-SNAPSHOT"
+          
           echo "NEW_VERSION=${NEW_VERSION}" >> $GITHUB_ENV
-          echo "Publishing version: ${NEW_VERSION}"
+          echo "📦 Publishing version: ${NEW_VERSION}"
+          echo "🌿 Branch: ${BRANCH_NAME}"
+          echo "📅 Date: ${DATE}"
+          echo "🔗 Commit: ${COMMIT_SHA}"
           
           # Update version in build.gradle
           sed -i "s/version = '.*'/version = '${NEW_VERSION}'/" build.gradle
