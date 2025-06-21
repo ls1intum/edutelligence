@@ -4,7 +4,7 @@ plugins {
     id 'com.google.protobuf' version '0.9.5'
 }
 
-group = 'de.tum.cit.aet'
+group = 'de.tum.cit.aet.edutelligence'
 version = '0.1.0-SNAPSHOT'
 
 java {
@@ -61,6 +61,46 @@ publishing {
     publications {
         mavenJava(MavenPublication) {
             from components.java
+            
+            // Add essential metadata for GitHub Packages
+            pom {
+                name = 'Hyperion Java gRPC Client'
+                description = 'Java gRPC client library for Edutelligence\'s Hyperion'
+                url = 'https://github.com/ls1intum/edutelligence'
+                
+                licenses {
+                    license {
+                        name = 'MIT License'
+                        url = 'https://opensource.org/licenses/MIT'
+                    }
+                }
+                
+                developers {
+                    developer {
+                        id = 'ls1intum'
+                        name = 'AET TUM'
+                        organization = 'Applied Educational Technologies'
+                        organizationUrl = 'https://aet.cit.tum.de/'
+                    }
+                }
+                
+                scm {
+                    connection = 'scm:git:git://github.com/ls1intum/edutelligence.git'
+                    developerConnection = 'scm:git:ssh://github.com/ls1intum/edutelligence.git'
+                    url = 'https://github.com/ls1intum/edutelligence'
+                }
+            }
+        }
+    }
+    
+    repositories {
+        maven {
+            name = "GitHubPackages"
+            url = uri("https://maven.pkg.github.com/ls1intum/edutelligence")
+            credentials {
+                username = project.findProperty("gpr.user") ?: System.getenv("GITHUB_ACTOR")
+                password = project.findProperty("gpr.key") ?: System.getenv("GITHUB_TOKEN")
+            }
         }
     }
 }
@@ -92,7 +132,7 @@ task copyProtoFile {
     }
 }
 
-// Single task to build and publish the Java client
+// Single task to build and publish the Java client locally
 task buildClient {
     group = 'build'
     description = 'Builds the Hyperion Java gRPC client and publishes it to Maven Local'
@@ -106,9 +146,29 @@ task buildClient {
     
     doLast {
         println ""
-        println "🎉 Hyperion Java gRPC client built and published successfully!"
+        println "🎉 Hyperion Java gRPC client built and published to Maven Local successfully!"
         println "📦 Use in your project with:"
         println "   implementation '${projectGroup}:${projectName}:${projectVersion}'"
+    }
+}
+
+// Task to publish to GitHub Packages
+task publishToGitHubPackages {
+    group = 'publishing'
+    description = 'Builds and publishes the Hyperion Java gRPC client to GitHub Packages'
+    
+    dependsOn copyProtoFile, build, publish
+    
+    // Capture project properties at configuration time
+    def projectGroup = project.group
+    def projectName = project.name
+    def projectVersion = project.version
+    
+    doLast {
+        println ""
+        println "🚀 Hyperion Java gRPC client published to GitHub Packages successfully!"
+        println "📦 Package: ${projectGroup}:${projectName}:${projectVersion}"
+        println "🔗 Available at: https://github.com/ls1intum/edutelligence/packages"
     }
 }
 

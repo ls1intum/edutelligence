@@ -1,7 +1,7 @@
 syntax = "proto3";
 
 option java_multiple_files = true;
-option java_package = "de.tum.cit.aet.hyperion";
+option java_package = "de.tum.cit.aet.edutelligence.hyperion";
 option java_outer_classname = "HyperionProto";
 option objc_class_prefix = "Hyperion";
 
