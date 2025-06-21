@@ -35,9 +35,6 @@ jobs:
         with:
           gradle-version: wrapper
           
-      - name: Validate Gradle wrapper
-        uses: gradle/wrapper-validation-action@v2
-        
       - name: Build and test
         working-directory: hyperion/java-client
         run: ./gradlew build --no-daemon --parallel
