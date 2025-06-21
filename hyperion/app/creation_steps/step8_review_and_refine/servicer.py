@@ -10,13 +10,15 @@ from langchain_core.prompts import PromptTemplate
 from .models import (
     InconsistencyCheckRequest,
     InconsistencyCheckResponse,
+    RewriteProblemStatementRequest,
+    RewriteProblemStatementResponse,
 )
-from .prompts import checker_prompt, prettify_prompt
+from .prompts import checker_prompt, prettify_prompt, rewrite_prompt
 
 logger = logging.getLogger(__name__)
 
 
-class VerifyConfigurationServicer(hyperion_pb2_grpc.VerifyConfigurationServicer):
+class ReviewAndRefineServicer(hyperion_pb2_grpc.ReviewAndRefineServicer):
 
     def CheckInconsistencies(self, request, context):
         # Convert from gRPC to Pydantic model
@@ -94,3 +96,23 @@ class VerifyConfigurationServicer(hyperion_pb2_grpc.VerifyConfigurationServicer)
 
         # Return the response
         return InconsistencyCheckResponse(inconsistencies=result).to_grpc()
+
+    def RewriteProblemStatement(self, request, context):
+        # Convert from gRPC to Pydantic model
+        request = RewriteProblemStatementRequest.from_grpc(request)
+
+        logger.info("Rewriting problem statement text...")
+
+        # Get the language model
+        model = get_model(settings.MODEL_NAME)()
+
+        # Set up the rewriting prompt and chain
+        rewrite_prompt_template = PromptTemplate.from_template(rewrite_prompt)
+        rewriter = rewrite_prompt_template | model
+
+        # Rewrite the text
+        response = rewriter.invoke({"text": request.text})
+        rewritten_text = response.content.strip()
+
+        # Return the response
+        return RewriteProblemStatementResponse(rewritten_text=rewritten_text).to_grpc()

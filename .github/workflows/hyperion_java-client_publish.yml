@@ -1,0 +1,124 @@
+name: Hyperion - Java Client Publish Snapshots
+
+permissions:
+  contents: read
+  packages: write
+
+on:
+  push:
+    paths:
+      - 'hyperion/java-client/**'
+      - 'hyperion/app/protos/**'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'hyperion/java-client/**'
+      - 'hyperion/app/protos/**'
+  workflow_dispatch:
+
+jobs:
+  validate:
+    name: Validate and Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: wrapper
+          
+      - name: Build and test
+        working-directory: hyperion/java-client
+        run: ./gradlew build --no-daemon --parallel
+        
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: build-artifacts
+          path: |
+            hyperion/java-client/build/libs/
+            hyperion/java-client/build/reports/
+          retention-days: 7
+
+  publish-snapshot:
+    name: Publish Snapshot to GitHub Packages
+    needs: validate
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: wrapper
+          
+      - name: Set snapshot version
+        working-directory: hyperion/java-client
+        run: |
+          # Extract current version and build meaningful snapshot version
+          CURRENT_VERSION=$(grep "^version = " build.gradle | sed "s/version = '\(.*\)'/\1/")
+          DATE=$(date -u +"%Y%m%d")
+          COMMIT_SHA=${GITHUB_SHA:0:7}
+          
+          # Get meaningful branch name (handle PR refs properly)
+          if [[ "$GITHUB_REF" == refs/pull/* ]]; then
+            # For PRs, use the head branch name from the event
+            BRANCH_NAME="${GITHUB_HEAD_REF}"
+          else
+            # For regular pushes, extract from ref
+            BRANCH_NAME="${GITHUB_REF#refs/heads/}"
+          fi
+          
+          # Sanitize branch name for version compatibility
+          BRANCH_SANITIZED=$(echo "$BRANCH_NAME" | sed 's/[^a-zA-Z0-9._-]/-/g' | sed 's/--*/-/g' | sed 's/^-\|-$//g')
+          
+          # Remove existing -SNAPSHOT suffix if present
+          if [[ "$CURRENT_VERSION" == *"-SNAPSHOT" ]]; then
+            BASE_VERSION=${CURRENT_VERSION%-SNAPSHOT}
+          else
+            BASE_VERSION=$CURRENT_VERSION
+          fi
+          
+          # Build semantic snapshot version: base-branch-date-commit-SNAPSHOT
+          NEW_VERSION="${BASE_VERSION}-${BRANCH_SANITIZED}-${DATE}-${COMMIT_SHA}-SNAPSHOT"
+          
+          echo "NEW_VERSION=${NEW_VERSION}" >> $GITHUB_ENV
+          echo "📦 Publishing version: ${NEW_VERSION}"
+          echo "🌿 Branch: ${BRANCH_NAME}"
+          echo "📅 Date: ${DATE}"
+          echo "🔗 Commit: ${COMMIT_SHA}"
+          
+          # Update version in build.gradle
+          sed -i "s/version = '.*'/version = '${NEW_VERSION}'/" build.gradle
+          
+      - name: Publish to GitHub Packages
+        working-directory: hyperion/java-client
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_ACTOR: ${{ github.actor }}
+        run: ./gradlew publishToGitHubPackages --no-daemon
+        
+      - name: Create release summary
+        run: |
+          echo "## 📦 Package Published" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Package:** \`de.tum.cit.aet.edutelligence:hyperion:${{ env.NEW_VERSION }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Repository:** [GitHub Packages](https://github.com/ls1intum/edutelligence/packages)" >> $GITHUB_STEP_SUMMARY
