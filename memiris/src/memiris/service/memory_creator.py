@@ -24,6 +24,7 @@ class MemoryCreator:
     """
 
     tool_llm: str
+    thinking_llm: str
     response_llm: str
     template: Template
     learning_repository: LearningRepository
@@ -34,11 +35,12 @@ class MemoryCreator:
     def __init__(
         self,
         tool_llm: str,
+        thinking_llm: str,
         response_llm: str,
         learning_repository: LearningRepository,
-        memory_repository: Optional[MemoryRepository] = None,
-        vectorizer: Optional[Vectorizer] = None,
-        ollama_service: Optional[OllamaService] = None,
+        memory_repository: MemoryRepository,
+        vectorizer: Vectorizer,
+        ollama_service: OllamaService,
         template: Optional[str] = None,
     ) -> None:
         """
@@ -46,7 +48,8 @@ class MemoryCreator:
 
         Args:
             tool_llm: The language model to use for tool operations
-            response_llm: The language model to use for responses
+            thinking_llm: The language model to use for thinking operations
+            response_llm: The language model to use for the final JSON response
             learning_repository: The repository for accessing learning data
             memory_repository: The repository for accessing memory data
             vectorizer: The vectorizer service
@@ -54,6 +57,7 @@ class MemoryCreator:
             template: Optional template path
         """
         self.tool_llm = tool_llm
+        self.thinking_llm = thinking_llm
         self.response_llm = response_llm
         self.learning_repository = learning_repository
         self.memory_repository = memory_repository
@@ -124,7 +128,7 @@ class MemoryCreator:
 
             # Call the LLM to get the response
             response = self.ollama_service.chat(
-                model=self.tool_llm,
+                model=self.tool_llm if i % 2 == 1 else self.thinking_llm,
                 messages=messages,
                 tools=(list(tools.values()) if i % 2 == 1 else None),
                 options={"temperature": 0.05},

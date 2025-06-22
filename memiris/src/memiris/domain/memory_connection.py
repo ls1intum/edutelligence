@@ -8,23 +8,14 @@ class ConnectionType(Enum):
     Enum representing the type of connection between memories.
 
     RELATED: General relation between memories
-    ELABORATES: One memory expands on another memory
     CONTRADICTS: Memories have contradicting information
-    PRECEDES: One memory comes before another chronologically
-    FOLLOWS: One memory comes after another chronologically
-    CAUSES: One memory describes something that causes another
-    EXAMPLE_OF: One memory gives an example of the other
     SAME_TOPIC: Memories are about the same topic but not duplicates
     """
 
     RELATED = "related"
-    ELABORATES = "elaborates"
     CONTRADICTS = "contradicts"
-    PRECEDES = "precedes"
-    FOLLOWS = "follows"
-    CAUSES = "causes"
-    EXAMPLE_OF = "example_of"
     SAME_TOPIC = "same_topic"
+    CREATED_FROM = "created_from"
 
 
 class MemoryConnection:

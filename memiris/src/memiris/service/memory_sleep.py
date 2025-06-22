@@ -1,4 +1,5 @@
 import logging
+import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Optional
 from uuid import UUID
@@ -275,7 +276,7 @@ class MemorySleeper:
 
         # Call the LLM to deduplicate memories
         response = self.ollama_service.chat(
-            model=self.tool_llm,
+            model=self.response_llm,
             messages=messages,
             response_format=MemoryDeduplicationDto.json_array_type().json_schema(),
             options={"temperature": 0.05},
@@ -309,6 +310,7 @@ class MemorySleeper:
             # Track which memories were used in deduplication (to be deleted later)
             used_memory_ids = set()
             deduplicated_results = []
+            created_from_connections = []
 
             for memory_dto in memory_dtos:
                 # Skip if no memories are referenced (shouldn't happen)
@@ -365,11 +367,18 @@ class MemorySleeper:
 
                 # Create new memory with combined information
                 new_memory = Memory(
+                    uid=uuid.uuid4(),
                     title=memory_dto.title,
                     content=memory_dto.content,
                     learnings=combined_learnings,
                     slept_on=True,  # Mark as slept on since we're processing it
                 )
+
+                connection = MemoryConnection(
+                    connection_type=ConnectionType.CREATED_FROM,
+                    memories=[m.id for m in original_memories] + [new_memory.id],  # type: ignore
+                )
+                created_from_connections.append(connection)
 
                 logging.debug(
                     "Creating new memory with title: %s and content: %s",
@@ -394,6 +403,8 @@ class MemorySleeper:
             deduplicated_results = self.memory_repository.save_all(
                 tenant, deduplicated_results
             )
+
+            self.memory_connection_repository.save_all(tenant, created_from_connections)
 
             # Mark the original memories as deleted instead of actually deleting them
             for memory_id in used_memory_ids:
@@ -476,7 +487,9 @@ class MemorySleeper:
         final_deduplicated_memories = []
         memories_without_vectors = [m for m in deduplicated_memories if not m.vectors]
 
-        kwargs["langfuse_trace_id"] = self.langfuse_client.get_current_trace_id()
+        kwargs["langfuse_parent_observation_id"] = (
+            self.langfuse_client.get_current_observation_id()
+        )
 
         # Process each chunk in parallel
         with ThreadPoolExecutor(max_workers=5) as executor:
@@ -674,7 +687,7 @@ class MemorySleeper:
 
         # Call the LLM to identify connections between memories
         response = self.ollama_service.chat(
-            model=self.tool_llm,
+            model=self.response_llm,
             messages=messages,
             response_format=MemoryConnectionDto.json_array_type().json_schema(),
             options={"temperature": 0.05},
