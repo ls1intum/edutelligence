@@ -1,9 +1,12 @@
 import numpy as np
 from scipy.spatial.distance import cosine
+
 from atlasml.ml.VectorEmbeddings.ModelDimension import ModelDimension
 
 
-def compute_cosine_similarity(embedding_vector, model: ModelDimension, comparison_vector):
+def compute_cosine_similarity(
+    embedding_vector, model: ModelDimension, comparison_vector
+):
     """
     Computes the cosine similarity between two embedding vectors.
 
