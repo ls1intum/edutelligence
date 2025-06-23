@@ -14,10 +14,9 @@ class COTLearnerProfileConfig(ApproachConfig):
     thinking_prompt: ThinkingPrompt = Field(default=ThinkingPrompt())
     generate_suggestions_prompt: GenerateSuggestionsPrompt = Field(default=GenerateSuggestionsPrompt())
     profile: LearnerProfile = Field(default=LearnerProfile(
-        feedback_practical_theoretical=3,
-        feedback_alternative_standard=3,
-        feedback_followup_summary=3,
-        feedback_brief_detailed=3
+        feedback_alternative_standard=2,
+        feedback_followup_summary=2,
+        feedback_brief_detailed=2
     ))
 
     async def generate_suggestions(self, exercise: Exercise, submission: Submission, config, *, debug: bool,

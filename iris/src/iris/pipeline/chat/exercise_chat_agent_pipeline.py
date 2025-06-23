@@ -136,7 +136,7 @@ class ExerciseChatAgentPipeline(Pipeline):
             model = "gpt-4.1"
             model_small = "gpt-4.1-mini"
         else:
-            model = "gpt-4.1-nano"
+            model = "gpt-4.1-mini"
             model_small = "gpt-4.1-nano"
 
         self.llm = IrisLangchainChatModel(
@@ -171,7 +171,7 @@ class ExerciseChatAgentPipeline(Pipeline):
     def get_variants(cls, available_llms: List[LanguageModel]) -> List[FeatureDTO]:
         variant_specs = [
             (
-                ["gpt-4.1-nano"],
+                ["gpt-4.1-mini", "gpt-4.1-nano"],
                 FeatureDTO(
                     id="default",
                     name="Default",
@@ -712,12 +712,12 @@ class ExerciseChatAgentPipeline(Pipeline):
                 self.callback.error("Generating interaction suggestions failed.")
         except Exception as e:
             logger.error(
-                "An error occurred while running the course chat pipeline",
+                "An error occurred while running the exercise chat pipeline",
                 exc_info=e,
             )
             traceback.print_exc()
             self.callback.error(
-                "An error occurred while running the course chat pipeline."
+                "An error occurred while running the exercise chat pipeline."
             )
 
     def should_allow_lecture_tool(self, course_id: int) -> bool:
