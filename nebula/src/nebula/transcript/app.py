@@ -89,27 +89,32 @@ def run_transcription(req: TranscribeRequestDTO, job_id: str):
         fail_job(job_id, str(e))
 
     finally:
-        for path in [video_path, audio_path]:
-            try:
-                if os.path.exists(path):
-                    os.remove(path)
-                    logging.debug("🧹 Removed temp file: %s", path)
-            except Exception as cleanup_err:
-                logging.warning(
-                    "⚠️ Failed to remove temp file %s: %s", path, cleanup_err
-                )
+        cleanup_errors = []
 
-        chunk_dir_prefix = f"chunks_{uid}"
-        temp_dir = Config.VIDEO_STORAGE_PATH
-
+    for path in [video_path, audio_path]:
         try:
-            for entry in os.listdir(temp_dir):
-                full_path = os.path.join(temp_dir, entry)
-                if entry.startswith(chunk_dir_prefix) and os.path.isdir(full_path):
-                    shutil.rmtree(full_path)
-                    logging.debug("🧹 Removed chunk directory: %s", full_path)
+            if os.path.exists(path):
+                os.remove(path)
+                logging.debug("🧹 Removed temp file: %s", path)
         except Exception as cleanup_err:
-            logging.warning("⚠️ Failed to remove chunk directories: %s", cleanup_err)
+            logging.error("❌ Failed to remove temp file %s: %s", path, cleanup_err)
+            cleanup_errors.append(f"{path}: {cleanup_err}")
+
+    chunk_dir_prefix = f"chunks_{uid}"
+    temp_dir = Config.VIDEO_STORAGE_PATH
+
+    try:
+        for entry in os.listdir(temp_dir):
+            full_path = os.path.join(temp_dir, entry)
+            if entry.startswith(chunk_dir_prefix) and os.path.isdir(full_path):
+                shutil.rmtree(full_path)
+                logging.debug("🧹 Removed chunk directory: %s", full_path)
+    except Exception as cleanup_err:
+        logging.error("❌ Failed to remove chunk directories: %s", cleanup_err)
+        cleanup_errors.append(f"chunks cleanup: {cleanup_err}")
+
+    if cleanup_errors:
+        logging.error("❌ Cleanup completed with errors: %s", cleanup_errors)
 
 
 # ─────────────────────────────
