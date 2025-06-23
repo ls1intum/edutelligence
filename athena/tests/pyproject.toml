@@ -24,6 +24,7 @@ prospector = "^1.10.2"
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 pythonpath = ["."]
+markers = ["e2e: marks tests as end-to-end tests"]
 
 [build-system]
 requires = ["poetry-core"]

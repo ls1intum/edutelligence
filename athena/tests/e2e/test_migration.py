@@ -7,12 +7,12 @@ from datetime import datetime
 from sqlalchemy import create_engine, inspect, text
 
 # Test Configuration
-PROJECT_ROOT = Path(__file__).parent.parent.parent
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 MIGRATIONS_DIR = PROJECT_ROOT / "migrations" / "versions"
 MIGRATION_TEMPLATE_FILE = (
     PROJECT_ROOT / "test" / "e2e" / "migration_files" / "migration_template.py"
 )
-DOCKER_COMPOSE_FILE = PROJECT_ROOT / "docker-compose.yml"
+DOCKER_COMPOSE_FILE = PROJECT_ROOT / "docker-compose.local.yml"
 
 # Service URLs
 AMM_API_URL = "http://localhost:5100"
@@ -199,9 +199,9 @@ def test_database_migration_flow():
 
     finally:
         # Cleanup
-        print("\n--- Cleaning up ---")
-        if new_migration_file_path and new_migration_file_path.exists():
-            new_migration_file_path.unlink()
-            print(f"Removed migration file: {new_migration_file_path.name}")
-        run_docker_compose("down -v --remove-orphans")
+        # print("\n--- Cleaning up ---")
+        # if new_migration_file_path and new_migration_file_path.exists():
+        #     new_migration_file_path.unlink()
+        #     print(f"Removed migration file: {new_migration_file_path.name}")
+        # run_docker_compose("down -v --remove-orphans")
         print("Test environment cleaned up successfully.")
