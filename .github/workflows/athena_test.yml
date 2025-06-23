@@ -75,7 +75,7 @@ jobs:
       with:
         script: |
           const prNumber = ${{ steps.find-pr.outputs.pr_number }};
-          const summary = `### Athena Test Results Summary\n\n${{ steps.test-report.outputs.summary }}\n\n${{ steps.test-report.outputs.detailed_summary }}`;
+          const summary = `### Athena Test Results Summary\n\n${{ steps.test-report.outputs.summary }}\n\n#### Failing Tests Summary\n\n${{ steps.test-report.outputs.detailed_summary }}`;
 
           github.rest.issues.createComment({
             owner: context.repo.owner,

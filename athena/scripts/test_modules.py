@@ -2,7 +2,6 @@ import subprocess
 import os
 import sys
 import argparse
-from pathlib import Path
 import shutil
 
 def main():
@@ -28,10 +27,10 @@ def main():
     success = True
     path_env = os.environ["PATH"]
 
-    test_results_dir = Path("test-results")
-    if test_results_dir.exists():
+    test_results_dir = "test-results"
+    if os.path.exists(test_results_dir):
         shutil.rmtree(test_results_dir)
-    test_results_dir.mkdir()
+    os.makedirs(test_results_dir)
 
     for module in modules:
         # Check if test directory exists
@@ -63,7 +62,7 @@ def main():
             mock_test_dir = os.path.join(test_dir, "mock")
             if os.path.exists(mock_test_dir):
                 print(f"\nRunning mock tests for {module}...")
-                junit_file = test_results_dir / f"{module.replace('/', '_')}_mock.xml"
+                junit_file = os.path.join(test_results_dir, f"{module.replace('/', '_')}_mock.xml")
                 result = subprocess.run(
                     [python_path, "-m", "pytest", mock_test_dir, "-v", f"--junitxml={junit_file}"],
                     check=False)
@@ -87,7 +86,7 @@ def main():
                         print(f"\nRunning real tests from {module_dir}...")
                         
                         # Use absolute path for JUnit XML output to write to top-level test-results/
-                        junit_file_real = (Path(original_dir) / test_results_dir / f"{module.replace('/', '_')}_real.xml").resolve()
+                        junit_file_real = os.path.join(original_dir, test_results_dir, f"{module.replace('/', '_')}_real.xml")
                         # Run pytest with the real test directory as the test path
                         result = subprocess.run(
                             [python_path, "-m", "pytest", '../../../' + real_test_dir, "-v", f"--junitxml={junit_file_real}"],
