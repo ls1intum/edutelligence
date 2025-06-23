@@ -66,11 +66,13 @@ brew install ffmpeg
 
 ### 1. `application_local.nebula.yml`
 
-Copy from application_local.example.nebula.yml
+-Copy from application_local.example.nebula.yml
++Copy from `nebula/application_local.example.nebula.yml` to `nebula/application_local.nebula.yml`
 
 ### 2. `llm_config.nebula.yml`
 
-Copy llm_config.example.yml and add your keys:
+-Copy llm_config.example.yml and add your keys:
++Copy `nebula/llm_config.example.yml` to `nebula/llm_config.nebula.yml` and add your keys:
 
 ```yaml
 - id: azure-gpt-4o

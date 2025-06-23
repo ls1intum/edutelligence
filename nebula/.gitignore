@@ -179,4 +179,4 @@ cython_debug/
 .DS_Store
 
 # Ignore transcription temp files
-nebula/src/transcript/temp/
+nebula/src/nebula/transcript/temp/

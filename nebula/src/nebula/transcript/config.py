@@ -1,8 +1,11 @@
+import logging
 import os
 from pathlib import Path
 from typing import List
 
 import yaml
+
+logger = logging.getLogger(__name__)
 
 
 class Config:
@@ -30,15 +33,15 @@ class Config:
         if cls._loaded:
             return
 
-        print(f"[Config] Loading from: {cls.APPLICATION_YML_PATH}")
+        logger.info("Loading config from: %s", cls.APPLICATION_YML_PATH)
         if cls.APPLICATION_YML_PATH.exists():
             with open(cls.APPLICATION_YML_PATH, "r", encoding="utf-8") as f:
                 data = yaml.safe_load(f)
-                print(f"[DEBUG] Raw YAML data: {data}")
+                logger.debug("Raw YAML data: %s", data)
                 cls._api_keys = [entry["token"] for entry in data.get("api_keys", [])]
                 cls._log_level = data.get("log_level", "INFO")
         else:
-            print("[Config] No config file found, skipping")
+            logger.info("No config file found, skipping")
         cls._loaded = True
 
     @classmethod
