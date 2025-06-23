@@ -55,6 +55,7 @@ class ExerciseWithSubmissionsDTO(BaseModel):
         alias="presentationScoreEnabled", default=None
     )
     submissions: List[SimpleSubmissionDTO] = Field(default=[])
+    problem_statement: Optional[str] = Field(alias="problemStatement", default=None)
 
     class Config:
         require_by_default = False
