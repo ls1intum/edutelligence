@@ -9,10 +9,8 @@ from weaviate.client import WeaviateClient
 from iris.common.pipeline_enum import PipelineEnum
 from iris.domain.lecture.lecture_unit_dto import LectureUnitDTO
 from iris.llm import (
-    BasicRequestHandler,
-    CapabilityRequestHandler,
     CompletionArguments,
-    RequirementList,
+    ModelVersionRequestHandler,
 )
 from iris.llm.langchain import IrisLangchainChatModel
 from iris.pipeline import Pipeline
@@ -51,7 +49,7 @@ class LectureUnitSegmentSummaryPipeline(Pipeline):
         lecture_unit_dto: LectureUnitDTO,
     ) -> None:
         super().__init__()
-        self.client = client
+        self.weaviate_client = client
         self.lecture_unit_dto = lecture_unit_dto
 
         self.lecture_unit_segment_collection = init_lecture_unit_segment_schema(client)
@@ -62,15 +60,9 @@ class LectureUnitSegmentSummaryPipeline(Pipeline):
             client
         )
 
-        self.llm_embedding = BasicRequestHandler("embedding-small")
+        self.llm_embedding = ModelVersionRequestHandler("text-embedding-3-small")
 
-        request_handler = CapabilityRequestHandler(
-            requirements=RequirementList(
-                gpt_version_equivalent=4.5,
-                context_length=16385,
-                privacy_compliance=True,
-            )
-        )
+        request_handler = ModelVersionRequestHandler(version="gpt-4.1-mini")
         completion_args = CompletionArguments(temperature=0, max_tokens=2000)
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler, completion_args=completion_args

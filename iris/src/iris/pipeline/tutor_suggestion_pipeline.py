@@ -1,4 +1,6 @@
 import logging
+import re
+from typing import List
 
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
@@ -6,9 +8,12 @@ from langchain_core.runnables import Runnable
 from langsmith import traceable
 
 from iris.common.pipeline_enum import PipelineEnum
+from iris.domain import FeatureDTO
 from iris.domain.communication.communication_tutor_suggestion_pipeline_execution_dto import (
     CommunicationTutorSuggestionPipelineExecutionDTO,
 )
+from iris.llm import CompletionArguments, ModelVersionRequestHandler
+from iris.llm.external.model import LanguageModel
 from iris.domain.data.text_exercise_dto import TextExerciseDTO
 from iris.llm import CapabilityRequestHandler, CompletionArguments, RequirementList
 from iris.llm.langchain import IrisLangchainChatModel
@@ -16,6 +21,7 @@ from iris.pipeline import Pipeline
 from iris.pipeline.prompts.tutor_suggestion.question_answered_prompt import (
     question_answered_prompt,
 )
+from iris.pipeline.shared.utils import filter_variants_by_available_models
 from iris.pipeline.tutor_suggestion_programming_exercise_pipeline import (
     TutorSuggestionProgrammingExercisePipeline,
 )
@@ -59,9 +65,7 @@ class TutorSuggestionPipeline(Pipeline):
     def __init__(self, callback: TutorSuggestionCallback):
         super().__init__(implementation_id="tutor_suggestion_pipeline")
         completion_args = CompletionArguments()
-        request_handler = CapabilityRequestHandler(
-            requirements=RequirementList(self_hosted=True)
-        )
+        request_handler = ModelVersionRequestHandler(version="gemma3:27b")
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler,
             completion_args=completion_args,
@@ -191,4 +195,30 @@ class TutorSuggestionPipeline(Pipeline):
             "Generated tutor suggestions",
             artifact=programming_exercise_result,
             tokens=self.tokens,
+        )
+
+    @classmethod
+    def get_variants(cls, available_llms: List[LanguageModel]) -> List[FeatureDTO]:
+        """
+        Returns available variants for the TutorSuggestionPipeline based on available LLMs.
+
+        Args:
+            available_llms: List of available language models
+
+        Returns:
+            List of FeatureDTO objects representing available variants
+        """
+        variant_specs = [
+            (
+                ["gemma3:27b"],
+                FeatureDTO(
+                    id="default",
+                    name="Default",
+                    description="Default tutor suggestion variant using Gemma 3 model.",
+                ),
+            )
+        ]
+
+        return filter_variants_by_available_models(
+            available_llms, variant_specs, pipeline_name="TutorSuggestionPipeline"
         )

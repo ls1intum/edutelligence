@@ -3,6 +3,8 @@ from typing import List
 
 from iris.common.pipeline_enum import PipelineEnum
 from iris.common.token_usage_dto import TokenUsageDTO
+from iris.domain import FeatureDTO
+from iris.llm.external.model import LanguageModel
 
 
 class Pipeline(metaclass=ABCMeta):
@@ -36,3 +38,26 @@ class Pipeline(metaclass=ABCMeta):
     def _append_tokens(self, tokens: TokenUsageDTO, pipeline: PipelineEnum) -> None:
         tokens.pipeline = pipeline
         self.tokens.append(tokens)
+
+    @classmethod
+    def get_variants(
+        cls, available_llms: List[LanguageModel]  # pylint: disable=unused-argument
+    ) -> List[FeatureDTO]:
+        """
+        Returns available variants for this pipeline based on available LLMs.
+        By default, returns a single 'default' variant.
+        Pipeline subclasses can override this method to provide custom variant logic.
+
+        Args:
+            available_llms: List of available language models
+
+        Returns:
+            List of FeatureDTO objects representing available variants
+        """
+        return [
+            FeatureDTO(
+                id="default",
+                name="Default Variant",
+                description="Default pipeline variant.",
+            )
+        ]

@@ -12,3 +12,4 @@ class CourseChatPipelineExecutionDTO(ChatPipelineExecutionDTO):
     course: ExtendedCourseDTO
     metrics: Optional[StudentMetricsDTO]
     event_payload: Optional[PyrisEventDTO[Any]] = Field(None, alias="eventPayload")
+    custom_instructions: Optional[str] = Field(default="", alias="customInstructions")

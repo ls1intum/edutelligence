@@ -102,7 +102,6 @@ class OllamaModel(
     """
 
     type: Literal["ollama"]
-    model: str
     host: str
     options: dict[str, Any] = Field(default={})
     username: str
