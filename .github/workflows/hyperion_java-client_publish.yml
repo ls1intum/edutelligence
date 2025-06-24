@@ -1,4 +1,11 @@
-name: Hyperion - Java Client Publish Snapshots
+name: Hyperion Java Client - CI/CD
+
+# Required GitHub Secrets:
+# - GITHUB_TOKEN: Automatically provided by GitHub for GitHub Packages
+# - OSSRH_USERNAME: Sonatype OSSRH username for Maven Central
+# - OSSRH_PASSWORD: Sonatype OSSRH password for Maven Central  
+# - GPG_KEY: Base64 encoded GPG private key (gpg --armor --export-secret-keys KEY_ID | base64 -w 0)
+# - GPG_PASSPHRASE: GPG key passphrase
 
 permissions:
   contents: read
@@ -10,115 +17,290 @@ on:
       - 'hyperion/java-client/**'
       - 'hyperion/app/protos/**'
   pull_request:
-    branches: [main]
+    branches: [main, develop]
     paths:
       - 'hyperion/java-client/**'
       - 'hyperion/app/protos/**'
   workflow_dispatch:
 
 jobs:
-  validate:
-    name: Validate and Test
+  build:
+    name: Build & Test
     runs-on: ubuntu-latest
+    outputs:
+      should-publish: ${{ steps.check.outputs.should-publish }}
+      version: ${{ steps.version.outputs.version }}
+      branch-name: ${{ steps.version.outputs.branch-name }}
+      is-snapshot: ${{ steps.version.outputs.is-snapshot }}
+    
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
         
-      - name: Set up JDK 17
+      - name: Setup JDK 17
         uses: actions/setup-java@v4
         with:
           java-version: '17'
           distribution: 'temurin'
           
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
+      - name: Cache Maven
+        uses: actions/cache@v4
         with:
-          gradle-version: wrapper
+          path: ~/.m2
+          key: ${{ runner.os }}-m2-${{ hashFiles('**/pom.xml') }}
           
-      - name: Build and test
+      - name: Determine version and publishing strategy
+        id: version
         working-directory: hyperion/java-client
-        run: ./gradlew build --no-daemon --parallel
-        
-      - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: build-artifacts
-          path: |
-            hyperion/java-client/build/libs/
-            hyperion/java-client/build/reports/
-          retention-days: 7
+        run: |
+          # Get base version from pom.xml (always 1.1.0)
+          BASE_VERSION=$(mvn help:evaluate -Dexpression=project.version -q -DforceStdout)
+          echo "📋 Base version from pom.xml: $BASE_VERSION"
+          
+          # Get branch name (handle PR refs properly)
+          if [[ "${{ github.ref }}" == refs/pull/* ]]; then
+            BRANCH_NAME="${{ github.head_ref }}"
+          else
+            BRANCH_NAME="${{ github.ref_name }}"
+          fi
+          echo "🌿 Branch: $BRANCH_NAME"
+          
+          # Determine version strategy based on branch
+          if [[ "$BRANCH_NAME" == "main" ]] || [[ "$BRANCH_NAME" == "develop" ]]; then
+            # Stable branches: use base version for releases
+            FINAL_VERSION="$BASE_VERSION"
+            IS_SNAPSHOT="false"
+            echo "🎯 Stable branch detected: will publish release version $FINAL_VERSION"
+          else
+            # Feature branches: use dynamic branch-based snapshots
+            # Use EXACT same sanitization as local Maven build
+            SANITIZED_BRANCH=$(echo "$BRANCH_NAME" | sed 's/[^a-zA-Z0-9]/-/g' | tr '[:upper:]' '[:lower:]')
+            FINAL_VERSION="${BASE_VERSION}-${SANITIZED_BRANCH}-SNAPSHOT"
+            IS_SNAPSHOT="true"
+            echo "🔨 Feature branch detected: will publish snapshot $FINAL_VERSION"
+          fi
+          
+          echo "version=$FINAL_VERSION" >> $GITHUB_OUTPUT
+          echo "branch-name=$BRANCH_NAME" >> $GITHUB_OUTPUT
+          echo "is-snapshot=$IS_SNAPSHOT" >> $GITHUB_OUTPUT
+          echo "base-version=$BASE_VERSION" >> $GITHUB_OUTPUT
+          
+      - name: Check publishing rules
+        id: check
+        run: |
+          BRANCH_NAME="${{ steps.version.outputs.branch-name }}"
+          EVENT="${{ github.event_name }}"
+          
+          # Publish on push events (feature branches → snapshots, stable branches → releases)
+          if [[ "$EVENT" == "push" ]]; then
+            echo "should-publish=true" >> $GITHUB_OUTPUT
+            if [[ "${{ steps.version.outputs.is-snapshot }}" == "true" ]]; then
+              echo "✅ Will publish feature snapshot to GitHub Packages"
+            else
+              echo "✅ Will publish release to GitHub Packages + Maven Central"
+            fi
+          else
+            echo "should-publish=false" >> $GITHUB_OUTPUT
+            echo "ℹ️ PR: Build only, no publishing"
+          fi
+          
+      - name: Build & Test
+        working-directory: hyperion/java-client
+        run: |
+          if [[ "${{ steps.version.outputs.is-snapshot }}" == "true" ]]; then
+            echo "🔨 Building feature branch with local dynamic versioning"
+            mvn clean compile test package --no-transfer-progress
+          else
+            echo "🎯 Building stable release with base version"
+            mvn clean compile test package -DskipLocalVersioning=true --no-transfer-progress
+          fi
 
-  publish-snapshot:
-    name: Publish Snapshot to GitHub Packages
-    needs: validate
+  publish-snapshots:
+    name: Publish Snapshots
+    needs: build
     runs-on: ubuntu-latest
-
+    if: needs.build.outputs.should-publish == 'true' && needs.build.outputs.is-snapshot == 'true'
+    
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
         
-      - name: Set up JDK 17
+      - name: Setup JDK 17
         uses: actions/setup-java@v4
         with:
           java-version: '17'
           distribution: 'temurin'
           
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
+      - name: Cache Maven
+        uses: actions/cache@v4
         with:
-          gradle-version: wrapper
+          path: ~/.m2
+          key: ${{ runner.os }}-m2-${{ hashFiles('**/pom.xml') }}
           
-      - name: Set snapshot version
+      - name: Configure Maven for GitHub Packages
+        run: |
+          mkdir -p ~/.m2
+          cat > ~/.m2/settings.xml << 'EOF'
+          <settings>
+              <servers>
+                  <server>
+                      <id>github</id>
+                      <username>${{ github.actor }}</username>
+                      <password>${{ secrets.GITHUB_TOKEN }}</password>
+                  </server>
+              </servers>
+          </settings>
+          EOF
+          
+      - name: Publish Snapshot to GitHub Packages
         working-directory: hyperion/java-client
         run: |
-          # Extract current version and build meaningful snapshot version
-          CURRENT_VERSION=$(grep "^version = " build.gradle | sed "s/version = '\(.*\)'/\1/")
-          DATE=$(date -u +"%Y%m%d")
-          COMMIT_SHA=${GITHUB_SHA:0:7}
+          echo "📦 Publishing snapshot ${{ needs.build.outputs.version }} to GitHub Packages"
+          echo "🔨 Setting version to ${{ needs.build.outputs.version }} and deploying"
           
-          # Get meaningful branch name (handle PR refs properly)
-          if [[ "$GITHUB_REF" == refs/pull/* ]]; then
-            # For PRs, use the head branch name from the event
-            BRANCH_NAME="${GITHUB_HEAD_REF}"
-          else
-            # For regular pushes, extract from ref
-            BRANCH_NAME="${GITHUB_REF#refs/heads/}"
-          fi
+          # Set the version to our calculated snapshot version
+          mvn versions:set -DnewVersion="${{ needs.build.outputs.version }}" -DgenerateBackupPoms=false
           
-          # Sanitize branch name for version compatibility
-          BRANCH_SANITIZED=$(echo "$BRANCH_NAME" | sed 's/[^a-zA-Z0-9._-]/-/g' | sed 's/--*/-/g' | sed 's/^-\|-$//g')
-          
-          # Remove existing -SNAPSHOT suffix if present
-          if [[ "$CURRENT_VERSION" == *"-SNAPSHOT" ]]; then
-            BASE_VERSION=${CURRENT_VERSION%-SNAPSHOT}
-          else
-            BASE_VERSION=$CURRENT_VERSION
-          fi
-          
-          # Build semantic snapshot version: base-branch-date-commit-SNAPSHOT
-          NEW_VERSION="${BASE_VERSION}-${BRANCH_SANITIZED}-${DATE}-${COMMIT_SHA}-SNAPSHOT"
-          
-          echo "NEW_VERSION=${NEW_VERSION}" >> $GITHUB_ENV
-          echo "📦 Publishing version: ${NEW_VERSION}"
-          echo "🌿 Branch: ${BRANCH_NAME}"
-          echo "📅 Date: ${DATE}"
-          echo "🔗 Commit: ${COMMIT_SHA}"
-          
-          # Update version in build.gradle
-          sed -i "s/version = '.*'/version = '${NEW_VERSION}'/" build.gradle
-          
-      - name: Publish to GitHub Packages
-        working-directory: hyperion/java-client
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_ACTOR: ${{ github.actor }}
-        run: ./gradlew publishToGitHubPackages --no-daemon
+          # Deploy to GitHub Packages
+          mvn deploy -Pgithub --no-transfer-progress
+
+  publish-releases:
+    name: Publish Releases
+    needs: build
+    runs-on: ubuntu-latest
+    if: needs.build.outputs.should-publish == 'true' && needs.build.outputs.is-snapshot == 'false'
+    
+    strategy:
+      fail-fast: false
+      matrix:
+        target: 
+          - name: "Maven Central"
+            profile: ""
+          - name: "GitHub Packages"  
+            profile: "-Pgithub"
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
         
-      - name: Create release summary
+      - name: Setup JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          
+      - name: Cache Maven
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2
+          key: ${{ runner.os }}-m2-${{ hashFiles('**/pom.xml') }}
+          
+      - name: Configure Maven
         run: |
-          echo "## 📦 Package Published" >> $GITHUB_STEP_SUMMARY
+          mkdir -p ~/.m2
+          cat > ~/.m2/settings.xml << 'EOF'
+          <settings>
+              <servers>
+                  <server>
+                      <id>central</id>
+                      <username>${{ secrets.OSSRH_USERNAME }}</username>
+                      <password>${{ secrets.OSSRH_PASSWORD }}</password>
+                  </server>
+                  <server>
+                      <id>github</id>
+                      <username>${{ github.actor }}</username>
+                      <password>${{ secrets.GITHUB_TOKEN }}</password>
+                  </server>
+              </servers>
+          </settings>
+          EOF
+          
+      - name: Import GPG key
+        if: matrix.target.profile == ''
+        run: |
+          # Import GPG private key for Maven Central signing
+          echo "${{ secrets.GPG_KEY }}" | base64 -d | gpg --batch --import
+          
+          # Configure GPG for non-interactive use
+          mkdir -p ~/.gnupg
+          echo "use-agent" >> ~/.gnupg/gpg.conf
+          echo "pinentry-mode loopback" >> ~/.gnupg/gpg.conf
+          echo "allow-loopback-pinentry" >> ~/.gnupg/gpg-agent.conf
+          
+          # Get the key ID automatically
+          GPG_KEY_ID=$(gpg --list-secret-keys --keyid-format=long | grep -E "sec\s+[^/]+/([A-F0-9]{16})" | head -n1 | sed 's/.*\/\([A-F0-9]\{16\}\).*/\1/')
+          if [[ -z "$GPG_KEY_ID" ]]; then
+            echo "❌ Failed to detect GPG key ID"
+            echo "Available keys:"
+            gpg --list-secret-keys --keyid-format=long
+            exit 1
+          fi
+          echo "🔑 Detected GPG Key ID: $GPG_KEY_ID"
+          echo "GPG_KEY_ID=$GPG_KEY_ID" >> $GITHUB_ENV
+          
+      - name: Publish Release to ${{ matrix.target.name }}
+        working-directory: hyperion/java-client
+        run: |
+          echo "📦 Publishing release ${{ needs.build.outputs.version }} to ${{ matrix.target.name }}"
+          
+          if [[ "${{ matrix.target.profile }}" == "" ]]; then
+            echo "🔐 Maven Central: Enabling GPG signing"
+            mvn deploy -Prelease \
+              -Dgpg.keyname="${GPG_KEY_ID}" \
+              -Dgpg.passphrase="${{ secrets.GPG_PASSPHRASE }}" \
+              --no-transfer-progress
+          else
+            echo "📦 GitHub Packages: Skipping GPG signing"
+            mvn deploy ${{ matrix.target.profile }} --no-transfer-progress
+          fi
+        continue-on-error: ${{ matrix.target.profile == '-Pgithub' }}
+
+  summary:
+    name: Summary
+    needs: [build, publish-snapshots, publish-releases]
+    runs-on: ubuntu-latest
+    if: always()
+    
+    steps:
+      - name: Create Summary
+        run: |
+          echo "## 🚀 Hyperion Java Client CI/CD" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Package:** \`de.tum.cit.aet.edutelligence:hyperion:${{ env.NEW_VERSION }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "| Field | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| **Version** | \`${{ needs.build.outputs.version }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Branch** | \`${{ needs.build.outputs.branch-name }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Type** | ${{ needs.build.outputs.is-snapshot == 'true' && '📦 Snapshot' || '🎯 Release' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Event** | \`${{ github.event_name }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Published** | ${{ needs.build.outputs.should-publish == 'true' && '✅ Yes' || '❌ No' }} |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Repository:** [GitHub Packages](https://github.com/ls1intum/edutelligence/packages)" >> $GITHUB_STEP_SUMMARY
+          
+          if [[ "${{ needs.build.outputs.should-publish }}" == "true" ]]; then
+            echo "### 📦 Usage" >> $GITHUB_STEP_SUMMARY
+            echo '```xml' >> $GITHUB_STEP_SUMMARY
+            echo '<dependency>' >> $GITHUB_STEP_SUMMARY
+            echo '    <groupId>de.tum.cit.aet</groupId>' >> $GITHUB_STEP_SUMMARY
+            echo '    <artifactId>hyperion</artifactId>' >> $GITHUB_STEP_SUMMARY
+            echo "    <version>${{ needs.build.outputs.version }}</version>" >> $GITHUB_STEP_SUMMARY
+            echo '</dependency>' >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            
+            if [[ "${{ needs.build.outputs.is-snapshot }}" == "true" ]]; then
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "### 🔨 Feature Branch Snapshot" >> $GITHUB_STEP_SUMMARY
+              echo "- Published to **GitHub Packages only**" >> $GITHUB_STEP_SUMMARY
+              echo "- Uses dynamic branch-based versioning: \`${{ needs.build.outputs.version }}\`" >> $GITHUB_STEP_SUMMARY
+              echo "- Perfect for testing in Artemis feature branches" >> $GITHUB_STEP_SUMMARY
+              echo "- No GPG signing required" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "### 🎯 Stable Release" >> $GITHUB_STEP_SUMMARY
+              echo "- Published to **GitHub Packages + Maven Central**" >> $GITHUB_STEP_SUMMARY
+              echo "- Uses base version from pom.xml: \`${{ needs.build.outputs.version }}\`" >> $GITHUB_STEP_SUMMARY
+              echo "- **GPG signed** for Maven Central" >> $GITHUB_STEP_SUMMARY
+              echo "- Ready for production use" >> $GITHUB_STEP_SUMMARY
+            fi
+          else
+            echo "### ℹ️ Pull Request - Build Only" >> $GITHUB_STEP_SUMMARY
+            echo "Artifacts are built and tested but not published." >> $GITHUB_STEP_SUMMARY
+          fi
