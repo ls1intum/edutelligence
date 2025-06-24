@@ -91,17 +91,24 @@ jobs:
           BRANCH_NAME="${{ steps.version.outputs.branch-name }}"
           EVENT="${{ github.event_name }}"
           
-          # Publish on push events (feature branches → snapshots, stable branches → releases)
-          if [[ "$EVENT" == "push" ]]; then
+          echo "🔍 Event: $EVENT"
+          echo "🔍 GitHub ref: ${{ github.ref }}"
+          echo "🔍 Branch name: $BRANCH_NAME"
+          
+          # Publish on push events, workflow_dispatch, OR pull_request (for snapshots only)
+          if [[ "$EVENT" == "push" ]] || [[ "$EVENT" == "workflow_dispatch" ]]; then
             echo "should-publish=true" >> $GITHUB_OUTPUT
             if [[ "${{ steps.version.outputs.is-snapshot }}" == "true" ]]; then
               echo "✅ Will publish feature snapshot to GitHub Packages"
             else
               echo "✅ Will publish release to GitHub Packages + Maven Central"
             fi
+          elif [[ "$EVENT" == "pull_request" ]] && [[ "${{ steps.version.outputs.is-snapshot }}" == "true" ]]; then
+            echo "should-publish=true" >> $GITHUB_OUTPUT
+            echo "✅ Will publish PR snapshot to GitHub Packages for testing"
           else
             echo "should-publish=false" >> $GITHUB_OUTPUT
-            echo "ℹ️ PR: Build only, no publishing"
+            echo "ℹ️ Event '$EVENT': Build only, no publishing"
           fi
           
       - name: Build & Test
