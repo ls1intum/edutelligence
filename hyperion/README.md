@@ -209,7 +209,7 @@ The Java client is published to both GitHub Packages and Maven Central:
 ```xml
 <!-- Requires GitHub authentication -->
 <dependency>
-    <groupId>de.tum.cit.aet</groupId>
+    <groupId>de.tum.cit.aet.edutelligence</groupId>
     <artifactId>hyperion</artifactId>
     <version>1.1.0-feature-new-service-SNAPSHOT</version> <!-- Branch-based snapshots -->
 </dependency>
@@ -553,7 +553,7 @@ If you're working on Hyperion features that need testing in Artemis:
     ✅ Installed version: 1.1.0-hyperion-artemis-integration-SNAPSHOT
     
     📝 To use in Artemis, add this dependency:
-       implementation "de.tum.cit.aet:hyperion:1.1.0-hyperion-artemis-integration-SNAPSHOT"
+       implementation "de.tum.cit.aet.edutelligence:hyperion:1.1.0-hyperion-artemis-integration-SNAPSHOT"
     
     💡 Need different version behavior?
        mvn install -DskipLocalVersioning=true
