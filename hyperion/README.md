@@ -198,7 +198,7 @@ The Java client is published to both GitHub Packages and Maven Central:
 
 ```xml
 <dependency>
-    <groupId>de.tum.cit.aet</groupId>
+    <groupId>de.tum.cit.aet.edutelligence</groupId>
     <artifactId>hyperion</artifactId>
     <version>1.2.0</version> <!-- Stable releases only -->
 </dependency>
@@ -236,7 +236,7 @@ After running `mvn install`, you'll see clear instructions showing your branch-s
 
 ```xml
 <dependency>
-    <groupId>de.tum.cit.aet</groupId>
+    <groupId>de.tum.cit.aet.edutelligence</groupId>
     <artifactId>hyperion</artifactId>
     <version>1.1.0-hyperion-artemis-integration-SNAPSHOT</version> <!-- Your branch version -->
 </dependency>

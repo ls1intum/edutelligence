@@ -286,7 +286,7 @@ jobs:
             echo "### 📦 Usage" >> $GITHUB_STEP_SUMMARY
             echo '```xml' >> $GITHUB_STEP_SUMMARY
             echo '<dependency>' >> $GITHUB_STEP_SUMMARY
-            echo '    <groupId>de.tum.cit.aet</groupId>' >> $GITHUB_STEP_SUMMARY
+            echo '    <groupId>de.tum.cit.aet.edutelligence</groupId>' >> $GITHUB_STEP_SUMMARY
             echo '    <artifactId>hyperion</artifactId>' >> $GITHUB_STEP_SUMMARY
             echo "    <version>${{ needs.build.outputs.version }}</version>" >> $GITHUB_STEP_SUMMARY
             echo '</dependency>' >> $GITHUB_STEP_SUMMARY

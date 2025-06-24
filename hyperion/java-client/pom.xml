@@ -120,7 +120,7 @@
                                 <echo message="✅ Installed version: ${install.version}"/>
                                 <echo message=""/>
                                 <echo message="📝 To use in Artemis, add this dependency:"/>
-                                <echo message='   implementation "de.tum.cit.aet:hyperion:${install.version}"'/>
+                                <echo message='   implementation "de.tum.cit.aet.edutelligence:hyperion:${install.version}"'/>
                                 <echo message=""/>
                                 <echo message="💡 Need different version behavior?"/>
                                 <echo message="   mvn install -DskipLocalVersioning=true"/>
