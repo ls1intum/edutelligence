@@ -4,7 +4,8 @@ import grpc
 from concurrent import futures
 
 from nebula.grpc_stubs import faq_pb2_grpc
-from nebula.faq.rewriter_servicer import FAQRewriterService
+from nebula.faq.services.rewriter_servicer import FAQRewriterService
+
 
 logger = logging.getLogger("nebula.faq")
 logging.basicConfig(

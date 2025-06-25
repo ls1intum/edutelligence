@@ -4,7 +4,7 @@ import grpc
 from concurrent import futures
 
 from nebula.grpc_stubs import faq_pb2_grpc
-from nebula.gateway.faq_handler import FAQServiceHandler
+from nebula.gateway.handlers.faq_handler import FAQServiceHandler
 
 logger = logging.getLogger("nebula.gateway")
 logging.basicConfig(
