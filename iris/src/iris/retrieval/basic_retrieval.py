@@ -176,7 +176,7 @@ class BaseRetrieval(Pipeline, ABC):
         """
         Search the database for the given query.
         """
-        logger.info("Searching in the database for query: %s", query)
+        logger.info("[BASIC_RETRIEVAL] Searching in the database for query: %s", query)
         filter_weaviate = None
 
         if course_id:

@@ -152,7 +152,7 @@ class InteractionSuggestionPipeline(Pipeline):
                 raise ValueError("No last message provided")
         except Exception as e:
             logger.error(
-                "An error occurred while running the course chat pipeline",
+                "An error occurred while running the interaction suggestion chat pipeline",
                 exc_info=e,
             )
             traceback.print_exc()

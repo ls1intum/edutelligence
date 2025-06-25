@@ -3,7 +3,7 @@ import sys
 from unittest.mock import Mock, patch
 
 # Import OpenAI mocks first
-from tests.utils.mock_openai import mock_openai, mock_openai_client
+from tests.modules.text.utils.mock_openai import mock_openai, mock_openai_client
 
 # Env vars
 os.environ["LLM_DEFAULT_MODEL"] = "mock_model"
