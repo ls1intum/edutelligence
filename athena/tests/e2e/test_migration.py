@@ -6,22 +6,23 @@ from pathlib import Path
 from datetime import datetime
 from sqlalchemy import create_engine, inspect, text
 
-# Test Configuration
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 MIGRATIONS_DIR = PROJECT_ROOT / "migrations" / "versions"
 MIGRATION_TEMPLATE_FILE = (
-    PROJECT_ROOT / "test" / "e2e" / "migration_files" / "migration_template.py"
+    PROJECT_ROOT / "tests" / "e2e" / "migration_files" / "migration_template.py"
 )
 DOCKER_COMPOSE_FILE = PROJECT_ROOT / "docker-compose.local.yml"
 
-# Service URLs
 AMM_API_URL = "http://localhost:5100"
 MODELING_MODULE_URL = "http://localhost:5008"
-# Database URL for the test script to connect to the exposed Postgres port
 DB_URL_HOST = "postgresql://athena:athena@localhost:5432/athena"
+AMM_MODELINGPROXY_URL = (
+    f"{AMM_API_URL}/modules/modeling/module_modeling_llm/feedback_suggestions"
+)
+AMM_PROXY_URL = (
+    f"{AMM_API_URL}/modules/modeling/module_modeling_llm/feedback_suggestions"
+)
 
-# Test Data
-# This payload targets the modeling module defined in your docker-compose.yml
 MODELING_FEEDBACK_REQUEST_PAYLOAD = {
     "exercise": {
         "id": 2,
@@ -43,7 +44,6 @@ MODELING_FEEDBACK_REQUEST_PAYLOAD = {
 
 def run_docker_compose(command: str):
     """Runs a docker-compose command and raises an exception on failure."""
-    # Use the -p flag to create a uniquely named project to avoid conflicts in CI
     cmd = [
         "docker-compose",
         "-p",
@@ -69,13 +69,10 @@ def wait_for_services(timeout: int = 120):
     start_time = time.time()
     while time.time() - start_time < timeout:
         try:
-            # 1. Check Database
             engine = create_engine(DB_URL_HOST)
             with engine.connect():
-                pass  # Connection successful
-            # 2. Check Assessment Module Manager
+                pass
             requests.get(f"{AMM_API_URL}/health", timeout=5).raise_for_status()
-            # 3. Check Modeling Module (from your docker-compose.yml)
             requests.get(f"{MODELING_MODULE_URL}/", timeout=5).raise_for_status()
 
             print("All services are up and running.")
@@ -103,16 +100,30 @@ def verify_db_schema(engine, expected_tables, expected_columns=None):
 
 
 def make_feedback_request():
-    """Makes a request to the modeling feedback suggestions endpoint."""
+    """
+    Makes a real HTTP request to the Assessment Module Manager to trigger
+    feedback generation in the modeling module.
+    """
     headers = {
-        "Authorization": "12345abcdef",  # From .env file
-        "X-Server-URL": "http://localhost:8080",  # From deployments.ini (local)
+        # The AMM's authenticate.py uses this header to find the secret
+        "X-Server-URL": "http://localhost:8080",
+        # The secret for the "local" deployment defined in deployments.ini
+        # See assessment_module_manager/.env and assessment_module_manager/env.py
+        "Authorization": "12345abcdef",
     }
-    url = f"{AMM_API_URL}/modules/modeling/module_modeling_llm/feedback_suggestions"
+
+    print(f"Sending POST request to {AMM_PROXY_URL} with payload...")
     response = requests.post(
-        url, json=MODELING_FEEDBACK_REQUEST_PAYLOAD, headers=headers
+        AMM_PROXY_URL,
+        json=MODELING_FEEDBACK_REQUEST_PAYLOAD,
+        headers=headers,
+        timeout=30,
     )
+
+    # This will raise an exception if the status code is 4xx or 5xx
     response.raise_for_status()
+
+    print("Feedback request successful. Response:", response.json())
     return response.json()
 
 
