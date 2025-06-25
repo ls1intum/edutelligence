@@ -31,10 +31,16 @@
 			"path": "modules/programming/module_programming_themisml"
 		},
 		{
-      "path": "modules/programming/module_programming_apted"
+      		"path": "modules/programming/module_programming_apted"
 		},
 		{
-      "path": "modules/modeling/module_modeling_llm"
+      		"path": "modules/modeling/module_modeling_llm"
+		},
+		{
+            "path": "playground"
+        },
+		{
+			"path": "llm_core"
 		}
 	],
 	"settings": {
