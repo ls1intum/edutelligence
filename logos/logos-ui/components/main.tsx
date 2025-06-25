@@ -1,3 +1,4 @@
+import { useRouter } from 'expo-router';
 import React, {useContext, useEffect, useState} from 'react';
 import {
   View,
@@ -11,12 +12,9 @@ import { ThemeContext } from './theme';
 import { Image as ExpoImage } from 'expo-image';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-// Hier könntest du später eine richtige Auth-Logik einbauen
-const validateApiKey = (key: string) => {
-  return key.trim().length > 0; // Simpler Check
-};
 
 export default function Main() {
+  const router = useRouter();
   const { theme } = useContext(ThemeContext);
   const [apiKey, setApiKey] = useState('');
   const [isLoggedIn, setIsLoggedIn] = useState(false);
@@ -37,6 +35,7 @@ export default function Main() {
         const valid = await verifyApiKey(storedKey);
         if (valid) {
           setIsLoggedIn(true);
+          router.push('/dashboard');
         } else {
           await AsyncStorage.removeItem('logos_api_key');
         }
@@ -71,15 +70,10 @@ export default function Main() {
     if (isValid) {
       await AsyncStorage.setItem('logos_api_key', apiKey);
       setIsLoggedIn(true);
+      router.push('/dashboard');
     } else {
       Alert.alert('Login fehlgeschlagen', 'Ungültiger API-Key.');
     }
-  };
-
-  const handleLogout = async () => {
-    await AsyncStorage.removeItem('logos_api_key');
-    setApiKey('');
-    setIsLoggedIn(false);
   };
 
   if (!isLoggedIn) {
@@ -114,6 +108,7 @@ export default function Main() {
           ]}
           secureTextEntry
           autoCapitalize="none"
+          onSubmitEditing={handleLogin}
         />
         <View style={styles.buttonContainer}>
           <Button title="Login" onPress={handleLogin} />
@@ -121,7 +116,6 @@ export default function Main() {
       </View>
     );
   }
-
   return (
     <View style={styles.container}>
       <Text style={theme === 'light' ? styles.lightText : styles.darkText}>
