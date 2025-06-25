@@ -1,21 +1,28 @@
+import os
 import logging
 import grpc
 from concurrent import futures
 
 from nebula.grpc_stubs import faq_pb2_grpc
 from nebula.faq.rewriter_servicer import FAQRewriterService
-# Future imports for other FAQ-related gRPC services can go here
 
-logger = logging.getLogger("nebula.faq.server")
-logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("nebula.faq")
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+)
+
+# Load gRPC port from environment variable (default: 50052)
+FAQ_SERVICE_PORT = os.getenv("FAQ_SERVICE_PORT", "50052")
 
 def serve():
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
+
     # Register FAQ-related gRPC services
     faq_pb2_grpc.add_FAQServiceServicer_to_server(FAQRewriterService(), server)
-    # Example: add_FAQSyncServiceServicer_to_server(...)
-    server.add_insecure_port("[::]:50052")
-    logging.info("🚀 FAQ gRPC server running on port 50052")
+
+    server.add_insecure_port(f"[::]:{FAQ_SERVICE_PORT}")
+    logger.info(f"FAQ gRPC server running on port {FAQ_SERVICE_PORT}")
     server.start()
     server.wait_for_termination()
 

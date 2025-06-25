@@ -21,13 +21,15 @@ services:
     build:
       context: .
       dockerfile: docker/gateway/Dockerfile
-    container_name: nebula-gateway
+    container_name: ${GATEWAY_SERVICE_NAME}
     ports:
-      - "8000:8000" # HTTP port exposed
-      - "50051:50051"  # gRPC port exposed (optional, for testing)
+      - "8000:8000"
+      - "${GATEWAY_SERVICE_PORT}:${GATEWAY_SERVICE_PORT}"
     environment:
       - TRANSCRIBE_SERVICE_URL=http://transcriber:5000
       - APPLICATION_YML_PATH=/app/application_local.nebula.yml
+      - FAQ_SERVICE_NAME=${FAQ_SERVICE_NAME}
+      - FAQ_SERVICE_PORT=${FAQ_SERVICE_PORT}
     volumes:
       - ./application_local.nebula.yml:/app/application_local.nebula.yml:ro
     depends_on:
@@ -39,11 +41,12 @@ services:
     build:
       context: .
       dockerfile: docker/faq/Dockerfile
-    container_name: nebula-faq-rewriter
+    container_name: ${FAQ_SERVICE_NAME}
     ports:
-      - "50052:50052"  # gRPC port
+      - "${FAQ_SERVICE_PORT}:${FAQ_SERVICE_PORT}"
     environment:
       - APPLICATION_YML_PATH=/app/application_local.nebula.yml
+      - FAQ_SERVICE_PORT=${FAQ_SERVICE_PORT}
     volumes:
       - ./application_local.nebula.yml:/app/application_local.nebula.yml:ro
     restart: unless-stopped
