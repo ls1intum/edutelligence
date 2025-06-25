@@ -8,7 +8,8 @@ RUN pip install poetry && poetry install --only main --no-root
 
 # Copy source code and config
 COPY src/nebula ./nebula
-COPY application_local.nebula.yml ./
+COPY application_local.nebula.yml .
+COPY llm_config.nebula.yml .
 
 # COMPILE PROTO FROM ROOT CONTEXT!
 # This makes relative imports (from . import faq_pb2) work inside grpc_stubs

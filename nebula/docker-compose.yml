@@ -46,6 +46,7 @@ services:
       - "${FAQ_SERVICE_PORT}:${FAQ_SERVICE_PORT}"
     environment:
       - APPLICATION_YML_PATH=/app/application_local.nebula.yml
+      - LLM_CONFIG_PATH=/app/llm_config.nebula.yml
       - FAQ_SERVICE_PORT=${FAQ_SERVICE_PORT}
     volumes:
       - ./application_local.nebula.yml:/app/application_local.nebula.yml:ro

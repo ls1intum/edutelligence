@@ -17,7 +17,6 @@ GATEWAY_SERVICE_PORT = os.getenv("GATEWAY_SERVICE_PORT", "50051")
 
 def serve():
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
-
     # Register FAQ handler
     faq_pb2_grpc.add_FAQServiceServicer_to_server(FAQServiceHandler(), server)
     logger.info("Registered gRPC handler for FAQ rewriting")
