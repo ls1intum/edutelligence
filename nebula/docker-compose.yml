@@ -23,7 +23,8 @@ services:
       dockerfile: docker/gateway/Dockerfile
     container_name: nebula-gateway
     ports:
-      - "8000:8000"
+      - "8000:8000" # HTTP port exposed
+      - "50051:50051"  # gRPC port exposed (optional, for testing)
     environment:
       - TRANSCRIBE_SERVICE_URL=http://transcriber:5000
       - APPLICATION_YML_PATH=/app/application_local.nebula.yml
@@ -31,4 +32,18 @@ services:
       - ./application_local.nebula.yml:/app/application_local.nebula.yml:ro
     depends_on:
       - transcriber
+      - faq
+    restart: unless-stopped
+
+  faq:
+    build:
+      context: .
+      dockerfile: docker/faq/Dockerfile
+    container_name: nebula-faq-rewriter
+    ports:
+      - "50052:50052"  # gRPC port
+    environment:
+      - APPLICATION_YML_PATH=/app/application_local.nebula.yml
+    volumes:
+      - ./application_local.nebula.yml:/app/application_local.nebula.yml:ro
     restart: unless-stopped
