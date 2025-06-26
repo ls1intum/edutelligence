@@ -93,6 +93,7 @@ class OllamaService:
         host: Optional[str] = None,
         username: Optional[str] = None,
         password: Optional[str] = None,
+        token: Optional[str] = None,
     ) -> None:
         """
         Initialize the OllamaService.
@@ -105,9 +106,11 @@ class OllamaService:
         host = host or os.environ.get("OLLAMA_HOST")
         username = username or os.environ.get("OLLAMA_USERNAME")
         password = password or os.environ.get("OLLAMA_PASSWORD")
+        token = token or os.environ.get("OLLAMA_TOKEN")
 
         auth_tuple = (username, password) if username and password else None
-        self.client = Client(host, auth=auth_tuple)
+        cookies = {"token": token} if token else None
+        self.client = Client(host, auth=auth_tuple, cookies=cookies)
         self.langfuse_client = langfuse.get_client()
 
     def list(self) -> List[ModelInfo]:

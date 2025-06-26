@@ -3,18 +3,21 @@ from typing import List, Optional
 from uuid import UUID
 
 
-class ConnectionType(Enum):
+class ConnectionType(str, Enum):
     """
     Enum representing the type of connection between memories.
 
     RELATED: General relation between memories
     CONTRADICTS: Memories have contradicting information
     SAME_TOPIC: Memories are about the same topic but not duplicates
+    DUPLICATE: Memories contain duplicate information
+    CREATED_FROM: One memory was created from another. NEVER USE THIS MANUALLY.
     """
 
     RELATED = "related"
     CONTRADICTS = "contradicts"
     SAME_TOPIC = "same_topic"
+    DUPLICATE = "duplicate"
     CREATED_FROM = "created_from"
 
 

@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import List
+from typing import List, Sequence
 
 
 class BaseRepository[Entity, EntityId](ABC):
@@ -16,6 +16,20 @@ class BaseRepository[Entity, EntityId](ABC):
 
     @abstractmethod
     def find(self, tenant: str, entity_id: EntityId) -> Entity:
+        pass
+
+    @abstractmethod
+    def find_by_ids(self, tenant: str, ids: Sequence[EntityId]) -> Sequence[Entity]:
+        """
+        Retrieve multiple domain objects by their IDs in a single batch operation.
+
+        Args:
+            tenant: The tenant identifier
+            ids: List of domain IDs to retrieve
+
+        Returns:
+            List of domain objects that match the provided IDs
+        """
         pass
 
     @abstractmethod

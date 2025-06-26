@@ -3,11 +3,13 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, TypeAdapter
 
+from memiris.domain.memory_connection import ConnectionType
+
 
 class MemoryConnectionDto(BaseModel):
     """DTO for representing a connection between memories identified by LLM."""
 
-    connection_type: str = Field(
+    connection_type: ConnectionType = Field(
         ...,
         description="Type of connection between the memories. Only use the defined values",
     )

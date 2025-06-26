@@ -22,17 +22,3 @@ class LearningRepository(BaseRepository[Learning, UUID], ABC):
         self, tenant: str, vectors: Mapping[str, Sequence[float]], count: int
     ) -> list[Learning]:
         pass
-
-    @abstractmethod
-    def find_by_ids(self, tenant: str, ids: list[UUID]) -> list[Learning]:
-        """
-        Retrieve multiple learning objects by their IDs in a single batch operation.
-
-        Args:
-            tenant: The tenant identifier
-            ids: List of learning IDs to retrieve
-
-        Returns:
-            List of Learning objects that match the provided IDs
-        """
-        pass

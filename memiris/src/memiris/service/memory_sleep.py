@@ -1,7 +1,7 @@
 import logging
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import List, Optional
+from typing import List, Optional, Tuple
 from uuid import UUID
 
 import langfuse
@@ -10,6 +10,7 @@ from langfuse import observe
 from langfuse._client.client import Langfuse
 from ollama import Message
 
+from memiris.domain.learning import Learning
 from memiris.domain.memory import Memory
 from memiris.domain.memory_connection import ConnectionType, MemoryConnection
 from memiris.dto.memory_connection_dto import MemoryConnectionDto
@@ -24,6 +25,7 @@ from memiris.repository.memory_repository import MemoryRepository
 from memiris.service.ollama_wrapper import OllamaService
 from memiris.service.vectorizer import Vectorizer
 from memiris.util.enum_util import get_enum_values_with_descriptions
+from memiris.util.grouping import greedy_cover_max_groups
 from memiris.util.jinja_util import create_template
 
 
@@ -46,6 +48,15 @@ class MemorySleeper:
     template_deduplication: Template
     template_connector: Template
 
+    learning_cache: dict[UUID, Learning] = {}
+    memory_cache: dict[UUID, Memory] = {}
+
+    max_threads: int = 5  # Maximum number of threads for parallel processing
+    group_size: int = (
+        20  # Size of memory groups, can be larger to meet the max_groups limit
+    )
+    max_groups: int = 5  # Maximum number of groups to process in parallel
+
     def __init__(
         self,
         tool_llm: str,
@@ -57,6 +68,9 @@ class MemorySleeper:
         ollama_service: OllamaService,
         template_deduplication: Optional[str] = None,
         template_connector: Optional[str] = None,
+        max_threads: int = 5,
+        group_size: int = 20,
+        max_groups: int = 5,
     ) -> None:
         """
         Initialize the LearningExtractor
@@ -71,6 +85,8 @@ class MemorySleeper:
             template_deduplication: Optional template path for deduplication
             template_deduplication_with_tools: Optional template path for deduplication with tools
             template_connector: Optional template path for connector
+            max_threads: Maximum number of threads for parallel processing
+            group_size: Size of memory groups for processing
         """
         self.tool_llm = tool_llm
         self.response_llm = response_llm
@@ -90,6 +106,10 @@ class MemorySleeper:
 
         self.langfuse_client = langfuse.get_client()
 
+        self.max_threads = max_threads
+        self.group_size = group_size
+        self.max_groups = max(1, max_groups)
+
     @observe(name="memory-sleep")
     def run_sleep(self, tenant: str, **kwargs):
         """
@@ -102,151 +122,260 @@ class MemorySleeper:
         logging.debug(
             "Loaded %s unslept memories for tenant %s", len(recent_memories), tenant
         )
+        if not recent_memories:
+            logging.warning("No unslept memories found for tenant %s", tenant)
+            return
 
-        # 2. Deduplicate memories within themselves
-        deduplicated_memories = self._deduplicate_memories(
-            recent_memories, tenant, **kwargs
-        )
+        recent_memories = self._general_cleanup(tenant, recent_memories)
+
+        for recent_memory in recent_memories:
+            if recent_memory.id:
+                self.memory_cache[recent_memory.id] = recent_memory
+
+        # 2. Connect memories with each other
+        logging.debug("Connecting memories for tenant %s", tenant)
+        connection_dtos = self._create_memory_connections(recent_memories, **kwargs)
+
+        connections = self._save_memory_connections(connection_dtos, tenant, **kwargs)
+
         logging.debug(
-            "Deduplicated %s memories down to %s memories within themselves for tenant %s",
+            "Created %s connections for %s recent memories in tenant %s",
+            len(connections),
             len(recent_memories),
-            len(deduplicated_memories),
             tenant,
         )
 
-        # 3. Deduplicate memories with existing memories
-        deduplicated_memories2 = self._deduplicate_with_existing_memories(
-            deduplicated_memories, tenant, **kwargs
+        duplicate_connections = [
+            connection
+            for connection in connections
+            if connection.connection_type == ConnectionType.DUPLICATE
+        ]
+
+        # 3. TODO: Filter out connections that contain memories with a CONFLICT connection
+
+        # 4. Deduplicate memories using LLM
+        self._deduplicate_memories(duplicate_connections, tenant, **kwargs)
+
+    @observe(name="memory-cleanup")
+    def _general_cleanup(self, tenant: str, memories: List[Memory]) -> List[Memory]:
+        """
+        General cleanup of memories. Currently, does the following:
+        1. Deletes memories with no learnings.
+
+        Args:
+            tenant: The tenant identifier
+            memories: List of Memory objects to process
+
+        Returns:
+            The updated list of Memory objects after cleanup
+        """
+        updated_memories = []
+
+        for memory in memories:
+            if len(memory.learnings) < 1:
+                logging.warning(
+                    "Memory %s has no learnings, permanently deleting.", memory.id
+                )
+                self.memory_repository.delete(tenant, memory.id)  # type: ignore
+            else:
+                updated_memories.append(memory)
+
+        return updated_memories
+
+    @observe(name="memory-data-caching")
+    def _data_caching(
+        self, duplicate_connections: List[MemoryConnectionDto], tenant: str
+    ):
+        all_memory_ids = set(
+            memory_id
+            for connection in duplicate_connections
+            for memory_id in connection.memories
         )
+
+        all_memories = (
+            self.memory_repository.find_by_ids(tenant, list(all_memory_ids))
+            if all_memory_ids
+            else []
+        )
+
+        for memory in all_memories:
+            self.memory_cache[memory.id] = memory  # type: ignore
+
+        all_learning_ids = set(
+            learning_id
+            for connection in duplicate_connections
+            for memory_id in connection.memories
+            if memory_id in self.memory_cache
+            for learning_id in self.memory_cache[memory_id].learnings
+        )
+
         logging.debug(
-            "Deduplicated %s memories with existing memories down to %s memories for tenant %s",
-            len(deduplicated_memories),
-            len(deduplicated_memories2),
+            "Found %s learning IDs across %s connections for tenant %s",
+            len(set(all_learning_ids)),
+            len(duplicate_connections),
             tenant,
         )
 
-        # 4. Connect memories with each other
-        self._connect_memories(deduplicated_memories2, tenant, **kwargs)
-        logging.debug(
-            "Connected %s memories with each other for tenant %s",
-            len(deduplicated_memories2),
-            tenant,
+        # Fetch all learnings in a single batch operation to minimize DB calls
+        all_learnings = (
+            self.learning_repository.find_by_ids(tenant, list(all_learning_ids))
+            if all_learning_ids
+            else []
         )
 
-        # 5. Connect memories with existing memories
-        # self._connect_memories(saved_memories, tenant, **kwargs)
+        for learning in all_learnings:
+            self.learning_cache[learning.id] = learning  # type: ignore
 
-        # 6. Resolve transitive connections
-        # self._resolve_transitive_connections(saved_memories, tenant, **kwargs)
-
-    @observe(name="internal-only-memory-deduplication")
+    @observe(name="memory-deduplication")
     def _deduplicate_memories(
-        self, recent_memories: List[Memory], tenant: str, **kwargs
+        self, connections: List[MemoryConnection], tenant: str, **kwargs
     ) -> List[Memory]:
         """
-        Deduplicate recent memories using an LLM.
+        Deduplicate memories using an LLM.
 
         This method:
-        1. Transforms memories into a format suitable for LLM processing, including relevant learnings
-        2. Uses the LLM to identify duplicate memories and consolidate them
+        1. Processes connections of type DUPLICATE
+        2. Identifies and consolidates duplicate memories
         3. Creates new Memory objects with combined information and learning references
         4. Marks original (now deduplicated) memories for deletion
         5. Returns the deduplicated memory list
 
         Args:
-            recent_memories: List of memories to deduplicate
+            memory_cache: Cache of Memory objects indexed by their IDs
+            connections: List of MemoryConnectionDto objects representing connections between memories
             tenant: The tenant identifier
             **kwargs: Additional arguments to pass to the LLM
 
         Returns:
             List of deduplicated memories
         """
-        if not recent_memories:
-            logging.warning("No recent memories to deduplicate.")
+        if not connections:
+            logging.warning("No connections provided for deduplication.")
             return []
 
-        # If there's only one memory, no need to deduplicate
-        if len(recent_memories) == 1:
-            logging.warning("Only one memory found, no deduplication needed.")
-            return recent_memories
+        # Filter connections to only include those of type DUPLICATE
+        duplicate_connections = [
+            connection
+            for connection in connections
+            if connection.connection_type == ConnectionType.DUPLICATE
+        ]
 
-        # Collect all learning IDs from all memories
-        all_learning_ids = []
-        for memory in recent_memories:
-            if memory.id:  # Only include memories that have an ID
-                all_learning_ids.extend(memory.learnings)
+        if not duplicate_connections:
+            logging.warning("No duplicate connections found for deduplication.")
+            return []
 
-        logging.debug(
-            "Found %s learning IDs across %s recent memories for tenant %s",
-        )
+        # Group memories by their IDs from the processed connections
+        memory_groups: list[list[MemoryDeduplicationInputDto]] = []
+        current_group: list[MemoryDeduplicationInputDto] = []
 
-        # Fetch all learnings in a single batch operation to minimize DB calls
-        all_learnings = (
-            self.learning_repository.find_by_ids(tenant, list(set(all_learning_ids)))
-            if all_learning_ids
-            else []
-        )
-
-        logging.debug(
-            "Fetched %s learnings for %s learning IDs in tenant %s",
-            len(all_learnings),
-            len(list(set(all_learning_ids))),
-            tenant,
-        )
-
-        logging.debug("Current state is:")
-        logging.debug("Memories: %s", recent_memories)
-        logging.debug("Learnings: %s", all_learnings)
-
-        # Create a lookup dictionary for quick access to learning objects
-        learning_lookup = {str(learning.id): learning for learning in all_learnings}
-
-        # Prepare memory data for LLM processing using the new DTO
-        memory_input_dtos = []
-        valid_memories = []
-
-        logging.debug("Converting recent memories to input DTOs for deduplication.")
-
-        for memory in recent_memories:
-            if not memory.id:
-                logging.warning("Skipping memory without ID: %s", memory)
+        for connection in duplicate_connections:
+            if len(connection.memories) < 2:
+                logging.warning(
+                    "Skipping connection with less than 2 memories: %s", connection
+                )
                 continue
 
-            valid_memories.append(memory)
-
-            # Get associated learnings
-            memory_learnings = []
-            for learning_id in memory.learnings:
-                learning = learning_lookup.get(str(learning_id))
-                if learning:
-                    memory_learnings.append(
+            new_group_elements = [
+                MemoryDeduplicationInputDto(
+                    id=memory_id,
+                    title=self.memory_cache[memory_id].title,
+                    content=self.memory_cache[memory_id].content,
+                    learnings=[
                         LearningInfoDto(
-                            id=learning.id,  # type: ignore
-                            title=learning.title,
-                            content=learning.content,
+                            id=learning_id,
+                            title=self.learning_cache[learning_id].title,
+                            content=self.learning_cache[learning_id].content,
                         )
-                    )
+                        for learning_id in self.memory_cache[memory_id].learnings
+                    ],
+                )
+                for memory_id in connection.memories
+            ]
 
-            # Create the input DTO for this memory
-            memory_input_dto = MemoryDeduplicationInputDto(
-                id=memory.id,
-                title=memory.title,
-                content=memory.content,
-                learnings=memory_learnings,
-            )
+            if len(current_group) > self.group_size:
+                memory_groups.append(current_group)
+                current_group = []
+            elif len(current_group) + len(new_group_elements) > self.group_size * 1.5:
+                memory_groups.append(current_group)
+                current_group = new_group_elements
+            else:
+                current_group.extend(new_group_elements)
 
-            memory_input_dtos.append(memory_input_dto)
+        if current_group:
+            memory_groups.append(current_group)
+
+        if not memory_groups:
+            logging.warning("No valid memory groups found for deduplication.")
+            return []
 
         logging.debug(
-            "Converted %s valid memories to %s input DTOs for deduplication.",
-            len(valid_memories),
-            len(memory_input_dtos),
+            "Created %s memory groups for deduplication, largest has %s memories.",
+            len(memory_groups),
+            max(len(group) for group in memory_groups),
         )
 
-        # If no valid memories with IDs, return original list
-        if not memory_input_dtos:
-            logging.debug("No valid memories with IDs found for deduplication.")
-            return recent_memories
+        # Process each memory group in parallel
+        deduplicated_memories: List[Memory] = []
+        with ThreadPoolExecutor(max_workers=self.max_threads) as executor:
+            futures = {
+                executor.submit(
+                    self._process_memory_group_for_deduplication,
+                    memory_group,
+                    **kwargs,
+                ): memory_group
+                for memory_group in memory_groups[: self.max_groups]
+            }
+
+            for future in as_completed(futures):
+                try:
+                    result = future.result()
+                    if result:
+                        deduplicated_memories.extend(result)
+                except Exception as e:
+                    logging.error("Error processing memory group: %s", e, exc_info=True)
+
+        logging.debug(
+            "Processed %s memory groups, resulting in %s deduplicated memories.",
+            len(memory_groups),
+            len(deduplicated_memories),
+        )
+
+        if not deduplicated_memories:
+            logging.warning("No deduplicated memories found after processing groups.")
+            return []
+
+        saved_memories = self.memory_repository.save_all(tenant, deduplicated_memories)
+
+        for memory in saved_memories:
+            if memory.deleted:
+                self.memory_cache.pop(memory.id)  # type: ignore
+            self.memory_cache[memory.id] = memory  # type: ignore
+
+        return saved_memories
+
+    @observe(name="process-memory-group-for-deduplication")
+    def _process_memory_group_for_deduplication(
+        self, memory_group: List[MemoryDeduplicationInputDto], **kwargs
+    ) -> List[Memory]:
+        """
+        Process a group of memories for deduplication.
+
+        This method:
+        1. Calls the LLM to deduplicate the memories
+        2. Processes the LLM response to create new Memory objects
+        3. Marks original memories as deleted
+
+        Args:
+            memory_group: List of MemoryDeduplicationInputDto objects representing a group of memories
+            tenant: The tenant identifier
+            **kwargs: Additional arguments to pass to the LLM
+
+        Returns:
+            List of deduplicated Memory objects
+        """
+        if not memory_group:
+            logging.warning("Empty memory group provided for deduplication.")
+            return []
 
         # Prepare the prompt for the LLM
         memory_json_schema = MemoryDeduplicationDto.json_array_schema()
@@ -262,7 +391,7 @@ class MemorySleeper:
 
         # Use type adapter for proper JSON serialization
         memory_input_json = MemoryDeduplicationInputDto.json_array_type().dump_json(
-            memory_input_dtos
+            memory_group
         )
 
         logging.debug("Memory input JSON for LLM deduplication: %s", memory_input_json)
@@ -289,7 +418,7 @@ class MemorySleeper:
         # Process LLM response
         if not response or not response.message or not response.message.content:
             logging.warning("No valid response from LLM for deduplication.")
-            return recent_memories
+            return []
 
         try:
             logging.debug("Parsing deduplicated memories from LLM response.")
@@ -298,14 +427,10 @@ class MemorySleeper:
             memory_dtos = MemoryDeduplicationDto.json_array_type().validate_json(
                 response.message.content
             )
-
             logging.debug(
                 "Parsed %s deduplicated memory DTOs from LLM response.",
                 len(memory_dtos),
             )
-
-            # Create a lookup of original memories by ID for easy access
-            memory_lookup = {str(memory.id): memory for memory in valid_memories}
 
             # Track which memories were used in deduplication (to be deleted later)
             used_memory_ids = set()
@@ -323,19 +448,11 @@ class MemorySleeper:
 
                 # If only one memory is referenced, it wasn't deduplicated
                 if len(memory_dto.memories) == 1:
-                    memory_id = memory_dto.memories[0]
-                    if str(memory_id) in memory_lookup:
-                        deduplicated_results.append(memory_lookup[str(memory_id)])
-                    logging.warning(
-                        "Skipping memory DTO with single reference: %s", memory_dto
-                    )
                     continue
 
                 # Multiple memories were combined - create a new consolidated memory
                 original_memories = [
-                    memory_lookup[str(mid)]
-                    for mid in memory_dto.memories
-                    if str(mid) in memory_lookup
+                    self.memory_cache[memory_id] for memory_id in memory_dto.memories
                 ]
 
                 logging.debug(
@@ -355,12 +472,13 @@ class MemorySleeper:
                 combined_learnings = []
                 for memory in original_memories:
                     combined_learnings.extend(memory.learnings)
-                    used_memory_ids.add(str(memory.id))
+                    used_memory_ids.add(memory.id)
 
                 logging.debug(
                     "Combined %s learnings from original memories.",
                     len(combined_learnings),
                 )
+
                 logging.debug(
                     "We have used the following memory IDs so far: %s", used_memory_ids
                 )
@@ -376,232 +494,295 @@ class MemorySleeper:
 
                 connection = MemoryConnection(
                     connection_type=ConnectionType.CREATED_FROM,
-                    memories=[m.id for m in original_memories] + [new_memory.id],  # type: ignore
+                    memories=[new_memory.id] + [m.id for m in original_memories],  # type: ignore
                 )
                 created_from_connections.append(connection)
 
                 logging.debug(
                     "Creating new memory with title: %s and content: %s",
+                    new_memory.title,
+                    new_memory.content,
                 )
-
                 # Vectorize the new memory
                 new_memory.vectors = self.vectorizer.vectorize(new_memory.content)
-
                 deduplicated_results.append(new_memory)
 
-            # Add memories that weren't used in any deduplication
-            for memory in valid_memories:
-                if str(memory.id) not in used_memory_ids:
-                    # Mark as slept on since we're processing it
-                    memory.slept_on = True
-                    deduplicated_results.append(memory)
-                    logging.debug(
-                        "Adding unused memory with ID %s to deduplicated results.",
-                        memory.id,
-                    )
-
-            deduplicated_results = self.memory_repository.save_all(
-                tenant, deduplicated_results
-            )
-
-            self.memory_connection_repository.save_all(tenant, created_from_connections)
-
-            # Mark the original memories as deleted instead of actually deleting them
             for memory_id in used_memory_ids:
-                # Fetch the memory
-                try:
-                    memory_to_mark = self.memory_repository.find(
-                        tenant, UUID(memory_id)
-                    )
-                    # Mark as deleted
-                    memory_to_mark.slept_on = True
-                    memory_to_mark.deleted = True
-                    # Save the updated memory
-                    self.memory_repository.save(tenant, memory_to_mark)
-                except Exception as e:
-                    print(f"Error marking memory {memory_id} as deleted: {e}")
+                self.memory_cache[memory_id].slept_on = True  # type: ignore
+                self.memory_cache[memory_id].deleted = True  # type: ignore
+                deduplicated_results.append(self.memory_cache[memory_id])  # type: ignore
 
             return deduplicated_results
-
         except Exception as e:
-            print(f"Error processing deduplicated memories: {e}")
-        return recent_memories
-
-    @observe(name="with-existing-memory-deduplication")
-    def _deduplicate_with_existing_memories(
-        self,
-        deduplicated_memories: List[Memory],
-        tenant: str,
-        **kwargs,
-    ) -> List[Memory]:
-        """
-        Deduplicate deduplicated memories with existing memories in the system.
-        For this the memories will be split into chunks, and each chunk will be processed in parallel:
-        1. Find existing memories that are similar to those in the chunk
-        2. Transform the chunk into a format suitable for LLM processing
-        3. Use the LLM to identify duplicate memories and consolidate them using the _deduplicate_memories method
-        4. Done
-
-        Args:
-            deduplicated_memories: List of memories that have already been deduplicated within themselves
-            tenant: The tenant identifier
-            **kwargs: Additional arguments to pass to the LLM
-
-        Returns:
-            List of deduplicated memories after comparing with existing memories
-        """
-        if not deduplicated_memories:
-            logging.warning(
-                "No deduplicated memories to process for existing memory deduplication."
+            logging.error(
+                "Error processing deduplicated memories: %s", e, exc_info=True
             )
             return []
 
-        # If we don't have any vectors, we can't find similar memories
-        memories_with_vectors = [m for m in deduplicated_memories if m.vectors]
-        if not memories_with_vectors:
-            logging.warning(
-                "No memories with vectors found for deduplication with existing memories."
-            )
-            return deduplicated_memories
+    @observe(name="process-memory-connections-duplication")
+    def _process_connection_type_duplicate(
+        self, connections: List[MemoryConnectionDto]
+    ) -> List[MemoryConnectionDto]:
+        """
+        Processing for the DUPLICATE connection type.
+        This method processes connections of type DUPLICATE, ensuring that
 
-        logging.debug(
-            "Found %s/%s memories with vectors for deduplication with existing memories in tenant %s",
-            len(memories_with_vectors),
-            len(deduplicated_memories),
-            tenant,
-        )
+        """
+        seen_connections: dict[UUID, list[UUID]] = {}
 
-        # Process memories in chunks to avoid overwhelming the vector database or LLM
-        chunk_size = 5  # Can be adjusted based on performance needs
-        memory_chunks = [
-            memories_with_vectors[i : i + chunk_size]
-            for i in range(0, len(memories_with_vectors), chunk_size)
+        unique_connections: List[MemoryConnectionDto] = []
+
+        filtered_connections: List[MemoryConnectionDto] = [
+            connection
+            for connection in connections
+            if connection.connection_type == ConnectionType.DUPLICATE
         ]
 
-        logging.debug(
-            "Split deduplicated memories into %s chunks of size %s for processing.",
-            len(memory_chunks),
-            chunk_size,
+        # Sorted by size of memories, largest first
+        sorted_connections = sorted(
+            filtered_connections,
+            key=lambda x: len(x.memories),
+            reverse=True,
         )
 
-        final_deduplicated_memories = []
-        memories_without_vectors = [m for m in deduplicated_memories if not m.vectors]
+        for connection in sorted_connections:
+            if len(connection.memories) < 2:
+                logging.warning(
+                    "Skipping connection with less than 2 memories: %s", connection
+                )
+                continue
 
-        kwargs["langfuse_parent_observation_id"] = (
-            self.langfuse_client.get_current_observation_id()
-        )
-
-        # Process each chunk in parallel
-        with ThreadPoolExecutor(max_workers=5) as executor:
-            future_to_chunk = {
-                executor.submit(self._process_chunk, chunk, tenant, **kwargs): chunk
-                for chunk in memory_chunks
-            }
-
-            for future in as_completed(future_to_chunk):
-                try:
-                    deduplicated_chunk = future.result()
-                    final_deduplicated_memories.extend(deduplicated_chunk)
-
+            # Check if the connection is a full duplicate of existing connections
+            first_memory = connection.memories[0]
+            other_memories = connection.memories[1:]
+            if first_memory in seen_connections:
+                if all(
+                    other_memory in seen_connections[first_memory]
+                    for other_memory in other_memories
+                ):
                     logging.debug(
-                        "Processed chunk with %s memories, resulting in %s deduplicated memories.",
-                        len(future_to_chunk[future]),
-                        len(deduplicated_chunk),
+                        "Skipping duplicate connection for memory %s with others %s",
+                        first_memory,
+                        other_memories,
                     )
-                except Exception as e:
-                    print(f"Error processing chunk: {e}")
+                    continue
+
+            # Add the connection to the unique list
+            for memory in connection.memories:
+                if memory not in seen_connections:
+                    seen_connections[memory] = []
+                seen_connections[memory].extend(
+                    other for other in connection.memories if other != memory
+                )
+
+            logging.debug(
+                "Adding unique connection for memory %s with others %s",
+                first_memory,
+                other_memories,
+            )
+            unique_connections.append(connection)
 
         logging.debug(
-            "Processed all chunks, resulting in %s -> %s total deduplicated memories.",
-            len(deduplicated_memories),
-            len(final_deduplicated_memories),
+            "Processed %s connections of type DUPLICATE, resulting in %s unique connections.",
+            len(filtered_connections),
+            len(unique_connections),
         )
 
-        # Add back memories without vectors that couldn't be deduplicated
-        final_deduplicated_memories.extend(memories_without_vectors)
+        final_connections: List[MemoryConnectionDto] = []
 
-        return final_deduplicated_memories
+        # Collect the seen connections into as few unique connections as possible
+        for memory_id, ids in seen_connections.items():
+            if len(ids) < 2:
+                logging.debug(
+                    "Skipping memory %s with less than 2 seen connections: %s",
+                    memory_id,
+                    ids,
+                )
+                continue
 
-    @observe(name="process-memories-chunk")
-    def _process_chunk(
-        self, memory_chunk: List[Memory], tenant: str, **kwargs
-    ) -> List[Memory]:
+            # Create a new connection with the seen memories
+            new_connection = MemoryConnectionDto(
+                connection_type=ConnectionType.DUPLICATE,
+                memories=[memory_id] + ids,
+                description="Automatically deduplicated connection",
+                weight=1.0,
+            )
+            final_connections.append(new_connection)
+
+            for other_memory in ids:
+                seen_connections[other_memory].remove(memory_id)
+
+        return final_connections
+
+    @observe(name="process-memory-connections-other")
+    def _process_other_connection_types(
+        self, connections: List[MemoryConnectionDto]
+    ) -> List[MemoryConnectionDto]:
         """
-        Process a chunk of memories to find similar existing memories and deduplicate them.
+        Process other connection types (RELATED, CONTRADICTS, SAME_TOPIC).
+        This method processes connections of types other than DUPLICATE.
+        """
+
+        filtered_connections: List[MemoryConnectionDto] = [
+            connection
+            for connection in connections
+            if connection.connection_type != ConnectionType.DUPLICATE
+        ]
+
+        # Turn all connections into 2 memory connections
+        processed_connections: List[MemoryConnectionDto] = []
+        for connection in filtered_connections:
+            if len(connection.memories) < 2:
+                logging.warning(
+                    "Skipping connection with less than 2 memories: %s", connection
+                )
+                continue
+
+            # Create a connection for each pair of memories
+            for i in range(len(connection.memories)):
+                for j in range(i + 1, len(connection.memories)):
+                    new_connection = MemoryConnectionDto(
+                        connection_type=connection.connection_type,
+                        memories=[
+                            connection.memories[i],
+                            connection.memories[j],
+                        ],
+                        description=connection.description,
+                        weight=connection.weight,
+                    )
+                    processed_connections.append(new_connection)
+
+        # Remove duplicates from the processed connections
+        seen_connections: set[Tuple[UUID, UUID]] = set()
+        unique_connections: List[MemoryConnectionDto] = []
+
+        # Sort by weight
+        sorted_connections: List[MemoryConnectionDto] = sorted(
+            processed_connections,
+            key=lambda x: x.weight or 0.5,
+            reverse=True,
+        )
+
+        for connection in sorted_connections:
+            if len(connection.memories) != 2:
+                logging.warning(
+                    "Skipping connection with more or less than 2 memories: %s",
+                    connection,
+                )
+                continue
+
+            memory_pair = tuple(sorted(connection.memories))
+            if memory_pair in seen_connections:
+                logging.debug(
+                    "Skipping duplicate connection for memory pair %s",
+                    memory_pair,
+                )
+                continue
+
+            logging.debug(
+                "Adding unique connection for memory pair %s: %s",
+                memory_pair,
+                connection,
+            )
+
+            seen_connections.add(memory_pair)  # type: ignore
+            unique_connections.append(connection)
+
+        logging.debug(
+            "Processed %s connections of other types, resulting in %s unique connections.",
+            len(filtered_connections),
+            len(unique_connections),
+        )
+        return unique_connections
+
+    @observe(name="process-memory-group-for-connecting")
+    def _process_memory_group_for_connecting(
+        self, memory_group: List[MemoryDeduplicationInputDto], **kwargs
+    ) -> List[MemoryConnectionDto]:
+        """
+        Process a group of memories to identify connections using an LLM.
 
         Args:
-            memory_chunk: List of memories in the chunk
+            memory_group: List of MemoryDeduplicationInputDto objects representing the memory group
             tenant: The tenant identifier
             **kwargs: Additional arguments to pass to the LLM
 
         Returns:
-            List of deduplicated memories for the chunk
+            List of MemoryConnectionDto objects representing the identified connections
         """
-        # Find similar memories in the repository
-        similar_memories = []
-        for memory in memory_chunk:
-            # Find existing memories with similar vectors
-            if not memory.vectors:
-                logging.warning("Skipping memory without vectors: %s", memory)
-                continue
+        if not memory_group or len(memory_group) < 2:
+            logging.warning("Not enough memories in group to process connections.")
+            return []
 
-            found_memories = self.memory_repository.search_multi(
-                tenant=tenant,
-                vectors=memory.vectors,
-                count=5,
-                # min_similarity=0.7  # Minimum similarity threshold
-            )
+        # Prepare the prompt for the LLM
+        memory_connection_json_schema = MemoryConnectionDto.json_array_schema()
 
-            logging.debug(
-                "Found %s similar memories for memory ID %s in tenant %s",
-                len(found_memories),
-                memory.id,
-                tenant,
-            )
-
-            # Exclude memories that are already in our input set
-            for found_memory in found_memories:
-                if (
-                    found_memory not in memory_chunk
-                    and found_memory not in similar_memories
-                ):
-                    similar_memories.append(found_memory)
-
-        # If no similar memories found, just keep the original chunk
-        if not similar_memories:
-            logging.debug(
-                "No similar memories found for chunk, returning original memory chunk."
-            )
-            return memory_chunk
-
-        logging.debug(
-            "Found %s similar memories for chunk of size %s in tenant %s",
-            len(similar_memories),
-            len(memory_chunk),
-            tenant,
-        )
-
-        # Combine the chunk and similar memories for deduplication
-        combined_memories = memory_chunk + similar_memories
-
-        # Deduplicate using the same method as for internal deduplication
-        deduplicated_chunk = self._deduplicate_memories(
-            combined_memories, tenant, **kwargs
+        system_message = self.template_connector.render(
+            memory_connection_json_schema=memory_connection_json_schema,
+            connection_types=get_enum_values_with_descriptions(ConnectionType),
+            **kwargs,
         )
 
         logging.debug(
-            "Deduplicated chunk of size %s down to %s memories after comparing with existing memories in tenant %s",
-            len(combined_memories),
-            len(deduplicated_chunk),
-            tenant,
+            "System message for LLM connection analysis: \n%s", system_message
         )
 
-        return deduplicated_chunk
+        # Use type adapter for proper JSON serialization
+        memory_input_json = MemoryDeduplicationInputDto.json_array_type().dump_json(
+            memory_group
+        )
+
+        messages = [
+            Message(role="system", content=system_message),
+            Message(role="user", content=str(memory_input_json)),
+        ]
+
+        logging.debug("Sending messages to LLM for connection analysis")
+
+        # Call the LLM to identify connections between memories
+        response = self.ollama_service.chat(
+            model=self.response_llm,
+            messages=messages,
+            response_format=MemoryConnectionDto.json_array_type().json_schema(),
+            options={"temperature": 0.05},
+        )
+
+        # Process LLM response
+        if not response or not response.message or not response.message.content:
+            logging.warning("No valid response from LLM for memory connections.")
+            return []
+
+        logging.debug(
+            "Received response from LLM for connection analysis: %s",
+            response.message.content,
+        )
+
+        try:
+            logging.debug("Parsing memory connections from LLM response.")
+
+            # Parse the connections from the LLM response
+            connection_dtos = MemoryConnectionDto.json_array_type().validate_json(
+                response.message.content
+            )
+
+            logging.debug(
+                "Parsed %s memory connection DTOs from LLM response.",
+                len(connection_dtos),
+            )
+
+            return connection_dtos
+        except Exception as e:
+            logging.error(
+                "Error processing memory connections: %s. Response content: %s",
+                e,
+                response.message.content if response.message else "No content",
+            )
+            return []
 
     @observe(name="connect-memories")
-    def _connect_memories(
-        self, memories: List[Memory], tenant: str, **kwargs
-    ) -> List[Memory]:
+    def _create_memory_connections(
+        self, memories: List[Memory], **kwargs
+    ) -> List[MemoryConnectionDto]:
         """
         Connect memories with each other using an LLM.
 
@@ -622,7 +803,7 @@ class MemorySleeper:
         """
         if not memories or len(memories) < 2:
             logging.warning("Not enough memories to connect. Returning original list.")
-            return memories
+            return []
 
         # Prepare memory data for LLM processing
         memory_input_dtos = []
@@ -652,7 +833,7 @@ class MemorySleeper:
             logging.warning(
                 "Not enough valid memories with IDs for connection analysis."
             )
-            return memories
+            return []
 
         logging.debug(
             "Converted %s valid memories to %s input DTOs for connection analysis.",
@@ -660,62 +841,68 @@ class MemorySleeper:
             len(memory_input_dtos),
         )
 
-        # Prepare the prompt for the LLM
-        memory_connection_json_schema = MemoryConnectionDto.json_array_schema()
-
-        system_message = self.template_connector.render(
-            memory_connection_json_schema=memory_connection_json_schema,
-            connection_types=get_enum_values_with_descriptions(ConnectionType),
-            **kwargs,
+        memory_groups = greedy_cover_max_groups(
+            memory_input_dtos, self.group_size, self.max_groups
         )
+
+        with ThreadPoolExecutor(max_workers=self.max_threads) as executor:
+            kwargs["langfuse_parent_observation_id"] = (
+                self.langfuse_client.get_current_observation_id()
+            )
+
+            futures = {
+                executor.submit(
+                    self._process_memory_group_for_connecting, group, **kwargs
+                ): group
+                for group in memory_groups
+            }
+
+            all_connections: list[MemoryConnectionDto] = []
+
+            for future in as_completed(futures):
+                try:
+                    connections = future.result()
+                    logging.debug(
+                        "Processed memory group with %s memories, resulting in %s connections.",
+                        len(futures[future]),
+                        len(memories),
+                    )
+                    if connections:
+                        all_connections.extend(connections)
+                except Exception as e:
+                    print(f"Error processing memory group: {e}")
 
         logging.debug(
-            "System message for LLM connection analysis: \n%s", system_message
+            "Processed all memory groups, resulting in %s total connections.",
+            len(all_connections),
         )
+        if not all_connections:
+            logging.warning("No connections found between memories.")
+            return []
 
-        # Use type adapter for proper JSON serialization
-        memory_input_json = MemoryDeduplicationInputDto.json_array_type().dump_json(
-            memory_input_dtos
-        )
-
-        messages = [
-            Message(role="system", content=system_message),
-            Message(role="user", content=str(memory_input_json)),
-        ]
-
-        logging.debug("Sending messages to LLM for connection analysis")
-
-        # Call the LLM to identify connections between memories
-        response = self.ollama_service.chat(
-            model=self.response_llm,
-            messages=messages,
-            response_format=MemoryConnectionDto.json_array_type().json_schema(),
-            options={"temperature": 0.05},
-        )
-
-        # Process LLM response
-        if not response or not response.message or not response.message.content:
-            logging.warning("No valid response from LLM for memory connections.")
-            return memories
+        # Process the connections to handle duplicates and other types
+        logging.debug("Processing connections to handle duplicates and other types.")
+        duplicate_connections = self._process_connection_type_duplicate(all_connections)
+        other_connections = self._process_other_connection_types(all_connections)
+        all_connections = duplicate_connections + other_connections
 
         logging.debug(
-            "Received response from LLM for connection analysis: %s",
-            response.message.content,
+            "Processed connections, resulting in %s connections.",
+            len(all_connections),
         )
 
+        if not all_connections:
+            logging.warning("No valid connections found after processing.")
+            return []
+
+        return all_connections
+
+    @observe(name="save-memory-connections")
+    def _save_memory_connections(
+        self, connection_dtos: List[MemoryConnectionDto], tenant: str
+    ) -> List[MemoryConnection]:
         try:
             logging.debug("Parsing memory connections from LLM response.")
-
-            # Parse the connections from the LLM response
-            connection_dtos = MemoryConnectionDto.json_array_type().validate_json(
-                response.message.content
-            )
-
-            logging.debug(
-                "Parsed %s memory connection DTOs from LLM response.",
-                len(connection_dtos),
-            )
-
             # Create memory connections from DTOs
             connections = []
 
@@ -757,30 +944,17 @@ class MemorySleeper:
                     "Saved %s memories connections to the repository.", len(connections)
                 )
 
-            memories_dict = {
-                memory.id: memory for memory in valid_memories if memory.id
-            }
-
-            logging.debug(
-                "Updating %s memories with their connections.", len(memories_dict)
-            )
-
             # Update each memory with its connections
             for connection in connections:
                 for memory_id in connection.memories:
-                    if str(memory_id) in memories_dict:
-                        memory = memories_dict[memory_id]
+                    if memory_id in self.memory_cache:
+                        memory = self.memory_cache[memory_id]
                         if not memory.connections:
                             memory.connections = []
                         memory.connections.append(connection.id)  # type: ignore
 
-            logging.debug(
-                "Updated memories with their connections. Total memories: %s",
-                len(memories_dict),
-            )
-
-            return memories
+            return connections
 
         except Exception as e:
             print(f"Error processing memory connections: {e}")
-            return memories
+            return []

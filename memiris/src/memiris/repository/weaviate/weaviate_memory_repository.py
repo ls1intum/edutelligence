@@ -106,6 +106,7 @@ class WeaviateMemoryRepository(MemoryRepository, _WeaviateBaseRepository):
                     else None
                 ),
                 limit=10000,
+                include_vector=True,
                 return_references=[
                     QueryReference(link_on="learnings"),
                     QueryReference(link_on="connections"),
@@ -204,3 +205,41 @@ class WeaviateMemoryRepository(MemoryRepository, _WeaviateBaseRepository):
             return [self.object_to_memory(item) for item in result.objects]
         except Exception as e:
             raise ValueError("Error retrieving unslept Memory objects") from e
+
+    @observe(name="weaviate.memory_repository.find_by_ids")
+    def find_by_ids(self, tenant: str, ids: Sequence[UUID]) -> Sequence[Memory]:
+        """
+        Retrieve multiple memory objects by their IDs in a single batch operation.
+
+        Args:
+            tenant: The tenant identifier
+            ids: List of memory IDs to retrieve
+
+        Returns:
+            List of Memory objects that match the provided IDs
+        """
+        if not ids:
+            return []
+
+        try:
+            # Convert UUIDs to strings for the filter
+            id_strings = [str(uid) for uid in ids]
+
+            # Use proper filter syntax with Weaviate's filter classes
+            result = self.collection.with_tenant(tenant).query.fetch_objects(
+                filters=Filter.by_id().contains_any(id_strings),
+                limit=len(ids),
+                include_vector=True,
+                return_references=[
+                    QueryReference(link_on="learnings"),
+                    QueryReference(link_on="connections"),
+                ],
+            )
+
+            if not result or not result.objects:
+                return []
+
+            # Create Learning objects from the results
+            return [self.object_to_memory(item) for item in result.objects]
+        except Exception as e:
+            raise ValueError(f"Error retrieving Memory objects by IDs: {e}") from e

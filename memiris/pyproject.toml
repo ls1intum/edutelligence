@@ -37,6 +37,7 @@ multi_line_output = 3
 
 [tool.bandit]
 exclude_dirs = ["tests"]
+skips = ["B311"]
 
 [tool.mypy]
 

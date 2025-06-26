@@ -73,6 +73,8 @@ class WeaviateLearningRepository(LearningRepository, _WeaviateBaseRepository):
                 return []
 
             result = self.collection.with_tenant(tenant).query.fetch_objects(
+                limit=10000,
+                include_vector=True,
                 return_references=QueryReference(link_on="memories"),
             )
 
@@ -136,7 +138,7 @@ class WeaviateLearningRepository(LearningRepository, _WeaviateBaseRepository):
             raise ValueError("Error searching for Learning objects") from e
 
     @observe(name="weaviate.learning_repository.find_by_ids")
-    def find_by_ids(self, tenant: str, ids: list[UUID]) -> list[Learning]:
+    def find_by_ids(self, tenant: str, ids: Sequence[UUID]) -> Sequence[Learning]:
         """
         Retrieve multiple learning objects by their IDs in a single batch operation.
 

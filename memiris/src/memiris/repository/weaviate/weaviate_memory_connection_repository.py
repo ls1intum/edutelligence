@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Sequence
 from uuid import UUID
 
 from langfuse import observe
@@ -102,6 +102,7 @@ class WeaviateMemoryConnectionRepository(
                 return []
 
             result = self.collection.with_tenant(tenant).query.fetch_objects(
+                limit=10000,
                 return_references=QueryReference(link_on="connected_memories"),
             )
 
@@ -157,4 +158,43 @@ class WeaviateMemoryConnectionRepository(
         except Exception as e:
             raise ValueError(
                 f"Error finding connections of type {connection_type}: {e}"
+            ) from e
+
+    @observe(name="weaviate.memory_connection_repository.find_by_ids")
+    def find_by_ids(
+        self, tenant: str, ids: Sequence[UUID]
+    ) -> Sequence[MemoryConnection]:
+        """
+        Retrieve multiple memory connection objects by their IDs in a single batch operation.
+
+        Args:
+            tenant: The tenant identifier
+            ids: List of memory connection IDs to retrieve
+
+        Returns:
+            List of MemoryConnection objects that match the provided IDs
+        """
+        if not ids:
+            return []
+
+        try:
+            # Convert UUIDs to strings for the filter
+            id_strings = [str(uid) for uid in ids]
+
+            # Use proper filter syntax with Weaviate's filter classes
+            result = self.collection.with_tenant(tenant).query.fetch_objects(
+                filters=Filter.by_id().contains_any(id_strings),
+                limit=len(ids),
+                include_vector=True,
+                return_references=QueryReference(link_on="memories"),
+            )
+
+            if not result or not result.objects:
+                return []
+
+            # Create Learning objects from the results
+            return [self.object_to_memory_connection(item) for item in result.objects]
+        except Exception as e:
+            raise ValueError(
+                f"Error retrieving MemoryConnection objects by IDs: {e}"
             ) from e
