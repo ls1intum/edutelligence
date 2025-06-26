@@ -7,7 +7,7 @@ import Header from '@/components/header';
 import Sidebar from '@/components/sidebar';
 import {useRouter} from "expo-router";
 
-export default function Dashboard() {
+export default function Settings() {
     const {theme} = useContext(ThemeContext);
     const [stats, setStats] = useState<{ models: number; requests: number; users: number } | null>(null);
     const [loading, setLoading] = useState(true);
@@ -38,11 +38,11 @@ export default function Dashboard() {
                 <Sidebar/>
                 <View style={styles.content}>
                     <Text style={[styles.title, theme === 'light' ? styles.textLight : styles.textDark]}>
-                        Policy Management
+                        Settings
                     </Text>
                     <View style={styles.dummyCard}>
                         <Text style={theme === 'light' ? styles.textLight : styles.textDark}>
-                            Hier erscheinen bald Policies...
+                            Hier erscheinen bald Einstellungen...
                         </Text>
                     </View>
                 </View>

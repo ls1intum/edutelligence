@@ -59,7 +59,7 @@ services:
       - "traefik.http.routers.logos-server-logosdb.priority=100"
 
       # === Routing: /docs ===
-      - "traefik.http.routers.logos-server-docs.rule=PathPrefix(`/docs`)"
+      - "traefik.http.routers.logos-server-docs.rule=PathPrefix(`/docs`) || PathPrefix(`/openapi.json`)"
       - "traefik.http.routers.logos-server-docs.entrypoints=secure8080"
       - "traefik.http.routers.logos-server-docs.tls=true"
       - "traefik.http.routers.logos-server-docs.tls.certresolver=letsencrypt"

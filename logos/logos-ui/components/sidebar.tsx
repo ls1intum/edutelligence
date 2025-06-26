@@ -8,7 +8,8 @@ const menuItems = [
   'Dashboard',
   'Policies',
   'Models',
-  'Database',
+  'Billing',
+  'Routing',
   'Statistics',
   'Settings',
   'Logout'
@@ -33,6 +34,21 @@ export default function Sidebar() {
           break;
         case 'Policies':
           router.push('/policies');
+          break;
+        case 'Models':
+          router.push('/models');
+          break;
+        case 'Billing':
+          router.push('/billing');
+          break;
+        case 'Routing':
+          router.push('/routing');
+          break;
+        case 'Statistics':
+          router.push('/statistics');
+          break;
+        case 'Settings':
+          router.push('/settings');
           break;
         case 'Logout':
           handleLogout().then(r => {});
