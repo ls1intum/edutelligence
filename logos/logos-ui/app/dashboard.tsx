@@ -20,13 +20,18 @@ export default function Dashboard() {
             try {
                 const key = await AsyncStorage.getItem('logos_api_key');
                 const response = await fetch('https://logos.ase.cit.tum.de:8080/logosdb/generalstats', {
-                    method: 'GET',
+                    method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
                         'logos_key': key || ''
-                    }
+                    },
+                    body: JSON.stringify({
+                      logos_key: key
+                    })
                 });
                 const [data, code] = JSON.parse(await response.text());
+                console.log(code);
+                console.log(data);
                 if (code === 200) {
                     setStats({
                         models: data.models,

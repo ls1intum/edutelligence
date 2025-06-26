@@ -11,7 +11,7 @@ import sqlalchemy.exc
 import yaml
 import json
 from sqlalchemy import Table, MetaData
-from sqlalchemy import text
+from sqlalchemy import text, func
 
 from logos.dbutils.dbmodules import *
 
@@ -239,6 +239,19 @@ class DBManager:
 
         billing_id = self.insert("token_prices", {"type_id": token_id, "valid_from": timestamp, "price_per_k_token": type_cost})
         return {"result": "Successfully added billing", "billing-id": billing_id}, 200
+
+    def generalstats(self, logos_key: str):
+        if not self.check_authorization(logos_key):
+            return {"error": "Database changes only allowed for root user."}, 500
+        model_count = self.session.query(func.count(Model.id)).scalar()
+        process_count = self.session.query(func.count(Process.id)).scalar()
+        request_count = self.session.query(func.count(LogEntry.id)).scalar()
+
+        return {
+            "models": model_count,
+            "users": process_count,
+            "requests": request_count
+        }, 200
 
     def get_token_name(self, name):
         sql = text("""

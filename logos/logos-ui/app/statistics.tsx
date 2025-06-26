@@ -40,11 +40,24 @@ export default function Statistics() {
                     <Text style={[styles.title, theme === 'light' ? styles.textLight : styles.textDark]}>
                         Statistics
                     </Text>
-                    <View style={styles.dummyCard}>
-                        <Text style={theme === 'light' ? styles.textLight : styles.textDark}>
-                            Hier erscheinen bald Statistiken...
-                        </Text>
-                    </View>
+                    <Text style={theme === 'light' ? styles.textLight : styles.textDark}>
+                        Here you get a detailed overview over all important information:
+                    </Text>
+                    <Text style={theme === 'light' ? styles.textLight : styles.textDark}>
+                        - Model Usage
+                    </Text>
+                    <Text style={theme === 'light' ? styles.textLight : styles.textDark}>
+                        - Performance Metrics
+                    </Text>
+                    <Text style={theme === 'light' ? styles.textLight : styles.textDark}>
+                        - Billing Overview
+                    </Text>
+                    <Text style={theme === 'light' ? styles.textLight : styles.textDark}>
+                        - Quality & Feedback
+                    </Text>
+                    <Text style={theme === 'light' ? styles.textLight : styles.textDark}>
+                        - (Optional) System Metrics
+                    </Text>
                 </View>
             </View>
 

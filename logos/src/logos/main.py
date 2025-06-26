@@ -209,6 +209,12 @@ async def add_billing(data: AddBillingRequest):
         return db.add_billing(**data.dict())
 
 
+@app.post("/logosdb/generalstats")
+async def generalstats(data: LogosKeyModel):
+    with DBManager() as db:
+        return db.generalstats(**data.dict())
+
+
 @app.api_route("/v1/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
 async def logos_service(path: str, request: Request):
     """

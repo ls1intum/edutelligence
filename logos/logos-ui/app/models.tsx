@@ -122,22 +122,26 @@ export default function Models() {
                 <Sidebar/>
                 <ScrollView style={styles.content}>
                     <Text style={[styles.title, theme === 'light' ? styles.textLight : styles.textDark]}>Model
-                        Management</Text>
+                        Management
+                    </Text>
+                    <Text style={[theme === 'light' ? styles.textLight : styles.textDark]}>
+                        Add new Model (To be moved to add_model)
+                    </Text>
 
                     <View style={styles.formRowContainer}>
                         <View style={styles.leftColumn}>
                             {[{
                                 label: 'Name', value: name, setter: setName,
-                                tooltip: 'Eindeutiger Modellname'
+                                tooltip: 'Unique Model Name'
                             }, {
                                 label: 'Endpoint', value: endpoint, setter: setEndpoint,
-                                tooltip: 'URL oder Pfad zum Modell-Endpunkt'
+                                tooltip: 'Model-Endpoint'
                             }, {
                                 label: 'Tags', value: tags, setter: setTags,
-                                tooltip: 'Kommagetrennte Stichworte'
+                                tooltip: 'Keywords separated by ";"'
                             }, {
-                                label: 'Parallelität', value: parallel, setter: setParallel,
-                                tooltip: 'Maximale parallele Anfragen (1–256)', keyboard: 'numeric'
+                                label: 'Parallelism', value: parallel, setter: setParallel,
+                                tooltip: 'Maximum number of parallel requests to this model (1–256)', keyboard: 'numeric'
                             }].map(({label, value, setter, tooltip, keyboard}) => (
                                 <View key={label} style={styles.formRow}>
                                     <Text style={[styles.label, theme === 'light' ? styles.textLight : styles.textDark]}>{label}:
@@ -151,10 +155,10 @@ export default function Models() {
                             ))}
 
                             <View style={styles.formRow}>
-                                <Text style={[styles.label, theme === 'light' ? styles.textLight : styles.textDark]}>Privacy-Gewicht:
-                                    <View onMouseEnter={() => showTooltip('Datenschutzbewertung des Modells')} onMouseLeave={() => setTooltipVisible(false)}>
+                                <Text style={[styles.label, theme === 'light' ? styles.textLight : styles.textDark]}>Privacy-Weight:
+                                    <View onMouseEnter={() => showTooltip('Privacy of the Model')} onMouseLeave={() => setTooltipVisible(false)}>
                                         <Ionicons name="help-circle-outline" size={16} style={styles.icon}/>
-                                        {tooltipVisible && tooltipText === 'Datenschutzbewertung des Modells' && <Tooltip text={'Datenschutzbewertung des Modells'} />}
+                                        {tooltipVisible && tooltipText === 'Privacy of the Model' && <Tooltip text={'Privacy of the Model'} />}
                                     </View>
                                 </Text>
                                 <Picker selectedValue={privacy} onValueChange={setPrivacy} style={styles.input}>
@@ -166,12 +170,12 @@ export default function Models() {
                         </View>
 
                         <View style={styles.rightColumn}>
-                            {['latency', 'accuracy', 'cost', 'quality'].map((key) => (
+                            {['Latency', 'Accuracy', 'Cost', 'Quality'].map((key) => (
                                 <View key={key} style={styles.formRow}>
-                                    <Text style={[styles.label, theme === 'light' ? styles.textLight : styles.textDark]}>Gewichtung ggü. {key}:
-                                        <View onMouseEnter={() => showTooltip(`Mit welchem Modell ist ${key} zu vergleichen?`)} onMouseLeave={() => setTooltipVisible(false)}>
+                                    <Text style={[styles.label, theme === 'light' ? styles.textLight : styles.textDark]}>{key}-Weight:
+                                        <View onMouseEnter={() => showTooltip(`Which is the best model that is worse than this one in terms of ${key}?`)} onMouseLeave={() => setTooltipVisible(false)}>
                                             <Ionicons name="help-circle-outline" size={16} style={styles.icon}/>
-                                            {tooltipVisible && tooltipText === `Mit welchem Modell ist ${key} zu vergleichen?` && <Tooltip text={`Mit welchem Modell ist ${key} zu vergleichen?`} />}
+                                            {tooltipVisible && tooltipText === `Which is the best model that is worse than this one in terms of ${key}?` && <Tooltip text={`Which is the best model that is worse than this one in terms of ${key}?`} />}
                                         </View>
                                     </Text>
                                     <Picker
@@ -196,8 +200,9 @@ export default function Models() {
 
 
 
-                    <Text style={[styles.subheading, theme === 'light' ? styles.textLight : styles.textDark]}>Vorhandene
-                        Modelle</Text>
+                    <Text style={[styles.subheading, theme === 'light' ? styles.textLight : styles.textDark]}>
+                        Existing Models
+                    </Text>
                     <View>
                         {models.map(model => (
                             <View key={model.id} style={styles.modelBox}>
@@ -233,14 +238,16 @@ const styles = StyleSheet.create({
     textLight: {color: '#000'},
     textDark: {color: '#fff'},
     tooltip: {
-    position: 'absolute',
-    top: 20,
-    left: 20,
-    backgroundColor: '#333',
-    padding: 8,
-    borderRadius: 6,
-    zIndex: 9999,
-    maxWidth: 200
+        position: 'absolute',
+        top: 20,
+        left: 20,
+        backgroundColor: '#333',
+        padding: 8,
+        borderRadius: 6,
+        zIndex: 9999,
+        width: "auto",
+        maxWidth: 500,
+        minWidth: 300,
     },
     tooltipText: {
         color: '#fff',
