@@ -37,7 +37,7 @@ async def test_generate_suggestions_basic(mock_exercise, mock_submission, mock_c
         assert isinstance(feedback.feedbacks, list)
         assert len(feedback.feedbacks) > 0
         assert all(f.exercise_id == mock_exercise.id for f in feedback.feedbacks)
-        assert all(f.submission_id != mock_submission.id for f in feedback.feedbacks)
+        assert all(f.submission_id == mock_submission.id for f in feedback.feedbacks)
 
 @pytest.mark.asyncio
 async def test_generate_suggestions_empty_submission(mock_exercise, mock_config, mock_grading_criterion):
