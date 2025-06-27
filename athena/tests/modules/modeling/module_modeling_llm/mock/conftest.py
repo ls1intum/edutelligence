@@ -1,6 +1,14 @@
+import sys
 from unittest.mock import patch
 from tests.modules.modeling.module_modeling_llm.mock.utils.mock_llm_config import mock_get_llm_config
-patch('llm_core.loaders.llm_config_loader.get_llm_config', mock_get_llm_config).start()
+
+# Apply the patch globally before any modules are imported
+# Use a more robust approach that handles CI environments
+try:
+    patch('llm_core.loaders.llm_config_loader.get_llm_config', mock_get_llm_config).start()
+except (AttributeError, ModuleNotFoundError):
+    # If the module isn't available yet, patch it when it gets imported
+    patch('llm_core.loaders.llm_config_loader.get_llm_config', mock_get_llm_config, create=True).start()
 
 # Import OpenAI mocks first to ensure they're in place before any other imports
 from tests.modules.modeling.module_modeling_llm.mock.utils.mock_openai import mock_openai, mock_openai_client
@@ -15,6 +23,15 @@ from tests.modules.modeling.module_modeling_llm.mock.utils.mock_config import Mo
 import json
 from athena.modeling import Exercise, Submission
 from athena.schemas.exercise_type import ExerciseType
+
+@pytest.fixture(autouse=True)
+def patch_llm_config():
+    """Automatically patch the get_llm_config function for all tests."""
+    from unittest.mock import patch
+    from tests.modules.modeling.module_modeling_llm.mock.utils.mock_llm_config import mock_get_llm_config
+    
+    with patch('module_modeling_llm.config.get_llm_config', mock_get_llm_config):
+        yield
 
 @pytest_asyncio.fixture
 async def mock_config():
