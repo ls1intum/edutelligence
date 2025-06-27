@@ -63,13 +63,27 @@ Always aim to reflect the student's learning journey — show that you're aware 
     - Write a short title summarizing the feedback.
     - Include line_start and line_end if the feedback refers to a specific part of the answer.
     - Include credits (points awarded or deducted).
-    - Suggest the action the student should take. Choose one of:
-        - 'Review Concept': When the student has a conceptual misunderstanding. Suggest revisiting relevant material, without revealing the answer. Use clear, respectful language.
-        - 'Improve Explanation': When the student is partially correct. Suggest elaborating or clarifying. Encourage them to strengthen their answer.
-        - 'Extend Thinking': When the student is fully or mostly correct. Invite them to deepen their thinking or explore a related idea. Use open-ended questions or suggestions.
-    - Write a clear explanation directly addressed to the student.
-    - Assign points gained or lost for this competency, aligned with the grading instruction if possible.
+    - Assign points gained or lost, aligned with the grading instruction if possible.
     - Include grading_instruction_id if applicable.
+    - Write a clear explanation directly addressed to the student.
+    - Choose the type of the feedback, one of:
+        - 'Not Attempted': When the student has not attempted a part of the exercise.
+        - 'Needs Revision': When the student is attempted and partially correct.
+        - 'Full Points': When the student is fully correct and got all the points from a grading instruction.
+    - For each feedback point, give the student a clear, simple, and specific next step.
+        If the feedback type is 'Needs Revision':
+            Clearly explain what the student should do to improve this part.
+            Examples:
+            - 'Add an example to support your answer.'
+            - 'Explain your reasoning more clearly.'
+        If the feedback type is 'Not Attempted':
+            Briefly state what the student missed, and guide them back to the problem statement.    
+            Example:
+            - 'You missed this part of the question. Please reread the problem statement and add an answer for this.'
+        If the feedback type is 'Full Points':
+            Keep it short and positive.
+            Example:
+            - 'You fully met the expectations for this part, great work!'    
 
 You may also provide general feedback that does not refer to any specific line. In that case, set line_start and line_end to null, and credits to 0.
 
@@ -126,10 +140,10 @@ class GenerateSuggestionsPrompt(BaseModel):
 
 # Output Object
 
-class SuggestedAction(str, Enum):
-    REVIEW_CONCEPT = "Review Concept"  # For conceptual misunderstandings; revisit foundational material
-    IMPROVE_EXPLANATION = "Improve Explanation"  # Partially correct; elaborate or clarify to strengthen understanding
-    EXTEND_THINKING = "Extend Thinking"  # Fully or mostly correct; deepen insight or explore related ideas
+class FeedbackType(str, Enum):
+    FULL_POINTS = "Full Points"
+    NEEDS_REVISION = "Needs Revision"
+    NOT_ATTEMPTED = "Not Attempted"
 
 
 class FeedbackModel(BaseModel):
@@ -139,8 +153,11 @@ class FeedbackModel(BaseModel):
     description: str = Field(
         description="Student-facing feedback message that explains the issue or suggestion in a constructive and clear way."
     )
-    suggested_action: SuggestedAction = Field(
-        description="Suggested action for the student as a next step."
+    type: FeedbackType = Field(
+        description="Type of the feedback according to student's performance to a part of the answer."
+    )
+    suggested_action: str = Field(
+        description="Suggested action for the student as a next step in order to get more points, or extend knowledge in case of full points achieved."
     )
     line_start: Optional[int] = Field(
         description="Referenced starting line number from the student's submission, or empty if unreferenced"
