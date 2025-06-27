@@ -47,7 +47,7 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: Athena JUnit Test Results
-        path: athena/test-results/*.xml  
+        path: athena/test-results/*.xml
 
     - name: Test Report Summary
       if: always()
@@ -64,13 +64,13 @@ jobs:
         group_suite: true
 
     - name: Find PR number
-      if: github.event_name == 'pull_request'
+      if: always() && github.event_name == 'pull_request'
       id: find-pr
       run: |
         echo "pr_number=${{ github.event.pull_request.number }}" >> $GITHUB_OUTPUT
 
     - name: Comment test results on PR
-      if: github.event_name == 'pull_request'
+      if: always() && github.event_name == 'pull_request'
       uses: actions/github-script@v7
       with:
         script: |
