@@ -2,13 +2,8 @@ from google.protobuf.internal import containers as _containers
 from google.protobuf.internal import enum_type_wrapper as _enum_type_wrapper
 from google.protobuf import descriptor as _descriptor
 from google.protobuf import message as _message
-from typing import (
-    ClassVar as _ClassVar,
-    Iterable as _Iterable,
-    Mapping as _Mapping,
-    Optional as _Optional,
-    Union as _Union,
-)
+from collections.abc import Iterable as _Iterable, Mapping as _Mapping
+from typing import ClassVar as _ClassVar, Optional as _Optional, Union as _Union
 
 DESCRIPTOR: _descriptor.FileDescriptor
 
@@ -169,23 +164,14 @@ class InconsistencyCheckResponse(_message.Message):
     inconsistencies: str
     def __init__(self, inconsistencies: _Optional[str] = ...) -> None: ...
 
-class PingRequest(_message.Message):
-    __slots__ = ("client_id",)
-    CLIENT_ID_FIELD_NUMBER: _ClassVar[int]
-    client_id: str
-    def __init__(self, client_id: _Optional[str] = ...) -> None: ...
+class RewriteProblemStatementRequest(_message.Message):
+    __slots__ = ("text",)
+    TEXT_FIELD_NUMBER: _ClassVar[int]
+    text: str
+    def __init__(self, text: _Optional[str] = ...) -> None: ...
 
-class PingResponse(_message.Message):
-    __slots__ = ("status", "version", "timestamp")
-    STATUS_FIELD_NUMBER: _ClassVar[int]
-    VERSION_FIELD_NUMBER: _ClassVar[int]
-    TIMESTAMP_FIELD_NUMBER: _ClassVar[int]
-    status: str
-    version: str
-    timestamp: int
-    def __init__(
-        self,
-        status: _Optional[str] = ...,
-        version: _Optional[str] = ...,
-        timestamp: _Optional[int] = ...,
-    ) -> None: ...
+class RewriteProblemStatementResponse(_message.Message):
+    __slots__ = ("rewritten_text",)
+    REWRITTEN_TEXT_FIELD_NUMBER: _ClassVar[int]
+    rewritten_text: str
+    def __init__(self, rewritten_text: _Optional[str] = ...) -> None: ...
