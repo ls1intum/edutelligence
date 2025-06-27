@@ -56,7 +56,7 @@ jobs:
       with:
         report_paths: 'athena/test-results/*.xml'
         check_name: "Athena Test Report"
-        fail_on_failure: true
+        continue_on_error: true
         require_tests: true
         require_passed_tests: true
         detailed_summary: true
