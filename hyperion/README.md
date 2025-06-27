@@ -211,68 +211,6 @@ This command:
 3. Validates the proto file syntax
 4. Reports the synchronization status
 
-### Artemis Integration Setup
-
-On the Artemis side, you'll need to configure your Gradle build to generate gRPC client stubs from the proto file. Add the following to your `build.gradle`:
-
-```gradle
-plugins {
-    id 'com.google.protobuf' version '0.9.5'
-}
-
-protobuf {
-    protoc {
-        artifact = "com.google.protobuf:protoc:4.31.1"
-    }
-    plugins {
-        grpc {
-            artifact = "io.grpc:protoc-gen-grpc-java:1.73.0"
-        }
-    }
-    generateProtoTasks {
-        all()*.plugins {
-            grpc {}
-        }
-    }
-}
-
-dependencies {
-    implementation platform('io.grpc:grpc-bom:1.73.0')
-    implementation 'io.grpc:grpc-protobuf'
-    implementation 'io.grpc:grpc-stub'
-    implementation 'io.grpc:grpc-netty-shaded'
-}
-```
-
-### Usage in Artemis
-
-```java
-import de.tum.cit.aet.artemis.hyperion.*;
-import io.grpc.ManagedChannel;
-import io.grpc.ManagedChannelBuilder;
-
-// Create client for development
-ManagedChannel channel = ManagedChannelBuilder
-    .forAddress("hyperion-service", 50051)
-    .usePlaintext()
-    .build();
-
-// Example: Check inconsistencies in exercise
-ReviewAndRefineGrpc.ReviewAndRefineBlockingStub reviewStub = 
-    ReviewAndRefineGrpc.newBlockingStub(channel);
-
-InconsistencyCheckResponse inconsistencies = reviewStub.checkInconsistencies(
-    InconsistencyCheckRequest.newBuilder()
-        .setProblemStatement("Your exercise description...")
-        .setSolutionRepository(Repository.newBuilder()
-            .addFiles(RepositoryFile.newBuilder()
-                .setPath("src/Main.java")
-                .setContent("public class Main {...}")
-                .build())
-            .build())
-        .build()
-);
-```
 
 ## Generate gRPC stubs
 
