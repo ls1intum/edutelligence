@@ -1,3 +1,7 @@
+from unittest.mock import patch
+from tests.modules.modeling.module_modeling_llm.mock.utils.mock_llm_config import mock_get_llm_config
+patch('llm_core.loaders.llm_config_loader.get_llm_config', mock_get_llm_config).start()
+
 # Import OpenAI mocks first to ensure they're in place before any other imports
 from tests.modules.modeling.module_modeling_llm.mock.utils.mock_openai import mock_openai, mock_openai_client
 

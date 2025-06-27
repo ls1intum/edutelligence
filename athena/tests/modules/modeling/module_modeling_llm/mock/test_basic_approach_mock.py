@@ -22,7 +22,7 @@ async def test_generate_suggestions_basic(mock_exercise, mock_submission, mock_c
             submission_id=mock_submission.id
         )
     ]))
-    mock_config.model.get_model = lambda: mock_model
+    mock_config.generate_feedback.get_model = lambda: mock_model
     mock_config.generate_suggestions_prompt = MockPrompt(
         graded_feedback_system_message="Test system message",
         graded_feedback_human_message="Test human message"
@@ -53,7 +53,7 @@ async def test_generate_suggestions_empty_submission(mock_exercise, mock_config,
         model=json.dumps(empty_model_data)
     )
     mock_model = MockLanguageModel(return_value=MockAssessmentModel(feedbacks=[]))
-    mock_config.model.get_model = lambda: mock_model
+    mock_config.generate_feedback.get_model = lambda: mock_model
     mock_config.generate_suggestions_prompt = MockPrompt(
         graded_feedback_system_message="Test system message",
         graded_feedback_human_message="Test human message"
@@ -235,7 +235,7 @@ async def test_generate_suggestions_complex_diagram(mock_exercise, mock_config, 
             submission_id=complex_submission.id
         )
     ]))
-    mock_config.model.get_model = lambda: mock_model
+    mock_config.generate_feedback.get_model = lambda: mock_model
     mock_config.generate_suggestions_prompt = MockPrompt(
         graded_feedback_system_message="Test system message",
         graded_feedback_human_message="Test human message"

@@ -1,6 +1,7 @@
 import pytest
 from athena.text import Exercise, Submission, Feedback
 from athena.schemas.exercise_type import ExerciseType
+from module_text_llm.basic_approach.generate_suggestions import generate_suggestions
 
 @pytest.mark.asyncio
 async def test_generate_suggestions_algorithm_explanation(real_config):
@@ -23,7 +24,7 @@ async def test_generate_suggestions_algorithm_explanation(real_config):
         text="Binary search is when you look for something in a sorted list by checking the middle element. If it's not there, you look in the left or right half. It's pretty fast."
     )
     
-    feedbacks = await real_config.generate_suggestions(
+    feedbacks = await generate_suggestions(
         exercise=exercise,
         submission=submission,
         config=real_config,
@@ -73,7 +74,7 @@ async def test_generate_suggestions_code_documentation(real_config):
         text="This function finds the factorial. It takes a number and multiplies it by all numbers below it until it reaches 1."
     )
     
-    feedbacks = await real_config.generate_suggestions(
+    feedbacks = await generate_suggestions(
         exercise=exercise,
         submission=submission,
         config=real_config,
@@ -118,7 +119,7 @@ async def test_generate_suggestions_design_pattern(real_config):
         text="Singleton is when you make sure there's only one copy of something in your program. It's good for saving memory."
     )
     
-    feedbacks = await real_config.generate_suggestions(
+    feedbacks = await generate_suggestions(
         exercise=exercise,
         submission=submission,
         config=real_config,
