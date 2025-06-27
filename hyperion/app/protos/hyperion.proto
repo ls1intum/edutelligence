@@ -1,11 +1,12 @@
 syntax = "proto3";
 
-option java_multiple_files = true;
-option java_package = "de.tum.cit.aet.edutelligence.hyperion";
-option java_outer_classname = "HyperionProto";
-option objc_class_prefix = "Hyperion";
+package de.tum.cit.aet.artemis.hyperion;
 
-package hyperion;
+// --- Java-specific file-level options ---
+option java_package        = "de.tum.cit.aet.artemis.hyperion.proto";
+option java_outer_classname = "HyperionServiceProto";
+option java_multiple_files = true;
+option java_generic_services = false;
 
 
 // Represents a file in a repository with content

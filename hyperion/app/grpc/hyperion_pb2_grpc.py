@@ -46,9 +46,9 @@ def add_DefineBoundaryConditionServicer_to_server(servicer, server):
     rpc_method_handlers = {
     }
     generic_handler = grpc.method_handlers_generic_handler(
-            'hyperion.DefineBoundaryCondition', rpc_method_handlers)
+            'de.tum.cit.aet.artemis.hyperion.DefineBoundaryCondition', rpc_method_handlers)
     server.add_generic_rpc_handlers((generic_handler,))
-    server.add_registered_method_handlers('hyperion.DefineBoundaryCondition', rpc_method_handlers)
+    server.add_registered_method_handlers('de.tum.cit.aet.artemis.hyperion.DefineBoundaryCondition', rpc_method_handlers)
 
 
  # This class is part of an EXPERIMENTAL API.
@@ -78,9 +78,9 @@ def add_DraftProblemStatementServicer_to_server(servicer, server):
     rpc_method_handlers = {
     }
     generic_handler = grpc.method_handlers_generic_handler(
-            'hyperion.DraftProblemStatement', rpc_method_handlers)
+            'de.tum.cit.aet.artemis.hyperion.DraftProblemStatement', rpc_method_handlers)
     server.add_generic_rpc_handlers((generic_handler,))
-    server.add_registered_method_handlers('hyperion.DraftProblemStatement', rpc_method_handlers)
+    server.add_registered_method_handlers('de.tum.cit.aet.artemis.hyperion.DraftProblemStatement', rpc_method_handlers)
 
 
  # This class is part of an EXPERIMENTAL API.
@@ -110,9 +110,9 @@ def add_CreateSolutionRepositoryServicer_to_server(servicer, server):
     rpc_method_handlers = {
     }
     generic_handler = grpc.method_handlers_generic_handler(
-            'hyperion.CreateSolutionRepository', rpc_method_handlers)
+            'de.tum.cit.aet.artemis.hyperion.CreateSolutionRepository', rpc_method_handlers)
     server.add_generic_rpc_handlers((generic_handler,))
-    server.add_registered_method_handlers('hyperion.CreateSolutionRepository', rpc_method_handlers)
+    server.add_registered_method_handlers('de.tum.cit.aet.artemis.hyperion.CreateSolutionRepository', rpc_method_handlers)
 
 
  # This class is part of an EXPERIMENTAL API.
@@ -142,9 +142,9 @@ def add_CreateTemplateRepositoryServicer_to_server(servicer, server):
     rpc_method_handlers = {
     }
     generic_handler = grpc.method_handlers_generic_handler(
-            'hyperion.CreateTemplateRepository', rpc_method_handlers)
+            'de.tum.cit.aet.artemis.hyperion.CreateTemplateRepository', rpc_method_handlers)
     server.add_generic_rpc_handlers((generic_handler,))
-    server.add_registered_method_handlers('hyperion.CreateTemplateRepository', rpc_method_handlers)
+    server.add_registered_method_handlers('de.tum.cit.aet.artemis.hyperion.CreateTemplateRepository', rpc_method_handlers)
 
 
  # This class is part of an EXPERIMENTAL API.
@@ -174,9 +174,9 @@ def add_CreateTestRepositoryServicer_to_server(servicer, server):
     rpc_method_handlers = {
     }
     generic_handler = grpc.method_handlers_generic_handler(
-            'hyperion.CreateTestRepository', rpc_method_handlers)
+            'de.tum.cit.aet.artemis.hyperion.CreateTestRepository', rpc_method_handlers)
     server.add_generic_rpc_handlers((generic_handler,))
-    server.add_registered_method_handlers('hyperion.CreateTestRepository', rpc_method_handlers)
+    server.add_registered_method_handlers('de.tum.cit.aet.artemis.hyperion.CreateTestRepository', rpc_method_handlers)
 
 
  # This class is part of an EXPERIMENTAL API.
@@ -206,9 +206,9 @@ def add_FinalizeProblemStatementServicer_to_server(servicer, server):
     rpc_method_handlers = {
     }
     generic_handler = grpc.method_handlers_generic_handler(
-            'hyperion.FinalizeProblemStatement', rpc_method_handlers)
+            'de.tum.cit.aet.artemis.hyperion.FinalizeProblemStatement', rpc_method_handlers)
     server.add_generic_rpc_handlers((generic_handler,))
-    server.add_registered_method_handlers('hyperion.FinalizeProblemStatement', rpc_method_handlers)
+    server.add_registered_method_handlers('de.tum.cit.aet.artemis.hyperion.FinalizeProblemStatement', rpc_method_handlers)
 
 
  # This class is part of an EXPERIMENTAL API.
@@ -238,9 +238,9 @@ def add_ConfigureGradingServicer_to_server(servicer, server):
     rpc_method_handlers = {
     }
     generic_handler = grpc.method_handlers_generic_handler(
-            'hyperion.ConfigureGrading', rpc_method_handlers)
+            'de.tum.cit.aet.artemis.hyperion.ConfigureGrading', rpc_method_handlers)
     server.add_generic_rpc_handlers((generic_handler,))
-    server.add_registered_method_handlers('hyperion.ConfigureGrading', rpc_method_handlers)
+    server.add_registered_method_handlers('de.tum.cit.aet.artemis.hyperion.ConfigureGrading', rpc_method_handlers)
 
 
  # This class is part of an EXPERIMENTAL API.
@@ -260,12 +260,12 @@ class ReviewAndRefineStub(object):
             channel: A grpc.Channel.
         """
         self.CheckInconsistencies = channel.unary_unary(
-                '/hyperion.ReviewAndRefine/CheckInconsistencies',
+                '/de.tum.cit.aet.artemis.hyperion.ReviewAndRefine/CheckInconsistencies',
                 request_serializer=hyperion__pb2.InconsistencyCheckRequest.SerializeToString,
                 response_deserializer=hyperion__pb2.InconsistencyCheckResponse.FromString,
                 _registered_method=True)
         self.RewriteProblemStatement = channel.unary_unary(
-                '/hyperion.ReviewAndRefine/RewriteProblemStatement',
+                '/de.tum.cit.aet.artemis.hyperion.ReviewAndRefine/RewriteProblemStatement',
                 request_serializer=hyperion__pb2.RewriteProblemStatementRequest.SerializeToString,
                 response_deserializer=hyperion__pb2.RewriteProblemStatementResponse.FromString,
                 _registered_method=True)
@@ -302,9 +302,9 @@ def add_ReviewAndRefineServicer_to_server(servicer, server):
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
-            'hyperion.ReviewAndRefine', rpc_method_handlers)
+            'de.tum.cit.aet.artemis.hyperion.ReviewAndRefine', rpc_method_handlers)
     server.add_generic_rpc_handlers((generic_handler,))
-    server.add_registered_method_handlers('hyperion.ReviewAndRefine', rpc_method_handlers)
+    server.add_registered_method_handlers('de.tum.cit.aet.artemis.hyperion.ReviewAndRefine', rpc_method_handlers)
 
 
  # This class is part of an EXPERIMENTAL API.
@@ -326,7 +326,7 @@ class ReviewAndRefine(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/hyperion.ReviewAndRefine/CheckInconsistencies',
+            '/de.tum.cit.aet.artemis.hyperion.ReviewAndRefine/CheckInconsistencies',
             hyperion__pb2.InconsistencyCheckRequest.SerializeToString,
             hyperion__pb2.InconsistencyCheckResponse.FromString,
             options,
@@ -353,7 +353,7 @@ class ReviewAndRefine(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/hyperion.ReviewAndRefine/RewriteProblemStatement',
+            '/de.tum.cit.aet.artemis.hyperion.ReviewAndRefine/RewriteProblemStatement',
             hyperion__pb2.RewriteProblemStatementRequest.SerializeToString,
             hyperion__pb2.RewriteProblemStatementResponse.FromString,
             options,
