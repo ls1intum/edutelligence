@@ -9,61 +9,59 @@ from google.protobuf import descriptor_pool as _descriptor_pool
 from google.protobuf import runtime_version as _runtime_version
 from google.protobuf import symbol_database as _symbol_database
 from google.protobuf.internal import builder as _builder
+
 _runtime_version.ValidateProtobufRuntimeVersion(
-    _runtime_version.Domain.PUBLIC,
-    6,
-    31,
-    0,
-    '',
-    'hyperion.proto'
+    _runtime_version.Domain.PUBLIC, 6, 31, 0, "", "hyperion.proto"
 )
 # @@protoc_insertion_point(imports)
 
 _sym_db = _symbol_database.Default()
 
 
-
-
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0ehyperion.proto\x12\x1f\x64\x65.tum.cit.aet.artemis.hyperion\"/\n\x0eRepositoryFile\x12\x0c\n\x04path\x18\x01 \x01(\t\x12\x0f\n\x07\x63ontent\x18\x02 \x01(\t\"L\n\nRepository\x12>\n\x05\x66iles\x18\x01 \x03(\x0b\x32/.de.tum.cit.aet.artemis.hyperion.RepositoryFile\"\xd3\x03\n\x13ProgrammingExercise\x12\n\n\x02id\x18\x01 \x01(\x05\x12\r\n\x05title\x18\x02 \x01(\t\x12R\n\x14programming_language\x18\x03 \x01(\x0e\x32\x34.de.tum.cit.aet.artemis.hyperion.ProgrammingLanguage\x12\x14\n\x0cpackage_name\x18\x04 \x01(\t\x12\x42\n\x0cproject_type\x18\x05 \x01(\x0e\x32,.de.tum.cit.aet.artemis.hyperion.ProjectType\x12H\n\x13template_repository\x18\x06 \x01(\x0b\x32+.de.tum.cit.aet.artemis.hyperion.Repository\x12H\n\x13solution_repository\x18\x07 \x01(\x0b\x32+.de.tum.cit.aet.artemis.hyperion.Repository\x12\x44\n\x0ftest_repository\x18\x08 \x01(\x0b\x32+.de.tum.cit.aet.artemis.hyperion.Repository\x12\x19\n\x11problem_statement\x18\t \x01(\t\"\x90\x02\n\x19InconsistencyCheckRequest\x12\x19\n\x11problem_statement\x18\x01 \x01(\t\x12H\n\x13solution_repository\x18\x02 \x01(\x0b\x32+.de.tum.cit.aet.artemis.hyperion.Repository\x12H\n\x13template_repository\x18\x03 \x01(\x0b\x32+.de.tum.cit.aet.artemis.hyperion.Repository\x12\x44\n\x0ftest_repository\x18\x04 \x01(\x0b\x32+.de.tum.cit.aet.artemis.hyperion.Repository\"5\n\x1aInconsistencyCheckResponse\x12\x17\n\x0finconsistencies\x18\x01 \x01(\t\".\n\x1eRewriteProblemStatementRequest\x12\x0c\n\x04text\x18\x01 \x01(\t\"9\n\x1fRewriteProblemStatementResponse\x12\x16\n\x0erewritten_text\x18\x01 \x01(\t*\x86\x02\n\x13ProgrammingLanguage\x12\t\n\x05\x45MPTY\x10\x00\x12\r\n\tASSEMBLER\x10\x01\x12\x08\n\x04\x42\x41SH\x10\x02\x12\x05\n\x01\x43\x10\x03\x12\x0f\n\x0b\x43_PLUS_PLUS\x10\x04\x12\x0b\n\x07\x43_SHARP\x10\x05\x12\x08\n\x04\x44\x41RT\x10\x06\x12\x06\n\x02GO\x10\x07\x12\x0b\n\x07HASKELL\x10\x08\x12\x08\n\x04JAVA\x10\t\x12\x0e\n\nJAVASCRIPT\x10\n\x12\n\n\x06KOTLIN\x10\x0b\x12\n\n\x06MATLAB\x10\x0c\x12\t\n\x05OCAML\x10\r\x12\n\n\x06PYTHON\x10\x0e\x12\x05\n\x01R\x10\x0f\x12\x08\n\x04RUBY\x10\x10\x12\x08\n\x04RUST\x10\x11\x12\t\n\x05SWIFT\x10\x12\x12\x0e\n\nTYPESCRIPT\x10\x13\x12\x08\n\x04VHDL\x10\x14*\x91\x01\n\x0bProjectType\x12\x0f\n\x0bMAVEN_MAVEN\x10\x00\x12\x0f\n\x0bPLAIN_MAVEN\x10\x01\x12\x12\n\x0eMAVEN_BLACKBOX\x10\x02\x12\x10\n\x0cPLAIN_GRADLE\x10\x03\x12\x11\n\rGRADLE_GRADLE\x10\x04\x12\t\n\x05PLAIN\x10\x05\x12\t\n\x05XCODE\x10\x06\x12\x08\n\x04\x46\x41\x43T\x10\x07\x12\x07\n\x03GCC\x10\x08\x32\x19\n\x17\x44\x65\x66ineBoundaryCondition2\x17\n\x15\x44raftProblemStatement2\x1a\n\x18\x43reateSolutionRepository2\x1a\n\x18\x43reateTemplateRepository2\x16\n\x14\x43reateTestRepository2\x1a\n\x18\x46inalizeProblemStatement2\x12\n\x10\x43onfigureGrading2\xc6\x02\n\x0fReviewAndRefine\x12\x91\x01\n\x14\x43heckInconsistencies\x12:.de.tum.cit.aet.artemis.hyperion.InconsistencyCheckRequest\x1a;.de.tum.cit.aet.artemis.hyperion.InconsistencyCheckResponse\"\x00\x12\x9e\x01\n\x17RewriteProblemStatement\x12?.de.tum.cit.aet.artemis.hyperion.RewriteProblemStatementRequest\x1a@.de.tum.cit.aet.artemis.hyperion.RewriteProblemStatementResponse\"\x00\x42\x42\n%de.tum.cit.aet.artemis.hyperion.protoB\x14HyperionServiceProtoP\x01\x88\x01\x00\x62\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(
+    b'\n\x0ehyperion.proto\x12\x1f\x64\x65.tum.cit.aet.artemis.hyperion"/\n\x0eRepositoryFile\x12\x0c\n\x04path\x18\x01 \x01(\t\x12\x0f\n\x07\x63ontent\x18\x02 \x01(\t"L\n\nRepository\x12>\n\x05\x66iles\x18\x01 \x03(\x0b\x32/.de.tum.cit.aet.artemis.hyperion.RepositoryFile"\xd3\x03\n\x13ProgrammingExercise\x12\n\n\x02id\x18\x01 \x01(\x05\x12\r\n\x05title\x18\x02 \x01(\t\x12R\n\x14programming_language\x18\x03 \x01(\x0e\x32\x34.de.tum.cit.aet.artemis.hyperion.ProgrammingLanguage\x12\x14\n\x0cpackage_name\x18\x04 \x01(\t\x12\x42\n\x0cproject_type\x18\x05 \x01(\x0e\x32,.de.tum.cit.aet.artemis.hyperion.ProjectType\x12H\n\x13template_repository\x18\x06 \x01(\x0b\x32+.de.tum.cit.aet.artemis.hyperion.Repository\x12H\n\x13solution_repository\x18\x07 \x01(\x0b\x32+.de.tum.cit.aet.artemis.hyperion.Repository\x12\x44\n\x0ftest_repository\x18\x08 \x01(\x0b\x32+.de.tum.cit.aet.artemis.hyperion.Repository\x12\x19\n\x11problem_statement\x18\t \x01(\t"\x90\x02\n\x19InconsistencyCheckRequest\x12\x19\n\x11problem_statement\x18\x01 \x01(\t\x12H\n\x13solution_repository\x18\x02 \x01(\x0b\x32+.de.tum.cit.aet.artemis.hyperion.Repository\x12H\n\x13template_repository\x18\x03 \x01(\x0b\x32+.de.tum.cit.aet.artemis.hyperion.Repository\x12\x44\n\x0ftest_repository\x18\x04 \x01(\x0b\x32+.de.tum.cit.aet.artemis.hyperion.Repository"5\n\x1aInconsistencyCheckResponse\x12\x17\n\x0finconsistencies\x18\x01 \x01(\t".\n\x1eRewriteProblemStatementRequest\x12\x0c\n\x04text\x18\x01 \x01(\t"9\n\x1fRewriteProblemStatementResponse\x12\x16\n\x0erewritten_text\x18\x01 \x01(\t*\x86\x02\n\x13ProgrammingLanguage\x12\t\n\x05\x45MPTY\x10\x00\x12\r\n\tASSEMBLER\x10\x01\x12\x08\n\x04\x42\x41SH\x10\x02\x12\x05\n\x01\x43\x10\x03\x12\x0f\n\x0b\x43_PLUS_PLUS\x10\x04\x12\x0b\n\x07\x43_SHARP\x10\x05\x12\x08\n\x04\x44\x41RT\x10\x06\x12\x06\n\x02GO\x10\x07\x12\x0b\n\x07HASKELL\x10\x08\x12\x08\n\x04JAVA\x10\t\x12\x0e\n\nJAVASCRIPT\x10\n\x12\n\n\x06KOTLIN\x10\x0b\x12\n\n\x06MATLAB\x10\x0c\x12\t\n\x05OCAML\x10\r\x12\n\n\x06PYTHON\x10\x0e\x12\x05\n\x01R\x10\x0f\x12\x08\n\x04RUBY\x10\x10\x12\x08\n\x04RUST\x10\x11\x12\t\n\x05SWIFT\x10\x12\x12\x0e\n\nTYPESCRIPT\x10\x13\x12\x08\n\x04VHDL\x10\x14*\x91\x01\n\x0bProjectType\x12\x0f\n\x0bMAVEN_MAVEN\x10\x00\x12\x0f\n\x0bPLAIN_MAVEN\x10\x01\x12\x12\n\x0eMAVEN_BLACKBOX\x10\x02\x12\x10\n\x0cPLAIN_GRADLE\x10\x03\x12\x11\n\rGRADLE_GRADLE\x10\x04\x12\t\n\x05PLAIN\x10\x05\x12\t\n\x05XCODE\x10\x06\x12\x08\n\x04\x46\x41\x43T\x10\x07\x12\x07\n\x03GCC\x10\x08\x32\x19\n\x17\x44\x65\x66ineBoundaryCondition2\x17\n\x15\x44raftProblemStatement2\x1a\n\x18\x43reateSolutionRepository2\x1a\n\x18\x43reateTemplateRepository2\x16\n\x14\x43reateTestRepository2\x1a\n\x18\x46inalizeProblemStatement2\x12\n\x10\x43onfigureGrading2\xc6\x02\n\x0fReviewAndRefine\x12\x91\x01\n\x14\x43heckInconsistencies\x12:.de.tum.cit.aet.artemis.hyperion.InconsistencyCheckRequest\x1a;.de.tum.cit.aet.artemis.hyperion.InconsistencyCheckResponse"\x00\x12\x9e\x01\n\x17RewriteProblemStatement\x12?.de.tum.cit.aet.artemis.hyperion.RewriteProblemStatementRequest\x1a@.de.tum.cit.aet.artemis.hyperion.RewriteProblemStatementResponse"\x00\x42\x42\n%de.tum.cit.aet.artemis.hyperion.protoB\x14HyperionServiceProtoP\x01\x88\x01\x00\x62\x06proto3'
+)
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
-_builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'hyperion_pb2', _globals)
+_builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, "hyperion_pb2", _globals)
 if not _descriptor._USE_C_DESCRIPTORS:
-  _globals['DESCRIPTOR']._loaded_options = None
-  _globals['DESCRIPTOR']._serialized_options = b'\n%de.tum.cit.aet.artemis.hyperion.protoB\024HyperionServiceProtoP\001\210\001\000'
-  _globals['_PROGRAMMINGLANGUAGE']._serialized_start=1086
-  _globals['_PROGRAMMINGLANGUAGE']._serialized_end=1348
-  _globals['_PROJECTTYPE']._serialized_start=1351
-  _globals['_PROJECTTYPE']._serialized_end=1496
-  _globals['_REPOSITORYFILE']._serialized_start=51
-  _globals['_REPOSITORYFILE']._serialized_end=98
-  _globals['_REPOSITORY']._serialized_start=100
-  _globals['_REPOSITORY']._serialized_end=176
-  _globals['_PROGRAMMINGEXERCISE']._serialized_start=179
-  _globals['_PROGRAMMINGEXERCISE']._serialized_end=646
-  _globals['_INCONSISTENCYCHECKREQUEST']._serialized_start=649
-  _globals['_INCONSISTENCYCHECKREQUEST']._serialized_end=921
-  _globals['_INCONSISTENCYCHECKRESPONSE']._serialized_start=923
-  _globals['_INCONSISTENCYCHECKRESPONSE']._serialized_end=976
-  _globals['_REWRITEPROBLEMSTATEMENTREQUEST']._serialized_start=978
-  _globals['_REWRITEPROBLEMSTATEMENTREQUEST']._serialized_end=1024
-  _globals['_REWRITEPROBLEMSTATEMENTRESPONSE']._serialized_start=1026
-  _globals['_REWRITEPROBLEMSTATEMENTRESPONSE']._serialized_end=1083
-  _globals['_DEFINEBOUNDARYCONDITION']._serialized_start=1498
-  _globals['_DEFINEBOUNDARYCONDITION']._serialized_end=1523
-  _globals['_DRAFTPROBLEMSTATEMENT']._serialized_start=1525
-  _globals['_DRAFTPROBLEMSTATEMENT']._serialized_end=1548
-  _globals['_CREATESOLUTIONREPOSITORY']._serialized_start=1550
-  _globals['_CREATESOLUTIONREPOSITORY']._serialized_end=1576
-  _globals['_CREATETEMPLATEREPOSITORY']._serialized_start=1578
-  _globals['_CREATETEMPLATEREPOSITORY']._serialized_end=1604
-  _globals['_CREATETESTREPOSITORY']._serialized_start=1606
-  _globals['_CREATETESTREPOSITORY']._serialized_end=1628
-  _globals['_FINALIZEPROBLEMSTATEMENT']._serialized_start=1630
-  _globals['_FINALIZEPROBLEMSTATEMENT']._serialized_end=1656
-  _globals['_CONFIGUREGRADING']._serialized_start=1658
-  _globals['_CONFIGUREGRADING']._serialized_end=1676
-  _globals['_REVIEWANDREFINE']._serialized_start=1679
-  _globals['_REVIEWANDREFINE']._serialized_end=2005
+    _globals["DESCRIPTOR"]._loaded_options = None
+    _globals["DESCRIPTOR"]._serialized_options = (
+        b"\n%de.tum.cit.aet.artemis.hyperion.protoB\024HyperionServiceProtoP\001\210\001\000"
+    )
+    _globals["_PROGRAMMINGLANGUAGE"]._serialized_start = 1086
+    _globals["_PROGRAMMINGLANGUAGE"]._serialized_end = 1348
+    _globals["_PROJECTTYPE"]._serialized_start = 1351
+    _globals["_PROJECTTYPE"]._serialized_end = 1496
+    _globals["_REPOSITORYFILE"]._serialized_start = 51
+    _globals["_REPOSITORYFILE"]._serialized_end = 98
+    _globals["_REPOSITORY"]._serialized_start = 100
+    _globals["_REPOSITORY"]._serialized_end = 176
+    _globals["_PROGRAMMINGEXERCISE"]._serialized_start = 179
+    _globals["_PROGRAMMINGEXERCISE"]._serialized_end = 646
+    _globals["_INCONSISTENCYCHECKREQUEST"]._serialized_start = 649
+    _globals["_INCONSISTENCYCHECKREQUEST"]._serialized_end = 921
+    _globals["_INCONSISTENCYCHECKRESPONSE"]._serialized_start = 923
+    _globals["_INCONSISTENCYCHECKRESPONSE"]._serialized_end = 976
+    _globals["_REWRITEPROBLEMSTATEMENTREQUEST"]._serialized_start = 978
+    _globals["_REWRITEPROBLEMSTATEMENTREQUEST"]._serialized_end = 1024
+    _globals["_REWRITEPROBLEMSTATEMENTRESPONSE"]._serialized_start = 1026
+    _globals["_REWRITEPROBLEMSTATEMENTRESPONSE"]._serialized_end = 1083
+    _globals["_DEFINEBOUNDARYCONDITION"]._serialized_start = 1498
+    _globals["_DEFINEBOUNDARYCONDITION"]._serialized_end = 1523
+    _globals["_DRAFTPROBLEMSTATEMENT"]._serialized_start = 1525
+    _globals["_DRAFTPROBLEMSTATEMENT"]._serialized_end = 1548
+    _globals["_CREATESOLUTIONREPOSITORY"]._serialized_start = 1550
+    _globals["_CREATESOLUTIONREPOSITORY"]._serialized_end = 1576
+    _globals["_CREATETEMPLATEREPOSITORY"]._serialized_start = 1578
+    _globals["_CREATETEMPLATEREPOSITORY"]._serialized_end = 1604
+    _globals["_CREATETESTREPOSITORY"]._serialized_start = 1606
+    _globals["_CREATETESTREPOSITORY"]._serialized_end = 1628
+    _globals["_FINALIZEPROBLEMSTATEMENT"]._serialized_start = 1630
+    _globals["_FINALIZEPROBLEMSTATEMENT"]._serialized_end = 1656
+    _globals["_CONFIGUREGRADING"]._serialized_start = 1658
+    _globals["_CONFIGUREGRADING"]._serialized_end = 1676
+    _globals["_REVIEWANDREFINE"]._serialized_start = 1679
+    _globals["_REVIEWANDREFINE"]._serialized_end = 2005
 # @@protoc_insertion_point(module_scope)
