@@ -4,6 +4,34 @@ from app.grpc import hyperion_pb2
 from app.grpc.models import GrpcMessage, Repository
 
 
+class RewriteProblemStatementRequest(GrpcMessage):
+    text: str = Field(..., description="The problem statement text to be rewritten")
+
+    def to_grpc(self) -> hyperion_pb2.RewriteProblemStatementRequest:
+        return hyperion_pb2.RewriteProblemStatementRequest(text=self.text)
+
+    @classmethod
+    def from_grpc(
+        cls, grpc_request: hyperion_pb2.RewriteProblemStatementRequest
+    ) -> "RewriteProblemStatementRequest":
+        return cls(text=grpc_request.text)
+
+
+class RewriteProblemStatementResponse(GrpcMessage):
+    rewritten_text: str = Field(..., description="The rewritten problem statement text")
+
+    def to_grpc(self) -> hyperion_pb2.RewriteProblemStatementResponse:
+        return hyperion_pb2.RewriteProblemStatementResponse(
+            rewritten_text=self.rewritten_text
+        )
+
+    @classmethod
+    def from_grpc(
+        cls, grpc_response: hyperion_pb2.RewriteProblemStatementResponse
+    ) -> "RewriteProblemStatementResponse":
+        return cls(rewritten_text=grpc_response.rewritten_text)
+
+
 class InconsistencyCheckRequest(GrpcMessage):
     problem_statement: str = Field(..., description="The problem statement text")
     solution_repository: Repository = Field(
