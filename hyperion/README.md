@@ -35,7 +35,7 @@ Hyperion provides an 8-step workflow for creating programming exercises:
 Install Poetry version >=2.0.0, if you haven't already:
 
 ```bash
-pip install poetry
+brew install poetry
 ```
 
 #### Dependencies
