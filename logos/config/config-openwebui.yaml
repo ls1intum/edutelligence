@@ -1,0 +1,10 @@
+provider: openwebui
+
+forward_url: "{base_url}/{path}"
+
+required_headers:
+  - Authorization
+
+auth:
+  header: Authorization
+  format: "{Authorization}"
