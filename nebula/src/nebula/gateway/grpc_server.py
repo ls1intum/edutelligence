@@ -14,9 +14,9 @@ logging.basicConfig(
 
 # Read port from environment variable (default: 50051)
 GATEWAY_SERVICE_PORT = os.getenv("GATEWAY_SERVICE_PORT", "50051")
+server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
 
 def serve():
-    server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
     # Register FAQ handler
     faq_pb2_grpc.add_FAQServiceServicer_to_server(FAQServiceHandler(), server)
     logger.info("Registered gRPC handler for FAQ rewriting")
@@ -24,3 +24,6 @@ def serve():
     logger.info(f"gRPC server running on port {GATEWAY_SERVICE_PORT}")
     server.start()
     server.wait_for_termination()
+
+def stop():
+    server.stop(grace=None)  # grace=None = sofort
