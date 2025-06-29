@@ -6,8 +6,8 @@ services:
       context: .
       dockerfile: docker/transcriber/Dockerfile
     container_name: nebula-transcriber
-    ports:
-      - "5050:5000"
+    expose:
+      - "5000"  # interne Kommunikation mit Envoy
     environment:
       - APPLICATION_YML_PATH=/app/application_local.nebula.yml
       - LLM_CONFIG_PATH=/app/llm_config.nebula.yml
@@ -17,37 +17,31 @@ services:
       - ./temp:/app/temp
     restart: unless-stopped
 
-  gateway:
-    build:
-      context: .
-      dockerfile: docker/gateway/Dockerfile
-    container_name: ${GATEWAY_NAME}
-    ports:
-      - "8000:8000"
-      - "${GATEWAY_GRPC_PORT}:${GATEWAY_GRPC_PORT}"
-    environment:
-      - TRANSCRIBE_SERVICE_URL=http://transcriber:5000
-      - APPLICATION_YML_PATH=/app/application_local.nebula.yml
-      - FAQ_SERVICE_NAME=${FAQ_SERVICE_NAME}
-      - FAQ_SERVICE_PORT=${FAQ_SERVICE_PORT}
-    volumes:
-      - ./application_local.nebula.yml:/app/application_local.nebula.yml:ro
-    depends_on:
-      - transcriber
-      - faq
-    restart: unless-stopped
-
   faq:
     build:
       context: .
       dockerfile: docker/faq/Dockerfile
     container_name: ${FAQ_SERVICE_NAME}
-    ports:
-      - "${FAQ_SERVICE_PORT}:${FAQ_SERVICE_PORT}"
+    expose:
+      - "${FAQ_SERVICE_PORT}"
     environment:
       - APPLICATION_YML_PATH=/app/application_local.nebula.yml
       - LLM_CONFIG_PATH=/app/llm_config.nebula.yml
       - FAQ_SERVICE_PORT=${FAQ_SERVICE_PORT}
     volumes:
       - ./application_local.nebula.yml:/app/application_local.nebula.yml:ro
+      - ./llm_config.nebula.yml:/app/llm_config.nebula.yml:ro
     restart: unless-stopped
+
+  envoy:
+    image: envoyproxy/envoy:v1.30-latest
+    container_name: envoy
+    volumes:
+      - ./envoy.yaml:/etc/envoy/envoy.yaml:ro
+    ports:
+      - "8000:8000"     # HTTP for FastAPI
+      - "50051:50051"   # gRPC
+      -  "9901:9901"     # Admin interface
+    depends_on:
+      - transcriber
+      - faq
