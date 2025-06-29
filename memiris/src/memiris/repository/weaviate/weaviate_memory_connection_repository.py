@@ -6,6 +6,7 @@ from weaviate import WeaviateClient
 from weaviate.collections import Collection
 from weaviate.collections.classes.filters import Filter
 from weaviate.collections.classes.grpc import QueryReference
+from weaviate.util import _WeaviateUUIDInt
 
 from memiris.domain.memory_connection import ConnectionType, MemoryConnection
 from memiris.repository.memory_connection_repository import MemoryConnectionRepository
@@ -42,12 +43,12 @@ class WeaviateMemoryConnectionRepository(
             "weight": entity.weight,
         }
 
-        if not entity.id:
-            operation = self.collection.with_tenant(tenant).data.insert
-        else:
+        if entity.id and isinstance(entity.id, _WeaviateUUIDInt):
             operation = self.collection.with_tenant(tenant).data.update  # type: ignore
+        else:
+            operation = self.collection.with_tenant(tenant).data.insert  # type: ignore
 
-        result = operation(properties=properties, uuid=entity.id)
+        result = operation(properties=properties, uuid=entity.id)  # type: ignore
 
         if not entity.id:
             entity.id = result

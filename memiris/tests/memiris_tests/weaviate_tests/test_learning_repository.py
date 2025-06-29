@@ -1,3 +1,5 @@
+import uuid
+
 import pytest
 from memiris_tests.test_utils import compare_vectors, mock_vector
 from memiris_tests.weaviate_tests.test_setup import WeaviateTest
@@ -35,6 +37,24 @@ class TestWeaviateLearningRepository(WeaviateTest):
         assert learning.id is not None
 
         return learning
+
+    def test_create_with_id(self, learning_repository):
+        vec = mock_vector()
+        uid = uuid.uuid4()
+        learning_repository.learning_collection.tenants.create("test")
+        learning = learning_repository.save(
+            "test",
+            Learning(
+                uid=uid,
+                title="Test Title",
+                content="Test Content",
+                reference="Test Reference",
+                vectors={"vector_0": vec},
+            ),
+        )
+
+        assert learning is not None
+        assert learning.id == uid
 
     def test_delete(self, learning_repository):
         learning = self.test_create(learning_repository)

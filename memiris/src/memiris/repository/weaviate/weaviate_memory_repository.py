@@ -6,6 +6,7 @@ from weaviate import WeaviateClient
 from weaviate.collections import Collection
 from weaviate.collections.classes.filters import Filter
 from weaviate.collections.classes.grpc import QueryReference, TargetVectors
+from weaviate.util import _WeaviateUUIDInt
 
 from memiris.domain.memory import Memory
 from memiris.repository.memory_repository import MemoryRepository
@@ -40,12 +41,12 @@ class WeaviateMemoryRepository(MemoryRepository, _WeaviateBaseRepository):
             "deleted": entity.deleted,
         }
 
-        if not entity.id:
-            operation = self.collection.with_tenant(tenant).data.insert
-        else:
+        if entity.id and isinstance(entity.id, _WeaviateUUIDInt):
             operation = self.collection.with_tenant(tenant).data.update  # type: ignore
+        else:
+            operation = self.collection.with_tenant(tenant).data.insert  # type: ignore
 
-        result = operation(properties=properties, uuid=entity.id, vector=entity.vectors)
+        result = operation(properties=properties, uuid=entity.id, vector=entity.vectors)  # type: ignore
 
         if not entity.id:
             entity.id = result
