@@ -42,7 +42,7 @@ export function useAthenaFetcher() {
   const { experimentId, moduleConfigurationId, runId } = useExperimentIdentifiers();
 
   return (
-    async (moduleRoute: string, body?: any, overrideModule?: Module) => {
+    async (moduleRoute: string, body?: any, overrideModule?: Module, content_type="application/json") => {
       let targetModule = contextModule;
       let targetModuleConfig = contextModuleConfig;
       if (overrideModule) {
@@ -72,7 +72,7 @@ export function useAthenaFetcher() {
         {
           method: body ? "POST" : "GET",
           headers: {
-            "Content-Type": "application/json",
+            "Content-Type": content_type,
             "Authorization": athenaSecret,
             "X-Server-URL": lmsUrl,
             ...headers,
