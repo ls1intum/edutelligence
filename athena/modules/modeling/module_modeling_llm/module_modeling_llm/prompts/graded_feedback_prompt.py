@@ -11,7 +11,6 @@ class GradedFeedbackInputs(BaseModel):
     submission_uml_type: str
     example_solution: Optional[str] = None
     uml_diagram_format: str
-    feedback_output_format: str
 
 
 graded_feedback_system_message = """
@@ -56,9 +55,6 @@ Important:
 The submission uses the following UML diagram format:
 {uml_diagram_format}
 - Note: Don't mention elements that have no name, by there articial name: e.g. ##A or ##B, instad just say e.g. the task in ... is missing ...
-
-<Output Format>
-{feedback_output_format}
 """
 
 graded_feedback_human_message = """

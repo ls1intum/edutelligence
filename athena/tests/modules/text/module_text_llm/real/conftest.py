@@ -3,7 +3,7 @@ import pytest
 import nltk
 import asyncio
 from module_text_llm.basic_approach import BasicApproachConfig
-from llm_core.models.openai import OpenAIModelConfig
+from llm_core.models.providers.azure_model_config import AzureModelConfig
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -24,7 +24,7 @@ def real_config():
     """Create a real configuration for testing with Azure OpenAI."""
     return BasicApproachConfig(
         max_input_tokens=5000,
-        model=OpenAIModelConfig(
+        model=AzureModelConfig(
             model_name="azure_openai_gpt-4o",  
             get_model=lambda: None  # This will be set by the module
         ),
