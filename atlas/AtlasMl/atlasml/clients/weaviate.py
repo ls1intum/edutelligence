@@ -47,22 +47,22 @@ class WeaviateClient:
         collection_schemas = {
             CollectionNames.TEXT.value: {
                 "properties": [
-                    {"name": "text_id", "dataType": "text", "indexFilterable": True},
-                    {"name": "text", "dataType": "text"},
-                    {"name": "competency_ids", "dataType": "string[]", "indexFilterable": True},
+                    {"name": "text_id", "data_type": DataType.TEXT, "indexFilterable": True, "indexNullState": True},
+                    {"name": "text", "data_type": DataType.TEXT},
+                    {"name": "competency_ids", "data_type": DataType.TEXT_ARRAY, "indexFilterable": True},
                 ]
             },
             CollectionNames.COMPETENCY.value: {
                 "properties": [
-                    {"name": "competency_id", "dataType": "text", "indexFilterable": True},
-                    {"name": "name", "dataType":  "text"},
-                    {"name": "text", "dataType":  "text"},
-                    {"name": "cluster_id", "dataType": "text", "indexFilterable": True},
+                    {"name": "competency_id", "data_type": DataType.TEXT, "indexFilterable": True},
+                    {"name": "name", "data_type":  DataType.TEXT},
+                    {"name": "text", "data_type":  DataType.TEXT},
+                    {"name": "cluster_id", "data_type": DataType.TEXT, "indexFilterable": True},
                 ]
             },
             CollectionNames.CLUSTERCENTER.value: {
                 "properties": [
-                    {"name": "cluster_id", "dataType":  "text", "indexFilterable": True}
+                    {"name": "cluster_id", "data_type":  DataType.TEXT, "indexFilterable": True}
                 ]
             },
         }
@@ -82,7 +82,7 @@ class WeaviateClient:
                 for prop in schema["properties"]:
                     if prop["name"] not in existing_props:
                         # Convert string data type to DataType enum
-                        data_type_str = prop["dataType"]
+                        data_type_str = prop["data_type"]
                         if data_type_str == "text":
                             data_type = DataType.TEXT
                         elif data_type_str == "int":
@@ -334,7 +334,8 @@ class WeaviateClient:
         self._check_if_collection_exists(collection_name)
 
         collection = self.client.collections.get(collection_name)
-        collection.data.delete_all()
+        self.client.collections.delete(collection_name)
+        # collection.data.delete_many()
         logger.info(f"--- ALL DATA DELETED FROM {collection_name} ---")
 
     def delete_data_by_id(self, collection_name: str, id: str):
