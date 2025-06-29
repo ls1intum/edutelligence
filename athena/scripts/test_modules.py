@@ -2,7 +2,7 @@ import subprocess
 import os
 import sys
 import argparse
-
+import shutil
 
 def main():
     parser = argparse.ArgumentParser(description='Run tests for Athena modules')
@@ -26,6 +26,11 @@ def main():
 
     success = True
     path_env = os.environ["PATH"]
+
+    test_results_dir = "test-results"
+    if os.path.exists(test_results_dir):
+        shutil.rmtree(test_results_dir)
+    os.makedirs(test_results_dir)
 
     for module in modules:
         # Check if test directory exists
@@ -57,7 +62,10 @@ def main():
             mock_test_dir = os.path.join(test_dir, "mock")
             if os.path.exists(mock_test_dir):
                 print(f"\nRunning mock tests for {module}...")
-                result = subprocess.run([python_path, "-m", "pytest", mock_test_dir, "-v"], check=False)
+                junit_file = os.path.join(test_results_dir, f"{module.replace('/', '_')}_mock.xml")
+                result = subprocess.run(
+                    [python_path, "-m", "pytest", mock_test_dir, "-v", f"--junitxml={junit_file}"],
+                    check=False)
                 if result.returncode != 0:
                     print(f"\nMock tests failed for {module}")
                     success = False
@@ -76,8 +84,14 @@ def main():
                         original_dir = os.getcwd()
                         os.chdir(module_dir)
                         print(f"\nRunning real tests from {module_dir}...")
+                        
+                        # Use absolute path for JUnit XML output to write to top-level test-results/
+                        junit_file_real = os.path.join(original_dir, test_results_dir, f"{module.replace('/', '_')}_real.xml")
                         # Run pytest with the real test directory as the test path
-                        result = subprocess.run([python_path, "-m", "pytest", '../../../'+real_test_dir, "-v"], check=False)
+                        result = subprocess.run(
+                            [python_path, "-m", "pytest", '../../../' + real_test_dir, "-v", f"--junitxml={junit_file_real}"],
+                            check=False
+                        )
                         if result.returncode != 0:
                             print(f"\nReal tests failed for {module}")
                             success = False
