@@ -31,12 +31,42 @@ class PipelineWorkflows:
         """
         for text in texts:
             text_id, embedding = generate_embeddings(str(uuid.uuid4()), text)
-            properties = {"properties": [{
+            properties = {
                 "text_id": text_id,
                 "text": text,
                 "competency_ids": []
-            }]}
+            }
             self.weaviate_client.add_embeddings(CollectionNames.TEXT.value, embedding, properties)
+
+    def initial_competencies(self, competencies):
+        """Process and store initial competencies in the database.
+
+        Takes a list of competencies, generates embeddings for each competency, and stores them in
+        the Weaviate competency collection. Each competency entry is created with a unique ID and 
+        initialized with an empty cluster ID.
+
+        Args:
+            competencies (list[dict]): List of competency dictionaries containing 'title' and 'description'
+        
+        The workflow:
+            1. For each competency:
+            2. Generate a unique UUID
+            3. Create vector embedding using the competency description
+            4. Store in Weaviate competency collection with:
+                - competency_id: Generated UUID
+                - name: Competency title
+                - text: Competency description
+                - cluster_id: Empty string
+                - vector: Competency embedding
+        """
+        for competency in competencies:
+            competency_id, embedding = generate_embeddings(str(uuid.uuid4()), competency["description"])
+            properties = {
+                "competency_id": competency_id,
+                "name": competency["title"],
+                "text": competency["description"]
+            }
+            self.weaviate_client.add_embeddings(CollectionNames.COMPETENCY.value, embedding, properties)
 
 
     def initial_cluster_to_competencyPipeline(self):
@@ -65,16 +95,16 @@ class PipelineWorkflows:
             uuid, embedding = generate_embeddings(competency["properties"]["competency_id"], competency["properties"]["text"])
             similarity_score = np.array([compute_cosine_similarity(embedding, medoid) for medoid in medoids])
             best_medoid_idx = int(np.argmax(similarity_score))
-            properties = { "properties": [{
-                "competency_id": uuid ,
+            properties = {
+                "competency_id": uuid,
                 "name" : competency["properties"]["name"],
                 "text": competency["properties"]["text"],
                 "cluster_id": clusters[best_medoid_idx]["properties"]["cluster_id"]
-            }]}
+            }
             self.weaviate_client.add_embeddings(CollectionNames.COMPETENCY.value, embedding, properties)
 
 
-    def initial_cluster_pipeline(self, eps: float = 0.1, min_samples: int = 1, min_cluster_size: int = 1):
+    def initial_cluster_pipeline(self, eps: float = 0.1, min_samples: int = 1, min_cluster_size: int = 2):
         """Initialize and perform complete clustering of all texts in the database.
 
         This is the main pipeline for clustering text data and establishing relationships
@@ -102,7 +132,7 @@ class PipelineWorkflows:
         texts = self.weaviate_client.get_all_embeddings(CollectionNames.TEXT.value)
 
         # Generate embeddings for each text entry and collect UUIDs
-        embeddings_list = np.vstack([text["vector"] for text in texts])
+        embeddings_list = np.vstack([text["vector"]["default"] for text in texts])
         embeddings_uuids = np.array([text["properties"]["text_id"] for text in texts])
 
         # Cluster texts and get cluster medoids
@@ -114,38 +144,41 @@ class PipelineWorkflows:
             min_cluster_size=min_cluster_size
         )
 
-        self.weaviate_client.delete_all_data_from_collection(CollectionNames.CLUSTERCENTER.value)
         # Expose clusters and similarity matrix as instance variables
         for index in range(len(medoids)):
-            cluster = { "properties": [{
-                "cluster_id": str(uuid.uuid4())
-                }]}
+            cluster = {
+                "cluster_id": str(index)
+                }
             self.weaviate_client.add_embeddings(CollectionNames.CLUSTERCENTER.value, medoids[index].tolist(), cluster)
 
         competencies = self.weaviate_client.get_all_embeddings(CollectionNames.COMPETENCY.value)
         clusters = self.weaviate_client.get_all_embeddings(CollectionNames.CLUSTERCENTER.value)
 
         for competency in competencies:
-            competency_id, embedding = generate_embeddings(competency["properties"]["competency_id"], competency["properties"]["text"])
+            competency_id, embedding = competency["properties"]["competency_id"], competency["vector"]["default"]
             similarity_score = np.array([compute_cosine_similarity(embedding, medoid) for medoid in medoids])
             best_medoid_idx = int(np.argmax(similarity_score))
-            properties = { "properties": [{
+            if best_medoid_idx == -1: continue
+            if similarity_score[best_medoid_idx] < 0.5: continue
+            properties = {
                 "competency_id": competency_id,
                 "name" : competency["properties"]["name"],
                 "text": competency["properties"]["text"],
                 "cluster_id": clusters[best_medoid_idx]["properties"]["cluster_id"]
-            }]}
-            self.weaviate_client.add_embeddings(CollectionNames.COMPETENCY.value, embedding, properties)
+            }
+            self.weaviate_client.update_property_by_id(CollectionNames.COMPETENCY.value, competency["id"], properties)
 
         for index in range(len(texts)):
             text_entry = texts[index]
-            competency_id = self.weaviate_client.get_embeddings_by_property(CollectionNames.COMPETENCY.value, "cluster_id", labels[index])["properties"]["competency_id"]
-            properties = {"properties": [{
+            competency = self.weaviate_client.get_embeddings_by_property(CollectionNames.COMPETENCY.value, "cluster_id", str(labels[index]))
+            if not competency: continue
+            competency_id = competency[0]["properties"]["competency_id"]
+            properties = {
                 "text_id": text_entry["properties"]["text_id"],
                 "text": text_entry["properties"]["text"],
                 "competency_ids": [competency_id]
-            }]}
-            self.weaviate_client.update_property_by_id(CollectionNames.TEXT.value, text_entry["properties"]["text_id"], properties)
+            }
+            self.weaviate_client.update_property_by_id(CollectionNames.TEXT.value, text_entry["id"], properties)
 
         return
 
@@ -178,12 +211,16 @@ class PipelineWorkflows:
         medoids = np.array(entry["vector"] for entry in clusters)
         similarity_scores = np.array([compute_cosine_similarity(embedding, medoid) for medoid in medoids])
         best_medoid_idx = int(np.argmax(similarity_scores))
-        competency_to_match = self.weaviate_client.get_embeddings_by_property(CollectionNames.COMPETENCY.value, "cluster_id", clusters[best_medoid_idx]["properties"]["cluster_id"])[0]
+        if best_medoid_idx == -1: return
+        if similarity_scores[best_medoid_idx] < 0.5: return
+        competency = self.weaviate_client.get_embeddings_by_property(CollectionNames.COMPETENCY.value, "cluster_id", clusters[best_medoid_idx]["properties"]["cluster_id"])
+        if not competency: return
+        competency_to_match = competency[0]
 
-        properties = { "properties": [{
+        properties = {
                     "text_id": uuid,
                     "text": text ,
                     "competency_ids": competency_to_match["properties"]["competency_id"]
-        } ] }
+        }
         self.weaviate_client.add_embeddings(CollectionNames.TEXT.value, embedding, properties)
         return competency_to_match["properties"]["competency_id"]
