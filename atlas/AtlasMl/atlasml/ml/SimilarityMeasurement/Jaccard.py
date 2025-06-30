@@ -1,8 +1,12 @@
 import numpy as np
 from scipy.spatial.distance import jaccard
+
 from atlasml.ml.VectorEmbeddings.ModelDimension import ModelDimension
 
-def compute_jaccard_similarity(embedding_vector, model: ModelDimension, comparison_vector):
+
+def compute_jaccard_similarity(
+    embedding_vector, model: ModelDimension, comparison_vector
+):
     """
     Computes the Jaccard similarity between two vectors.
 

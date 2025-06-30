@@ -1,11 +1,12 @@
 syntax = "proto3";
 
-option java_multiple_files = true;
-option java_package = "de.tum.cit.aet.hyperion";
-option java_outer_classname = "HyperionProto";
-option objc_class_prefix = "Hyperion";
+package de.tum.cit.aet.artemis.hyperion;
 
-package hyperion;
+// --- Java-specific file-level options ---
+option java_package        = "de.tum.cit.aet.artemis.hyperion.generated";
+option java_outer_classname = "HyperionServiceProto";
+option java_multiple_files = true;
+option java_generic_services = false;
 
 /***********************
  ***   Core types    ***
@@ -72,6 +73,8 @@ message PingResponse {
 /******************************
  ***   Exercise Messages    ***
  ******************************/
+// Exercise Creation Step 1: Define Boundary Conditions
+service DefineBoundaryCondition { }
 
 message BoundaryConditionsDefinerRequest {
 
@@ -161,6 +164,12 @@ message GradingConfiguratorResponse {
   Repository test_repository = 5;
 }
 
+// Exercise Creation Step 8: Review and Refine
+service ReviewAndRefine {
+  rpc CheckInconsistencies(InconsistencyCheckRequest) returns (InconsistencyCheckResponse) {}
+  rpc RewriteProblemStatement(RewriteProblemStatementRequest) returns (RewriteProblemStatementResponse) {}
+}
+
 message InconsistencyCheckRequest {
   BoundaryConditions boundary_conditions = 1;
   ProblemStatement problem_statement = 2;
@@ -222,4 +231,12 @@ service GradingConfigurator {
 // Step 8: Verify Configuration
 service ConfigurationVerifier {
   rpc CheckInconsistencies(InconsistencyCheckRequest) returns (InconsistencyCheckResponse) {}
+}
+
+message RewriteProblemStatementRequest {
+  string text = 1;
+}
+
+message RewriteProblemStatementResponse {
+  string rewritten_text = 1;
 }

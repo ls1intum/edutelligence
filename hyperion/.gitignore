@@ -1,6 +1,9 @@
 .venv
 .DS_Store
 
+# Artemis sync configuration - stores path to Artemis project
+.artemis_sync_config.json
+
 # Idea files
 .idea/
 

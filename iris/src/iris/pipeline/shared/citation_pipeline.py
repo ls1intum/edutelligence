@@ -81,6 +81,13 @@ class CitationPipeline(Pipeline):
 
         formatted_string_lecture_page_chunks = ""
         for paragraph in lecture_retrieval_dto.lecture_unit_page_chunks:
+            if not paragraph.page_text_content:
+                continue
+            # Temporary fix for wrong links, e.g. https://artemis.tum.deattachments/...
+            if ".deattachment" in paragraph.lecture_unit_link:
+                paragraph.lecture_unit_link = paragraph.lecture_unit_link.replace(
+                    ".deattachment", ".de/api/core/files/attachment"
+                )
             lct = (
                 f"Lecture: {paragraph.lecture_name},"
                 f" Unit: {paragraph.lecture_unit_name},"
