@@ -138,12 +138,24 @@ class GrpcServer:
 
         # Map of servicer classes to their registration functions
         servicers = {
-            "DefineBoundaryConditionServicer": DefineBoundaryConditionServicer(model=self.model),
-            "DraftProblemStatementServicer": DraftProblemStatementServicer(model=self.model),
-            "SolutionRepositoryCreatorServicer": SolutionRepositoryCreatorServicer(model=self.model),
-            "CreateTemplateRepositoryServicer": CreateTemplateRepositoryServicer(model=self.model),
-            "CreateTestRepositoryServicer": CreateTestRepositoryServicer(model=self.model),
-            "FinalizeProblemStatementServicer": FinalizeProblemStatementServicer(model=self.model),
+            "DefineBoundaryConditionServicer": DefineBoundaryConditionServicer(
+                model=self.model
+            ),
+            "DraftProblemStatementServicer": DraftProblemStatementServicer(
+                model=self.model
+            ),
+            "SolutionRepositoryCreatorServicer": SolutionRepositoryCreatorServicer(
+                model=self.model
+            ),
+            "CreateTemplateRepositoryServicer": CreateTemplateRepositoryServicer(
+                model=self.model
+            ),
+            "CreateTestRepositoryServicer": CreateTestRepositoryServicer(
+                model=self.model
+            ),
+            "FinalizeProblemStatementServicer": FinalizeProblemStatementServicer(
+                model=self.model
+            ),
             "ConfigureGradingServicer": ConfigureGradingServicer(model=self.model),
             "ReviewAndRefineServicer": ReviewAndRefineServicer(),
         }

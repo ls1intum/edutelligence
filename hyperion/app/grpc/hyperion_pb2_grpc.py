@@ -5,23 +5,26 @@ import warnings
 
 import hyperion_pb2 as hyperion__pb2
 
-GRPC_GENERATED_VERSION = '1.71.0'
+GRPC_GENERATED_VERSION = "1.71.0"
 GRPC_VERSION = grpc.__version__
 _version_not_supported = False
 
 try:
     from grpc._utilities import first_version_is_lower
-    _version_not_supported = first_version_is_lower(GRPC_VERSION, GRPC_GENERATED_VERSION)
+
+    _version_not_supported = first_version_is_lower(
+        GRPC_VERSION, GRPC_GENERATED_VERSION
+    )
 except ImportError:
     _version_not_supported = True
 
 if _version_not_supported:
     raise RuntimeError(
-        f'The grpc package installed is at version {GRPC_VERSION},'
-        + f' but the generated code in hyperion_pb2_grpc.py depends on'
-        + f' grpcio>={GRPC_GENERATED_VERSION}.'
-        + f' Please upgrade your grpc module to grpcio>={GRPC_GENERATED_VERSION}'
-        + f' or downgrade your generated code using grpcio-tools<={GRPC_VERSION}.'
+        f"The grpc package installed is at version {GRPC_VERSION},"
+        + f" but the generated code in hyperion_pb2_grpc.py depends on"
+        + f" grpcio>={GRPC_GENERATED_VERSION}."
+        + f" Please upgrade your grpc module to grpcio>={GRPC_GENERATED_VERSION}"
+        + f" or downgrade your generated code using grpcio-tools<={GRPC_VERSION}."
     )
 
 
@@ -51,15 +54,17 @@ class DefineBoundaryConditionServicer(object):
 
 
 def add_DefineBoundaryConditionServicer_to_server(servicer, server):
-    rpc_method_handlers = {
-    }
+    rpc_method_handlers = {}
     generic_handler = grpc.method_handlers_generic_handler(
-            'de.tum.cit.aet.artemis.hyperion.DefineBoundaryCondition', rpc_method_handlers)
+        "de.tum.cit.aet.artemis.hyperion.DefineBoundaryCondition", rpc_method_handlers
+    )
     server.add_generic_rpc_handlers((generic_handler,))
-    server.add_registered_method_handlers('de.tum.cit.aet.artemis.hyperion.DefineBoundaryCondition', rpc_method_handlers)
+    server.add_registered_method_handlers(
+        "de.tum.cit.aet.artemis.hyperion.DefineBoundaryCondition", rpc_method_handlers
+    )
 
 
- # This class is part of an EXPERIMENTAL API.
+# This class is part of an EXPERIMENTAL API.
 class DefineBoundaryCondition(object):
     """*****************************
     **   Exercise Messages    ***
@@ -70,8 +75,7 @@ class DefineBoundaryCondition(object):
 
 
 class ReviewAndRefineStub(object):
-    """Exercise Creation Step 8: Review and Refine
-    """
+    """Exercise Creation Step 8: Review and Refine"""
 
     def __init__(self, channel):
         """Constructor.
@@ -80,73 +84,78 @@ class ReviewAndRefineStub(object):
             channel: A grpc.Channel.
         """
         self.CheckInconsistencies = channel.unary_unary(
-                '/de.tum.cit.aet.artemis.hyperion.ReviewAndRefine/CheckInconsistencies',
-                request_serializer=hyperion__pb2.InconsistencyCheckRequest.SerializeToString,
-                response_deserializer=hyperion__pb2.InconsistencyCheckResponse.FromString,
-                _registered_method=True)
+            "/de.tum.cit.aet.artemis.hyperion.ReviewAndRefine/CheckInconsistencies",
+            request_serializer=hyperion__pb2.InconsistencyCheckRequest.SerializeToString,
+            response_deserializer=hyperion__pb2.InconsistencyCheckResponse.FromString,
+            _registered_method=True,
+        )
         self.RewriteProblemStatement = channel.unary_unary(
-                '/de.tum.cit.aet.artemis.hyperion.ReviewAndRefine/RewriteProblemStatement',
-                request_serializer=hyperion__pb2.RewriteProblemStatementRequest.SerializeToString,
-                response_deserializer=hyperion__pb2.RewriteProblemStatementResponse.FromString,
-                _registered_method=True)
+            "/de.tum.cit.aet.artemis.hyperion.ReviewAndRefine/RewriteProblemStatement",
+            request_serializer=hyperion__pb2.RewriteProblemStatementRequest.SerializeToString,
+            response_deserializer=hyperion__pb2.RewriteProblemStatementResponse.FromString,
+            _registered_method=True,
+        )
 
 
 class ReviewAndRefineServicer(object):
-    """Exercise Creation Step 8: Review and Refine
-    """
+    """Exercise Creation Step 8: Review and Refine"""
 
     def CheckInconsistencies(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details('Method not implemented!')
-        raise NotImplementedError('Method not implemented!')
+        context.set_details("Method not implemented!")
+        raise NotImplementedError("Method not implemented!")
 
     def RewriteProblemStatement(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details('Method not implemented!')
-        raise NotImplementedError('Method not implemented!')
+        context.set_details("Method not implemented!")
+        raise NotImplementedError("Method not implemented!")
 
 
 def add_ReviewAndRefineServicer_to_server(servicer, server):
     rpc_method_handlers = {
-            'CheckInconsistencies': grpc.unary_unary_rpc_method_handler(
-                    servicer.CheckInconsistencies,
-                    request_deserializer=hyperion__pb2.InconsistencyCheckRequest.FromString,
-                    response_serializer=hyperion__pb2.InconsistencyCheckResponse.SerializeToString,
-            ),
-            'RewriteProblemStatement': grpc.unary_unary_rpc_method_handler(
-                    servicer.RewriteProblemStatement,
-                    request_deserializer=hyperion__pb2.RewriteProblemStatementRequest.FromString,
-                    response_serializer=hyperion__pb2.RewriteProblemStatementResponse.SerializeToString,
-            ),
+        "CheckInconsistencies": grpc.unary_unary_rpc_method_handler(
+            servicer.CheckInconsistencies,
+            request_deserializer=hyperion__pb2.InconsistencyCheckRequest.FromString,
+            response_serializer=hyperion__pb2.InconsistencyCheckResponse.SerializeToString,
+        ),
+        "RewriteProblemStatement": grpc.unary_unary_rpc_method_handler(
+            servicer.RewriteProblemStatement,
+            request_deserializer=hyperion__pb2.RewriteProblemStatementRequest.FromString,
+            response_serializer=hyperion__pb2.RewriteProblemStatementResponse.SerializeToString,
+        ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
-            'de.tum.cit.aet.artemis.hyperion.ReviewAndRefine', rpc_method_handlers)
+        "de.tum.cit.aet.artemis.hyperion.ReviewAndRefine", rpc_method_handlers
+    )
     server.add_generic_rpc_handlers((generic_handler,))
-    server.add_registered_method_handlers('de.tum.cit.aet.artemis.hyperion.ReviewAndRefine', rpc_method_handlers)
+    server.add_registered_method_handlers(
+        "de.tum.cit.aet.artemis.hyperion.ReviewAndRefine", rpc_method_handlers
+    )
 
 
- # This class is part of an EXPERIMENTAL API.
+# This class is part of an EXPERIMENTAL API.
 class ReviewAndRefine(object):
-    """Exercise Creation Step 8: Review and Refine
-    """
+    """Exercise Creation Step 8: Review and Refine"""
 
     @staticmethod
-    def CheckInconsistencies(request,
-            target,
-            options=(),
-            channel_credentials=None,
-            call_credentials=None,
-            insecure=False,
-            compression=None,
-            wait_for_ready=None,
-            timeout=None,
-            metadata=None):
+    def CheckInconsistencies(
+        request,
+        target,
+        options=(),
+        channel_credentials=None,
+        call_credentials=None,
+        insecure=False,
+        compression=None,
+        wait_for_ready=None,
+        timeout=None,
+        metadata=None,
+    ):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/de.tum.cit.aet.artemis.hyperion.ReviewAndRefine/CheckInconsistencies',
+            "/de.tum.cit.aet.artemis.hyperion.ReviewAndRefine/CheckInconsistencies",
             hyperion__pb2.InconsistencyCheckRequest.SerializeToString,
             hyperion__pb2.InconsistencyCheckResponse.FromString,
             options,
@@ -157,23 +166,26 @@ class ReviewAndRefine(object):
             wait_for_ready,
             timeout,
             metadata,
-            _registered_method=True)
+            _registered_method=True,
+        )
 
     @staticmethod
-    def RewriteProblemStatement(request,
-            target,
-            options=(),
-            channel_credentials=None,
-            call_credentials=None,
-            insecure=False,
-            compression=None,
-            wait_for_ready=None,
-            timeout=None,
-            metadata=None):
+    def RewriteProblemStatement(
+        request,
+        target,
+        options=(),
+        channel_credentials=None,
+        call_credentials=None,
+        insecure=False,
+        compression=None,
+        wait_for_ready=None,
+        timeout=None,
+        metadata=None,
+    ):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/de.tum.cit.aet.artemis.hyperion.ReviewAndRefine/RewriteProblemStatement',
+            "/de.tum.cit.aet.artemis.hyperion.ReviewAndRefine/RewriteProblemStatement",
             hyperion__pb2.RewriteProblemStatementRequest.SerializeToString,
             hyperion__pb2.RewriteProblemStatementResponse.FromString,
             options,
@@ -184,7 +196,8 @@ class ReviewAndRefine(object):
             wait_for_ready,
             timeout,
             metadata,
-            _registered_method=True)
+            _registered_method=True,
+        )
 
 
 class HealthStub(object):
@@ -204,10 +217,11 @@ class HealthStub(object):
             channel: A grpc.Channel.
         """
         self.Ping = channel.unary_unary(
-                '/de.tum.cit.aet.artemis.hyperion.Health/Ping',
-                request_serializer=hyperion__pb2.PingRequest.SerializeToString,
-                response_deserializer=hyperion__pb2.PingResponse.FromString,
-                _registered_method=True)
+            "/de.tum.cit.aet.artemis.hyperion.Health/Ping",
+            request_serializer=hyperion__pb2.PingRequest.SerializeToString,
+            response_deserializer=hyperion__pb2.PingResponse.FromString,
+            _registered_method=True,
+        )
 
 
 class HealthServicer(object):
@@ -223,25 +237,28 @@ class HealthServicer(object):
     def Ping(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details('Method not implemented!')
-        raise NotImplementedError('Method not implemented!')
+        context.set_details("Method not implemented!")
+        raise NotImplementedError("Method not implemented!")
 
 
 def add_HealthServicer_to_server(servicer, server):
     rpc_method_handlers = {
-            'Ping': grpc.unary_unary_rpc_method_handler(
-                    servicer.Ping,
-                    request_deserializer=hyperion__pb2.PingRequest.FromString,
-                    response_serializer=hyperion__pb2.PingResponse.SerializeToString,
-            ),
+        "Ping": grpc.unary_unary_rpc_method_handler(
+            servicer.Ping,
+            request_deserializer=hyperion__pb2.PingRequest.FromString,
+            response_serializer=hyperion__pb2.PingResponse.SerializeToString,
+        ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
-            'de.tum.cit.aet.artemis.hyperion.Health', rpc_method_handlers)
+        "de.tum.cit.aet.artemis.hyperion.Health", rpc_method_handlers
+    )
     server.add_generic_rpc_handlers((generic_handler,))
-    server.add_registered_method_handlers('de.tum.cit.aet.artemis.hyperion.Health', rpc_method_handlers)
+    server.add_registered_method_handlers(
+        "de.tum.cit.aet.artemis.hyperion.Health", rpc_method_handlers
+    )
 
 
- # This class is part of an EXPERIMENTAL API.
+# This class is part of an EXPERIMENTAL API.
 class Health(object):
     """*****************************
     **   Service Definitions  ***
@@ -253,20 +270,22 @@ class Health(object):
     """
 
     @staticmethod
-    def Ping(request,
-            target,
-            options=(),
-            channel_credentials=None,
-            call_credentials=None,
-            insecure=False,
-            compression=None,
-            wait_for_ready=None,
-            timeout=None,
-            metadata=None):
+    def Ping(
+        request,
+        target,
+        options=(),
+        channel_credentials=None,
+        call_credentials=None,
+        insecure=False,
+        compression=None,
+        wait_for_ready=None,
+        timeout=None,
+        metadata=None,
+    ):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/de.tum.cit.aet.artemis.hyperion.Health/Ping',
+            "/de.tum.cit.aet.artemis.hyperion.Health/Ping",
             hyperion__pb2.PingRequest.SerializeToString,
             hyperion__pb2.PingResponse.FromString,
             options,
@@ -277,12 +296,12 @@ class Health(object):
             wait_for_ready,
             timeout,
             metadata,
-            _registered_method=True)
+            _registered_method=True,
+        )
 
 
 class BoundaryConditionsDefinerStub(object):
-    """Step 1: Define Boundary Conditions
-    """
+    """Step 1: Define Boundary Conditions"""
 
     def __init__(self, channel):
         """Constructor.
@@ -291,57 +310,61 @@ class BoundaryConditionsDefinerStub(object):
             channel: A grpc.Channel.
         """
         self.DefineBoundaryConditions = channel.unary_unary(
-                '/de.tum.cit.aet.artemis.hyperion.BoundaryConditionsDefiner/DefineBoundaryConditions',
-                request_serializer=hyperion__pb2.BoundaryConditionsDefinerRequest.SerializeToString,
-                response_deserializer=hyperion__pb2.BoundaryConditionsDefinerResponse.FromString,
-                _registered_method=True)
+            "/de.tum.cit.aet.artemis.hyperion.BoundaryConditionsDefiner/DefineBoundaryConditions",
+            request_serializer=hyperion__pb2.BoundaryConditionsDefinerRequest.SerializeToString,
+            response_deserializer=hyperion__pb2.BoundaryConditionsDefinerResponse.FromString,
+            _registered_method=True,
+        )
 
 
 class BoundaryConditionsDefinerServicer(object):
-    """Step 1: Define Boundary Conditions
-    """
+    """Step 1: Define Boundary Conditions"""
 
     def DefineBoundaryConditions(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details('Method not implemented!')
-        raise NotImplementedError('Method not implemented!')
+        context.set_details("Method not implemented!")
+        raise NotImplementedError("Method not implemented!")
 
 
 def add_BoundaryConditionsDefinerServicer_to_server(servicer, server):
     rpc_method_handlers = {
-            'DefineBoundaryConditions': grpc.unary_unary_rpc_method_handler(
-                    servicer.DefineBoundaryConditions,
-                    request_deserializer=hyperion__pb2.BoundaryConditionsDefinerRequest.FromString,
-                    response_serializer=hyperion__pb2.BoundaryConditionsDefinerResponse.SerializeToString,
-            ),
+        "DefineBoundaryConditions": grpc.unary_unary_rpc_method_handler(
+            servicer.DefineBoundaryConditions,
+            request_deserializer=hyperion__pb2.BoundaryConditionsDefinerRequest.FromString,
+            response_serializer=hyperion__pb2.BoundaryConditionsDefinerResponse.SerializeToString,
+        ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
-            'de.tum.cit.aet.artemis.hyperion.BoundaryConditionsDefiner', rpc_method_handlers)
+        "de.tum.cit.aet.artemis.hyperion.BoundaryConditionsDefiner", rpc_method_handlers
+    )
     server.add_generic_rpc_handlers((generic_handler,))
-    server.add_registered_method_handlers('de.tum.cit.aet.artemis.hyperion.BoundaryConditionsDefiner', rpc_method_handlers)
+    server.add_registered_method_handlers(
+        "de.tum.cit.aet.artemis.hyperion.BoundaryConditionsDefiner", rpc_method_handlers
+    )
 
 
- # This class is part of an EXPERIMENTAL API.
+# This class is part of an EXPERIMENTAL API.
 class BoundaryConditionsDefiner(object):
-    """Step 1: Define Boundary Conditions
-    """
+    """Step 1: Define Boundary Conditions"""
 
     @staticmethod
-    def DefineBoundaryConditions(request,
-            target,
-            options=(),
-            channel_credentials=None,
-            call_credentials=None,
-            insecure=False,
-            compression=None,
-            wait_for_ready=None,
-            timeout=None,
-            metadata=None):
+    def DefineBoundaryConditions(
+        request,
+        target,
+        options=(),
+        channel_credentials=None,
+        call_credentials=None,
+        insecure=False,
+        compression=None,
+        wait_for_ready=None,
+        timeout=None,
+        metadata=None,
+    ):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/de.tum.cit.aet.artemis.hyperion.BoundaryConditionsDefiner/DefineBoundaryConditions',
+            "/de.tum.cit.aet.artemis.hyperion.BoundaryConditionsDefiner/DefineBoundaryConditions",
             hyperion__pb2.BoundaryConditionsDefinerRequest.SerializeToString,
             hyperion__pb2.BoundaryConditionsDefinerResponse.FromString,
             options,
@@ -352,12 +375,12 @@ class BoundaryConditionsDefiner(object):
             wait_for_ready,
             timeout,
             metadata,
-            _registered_method=True)
+            _registered_method=True,
+        )
 
 
 class ProblemStatementDrafterStub(object):
-    """Step 2: Create Draft Problem Statement
-    """
+    """Step 2: Create Draft Problem Statement"""
 
     def __init__(self, channel):
         """Constructor.
@@ -366,57 +389,61 @@ class ProblemStatementDrafterStub(object):
             channel: A grpc.Channel.
         """
         self.DraftProblemStatement = channel.unary_unary(
-                '/de.tum.cit.aet.artemis.hyperion.ProblemStatementDrafter/DraftProblemStatement',
-                request_serializer=hyperion__pb2.ProblemStatementDrafterRequest.SerializeToString,
-                response_deserializer=hyperion__pb2.ProblemStatementDrafterResponse.FromString,
-                _registered_method=True)
+            "/de.tum.cit.aet.artemis.hyperion.ProblemStatementDrafter/DraftProblemStatement",
+            request_serializer=hyperion__pb2.ProblemStatementDrafterRequest.SerializeToString,
+            response_deserializer=hyperion__pb2.ProblemStatementDrafterResponse.FromString,
+            _registered_method=True,
+        )
 
 
 class ProblemStatementDrafterServicer(object):
-    """Step 2: Create Draft Problem Statement
-    """
+    """Step 2: Create Draft Problem Statement"""
 
     def DraftProblemStatement(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details('Method not implemented!')
-        raise NotImplementedError('Method not implemented!')
+        context.set_details("Method not implemented!")
+        raise NotImplementedError("Method not implemented!")
 
 
 def add_ProblemStatementDrafterServicer_to_server(servicer, server):
     rpc_method_handlers = {
-            'DraftProblemStatement': grpc.unary_unary_rpc_method_handler(
-                    servicer.DraftProblemStatement,
-                    request_deserializer=hyperion__pb2.ProblemStatementDrafterRequest.FromString,
-                    response_serializer=hyperion__pb2.ProblemStatementDrafterResponse.SerializeToString,
-            ),
+        "DraftProblemStatement": grpc.unary_unary_rpc_method_handler(
+            servicer.DraftProblemStatement,
+            request_deserializer=hyperion__pb2.ProblemStatementDrafterRequest.FromString,
+            response_serializer=hyperion__pb2.ProblemStatementDrafterResponse.SerializeToString,
+        ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
-            'de.tum.cit.aet.artemis.hyperion.ProblemStatementDrafter', rpc_method_handlers)
+        "de.tum.cit.aet.artemis.hyperion.ProblemStatementDrafter", rpc_method_handlers
+    )
     server.add_generic_rpc_handlers((generic_handler,))
-    server.add_registered_method_handlers('de.tum.cit.aet.artemis.hyperion.ProblemStatementDrafter', rpc_method_handlers)
+    server.add_registered_method_handlers(
+        "de.tum.cit.aet.artemis.hyperion.ProblemStatementDrafter", rpc_method_handlers
+    )
 
 
- # This class is part of an EXPERIMENTAL API.
+# This class is part of an EXPERIMENTAL API.
 class ProblemStatementDrafter(object):
-    """Step 2: Create Draft Problem Statement
-    """
+    """Step 2: Create Draft Problem Statement"""
 
     @staticmethod
-    def DraftProblemStatement(request,
-            target,
-            options=(),
-            channel_credentials=None,
-            call_credentials=None,
-            insecure=False,
-            compression=None,
-            wait_for_ready=None,
-            timeout=None,
-            metadata=None):
+    def DraftProblemStatement(
+        request,
+        target,
+        options=(),
+        channel_credentials=None,
+        call_credentials=None,
+        insecure=False,
+        compression=None,
+        wait_for_ready=None,
+        timeout=None,
+        metadata=None,
+    ):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/de.tum.cit.aet.artemis.hyperion.ProblemStatementDrafter/DraftProblemStatement',
+            "/de.tum.cit.aet.artemis.hyperion.ProblemStatementDrafter/DraftProblemStatement",
             hyperion__pb2.ProblemStatementDrafterRequest.SerializeToString,
             hyperion__pb2.ProblemStatementDrafterResponse.FromString,
             options,
@@ -427,12 +454,12 @@ class ProblemStatementDrafter(object):
             wait_for_ready,
             timeout,
             metadata,
-            _registered_method=True)
+            _registered_method=True,
+        )
 
 
 class SolutionRepositoryCreatorStub(object):
-    """Step 3: Create Solution Repository
-    """
+    """Step 3: Create Solution Repository"""
 
     def __init__(self, channel):
         """Constructor.
@@ -441,57 +468,61 @@ class SolutionRepositoryCreatorStub(object):
             channel: A grpc.Channel.
         """
         self.CreateSolutionRepository = channel.unary_unary(
-                '/de.tum.cit.aet.artemis.hyperion.SolutionRepositoryCreator/CreateSolutionRepository',
-                request_serializer=hyperion__pb2.SolutionRepositoryCreatorRequest.SerializeToString,
-                response_deserializer=hyperion__pb2.SolutionRepositoryCreatorResponse.FromString,
-                _registered_method=True)
+            "/de.tum.cit.aet.artemis.hyperion.SolutionRepositoryCreator/CreateSolutionRepository",
+            request_serializer=hyperion__pb2.SolutionRepositoryCreatorRequest.SerializeToString,
+            response_deserializer=hyperion__pb2.SolutionRepositoryCreatorResponse.FromString,
+            _registered_method=True,
+        )
 
 
 class SolutionRepositoryCreatorServicer(object):
-    """Step 3: Create Solution Repository
-    """
+    """Step 3: Create Solution Repository"""
 
     def CreateSolutionRepository(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details('Method not implemented!')
-        raise NotImplementedError('Method not implemented!')
+        context.set_details("Method not implemented!")
+        raise NotImplementedError("Method not implemented!")
 
 
 def add_SolutionRepositoryCreatorServicer_to_server(servicer, server):
     rpc_method_handlers = {
-            'CreateSolutionRepository': grpc.unary_unary_rpc_method_handler(
-                    servicer.CreateSolutionRepository,
-                    request_deserializer=hyperion__pb2.SolutionRepositoryCreatorRequest.FromString,
-                    response_serializer=hyperion__pb2.SolutionRepositoryCreatorResponse.SerializeToString,
-            ),
+        "CreateSolutionRepository": grpc.unary_unary_rpc_method_handler(
+            servicer.CreateSolutionRepository,
+            request_deserializer=hyperion__pb2.SolutionRepositoryCreatorRequest.FromString,
+            response_serializer=hyperion__pb2.SolutionRepositoryCreatorResponse.SerializeToString,
+        ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
-            'de.tum.cit.aet.artemis.hyperion.SolutionRepositoryCreator', rpc_method_handlers)
+        "de.tum.cit.aet.artemis.hyperion.SolutionRepositoryCreator", rpc_method_handlers
+    )
     server.add_generic_rpc_handlers((generic_handler,))
-    server.add_registered_method_handlers('de.tum.cit.aet.artemis.hyperion.SolutionRepositoryCreator', rpc_method_handlers)
+    server.add_registered_method_handlers(
+        "de.tum.cit.aet.artemis.hyperion.SolutionRepositoryCreator", rpc_method_handlers
+    )
 
 
- # This class is part of an EXPERIMENTAL API.
+# This class is part of an EXPERIMENTAL API.
 class SolutionRepositoryCreator(object):
-    """Step 3: Create Solution Repository
-    """
+    """Step 3: Create Solution Repository"""
 
     @staticmethod
-    def CreateSolutionRepository(request,
-            target,
-            options=(),
-            channel_credentials=None,
-            call_credentials=None,
-            insecure=False,
-            compression=None,
-            wait_for_ready=None,
-            timeout=None,
-            metadata=None):
+    def CreateSolutionRepository(
+        request,
+        target,
+        options=(),
+        channel_credentials=None,
+        call_credentials=None,
+        insecure=False,
+        compression=None,
+        wait_for_ready=None,
+        timeout=None,
+        metadata=None,
+    ):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/de.tum.cit.aet.artemis.hyperion.SolutionRepositoryCreator/CreateSolutionRepository',
+            "/de.tum.cit.aet.artemis.hyperion.SolutionRepositoryCreator/CreateSolutionRepository",
             hyperion__pb2.SolutionRepositoryCreatorRequest.SerializeToString,
             hyperion__pb2.SolutionRepositoryCreatorResponse.FromString,
             options,
@@ -502,12 +533,12 @@ class SolutionRepositoryCreator(object):
             wait_for_ready,
             timeout,
             metadata,
-            _registered_method=True)
+            _registered_method=True,
+        )
 
 
 class TemplateRepositoryCreatorStub(object):
-    """Step 4: Create Template Repository
-    """
+    """Step 4: Create Template Repository"""
 
     def __init__(self, channel):
         """Constructor.
@@ -516,57 +547,61 @@ class TemplateRepositoryCreatorStub(object):
             channel: A grpc.Channel.
         """
         self.CreateTemplateRepository = channel.unary_unary(
-                '/de.tum.cit.aet.artemis.hyperion.TemplateRepositoryCreator/CreateTemplateRepository',
-                request_serializer=hyperion__pb2.TemplateRepositoryCreatorRequest.SerializeToString,
-                response_deserializer=hyperion__pb2.TemplateRepositoryCreatorResponse.FromString,
-                _registered_method=True)
+            "/de.tum.cit.aet.artemis.hyperion.TemplateRepositoryCreator/CreateTemplateRepository",
+            request_serializer=hyperion__pb2.TemplateRepositoryCreatorRequest.SerializeToString,
+            response_deserializer=hyperion__pb2.TemplateRepositoryCreatorResponse.FromString,
+            _registered_method=True,
+        )
 
 
 class TemplateRepositoryCreatorServicer(object):
-    """Step 4: Create Template Repository
-    """
+    """Step 4: Create Template Repository"""
 
     def CreateTemplateRepository(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details('Method not implemented!')
-        raise NotImplementedError('Method not implemented!')
+        context.set_details("Method not implemented!")
+        raise NotImplementedError("Method not implemented!")
 
 
 def add_TemplateRepositoryCreatorServicer_to_server(servicer, server):
     rpc_method_handlers = {
-            'CreateTemplateRepository': grpc.unary_unary_rpc_method_handler(
-                    servicer.CreateTemplateRepository,
-                    request_deserializer=hyperion__pb2.TemplateRepositoryCreatorRequest.FromString,
-                    response_serializer=hyperion__pb2.TemplateRepositoryCreatorResponse.SerializeToString,
-            ),
+        "CreateTemplateRepository": grpc.unary_unary_rpc_method_handler(
+            servicer.CreateTemplateRepository,
+            request_deserializer=hyperion__pb2.TemplateRepositoryCreatorRequest.FromString,
+            response_serializer=hyperion__pb2.TemplateRepositoryCreatorResponse.SerializeToString,
+        ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
-            'de.tum.cit.aet.artemis.hyperion.TemplateRepositoryCreator', rpc_method_handlers)
+        "de.tum.cit.aet.artemis.hyperion.TemplateRepositoryCreator", rpc_method_handlers
+    )
     server.add_generic_rpc_handlers((generic_handler,))
-    server.add_registered_method_handlers('de.tum.cit.aet.artemis.hyperion.TemplateRepositoryCreator', rpc_method_handlers)
+    server.add_registered_method_handlers(
+        "de.tum.cit.aet.artemis.hyperion.TemplateRepositoryCreator", rpc_method_handlers
+    )
 
 
- # This class is part of an EXPERIMENTAL API.
+# This class is part of an EXPERIMENTAL API.
 class TemplateRepositoryCreator(object):
-    """Step 4: Create Template Repository
-    """
+    """Step 4: Create Template Repository"""
 
     @staticmethod
-    def CreateTemplateRepository(request,
-            target,
-            options=(),
-            channel_credentials=None,
-            call_credentials=None,
-            insecure=False,
-            compression=None,
-            wait_for_ready=None,
-            timeout=None,
-            metadata=None):
+    def CreateTemplateRepository(
+        request,
+        target,
+        options=(),
+        channel_credentials=None,
+        call_credentials=None,
+        insecure=False,
+        compression=None,
+        wait_for_ready=None,
+        timeout=None,
+        metadata=None,
+    ):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/de.tum.cit.aet.artemis.hyperion.TemplateRepositoryCreator/CreateTemplateRepository',
+            "/de.tum.cit.aet.artemis.hyperion.TemplateRepositoryCreator/CreateTemplateRepository",
             hyperion__pb2.TemplateRepositoryCreatorRequest.SerializeToString,
             hyperion__pb2.TemplateRepositoryCreatorResponse.FromString,
             options,
@@ -577,12 +612,12 @@ class TemplateRepositoryCreator(object):
             wait_for_ready,
             timeout,
             metadata,
-            _registered_method=True)
+            _registered_method=True,
+        )
 
 
 class TestRepositoryCreatorStub(object):
-    """Step 5: Create Test Repository
-    """
+    """Step 5: Create Test Repository"""
 
     def __init__(self, channel):
         """Constructor.
@@ -591,57 +626,61 @@ class TestRepositoryCreatorStub(object):
             channel: A grpc.Channel.
         """
         self.CreateTestRepository = channel.unary_unary(
-                '/de.tum.cit.aet.artemis.hyperion.TestRepositoryCreator/CreateTestRepository',
-                request_serializer=hyperion__pb2.TestRepositoryCreatorRequest.SerializeToString,
-                response_deserializer=hyperion__pb2.TestRepositoryCreatorResponse.FromString,
-                _registered_method=True)
+            "/de.tum.cit.aet.artemis.hyperion.TestRepositoryCreator/CreateTestRepository",
+            request_serializer=hyperion__pb2.TestRepositoryCreatorRequest.SerializeToString,
+            response_deserializer=hyperion__pb2.TestRepositoryCreatorResponse.FromString,
+            _registered_method=True,
+        )
 
 
 class TestRepositoryCreatorServicer(object):
-    """Step 5: Create Test Repository
-    """
+    """Step 5: Create Test Repository"""
 
     def CreateTestRepository(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details('Method not implemented!')
-        raise NotImplementedError('Method not implemented!')
+        context.set_details("Method not implemented!")
+        raise NotImplementedError("Method not implemented!")
 
 
 def add_TestRepositoryCreatorServicer_to_server(servicer, server):
     rpc_method_handlers = {
-            'CreateTestRepository': grpc.unary_unary_rpc_method_handler(
-                    servicer.CreateTestRepository,
-                    request_deserializer=hyperion__pb2.TestRepositoryCreatorRequest.FromString,
-                    response_serializer=hyperion__pb2.TestRepositoryCreatorResponse.SerializeToString,
-            ),
+        "CreateTestRepository": grpc.unary_unary_rpc_method_handler(
+            servicer.CreateTestRepository,
+            request_deserializer=hyperion__pb2.TestRepositoryCreatorRequest.FromString,
+            response_serializer=hyperion__pb2.TestRepositoryCreatorResponse.SerializeToString,
+        ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
-            'de.tum.cit.aet.artemis.hyperion.TestRepositoryCreator', rpc_method_handlers)
+        "de.tum.cit.aet.artemis.hyperion.TestRepositoryCreator", rpc_method_handlers
+    )
     server.add_generic_rpc_handlers((generic_handler,))
-    server.add_registered_method_handlers('de.tum.cit.aet.artemis.hyperion.TestRepositoryCreator', rpc_method_handlers)
+    server.add_registered_method_handlers(
+        "de.tum.cit.aet.artemis.hyperion.TestRepositoryCreator", rpc_method_handlers
+    )
 
 
- # This class is part of an EXPERIMENTAL API.
+# This class is part of an EXPERIMENTAL API.
 class TestRepositoryCreator(object):
-    """Step 5: Create Test Repository
-    """
+    """Step 5: Create Test Repository"""
 
     @staticmethod
-    def CreateTestRepository(request,
-            target,
-            options=(),
-            channel_credentials=None,
-            call_credentials=None,
-            insecure=False,
-            compression=None,
-            wait_for_ready=None,
-            timeout=None,
-            metadata=None):
+    def CreateTestRepository(
+        request,
+        target,
+        options=(),
+        channel_credentials=None,
+        call_credentials=None,
+        insecure=False,
+        compression=None,
+        wait_for_ready=None,
+        timeout=None,
+        metadata=None,
+    ):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/de.tum.cit.aet.artemis.hyperion.TestRepositoryCreator/CreateTestRepository',
+            "/de.tum.cit.aet.artemis.hyperion.TestRepositoryCreator/CreateTestRepository",
             hyperion__pb2.TestRepositoryCreatorRequest.SerializeToString,
             hyperion__pb2.TestRepositoryCreatorResponse.FromString,
             options,
@@ -652,12 +691,12 @@ class TestRepositoryCreator(object):
             wait_for_ready,
             timeout,
             metadata,
-            _registered_method=True)
+            _registered_method=True,
+        )
 
 
 class ProblemStatementFinalizerStub(object):
-    """Step 6: Finalize Problem Statement
-    """
+    """Step 6: Finalize Problem Statement"""
 
     def __init__(self, channel):
         """Constructor.
@@ -666,57 +705,61 @@ class ProblemStatementFinalizerStub(object):
             channel: A grpc.Channel.
         """
         self.FinalizeProblemStatement = channel.unary_unary(
-                '/de.tum.cit.aet.artemis.hyperion.ProblemStatementFinalizer/FinalizeProblemStatement',
-                request_serializer=hyperion__pb2.ProblemStatementFinalizerRequest.SerializeToString,
-                response_deserializer=hyperion__pb2.ProblemStatementFinalizerResponse.FromString,
-                _registered_method=True)
+            "/de.tum.cit.aet.artemis.hyperion.ProblemStatementFinalizer/FinalizeProblemStatement",
+            request_serializer=hyperion__pb2.ProblemStatementFinalizerRequest.SerializeToString,
+            response_deserializer=hyperion__pb2.ProblemStatementFinalizerResponse.FromString,
+            _registered_method=True,
+        )
 
 
 class ProblemStatementFinalizerServicer(object):
-    """Step 6: Finalize Problem Statement
-    """
+    """Step 6: Finalize Problem Statement"""
 
     def FinalizeProblemStatement(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details('Method not implemented!')
-        raise NotImplementedError('Method not implemented!')
+        context.set_details("Method not implemented!")
+        raise NotImplementedError("Method not implemented!")
 
 
 def add_ProblemStatementFinalizerServicer_to_server(servicer, server):
     rpc_method_handlers = {
-            'FinalizeProblemStatement': grpc.unary_unary_rpc_method_handler(
-                    servicer.FinalizeProblemStatement,
-                    request_deserializer=hyperion__pb2.ProblemStatementFinalizerRequest.FromString,
-                    response_serializer=hyperion__pb2.ProblemStatementFinalizerResponse.SerializeToString,
-            ),
+        "FinalizeProblemStatement": grpc.unary_unary_rpc_method_handler(
+            servicer.FinalizeProblemStatement,
+            request_deserializer=hyperion__pb2.ProblemStatementFinalizerRequest.FromString,
+            response_serializer=hyperion__pb2.ProblemStatementFinalizerResponse.SerializeToString,
+        ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
-            'de.tum.cit.aet.artemis.hyperion.ProblemStatementFinalizer', rpc_method_handlers)
+        "de.tum.cit.aet.artemis.hyperion.ProblemStatementFinalizer", rpc_method_handlers
+    )
     server.add_generic_rpc_handlers((generic_handler,))
-    server.add_registered_method_handlers('de.tum.cit.aet.artemis.hyperion.ProblemStatementFinalizer', rpc_method_handlers)
+    server.add_registered_method_handlers(
+        "de.tum.cit.aet.artemis.hyperion.ProblemStatementFinalizer", rpc_method_handlers
+    )
 
 
- # This class is part of an EXPERIMENTAL API.
+# This class is part of an EXPERIMENTAL API.
 class ProblemStatementFinalizer(object):
-    """Step 6: Finalize Problem Statement
-    """
+    """Step 6: Finalize Problem Statement"""
 
     @staticmethod
-    def FinalizeProblemStatement(request,
-            target,
-            options=(),
-            channel_credentials=None,
-            call_credentials=None,
-            insecure=False,
-            compression=None,
-            wait_for_ready=None,
-            timeout=None,
-            metadata=None):
+    def FinalizeProblemStatement(
+        request,
+        target,
+        options=(),
+        channel_credentials=None,
+        call_credentials=None,
+        insecure=False,
+        compression=None,
+        wait_for_ready=None,
+        timeout=None,
+        metadata=None,
+    ):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/de.tum.cit.aet.artemis.hyperion.ProblemStatementFinalizer/FinalizeProblemStatement',
+            "/de.tum.cit.aet.artemis.hyperion.ProblemStatementFinalizer/FinalizeProblemStatement",
             hyperion__pb2.ProblemStatementFinalizerRequest.SerializeToString,
             hyperion__pb2.ProblemStatementFinalizerResponse.FromString,
             options,
@@ -727,12 +770,12 @@ class ProblemStatementFinalizer(object):
             wait_for_ready,
             timeout,
             metadata,
-            _registered_method=True)
+            _registered_method=True,
+        )
 
 
 class GradingConfiguratorStub(object):
-    """Step 7: Configure Grading
-    """
+    """Step 7: Configure Grading"""
 
     def __init__(self, channel):
         """Constructor.
@@ -741,57 +784,61 @@ class GradingConfiguratorStub(object):
             channel: A grpc.Channel.
         """
         self.ConfigureGrading = channel.unary_unary(
-                '/de.tum.cit.aet.artemis.hyperion.GradingConfigurator/ConfigureGrading',
-                request_serializer=hyperion__pb2.GradingConfiguratorRequest.SerializeToString,
-                response_deserializer=hyperion__pb2.GradingConfiguratorResponse.FromString,
-                _registered_method=True)
+            "/de.tum.cit.aet.artemis.hyperion.GradingConfigurator/ConfigureGrading",
+            request_serializer=hyperion__pb2.GradingConfiguratorRequest.SerializeToString,
+            response_deserializer=hyperion__pb2.GradingConfiguratorResponse.FromString,
+            _registered_method=True,
+        )
 
 
 class GradingConfiguratorServicer(object):
-    """Step 7: Configure Grading
-    """
+    """Step 7: Configure Grading"""
 
     def ConfigureGrading(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details('Method not implemented!')
-        raise NotImplementedError('Method not implemented!')
+        context.set_details("Method not implemented!")
+        raise NotImplementedError("Method not implemented!")
 
 
 def add_GradingConfiguratorServicer_to_server(servicer, server):
     rpc_method_handlers = {
-            'ConfigureGrading': grpc.unary_unary_rpc_method_handler(
-                    servicer.ConfigureGrading,
-                    request_deserializer=hyperion__pb2.GradingConfiguratorRequest.FromString,
-                    response_serializer=hyperion__pb2.GradingConfiguratorResponse.SerializeToString,
-            ),
+        "ConfigureGrading": grpc.unary_unary_rpc_method_handler(
+            servicer.ConfigureGrading,
+            request_deserializer=hyperion__pb2.GradingConfiguratorRequest.FromString,
+            response_serializer=hyperion__pb2.GradingConfiguratorResponse.SerializeToString,
+        ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
-            'de.tum.cit.aet.artemis.hyperion.GradingConfigurator', rpc_method_handlers)
+        "de.tum.cit.aet.artemis.hyperion.GradingConfigurator", rpc_method_handlers
+    )
     server.add_generic_rpc_handlers((generic_handler,))
-    server.add_registered_method_handlers('de.tum.cit.aet.artemis.hyperion.GradingConfigurator', rpc_method_handlers)
+    server.add_registered_method_handlers(
+        "de.tum.cit.aet.artemis.hyperion.GradingConfigurator", rpc_method_handlers
+    )
 
 
- # This class is part of an EXPERIMENTAL API.
+# This class is part of an EXPERIMENTAL API.
 class GradingConfigurator(object):
-    """Step 7: Configure Grading
-    """
+    """Step 7: Configure Grading"""
 
     @staticmethod
-    def ConfigureGrading(request,
-            target,
-            options=(),
-            channel_credentials=None,
-            call_credentials=None,
-            insecure=False,
-            compression=None,
-            wait_for_ready=None,
-            timeout=None,
-            metadata=None):
+    def ConfigureGrading(
+        request,
+        target,
+        options=(),
+        channel_credentials=None,
+        call_credentials=None,
+        insecure=False,
+        compression=None,
+        wait_for_ready=None,
+        timeout=None,
+        metadata=None,
+    ):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/de.tum.cit.aet.artemis.hyperion.GradingConfigurator/ConfigureGrading',
+            "/de.tum.cit.aet.artemis.hyperion.GradingConfigurator/ConfigureGrading",
             hyperion__pb2.GradingConfiguratorRequest.SerializeToString,
             hyperion__pb2.GradingConfiguratorResponse.FromString,
             options,
@@ -802,12 +849,12 @@ class GradingConfigurator(object):
             wait_for_ready,
             timeout,
             metadata,
-            _registered_method=True)
+            _registered_method=True,
+        )
 
 
 class ConfigurationVerifierStub(object):
-    """Step 8: Verify Configuration
-    """
+    """Step 8: Verify Configuration"""
 
     def __init__(self, channel):
         """Constructor.
@@ -816,57 +863,61 @@ class ConfigurationVerifierStub(object):
             channel: A grpc.Channel.
         """
         self.CheckInconsistencies = channel.unary_unary(
-                '/de.tum.cit.aet.artemis.hyperion.ConfigurationVerifier/CheckInconsistencies',
-                request_serializer=hyperion__pb2.InconsistencyCheckRequest.SerializeToString,
-                response_deserializer=hyperion__pb2.InconsistencyCheckResponse.FromString,
-                _registered_method=True)
+            "/de.tum.cit.aet.artemis.hyperion.ConfigurationVerifier/CheckInconsistencies",
+            request_serializer=hyperion__pb2.InconsistencyCheckRequest.SerializeToString,
+            response_deserializer=hyperion__pb2.InconsistencyCheckResponse.FromString,
+            _registered_method=True,
+        )
 
 
 class ConfigurationVerifierServicer(object):
-    """Step 8: Verify Configuration
-    """
+    """Step 8: Verify Configuration"""
 
     def CheckInconsistencies(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details('Method not implemented!')
-        raise NotImplementedError('Method not implemented!')
+        context.set_details("Method not implemented!")
+        raise NotImplementedError("Method not implemented!")
 
 
 def add_ConfigurationVerifierServicer_to_server(servicer, server):
     rpc_method_handlers = {
-            'CheckInconsistencies': grpc.unary_unary_rpc_method_handler(
-                    servicer.CheckInconsistencies,
-                    request_deserializer=hyperion__pb2.InconsistencyCheckRequest.FromString,
-                    response_serializer=hyperion__pb2.InconsistencyCheckResponse.SerializeToString,
-            ),
+        "CheckInconsistencies": grpc.unary_unary_rpc_method_handler(
+            servicer.CheckInconsistencies,
+            request_deserializer=hyperion__pb2.InconsistencyCheckRequest.FromString,
+            response_serializer=hyperion__pb2.InconsistencyCheckResponse.SerializeToString,
+        ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
-            'de.tum.cit.aet.artemis.hyperion.ConfigurationVerifier', rpc_method_handlers)
+        "de.tum.cit.aet.artemis.hyperion.ConfigurationVerifier", rpc_method_handlers
+    )
     server.add_generic_rpc_handlers((generic_handler,))
-    server.add_registered_method_handlers('de.tum.cit.aet.artemis.hyperion.ConfigurationVerifier', rpc_method_handlers)
+    server.add_registered_method_handlers(
+        "de.tum.cit.aet.artemis.hyperion.ConfigurationVerifier", rpc_method_handlers
+    )
 
 
- # This class is part of an EXPERIMENTAL API.
+# This class is part of an EXPERIMENTAL API.
 class ConfigurationVerifier(object):
-    """Step 8: Verify Configuration
-    """
+    """Step 8: Verify Configuration"""
 
     @staticmethod
-    def CheckInconsistencies(request,
-            target,
-            options=(),
-            channel_credentials=None,
-            call_credentials=None,
-            insecure=False,
-            compression=None,
-            wait_for_ready=None,
-            timeout=None,
-            metadata=None):
+    def CheckInconsistencies(
+        request,
+        target,
+        options=(),
+        channel_credentials=None,
+        call_credentials=None,
+        insecure=False,
+        compression=None,
+        wait_for_ready=None,
+        timeout=None,
+        metadata=None,
+    ):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/de.tum.cit.aet.artemis.hyperion.ConfigurationVerifier/CheckInconsistencies',
+            "/de.tum.cit.aet.artemis.hyperion.ConfigurationVerifier/CheckInconsistencies",
             hyperion__pb2.InconsistencyCheckRequest.SerializeToString,
             hyperion__pb2.InconsistencyCheckResponse.FromString,
             options,
@@ -877,4 +928,5 @@ class ConfigurationVerifier(object):
             wait_for_ready,
             timeout,
             metadata,
-            _registered_method=True)
+            _registered_method=True,
+        )
