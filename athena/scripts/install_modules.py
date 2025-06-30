@@ -18,19 +18,14 @@ def main():
     ]
 
     success = True
-    path_env = os.environ["PATH"]
 
     for module in modules:
         if os.path.isdir(module):
-
-            path = os.path.join(os.getcwd(), module, ".venv")
-            os.environ["VIRTUAL_ENV"] = path
-            os.environ["PATH"] = os.path.join(path, "bin") + os.pathsep + path_env
-
-            subprocess.run([sys.executable, "-m", "venv", path])
+            print(f"Installing dependencies for {module}...")
             result = subprocess.run(["poetry", "install"], cwd=module)
 
             if result.returncode != 0:
+                print(f"Failed to install dependencies for {module}")
                 success = False
 
     if success:

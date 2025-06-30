@@ -31,6 +31,9 @@ jobs:
         python-version: '3.11'
         cache: 'poetry'
 
+    - name: Configure Poetry for in-project virtual environments
+      run: poetry config virtualenvs.in-project true
+
     - name: Install dependencies
       working-directory: athena
       run: |

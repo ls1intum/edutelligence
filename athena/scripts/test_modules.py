@@ -4,6 +4,17 @@ import sys
 import argparse
 import shutil
 
+def check_llm_core_available(python_path):
+    """Check if llm_core is available in the given Python environment."""
+    try:
+        result = subprocess.run(
+            [python_path, "-c", "import llm_core; print('llm_core available')"],
+            capture_output=True, text=True, timeout=10
+        )
+        return result.returncode == 0
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return False
+
 def main():
     parser = argparse.ArgumentParser(description='Run tests for Athena modules')
     parser.add_argument('--include-real', action='store_true',
@@ -52,6 +63,15 @@ def main():
         pip_path = os.path.join(venv_path, "bin", "pip")
 
         print(f"Using Python path: {python_path}")
+
+        # Check if llm_core is available (for modules that need it)
+        if module in ["modules/text/module_text_llm", "modules/modeling/module_modeling_llm"]:
+            if not check_llm_core_available(python_path):
+                print(f"ERROR: llm_core is not available in {module} virtual environment")
+                print(f"This usually means dependencies were not installed correctly.")
+                print(f"Try running 'poetry install' in the {module} directory.")
+                success = False
+                continue
 
         try:
             # Install pytest and pytest-asyncio in the virtual environment
