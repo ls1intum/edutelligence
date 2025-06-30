@@ -35,6 +35,10 @@ export default function Providers() {
         checkLogin();
     }, []);
 
+    useEffect(() => {
+      console.log('Providers:', providers);
+    }, [providers]);
+
     const loadProviders = async () => {
         try {
             const response = await fetch('https://logos.ase.cit.tum.de:8080/logosdb/get_providers', {
@@ -42,13 +46,14 @@ export default function Providers() {
                 headers: {
                     'Authorization': `Bearer ${apiKey}`,
                     'Content-Type': 'application/json',
-                    'logos_key': apiKey,
+                    'logos_key': await AsyncStorage.getItem('logos_api_key'),
                 },
                 body: JSON.stringify({
-                    logos_key: apiKey
+                    logos_key: await AsyncStorage.getItem('logos_api_key')
                 })
             });
-            const [data, code] = JSON.parse(await response.text());
+            let text = await response.text();
+            const [data, code] = JSON.parse(text);
             if (code === 200) {
                 const formattedProviders = data.map((provider: any[][]) => ({
                     id: provider[0],
@@ -59,9 +64,12 @@ export default function Providers() {
                 }));
                 setProviders(formattedProviders);
             } else {
+            console.log("No Providers found");
+            setProviders([]);
             }
             setLoading(false);
         } catch (e) {
+            console.log(e);
             setProviders([]);
         } finally {
             setLoading(false);
@@ -76,10 +84,10 @@ export default function Providers() {
                 headers: {
                     'Authorization': `Bearer ${apiKey}`,
                     'Content-Type': 'application/json',
-                    'logos_key': apiKey,
+                    'logos_key': await AsyncStorage.getItem('logos_api_key'),
                 },
                 body: JSON.stringify({
-                    logos_key: apiKey
+                    logos_key: await AsyncStorage.getItem('logos_api_key')
                 })
             });
             const [data, code] = JSON.parse(await response.text());
@@ -141,6 +149,7 @@ export default function Providers() {
 
 // @ts-ignore
 const Table = ({providers, theme}) => {
+    console.log('Providers:', providers);
     return (
         <table style={{
             borderCollapse: 'collapse',

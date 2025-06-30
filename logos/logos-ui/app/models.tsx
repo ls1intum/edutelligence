@@ -42,10 +42,10 @@ export default function Models() {
                 headers: {
                     'Authorization': `Bearer ${apiKey}`,
                     'Content-Type': 'application/json',
-                    'logos_key': apiKey,
+                    'logos_key': await AsyncStorage.getItem('logos_api_key'),
                 },
                 body: JSON.stringify({
-                    logos_key: apiKey
+                    logos_key: await AsyncStorage.getItem('logos_api_key')
                 })
             });
             const [data, code] = JSON.parse(await response.text());
@@ -82,10 +82,10 @@ export default function Models() {
                 headers: {
                     'Authorization': `Bearer ${apiKey}`,
                     'Content-Type': 'application/json',
-                    'logos_key': apiKey,
+                    'logos_key': await AsyncStorage.getItem('logos_api_key'),
                 },
                 body: JSON.stringify({
-                    logos_key: apiKey
+                    logos_key: await AsyncStorage.getItem('logos_api_key')
                 })
             });
             const [data, code] = JSON.parse(await response.text());
