@@ -46,7 +46,7 @@ export default function Dashboard() {
                     requests: -1,
                     users: -1
                 });
-                console.error('Fehler beim Abrufen der Statistiken:', e);
+                console.error('Error while loading statistics:', e);
             } finally {
                 setLoading(false);
             }
@@ -104,7 +104,7 @@ export default function Dashboard() {
                             </View>
                         </View>
                     ) : (
-                        <Text style={{marginTop: 20, color: 'red'}}>Fehler beim Laden der Statistiken.</Text>
+                        <Text style={{marginTop: 20, color: 'red'}}>Error while loading statistics.</Text>
                     )}
 
                     <View style={styles.dummyCard}>

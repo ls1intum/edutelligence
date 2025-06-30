@@ -8,6 +8,7 @@ const menuItems = [
   'Dashboard',
   'Policies',
   'Models',
+  'Providers',
   'Billing',
   'Routing',
   'Statistics',
@@ -37,6 +38,9 @@ export default function Sidebar() {
           break;
         case 'Models':
           router.push('/models');
+          break;
+        case 'Providers':
+          router.push('/providers');
           break;
         case 'Billing':
           router.push('/billing');

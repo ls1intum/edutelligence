@@ -150,7 +150,7 @@ class LogEntry(Base):
     provider_id = Column(Integer)
     model_id = Column(Integer)
 
-    usage_tokens = relationship("UsageToken", back_populates="log_entry")
+    usage_tokens = relationship("UsageTokens")
 
 
 class TokenTypes(Base):
@@ -178,4 +178,4 @@ class TokenPrice(Base):
     valid_from = Column(TIMESTAMP(timezone=True), nullable=False)
     price_per_k_token = Column(Numeric(10, 6), nullable=False)
 
-    token_type = relationship("TokenTypes", back_populates="TokenPrice")
+    token_type = relationship("TokenTypes")

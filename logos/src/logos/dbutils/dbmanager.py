@@ -241,8 +241,8 @@ class DBManager:
         return {"result": "Successfully added billing", "billing-id": billing_id}, 200
 
     def generalstats(self, logos_key: str):
-        if not self.check_authorization(logos_key):
-            return {"error": "Database changes only allowed for root user."}, 500
+        if not self.user_authorization(logos_key):
+            return {"error": "Unknown user."}, 500
         model_count = self.session.query(func.count(Model.id)).scalar()
         process_count = self.session.query(func.count(Process.id)).scalar()
         request_count = self.session.query(func.count(LogEntry.id)).scalar()
@@ -453,6 +453,30 @@ class DBManager:
         """)
         result = self.session.execute(sql, {"logos_key": logos_key}).fetchall()
         return [i.id for i in result]
+
+    def get_provider_info(self, logos_key: str):
+        """
+        Get a list of providers accessible by a given key.
+        """
+        sql = text("""
+            SELECT providers.id, providers.name, providers.base_url, providers.auth_name, providers.auth_format
+            FROM providers, model_api_keys, profiles, process
+            WHERE process.logos_key = :logos_key
+                and process.id = profiles.process_id
+                and profiles.id = model_api_keys.profile_id
+                and model_api_keys.provider_id = providers.id
+        """)
+        result = self.session.execute(sql, {"logos_key": logos_key}).fetchall()
+        return [(i.id, i.name, i.base_url, i.auth_name, i.auth_format) for i in result]
+
+    def get_general_provider_stats(self, logos_key: str):
+        if not self.user_authorization(logos_key):
+            return {"error": "Unknown user."}, 500
+        provider_count = self.session.query(func.count(Provider.id)).scalar()
+        return {
+            "totalProviders": provider_count,
+        }, 200
+
 
     def get_model(self, model_id: int):
         sql = text("""
@@ -734,6 +758,14 @@ class DBManager:
                                 WHERE logos_key = :logos_key
                                     and process.user_id = users.id
                                     and users.name = 'root'
+                            """)
+        return self.session.execute(sql, {"logos_key": logos_key}).fetchone() is not None
+
+    def user_authorization(self, logos_key: str):
+        sql = text("""
+                                SELECT *
+                                FROM process
+                                WHERE logos_key = :logos_key
                             """)
         return self.session.execute(sql, {"logos_key": logos_key}).fetchone() is not None
 

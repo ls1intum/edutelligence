@@ -185,6 +185,18 @@ async def get_role(data: GetRole):
         return db.get_role(**data.dict())
 
 
+@app.post("/logosdb/get_providers")
+async def get_providers(data: LogosKeyModel):
+    with DBManager() as db:
+        return db.get_provider_info(**data.dict()), 200
+
+
+@app.post("/logosdb/get_general_provider_stats")
+async def get_general_provider_stats(data: LogosKeyModel):
+    with DBManager() as db:
+        return db.get_general_provider_stats(**data.dict())
+
+
 @app.post("/logosdb/export")
 async def export(data: LogosKeyModel):
     with DBManager() as db:
