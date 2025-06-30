@@ -51,6 +51,7 @@ class Process(Base):
     user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
     service_id = Column(Integer, ForeignKey('services.id'), nullable=False)
     log = Column(Enum(LoggingLevel))
+    settings = Column(JSON)
 
     user = relationship("User")
     service = relationship("Service")
