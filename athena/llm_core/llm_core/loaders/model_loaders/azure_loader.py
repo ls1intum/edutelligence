@@ -61,4 +61,11 @@ if azure_available_models:
 else:
 
     class AzureModel(str, Enum):
-        pass
+        azure_openai_gpt_35_turbo = "azure_openai_gpt-35-turbo"
+        azure_openai_gpt_4_turbo = "azure_openai_gpt-4-turbo"
+        azure_openai_gpt_4o = "azure_openai_gpt-4o"
+        azure_openai_gpt_4o_mini = "azure_openai_gpt-4o-mini"
+        azure_openai_o3_mini = "azure_openai_o3-mini"
+        azure_openai_gpt_41 = "azure_openai_gpt-41"
+        azure_openai_gpt_41_mini = "azure_openai_gpt-41-mini"
+        azure_openai_gpt_41_nano = "azure_openai_gpt-41-nano"

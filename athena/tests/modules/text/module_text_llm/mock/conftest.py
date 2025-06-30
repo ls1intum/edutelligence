@@ -16,8 +16,10 @@ from tests.modules.text.module_text_llm.mock.utils.mock_openai import mock_opena
 
 import pytest
 from tests.modules.text.module_text_llm.mock.utils.mock_llm import MockLanguageModel, MockStructuredMockLanguageModel, MockAssessmentModel
-from tests.modules.text.module_text_llm.mock.utils.mock_config import MockApproachConfig, MockModelConfig
+from tests.modules.text.module_text_llm.mock.utils.mock_config import MockApproachConfig
 from tests.modules.text.module_text_llm.mock.utils.mock_env import mock_sent_tokenize
+from llm_core.models.providers.azure_model_config import AzureModelConfig
+from llm_core.loaders.model_loaders.azure_loader import AzureModel
 
 
 @pytest.fixture(autouse=True)
@@ -53,6 +55,9 @@ def mock_config():
     """Create a mock configuration for testing."""
     return MockApproachConfig(
         max_input_tokens=5000,
-        model=MockModelConfig(),
+        model=AzureModelConfig(
+            model_name="azure_openai_gpt-4o",
+            get_model=lambda: MockLanguageModel()
+        ),
         type="basic"
     )
