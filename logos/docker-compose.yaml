@@ -75,6 +75,8 @@ services:
       - "traefik.tcp.routers.logos-server-grpc.entrypoints=grpc"
       - "traefik.tcp.routers.logos-server-grpc.service=logos-server-grpc"
       - "traefik.tcp.services.logos-server-grpc.loadbalancer.server.port=50051"
+      - "traefik.tcp.routers.logos-server-grpc.tls=true"
+      - "traefik.tcp.routers.logos-server-grpc.tls.certresolver=letsencrypt"
     networks:
       - internal
 
