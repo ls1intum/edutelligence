@@ -1,47 +1,21 @@
 import React, {useContext, useEffect, useState} from 'react';
-import {View, Text, StyleSheet, TextInput, Button, ScrollView, Pressable, Modal} from 'react-native';
+import {View, Text, StyleSheet, ActivityIndicator, Pressable, TouchableOpacity} from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {ThemeContext} from '@/components/theme';
 import Footer from '@/components/footer';
 import Header from '@/components/header';
 import Sidebar from '@/components/sidebar';
 import {useRouter} from "expo-router";
-import {Picker} from '@react-native-picker/picker';
-import {Ionicons} from '@expo/vector-icons';
-
-const privacyOptions = [
-    'LOCAL',
-    'CLOUD_IN_EU_BY_US_PROVIDER',
-    'CLOUD_NOT_IN_EU_BY_US_PROVIDER',
-    'CLOUD_IN_EU_BY_EU_PROVIDER'
-];
+import {compareSource} from "@expo/fingerprint/build/Sort";
 
 export default function Models() {
     const {theme} = useContext(ThemeContext);
+    const [stats, setStats] = useState<{ totalModels: number; mostUsedModel: string } | null>(null);
+    const [models, setModels] = useState<any[]>([]);
+    const [loading, setLoading] = useState(true);
     const [isLoggedIn, setIsLoggedIn] = useState(false);
     const [apiKey, setApiKey] = useState('');
     const router = useRouter();
-
-    const [models, setModels] = useState<any[]>([]);
-    const [name, setName] = useState('');
-    const [endpoint, setEndpoint] = useState('');
-    const [tags, setTags] = useState('');
-    const [parallel, setParallel] = useState('1');
-    const [privacy, setPrivacy] = useState('LOCAL');
-    const [weights, setWeights] = useState({
-        latency: '',
-        accuracy: '',
-        cost: '',
-        quality: ''
-    });
-
-    const [tooltipText, setTooltipText] = useState('');
-    const [tooltipVisible, setTooltipVisible] = useState(false);
-
-    const showTooltip = (text: string) => {
-        setTooltipText(text);
-        setTooltipVisible(true);
-    };
 
     useEffect(() => {
         const checkLogin = async () => {
@@ -53,223 +27,276 @@ export default function Models() {
             } else {
                 setIsLoggedIn(true);
                 setApiKey(key);
-                loadModels(key);
+                // Hier Daten laden
+                loadModels();
+                loadStats();
             }
         };
         checkLogin();
     }, []);
 
-    const loadModels = async (key: string) => {
+    const loadModels = async () => {
         try {
-            const res = await fetch('/list_models', {
-                headers: {'Authorization': key}
-            });
-            const data = await res.json();
-            setModels(data);
-        } catch (e) {
-            console.error(e);
-        }
-    };
-
-    const handleSubmit = async () => {
-        const payload = {
-            name, endpoint, tags, parallel: parseInt(parallel),
-            weight_privacy: privacy,
-            weight_latency: 0,
-            weight_accuracy: 0,
-            weight_cost: 0,
-            weight_quality: 0,
-            compare_latency: weights.latency,
-            compare_accuracy: weights.accuracy,
-            compare_cost: weights.cost,
-            compare_quality: weights.quality
-        };
-        try {
-            const res = await fetch('/add_model', {
+            const response = await fetch('https://logos.ase.cit.tum.de:8080/logosdb/get_models', {
                 method: 'POST',
                 headers: {
+                    'Authorization': `Bearer ${apiKey}`,
                     'Content-Type': 'application/json',
-                    'Authorization': apiKey
+                    'logos_key': apiKey,
                 },
-                body: JSON.stringify(payload)
+                body: JSON.stringify({
+                    logos_key: apiKey
+                })
             });
-            if (res.ok) {
-                loadModels(apiKey);
-                setName('');
-                setEndpoint('');
-                setTags('');
-                setParallel('1');
-                setPrivacy('LOCAL');
-                setWeights({latency: '', accuracy: '', cost: '', quality: ''});
+            const [data, code] = JSON.parse(await response.text());
+            if (code === 200) {
+                const formattedModels = data.map((model: any[][]) => ({
+                    id: model[0],
+                    name: model[1],
+                    endpoint: model[2],
+                    api_id: model[3],
+                    weight_privacy: model[4],
+                    weight_latency: model[5],
+                    weight_accuracy: model[6],
+                    weight_cost: model[7],
+                    weight_quality: model[8],
+                    tags: model[9],
+                    parallel: model[10],
+                }));
+                setModels(formattedModels);
+            } else {
+            }
+            setLoading(false);
+        } catch (e) {
+            setModels([]);
+        } finally {
+            setLoading(false);
+        }
+
+    };
+
+    const loadStats = async () => {
+        try {
+            const response = await fetch('https://logos.ase.cit.tum.de:8080/logosdb/get_general_model_stats', {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${apiKey}`,
+                    'Content-Type': 'application/json',
+                    'logos_key': apiKey,
+                },
+                body: JSON.stringify({
+                    logos_key: apiKey
+                })
+            });
+            const [data, code] = JSON.parse(await response.text());
+            if (code === 200 && false) {
+                setStats(data);
+            } else {
+                setStats({totalModels: 0, mostUsedModel: "None" });
             }
         } catch (e) {
-            console.error(e);
+            setStats({totalModels: 0, mostUsedModel: "None" });
         }
     };
 
     if (!isLoggedIn) return null;
-
-    const Tooltip = ({ text }: { text: string }) => (
-        <View style={styles.tooltip}>
-            <Text style={styles.tooltipText}>{text}</Text>
-        </View>
-    );
 
     return (
         <View style={styles.outer_container}>
             <Header/>
             <View style={[styles.page, theme === 'light' ? styles.light : styles.dark]}>
                 <Sidebar/>
-                <ScrollView style={styles.content}>
-                    <Text style={[styles.title, theme === 'light' ? styles.textLight : styles.textDark]}>Model
-                        Management
+                <View style={styles.content}>
+                    <Text style={[styles.title, theme === 'light' ? styles.textLight : styles.textDark]}>
+                        Models
                     </Text>
-                    <Text style={[theme === 'light' ? styles.textLight : styles.textDark]}>
-                        Add new Model (To be moved to add_model)
+                    <Text style={[styles.subtitle, theme === 'light' ? styles.textLight : styles.textDark]}>
+                        Administrate Models.
                     </Text>
-
-                    <View style={styles.formRowContainer}>
-                        <View style={styles.leftColumn}>
-                            {[{
-                                label: 'Name', value: name, setter: setName,
-                                tooltip: 'Unique Model Name'
-                            }, {
-                                label: 'Endpoint', value: endpoint, setter: setEndpoint,
-                                tooltip: 'Model-Endpoint'
-                            }, {
-                                label: 'Tags', value: tags, setter: setTags,
-                                tooltip: 'Keywords separated by ";"'
-                            }, {
-                                label: 'Parallelism', value: parallel, setter: setParallel,
-                                tooltip: 'Maximum number of parallel requests to this model (1–256)', keyboard: 'numeric'
-                            }].map(({label, value, setter, tooltip, keyboard}) => (
-                                <View key={label} style={styles.formRow}>
-                                    <Text style={[styles.label, theme === 'light' ? styles.textLight : styles.textDark]}>{label}:
-                                        <View onMouseEnter={() => showTooltip(tooltip)} onMouseLeave={() => setTooltipVisible(false)}>
-                                            <Ionicons name="help-circle-outline" size={16} style={styles.icon}/>
-                                            {tooltipVisible && tooltipText === tooltip && <Tooltip text={tooltip} />}
-                                        </View>
-                                    </Text>
-                                    <TextInput value={value} onChangeText={setter} style={[styles.input, theme === 'light' ? styles.textLight : styles.textDark]}/>
+                    <View style={styles.statsContainer}>
+                        {stats && (
+                            <>
+                                <View style={styles.statBox}>
+                                    <Text style={[styles.statNumber, theme === 'light' ? styles.textLight : styles.textDark]}>{stats.totalModels}</Text>
+                                    <Text style={[styles.statLabel, theme === 'light' ? styles.textLight : styles.textDark]}>Models</Text>
                                 </View>
-                            ))}
-
-                            <View style={styles.formRow}>
-                                <Text style={[styles.label, theme === 'light' ? styles.textLight : styles.textDark]}>Privacy-Weight:
-                                    <View onMouseEnter={() => showTooltip('Privacy of the Model')} onMouseLeave={() => setTooltipVisible(false)}>
-                                        <Ionicons name="help-circle-outline" size={16} style={styles.icon}/>
-                                        {tooltipVisible && tooltipText === 'Privacy of the Model' && <Tooltip text={'Privacy of the Model'} />}
-                                    </View>
-                                </Text>
-                                <Picker selectedValue={privacy} onValueChange={setPrivacy} style={styles.input}>
-                                    {privacyOptions.map(opt => (
-                                        <Picker.Item label={opt} value={opt} key={opt}/>
-                                    ))}
-                                </Picker>
-                            </View>
-                        </View>
-
-                        <View style={styles.rightColumn}>
-                            {['Latency', 'Accuracy', 'Cost', 'Quality'].map((key) => (
-                                <View key={key} style={styles.formRow}>
-                                    <Text style={[styles.label, theme === 'light' ? styles.textLight : styles.textDark]}>{key}-Weight:
-                                        <View onMouseEnter={() => showTooltip(`Which is the best model that is worse than this one in terms of ${key}?`)} onMouseLeave={() => setTooltipVisible(false)}>
-                                            <Ionicons name="help-circle-outline" size={16} style={styles.icon}/>
-                                            {tooltipVisible && tooltipText === `Which is the best model that is worse than this one in terms of ${key}?` && <Tooltip text={`Which is the best model that is worse than this one in terms of ${key}?`} />}
-                                        </View>
-                                    </Text>
-                                    <Picker
-                                        selectedValue={weights[key as keyof typeof weights]}
-                                        onValueChange={(v) => setWeights(prev => ({...prev, [key]: v}))}
-                                        style={styles.input}
-                                    >
-                                        <Picker.Item label="None" value=""/>
-                                        {models.map(m => (
-                                            <Picker.Item label={m.name} value={m.id.toString()} key={m.id}/>
-                                        ))}
-                                    </Picker>
+                                <View style={styles.statBox}>
+                                    <Text style={[styles.statNumber, theme === 'light' ? styles.textLight : styles.textDark]}>{stats.mostUsedModel}</Text>
+                                    <Text style={[styles.statLabel, theme === 'light' ? styles.textLight : styles.textDark]}>Most frequently used Model</Text>
                                 </View>
-                            ))}
+                            </>
+                        )}
+                    </View>
+                    <TouchableOpacity style={styles.addButton} onPress={() => router.push('/add_model')}>
+                        <Text style={styles.addButtonText}>+ Add</Text>
+                    </TouchableOpacity>
+                    {loading ? (
+                        <ActivityIndicator size="large" color="#0000ff"/>
+                    ) : (
+                        <View style={styles.tableContainer}>
+                            <Table models={models} theme={theme}/>
                         </View>
-                    </View>
-                    <View style={ {alignItems: "center"} }>
-                        <Pressable style={styles.addButton} onPress={handleSubmit}>
-                            <Text style={styles.addButtonText}>Add Model</Text>
-                        </Pressable>
-                    </View>
-
-
-
-                    <Text style={[styles.subheading, theme === 'light' ? styles.textLight : styles.textDark]}>
-                        Existing Models
-                    </Text>
-                    <View>
-                        {models.map(model => (
-                            <View key={model.id} style={styles.modelBox}>
-                                <Text style={theme === 'light' ? styles.textLight : styles.textDark}>
-                                    {model.name} – {model.endpoint}
-                                </Text>
-                            </View>
-                        ))}
-                    </View>
-                </ScrollView>
+                    )}
+                </View>
             </View>
             <Footer/>
         </View>
     );
 }
 
+// @ts-ignore
+const Table = ({models, theme}) => {
+    return (
+        <table style={{
+            borderCollapse: 'collapse',
+            borderRadius: 10,
+            overflow: 'hidden',
+            boxShadow: '0px 0px 10px rgba(0,0,0,0.1)',
+            backgroundColor: theme === 'light' ? '#fff' : '#333',
+            color: theme === 'light' ? '#000' : '#fff',
+        }}>
+            <thead>
+                <tr>
+                    <th style={{padding: 10, borderBottom: '1px solid #ccc'}}>ID</th>
+                    <th style={{padding: 10, borderBottom: '1px solid #ccc'}}>Name</th>
+                    <th style={{padding: 10, borderBottom: '1px solid #ccc'}}>Endpoint</th>
+                    <th style={{padding: 10, borderBottom: '1px solid #ccc'}}>API-ID</th>
+                    <th style={{padding: 10, borderBottom: '1px solid #ccc'}}>Privacy</th>
+                    <th style={{padding: 10, borderBottom: '1px solid #ccc'}}>Latency</th>
+                    <th style={{padding: 10, borderBottom: '1px solid #ccc'}}>Accuracy</th>
+                    <th style={{padding: 10, borderBottom: '1px solid #ccc'}}>Cost</th>
+                    <th style={{padding: 10, borderBottom: '1px solid #ccc'}}>Quality</th>
+                    <th style={{padding: 10, borderBottom: '1px solid #ccc'}}>Tags</th>
+                    <th style={{padding: 10, borderBottom: '1px solid #ccc'}}>Parallel</th>
+                </tr>
+            </thead>
+            <tbody>
+                {models.map((model: any) => (
+                    <tr key={model.id}>
+                        <td style={{padding: 10, borderRight: '1px solid #ccc'}}>{model.id}</td>
+                        <td style={{padding: 10, borderRight: '1px solid #ccc'}}>{model.name}</td>
+                        <td style={{padding: 10, borderRight: '1px solid #ccc'}}>{model.endpoint}</td>
+                        <td style={{padding: 10, borderRight: '1px solid #ccc'}}>{model.api_id}</td>
+                        <td style={{padding: 10, borderRight: '1px solid #ccc'}}>{model.weight_privacy}</td>
+                        <td style={{padding: 10, borderRight: '1px solid #ccc'}}>{model.weight_latency}</td>
+                        <td style={{padding: 10, borderRight: '1px solid #ccc'}}>{model.weight_accuracy}</td>
+                        <td style={{padding: 10, borderRight: '1px solid #ccc'}}>{model.weight_cost}</td>
+                        <td style={{padding: 10, borderRight: '1px solid #ccc'}}>{model.weight_quality}</td>
+                        <td style={{padding: 10, borderRight: '1px solid #ccc'}}>{model.tags}</td>
+                        <td style={{padding: 10, borderRight: '1px solid #ccc'}}>{model.parallel}</td>
+                    </tr>
+                ))}
+            </tbody>
+        </table>
+    );
+};
+
 const styles = StyleSheet.create({
-    page: {flex: 1, flexDirection: 'row'},
-    outer_container: {flex: 1},
-    content: {flex: 1, padding: 32, width: '100%'},
-    title: {fontSize: 28, fontWeight: 'bold', marginBottom: 24, alignSelf: 'center'},
-    subheading: {fontSize: 20, fontWeight: '600', marginTop: 40, marginBottom: 16},
-    formRowContainer: {flexDirection: 'row', justifyContent: 'space-between', gap: 32, marginBottom: 40},
-    leftColumn: {flex: 1},
-    rightColumn: {flex: 1},
-    formRow: {marginBottom: 20},
-    input: {borderWidth: 1, borderColor: '#888', borderRadius: 10, padding: 12},
-    label: {fontWeight: 'bold', marginBottom: 6, flexDirection: 'row', alignItems: 'center'},
-    modelBox: {padding: 14, backgroundColor: '#4444', borderRadius: 12, marginBottom: 12},
-    icon: {marginLeft: 4},
-    light: {backgroundColor: '#fff'},
-    dark: {backgroundColor: '#1e1e1e'},
-    textLight: {color: '#000'},
-    textDark: {color: '#fff'},
-    tooltip: {
-        position: 'absolute',
-        top: 20,
-        left: 20,
-        backgroundColor: '#333',
-        padding: 8,
-        borderRadius: 6,
-        zIndex: 9999,
-        width: "auto",
-        maxWidth: 500,
-        minWidth: 300,
+    page: {
+        flex: 1,
+        flexDirection: 'row'
     },
-    tooltipText: {
-        color: '#fff',
-        fontSize: 12
+    outer_container: {
+        flex: 1
+    },
+    content: {
+        flex: 1,
+        padding: 32,
+        width: '100%',
+    },
+    title: {
+        fontSize: 28,
+        fontWeight: 'bold',
+        marginBottom: 24,
+        alignSelf: 'center'
+    },
+    dummyCard: {
+        marginTop: 20,
+        alignSelf: 'center',
+        padding: 20,
+        borderRadius: 30,
+        borderWidth: 1,
+        borderColor: '#aaa'
+    },
+    light: {
+        backgroundColor: '#fff'
+    },
+    dark: {
+        backgroundColor: '#1e1e1e'
+    },
+    textLight: {
+        color: '#000'
+    },
+    textDark: {
+        color: '#fff'
+    },subtitle: {
+        fontSize: 16,
+        color: '#666',
+        marginBottom: 24,
+    },
+    statsContainer: {
+        flexDirection: 'row',
+        justifyContent: 'center',
+        gap: 24,
+        marginBottom: 32
+    },
+    statBox: {
+        alignItems: 'center',
+        backgroundColor: '#3c3c3c20',
+        padding: 16,
+        borderRadius: 16,
+        minWidth: 100,
+    },
+    statNumber: {
+        fontSize: 22,
+        fontWeight: 'bold',
+    },
+    statLabel: {
+        marginTop: 4,
+        fontSize: 14,
     },
     addButton: {
         backgroundColor: '#007bff',
-        paddingVertical: 12,
-        paddingHorizontal: 24,
-        borderRadius: 12,
-        alignItems: 'center',
-        marginVertical: 20,
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.2,
-        shadowRadius: 4,
-        elevation: 3,
-        maxWidth: 300
+        padding: 12,
+        borderRadius: 8,
+        marginBottom: 24,
+        alignSelf: 'flex-end',
     },
     addButtonText: {
         color: '#fff',
+        fontSize: 18,
+    },
+    tableContainer: {
+        flex: 1,
+    },
+    table: {
+        borderWidth: 1,
+        borderColor: '#ddd',
+        borderRadius: 8,
+        padding: 16,
+    },
+    tableHeader: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        marginBottom: 12,
+    },
+    tableHeaderText: {
+        fontSize: 18,
+        fontWeight: 'bold',
+    },
+    tableRow: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        paddingVertical: 8,
+        borderBottomWidth: 1,
+        borderColor: '#ddd',
+    },
+    tableCell: {
         fontSize: 16,
-        fontWeight: '600',
-    }
+        borderRightWidth: 1,
+        borderRightColor: '#ccc',
+    },
+    lasttableCell: {
+        fontSize: 16,
+    },
 });

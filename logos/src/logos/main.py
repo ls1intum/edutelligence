@@ -197,6 +197,18 @@ async def get_general_provider_stats(data: LogosKeyModel):
         return db.get_general_provider_stats(**data.dict())
 
 
+@app.post("/logosdb/get_models")
+async def get_models(data: LogosKeyModel):
+    with DBManager() as db:
+        return db.get_models_info(**data.dict()), 200
+
+
+@app.post("/logosdb/get_general_model_stats")
+async def get_general_model_stats(data: LogosKeyModel):
+    with DBManager() as db:
+        return db.get_general_model_stats(**data.dict())
+
+
 @app.post("/logosdb/export")
 async def export(data: LogosKeyModel):
     with DBManager() as db:

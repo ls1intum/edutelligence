@@ -477,6 +477,30 @@ class DBManager:
             "totalProviders": provider_count,
         }, 200
 
+    def get_models_info(self, logos_key: str):
+        """
+        Get a list of models accessible by a given key.
+        """
+        sql = text("""
+            SELECT models.id, models.name, models.endpoint, models.api_id, models.weight_privacy, models.weight_latency, models.weight_accuracy, models.weight_cost, models.weight_quality, models.tags, models.parallel
+            FROM models, profile_model_permissions, profiles, process
+            WHERE process.logos_key = :logos_key
+                and process.id = profiles.process_id
+                and profiles.id = profile_model_permissions.profile_id
+                and profile_model_permissions.model_id = models.id
+        """)
+        result = self.session.execute(sql, {"logos_key": logos_key}).fetchall()
+        return [(i.id, i.name, i.endpoint, i.api_id, i.weight_privacy, i.weight_latency, i.weight_accuracy, i.weight_cost, i.weight_quality, i.tags, i.parallel) for i in result]
+
+
+    def get_general_model_stats(self, logos_key: str):
+        if not self.user_authorization(logos_key):
+            return {"error": "Unknown user."}, 500
+        model_count = self.session.query(func.count(Model.id)).scalar()
+        return {
+            "totalModels": model_count,
+        }, 200
+
 
     def get_model(self, model_id: int):
         sql = text("""

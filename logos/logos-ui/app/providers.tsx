@@ -16,7 +16,6 @@ export default function Providers() {
     const [isLoggedIn, setIsLoggedIn] = useState(false);
     const [apiKey, setApiKey] = useState('');
     const router = useRouter();
-    const [showPasswords, setShowPasswords] = useState({});
 
     useEffect(() => {
         const checkLogin = async () => {
@@ -37,40 +36,62 @@ export default function Providers() {
     }, []);
 
     const loadProviders = async () => {
-        const response = await fetch('https://logos.ase.cit.tum.de:8080/logosdb/get_providers', {
-            headers: {
-                'Authorization': `Bearer ${apiKey}`,
-            },
-        });
-        const [data, code] = JSON.parse('[[[1,"azure","https://ase-se01.openai.azure.com/openai/deployments/","api-key","{}"]],200]');//await response.text());
-        if (code === 200) {
-            const formattedProviders = data.map((provider: any[][]) => ({
-                id: provider[0],
-                name: provider[1],
-                baseUrl: provider[2],
-                authName: provider[3],
-                authFormat: provider[4],
-            }));
-            setProviders(formattedProviders);
-        } else {
+        try {
+            const response = await fetch('https://logos.ase.cit.tum.de:8080/logosdb/get_providers', {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${apiKey}`,
+                    'Content-Type': 'application/json',
+                    'logos_key': apiKey,
+                },
+                body: JSON.stringify({
+                    logos_key: apiKey
+                })
+            });
+            const [data, code] = JSON.parse(await response.text());
+            if (code === 200) {
+                const formattedProviders = data.map((provider: any[][]) => ({
+                    id: provider[0],
+                    name: provider[1],
+                    baseUrl: provider[2],
+                    authName: provider[3],
+                    authFormat: provider[4],
+                }));
+                setProviders(formattedProviders);
+            } else {
+            }
+            setLoading(false);
+        } catch (e) {
+            setProviders([]);
+        } finally {
+            setLoading(false);
         }
-        setLoading(false);
+
     };
 
     const loadStats = async () => {
-        // Implementiere die Logik zum Laden von Statistiken hier
-        // Zum Beispiel:
-        const response = await fetch('https://logos.ase.cit.tum.de:8080/logosdb/get_general_provider_stats', {
-            headers: {
-                'Authorization': `Bearer ${apiKey}`,
-            },
-        });
-        const [data, code] = JSON.parse('[{"totalProviders":1},200]');//await response.text());
-        if (code === 200 && false) {
-            setStats(data);
-        } else {
+        try {
+            const response = await fetch('https://logos.ase.cit.tum.de:8080/logosdb/get_general_provider_stats', {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${apiKey}`,
+                    'Content-Type': 'application/json',
+                    'logos_key': apiKey,
+                },
+                body: JSON.stringify({
+                    logos_key: apiKey
+                })
+            });
+            const [data, code] = JSON.parse(await response.text());
+            if (code === 200 && false) {
+                setStats(data);
+            } else {
+                setStats({"totalProviders": 1, mostUsedProvider: "azure" });
+            }
+        } catch (e) {
             setStats({"totalProviders": 1, mostUsedProvider: "azure" });
         }
+
     };
 
     if (!isLoggedIn) return null;
@@ -101,14 +122,14 @@ export default function Providers() {
                             </>
                         )}
                     </View>
-                    <TouchableOpacity style={styles.addButton} onPress={() => router.push('/')}>
+                    <TouchableOpacity style={styles.addButton} onPress={() => router.push('/add_provider')}>
                         <Text style={styles.addButtonText}>+ Add</Text>
                     </TouchableOpacity>
                     {loading ? (
                         <ActivityIndicator size="large" color="#0000ff"/>
                     ) : (
                         <View style={styles.tableContainer}>
-                            <Table providers={providers} showPasswords={showPasswords} setShowPasswords={setShowPasswords} theme={theme}/>
+                            <Table providers={providers} theme={theme}/>
                         </View>
                     )}
                 </View>
@@ -118,7 +139,8 @@ export default function Providers() {
     );
 }
 
-const Table = ({providers, showPasswords, setShowPasswords, theme}) => {
+// @ts-ignore
+const Table = ({providers, theme}) => {
     return (
         <table style={{
             borderCollapse: 'collapse',
@@ -136,11 +158,11 @@ const Table = ({providers, showPasswords, setShowPasswords, theme}) => {
                     <th style={{padding: 10, borderBottom: '1px solid #ccc'}}>Auth Name</th>
                     <th style={{padding: 10, borderBottom: '1px solid #ccc'}}>Auth Format</th>
                     <th style={{padding: 10, borderBottom: '1px solid #ccc'}}>API Key</th>
-                    <th style={{padding: 10, borderBottom: '1px solid #ccc'}}>Modelle</th>
+                    <th style={{padding: 10, borderBottom: '1px solid #ccc'}}>Models</th>
                 </tr>
             </thead>
             <tbody>
-                {providers.map((provider) => (
+                {providers.map((provider: any) => (
                     <tr key={provider.id}>
                         <td style={{padding: 10, borderRight: '1px solid #ccc'}}>{provider.id}</td>
                         <td style={{padding: 10, borderRight: '1px solid #ccc'}}>{provider.name}</td>

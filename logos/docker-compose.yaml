@@ -12,9 +12,11 @@ services:
       - "--certificatesresolvers.letsencrypt.acme.email=admin@tum.de"
       - "--certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json"
       - "--api.dashboard=true"
+      - "--entrypoints.grpc.address=:50051"
     ports:
       - "443:443"
       - "8080:8080"
+      - "50051:50051"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./letsencrypt:/letsencrypt
@@ -38,7 +40,7 @@ services:
       BASE_URL:
     expose:
       - "8080"
-      - "50051:50051"
+      - "50051"
     labels:
       - "traefik.enable=true"
 
@@ -68,6 +70,11 @@ services:
 
       # Service-Port
       - "traefik.http.services.logos-server.loadbalancer.server.port=8080"
+
+      - "traefik.tcp.routers.logos-server-grpc.rule=HostSNI(`*`)"
+      - "traefik.tcp.routers.logos-server-grpc.entrypoints=grpc"
+      - "traefik.tcp.routers.logos-server-grpc.service=logos-server-grpc"
+      - "traefik.tcp.services.logos-server-grpc.loadbalancer.server.port=50051"
     networks:
       - internal
 

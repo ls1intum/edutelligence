@@ -40,7 +40,8 @@ CREATE TABLE process (
     name TEXT NOT NULL,
     user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
     service_id INTEGER REFERENCES services(id) ON DELETE CASCADE,
-    log logging_enum DEFAULT('BILLING')
+    log logging_enum DEFAULT('BILLING'),
+    settings JSONB
 );
 
 CREATE TABLE profiles (
