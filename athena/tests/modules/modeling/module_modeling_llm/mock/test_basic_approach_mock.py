@@ -2,7 +2,7 @@ import pytest
 import json
 from athena.modeling import Submission
 from module_modeling_llm.utils.get_exercise_model import get_exercise_model
-from mod.core.generate_suggestions import generate_suggestions
+from module_modeling_llm.core.generate_suggestions import generate_suggestions
 from tests.modules.modeling.module_modeling_llm.mock.utils.mock_llm import MockLanguageModel, MockAssessmentModel, MockFeedbackModel
 from tests.modules.modeling.module_modeling_llm.mock.utils.mock_config import MockApproachConfig, MockModelConfig
 from tests.modules.modeling.module_modeling_llm.mock.conftest import MockPrompt
