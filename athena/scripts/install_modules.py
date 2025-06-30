@@ -28,7 +28,7 @@ def main():
             os.environ["PATH"] = os.path.join(path, "bin") + os.pathsep + path_env
 
             subprocess.run([sys.executable, "-m", "venv", path])
-            result = subprocess.run(["poetry", "install"], cwd=path)
+            result = subprocess.run(["poetry", "install"], cwd=module)
 
             if result.returncode != 0:
                 success = False
