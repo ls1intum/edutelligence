@@ -5,6 +5,7 @@ import sys
 
 def main():
     modules = [
+        "llm_core",
         "assessment_module_manager",
         "athena",
         "log_viewer",
