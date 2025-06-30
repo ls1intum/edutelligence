@@ -7,6 +7,7 @@ WORKDIR /app
 COPY ./logos/logos-ui/ ./
 
 # Install dependencies
+RUN npm install @react-native-picker/picker
 RUN npm ci
 
 # Build React app (defaults to production mode)
