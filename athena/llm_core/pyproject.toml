@@ -4,9 +4,6 @@ version = "0.1.0"
 description = "SHared LLM module."
 authors = ["Felix Dietrich <felixtj.dietrich@tum.de>"]
 license = "MIT"
-packages = [
-    { include = "llm_core" }
-]
 
 [tool.poetry.dependencies]
 python = "3.11.*"

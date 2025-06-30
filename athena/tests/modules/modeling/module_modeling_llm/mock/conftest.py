@@ -1,14 +1,6 @@
-import sys
 from unittest.mock import patch
 from tests.modules.modeling.module_modeling_llm.mock.utils.mock_llm_config import mock_get_llm_config
-
-# Apply the patch globally before any modules are imported
-# Use a more robust approach that handles CI environments
-try:
-    patch('llm_core.loaders.llm_config_loader.get_llm_config', mock_get_llm_config).start()
-except (AttributeError, ModuleNotFoundError):
-    # If the module isn't available yet, patch it when it gets imported
-    patch('llm_core.loaders.llm_config_loader.get_llm_config', mock_get_llm_config, create=True).start()
+patch('llm_core.loaders.llm_config_loader.get_llm_config', mock_get_llm_config).start()
 
 # Import OpenAI mocks first to ensure they're in place before any other imports
 from tests.modules.modeling.module_modeling_llm.mock.utils.mock_openai import mock_openai, mock_openai_client
@@ -23,16 +15,6 @@ from tests.modules.modeling.module_modeling_llm.mock.utils.mock_config import Mo
 import json
 from athena.modeling import Exercise, Submission
 from athena.schemas.exercise_type import ExerciseType
-
-@pytest.fixture(autouse=True)
-def patch_llm_config():
-    """Automatically patch the get_llm_config function for all tests."""
-    from unittest.mock import patch
-    from tests.modules.modeling.module_modeling_llm.mock.utils.mock_llm_config import mock_get_llm_config
-    
-    with patch('module_modeling_llm.config.get_llm_config', mock_get_llm_config):
-        yield
-
 @pytest_asyncio.fixture
 async def mock_config():
     """Create a mock configuration for testing."""
@@ -44,22 +26,18 @@ async def mock_config():
         )
     )
     return config
-
 @pytest.fixture
 def mock_llm():
     """Fixture providing a basic mock language model."""
     return MockLanguageModel()
-
 @pytest.fixture
 def mock_assessment_model():
     """Fixture providing a mock assessment model."""
     return MockAssessmentModel()
-
 class MockPrompt:
     def __init__(self, graded_feedback_system_message="Test system message", graded_feedback_human_message="Test human message"):
         self.graded_feedback_system_message = graded_feedback_system_message
         self.graded_feedback_human_message = graded_feedback_human_message
-
 class MockStructuredGradingCriterion:
     def __init__(self):
         self.criteria = [
@@ -76,15 +54,12 @@ class MockStructuredGradingCriterion:
                 "max_points": 5.0
             }
         ]
-
     def json(self):
         return json.dumps(self.criteria)
-
 @pytest.fixture
 def mock_grading_criterion():
     """Create a mock structured grading criterion."""
     return MockStructuredGradingCriterion()
-
 @pytest.fixture
 def mock_exercise():
     """Create a mock exercise for testing."""
@@ -144,7 +119,6 @@ def mock_exercise():
         example_solution=json.dumps(example_solution),
         grading_criteria=[]
     )
-
 @pytest.fixture
 def mock_submission(mock_exercise):
     """Create a mock submission for testing."""
