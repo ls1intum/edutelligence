@@ -41,3 +41,38 @@ jobs:
     - name: Run tests
       working-directory: athena
       run: poetry run test_all
+
+    - name: Upload JUnit Test Results
+      if: success() || failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: Athena JUnit Test Results
+        path: athena/test-results/*.xml
+
+    - name: Test Report Summary
+      if: always()
+      continue-on-error: true
+      uses: mikepenz/action-junit-report@v5.5.0
+      id: test-report
+      with:
+        report_paths: 'athena/test-results/*.xml'
+        check_name: "Athena Test Report"
+        require_tests: true
+        require_passed_tests: false
+        detailed_summary: true
+        include_time_in_summary: true
+        group_suite: true
+
+    - name: Comment test results on PR
+      if: always() && github.event_name == 'pull_request'
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const summary = `### Athena Test Results Summary\n\n${{ steps.test-report.outputs.summary }}\n\n#### Failing Tests Summary\n\n${{ steps.test-report.outputs.detailed_summary }}`;
+
+          github.rest.issues.createComment({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            issue_number: context.payload.pull_request.number,
+            body: summary
+          });

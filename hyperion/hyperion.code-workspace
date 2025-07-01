@@ -2,21 +2,28 @@
 	"folders": [
 		{
 			"name": "EduTelligence",
-			"path": "./",
+			"path": ".."
 		},
 		{
 			"name": "Hyperion",
-			"path": "./hyperion"
+			"path": "."
 		},
 		{
 			"name": "Shared",
-			"path": "./shared"
+			"path": "../shared"
+		},
+		{
+			"name": "Artemis",
+			"path": "../../Artemis"
 		}
 	],
 	"settings": {
 		"python.terminal.activateEnvironment": true,
 		"python.terminal.activateEnvInCurrentTerminal": true,
-		"python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python"
+		"python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
+		"java.configuration.updateBuildConfiguration": "automatic",
+		"java.debug.settings.onBuildFailureProceed": true,
+		"java.compile.nullAnalysis.mode": "automatic"
 	},
 	"extensions": {
 		"recommendations": [
