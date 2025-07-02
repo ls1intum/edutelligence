@@ -48,7 +48,7 @@ static_resources:
                       domains: ["*"]
                       routes:
                         - match:
-                            prefix: "/faqservice.FAQService/"
+                            prefix: "/de.tum.cit.aet.artemis.nebula.FAQService/"
                           route:
                             cluster: faq
 

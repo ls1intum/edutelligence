@@ -14,7 +14,7 @@ logging.basicConfig(
 class FAQRewriterService(faq_pb2_grpc.FAQServiceServicer):
 
     def RewriteFAQ(self, request: faq_pb2.FaqRewritingRequest, context: ServicerContext) -> faq_pb2.FaqRewritingResponse:
-        logger.info(f"Received RewriteFAQ request with input text: '{request.input_text}' and {len(request.faqs)} FAQ(s)")
+        logger.info("Received RewriteFAQ request with input text: '%s' and %d FAQ(s)", request.input_text, len(request.faqs))
 
         try:
             client, deployment = get_openai_client("azure-gpt-4-omni")
