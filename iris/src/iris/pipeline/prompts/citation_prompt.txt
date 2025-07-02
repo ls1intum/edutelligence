@@ -23,6 +23,7 @@ Citation Formats:
    - **Important:** Ensure that a start time and an end time are always displayed for lecture transcriptions, regardless of link availability.
    - URL modification for transcriptions: If the URL has a "videoOnly" parameter, remove it. If you know the start time, add it to the URL as a query parameter in the format `?t=ss`, where `ss` is the start time in seconds.
    - You are given the time in HH:MM:SS AND in seconds. Use the seconds value for the URL; use the HH:MM:SS format for the citation text.
+   - If you use this format with start and end times, ALWAYS link to the transcription with the start time included, not to the slides.
 
 
 2. For Lecture Slides:
@@ -30,8 +31,7 @@ Citation Formats:
      [X] <a href="URL">Lecture title, Lecture unit title, page number(s)</a>.
    - If no link is available, output the citation without a clickable link, e.g.,
      [X] "Lecture title", "Lecture unit title", "page number(s)".
-
-Note: If you have to decide between using a lecture transcription or a lecture slide for the same information, prefer linking to the lecture transcription if it is available.
+   - If you use this format with only the page number and no transcription times, ALWAYS link to the slides (usually a PDF) and not to the transcription.
 
 Example:
 
