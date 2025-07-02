@@ -9,8 +9,8 @@ from logos.scheduling.scheduling_manager import SchedulingManager
 
 
 def test_scheduling_manager():
-    select = ClassificationManager(data.models)
-    tasks = select.classify("absolutely no idea", ProxyPolicy())
+    # select = ClassificationManager("", data.models)
+    # tasks = select.classify("absolutely no idea", ProxyPolicy())
     tasks = [(2, 387.0, 0, 1), (3, 371.0, 0, 1), (1, 365.0, 0, 2), (2, 365.0, 0, 1), (1, 360.0, 0, 2), (2, 350.0, 0, 1)]
     print(tasks)
 

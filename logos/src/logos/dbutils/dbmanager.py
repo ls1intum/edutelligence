@@ -482,7 +482,7 @@ class DBManager:
         Get a list of models accessible by a given key.
         """
         sql = text("""
-            SELECT models.id, models.name, models.endpoint, models.api_id, models.weight_privacy, models.weight_latency, models.weight_accuracy, models.weight_cost, models.weight_quality, models.tags, models.parallel
+            SELECT models.id, models.name, models.endpoint, models.api_id, models.weight_privacy, models.weight_latency, models.weight_accuracy, models.weight_cost, models.weight_quality, models.tags, models.parallel, models.description
             FROM models, profile_model_permissions, profiles, process
             WHERE process.logos_key = :logos_key
                 and process.id = profiles.process_id
@@ -490,7 +490,7 @@ class DBManager:
                 and profile_model_permissions.model_id = models.id
         """)
         result = self.session.execute(sql, {"logos_key": logos_key}).fetchall()
-        return [(i.id, i.name, i.endpoint, i.api_id, i.weight_privacy, i.weight_latency, i.weight_accuracy, i.weight_cost, i.weight_quality, i.tags, i.parallel) for i in result]
+        return [(i.id, i.name, i.endpoint, i.api_id, i.weight_privacy, i.weight_latency, i.weight_accuracy, i.weight_cost, i.weight_quality, i.tags, i.parallel, i.description) for i in result]
 
 
     def get_general_model_stats(self, logos_key: str):

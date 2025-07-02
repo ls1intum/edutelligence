@@ -10,5 +10,5 @@ class Classifier(ABC):
         self.models = models
 
     @abstractmethod
-    def classify(self, prompt: str, policy: dict) -> List[Dict]:
+    def classify(self, prompt: str, policy: dict, *args, **kwargs) -> List[Dict]:
         """Return the subset of `self.models` matching the prompt/policy."""

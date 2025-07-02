@@ -207,7 +207,28 @@ def proxy_behaviour(headers, providers, path):
 def resource_behaviour(logos_key, headers, data, models):
     # The interesting part: Classification and scheduling
     # First, retrieve our used policy. If no one is given, use default ProxyPolicy
-    select = ClassificationManager(models)
+    mdls = list()
+    with DBManager() as db:
+        for tpl in db.get_models_info(logos_key):
+            if tpl[0] not in models:
+                continue
+            model = {
+                "id": tpl[0],
+                "name": tpl[1],
+                "endpoint": tpl[2],
+                "api_id": tpl[3],
+                "weight_privacy": tpl[4],
+                "weight_latency": tpl[5],
+                "weight_accuracy": tpl[6],
+                "weight_cost": tpl[7],
+                "weight_quality": tpl[8],
+                "tags": tpl[9],
+                "parallel": tpl[10],
+                "description": tpl[11],
+                "classification_weight": 1,
+            }
+            mdls.append(model)
+    select = ClassificationManager(mdls)
     if "policy" in headers:
         with DBManager() as db:
             policy = db.get_policy(logos_key, headers["policy"])

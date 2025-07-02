@@ -7,6 +7,9 @@ from typing import List, Tuple
 from logos.classification.classify_policy import PolicyClassifier
 from logos.classification.classify_token import TokenClassifier
 from logos.classification.classify_ai import AIClassifier
+from logos.classification.laura_embedding_classifier import LauraEmbeddingClassifier
+from logos.dbutils.dbmanager import DBManager
+
 
 def singleton(cls):
     """
@@ -32,6 +35,10 @@ class ClassificationManager:
 
     def __init__(self, models) -> None:
         self.models = models
+        self.laura = LauraEmbeddingClassifier()
+        if not self.laura.model_db:
+            for model in self.models:
+                self.laura.register_model(model["id"], model["description"])
 
     def classify(self, prompt: str, policy: dict) -> List[Tuple[int, int, int, int]]:
         """
@@ -42,8 +49,8 @@ class ClassificationManager:
         """
         filtered = PolicyClassifier(self.models).classify(prompt, policy)
         filtered = TokenClassifier(filtered).classify(prompt, policy)
-        filtered = AIClassifier(filtered).classify(prompt, policy)
-        return sorted([(i["id"], self.calc_weight(i), policy["priority"], i["parallel"]) for i in filtered], key=lambda x: x[1], reverse=True)
+        filtered = AIClassifier(filtered).classify(prompt, policy, laura=self.laura)
+        return sorted([(i["id"], i["classification_weight"], policy["priority"], i["parallel"]) for i in filtered], key=lambda x: x[1], reverse=True)
 
     def calc_weight(self, model):
         """

@@ -78,7 +78,8 @@ CREATE TABLE models (
     weight_cost INTEGER DEFAULT(0),
     weight_quality INTEGER DEFAULT(0),
     tags TEXT,
-    parallel INTEGER DEFAULT(1) CONSTRAINT minimum CHECK (parallel BETWEEN 1 and 256)
+    parallel INTEGER DEFAULT(1) CONSTRAINT minimum CHECK (parallel BETWEEN 1 and 256),
+    description TEXT
 );
 
 CREATE TABLE model_provider (
