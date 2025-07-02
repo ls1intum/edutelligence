@@ -15,6 +15,6 @@ class TokenClassifier(Classifier):
             tags = model["tags"].split(";")
             matches = sum(1 for tag in tags if tag.lower() in prompt.lower())
             score = matches / len(tags)
-            model["classification_weight"] *= score
-            logging.info(f"Token weight for model {model['id']} is: {score}")
+            model["classification_weight"] += score
+            print(f"Token weight for model {model['id']} is: {score}")
         return self.models
