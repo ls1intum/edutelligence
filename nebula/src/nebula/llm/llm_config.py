@@ -1,4 +1,5 @@
 import os
+
 import yaml
 
 
@@ -20,5 +21,3 @@ def load_llm_config(filename="llm_config.nebula.yml", llm_id="azure-gpt-4-omni")
             return entry
 
     raise ValueError(f"LLM config with ID '{llm_id}' not found.")
-
-

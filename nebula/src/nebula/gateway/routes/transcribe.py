@@ -7,7 +7,7 @@ from fastapi import APIRouter, HTTPException, Request
 router = APIRouter()
 logger = logging.getLogger("nebula.gateway.transcribe")
 
-TRANSCRIBE_BASE_URL = os.getenv("TRANSCRIBE_SERVICE_URL", "http://transcript:8000")
+TRANSCRIBE_BASE_URL = os.getenv("TRANSCRIBE_SERVICE_URL", "http://transcript:5000")
 
 
 @router.post("/start")
@@ -23,7 +23,7 @@ async def proxy_start_transcription(request: Request):
     try:
         async with httpx.AsyncClient() as client:
             response = await client.post(
-                f"{TRANSCRIBE_BASE_URL}/start-transcribe", json=body
+                f"{TRANSCRIBE_BASE_URL}/transcribe/start-transcribe", json=body
             )
 
         response.raise_for_status()
@@ -49,9 +49,11 @@ async def proxy_transcription_status(job_id: str):
 
     try:
         async with httpx.AsyncClient() as client:
-            response = await client.get(f"{TRANSCRIBE_BASE_URL}/status/{job_id}")
+            response = await client.get(
+                f"{TRANSCRIBE_BASE_URL}/transcribe/status/{job_id}"
+            )
+            response.raise_for_status()  # ✅ Move inside this block
 
-        response.raise_for_status()
         logger.info("✅ Status fetched successfully.")
         return response.json()
 

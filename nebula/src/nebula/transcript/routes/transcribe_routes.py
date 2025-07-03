@@ -1,10 +1,10 @@
+import asyncio
 import logging
-import time
-import uuid
 import os
 import shutil
+import uuid
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException
+from fastapi import APIRouter, HTTPException
 
 from nebula.transcript.align_utils import align_slides_with_segments
 from nebula.transcript.config import Config
@@ -20,7 +20,29 @@ from nebula.transcript.whisper_utils import transcribe_with_azure_whisper
 
 router = APIRouter()
 
-def run_transcription(req: TranscribeRequestDTO, job_id: str):
+
+async def cleanup_temp_files(uid, video_path, audio_path):
+    for path in [video_path, audio_path]:
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+                logging.debug("🧹 Removed temp file: %s", path)
+        except Exception as cleanup_err:
+            logging.warning("⚠️ Failed to remove temp file %s: %s", path, cleanup_err)
+
+    chunk_dir_prefix = f"chunks_{uid}"
+    temp_dir = Config.VIDEO_STORAGE_PATH
+    try:
+        for entry in os.listdir(temp_dir):
+            full_path = os.path.join(temp_dir, entry)
+            if entry.startswith(chunk_dir_prefix) and os.path.isdir(full_path):
+                shutil.rmtree(full_path)
+                logging.debug("🧹 Removed chunk directory: %s", full_path)
+    except Exception as cleanup_err:
+        logging.warning("⚠️ Failed to remove chunk directories: %s", cleanup_err)
+
+
+async def run_transcription(req: TranscribeRequestDTO, job_id: str):
     uid = str(uuid.uuid4())
     video_path = os.path.join(Config.VIDEO_STORAGE_PATH, f"{uid}.mp4")
     audio_path = os.path.join(Config.VIDEO_STORAGE_PATH, f"{uid}.wav")
@@ -44,7 +66,7 @@ def run_transcription(req: TranscribeRequestDTO, job_id: str):
             slide_number = ask_gpt_for_slide_number(img_b64)
             if slide_number is not None:
                 slide_timestamps.append((ts, slide_number))
-            time.sleep(2)
+            await asyncio.sleep(2)
 
         logging.debug("▶ Aligning slides with transcript...")
         aligned_segments = align_slides_with_segments(
@@ -69,37 +91,23 @@ def run_transcription(req: TranscribeRequestDTO, job_id: str):
         fail_job(job_id, str(e))
 
     finally:
-        for path in [video_path, audio_path]:
-            try:
-                if os.path.exists(path):
-                    os.remove(path)
-                    logging.debug("🧹 Removed temp file: %s", path)
-            except Exception as cleanup_err:
-                logging.warning("⚠️ Failed to remove temp file %s: %s", path, cleanup_err)
+        await cleanup_temp_files(uid, video_path, audio_path)
 
-        chunk_dir_prefix = f"chunks_{uid}"
-        temp_dir = Config.VIDEO_STORAGE_PATH
-        try:
-            for entry in os.listdir(temp_dir):
-                full_path = os.path.join(temp_dir, entry)
-                if entry.startswith(chunk_dir_prefix) and os.path.isdir(full_path):
-                    shutil.rmtree(full_path)
-                    logging.debug("🧹 Removed chunk directory: %s", full_path)
-        except Exception as cleanup_err:
-            logging.warning("⚠️ Failed to remove chunk directories: %s", cleanup_err)
 
 @router.post("/start-transcribe", tags=["internal"])
-async def start_transcribe(req: TranscribeRequestDTO, background_tasks: BackgroundTasks):
+async def start_transcribe(req: TranscribeRequestDTO):
     if not req.videoUrl:
         raise HTTPException(status_code=400, detail="Missing videoUrl")
     job_id = create_job()
-    background_tasks.add_task(run_transcription, req, job_id)
+    asyncio.create_task(run_transcription(req, job_id))  # Async background
     logging.info("🟡 Started transcription job: %s", job_id)
     return {"status": "processing", "transcriptionId": job_id}
+
 
 @router.get("/status/{job_id}", tags=["internal"])
 async def get_transcription_status(job_id: str):
     return get_job_status(job_id)
+
 
 @router.get("/test")
 async def test():

@@ -7,7 +7,7 @@ services:
       dockerfile: docker/transcriber/Dockerfile
     container_name: nebula-transcriber
     expose:
-      - "5000"  # interne Kommunikation mit Envoy
+      - "5000" # interne Kommunikation mit Envoy
     environment:
       - APPLICATION_YML_PATH=/app/application_local.nebula.yml
       - LLM_CONFIG_PATH=/app/llm_config.nebula.yml
@@ -39,9 +39,9 @@ services:
     volumes:
       - ./envoy.yaml:/etc/envoy/envoy.yaml:ro
     ports:
-      - "8000:8000"     # HTTP for FastAPI
-      - "50051:50051"   # gRPC
-      -  "9901:9901"     # Admin interface
+      - "8000:8000" # HTTP for FastAPI
+      - "50051:50051" # gRPC
+      - "9901:9901" # Admin interface
     depends_on:
       - transcriber
       - faq
