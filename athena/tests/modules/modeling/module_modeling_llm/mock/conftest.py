@@ -1,46 +1,40 @@
-from unittest.mock import patch
-from tests.modules.modeling.module_modeling_llm.mock.utils.mock_llm_config import (
-    mock_get_llm_config,
-)
-
-patch(
-    "llm_core.loaders.llm_config_loader.get_llm_config",
-    mock_get_llm_config,
-).start()
-
-# Import OpenAI mocks first to ensure they're in place before any other imports
-from tests.modules.modeling.module_modeling_llm.mock.utils.mock_openai import (
-    mock_openai,
-    mock_openai_client,
-)
-
+from unittest.mock import patch, MagicMock
 import pytest
 import pytest_asyncio
-import asyncio
-from module_modeling_llm.config import BasicApproachConfig
-from llm_core.models.openai import OpenAIModelConfig
-from tests.modules.modeling.module_modeling_llm.mock.utils.mock_llm import (
+import json
+from athena.module_config import ModuleConfig
+from athena.schemas.exercise_type import ExerciseType
+
+stub = ModuleConfig(name="module_modeling_llm", type=ExerciseType.modeling, port=5001)
+patch("athena.module_config.get_module_config", return_value=stub).start()
+
+
+from modules.modeling.module_modeling_llm.mock.utils.mock_llm import (
     MockLanguageModel,
     MockAssessmentModel,
 )
-from tests.modules.modeling.module_modeling_llm.mock.utils.mock_config import (
-    MockApproachConfig,
-    MockModelConfig,
-)
-import json
 from athena.modeling import Exercise, Submission
-from athena.schemas.exercise_type import ExerciseType
+from utils.mock_llm_config import mock_get_llm_config
+
+
+@pytest.fixture(autouse=True)
+def _mock_llm_config(monkeypatch):
+    monkeypatch.setattr(
+        "llm_core.loaders.llm_config_loader.get_llm_config",
+        mock_get_llm_config,
+    )
 
 
 @pytest_asyncio.fixture
 async def mock_config():
-    """Create a mock configuration for testing."""
-    config = BasicApproachConfig(
-        max_input_tokens=5000,
-        model=OpenAIModelConfig(
-            model_name="mock_model", get_model=lambda: MockLanguageModel()
-        ),
-    )
+    """
+    Create a flexible mock configuration for testing using MagicMock.
+    This avoids issues with Pydantic model validation and field assignment.
+    """
+    config = MagicMock()
+    config.generate_feedback = MagicMock()
+    config.generate_suggestions_prompt = MagicMock()
+
     return config
 
 
@@ -130,6 +124,7 @@ def mock_exercise():
         problem_statement="Test problem statement",
         example_solution=json.dumps(example_solution),
         grading_criteria=[],
+        meta={},
     )
 
 
@@ -160,4 +155,6 @@ def mock_submission(mock_exercise):
             }
         },
     }
-    return Submission(id=1, exerciseId=mock_exercise.id, model=json.dumps(model_data))
+    return Submission(
+        id=1, exercise_id=mock_exercise.id, model=json.dumps(model_data), meta={}
+    )

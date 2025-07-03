@@ -1,3 +1,4 @@
+from pathlib import Path
 from llm_core.loaders.llm_config_loader import get_llm_config
 from llm_core.models import ModelConfigType
 from pydantic import BaseModel, Field
@@ -9,7 +10,8 @@ from module_modeling_llm.prompts import (
     structured_grading_instructions_prompt,
 )
 
-llm_config = get_llm_config()
+_CONFIG_PATH = Path(__file__).resolve().parent.parent / "llm_config.yml"
+llm_config = get_llm_config(str(_CONFIG_PATH))
 
 
 class GenerateSuggestionsPrompt(BaseModel):

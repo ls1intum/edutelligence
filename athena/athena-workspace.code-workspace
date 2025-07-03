@@ -38,6 +38,9 @@
         },
 		{
 			"path": "llm_core"
+		},
+		{
+			"path": "tests"
 		}
 	],
 	"settings": {

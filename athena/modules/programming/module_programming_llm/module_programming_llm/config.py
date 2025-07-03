@@ -1,4 +1,5 @@
 from abc import ABC
+from pathlib import Path
 
 from llm_core.loaders.llm_config_loader import get_llm_config
 from pydantic import BaseModel, Field
@@ -30,7 +31,8 @@ from module_programming_llm.prompts.summarize_submission_by_file import (
     human_message as summarize_submission_by_file_human_message,
 )
 
-llm_config = get_llm_config()
+_CONFIG_PATH = Path(__file__).resolve().parent.parent / "llm_config.yml"
+llm_config = get_llm_config(str(_CONFIG_PATH))
 
 
 class SplitProblemStatementsBasePrompt(BaseModel):
