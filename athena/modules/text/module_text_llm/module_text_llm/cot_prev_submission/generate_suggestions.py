@@ -3,7 +3,7 @@ from typing import List, Optional
 from athena import emit_meta
 from athena.text import Exercise, Submission, Feedback
 from athena.logger import logger
-from athena.schemas import LearnerProfile, Result
+from athena.schemas import LearnerProfile
 from module_text_llm.approach_config import ApproachConfig
 from llm_core.utils.llm_utils import (
     get_chat_prompt_with_formatting_instructions,
@@ -18,7 +18,7 @@ from module_text_llm.cot_prev_submission.prompt_generate_feedback import Assessm
 
 
 async def generate_suggestions(exercise: Exercise, submission: Submission, config: ApproachConfig, *, debug: bool,
-                               is_graded: bool, learner_profile: Optional[LearnerProfile] = None, result: Optional[Result]) -> List[Feedback]:
+                               is_graded: bool, learner_profile: Optional[LearnerProfile] = None, latest_submission: Optional[Submission]) -> List[Feedback]:
     model = config.model.get_model()  # type: ignore[attr-defined]
 
     # Use default preferences if none provided
@@ -40,7 +40,7 @@ async def generate_suggestions(exercise: Exercise, submission: Submission, confi
         "problem_statement": exercise.problem_statement or "No problem statement.",
         "example_solution": exercise.example_solution,
         "submission": add_sentence_numbers(submission.text),
-        "previous_submission": add_sentence_numbers(result.submission.text)
+        "previous_submission": add_sentence_numbers(latest_submission.text)
     }
 
     chat_prompt = get_chat_prompt_with_formatting_instructions(
@@ -82,9 +82,8 @@ async def generate_suggestions(exercise: Exercise, submission: Submission, confi
     )
 
     logger.info("---------------------------------")
-    logger.info(initial_result.comparison)
-    logger.info("---------------------------------")
     logger.info(initial_result.dict())
+    logger.info("---------------------------------")
 
     second_prompt_input = {
         "example_solution": exercise.example_solution,
@@ -112,6 +111,9 @@ async def generate_suggestions(exercise: Exercise, submission: Submission, confi
         ],
         use_function_calling=True
     )
+
+    logger.info(result.dict())
+    logger.info("---------------------------------")
 
     if debug:
         emit_meta("generate_suggestions", {

@@ -2,7 +2,7 @@ from pydantic import Field
 from typing import Literal
 
 from athena.text import Exercise, Submission
-from athena.schemas import LearnerProfile, Result
+from athena.schemas import LearnerProfile
 
 from module_text_llm.approach_config import ApproachConfig
 from module_text_llm.cot_prev_submission.prompt_generate_feedback import GenerateSuggestionsPrompt
@@ -21,6 +21,6 @@ class COTPrevSubmissionConfig(ApproachConfig):
     ))
 
     async def generate_suggestions(self, exercise: Exercise, submission: Submission, config, *, debug: bool,
-                                   is_graded: bool, learner_profile: LearnerProfile = None, result: Result = None):
+                                   is_graded: bool, learner_profile: LearnerProfile = None, latest_submission: Submission = None):
         return await generate_suggestions(exercise, submission, config, debug=debug, is_graded=is_graded,
-                                          learner_profile=learner_profile, result=result)
+                                          learner_profile=learner_profile, latest_submission=latest_submission)
