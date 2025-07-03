@@ -6,7 +6,6 @@ from tests.modules.modeling.module_modeling_llm.mock.utils.mock_llm_config impor
 patch(
     "llm_core.loaders.llm_config_loader.get_llm_config",
     mock_get_llm_config,
-    create=True,
 ).start()
 
 # Import OpenAI mocks first to ensure they're in place before any other imports
