@@ -1,20 +1,28 @@
 import logging
 
+from nebula.transcript.config import Config
 from nebula.transcript.llm_utils import get_openai_client
 
 
-def ask_gpt_for_slide_number(image_b64: str) -> int | None:
+def ask_gpt_for_slide_number(image_b64: str, llm_id: str | None = None) -> int | None:
     """
-    Use GPT-4o Vision to detect a visible slide number from a base64 image.
+    Use GPT Vision to detect the slide number from a base64 image.
+    Supports both Azure OpenAI and OpenAI.com based on `llm_id`.
+
+    Args:
+        image_b64 (str): base64-encoded image string.
+        llm_id (str | None): Optional override for GPT Vision model ID.
 
     Returns:
-        int or None: The detected slide number, or None if unknown.
+        int | None: Detected slide number, or None if unknown.
     """
-    client, deployment = get_openai_client()
-
     try:
+        # Use configured LLM if not explicitly given
+        llm_id = llm_id or Config.get_gpt_vision_llm_id()
+        client, model_or_deployment = get_openai_client(llm_id)
+
         response = client.chat.completions.create(
-            model=deployment,
+            model=model_or_deployment,
             messages=[
                 {
                     "role": "user",
@@ -36,8 +44,7 @@ def ask_gpt_for_slide_number(image_b64: str) -> int | None:
         )
 
         content = response.choices[0].message.content.strip().lower()
-
-        if "unknown" in content:
+        if "null" in content or "unknown" in content:
             return None
 
         digits = "".join(filter(str.isdigit, content))

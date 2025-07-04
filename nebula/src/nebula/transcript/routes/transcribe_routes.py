@@ -10,13 +10,17 @@ from nebula.transcript.align_utils import align_slides_with_segments
 from nebula.transcript.config import Config
 from nebula.transcript.dto import TranscribeRequestDTO, TranscriptionSegmentDTO
 from nebula.transcript.jobs import create_job, fail_job, get_job_status, save_job_result
+from nebula.transcript.llm_utils import load_llm_config
 from nebula.transcript.slide_utils import ask_gpt_for_slide_number
 from nebula.transcript.video_utils import (
     download_video,
     extract_audio,
     extract_frames_at_timestamps,
 )
-from nebula.transcript.whisper_utils import transcribe_with_azure_whisper
+from nebula.transcript.whisper_utils import (
+    transcribe_with_azure_whisper,
+    transcribe_with_openai_whisper,
+)
 
 router = APIRouter()
 
@@ -54,8 +58,20 @@ async def run_transcription(req: TranscribeRequestDTO, job_id: str):
         logging.debug("▶ Extracting audio...")
         extract_audio(video_path, audio_path)
 
-        logging.debug("▶ Transcribing with Whisper...")
-        transcription = transcribe_with_azure_whisper(audio_path)
+        whisper_config = load_llm_config(llm_id=Config.get_whisper_llm_id())
+
+        if whisper_config["type"] == "azure_whisper":
+            logging.debug("▶ Transcribing with Azure Whisper...")
+            transcription = transcribe_with_azure_whisper(
+                audio_path, llm_id=whisper_config["id"]
+            )
+        elif whisper_config["type"] == "openai_whisper":
+            logging.debug("▶ Transcribing with OpenAI Whisper...")
+            transcription = transcribe_with_openai_whisper(
+                audio_path, llm_id=whisper_config["id"]
+            )
+        else:
+            raise ValueError(f"Unsupported Whisper type: {whisper_config['type']}")
 
         logging.debug("▶ Extracting frames for GPT...")
         timestamps = [s["start"] for s in transcription["segments"]]
@@ -63,7 +79,10 @@ async def run_transcription(req: TranscribeRequestDTO, job_id: str):
 
         slide_timestamps = []
         for ts, img_b64 in frames:
-            slide_number = ask_gpt_for_slide_number(img_b64)
+            slide_number = ask_gpt_for_slide_number(
+                img_b64,
+                llm_id=Config.get_gpt_vision_llm_id(),
+            )
             if slide_number is not None:
                 slide_timestamps.append((ts, slide_number))
             await asyncio.sleep(2)
@@ -99,7 +118,7 @@ async def start_transcribe(req: TranscribeRequestDTO):
     if not req.videoUrl:
         raise HTTPException(status_code=400, detail="Missing videoUrl")
     job_id = create_job()
-    asyncio.create_task(run_transcription(req, job_id))  # Async background
+    asyncio.create_task(run_transcription(req, job_id))
     logging.info("🟡 Started transcription job: %s", job_id)
     return {"status": "processing", "transcriptionId": job_id}
 
