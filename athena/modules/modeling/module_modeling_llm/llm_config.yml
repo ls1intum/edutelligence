@@ -1,0 +1,5 @@
+models:
+  base_model: azure_openai_gpt-4o
+  mini_model: azure_openai_gpt-4o
+  fast_reasoning_model: azure_openai_gpt-4o
+  long_reasoning_model: azure_openai_gpt-4o

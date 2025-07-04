@@ -1,16 +1,15 @@
 import pytest
 from typing import List, Optional, Dict
 from dataclasses import dataclass, field
-
-from tests.modules.programming.module_programming_llm.mock.utils.mock_config import (
+from modules.programming.module_programming_llm.mock.utils.mock_config import (
     MockModelConfig,
     create_mock_graded_config,
     create_mock_non_graded_config,
 )
 
+
 @dataclass
 class MockFeedback:
-    
     exercise_id: int
     submission_id: int
     title: str
@@ -22,10 +21,13 @@ class MockFeedback:
     is_graded: bool = False
     meta: Dict = field(default_factory=dict)
 
-async def mock_generate_graded_suggestions(exercise, submission, config) -> List[MockFeedback]:
+
+async def mock_generate_graded_suggestions(
+    exercise, submission, config
+) -> List[MockFeedback]:
     if not submission.files:
         return []
-        
+
     return [
         MockFeedback(
             exercise_id=exercise.id,
@@ -41,8 +43,11 @@ async def mock_generate_graded_suggestions(exercise, submission, config) -> List
         )
     ]
 
-async def mock_generate_non_graded_suggestions(exercise, submission, config) -> List[MockFeedback]:
-    
+
+async def mock_generate_non_graded_suggestions(
+    exercise, submission, config
+) -> List[MockFeedback]:
+
     if not submission.files:
         return []
     return [
@@ -59,12 +64,15 @@ async def mock_generate_non_graded_suggestions(exercise, submission, config) -> 
         )
     ]
 
+
 @pytest.mark.asyncio
 async def test_generate_graded_suggestions(mock_exercise, mock_submission):
     model_config = MockModelConfig()
     config = create_mock_graded_config(model_config)
-    feedbacks = await mock_generate_graded_suggestions(mock_exercise, mock_submission, config)
-    
+    feedbacks = await mock_generate_graded_suggestions(
+        mock_exercise, mock_submission, config
+    )
+
     assert feedbacks is not None, "Feedbacks should not be None"
     assert len(feedbacks) == 1, "Should have one feedback"
     feedback = feedbacks[0]
@@ -76,12 +84,15 @@ async def test_generate_graded_suggestions(mock_exercise, mock_submission):
     assert feedback.line_start == 1
     assert feedback.line_end == 1
 
+
 @pytest.mark.asyncio
 async def test_generate_non_graded_suggestions(mock_exercise, mock_submission):
     model_config = MockModelConfig()
     config = create_mock_non_graded_config(model_config)
-    feedbacks = await mock_generate_non_graded_suggestions(mock_exercise, mock_submission, config)
-    
+    feedbacks = await mock_generate_non_graded_suggestions(
+        mock_exercise, mock_submission, config
+    )
+
     assert feedbacks is not None, "Feedbacks should not be None"
     assert len(feedbacks) == 1, "Should have one feedback"
     feedback = feedbacks[0]
@@ -92,11 +103,14 @@ async def test_generate_non_graded_suggestions(mock_exercise, mock_submission):
     assert feedback.line_start == 1
     assert feedback.line_end == 1
 
+
 @pytest.mark.asyncio
 async def test_error_handling(mock_exercise, mock_empty_submission):
     model_config = MockModelConfig()
     config = create_mock_graded_config(model_config)
-    feedbacks = await mock_generate_graded_suggestions(mock_exercise, mock_empty_submission, config)
-    
+    feedbacks = await mock_generate_graded_suggestions(
+        mock_exercise, mock_empty_submission, config
+    )
+
     assert feedbacks is not None
     assert len(feedbacks) == 0

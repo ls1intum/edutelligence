@@ -1,5 +1,5 @@
 from athena.approach_discovery.discover_approaches import discover_approach_configs
-from typing import List, Callable
+from typing import Callable
 
 class SuggestionStrategyFactory:
     """
