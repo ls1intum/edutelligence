@@ -23,24 +23,26 @@ class _WeaviateBaseRepository(ABC):
     It provides common functionality for dealing with Weaviate.
     """
 
-    client: WeaviateClient
     learning_collection_name: str = "Learning"
     memory_collection_name: str = "Memory"
     memory_connection_collection_name: str = "MemoryConnection"
-    _vector_count: int = 5
-    learning_collection: Collection
-    memory_collection: Collection
-    memory_connection_collection: Collection
     memory_learning_reference_name: str = "learnings"
     learning_memory_reference_name: str = "memories"
     memory_connection_memory_reference_name: str = "connected_memories"
     memory_connection_reference_name: str = "connections"
+    _vector_count: int = 5
+
+    client: WeaviateClient
+    learning_collection: Collection
+    memory_collection: Collection
+    memory_connection_collection: Collection
 
     def __init__(self, client: WeaviateClient):
         """
         Initialize the repository with all necessary components.
         """
         self.client = client
+
         self._ensure_learning_schema()
         self._ensure_memory_schema()
         self._ensure_memory_connection_schema()

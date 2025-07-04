@@ -7,7 +7,6 @@ import pytest
 from memiris.util.grouping import check_groups, greedy_cover
 
 
-# ──────────────────────────────────────────────────────────────────────────
 def _all_pairs(blocks: List[List[Any]]) -> set[tuple[Any, Any]]:
     """Return the set of unordered pairs covered by *blocks*."""
     pairs: set[tuple[Any, Any]] = set()

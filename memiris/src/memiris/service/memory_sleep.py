@@ -48,14 +48,12 @@ class MemorySleeper:
     template_deduplication: Template
     template_connector: Template
 
-    learning_cache: dict[UUID, Learning] = {}
-    memory_cache: dict[UUID, Memory] = {}
+    learning_cache: dict[UUID, Learning]
+    memory_cache: dict[UUID, Memory]
 
-    max_threads: int = 5  # Maximum number of threads for parallel processing
-    group_size: int = (
-        20  # Size of memory groups, can be larger to meet the max_groups limit
-    )
-    max_groups: int = 5  # Maximum number of groups to process in parallel
+    max_threads: int  # Maximum number of threads for parallel processing
+    group_size: int  # Size of memory groups, can be larger to meet the max_groups limit
+    max_groups: int  # Maximum number of groups to process in parallel
 
     def __init__(
         self,
@@ -105,6 +103,9 @@ class MemorySleeper:
         )
 
         self.langfuse_client = langfuse.get_client()
+
+        self.learning_cache: dict[UUID, Learning] = {}
+        self.memory_cache: dict[UUID, Memory] = {}
 
         self.max_threads = max_threads
         self.group_size = group_size
