@@ -81,10 +81,6 @@ async def generate_suggestions(exercise: Exercise, submission: Submission, confi
         use_function_calling=True
     )
 
-    logger.info("---------------------------------")
-    logger.info(initial_result.dict())
-    logger.info("---------------------------------")
-
     second_prompt_input = {
         "example_solution": exercise.example_solution,
         "max_points": exercise.max_points,
@@ -111,9 +107,6 @@ async def generate_suggestions(exercise: Exercise, submission: Submission, confi
         ],
         use_function_calling=True
     )
-
-    logger.info(result.dict())
-    logger.info("---------------------------------")
 
     if debug:
         emit_meta("generate_suggestions", {
