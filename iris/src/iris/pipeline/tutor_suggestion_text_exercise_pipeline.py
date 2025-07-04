@@ -8,7 +8,7 @@ from langsmith import traceable
 
 from iris.common.pipeline_enum import PipelineEnum
 from iris.domain.data.text_exercise_dto import TextExerciseDTO
-from iris.llm import CapabilityRequestHandler, CompletionArguments, RequirementList
+from iris.llm import CompletionArguments, ModelVersionRequestHandler
 from iris.llm.langchain import IrisLangchainChatModel
 from iris.pipeline import Pipeline
 from iris.pipeline.prompts.tutor_suggestion.text_exercise_prompt import (
@@ -47,16 +47,20 @@ class TutorSuggestionTextExercisePipeline(Pipeline):
     llm: IrisLangchainChatModel
     pipeline: Runnable
 
-    def __init__(self):
+    def __init__(self, variant: str = "default"):
         super().__init__(implementation_id="tutor_suggestion_text_exercise_pipeline")
         completion_args = CompletionArguments(temperature=0, max_tokens=2000)
-        request_handler = CapabilityRequestHandler(
-            requirements=RequirementList(self_hosted=False)
-        )
+
+        if variant == "advanced":
+            model = "gemma3:27b"
+        else:
+            model = "deepseek-r1:8b"
+
         self.llm = IrisLangchainChatModel(
-            request_handler=request_handler,
-            completion_arguments=completion_args,
+            request_handler=ModelVersionRequestHandler(version=model),
+            completion_args=completion_args,
         )
+
 
         self.pipeline = self.llm | StrOutputParser()
         self.tokens = []

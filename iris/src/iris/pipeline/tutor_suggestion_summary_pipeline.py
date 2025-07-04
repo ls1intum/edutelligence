@@ -11,7 +11,7 @@ from iris.common.pipeline_enum import PipelineEnum
 from iris.domain.communication.communication_tutor_suggestion_pipeline_execution_dto import (
     CommunicationTutorSuggestionPipelineExecutionDTO,
 )
-from iris.llm import CapabilityRequestHandler, CompletionArguments, RequirementList
+from iris.llm import CompletionArguments, ModelVersionRequestHandler
 from iris.llm.langchain import IrisLangchainChatModel
 from iris.pipeline import Pipeline
 from iris.pipeline.prompts.tutor_suggestion.post_summary_prompt import (
@@ -60,16 +60,25 @@ class TutorSuggestionSummaryPipeline(Pipeline):
     pipeline: Runnable
     callback: TutorSuggestionCallback
 
-    def __init__(self, callback: TutorSuggestionCallback):
+    def __init__(
+            self,
+            callback: TutorSuggestionCallback,
+            variant: str = "default",
+    ):
         super().__init__(implementation_id="tutor_suggestion_summary_pipeline")
         completion_args = CompletionArguments(temperature=0, max_tokens=2000)
-        request_handler = CapabilityRequestHandler(
-            requirements=RequirementList(self_hosted=True)
-        )
+
+
+        if variant == "advanced":
+            model = "gemma3:27b"
+        else:
+            model = "deepseek-r1:8b"
+
         self.llm = IrisLangchainChatModel(
-            request_handler=request_handler,
+            request_handler=ModelVersionRequestHandler(version=model),
             completion_args=completion_args,
         )
+
         self.callback = callback
         self.pipeline = self.llm | StrOutputParser()
         self.tokens = []

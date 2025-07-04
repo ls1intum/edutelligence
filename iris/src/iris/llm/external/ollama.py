@@ -104,8 +104,7 @@ class OllamaModel(
     type: Literal["ollama"]
     host: str
     options: dict[str, Any] = Field(default={})
-    username: str
-    password: str
+    api_key: str
     _client: Client
 
     def model_post_init(self, __context: Any) -> None:
@@ -121,11 +120,10 @@ class OllamaModel(
             http2=True,
             transport=transport,
             timeout=timeout,
-            auth=(
-                HTTPBasicAuth(self.username, self.password)
-                if self.username and self.password
-                else None
-            ),
+            headers={
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+            },
         )
 
     def complete(
