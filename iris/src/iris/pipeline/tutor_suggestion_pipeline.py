@@ -12,10 +12,10 @@ from iris.domain import FeatureDTO
 from iris.domain.communication.communication_tutor_suggestion_pipeline_execution_dto import (
     CommunicationTutorSuggestionPipelineExecutionDTO,
 )
-from iris.llm import CompletionArguments, ModelVersionRequestHandler
+from iris.llm import ModelVersionRequestHandler
 from iris.llm.external.model import LanguageModel
 from iris.domain.data.text_exercise_dto import TextExerciseDTO
-from iris.llm import CapabilityRequestHandler, CompletionArguments, RequirementList
+from iris.llm import CompletionArguments
 from iris.llm.langchain import IrisLangchainChatModel
 from iris.pipeline import Pipeline
 from iris.pipeline.prompts.tutor_suggestion.question_answered_prompt import (

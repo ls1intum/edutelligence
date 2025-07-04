@@ -18,8 +18,6 @@ from ...domain.data.feedback_dto import FeedbackDTO
 from ...llm import (
     CompletionArguments,
     ModelVersionRequestHandler,
-    RequestHandler,
-    RequirementList,
 )
 from ...llm.external.model import LanguageModel
 from ...llm.langchain import IrisLangchainChatModel
