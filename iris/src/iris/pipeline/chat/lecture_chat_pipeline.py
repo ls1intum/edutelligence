@@ -32,7 +32,10 @@ from ...vector_database.database import VectorDatabase
 from ...web.status.status_update import LectureChatCallback
 from ..pipeline import Pipeline
 from ..shared.citation_pipeline import CitationPipeline
-from ..shared.utils import filter_variants_by_available_models
+from ..shared.utils import (
+    filter_variants_by_available_models,
+    format_custom_instructions,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -58,10 +61,9 @@ def lecture_initial_prompt():
      student's question. If the context provided to you is not enough to formulate an answer to the student question
      you can simply ask the student to elaborate more on his question. Use only the parts of the context provided for
      you that is relevant to the student's question. If the user greets you greet him back,
-      and ask him how you can help.
-     Always reply in the same language the student used in their question.
-     If the student writes in English, reply in English.
-     If they write in German, reply in German. Never switch languages unless asked to.
+     and ask him how you can help.
+     Always respond in the same language as the user. If they use English, you use English.
+     If they use German, you use German, but then always use "du" instead of "Sie".
      """
 
 
@@ -85,7 +87,6 @@ class LectureChatPipeline(Pipeline):
         variant: str = "default",
     ):
         super().__init__(implementation_id="lecture_chat_pipeline")
-        # Set the langchain chat model
 
         self.callback = callback
         self.dto = dto
@@ -96,7 +97,7 @@ class LectureChatPipeline(Pipeline):
         if variant == "advanced":
             model = "gpt-4.1"
         else:
-            model = "gpt-4.1-nano"
+            model = "gpt-4.1-mini"
 
         request_handler = ModelVersionRequestHandler(version=model)
 
@@ -114,7 +115,7 @@ class LectureChatPipeline(Pipeline):
     def get_variants(cls, available_llms: List[LanguageModel]) -> List[FeatureDTO]:
         variant_specs = [
             (
-                ["gpt-4.1-nano"],
+                ["gpt-4.1-mini"],
                 FeatureDTO(
                     id="default",
                     name="Default",
@@ -169,14 +170,23 @@ class LectureChatPipeline(Pipeline):
         )
 
         self._add_lecture_content_to_prompt(self.lecture_content)
-
+        custom_instructions = format_custom_instructions(
+            custom_instructions=dto.custom_instructions
+        )
+        if custom_instructions:
+            self.prompt += SystemMessagePromptTemplate.from_template(
+                custom_instructions
+            )
         prompt_val = self.prompt.format_messages()
         self.prompt = ChatPromptTemplate.from_messages(prompt_val)
         try:
             response = (self.prompt | self.pipeline).invoke({})
             self._append_tokens(self.llm.tokens, PipelineEnum.IRIS_CHAT_LECTURE_MESSAGE)
             response_with_citation = self.citation_pipeline(
-                self.lecture_content, response
+                self.lecture_content,
+                response,
+                variant=self.variant,
+                base_url=dto.settings.artemis_base_url,
             )
             self.tokens.extend(self.citation_pipeline.tokens)
             logger.info(
