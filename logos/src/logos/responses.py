@@ -17,6 +17,8 @@ from logos.dbutils.dbmanager import DBManager
 from logos.scheduling.scheduling_fcfs import FCFSScheduler
 from logos.scheduling.scheduling_manager import SchedulingManager
 
+from src.logos.classification.classification_balancer import Balancer
+
 
 def get_streaming_response(forward_url, proxy_headers, json_data, log_id, provider_id, model_id):
     json_data = json_data.copy()
@@ -225,7 +227,7 @@ def resource_behaviour(logos_key, headers, data, models):
                 "tags": tpl[9],
                 "parallel": tpl[10],
                 "description": tpl[11],
-                "classification_weight": 1,
+                "classification_weight": Balancer(),
             }
             mdls.append(model)
     select = ClassificationManager(mdls)

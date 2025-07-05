@@ -42,14 +42,14 @@ class PolicyClassifier(Classifier):
             else:
                 weight = 0
             print(f"Latency weight for model {model['id']} is: {weight}")
-            model["classification_weight"] += weight
+            model["classification_weight"].add_weight(weight, "policy")
         # Accuracy: The higher the value the better the result accuracy
         for model in models:
             if not strict or policy["threshold_accuracy"] <= model["weight_accuracy"]:
                 weight = sigmoid(model["weight_accuracy"], policy["threshold_accuracy"])
             else:
                 weight = 0
-            model["classification_weight"] += weight
+            model["classification_weight"].add_weight(weight, "policy")
             print(f"Accuracy weight for model {model['id']} is: {weight}")
         # Quality: The higher the value the higher the result quality
         for model in models:
@@ -57,6 +57,6 @@ class PolicyClassifier(Classifier):
                 weight = sigmoid(model["weight_quality"], policy["threshold_quality"])
             else:
                 weight = 0
-            model["classification_weight"] += weight
+            model["classification_weight"].add_weight(weight, "policy")
             print(f"Quality weight for model {model['id']} is: {weight}")
         return models

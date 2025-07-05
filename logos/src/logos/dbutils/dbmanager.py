@@ -522,7 +522,8 @@ class DBManager:
             "weight_cost": result.weight_cost,
             "weight_quality": result.weight_quality,
             "tags": result.tags,
-            "parallel": result.parallel
+            "parallel": result.parallel,
+            "description": result.description
         }
 
     def get_provider(self, provider_id: int):
