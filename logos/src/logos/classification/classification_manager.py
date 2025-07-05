@@ -50,7 +50,7 @@ class ClassificationManager:
         filtered = PolicyClassifier(self.models).classify(prompt, policy)
         filtered = TokenClassifier(filtered).classify(prompt, policy)
         filtered = AIClassifier(filtered).classify(prompt, policy, laura=self.laura)
-        return sorted([(i["id"], i["classification_weight"], policy["priority"], i["parallel"]) for i in filtered], key=lambda x: x[1], reverse=True)
+        return sorted([(i["id"], i["classification_weight"].get_weight(), policy["priority"], i["parallel"]) for i in filtered], key=lambda x: x[1], reverse=True)
 
     def calc_weight(self, model):
         """
