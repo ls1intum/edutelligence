@@ -1,9 +1,7 @@
 import datetime
 import json
-import time
 from typing import Union
 
-import tiktoken
 from fastapi.responses import StreamingResponse
 import httpx
 import grpc
@@ -248,10 +246,13 @@ def resource_behaviour(logos_key, headers, data, models):
         auth_name: auth_format,
         "Content-Type": "application/json"
     }
+    # TODO: Add config header fields to proxy_headers
     return proxy_headers, forward_url, model_id, model_name, int(provider["id"])
 
 
 def merge_url(base_url, endpoint):
+    if endpoint.startswith("http"):
+        return endpoint
     if not base_url.endswith("/") and not endpoint.startswith("/"):
         forward_url = f"{base_url}/{endpoint}"
     elif base_url.endswith("/") and endpoint.startswith("/"):
