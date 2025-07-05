@@ -21,7 +21,6 @@ class TokenClassifier(Classifier):
             relative = matches / len(tags)
             absolute = matches
             score = weighted_average(relative, absolute)
-            model["classification_weight"] += score
             model["classification_weight"].add_weight(score, "token")
             print(f"Token weight for model {model['id']} is: {score}")
         return self.models
