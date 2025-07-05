@@ -40,23 +40,29 @@ class ClassificationManager:
             for model in self.models:
                 self.laura.register_model(model["id"], model["description"])
 
-    def classify(self, prompt: str, policy: dict) -> List[Tuple[int, int, int, int]]:
+    def classify(self, prompt: str, policy: dict, allowed=None) -> List[Tuple[int, int, int, int]]:
         """
         Classify prompts and assign them to a model.
         Returns a sorted list with the best suited model-id at the front together with
         a weight describing how well the LLM is suited for the given prompt
         and a priority of the given policy.
         """
+        if allowed is None:
+            allowed = list()
         filtered = PolicyClassifier(self.models).classify(prompt, policy)
         filtered = TokenClassifier(filtered).classify(prompt, policy)
+        self.laura.allowed = allowed
         filtered = AIClassifier(filtered).classify(prompt, policy, laura=self.laura)
-        return sorted([(i["id"], i["classification_weight"].get_weight(), policy["priority"], i["parallel"]) for i in filtered], key=lambda x: x[1], reverse=True)
+        self.laura.allowed = list()
+        return sorted(
+            [(i["id"], i["classification_weight"].get_weight(), policy["priority"], i["parallel"]) for i in filtered],
+            key=lambda x: x[1], reverse=True)
 
     def calc_weight(self, model):
         """
         Calculates a combined weight over all weights of an LLM.
         """
         return self.WEIGHT_ACCURACY * model["weight_accuracy"] + \
-                self.WEIGHT_COST * model["weight_cost"] + \
-                self.WEIGHT_LATENCY * model["weight_latency"] + \
-                self.WEIGHT_QUALITY * model["weight_quality"]
+            self.WEIGHT_COST * model["weight_cost"] + \
+            self.WEIGHT_LATENCY * model["weight_latency"] + \
+            self.WEIGHT_QUALITY * model["weight_quality"]

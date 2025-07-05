@@ -8,6 +8,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from grpclocal import model_pb2_grpc
 from grpclocal.grpc_server import LogosServicer
+from logos.classification.classification_balancer import Balancer
+from logos.classification.classification_manager import ClassificationManager
 from logos.dbutils.dbmanager import DBManager
 from logos.dbutils.dbrequest import *
 from logos.responses import get_streaming_response, get_standard_response, get_client_ip, request_setup, \
@@ -20,6 +22,8 @@ from scripts.setup_proxy import setup
 
 app = FastAPI(docs_url="/docs", openapi_url="/openapi.json")
 _grpc_server = None
+_scheduler = None
+_classifier = None
 
 
 app.add_middleware(
@@ -53,6 +57,35 @@ async def start_grpc():
                 print("Created proxy configuration.", lk, flush=True)
     # else:
     #     print("Proxy Configuration not provided in docker compose, please setup via endpoint")
+
+
+@app.on_event("startup")
+async def start_handlers():
+    global _scheduler
+    _scheduler = SchedulingManager(FCFSScheduler())
+    mdls = list()
+    with DBManager() as db:
+        for model in db.get_all_models():
+            tpl = db.get_model(model)
+            model = {
+                "id": tpl[0],
+                "name": tpl[1],
+                "endpoint": tpl[2],
+                "api_id": tpl[3],
+                "weight_privacy": tpl[4],
+                "weight_latency": tpl[5],
+                "weight_accuracy": tpl[6],
+                "weight_cost": tpl[7],
+                "weight_quality": tpl[8],
+                "tags": tpl[9],
+                "parallel": tpl[10],
+                "description": tpl[11],
+                "classification_weight": Balancer(),
+            }
+            mdls.append(model)
+    global _classifier
+    _classifier = ClassificationManager(mdls)
+
 
 @app.on_event("shutdown")
 async def stop_grpc():

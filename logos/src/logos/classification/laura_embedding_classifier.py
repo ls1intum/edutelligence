@@ -3,12 +3,14 @@ import torch
 import pickle
 import os
 
+
 class LauraEmbeddingClassifier:
-    def __init__(self, model_name="all-MiniLM-L6-v2", db_path="laura_embeddings.pkl"):
+    def __init__(self, model_name="all-MiniLM-L6-v2", db_path="laura_embeddings.pkl", allowed=None):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model = SentenceTransformer(model_name, device=str(self.device))
         self.db_path = db_path
         self.model_db = self.load_db()
+        self.allowed = allowed if allowed else []
 
     def load_db(self):
         if os.path.exists(self.db_path):
@@ -41,7 +43,7 @@ class LauraEmbeddingClassifier:
         if not self.model_db:
             return []
         query_emb = self.encode_text(prompt, prefix="query:")
-        model_ids = list(self.model_db.keys())
+        model_ids = list(i for i in self.model_db.keys() if i in self.allowed or not self.allowed)
         model_matrix = torch.stack([self.model_db[mid] for mid in model_ids])
         sims = util.cos_sim(query_emb, model_matrix).squeeze(0)  # shape: (N,)
         top_indices = torch.topk(sims, k=top_k).indices.tolist()
@@ -61,7 +63,7 @@ class LauraEmbeddingClassifier:
         self.save_db()
 
     def update_negative_feedback(self, prompt: str, wrong_model_id: str, alpha: float = 0.05):
-        """Reduziert die Ähnlichkeit eines Modells mit einem Prompt durch negatives Feedback."""
+        """Reduces the similarity of a model with a prompt through negative feedback."""
         if wrong_model_id not in self.model_db:
             return
         prompt_emb = self.encode_text(prompt, prefix="query:")

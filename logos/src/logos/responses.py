@@ -209,37 +209,16 @@ def proxy_behaviour(headers, providers, path):
 def resource_behaviour(logos_key, headers, data, models):
     # The interesting part: Classification and scheduling
     # First, retrieve our used policy. If no one is given, use default ProxyPolicy
-    mdls = list()
-    with DBManager() as db:
-        for tpl in db.get_models_info(logos_key):
-            if tpl[0] not in models:
-                continue
-            model = {
-                "id": tpl[0],
-                "name": tpl[1],
-                "endpoint": tpl[2],
-                "api_id": tpl[3],
-                "weight_privacy": tpl[4],
-                "weight_latency": tpl[5],
-                "weight_accuracy": tpl[6],
-                "weight_cost": tpl[7],
-                "weight_quality": tpl[8],
-                "tags": tpl[9],
-                "parallel": tpl[10],
-                "description": tpl[11],
-                "classification_weight": Balancer(),
-            }
-            mdls.append(model)
-    select = ClassificationManager(mdls)
     if "policy" in headers:
         with DBManager() as db:
             policy = db.get_policy(logos_key, headers["policy"])
     else:
         policy = ProxyPolicy()
 
+    select = ClassificationManager(list())
     # Extract our prompt (needed for classification)
     prompt = extract_prompt(data)
-    models = select.classify(prompt, policy)
+    models = select.classify(prompt, policy, allowed=models)
     sm = SchedulingManager(FCFSScheduler())
     sm.run()
     tid = sm.add_request(data, models)
@@ -294,8 +273,8 @@ def request_setup(headers: dict, logos_key: str):
         if not models or "proxy" in headers:
             return list()
         else:
-            with DBManager() as db:
-                return [i for i in [db.get_model(i) for i in models] if i is not None]
+            # Return ids of all available models
+            return models
     except PermissionError as e:
         return {"error": str(e)}, 401
     except ValueError as e:

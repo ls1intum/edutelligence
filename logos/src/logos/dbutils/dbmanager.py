@@ -439,6 +439,17 @@ class DBManager:
         result = self.session.execute(sql, {"logos_key": logos_key}).fetchall()
         return [i.id for i in result]
 
+    def get_all_models(self):
+        """
+        Get a list of all models. ONLY FOR INTERNAL USE.
+        """
+        sql = text("""
+            SELECT models.id
+            FROM models
+        """)
+        result = self.session.execute(sql).fetchall()
+        return [i.id for i in result]
+
     def get_providers(self, logos_key: str):
         """
         Get a list of providers accessible by a given key.
