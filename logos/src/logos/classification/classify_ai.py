@@ -20,6 +20,6 @@ class AIClassifier(Classifier):
         ranking = laura.classify_prompt(prompt, top_k=len(laura.model_db))
         ranking = {idx: value for (idx, value) in ranking}
         for model in self.models:
-            model["classification_weight"].add_weight(ranking[model["id"]])
+            model["classification_weight"].add_weight(ranking[model["id"]], "ai")
             print(f"Laura weight for model {model['id']} is: {ranking[model["id"]]}")
         return self.models
