@@ -8,7 +8,7 @@ class Learning:
     """
 
     id: Optional[UUID]
-    title: str  # The title of the learning object (TODO: Do we need this?)
+    title: str  # The title of the learning object
     content: str  # The content of the learning object. Contains the information that was learned and details about it.
     reference: str  # The reference to the source this learning object was learned from
     memories: List[

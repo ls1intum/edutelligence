@@ -1,10 +1,9 @@
-// memory.proto
 syntax = "proto3";
 
 package memiris;
 
 message Memory {
-  // The unique identifier of the memory object (UUID as string).
+  // Unique identifier (UUID as string)
   string id = 1;
 
   // The user-visible title.
@@ -27,10 +26,10 @@ message Memory {
 }
 
 message Learning {
-  // Unique identifier (UUID as string); optional for presence checking.
+  // Unique identifier (UUID as string)
   string id = 1;
 
-  // Short human-readable label (kept even though the TODO questions it).
+  // Short human-readable label
   string title = 2;
 
   // Full text that was learned.
@@ -52,7 +51,7 @@ enum ConnectionType {
 }
 
 message MemoryConnection {
-  // Unique identifier (UUID string).
+  // Unique identifier (UUID as string).
   string id = 1;
 
   // Type of relationship between memories.
