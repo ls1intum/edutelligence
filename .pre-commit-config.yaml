@@ -18,7 +18,7 @@ repos:
         args: ["-p", "nebula"]
         files: "^nebula/.*"
       - id: sub-pre-commit
-        alias: iris
+        alias: memiris
         name: "pre-commit for memiris"
         args: ["-p", "memiris"]
         files: "^memiris/.*"
