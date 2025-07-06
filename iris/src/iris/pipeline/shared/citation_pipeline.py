@@ -1,3 +1,4 @@
+import datetime
 import os
 from asyncio.log import logger
 from enum import Enum
@@ -81,6 +82,13 @@ class CitationPipeline(Pipeline):
 
         formatted_string_lecture_page_chunks = ""
         for paragraph in lecture_retrieval_dto.lecture_unit_page_chunks:
+            if not paragraph.page_text_content:
+                continue
+            # Temporary fix for wrong links, e.g. https://artemis.tum.deattachments/...
+            if ".deattachment" in paragraph.lecture_unit_link:
+                paragraph.lecture_unit_link = paragraph.lecture_unit_link.replace(
+                    ".deattachment", ".de/api/core/files/attachment"
+                )
             lct = (
                 f"Lecture: {paragraph.lecture_name},"
                 f" Unit: {paragraph.lecture_unit_name},"
@@ -93,10 +101,14 @@ class CitationPipeline(Pipeline):
         formatted_string_lecture_transcriptions = ""
 
         for paragraph in lecture_retrieval_dto.lecture_transcriptions:
+            start_time_sec = paragraph.segment_start_time
+            end_time_sec = paragraph.segment_end_time
+            start_time_str = str(datetime.timedelta(seconds=int(start_time_sec)))
+            end_time_str = str(datetime.timedelta(seconds=int(end_time_sec)))
             lct = (
                 f"Lecture Transcription: {paragraph.lecture_name}, Unit: {paragraph.lecture_unit_name}, "
                 f"Page: {paragraph.page_number}, Link: {paragraph.lecture_unit_link}, "
-                f"Start Time: {paragraph.segment_start_time}, End Time: {paragraph.segment_end_time},\n"
+                f"Start Time: {start_time_str} ({start_time_sec}s), End Time: {end_time_str} ({end_time_sec}s),\n"
                 f"Content:\n"
                 f"---{paragraph.segment_text}---\n\n"
             )

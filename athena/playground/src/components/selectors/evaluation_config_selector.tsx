@@ -18,11 +18,14 @@ export default function EvaluationConfigSelector(evaluationConfigSelectorProps: 
         onChange={(e) => setSelectedConfigId(e.target.value)}
       >
         <option value="new">New Evaluation</option>
-        {expertEvaluationConfigs.map((config) => (
-          <option key={config.id} value={config.id}>
-            {config.name}: {config.creationDate?.toString() ?? ""}
-          </option>
-        ))}
+        {expertEvaluationConfigs
+          .slice()
+          .sort((a, b) => a.name.localeCompare(b.name))
+          .map((config) => (
+            <option key={config.id} value={config.id}>
+              {config.name}: {config.creationDate?.toString() ?? ""}
+            </option>
+          ))}
       </select>
     </section>
   );
