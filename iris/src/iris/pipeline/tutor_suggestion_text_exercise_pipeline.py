@@ -43,6 +43,11 @@ def _has_html(text: str):
 
 
 class TutorSuggestionTextExercisePipeline(Pipeline):
+    """
+    The TutorSuggestionTextExercisePipeline creates a suggestion for a text exercise.
+
+    When called, it uses the text exercise DTO and chat summary to generate suggestions
+    """
 
     llm: IrisLangchainChatModel
     pipeline: Runnable
@@ -109,5 +114,5 @@ class TutorSuggestionTextExercisePipeline(Pipeline):
                 )
             return html_response
         except Exception as e:
-            logger.error(f"Failed to generate suggestions for text exercise: {e}")
+            logger.error("Failed to generate suggestions for text exercise: %s", e)
             return result

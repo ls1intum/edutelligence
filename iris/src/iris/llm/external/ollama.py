@@ -16,7 +16,6 @@ from httpx import HTTPTransport, Timeout
 from langchain_core.tools import BaseTool
 from ollama import Client, Message
 from pydantic import BaseModel, Field
-from requests.auth import HTTPBasicAuth
 
 from ...common.message_converters import map_role_to_str, map_str_to_role
 from ...common.pyris_message import PyrisMessage

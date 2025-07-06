@@ -28,6 +28,11 @@ logger = logging.getLogger(__name__)
 
 
 class TutorSuggestionProgrammingExercisePipeline(Pipeline):
+    """
+    The TutorSuggestionProgrammingExercisePipeline creates a suggestion for a programming exercise.
+
+    When called, it uses the programming exercise DTO and chat summary to generate suggestions.
+    """
 
     llm: IrisLangchainChatModel
     pipeline: Runnable
@@ -71,7 +76,7 @@ class TutorSuggestionProgrammingExercisePipeline(Pipeline):
 
         if dto.submission:
             code_feedback = CodeFeedbackPipeline(
-                request_handler=BasicRequestHandler("gemma3:27b")
+                variant="default"
             )
             query = PyrisMessage(
                 sender=IrisMessageRole.USER,
@@ -129,6 +134,6 @@ class TutorSuggestionProgrammingExercisePipeline(Pipeline):
             return html_response
         except Exception as e:
             logger.error(
-                f"Failed to generate suggestions for programming exercise: {e}"
+                "Failed to generate suggestions for programming exercise: %s", e
             )
             return "Error generating suggestions for programming exercise"
