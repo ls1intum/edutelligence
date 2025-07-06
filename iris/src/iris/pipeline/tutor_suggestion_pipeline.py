@@ -85,7 +85,7 @@ class TutorSuggestionPipeline(Pipeline):
         summary_pipeline = TutorSuggestionSummaryPipeline(callback=self.callback)
         try:
             summary = summary_pipeline(dto=dto)
-        except AttributeError as _:
+        except AttributeError:
             self.callback.error("Error running summary pipeline")
             return
 
@@ -102,7 +102,7 @@ class TutorSuggestionPipeline(Pipeline):
             logging.info(
                 "is_question: %s, num_answers: %s", is_question, number_of_answers
             )
-        except AttributeError as _:
+        except AttributeError:
             self.callback.error("Error parsing summary JSON")
             return
 
