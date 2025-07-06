@@ -149,7 +149,7 @@ class MemoryCreationPipelineBuilder:
     def __init__(self, ollama_service: OllamaService):
         if not ollama_service:
             raise ValueError("OllamaService must be provided.")
-        self.ollama_service = ollama_service
+        self._ollama_service = ollama_service
         self._llm_learning_extractor_configs = []
         self._llm_learning_deduplicator_configs = []
         self._memory_creator_config = None
@@ -198,7 +198,7 @@ class MemoryCreationPipelineBuilder:
             llm_tool=llm_tool,
             llm_thinking=llm_thinking,
             llm_response=llm_response,
-            ollama_service=self.ollama_service,
+            ollama_service=self._ollama_service,
             template=template,
         )
         return self
@@ -254,7 +254,7 @@ class MemoryCreationPipelineBuilder:
             self._vectorizer = value
         elif isinstance(value, list):
             self._vectorizer = Vectorizer(
-                vector_models=value, ollama_service=self.ollama_service
+                vector_models=value, ollama_service=self._ollama_service
             )
         else:
             raise TypeError(
