@@ -25,6 +25,7 @@ test_all = "scripts.test_modules:main"
 pythonpath = ["athena", "llm_core"]
 asyncio_mode = "strict"
 asyncio_default_fixture_loop_scope = "function"
+asyncio_default_test_loop_scope = "function"
 
 [build-system]
 requires = ["poetry-core"]
