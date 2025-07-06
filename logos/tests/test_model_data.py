@@ -1,6 +1,8 @@
 import time
 from json import JSONDecodeError
 
+import matplotlib.pyplot as plt
+
 import requests
 from requests import Response
 
@@ -50,7 +52,7 @@ models = [
      "classification_weight": Balancer(),
      },
     {"id": 4,
-     "name": "llama3.3-latest",
+     "name": "llama3.3:latest",
      "endpoint": "https://gpu.aet.cit.tum.de/api/chat/completions",
      "api_id": 1,
      "weight_privacy": "LOCAL",
@@ -90,7 +92,7 @@ models = [
      "classification_weight": Balancer(),
      },
     {"id": 8,
-     "name": "qwen3:30b",
+     "name": "qwen3:32b",
      "endpoint": "https://gpu.aet.cit.tum.de/api/chat/completions",
      "api_id": 1,
      "weight_privacy": "LOCAL",
@@ -202,7 +204,7 @@ def get_from_id(m, i):
     return None
 
 
-def create_html(responses):
+def create_html(responses, prompt):
     html_template = """
     <!DOCTYPE html>
     <html lang="de">
@@ -217,7 +219,7 @@ def create_html(responses):
                 display: flex;
                 flex-wrap: wrap;
             }}
-    
+            
             .model-container {{
                 flex: 1;
                 min-width: 300px;
@@ -226,35 +228,83 @@ def create_html(responses):
                 margin: 10px;
                 background-color: #f9f9f9;
             }}
-    
+            
             .model-name {{
                 font-weight: bold;
                 margin-bottom: 10px;
             }}
-    
+            
             .response {{
                 white-space: pre-wrap;
                 word-wrap: break-word;
+                margin-bottom: 15px;
+            }}
+            
+            .metrics {{
+                background-color: #e8f4ff;
+                padding: 10px;
+                border-radius: 5px;
+            }}
+        
+            .chart-container {{
+                margin-top: 50px;
+                text-align: center;
             }}
         </style>
     </head>
     <body>
+    {prompt_container}
     {model_containers}
+    <div class="chart-container">
+        <h2>LLM Weights</h2>
+        <img src="model_weights.png" alt="Model Weights" style="max-width: 100%">
+    </div>
     </body>
     </html>
     """
 
+    model_names = []
+    total_weights = []
+
     model_containers = ""
-    for model, response in responses.items():
+    for model, (response, weight, time_latency, balancer) in responses.items():
+        latency, accuracy, quality = balancer.weights["policy"]
+        token = balancer.weights["token"][0]
+        ai = balancer.weights["ai"][0]
         container = f"""
         <div class="model-container">
             <div class="model-name">{model}:</div>
+            <div class="metrics">Duration: {time_latency}s</div>
+            <div class="metrics">Latency: {latency}</div>
+            <div class="metrics">Accuracy: {accuracy}</div>
+            <div class="metrics">Quality: {quality}</div>
+            <div class="metrics">Token: {token}</div>
+            <div class="metrics">Laura: {ai}</div>
+            <div class="metrics"><b>Weight: {weight}</b></div>
             <div class="response">{response}</div>
         </div>
         """
+        model_names.append(model)
+        total_weights.append(weight)
         model_containers += container
 
-    final_html = html_template.format(model_containers=model_containers)
+    prompt_container = f"""
+        <div class="prompt-container" style="width: 100%">
+            Prompt: {prompt}
+        </div>
+    """
+
+    plt.figure(figsize=(10, 5))
+    plt.bar(model_names, total_weights)
+    plt.xlabel('Models')
+    plt.ylabel('Weights')
+    plt.title('Distribution of Model Weights')
+    plt.xticks(rotation=45)
+    plt.tight_layout()
+    plt.savefig('model_weights.png', dpi=300)
+    plt.close()
+
+    final_html = html_template.format(model_containers=model_containers, prompt_container=prompt_container)
 
     with open("comparison.html", "w", encoding="utf-8") as file:
         file.write(final_html)

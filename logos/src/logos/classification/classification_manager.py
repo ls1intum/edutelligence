@@ -36,6 +36,7 @@ class ClassificationManager:
     def __init__(self, models) -> None:
         self.models = models
         self.laura = LauraEmbeddingClassifier()
+        self.filtered = models  # For debugging
         if not self.laura.model_db:
             for model in self.models:
                 self.laura.register_model(model["id"], model["description"])
@@ -54,6 +55,7 @@ class ClassificationManager:
         self.laura.allowed = allowed
         filtered = AIClassifier(filtered).classify(prompt, policy, laura=self.laura)
         self.laura.allowed = list()
+        self.filtered = filtered
         return sorted(
             [(i["id"], i["classification_weight"].get_weight(), policy["priority"], i["parallel"]) for i in filtered],
             key=lambda x: x[1], reverse=True)
