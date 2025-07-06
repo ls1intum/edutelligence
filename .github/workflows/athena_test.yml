@@ -13,21 +13,8 @@ on:
       - "athena/**"
       - ".github/workflows/athena_test.yml"
 jobs:
-  module-unit-tests:
+  test-and-lint:
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - module_name: programming_llm
-            module_path: modules/programming/module_programming_llm
-            test_path: tests/modules/programming/module_programming_llm
-          - module_name: text_llm
-            module_path: modules/text/module_text_llm
-            test_path: tests/modules/text/module_text_llm
-          - module_name: modeling_llm
-            module_path: modules/modeling/module_modeling_llm
-            test_path: tests/modules/modeling/module_modeling_llm
     steps:
       - name: Check out code
         uses: actions/checkout@v4
@@ -38,45 +25,46 @@ jobs:
         with:
           python-version: "3.11"
           cache: "poetry"
-          cache-dependency-path: ${{ matrix.module_path }}/poetry.lock
+          cache-dependency-path: athena/poetry.lock
       - name: Configure Poetry for in-project virtual environments
         run: poetry config virtualenvs.in-project true
-      - name: Install module dependencies
-        run: poetry -C ${{ matrix.module_path }} install --with test
-      - name: Run module tests
+      - name: Install athena dependencies
+        run: poetry -C athena install --with dev
+      - name: Install all modules
+        run: poetry -C athena run install_all
+      - name: Run tests
         run: |
-          mkdir -p test-results
-          poetry -C ${{ matrix.module_path }} run pytest --junitxml=test-results/${{ matrix.module_name }}.xml ${{ matrix.test_path }}
+          mkdir -p athena/test-results
+          poetry -C athena run test_all
+      - name: Run linting
+        run: poetry -C athena run lint_all
       - name: Upload JUnit Test Results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: junit-results-${{ matrix.module_name }}
-          path: test-results/${{ matrix.module_name }}.xml
+          name: junit-results
+          path: athena/test-results/
   report:
     runs-on: ubuntu-latest
     if: always()
-    needs: [module-unit-tests]
+    needs: [test-and-lint]
     steps:
       - name: Check out code
         uses: actions/checkout@v4
       - name: Download all JUnit results
         uses: actions/download-artifact@v4
         with:
-          pattern: junit-results-*
+          name: junit-results
           path: all-test-results
-          merge-multiple: true
       - name: Test Report Summary
         id: test-report
         uses: mikepenz/action-junit-report@v4
         with:
           report_paths: "all-test-results/**/*.xml"
-          check_name: "Athena Test Report (All Modules)"
+          check_name: "Athena Test Report"
           require_tests: true
           require_passed_tests: false
           detailed_summary: true
-          include_time_in_summary: true
-          group_suite: false
       - name: Comment test results on PR
         if: github.event_name == 'pull_request'
         uses: actions/github-script@v7

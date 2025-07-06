@@ -12,6 +12,8 @@ python-dotenv = "^1.0.0"
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.3.5"
 pytest-asyncio = "^0.26.0"
+prospector = "^1.10.2"
+setuptools = "^69.0.0"
 
 [tool.poetry.scripts]
 lint_all = "scripts.lint_modules:main"
