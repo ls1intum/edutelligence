@@ -1,5 +1,4 @@
 import logging
-import re
 from typing import List
 
 from langchain_core.output_parsers import StrOutputParser
@@ -86,7 +85,7 @@ class TutorSuggestionPipeline(Pipeline):
         summary_pipeline = TutorSuggestionSummaryPipeline(callback=self.callback)
         try:
             summary = summary_pipeline(dto=dto)
-        except AttributeError as e:
+        except AttributeError as _:
             self.callback.error("Error running summary pipeline")
             return
 
@@ -103,7 +102,7 @@ class TutorSuggestionPipeline(Pipeline):
             logging.info(
                 "is_question: %s, num_answers: %s", is_question, number_of_answers
             )
-        except AttributeError as e:
+        except AttributeError as _:
             self.callback.error("Error parsing summary JSON")
             return
 
@@ -140,7 +139,7 @@ class TutorSuggestionPipeline(Pipeline):
         logging.info(channel_type)
         if channel_type == "text_exercise":
             self._run_text_exercise_pipeline(
-                text_exercise_dto=dto.textExercise, summary=summary
+                text_exercise_dto=dto.text_exercise, summary=summary
             )
         elif channel_type == "programming_exercise":
             self._run_programming_exercise_pipeline(dto=dto, summary=summary)
@@ -180,7 +179,8 @@ class TutorSuggestionPipeline(Pipeline):
     ):
         """
         Run the programming exercise pipeline.
-        :param dto: The CommunicationTutorSuggestionPipelineExecutionDTO object containing details about the programming exercise.
+        :param dto: The CommunicationTutorSuggestionPipelineExecutionDTO object containing details about the
+        programming exercise.
         :param summary: The summary of the post.
         :return: The result of the programming exercise pipeline.
         """
