@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import List, Sequence
+from typing import List, Optional, Sequence
 
 
 class BaseRepository[Entity, EntityId](ABC):
@@ -15,7 +15,7 @@ class BaseRepository[Entity, EntityId](ABC):
         return [self.save(tenant, entity) for entity in entities]
 
     @abstractmethod
-    def find(self, tenant: str, entity_id: EntityId) -> Entity:
+    def find(self, tenant: str, entity_id: EntityId) -> Optional[Entity]:
         pass
 
     @abstractmethod

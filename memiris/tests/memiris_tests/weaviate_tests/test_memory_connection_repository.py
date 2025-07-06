@@ -26,7 +26,7 @@ class TestWeaviateMemoryConnectionRepository(WeaviateTest):
     def memory_connection_repository(self, weaviate_client):
         return WeaviateMemoryConnectionRepository(weaviate_client)
 
-    def create_test_memory(self, memory_repository) -> Memory:
+    def _create_test_memory(self, memory_repository) -> Memory:
         """Helper method to create a test memory object."""
         vec = mock_vector()
         memory = memory_repository.save(
@@ -40,17 +40,31 @@ class TestWeaviateMemoryConnectionRepository(WeaviateTest):
         )
         return memory
 
-    def test_create(
+    def _create_test_connection(
         self, memory_repository, memory_connection_repository
     ) -> MemoryConnection:
+        return memory_connection_repository.save(
+            "test",
+            MemoryConnection(
+                connection_type=ConnectionType.RELATED,
+                description="Memory 1 happened before Memory 2",
+                weight=0.95,
+                memories=[
+                    self._create_test_memory(memory_repository).id,
+                    self._create_test_memory(memory_repository).id,
+                ],
+            ),
+        )
+
+    def test_create(self, memory_repository, memory_connection_repository):
         """Test creating a memory connection with linked memories."""
-        memory1 = self.create_test_memory(memory_repository)
-        memory2 = self.create_test_memory(memory_repository)
+        memory1 = self._create_test_memory(memory_repository)
+        memory2 = self._create_test_memory(memory_repository)
 
         memory_connection = memory_connection_repository.save(
             "test",
             MemoryConnection(
-                connection_type=ConnectionType.PRECEDES,
+                connection_type=ConnectionType.RELATED,
                 description="Memory 1 happened before Memory 2",
                 weight=0.95,
                 memories=[memory1.id, memory2.id],
@@ -60,22 +74,19 @@ class TestWeaviateMemoryConnectionRepository(WeaviateTest):
         assert memory_connection is not None
         assert memory_connection.id is not None
 
-        return memory_connection
-
     def test_delete(self, memory_repository, memory_connection_repository):
         """Test deleting a memory connection."""
-        memory_connection = self.test_create(
+        memory_connection = self._create_test_connection(
             memory_repository, memory_connection_repository
         )
 
         memory_connection_repository.delete("test", memory_connection.id)
 
-        with pytest.raises(Exception):
-            memory_connection_repository.find("test", memory_connection.id)
+        assert memory_connection_repository.find("test", memory_connection.id) is None
 
     def test_get(self, memory_repository, memory_connection_repository):
         """Test retrieving a memory connection."""
-        memory_connection = self.test_create(
+        memory_connection = self._create_test_connection(
             memory_repository, memory_connection_repository
         )
 
@@ -93,16 +104,16 @@ class TestWeaviateMemoryConnectionRepository(WeaviateTest):
 
     def test_update(self, memory_repository, memory_connection_repository):
         """Test updating a memory connection."""
-        memory_connection = self.test_create(
+        memory_connection = self._create_test_connection(
             memory_repository, memory_connection_repository
         )
 
         # Create another memory to add to the connection
-        additional_memory = self.create_test_memory(memory_repository)
+        additional_memory = self._create_test_memory(memory_repository)
 
         memory_connection.description = "Updated Description"
         memory_connection.weight = 0.80
-        memory_connection.connection_type = ConnectionType.CAUSES
+        memory_connection.connection_type = ConnectionType.RELATED
         memory_connection.memories.append(additional_memory.id)
 
         memory_connection_repository.save("test", memory_connection)
@@ -115,15 +126,21 @@ class TestWeaviateMemoryConnectionRepository(WeaviateTest):
         assert updated_connection.id == memory_connection.id
         assert updated_connection.description == "Updated Description"
         assert updated_connection.weight == 0.80
-        assert updated_connection.connection_type == ConnectionType.CAUSES
+        assert updated_connection.connection_type == ConnectionType.RELATED
         assert len(updated_connection.memories) == 3
         assert set(memory_connection.memories) == set(updated_connection.memories)
 
     def test_all(self, memory_repository, memory_connection_repository):
         """Test retrieving all memory connections."""
-        connection1 = self.test_create(memory_repository, memory_connection_repository)
-        connection2 = self.test_create(memory_repository, memory_connection_repository)
-        connection3 = self.test_create(memory_repository, memory_connection_repository)
+        connection1 = self._create_test_connection(
+            memory_repository, memory_connection_repository
+        )
+        connection2 = self._create_test_connection(
+            memory_repository, memory_connection_repository
+        )
+        connection3 = self._create_test_connection(
+            memory_repository, memory_connection_repository
+        )
 
         all_connections = memory_connection_repository.all("test")
 
@@ -141,16 +158,16 @@ class TestWeaviateMemoryConnectionRepository(WeaviateTest):
     ):
         """Test finding connections by connection type."""
         # Create memories
-        memory1 = self.create_test_memory(memory_repository)
-        memory2 = self.create_test_memory(memory_repository)
-        memory3 = self.create_test_memory(memory_repository)
-        memory4 = self.create_test_memory(memory_repository)
+        memory1 = self._create_test_memory(memory_repository)
+        memory2 = self._create_test_memory(memory_repository)
+        memory3 = self._create_test_memory(memory_repository)
+        memory4 = self._create_test_memory(memory_repository)
 
         # Create connections of different types
         connection1 = memory_connection_repository.save(
             "test",
             MemoryConnection(
-                connection_type=ConnectionType.PRECEDES,
+                connection_type=ConnectionType.RELATED,
                 description="Memory 1 and 2 sequential",
                 weight=0.9,
                 memories=[memory1.id, memory2.id],
@@ -160,7 +177,7 @@ class TestWeaviateMemoryConnectionRepository(WeaviateTest):
         connection2 = memory_connection_repository.save(
             "test",
             MemoryConnection(
-                connection_type=ConnectionType.CAUSES,
+                connection_type=ConnectionType.RELATED,
                 description="Memory 3 caused Memory 4",
                 weight=0.85,
                 memories=[memory3.id, memory4.id],
@@ -170,23 +187,23 @@ class TestWeaviateMemoryConnectionRepository(WeaviateTest):
         connection3 = memory_connection_repository.save(
             "test",
             MemoryConnection(
-                connection_type=ConnectionType.CAUSES,
+                connection_type=ConnectionType.RELATED,
                 description="Memory 1 caused Memory 3",
                 weight=0.75,
                 memories=[memory1.id, memory3.id],
             ),
         )
 
-        # Find PRECEDES connections
+        # Find RELATED connections
         precedes_connections = memory_connection_repository.find_by_connection_type(
-            "test", ConnectionType.PRECEDES.value
+            "test", ConnectionType.RELATED.value
         )
         assert len(precedes_connections) >= 1
         assert connection1.id in [c.id for c in precedes_connections]
 
-        # Find CAUSES connections
+        # Find RELATED connections
         causes_connections = memory_connection_repository.find_by_connection_type(
-            "test", ConnectionType.CAUSES.value
+            "test", ConnectionType.RELATED.value
         )
         assert len(causes_connections) >= 2
         causes_ids = [c.id for c in causes_connections]
@@ -202,14 +219,14 @@ class TestWeaviateMemoryConnectionRepository(WeaviateTest):
     ):
         """Test that bidirectional references are maintained between memories and connections."""
         # Create memories
-        memory1 = self.create_test_memory(memory_repository)
-        memory2 = self.create_test_memory(memory_repository)
+        memory1 = self._create_test_memory(memory_repository)
+        memory2 = self._create_test_memory(memory_repository)
 
         # Create a connection between them
         connection = memory_connection_repository.save(
             "test",
             MemoryConnection(
-                connection_type=ConnectionType.PRECEDES,
+                connection_type=ConnectionType.RELATED,
                 description="Memory 1 happened before Memory 2",
                 weight=0.95,
                 memories=[memory1.id, memory2.id],

@@ -21,9 +21,9 @@ class TestWeaviateLearningRepository(WeaviateTest):
     def learning_repository(self, weaviate_client):
         return WeaviateLearningRepository(weaviate_client)
 
-    def test_create(self, learning_repository) -> Learning:
+    def _create_learning(self, learning_repository):
         vec = mock_vector()
-        learning = learning_repository.save(
+        return learning_repository.save(
             "test",
             Learning(
                 title="Test Title",
@@ -33,10 +33,11 @@ class TestWeaviateLearningRepository(WeaviateTest):
             ),
         )
 
+    def test_create(self, learning_repository):
+        learning = self._create_learning(learning_repository)
+
         assert learning is not None
         assert learning.id is not None
-
-        return learning
 
     def test_create_with_id(self, learning_repository):
         vec = mock_vector()
@@ -57,15 +58,14 @@ class TestWeaviateLearningRepository(WeaviateTest):
         assert learning.id == uid
 
     def test_delete(self, learning_repository):
-        learning = self.test_create(learning_repository)
+        learning = self._create_learning(learning_repository)
 
         learning_repository.delete("test", learning.id)
 
-        with pytest.raises(Exception):
-            learning_repository.find("test", learning.id)
+        assert learning_repository.find("test", learning.id) is None
 
     def test_get(self, learning_repository):
-        learning = self.test_create(learning_repository)
+        learning = self._create_learning(learning_repository)
 
         retrieved_learning = learning_repository.find("test", learning.id)
 
@@ -78,7 +78,7 @@ class TestWeaviateLearningRepository(WeaviateTest):
         compare_vectors(learning.vectors, retrieved_learning.vectors)
 
     def test_update(self, learning_repository):
-        learning = self.test_create(learning_repository)
+        learning = self._create_learning(learning_repository)
 
         learning.title = "Updated Title"
         learning.content = "Updated Content"
@@ -97,9 +97,9 @@ class TestWeaviateLearningRepository(WeaviateTest):
         compare_vectors(learning.vectors, updated_learning.vectors)
 
     def test_all(self, learning_repository):
-        learning1 = self.test_create(learning_repository)
-        learning2 = self.test_create(learning_repository)
-        learning3 = self.test_create(learning_repository)
+        learning1 = self._create_learning(learning_repository)
+        learning2 = self._create_learning(learning_repository)
+        learning3 = self._create_learning(learning_repository)
 
         all_learnings = learning_repository.all("test")
 
@@ -113,9 +113,9 @@ class TestWeaviateLearningRepository(WeaviateTest):
         assert learning3.id in all_ids
 
     def test_search(self, learning_repository):
-        learning1 = self.test_create(learning_repository)
-        learning2 = self.test_create(learning_repository)
-        _ = self.test_create(learning_repository)
+        learning1 = self._create_learning(learning_repository)
+        learning2 = self._create_learning(learning_repository)
+        _ = self._create_learning(learning_repository)
 
         search_results = learning_repository.search(
             "test", "vector_0", learning1.vectors["vector_0"], 1
@@ -140,9 +140,9 @@ class TestWeaviateLearningRepository(WeaviateTest):
         assert len(search_results) == 0
 
     def test_search_multi(self, learning_repository):
-        learning1 = self.test_create(learning_repository)
-        learning2 = self.test_create(learning_repository)
-        _ = self.test_create(learning_repository)
+        learning1 = self._create_learning(learning_repository)
+        learning2 = self._create_learning(learning_repository)
+        _ = self._create_learning(learning_repository)
 
         search_results = learning_repository.search_multi(
             "test", {"vector_0": learning1.vectors["vector_0"]}, 1

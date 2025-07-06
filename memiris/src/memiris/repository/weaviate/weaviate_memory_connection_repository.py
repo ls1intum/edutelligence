@@ -1,4 +1,4 @@
-from typing import List, Sequence
+from typing import List, Optional, Sequence
 from uuid import UUID
 
 from langfuse import observe
@@ -43,7 +43,9 @@ class WeaviateMemoryConnectionRepository(
             "weight": entity.weight,
         }
 
-        if entity.id and isinstance(entity.id, _WeaviateUUIDInt):
+        if entity.id and (
+            isinstance(entity.id, _WeaviateUUIDInt) or self.find(tenant, entity.id)
+        ):
             operation = self.collection.with_tenant(tenant).data.update  # type: ignore
         else:
             operation = self.collection.with_tenant(tenant).data.insert  # type: ignore
@@ -77,7 +79,7 @@ class WeaviateMemoryConnectionRepository(
         return entity
 
     @observe(name="weaviate.memory_connection_repository.find")
-    def find(self, tenant: str, entity_id: UUID) -> MemoryConnection:
+    def find(self, tenant: str, entity_id: UUID) -> Optional[MemoryConnection]:
         """Find a MemoryConnection by its ID."""
         try:
             result = self.collection.with_tenant(tenant).query.fetch_object_by_id(
@@ -86,7 +88,7 @@ class WeaviateMemoryConnectionRepository(
             )
 
             if not result:
-                raise ValueError(f"MemoryConnection with id {entity_id} not found")
+                return None
 
             # Create MemoryConnection object
             return self.object_to_memory_connection(result)

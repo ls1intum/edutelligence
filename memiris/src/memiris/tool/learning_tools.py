@@ -33,7 +33,7 @@ def create_tool_find_learnings_by_id(
             for learning_id in learning_ids
             if is_valid_uuid(learning_id)
             and (learning := learning_repository.find(tenant, to_uuid(learning_id)))
-            is not None  # type: ignore
+            is not None
         ]
 
     return find_learnings_by_id

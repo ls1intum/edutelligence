@@ -1,4 +1,4 @@
-from typing import Mapping, Sequence
+from typing import Mapping, Optional, Sequence
 from uuid import UUID
 
 from langfuse import observe
@@ -37,7 +37,9 @@ class WeaviateLearningRepository(LearningRepository, _WeaviateBaseRepository):
             "reference": entity.reference,
         }
 
-        if entity.id and isinstance(entity.id, _WeaviateUUIDInt):
+        if entity.id and (
+            isinstance(entity.id, _WeaviateUUIDInt) or self.find(tenant, entity.id)
+        ):
             operation = self.collection.with_tenant(tenant).data.update  # type: ignore
         else:
             operation = self.collection.with_tenant(tenant).data.insert  # type: ignore
@@ -50,7 +52,7 @@ class WeaviateLearningRepository(LearningRepository, _WeaviateBaseRepository):
         return entity
 
     @observe(name="weaviate.learning_repository.find")
-    def find(self, tenant: str, entity_id: UUID) -> Learning:
+    def find(self, tenant: str, entity_id: UUID) -> Optional[Learning]:
         """Find a Learning by its ID."""
         try:
             result = self.collection.with_tenant(tenant).query.fetch_object_by_id(
@@ -60,7 +62,7 @@ class WeaviateLearningRepository(LearningRepository, _WeaviateBaseRepository):
             )
 
             if not result:
-                raise ValueError(f"Learning with id {entity_id} not found")
+                return None
 
             return self.object_to_learning(result)
         except Exception as e:

@@ -4,7 +4,10 @@ version = "0.1.0"
 description = ""
 authors = ["Timor Morrien <timor.morrien@tum.de>"]
 readme = "README.MD"
-packages = [{include = "memiris", from = "src"}]
+packages = [
+    {include = "memiris", from = "src"},
+    {include = "memiris_tests", from = "tests"}
+]
 include = ["src/memiris/py.typed"]
 
 [tool.poetry.dependencies]

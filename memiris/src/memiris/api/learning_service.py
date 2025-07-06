@@ -1,4 +1,4 @@
-from typing import overload
+from typing import Optional, overload
 from uuid import UUID
 
 from weaviate.client import WeaviateClient
@@ -51,7 +51,9 @@ class LearningService:
                 f"Expected LearningRepository or WeaviateClient instance, got {type(value)}"
             )
 
-    def get_learning_by_id(self, tenant: str, learning_id: str | UUID) -> Learning:
+    def get_learning_by_id(
+        self, tenant: str, learning_id: str | UUID
+    ) -> Optional[Learning]:
         """
         Retrieve a learning entry by its ID.
 

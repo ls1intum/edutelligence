@@ -166,7 +166,7 @@ class MemoryCreationPipelineBuilder:
         self._llm_learning_extractor_configs.append(
             _MemoryCreationLearningExtractorConfig(
                 llm_learning_extraction=llm_learning_extraction,
-                ollama_service=self.ollama_service,
+                ollama_service=self._ollama_service,
                 focus=focus,
                 template=template,
             )
@@ -181,7 +181,7 @@ class MemoryCreationPipelineBuilder:
         self._llm_learning_deduplicator_configs.append(
             _MemoryCreationLearningDeduplicatorConfig(
                 llm_learning_deduplication=llm_learning_deduplication,
-                ollama_service=self.ollama_service,
+                ollama_service=self._ollama_service,
                 template=template,
             )
         )
@@ -421,12 +421,12 @@ class MemoryCreationPipeline:
 
         deduplicated_learnings = []
         for deduplicator in self._learning_deduplicators:
-            deduplicated_learnings.append(deduplicator.deduplicate(learnings, **kwargs))
+            deduplicated_learnings.extend(deduplicator.deduplicate(learnings, **kwargs))
 
         for learning in deduplicated_learnings:
             learning.vectors = self._vectorizer.vectorize(learning.content)
 
-        saved_learnings = self._learning_repository.save_learnings(
+        saved_learnings = self._learning_repository.save_all(
             tenant=tenant, learnings=deduplicated_learnings
         )
 
@@ -437,7 +437,7 @@ class MemoryCreationPipeline:
         for memory in memories:
             memory.vectors = self._vectorizer.vectorize(memory.content)
 
-        saved_memories = self._memory_repository.save_memories(
+        saved_memories = self._memory_repository.save_all(
             tenant=tenant, memories=memories
         )
 

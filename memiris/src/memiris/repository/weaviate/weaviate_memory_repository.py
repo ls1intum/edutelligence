@@ -1,4 +1,4 @@
-from typing import Mapping, Sequence, Union
+from typing import Mapping, Optional, Sequence, Union
 from uuid import UUID
 
 from langfuse import observe
@@ -41,7 +41,9 @@ class WeaviateMemoryRepository(MemoryRepository, _WeaviateBaseRepository):
             "deleted": entity.deleted,
         }
 
-        if entity.id and isinstance(entity.id, _WeaviateUUIDInt):
+        if entity.id and (
+            isinstance(entity.id, _WeaviateUUIDInt) or self.find(tenant, entity.id)
+        ):
             operation = self.collection.with_tenant(tenant).data.update  # type: ignore
         else:
             operation = self.collection.with_tenant(tenant).data.insert  # type: ignore
@@ -73,7 +75,7 @@ class WeaviateMemoryRepository(MemoryRepository, _WeaviateBaseRepository):
         return entity
 
     @observe(name="weaviate.memory_repository.find")
-    def find(self, tenant: str, entity_id: UUID) -> Memory:
+    def find(self, tenant: str, entity_id: UUID) -> Optional[Memory]:
         """Find a Memory by its ID."""
         try:
             result = self.collection.with_tenant(tenant).query.fetch_object_by_id(
@@ -86,7 +88,7 @@ class WeaviateMemoryRepository(MemoryRepository, _WeaviateBaseRepository):
             )
 
             if not result:
-                raise ValueError(f"Memory with id {entity_id} not found")
+                return None
 
             # Create Memory object
             return self.object_to_memory(result)

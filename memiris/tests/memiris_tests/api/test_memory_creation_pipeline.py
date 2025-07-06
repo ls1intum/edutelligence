@@ -1,3 +1,5 @@
+from uuid import UUID
+
 import pytest
 
 from memiris.api.memory_creation_pipeline import (
@@ -6,6 +8,8 @@ from memiris.api.memory_creation_pipeline import (
     _MemoryCreationLearningDeduplicatorConfig,
     _MemoryCreationLearningExtractorConfig,
 )
+from memiris.domain.learning import Learning
+from memiris.domain.memory import Memory
 from memiris.repository.learning_repository import LearningRepository
 from memiris.repository.memory_repository import MemoryRepository
 from memiris.service.learning_deduplication import LearningDeduplicator
@@ -125,7 +129,9 @@ class TestMemoryCreationPipeline:
         assert deduplicator.llm == "llm-dedupe"
         assert deduplicator.ollama_service == mock_ollama_service
 
-    def test_create_memory_pipeline_flow(self, mocker):
+    def test_create_memory_pipeline_flow(
+        self, mocker, mock_learning_repository, mock_memory_repository, mock_vectorizer
+    ):
         # Mock LearningExtractor and LearningDeduplicator
         mock_extractor = mocker.Mock(spec=LearningExtractor)
         mock_deduplicator = mocker.Mock(spec=LearningDeduplicator)
@@ -136,19 +142,47 @@ class TestMemoryCreationPipeline:
         mock_extractor.extract.return_value = fake_learnings
 
         # Setup deduplicator to return a deduplicated list
-        deduped_learnings = ["learning1"]
+        deduped_learnings = [
+            Learning(
+                uid=mocker.Mock(spec=UUID),
+                title="test",
+                content="test",
+                reference="test",
+            )
+        ]
         mock_deduplicator.deduplicate.return_value = deduped_learnings
+
+        # Setup learning repository to return the deduplicated learnings on save
+        mock_learning_repository.save_all.return_value = deduped_learnings
+
+        mock_memory_creator.create.return_value = [
+            Memory(
+                uid=mocker.Mock(spec=UUID),
+                title="Memory Title",
+                content="Memory Content",
+                slept_on=False,
+                deleted=False,
+                learnings=[learning.id for learning in deduped_learnings],
+            )
+        ]
+
+        mock_memory_repository.save_all.return_value = (
+            mock_memory_creator.create.return_value
+        )
 
         pipeline = MemoryCreationPipeline(
             learning_extractors=[mock_extractor],
             learning_deduplicators=[mock_deduplicator],
             memory_creator=mock_memory_creator,
+            learning_repository=mock_learning_repository,
+            memory_repository=mock_memory_repository,
+            vectorizer=mock_vectorizer,
         )
 
         tenant = "tenant1"
         content = "Some content to extract learnings from"
 
-        pipeline.create_memory(tenant, content)
+        pipeline.create_memories(tenant, content)
 
         mock_extractor.extract.assert_called_once_with(content)
         mock_deduplicator.deduplicate.assert_called_once_with(fake_learnings)

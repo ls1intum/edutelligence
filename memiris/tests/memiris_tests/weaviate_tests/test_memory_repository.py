@@ -27,7 +27,7 @@ class TestWeaviateMemoryRepository(WeaviateTest):
     def memory_repository(self, weaviate_client):
         return WeaviateMemoryRepository(weaviate_client)
 
-    def create_test_learning(self, learning_repository) -> Learning:
+    def _create_test_learning(self, learning_repository) -> Learning:
         """Helper method to create a test learning object."""
         vec = mock_vector()
         learning = learning_repository.save(
@@ -41,9 +41,22 @@ class TestWeaviateMemoryRepository(WeaviateTest):
         )
         return learning
 
-    def test_create(self, memory_repository, learning_repository) -> Memory:
+    def _create_test_memory(self, memory_repository, learning_repository) -> Memory:
+        """Helper method to create a test memory object linked to a learning."""
+        vec = mock_vector()
+        return memory_repository.save(
+            "test",
+            Memory(
+                title="Test Memory Title",
+                content="Test Memory Content",
+                learnings=[self._create_test_learning(learning_repository).id],
+                vectors={"vector_0": vec},
+            ),
+        )
+
+    def test_create(self, memory_repository, learning_repository):
         """Test creating a memory with a linked learning."""
-        learning = self.create_test_learning(learning_repository)
+        learning = self._create_test_learning(learning_repository)
         vec = mock_vector()
         memory = memory_repository.save(
             "test",
@@ -58,20 +71,17 @@ class TestWeaviateMemoryRepository(WeaviateTest):
         assert memory is not None
         assert memory.id is not None
 
-        return memory
-
     def test_delete(self, memory_repository, learning_repository):
         """Test deleting a memory."""
-        memory = self.test_create(memory_repository, learning_repository)
+        memory = self._create_test_memory(memory_repository, learning_repository)
 
         memory_repository.delete("test", memory.id)
 
-        with pytest.raises(Exception):
-            memory_repository.find("test", memory.id)
+        assert memory_repository.find("test", memory.id) is None
 
     def test_get(self, memory_repository, learning_repository):
         """Test retrieving a memory."""
-        memory = self.test_create(memory_repository, learning_repository)
+        memory = self._create_test_memory(memory_repository, learning_repository)
 
         retrieved_memory = memory_repository.find("test", memory.id)
 
@@ -86,10 +96,10 @@ class TestWeaviateMemoryRepository(WeaviateTest):
 
     def test_update(self, memory_repository, learning_repository):
         """Test updating a memory."""
-        memory = self.test_create(memory_repository, learning_repository)
+        memory = self._create_test_memory(memory_repository, learning_repository)
 
         # Create another learning to add to the memory
-        additional_learning = self.create_test_learning(learning_repository)
+        additional_learning = self._create_test_learning(learning_repository)
 
         memory.title = "Updated Memory Title"
         memory.content = "Updated Memory Content"
@@ -112,9 +122,9 @@ class TestWeaviateMemoryRepository(WeaviateTest):
 
     def test_all(self, memory_repository, learning_repository):
         """Test retrieving all memories."""
-        memory1 = self.test_create(memory_repository, learning_repository)
-        memory2 = self.test_create(memory_repository, learning_repository)
-        memory3 = self.test_create(memory_repository, learning_repository)
+        memory1 = self._create_test_memory(memory_repository, learning_repository)
+        memory2 = self._create_test_memory(memory_repository, learning_repository)
+        memory3 = self._create_test_memory(memory_repository, learning_repository)
 
         all_memories = memory_repository.all("test")
 
@@ -129,9 +139,9 @@ class TestWeaviateMemoryRepository(WeaviateTest):
 
     def test_search(self, memory_repository, learning_repository):
         """Test searching for memories by vector."""
-        memory1 = self.test_create(memory_repository, learning_repository)
-        memory2 = self.test_create(memory_repository, learning_repository)
-        _ = self.test_create(memory_repository, learning_repository)
+        memory1 = self._create_test_memory(memory_repository, learning_repository)
+        memory2 = self._create_test_memory(memory_repository, learning_repository)
+        _ = self._create_test_memory(memory_repository, learning_repository)
 
         search_results = memory_repository.search(
             "test", "vector_0", memory1.vectors["vector_0"], 1
@@ -158,9 +168,9 @@ class TestWeaviateMemoryRepository(WeaviateTest):
 
     def test_search_multi(self, memory_repository, learning_repository):
         """Test searching for memories using multiple vectors."""
-        memory1 = self.test_create(memory_repository, learning_repository)
-        memory2 = self.test_create(memory_repository, learning_repository)
-        _ = self.test_create(memory_repository, learning_repository)
+        memory1 = self._create_test_memory(memory_repository, learning_repository)
+        memory2 = self._create_test_memory(memory_repository, learning_repository)
+        _ = self._create_test_memory(memory_repository, learning_repository)
 
         search_results = memory_repository.search_multi(
             "test", {"vector_0": memory1.vectors["vector_0"]}, 1
@@ -193,9 +203,9 @@ class TestWeaviateMemoryRepository(WeaviateTest):
         self, memory_repository, learning_repository
     ):
         """Test creating a memory with multiple linked learnings."""
-        learning1 = self.create_test_learning(learning_repository)
-        learning2 = self.create_test_learning(learning_repository)
-        learning3 = self.create_test_learning(learning_repository)
+        learning1 = self._create_test_learning(learning_repository)
+        learning2 = self._create_test_learning(learning_repository)
+        learning3 = self._create_test_learning(learning_repository)
 
         vec = mock_vector()
         memory = memory_repository.save(
@@ -225,7 +235,7 @@ class TestWeaviateMemoryRepository(WeaviateTest):
 
     def test_update_memory_learnings(self, memory_repository, learning_repository):
         """Test updating the learnings of a memory."""
-        learning1 = self.create_test_learning(learning_repository)
+        learning1 = self._create_test_learning(learning_repository)
 
         # Create a memory with one learning
         memory = memory_repository.save(
@@ -239,8 +249,8 @@ class TestWeaviateMemoryRepository(WeaviateTest):
         )
 
         # Create two more learnings
-        learning2 = self.create_test_learning(learning_repository)
-        learning3 = self.create_test_learning(learning_repository)
+        learning2 = self._create_test_learning(learning_repository)
+        learning3 = self._create_test_learning(learning_repository)
 
         # Update to replace the learning with two new ones
         memory.learnings = [learning2.id, learning3.id]
