@@ -75,9 +75,7 @@ class TutorSuggestionProgrammingExercisePipeline(Pipeline):
         code_feedback_response = "!NONE!"
 
         if dto.submission:
-            code_feedback = CodeFeedbackPipeline(
-                variant="default"
-            )
+            code_feedback = CodeFeedbackPipeline(variant="default")
             query = PyrisMessage(
                 sender=IrisMessageRole.USER,
                 contents=[
