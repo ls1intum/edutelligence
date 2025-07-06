@@ -58,6 +58,7 @@ class WeaviateClient:
                     {"name": "name", "data_type":  DataType.TEXT},
                     {"name": "text", "data_type":  DataType.TEXT},
                     {"name": "cluster_id", "data_type": DataType.TEXT, "indexFilterable": True},
+                    {"name": "cluster_similarity_score", "data_type": DataType.NUMBER},
                 ]
             },
             CollectionNames.CLUSTERCENTER.value: {
