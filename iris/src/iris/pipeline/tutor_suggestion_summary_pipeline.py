@@ -61,13 +61,12 @@ class TutorSuggestionSummaryPipeline(Pipeline):
     callback: TutorSuggestionCallback
 
     def __init__(
-            self,
-            callback: TutorSuggestionCallback,
-            variant: str = "default",
+        self,
+        callback: TutorSuggestionCallback,
+        variant: str = "default",
     ):
         super().__init__(implementation_id="tutor_suggestion_summary_pipeline")
         completion_args = CompletionArguments(temperature=0, max_tokens=2000)
-
 
         if variant == "advanced":
             model = "gemma3:27b"

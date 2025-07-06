@@ -12,10 +12,9 @@ from iris.domain import FeatureDTO
 from iris.domain.communication.communication_tutor_suggestion_pipeline_execution_dto import (
     CommunicationTutorSuggestionPipelineExecutionDTO,
 )
-from iris.llm import ModelVersionRequestHandler
-from iris.llm.external.model import LanguageModel
 from iris.domain.data.text_exercise_dto import TextExerciseDTO
-from iris.llm import CompletionArguments
+from iris.llm import CompletionArguments, ModelVersionRequestHandler
+from iris.llm.external.model import LanguageModel
 from iris.llm.langchain import IrisLangchainChatModel
 from iris.pipeline import Pipeline
 from iris.pipeline.prompts.tutor_suggestion.question_answered_prompt import (
@@ -108,7 +107,9 @@ class TutorSuggestionPipeline(Pipeline):
             self.callback.error("Error parsing summary JSON")
             return
 
-        channel_type = get_channel_type(dto)
+        # self.callback.in_progress("Retrieving relevant lecture content")
+
+        # self.callback.in_progress("Retrieving relevant faq content")
 
         if is_question and number_of_answers > 0:
             self.callback.in_progress("Checking if questions is already answered")
@@ -133,6 +134,8 @@ class TutorSuggestionPipeline(Pipeline):
                     tokens=self.tokens,
                 )
                 return
+
+        channel_type = get_channel_type(dto)
 
         logging.info(channel_type)
         if channel_type == "text_exercise":

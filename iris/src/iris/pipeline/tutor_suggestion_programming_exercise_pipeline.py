@@ -60,12 +60,7 @@ class TutorSuggestionProgrammingExercisePipeline(Pipeline):
         """
         logger.info("Running Tutor Suggestion Programming Exercise Pipeline")
 
-        return self._run_programming_exercise_pipeline(dto=dto, summary=chat_summary)
-
-    def _run_programming_exercise_pipeline(
-        self, dto: CommunicationTutorSuggestionPipelineExecutionDTO, summary: str
-    ):
-        self.prompt = ChatPromptTemplate.from_messages(
+        prompt = ChatPromptTemplate.from_messages(
             [("system", programming_exercise_prompt())]
         )
         problem_statement = dto.exercise.problem_statement
@@ -78,16 +73,14 @@ class TutorSuggestionProgrammingExercisePipeline(Pipeline):
             code_feedback = CodeFeedbackPipeline(
                 request_handler=BasicRequestHandler("gemma3:27b")
             )
-
             query = PyrisMessage(
                 sender=IrisMessageRole.USER,
                 contents=[
                     TextMessageContentDTO(
-                        textContent=summary,
+                        textContent=chat_summary,
                     )
                 ],
             )
-
             code_feedback_response = code_feedback(
                 chat_history=[],
                 question=query,
@@ -103,9 +96,9 @@ class TutorSuggestionProgrammingExercisePipeline(Pipeline):
             )
 
         try:
-            response = (self.prompt | self.pipeline).invoke(
+            response = (prompt | self.pipeline).invoke(
                 {
-                    "thread_summary": summary,
+                    "thread_summary": chat_summary,
                     "exercise_title": exercise_title,
                     "programming_language": programming_language,
                     "problem_statement": problem_statement,
@@ -119,7 +112,8 @@ class TutorSuggestionProgrammingExercisePipeline(Pipeline):
             except AttributeError:
                 logger.error("No result found in JSON response.")
                 return None
-            if _has_html(result):
+            html_check = _has_html(result)
+            if html_check:
                 html_response = _extract_html_from_text(result)
                 self._append_tokens(
                     self.llm.tokens, PipelineEnum.IRIS_TUTOR_SUGGESTION_PIPELINE
@@ -127,8 +121,7 @@ class TutorSuggestionProgrammingExercisePipeline(Pipeline):
             else:
                 html_response = (
                     "<p>I was not able to answer this question based on the text exercise.</p><br>"
-                    "<p>It seems that the question is too general or not related to the programming exercise."
-                    "</p>"
+                    "<p>It seems that the question is too general or not related to the programming exercise.</p>"
                 )
                 self._append_tokens(
                     self.llm.tokens, PipelineEnum.IRIS_TUTOR_SUGGESTION_PIPELINE

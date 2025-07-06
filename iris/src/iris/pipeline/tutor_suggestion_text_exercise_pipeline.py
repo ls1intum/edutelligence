@@ -61,7 +61,6 @@ class TutorSuggestionTextExercisePipeline(Pipeline):
             completion_args=completion_args,
         )
 
-
         self.pipeline = self.llm | StrOutputParser()
         self.tokens = []
 
@@ -71,18 +70,7 @@ class TutorSuggestionTextExercisePipeline(Pipeline):
     @traceable(name="Tutor Suggestion Text Exercise Pipeline")
     def __call__(self, dto: TextExerciseDTO, chat_summary: str):
         result = "Error generating suggestions for text exercise"
-        text_exercise_result = self._run_text_exercise_pipeline(
-            dto=dto, summary=chat_summary
-        )
-        try:
-            result = text_exercise_result
-        except Exception as e:
-            logger.error(f"Failed to generate suggestions for text exercise: {e}")
-
-        return result
-
-    def _run_text_exercise_pipeline(self, dto, summary: str):
-        self.prompt = ChatPromptTemplate.from_messages(
+        prompt = ChatPromptTemplate.from_messages(
             [
                 (
                     "system",
@@ -91,9 +79,9 @@ class TutorSuggestionTextExercisePipeline(Pipeline):
             ]
         )
         try:
-            response = (self.prompt | self.pipeline).invoke(
+            response = (prompt | self.pipeline).invoke(
                 {
-                    "thread_summary": summary,
+                    "thread_summary": chat_summary,
                     "problem_statement": dto.problem_statement,
                     "example_solution": dto.example_solution,
                 }
@@ -121,4 +109,5 @@ class TutorSuggestionTextExercisePipeline(Pipeline):
                 )
             return html_response
         except Exception as e:
-            raise e
+            logger.error(f"Failed to generate suggestions for text exercise: {e}")
+            return result
