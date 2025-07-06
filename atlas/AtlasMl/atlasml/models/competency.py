@@ -13,6 +13,7 @@ class CompetencyTaxonomy(str, Enum):
 
 
 class Competency(BaseModel):
+    id: str
     title: str
     description: str
     taxonomy: CompetencyTaxonomy
