@@ -4,6 +4,8 @@ MemIris: A Python package for long-term memory management in large language mode
 
 from importlib.metadata import PackageNotFoundError, version  # pragma: no cover
 
+from memiris.api.learning_service import LearningService
+from memiris.api.memory_connection_service import MemoryConnectionService
 from memiris.api.memory_creation_pipeline import (
     MemoryCreationPipeline,
     MemoryCreationPipelineBuilder,
@@ -36,4 +38,6 @@ __all__ = [
     "MemoryCreationPipeline",
     "MemoryCreationPipelineBuilder",
     "MemoryService",
+    "MemoryConnectionService",
+    "LearningService",
 ]

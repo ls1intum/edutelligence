@@ -207,13 +207,29 @@ class MemoryCreationPipelineBuilder:
     def set_learning_repository(
         self, learning_repository: LearningRepository
     ) -> "MemoryCreationPipelineBuilder":
-        pass
+        """
+        Set the learning repository for the pipeline by providing a LearningRepository instance.
+
+        Args:
+            learning_repository: An instance of LearningRepository to handle learning operations.
+
+        Returns:
+            MemorySleepPipelineBuilder: The current instance of MemorySleepPipelineBuilder for method chaining.
+        """
 
     @overload
     def set_learning_repository(
         self, weaviate_client: WeaviateClient
     ) -> "MemoryCreationPipelineBuilder":
-        pass
+        """
+        Set the learning repository for the pipeline by providing a WeaviateClient instance.
+
+        Args:
+            weaviate_client: An instance of WeaviateClient to handle learning operations.
+
+        Returns:
+            MemorySleepPipelineBuilder: The current instance of MemorySleepPipelineBuilder for method chaining.
+        """
 
     def set_learning_repository(
         self, value: LearningRepository | WeaviateClient
@@ -236,13 +252,29 @@ class MemoryCreationPipelineBuilder:
 
     @overload
     def set_vectorizer(self, vectorizer: Vectorizer) -> "MemoryCreationPipelineBuilder":
-        pass
+        """
+        Set the vectorizer for the pipeline by providing a Vectorizer instance.
+
+        Args:
+            vectorizer: An instance of Vectorizer to handle embedding models.
+
+        Returns:
+            MemoryCreationPipelineBuilder: The current instance of MemoryCreationPipelineBuilder for method chaining.
+        """
 
     @overload
     def set_vectorizer(
         self, embedding_models: list[str]
     ) -> "MemoryCreationPipelineBuilder":
-        pass
+        """
+        Set the vectorizer for the pipeline by providing a list of embedding model names.
+
+        Args:
+            embedding_models: A list of strings representing embedding model names.
+
+        Returns:
+            MemoryCreationPipelineBuilder: The current instance of MemoryCreationPipelineBuilder for method chaining.
+        """
 
     def set_vectorizer(
         self, value: Vectorizer | list[str]
@@ -267,13 +299,29 @@ class MemoryCreationPipelineBuilder:
     def set_memory_repository(
         self, memory_repository: MemoryRepository
     ) -> "MemoryCreationPipelineBuilder":
-        pass
+        """
+        Set the memory repository for the pipeline by providing a MemoryRepository instance.
+
+        Args:
+            memory_repository: An instance of MemoryRepository to handle memory operations.
+
+        Returns:
+            MemoryCreationPipelineBuilder: The current instance of MemoryCreationPipelineBuilder for method chaining.
+        """
 
     @overload
     def set_memory_repository(
         self, weaviate_client: WeaviateClient
     ) -> "MemoryCreationPipelineBuilder":
-        pass
+        """
+        Set the memory repository for the pipeline by providing a WeaviateClient instance.
+
+        Args:
+            weaviate_client: An instance of WeaviateClient to handle memory operations.
+
+        Returns:
+            MemoryCreationPipelineBuilder: The current instance of MemoryCreationPipelineBuilder for method chaining.
+        """
 
     def set_memory_repository(
         self, value: MemoryRepository | WeaviateClient
@@ -319,6 +367,9 @@ class MemoryCreationPipelineBuilder:
                 memory_repository=self._memory_repository,
                 vectorizer=self._vectorizer,
             ),
+            learning_repository=self._learning_repository,
+            memory_repository=self._memory_repository,
+            vectorizer=self._vectorizer,
         )
 
 
@@ -330,21 +381,39 @@ class MemoryCreationPipeline:
     _learning_extractors: list[LearningExtractor]
     _learning_deduplicators: list[LearningDeduplicator]
     _memory_creator: MemoryCreator
+    _learning_repository: LearningRepository
+    _memory_repository: MemoryRepository
+    _vectorizer: Vectorizer
 
     def __init__(
         self,
         learning_extractors: list[LearningExtractor],
         learning_deduplicators: list[LearningDeduplicator],
         memory_creator: MemoryCreator,
+        learning_repository: LearningRepository,
+        memory_repository: MemoryRepository,
+        vectorizer: Vectorizer,
     ):
         self._learning_extractors = learning_extractors
         self._learning_deduplicators = learning_deduplicators
         self._memory_creator = memory_creator
+        self._learning_repository = learning_repository
+        self._memory_repository = memory_repository
+        self._vectorizer = vectorizer
 
     @observe(name="memiris.memory_creation_pipeline.create_memories")
     def create_memories(self, tenant: str, content: str, **kwargs) -> list[Memory]:
         """
-        Create a memory for a user with the given content.
+        Create memories from the provided content by extracting learnings, deduplicating them,
+        and creating memory entries.
+
+        Args:
+            tenant: The tenant to which the memories belong.
+            content: The content from which learnings will be extracted.
+            **kwargs: Additional keyword arguments that may be used by the extractors or deduplicators.
+
+        Returns:
+            list[Memory]: A list of Memory objects created from the extracted and deduplicated learnings.
         """
         learnings = []
         for extractor in self._learning_extractors:
@@ -354,7 +423,22 @@ class MemoryCreationPipeline:
         for deduplicator in self._learning_deduplicators:
             deduplicated_learnings.append(deduplicator.deduplicate(learnings, **kwargs))
 
-        memories = self._memory_creator.create(
-            learnings=deduplicated_learnings, tenant=tenant, **kwargs
+        for learning in deduplicated_learnings:
+            learning.vectors = self._vectorizer.vectorize(learning.content)
+
+        saved_learnings = self._learning_repository.save_learnings(
+            tenant=tenant, learnings=deduplicated_learnings
         )
-        return memories
+
+        memories = self._memory_creator.create(
+            learnings=saved_learnings, tenant=tenant, **kwargs
+        )
+
+        for memory in memories:
+            memory.vectors = self._vectorizer.vectorize(memory.content)
+
+        saved_memories = self._memory_repository.save_memories(
+            tenant=tenant, memories=memories
+        )
+
+        return saved_memories

@@ -121,13 +121,29 @@ class MemorySleepPipelineBuilder:
     def set_learning_repository(
         self, learning_repository: LearningRepository
     ) -> "MemorySleepPipelineBuilder":
-        pass
+        """
+        Set the learning repository for the pipeline by providing a LearningRepository instance.
+
+        Args:
+            learning_repository: An instance of LearningRepository to handle learning operations.
+
+        Returns:
+            MemorySleepPipelineBuilder: The current instance of MemorySleepPipelineBuilder for method chaining.
+        """
 
     @overload
     def set_learning_repository(
         self, weaviate_client: WeaviateClient
     ) -> "MemorySleepPipelineBuilder":
-        pass
+        """
+        Set the learning repository for the pipeline by providing a WeaviateClient instance.
+
+        Args:
+            weaviate_client: An instance of WeaviateClient to handle learning operations.
+
+        Returns:
+            MemorySleepPipelineBuilder: The current instance of MemorySleepPipelineBuilder for method chaining.
+        """
 
     def set_learning_repository(
         self, value: LearningRepository | WeaviateClient
@@ -152,13 +168,30 @@ class MemorySleepPipelineBuilder:
     def set_memory_connection_repository(
         self, memory_connection_repository: MemoryRepository
     ) -> "MemorySleepPipelineBuilder":
-        pass
+        """
+        Set the memory connection repository for the pipeline by providing a MemoryConnectionRepository instance.
+
+        Args:
+            memory_connection_repository: An instance of MemoryConnectionRepository
+            to handle memory connection operations.
+
+        Returns:
+            MemorySleepPipelineBuilder: The current instance of MemorySleepPipelineBuilder for method chaining.
+        """
 
     @overload
     def set_memory_connection_repository(
         self, weaviate_client: WeaviateClient
     ) -> "MemorySleepPipelineBuilder":
-        pass
+        """
+        Set the memory connection repository for the pipeline by providing a WeaviateClient instance.
+
+        Args:
+            weaviate_client: An instance of WeaviateClient to handle memory connection operations.
+
+        Returns:
+            MemorySleepPipelineBuilder: The current instance of MemorySleepPipelineBuilder for method chaining.
+        """
 
     def set_memory_connection_repository(
         self, value: MemoryConnectionRepository | WeaviateClient
@@ -183,13 +216,29 @@ class MemorySleepPipelineBuilder:
 
     @overload
     def set_vectorizer(self, vectorizer: Vectorizer) -> "MemorySleepPipelineBuilder":
-        pass
+        """
+        Set the vectorizer for the pipeline by providing a Vectorizer instance.
+
+        Args:
+            vectorizer: An instance of Vectorizer to handle embedding operations.
+
+        Returns:
+            MemorySleepPipelineBuilder: The current instance of MemorySleepPipelineBuilder for method chaining.
+        """
 
     @overload
     def set_vectorizer(
         self, embedding_models: list[str]
     ) -> "MemorySleepPipelineBuilder":
-        pass
+        """
+        Set the vectorizer for the pipeline by providing a list of embedding model names.
+
+        Args:
+            embedding_models: A list of strings representing the names of embedding models.
+
+        Returns:
+            MemorySleepPipelineBuilder: The current instance of MemorySleepPipelineBuilder for method chaining.
+        """
 
     def set_vectorizer(
         self, value: Vectorizer | list[str]
@@ -214,13 +263,28 @@ class MemorySleepPipelineBuilder:
     def set_memory_repository(
         self, memory_repository: MemoryRepository
     ) -> "MemorySleepPipelineBuilder":
-        pass
+        """
+        Set the memory repository for the pipeline by providing a MemoryRepository instance.
+
+        Args:
+            memory_repository: An instance of MemoryRepository to handle memory operations.
+
+        Returns:
+            MemorySleepPipelineBuilder: The current instance of MemorySleepPipelineBuilder for method chaining.
+        """
 
     @overload
     def set_memory_repository(
         self, weaviate_client: WeaviateClient
     ) -> "MemorySleepPipelineBuilder":
-        pass
+        """
+        Set the memory repository for the pipeline by providing a WeaviateClient instance.
+        Args:
+            weaviate_client: An instance of WeaviateClient to handle memory operations.
+
+        Returns:
+            MemorySleepPipelineBuilder: The current instance of MemorySleepPipelineBuilder for method chaining.
+        """
 
     def set_memory_repository(
         self, value: MemoryRepository | WeaviateClient
@@ -280,9 +344,13 @@ class MemorySleepPipeline:
     @observe(name="memiris.memory_sleep_pipeline.sleep")
     def sleep(self, tenant: str, **kwargs):
         """
-        Sleep on memories using the configured MemorySleeper.
+        Sleep on memories for a given tenant. Forms connections between memories and then deduplicates memories.
+
+        Args:
+            tenant: The tenant for which the memories should be processed.
+            **kwargs: Additional keyword arguments that can be passed to the MemorySleeper's run_sleep method.
         """
         if not self._memory_sleeper:
             raise ValueError("MemorySleeper must be set.")
 
-        return self._memory_sleeper.run_sleep(tenant, **kwargs)
+        self._memory_sleeper.run_sleep(tenant, **kwargs)

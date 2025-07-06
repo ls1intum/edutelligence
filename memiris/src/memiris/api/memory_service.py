@@ -1,7 +1,13 @@
+from typing import overload
 from uuid import UUID
+
+from weaviate.client import WeaviateClient
 
 from memiris.domain.memory import Memory
 from memiris.repository.memory_repository import MemoryRepository
+from memiris.repository.weaviate.weaviate_memory_repository import (
+    WeaviateMemoryRepository,
+)
 
 
 class MemoryService:
@@ -12,6 +18,7 @@ class MemoryService:
 
     _memory_repository: MemoryRepository
 
+    @overload
     def __init__(self, memory_repository: MemoryRepository) -> None:
         """
         Initialize the MemoryService with a MemoryRepository instance.
@@ -19,10 +26,30 @@ class MemoryService:
         Args:
             memory_repository: An instance of MemoryRepository to handle memory operations.
         """
-        if not memory_repository:
-            raise ValueError("MemoryRepository must be provided.")
 
-        self._memory_repository = memory_repository
+    @overload
+    def __init__(self, weaviate_client: WeaviateClient) -> None:
+        """
+        Initialize the MemoryService with a WeaviateClient instance.
+
+        Args:
+            weaviate_client: An instance of WeaviateClient to handle memory operations.
+        """
+
+    def __init__(self, value: MemoryRepository | WeaviateClient) -> None:
+        """
+        Initialize the MemoryService with a MemoryRepository or WeaviateClient instance.
+        Args:
+            value: An instance of MemoryRepository or WeaviateClient to handle memory operations.
+        """
+        if isinstance(value, MemoryRepository):
+            self._memory_repository = value
+        elif isinstance(value, WeaviateClient):
+            self._memory_repository = WeaviateMemoryRepository(value)
+        else:
+            raise TypeError(
+                f"Expected MemoryRepository or WeaviateClient instance, got {type(value)}"
+            )
 
     def get_memory_by_id(self, tenant: str, memory_id: str | UUID) -> Memory:
         """
@@ -36,6 +63,24 @@ class MemoryService:
             Memory: The memory object corresponding to the provided ID.
         """
         return self._memory_repository.find(tenant, memory_id)
+
+    def get_memories_by_ids(
+        self, tenant: str, memory_ids: list[str | UUID]
+    ) -> list[Memory]:
+        """
+        Retrieve multiple memory entries by their IDs.
+
+        Args:
+            tenant: The tenant to which the memories belong.
+            memory_ids: A list of memory IDs to retrieve.
+
+        Returns:
+            list[Memory]: A list of memory objects corresponding to the provided IDs.
+        """
+        if not memory_ids:
+            return []
+
+        return self._memory_repository.find_by_ids(tenant, memory_ids)
 
     def get_all_memories(self, tenant: str) -> list[Memory]:
         """
