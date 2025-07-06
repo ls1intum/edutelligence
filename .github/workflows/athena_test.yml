@@ -38,8 +38,10 @@ jobs:
         run: |
           cd athena
           mkdir -p test-results
-          # Run all mock tests using the existing test script
-          poetry run test_all
+          # Run tests directly from the main athena environment
+          poetry run pytest tests/modules/programming/module_programming_llm/mock --junitxml=test-results/programming_llm.xml
+          poetry run pytest tests/modules/text/module_text_llm/mock --junitxml=test-results/text_llm.xml
+          poetry run pytest tests/modules/modeling/module_modeling_llm/mock --junitxml=test-results/modeling_llm.xml
         continue-on-error: true
       - name: Run linting
         run: |
