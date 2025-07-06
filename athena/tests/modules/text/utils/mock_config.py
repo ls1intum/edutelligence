@@ -18,9 +18,18 @@ class MockModelConfig(BaseModel):
         mock_model.name = "mock-model"
         return mock_model
 
+    def supports_system_messages(self):
+        return True
+
+    def supports_function_calling(self):
+        return True
+
+    def supports_structured_output(self):
+        return True
+
 
 class MockApproachConfig(ApproachConfig):
-
+    model: MockModelConfig = Field(default_factory=MockModelConfig)
     generate_suggestions_prompt: MockPrompt = Field(default_factory=MockPrompt)
 
     async def generate_suggestions(
