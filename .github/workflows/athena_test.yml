@@ -31,13 +31,18 @@ jobs:
       - name: Install athena dependencies
         run: poetry -C athena install --with dev
       - name: Install all modules
-        run: poetry -C athena run install_all
+        run: |
+          cd athena
+          poetry run python scripts/install_modules.py
       - name: Run tests
         run: |
-          mkdir -p athena/test-results
-          poetry -C athena run test_all
+          cd athena
+          mkdir -p test-results
+          poetry run python scripts/test_modules.py
       - name: Run linting
-        run: poetry -C athena run lint_all
+        run: |
+          cd athena
+          poetry run python scripts/lint_modules.py
       - name: Upload JUnit Test Results
         if: always()
         uses: actions/upload-artifact@v4
