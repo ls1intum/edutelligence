@@ -23,7 +23,7 @@ def main():
     for module in modules:
         if os.path.isdir(module):
             print(f"Installing dependencies for {module}...")
-            result = subprocess.run(["poetry", "install"], cwd=module)
+            result = subprocess.run(["poetry", "install", "--with", "dev"], cwd=module)
 
             if result.returncode != 0:
                 print(f"Failed to install dependencies for {module}")
