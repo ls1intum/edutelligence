@@ -6,8 +6,8 @@ from typing import List
 from logos.classification.classifier import Classifier
 
 
-def weighted_average(relative, absolut, tau=4):
-    return relative * (1 - math.exp(-absolut/tau))
+def weighted_average(relative, absolute, tau=4):
+    return relative * (1 - math.exp(-absolute/tau))
 
 
 class TokenClassifier(Classifier):
