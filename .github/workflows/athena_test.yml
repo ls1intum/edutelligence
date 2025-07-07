@@ -52,7 +52,7 @@ jobs:
     - name: Test Report Summary
       if: always()
       continue-on-error: true
-      uses: mikepenz/action-junit-report@v5.5.0
+      uses: mikepenz/action-junit-report@v5.6.2
       id: test-report
       with:
         report_paths: 'athena/test-results/*.xml'
