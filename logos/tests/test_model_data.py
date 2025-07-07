@@ -213,43 +213,43 @@ def create_html(responses, prompt):
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>LLM-Comparison</title>
         <style>
-            body {{
+            body {
                 font-family: Arial, sans-serif;
                 margin: 20px;
                 display: flex;
                 flex-wrap: wrap;
-            }}
+            }
             
-            .model-container {{
+            .model-container {
                 flex: 1;
                 min-width: 300px;
                 padding: 20px;
                 border: 1px solid #ccc;
                 margin: 10px;
                 background-color: #f9f9f9;
-            }}
+            }
             
-            .model-name {{
+            .model-name {
                 font-weight: bold;
                 margin-bottom: 10px;
-            }}
+            }
             
-            .response {{
+            .response {
                 white-space: pre-wrap;
                 word-wrap: break-word;
                 margin-bottom: 15px;
-            }}
+            }
             
-            .metrics {{
+            .metrics {
                 background-color: #e8f4ff;
                 padding: 10px;
                 border-radius: 5px;
-            }}
+            }
         
-            .chart-container {{
+            .chart-container {
                 margin-top: 50px;
                 text-align: center;
-            }}
+            }
         </style>
         <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     </head>
@@ -315,7 +315,7 @@ def create_html(responses, prompt):
     plt.savefig('model_weights.png', dpi=300)
     plt.close()
 
-    final_html = html_template.format(model_containers=model_containers, prompt_container=prompt_container)
+    final_html = html_template.replace("{prompt_container}", prompt_container).replace("{model_containers}", model_containers)
 
     with open("comparison.html", "w", encoding="utf-8") as file:
         file.write(final_html)

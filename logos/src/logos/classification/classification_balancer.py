@@ -33,4 +33,4 @@ class Balancer:
         self.weights[category].append(weight)
 
     def get_weight(self):
-        return self.__combine_policy() + self.__combine_token() * 2 + self.__combine_ai() * 2
+        return self.__combine_policy() + self.__combine_token() * 2 + self.__combine_ai() * 4
