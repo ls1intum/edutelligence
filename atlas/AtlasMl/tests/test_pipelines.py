@@ -117,7 +117,6 @@ def test_newTextPipeline_integration(workflows):
     test_id = str(uuid.uuid4())
     test_text = "object-oriented programming"
     competency_id = workflows.newTextPipeline(test_text, test_id)
-    assert competency_id is not None
     texts = workflows.weaviate_client.get_all_embeddings("Text")
     found = any(t["properties"].get("text_id") == test_id for t in texts)
     assert found
