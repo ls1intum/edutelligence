@@ -1,4 +1,7 @@
-from athena.schemas.grading_criterion import GradingCriterion, StructuredGradingInstruction
+from athena.schemas.grading_criterion import (
+    GradingCriterion,
+    StructuredGradingInstruction,
+)
 
 # Grading criteria for e-commerce system
 ECOMMERCE_GRADING_CRITERIA = [
@@ -7,55 +10,70 @@ ECOMMERCE_GRADING_CRITERIA = [
         title="User has email attribute",
         structured_grading_instructions=[
             StructuredGradingInstruction(
-                id=1, credits=2.0, grading_scale="Good",
+                id=1,
+                credits=2.0,
+                grading_scale="Good",
                 instruction_description="User class must have an email attribute.",
-                feedback="User class has the required email attribute.", usage_count=0
+                feedback="User class has the required email attribute.",
+                usage_count=0,
             )
-        ]
+        ],
     ),
     GradingCriterion(
         id=2,
         title="Order-Product Association",
         structured_grading_instructions=[
             StructuredGradingInstruction(
-                id=2, credits=2.0, grading_scale="Good",
+                id=2,
+                credits=2.0,
+                grading_scale="Good",
                 instruction_description="Order and Product must be associated (association).",
-                feedback="Order and Product are correctly associated.", usage_count=0
+                feedback="Order and Product are correctly associated.",
+                usage_count=0,
             )
-        ]
+        ],
     ),
     GradingCriterion(
         id=3,
         title="Cart-Product Composition",
         structured_grading_instructions=[
             StructuredGradingInstruction(
-                id=3, credits=2.0, grading_scale="Good",
+                id=3,
+                credits=2.0,
+                grading_scale="Good",
                 instruction_description="Cart must have a composition relationship with Product.",
-                feedback="Cart and Product are correctly in a composition relationship.", usage_count=0
+                feedback="Cart and Product are correctly in a composition relationship.",
+                usage_count=0,
             )
-        ]
+        ],
     ),
     GradingCriterion(
         id=4,
         title="User-Address Aggregation",
         structured_grading_instructions=[
             StructuredGradingInstruction(
-                id=4, credits=2.0, grading_scale="Good",
+                id=4,
+                credits=2.0,
+                grading_scale="Good",
                 instruction_description="User must have an aggregation relationship with Address.",
-                feedback="User and Address are correctly in an aggregation relationship.", usage_count=0
+                feedback="User and Address are correctly in an aggregation relationship.",
+                usage_count=0,
             )
-        ]
+        ],
     ),
     GradingCriterion(
         id=5,
         title="Order inherits from Cart",
         structured_grading_instructions=[
             StructuredGradingInstruction(
-                id=5, credits=2.0, grading_scale="Good",
+                id=5,
+                credits=2.0,
+                grading_scale="Good",
                 instruction_description="Order must inherit from Cart.",
-                feedback="Order correctly inherits from Cart.", usage_count=0
+                feedback="Order correctly inherits from Cart.",
+                usage_count=0,
             )
-        ]
+        ],
     ),
 ]
 
@@ -78,7 +96,7 @@ ECOMMERCE_GRADING_INSTRUCTIONS = (
 )
 
 # Example solution and submission JSON
-ECOMMERCE_EXAMPLE_SOLUTION = '''
+ECOMMERCE_EXAMPLE_SOLUTION = """
 {
     "type": "ClassDiagram",
     "elements": {
@@ -96,9 +114,9 @@ ECOMMERCE_EXAMPLE_SOLUTION = '''
         "r4": {"id": "r4", "type": "Inheritance", "source": {"element": "2"}, "target": {"element": "4"}}
     }
 }
-'''
+"""
 
-ECOMMERCE_SUBMISSION = '''
+ECOMMERCE_SUBMISSION = """
 {
     "type": "ClassDiagram",
     "elements": {
@@ -114,4 +132,4 @@ ECOMMERCE_SUBMISSION = '''
         "r3": {"id": "r3", "type": "Aggregation", "source": {"element": "1"}, "target": {"element": "5"}}
     }
 }
-''' 
+"""
