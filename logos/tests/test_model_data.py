@@ -251,6 +251,7 @@ def create_html(responses, prompt):
                 text-align: center;
             }}
         </style>
+        <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     </head>
     <body>
     {prompt_container}
@@ -259,6 +260,16 @@ def create_html(responses, prompt):
         <h2>LLM Weights</h2>
         <img src="model_weights.png" alt="Model Weights" style="max-width: 100%">
     </div>
+    
+    <script>
+    document.addEventListener("DOMContentLoaded", function() {
+        document.querySelectorAll('.response').forEach(element => {
+            const markdownText = element.textContent;
+            const htmlContent = marked.parse(markdownText);
+            element.innerHTML = htmlContent;
+        });
+    });
+    </script>
     </body>
     </html>
     """
