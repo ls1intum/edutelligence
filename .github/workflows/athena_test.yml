@@ -34,18 +34,36 @@ jobs:
         run: |
           cd athena
           poetry run python scripts/install_modules.py
+      - name: Install pytest and prospector in main environment
+        run: |
+          cd athena
+          poetry run pip install pytest pytest-asyncio prospector
       - name: Run tests
         run: |
           cd athena
           mkdir -p test-results
-          # Run tests directly from the main athena environment
-          poetry run pytest tests/modules/programming/module_programming_llm/mock --junitxml=test-results/programming_llm.xml
-          poetry run pytest tests/modules/text/module_text_llm/mock --junitxml=test-results/text_llm.xml
-          poetry run pytest tests/modules/modeling/module_modeling_llm/mock --junitxml=test-results/modeling_llm.xml
+          # Set up Python path like test_modules.py does
+          export PYTHONPATH="$PWD:$PWD/llm_core"
+          
+          # Run tests for each module using its own virtual environment
+          for module in modules/programming/module_programming_llm modules/text/module_text_llm modules/modeling/module_modeling_llm; do
+            if [ -d "$module/.venv" ]; then
+              echo "Running tests for $module..."
+              # Install pytest in the module's environment
+              $module/.venv/bin/pip install pytest pytest-asyncio
+              # Run tests using the module's environment
+              $module/.venv/bin/python -m pytest tests/$module/mock --junitxml=test-results/${module//\//_}_mock.xml
+            else
+              echo "Virtual environment not found for $module, skipping..."
+            fi
+          done
         continue-on-error: true
       - name: Run linting
         run: |
           cd athena
+          # Set up Python path like test_modules.py does
+          export PYTHONPATH="$PWD:$PWD/llm_core"
+          
           # Run prospector on the main modules from the athena environment
           poetry run prospector --profile .prospector.yaml athena/
           poetry run prospector --profile .prospector.yaml modules/programming/module_programming_llm/
