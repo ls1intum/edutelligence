@@ -18,7 +18,6 @@ pydantic = "1.10.17"
 prospector = "^1.10.2"
 setuptools = "^69.0.0"
 
-
 [tool.poetry.scripts]
 assessment_module_manager = "assessment_module_manager.__main__:main"
 
