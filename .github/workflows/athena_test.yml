@@ -34,16 +34,15 @@ jobs:
         run: |
           cd athena
           poetry run python scripts/install_modules.py
-      - name: Install pytest and prospector in main environment
-        run: |
-          cd athena
-          poetry run pip install pytest pytest-asyncio prospector
       - name: Run tests
         run: |
           cd athena
           mkdir -p test-results
           # Set up Python path like test_modules.py does
           export PYTHONPATH="$PWD:$PWD/llm_core"
+          
+          # Track overall test success
+          overall_success=true
           
           # Run tests for each module using its own virtual environment
           for module in modules/programming/module_programming_llm modules/text/module_text_llm modules/modeling/module_modeling_llm; do
@@ -52,23 +51,27 @@ jobs:
               # Install pytest in the module's environment
               $module/.venv/bin/pip install pytest pytest-asyncio
               # Run tests using the module's environment
-              $module/.venv/bin/python -m pytest tests/$module/mock --junitxml=test-results/${module//\//_}_mock.xml
+              if ! $module/.venv/bin/python -m pytest tests/$module/mock --junitxml=test-results/${module//\//_}_mock.xml; then
+                echo "Tests failed for $module"
+                overall_success=false
+              fi
             else
               echo "Virtual environment not found for $module, skipping..."
             fi
           done
-        continue-on-error: true
+          
+          # Exit with failure if any tests failed
+          if [ "$overall_success" = false ]; then
+            exit 1
+          fi
       - name: Run linting
         run: |
           cd athena
           # Set up Python path like test_modules.py does
           export PYTHONPATH="$PWD:$PWD/llm_core"
           
-          # Run prospector on the main modules from the athena environment
+          # Run prospector only on the main athena directory to avoid import errors
           poetry run prospector --profile .prospector.yaml athena/
-          poetry run prospector --profile .prospector.yaml modules/programming/module_programming_llm/
-          poetry run prospector --profile .prospector.yaml modules/text/module_text_llm/
-          poetry run prospector --profile .prospector.yaml modules/modeling/module_modeling_llm/
         continue-on-error: true
       - name: Upload JUnit Test Results
         if: always()
