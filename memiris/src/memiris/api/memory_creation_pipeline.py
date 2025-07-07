@@ -3,6 +3,7 @@ from typing import overload
 from langfuse._client.observe import observe
 from weaviate.client import WeaviateClient
 
+from memiris.domain.learning import Learning
 from memiris.domain.memory import Memory
 from memiris.repository.learning_repository import LearningRepository
 from memiris.repository.memory_repository import MemoryRepository
@@ -343,8 +344,6 @@ class MemoryCreationPipelineBuilder:
     def build(self) -> "MemoryCreationPipeline":
         if not self._llm_learning_extractor_configs:
             raise ValueError("At least one LearningExtractor must be configured.")
-        if not self._memory_creator_config:
-            raise ValueError("MemoryCreator must be configured.")
         if not self._learning_repository:
             raise ValueError("LearningRepository must be set.")
         if not self._memory_repository:
@@ -354,6 +353,9 @@ class MemoryCreationPipelineBuilder:
         if not self._llm_learning_deduplicator_configs:
             print("No LearningDeduplicator configured, using default.")
             self.add_learning_deduplicator()
+        if not self._memory_creator_config:
+            print("No MemoryCreator configured, using default.")
+            self.set_memory_creator()
 
         return MemoryCreationPipeline(
             learning_extractors=[
@@ -419,15 +421,18 @@ class MemoryCreationPipeline:
         for extractor in self._learning_extractors:
             learnings.extend(extractor.extract(content, **kwargs))
 
-        deduplicated_learnings = []
-        for deduplicator in self._learning_deduplicators:
-            deduplicated_learnings.extend(deduplicator.deduplicate(learnings, **kwargs))
+        deduplicated_learnings: list[Learning] = []
+        if len(self._learning_extractors) > 1:
+            for deduplicator in self._learning_deduplicators:
+                deduplicated_learnings.extend(
+                    deduplicator.deduplicate(learnings, **kwargs)
+                )
 
         for learning in deduplicated_learnings:
             learning.vectors = self._vectorizer.vectorize(learning.content)
 
         saved_learnings = self._learning_repository.save_all(
-            tenant=tenant, learnings=deduplicated_learnings
+            tenant=tenant, entities=deduplicated_learnings
         )
 
         memories = self._memory_creator.create(
@@ -438,7 +443,7 @@ class MemoryCreationPipeline:
             memory.vectors = self._vectorizer.vectorize(memory.content)
 
         saved_memories = self._memory_repository.save_all(
-            tenant=tenant, memories=memories
+            tenant=tenant, entities=memories
         )
 
         return saved_memories
