@@ -1,4 +1,4 @@
-from typing import Optional, overload
+from typing import Optional, Sequence, overload
 from uuid import UUID
 
 from weaviate.client import WeaviateClient
@@ -19,24 +19,22 @@ class MemoryConnectionService:
     _memory_connection_repository: MemoryConnectionRepository
 
     @overload
-    def __init__(
-        self, memory_connection_repository: MemoryConnectionRepository
-    ) -> None:
+    def __init__(self, value: MemoryConnectionRepository) -> None:
         """
         Initialize the MemoryConnectionService with a MemoryConnectionRepository instance.
 
         Args:
-            memory_connection_repository: An instance of MemoryConnectionRepository
+            value: An instance of MemoryConnectionRepository
             to handle memory connection operations.
         """
 
     @overload
-    def __init__(self, weaviate_client: WeaviateClient) -> None:
+    def __init__(self, value: WeaviateClient) -> None:
         """
         Initialize the MemoryConnectionService with a WeaviateClient instance.
 
         Args:
-            weaviate_client: An instance of WeaviateClient to handle memory connection operations.
+            value: An instance of WeaviateClient to handle memory connection operations.
         """
 
     def __init__(self, value: MemoryConnectionRepository | WeaviateClient) -> None:
@@ -57,7 +55,7 @@ class MemoryConnectionService:
             )
 
     def get_memory_connection_by_id(
-        self, tenant: str, memory_connection_id: str | UUID
+        self, tenant: str, memory_connection_id: UUID
     ) -> Optional[MemoryConnection]:
         """
         Retrieve a memory connection entry by its ID.
@@ -72,8 +70,8 @@ class MemoryConnectionService:
         return self._memory_connection_repository.find(tenant, memory_connection_id)
 
     def get_memory_connections_by_ids(
-        self, tenant: str, memory_connection_ids: list[str | UUID]
-    ) -> list[MemoryConnection]:
+        self, tenant: str, memory_connection_ids: list[UUID]
+    ) -> Sequence[MemoryConnection]:
         """
         Retrieve multiple memory connection entries by their IDs.
 
@@ -103,9 +101,7 @@ class MemoryConnectionService:
         """
         return self._memory_connection_repository.all(tenant)
 
-    def delete_memory_connection(
-        self, tenant: str, memory_connection_id: str | UUID
-    ) -> None:
+    def delete_memory_connection(self, tenant: str, memory_connection_id: UUID) -> None:
         """
         Delete a memory connection entry by its ID.
 

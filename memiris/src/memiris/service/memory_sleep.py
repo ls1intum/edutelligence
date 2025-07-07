@@ -66,9 +66,9 @@ class MemorySleeper:
         ollama_service: OllamaService,
         template_deduplication: Optional[str] = None,
         template_connector: Optional[str] = None,
-        max_threads: int = 5,
-        group_size: int = 20,
-        max_groups: int = 5,
+        max_threads: int | None = None,
+        group_size: int | None = None,
+        max_groups: int | None = None,
     ) -> None:
         """
         Initialize the LearningExtractor
@@ -107,9 +107,9 @@ class MemorySleeper:
         self.learning_cache: dict[UUID, Learning] = {}
         self.memory_cache: dict[UUID, Memory] = {}
 
-        self.max_threads = max_threads
-        self.group_size = group_size
-        self.max_groups = max(1, max_groups)
+        self.max_threads = max_threads or 5
+        self.group_size = group_size or 20
+        self.max_groups = max(1, max_groups or 5)
 
     @observe(name="memory-sleep")
     def run_sleep(self, tenant: str, **kwargs):

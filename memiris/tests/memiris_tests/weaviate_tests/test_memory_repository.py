@@ -49,7 +49,7 @@ class TestWeaviateMemoryRepository(WeaviateTest):
             Memory(
                 title="Test Memory Title",
                 content="Test Memory Content",
-                learnings=[self._create_test_learning(learning_repository).id],
+                learnings=[self._create_test_learning(learning_repository).id],  # type: ignore
                 vectors={"vector_0": vec},
             ),
         )

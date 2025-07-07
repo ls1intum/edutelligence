@@ -206,13 +206,13 @@ class MemoryCreationPipelineBuilder:
 
     @overload
     def set_learning_repository(
-        self, learning_repository: LearningRepository
+        self, value: LearningRepository
     ) -> "MemoryCreationPipelineBuilder":
         """
         Set the learning repository for the pipeline by providing a LearningRepository instance.
 
         Args:
-            learning_repository: An instance of LearningRepository to handle learning operations.
+            value: An instance of LearningRepository to handle learning operations.
 
         Returns:
             MemorySleepPipelineBuilder: The current instance of MemorySleepPipelineBuilder for method chaining.
@@ -220,13 +220,13 @@ class MemoryCreationPipelineBuilder:
 
     @overload
     def set_learning_repository(
-        self, weaviate_client: WeaviateClient
+        self, value: WeaviateClient
     ) -> "MemoryCreationPipelineBuilder":
         """
         Set the learning repository for the pipeline by providing a WeaviateClient instance.
 
         Args:
-            weaviate_client: An instance of WeaviateClient to handle learning operations.
+            value: An instance of WeaviateClient to handle learning operations.
 
         Returns:
             MemorySleepPipelineBuilder: The current instance of MemorySleepPipelineBuilder for method chaining.
@@ -252,26 +252,24 @@ class MemoryCreationPipelineBuilder:
         return self
 
     @overload
-    def set_vectorizer(self, vectorizer: Vectorizer) -> "MemoryCreationPipelineBuilder":
+    def set_vectorizer(self, value: Vectorizer) -> "MemoryCreationPipelineBuilder":
         """
         Set the vectorizer for the pipeline by providing a Vectorizer instance.
 
         Args:
-            vectorizer: An instance of Vectorizer to handle embedding models.
+            value: An instance of Vectorizer to handle embedding models.
 
         Returns:
             MemoryCreationPipelineBuilder: The current instance of MemoryCreationPipelineBuilder for method chaining.
         """
 
     @overload
-    def set_vectorizer(
-        self, embedding_models: list[str]
-    ) -> "MemoryCreationPipelineBuilder":
+    def set_vectorizer(self, value: list[str]) -> "MemoryCreationPipelineBuilder":
         """
         Set the vectorizer for the pipeline by providing a list of embedding model names.
 
         Args:
-            embedding_models: A list of strings representing embedding model names.
+            value: A list of strings representing embedding model names.
 
         Returns:
             MemoryCreationPipelineBuilder: The current instance of MemoryCreationPipelineBuilder for method chaining.
@@ -298,13 +296,13 @@ class MemoryCreationPipelineBuilder:
 
     @overload
     def set_memory_repository(
-        self, memory_repository: MemoryRepository
+        self, value: MemoryRepository
     ) -> "MemoryCreationPipelineBuilder":
         """
         Set the memory repository for the pipeline by providing a MemoryRepository instance.
 
         Args:
-            memory_repository: An instance of MemoryRepository to handle memory operations.
+            value: An instance of MemoryRepository to handle memory operations.
 
         Returns:
             MemoryCreationPipelineBuilder: The current instance of MemoryCreationPipelineBuilder for method chaining.
@@ -312,13 +310,13 @@ class MemoryCreationPipelineBuilder:
 
     @overload
     def set_memory_repository(
-        self, weaviate_client: WeaviateClient
+        self, value: WeaviateClient
     ) -> "MemoryCreationPipelineBuilder":
         """
         Set the memory repository for the pipeline by providing a WeaviateClient instance.
 
         Args:
-            weaviate_client: An instance of WeaviateClient to handle memory operations.
+            value: An instance of WeaviateClient to handle memory operations.
 
         Returns:
             MemoryCreationPipelineBuilder: The current instance of MemoryCreationPipelineBuilder for method chaining.
@@ -364,7 +362,7 @@ class MemoryCreationPipelineBuilder:
             learning_deduplicators=[
                 config.convert() for config in self._llm_learning_deduplicator_configs
             ],
-            memory_creator=self._memory_creator_config.convert(
+            memory_creator=self._memory_creator_config.convert(  # type: ignore
                 learning_repository=self._learning_repository,
                 memory_repository=self._memory_repository,
                 vectorizer=self._vectorizer,

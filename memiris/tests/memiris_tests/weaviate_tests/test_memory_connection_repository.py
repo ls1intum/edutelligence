@@ -50,8 +50,8 @@ class TestWeaviateMemoryConnectionRepository(WeaviateTest):
                 description="Memory 1 happened before Memory 2",
                 weight=0.95,
                 memories=[
-                    self._create_test_memory(memory_repository).id,
-                    self._create_test_memory(memory_repository).id,
+                    self._create_test_memory(memory_repository).id,  # type: ignore
+                    self._create_test_memory(memory_repository).id,  # type: ignore
                 ],
             ),
         )

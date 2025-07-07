@@ -31,7 +31,7 @@ class MemoryConnection:
         self,
         uid: Optional[UUID] = None,
         connection_type: ConnectionType = ConnectionType.RELATED,
-        memories: List[UUID] = None,
+        memories: List[UUID] | None = None,
         description: str = "",
         context: Optional[dict] = None,
         weight: float = 1.0,

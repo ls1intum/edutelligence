@@ -64,7 +64,7 @@ class WeaviateMemoryRepository(MemoryRepository, _WeaviateBaseRepository):
             )
         else:
             WeaviateBidirectionalLinkHelper.add_links(
-                entity.id,
+                entity.id,  # type: ignore
                 entity.learnings,
                 "learnings",
                 "memories",

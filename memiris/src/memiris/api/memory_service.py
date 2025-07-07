@@ -1,4 +1,4 @@
-from typing import Optional, overload
+from typing import Optional, Sequence, overload
 from uuid import UUID
 
 from weaviate.client import WeaviateClient
@@ -19,21 +19,21 @@ class MemoryService:
     _memory_repository: MemoryRepository
 
     @overload
-    def __init__(self, memory_repository: MemoryRepository) -> None:
+    def __init__(self, value: MemoryRepository) -> None:
         """
         Initialize the MemoryService with a MemoryRepository instance.
 
         Args:
-            memory_repository: An instance of MemoryRepository to handle memory operations.
+            value: An instance of MemoryRepository to handle memory operations.
         """
 
     @overload
-    def __init__(self, weaviate_client: WeaviateClient) -> None:
+    def __init__(self, value: WeaviateClient) -> None:
         """
         Initialize the MemoryService with a WeaviateClient instance.
 
         Args:
-            weaviate_client: An instance of WeaviateClient to handle memory operations.
+            value: An instance of WeaviateClient to handle memory operations.
         """
 
     def __init__(self, value: MemoryRepository | WeaviateClient) -> None:
@@ -51,7 +51,7 @@ class MemoryService:
                 f"Expected MemoryRepository or WeaviateClient instance, got {type(value)}"
             )
 
-    def get_memory_by_id(self, tenant: str, memory_id: str | UUID) -> Optional[Memory]:
+    def get_memory_by_id(self, tenant: str, memory_id: UUID) -> Optional[Memory]:
         """
         Retrieve a memory entry by its ID.
 
@@ -65,8 +65,8 @@ class MemoryService:
         return self._memory_repository.find(tenant, memory_id)
 
     def get_memories_by_ids(
-        self, tenant: str, memory_ids: list[str | UUID]
-    ) -> list[Memory]:
+        self, tenant: str, memory_ids: list[UUID]
+    ) -> Sequence[Memory]:
         """
         Retrieve multiple memory entries by their IDs.
 
@@ -94,7 +94,7 @@ class MemoryService:
         """
         return self._memory_repository.all(tenant)
 
-    def delete_memory(self, tenant: str, memory_id: str | UUID) -> None:
+    def delete_memory(self, tenant: str, memory_id: UUID) -> None:
         """
         Delete a memory entry by its ID.
 

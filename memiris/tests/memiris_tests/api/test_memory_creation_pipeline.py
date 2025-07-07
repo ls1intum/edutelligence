@@ -171,7 +171,7 @@ class TestMemoryCreationPipeline:
         )
 
         pipeline = MemoryCreationPipeline(
-            learning_extractors=[mock_extractor],
+            learning_extractors=[mock_extractor, mock_extractor],
             learning_deduplicators=[mock_deduplicator],
             memory_creator=mock_memory_creator,
             learning_repository=mock_learning_repository,
@@ -184,8 +184,10 @@ class TestMemoryCreationPipeline:
 
         pipeline.create_memories(tenant, content)
 
-        mock_extractor.extract.assert_called_once_with(content)
-        mock_deduplicator.deduplicate.assert_called_once_with(fake_learnings)
+        mock_extractor.extract.assert_called()
+        mock_deduplicator.deduplicate.assert_called_once_with(
+            fake_learnings + fake_learnings
+        )
 
     def test_build_without_learning_extractor_raises(
         self,
@@ -209,7 +211,7 @@ class TestMemoryCreationPipeline:
         ):
             builder.build()
 
-    def test_build_without_memory_creator_raises(
+    def test_build_without_memory_creator_creates_default(
         self,
         mock_ollama_service,
         mock_learning_repository,
@@ -222,5 +224,6 @@ class TestMemoryCreationPipeline:
         builder._vectorizer = mock_vectorizer
         builder.add_learning_extractor(focus="focus", llm_learning_extraction="llm1")
 
-        with pytest.raises(ValueError, match="MemoryCreator must be configured."):
-            builder.build()
+        pipeline = builder.build()
+
+        assert pipeline._memory_creator is not None

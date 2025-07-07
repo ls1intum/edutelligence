@@ -32,7 +32,7 @@ def create_tool_find_learnings_by_id(
             learning_to_dto(learning)
             for learning_id in learning_ids
             if is_valid_uuid(learning_id)
-            and (learning := learning_repository.find(tenant, to_uuid(learning_id)))
+            and (learning := learning_repository.find(tenant, to_uuid(learning_id)))  # type: ignore
             is not None
         ]
 

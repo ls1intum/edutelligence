@@ -1,4 +1,4 @@
-from typing import Optional, overload
+from typing import Optional, Sequence, overload
 from uuid import UUID
 
 from weaviate.client import WeaviateClient
@@ -19,21 +19,21 @@ class LearningService:
     _learning_repository: LearningRepository
 
     @overload
-    def __init__(self, learning_repository: LearningRepository) -> None:
+    def __init__(self, value: LearningRepository) -> None:
         """
         Initialize the LearningService with a LearningRepository instance.
 
         Args:
-            learning_repository: An instance of LearningRepository to handle learning operations.
+            value: An instance of LearningRepository to handle learning operations.
         """
 
     @overload
-    def __init__(self, weaviate_client: WeaviateClient) -> None:
+    def __init__(self, value: WeaviateClient) -> None:
         """
         Initialize the LearningService with a WeaviateClient instance.
 
         Args:
-            weaviate_client: An instance of WeaviateClient to handle learning operations.
+            value: An instance of WeaviateClient to handle learning operations.
         """
 
     def __init__(self, value: LearningRepository | WeaviateClient) -> None:
@@ -51,9 +51,7 @@ class LearningService:
                 f"Expected LearningRepository or WeaviateClient instance, got {type(value)}"
             )
 
-    def get_learning_by_id(
-        self, tenant: str, learning_id: str | UUID
-    ) -> Optional[Learning]:
+    def get_learning_by_id(self, tenant: str, learning_id: UUID) -> Optional[Learning]:
         """
         Retrieve a learning entry by its ID.
 
@@ -67,8 +65,8 @@ class LearningService:
         return self._learning_repository.find(tenant, learning_id)
 
     def get_learnings_by_ids(
-        self, tenant: str, learning_ids: list[str | UUID]
-    ) -> list[Learning]:
+        self, tenant: str, learning_ids: list[UUID]
+    ) -> Sequence[Learning]:
         """
         Retrieve multiple learning entries by their IDs.
 
@@ -96,7 +94,7 @@ class LearningService:
         """
         return self._learning_repository.all(tenant)
 
-    def delete_learning(self, tenant: str, learning_id: str | UUID) -> None:
+    def delete_learning(self, tenant: str, learning_id: UUID) -> None:
         """
         Delete a learning entry by its ID.
 
