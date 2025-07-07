@@ -96,8 +96,8 @@ jobs:
             ls1tum/athena_${{ env.IMAGE_NAME }}
           tags: |
             type=raw,value=${{ github.ref == 'refs/heads/main' && 'main' || github.sha }}
-            type=raw,value=${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.sha }}
-            type=raw,value=${{ github.event_name == 'release' && github.event.release.tag_name }}
+            type=ref,event=pull_request
+            type=ref,event=tag
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v6
