@@ -44,15 +44,16 @@ def main():
     for proto_file in proto_files:
         logger.info(f"Generating stubs for {proto_file.name}")
 
-        # Build command
+        # Build command with mypy-protobuf for type safety
         cmd = [
             sys.executable,
             "-m",
             "grpc_tools.protoc",
             f"--proto_path={proto_dir}",
             f"--python_out={output_dir}",
-            f"--pyi_out={output_dir}",
             f"--grpc_python_out={output_dir}",
+            f"--mypy_out={output_dir}",
+            f"--mypy_grpc_out={output_dir}",
             str(proto_file),
         ]
 

@@ -3,16 +3,14 @@ import re
 from typing import Dict
 
 from app.grpc import hyperion_pb2_grpc
+from app.grpc.hyperion_pb2 import (
+    InconsistencyCheckResponse,
+    RewriteProblemStatementResponse,
+)
 from app.models import get_model
 from app.settings import settings
 from langchain_core.prompts import PromptTemplate
 
-from .models import (
-    InconsistencyCheckRequest,
-    InconsistencyCheckResponse,
-    RewriteProblemStatementRequest,
-    RewriteProblemStatementResponse,
-)
 from .prompts import checker_prompt, prettify_prompt, rewrite_prompt
 
 logger = logging.getLogger(__name__)
@@ -21,12 +19,8 @@ logger = logging.getLogger(__name__)
 class ReviewAndRefineServicer(hyperion_pb2_grpc.ReviewAndRefineServicer):
 
     def CheckInconsistencies(self, request, context):
-        # Convert from gRPC to Pydantic model
-        request = InconsistencyCheckRequest.from_grpc(request)
-
         logger.info("Running inconsistency check...")
 
-        # Get the language model
         model = get_model(settings.MODEL_NAME)()
 
         # Set up the prompts and chains
@@ -94,16 +88,11 @@ class ReviewAndRefineServicer(hyperion_pb2_grpc.ReviewAndRefineServicer):
         result = re.sub(r"^#\s.*?\n", "", result)
         result = re.sub(r"^#+.*?Summary of Consistency Issues\s*\n", "", result)
 
-        # Return the response
-        return InconsistencyCheckResponse(inconsistencies=result).to_grpc()
+        return InconsistencyCheckResponse(inconsistencies=result)
 
     def RewriteProblemStatement(self, request, context):
-        # Convert from gRPC to Pydantic model
-        request = RewriteProblemStatementRequest.from_grpc(request)
-
         logger.info("Rewriting problem statement text...")
 
-        # Get the language model
         model = get_model(settings.MODEL_NAME)()
 
         # Set up the rewriting prompt and chain
@@ -114,5 +103,4 @@ class ReviewAndRefineServicer(hyperion_pb2_grpc.ReviewAndRefineServicer):
         response = rewriter.invoke({"text": request.text})
         rewritten_text = response.content.strip()
 
-        # Return the response
-        return RewriteProblemStatementResponse(rewritten_text=rewritten_text).to_grpc()
+        return RewriteProblemStatementResponse(rewritten_text=rewritten_text)
