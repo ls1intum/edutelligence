@@ -62,6 +62,7 @@ export default function Models() {
                     weight_quality: model[8],
                     tags: model[9],
                     parallel: model[10],
+                    description: model[11],
                 }));
                 setModels(formattedModels);
             } else {
@@ -168,6 +169,7 @@ const Table = ({models, theme}) => {
                     <th style={{padding: 10, borderBottom: '1px solid #ccc'}}>Quality</th>
                     <th style={{padding: 10, borderBottom: '1px solid #ccc'}}>Tags</th>
                     <th style={{padding: 10, borderBottom: '1px solid #ccc'}}>Parallel</th>
+                    <th style={{padding: 10, borderBottom: '1px solid #ccc'}}>Description</th>
                 </tr>
             </thead>
             <tbody>
@@ -184,6 +186,7 @@ const Table = ({models, theme}) => {
                         <td style={{padding: 10, borderRight: '1px solid #ccc'}}>{model.weight_quality}</td>
                         <td style={{padding: 10, borderRight: '1px solid #ccc'}}>{model.tags}</td>
                         <td style={{padding: 10, borderRight: '1px solid #ccc'}}>{model.parallel}</td>
+                        <td style={{padding: 10, borderRight: '1px solid #ccc'}}>{model.description}</td>
                     </tr>
                 ))}
             </tbody>

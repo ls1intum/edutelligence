@@ -194,6 +194,54 @@ async def add_model(data: AddModelRequest):
         return db.add_model(**data.dict())
 
 
+@app.post("/logosdb/add_full_model")
+async def add_full_model(data: AddFullModelRequest):
+    with DBManager() as db:
+        return db.add_full_model(**data.dict())
+
+
+@app.post("/logosdb/update_model")
+async def update_model(data: UpdateModelRequest):
+    with DBManager() as db:
+        return db.update_model_weights(**data.dict())
+
+
+@app.post("/logosdb/delete_model")
+async def delete_model(data: DeleteModelRequest):
+    with DBManager() as db:
+        return db.delete_model(**data.dict())
+
+
+@app.post("/logosdb/get_model")
+async def get_model(data: GetModelRequest):
+    with DBManager() as db:
+        return db.get_model(**data.dict()), 200
+
+
+@app.post("/logosdb/add_policy")
+async def add_policy(data: AddPolicyRequest):
+    with DBManager() as db:
+        return db.add_policy(**data.dict())
+
+
+@app.post("/logosdb/update_policy")
+async def update_policy(data: UpdatePolicyRequest):
+    with DBManager() as db:
+        return db.update_policy(**data.dict())
+
+
+@app.post("/logosdb/delete_policy")
+async def delete_policy(data: DeletePolicyRequest):
+    with DBManager() as db:
+        return db.delete_policy(**data.dict())
+
+
+@app.post("/logosdb/get_policy")
+async def add_model(data: GetPolicyRequest):
+    with DBManager() as db:
+        return db.get_policy(**data.dict()), 200
+
+
 @app.post("/logosdb/add_service")
 async def add_service(data: AddServiceRequest):
     with DBManager() as db:

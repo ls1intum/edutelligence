@@ -72,6 +72,72 @@ class AddModelRequest(LogosKeyModel):
     endpoint: str
 
 
+class AddFullModelRequest(LogosKeyModel):
+    name: str
+    endpoint: str
+    api_id: int
+    weight_privacy: str
+    weight_accuracy: int
+    weight_quality: int
+    weight_latency: int
+    weight_cost: int
+    tags: str
+    parallel: int
+    description: str
+
+
+class UpdateModelRequest(LogosKeyModel):
+    id: int
+    privacy: str
+    accuracy: int
+    quality: int
+    latency: int
+    cost: int
+
+
+class DeleteModelRequest(LogosKeyModel):
+    id: int
+
+
+class GetModelRequest(LogosKeyModel):
+    id: int
+
+
+class AddPolicyRequest(LogosKeyModel):
+    entity_id: int
+    name: str
+    description: str
+    threshold_privacy: str
+    threshold_latency: int
+    threshold_accuracy: int
+    threshold_cost: int
+    threshold_quality: int
+    priority: int
+    topic: str
+
+
+class UpdatePolicyRequest(LogosKeyModel):
+    id: int
+    entity_id: int
+    name: str
+    description: str
+    threshold_privacy: str
+    threshold_latency: int
+    threshold_accuracy: int
+    threshold_cost: int
+    threshold_quality: int
+    priority: int
+    topic: str
+
+
+class DeletePolicyRequest(LogosKeyModel):
+    id: int
+
+
+class GetPolicyRequest(LogosKeyModel):
+    id: int
+
+
 class AddServiceRequest(LogosKeyModel):
     name: str
 

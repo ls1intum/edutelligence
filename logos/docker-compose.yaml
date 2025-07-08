@@ -36,8 +36,8 @@ services:
     volumes:
       - data_volume:/src/logos
     environment:
-      PROVIDER_NAME:
-      BASE_URL:
+      PROVIDER_NAME: azure
+      BASE_URL: https://ase-se01.openai.azure.com/openai/deployments/
     expose:
       - "8080"
       - "50051"

@@ -8,7 +8,7 @@ import math
 
 from logos.classification.classifier import Classifier
 
-def sigmoid(x, t, k=0.2):
+def sigmoid(x, t, k=0.0625):
     return 1 / (1 + math.pow(math.e, -k*(x-t)))
 
 
@@ -41,7 +41,7 @@ class PolicyClassifier(Classifier):
                 weight = sigmoid(model["weight_latency"], policy["threshold_latency"])
             else:
                 weight = 0
-            print(f"Latency weight for model {model['id']} is: {weight}")
+            logging.debug(f"Latency weight for model {model['id']} is: {weight}")
             model["classification_weight"].add_weight(weight, "policy")
         # Accuracy: The higher the value the better the result accuracy
         for model in models:
@@ -50,7 +50,7 @@ class PolicyClassifier(Classifier):
             else:
                 weight = 0
             model["classification_weight"].add_weight(weight, "policy")
-            print(f"Accuracy weight for model {model['id']} is: {weight}")
+            logging.debug(f"Accuracy weight for model {model['id']} is: {weight}")
         # Quality: The higher the value the higher the result quality
         for model in models:
             if not strict or policy["threshold_quality"] <= model["weight_quality"]:
@@ -58,5 +58,5 @@ class PolicyClassifier(Classifier):
             else:
                 weight = 0
             model["classification_weight"].add_weight(weight, "policy")
-            print(f"Quality weight for model {model['id']} is: {weight}")
+            logging.debug(f"Quality weight for model {model['id']} is: {weight}")
         return models

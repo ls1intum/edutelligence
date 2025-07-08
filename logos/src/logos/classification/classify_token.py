@@ -1,6 +1,7 @@
 """
 Classifier using keywords in prompts.
 """
+import logging
 import math
 from typing import List
 from logos.classification.classifier import Classifier
@@ -22,5 +23,5 @@ class TokenClassifier(Classifier):
             absolute = matches
             score = weighted_average(relative, absolute)
             model["classification_weight"].add_weight(score, "token")
-            print(f"Token weight for model {model['id']} is: {score}")
+            logging.debug(f"Token weight for model {model['id']} is: {score}")
         return self.models

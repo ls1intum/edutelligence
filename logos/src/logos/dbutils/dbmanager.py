@@ -209,6 +209,85 @@ class DBManager:
         pk = self.insert("models", {"name": name, "endpoint": endpoint})
         return {"result": f"Created Model", "model_id": pk}, 200
 
+    def add_full_model(self, logos_key: str, name: str, endpoint: str, api_id: int = None,
+                       weight_privacy: str = "LOCAL", weight_accuracy: int = 0, weight_quality: int = 0,
+                       weight_latency: int = 0, weight_cost: int = 0, tags: str = "", parallel: int = 1,
+                       description: str = ""):
+        if not self.check_authorization(logos_key):
+            return {"error": "Database changes only allowed for root user."}, 500
+        pk = self.insert("models", {"name": name, "endpoint": endpoint, "api_id": api_id,
+                                    "weight_privacy": weight_privacy, "weight_accuracy": weight_accuracy,
+                                    "weight_quality": weight_quality, "weight_latency": weight_latency,
+                                    "weight_cost": weight_cost, "tags": tags, "parallel": parallel,
+                                    "description": description})
+        return {"result": f"Created Model", "model_id": pk}, 200
+
+    def update_model_weights(self, logos_key: str, id: int, privacy: str, accuracy: int, quality: int, latency: int, cost: int):
+        if not self.check_authorization(logos_key):
+            return {"error": "Database changes only allowed for root user."}, 500
+        self.update("models", id, {"privacy": privacy, "accuracy": accuracy, "quality": quality, "latency": latency, "cost": cost})
+        return {"result": f"Updated Model"}, 200
+
+    def delete_model(self, logos_key: str, id: int):
+        if not self.check_authorization(logos_key):
+            return {"error": "Database changes only allowed for root user."}, 500
+        self.delete("models", id)
+        return {"result": f"Deleted Model"}, 200
+
+    def add_policy(self, logos_key: str, entity_id: int, name: str, description: str, threshold_privacy: str,
+                   threshold_latency: int, threshold_accuracy: int, threshold_cost: int, threshold_quality: int,
+                   priority: int, topic: str):
+        if not self.check_authorization(logos_key):
+            return {"error": "Database changes only allowed for root user."}, 500
+        pk = self.insert("policies", {"entity_id": entity_id, "name": name, "description": description,
+                                      "threshold_privacy": threshold_privacy, "threshold_latency": threshold_latency,
+                                      "threshold_accuracy": threshold_accuracy, "threshold_cost": threshold_cost,
+                                      "threshold_quality": threshold_quality, "priority": priority, "topic": topic})
+        return {"result": f"Created Policy", "policy-id": pk}, 200
+
+    def update_policy(self, logos_key: str, id: int, entity_id: int, name: str, description: str, threshold_privacy: str,
+                   threshold_latency: int, threshold_accuracy: int, threshold_cost: int, threshold_quality: int,
+                   priority: int, topic: str):
+        if not self.check_authorization(logos_key):
+            return {"error": "Database changes only allowed for root user."}, 500
+        self.update("policies", id, {"entity_id": entity_id, "name": name, "description": description,
+                                      "threshold_privacy": threshold_privacy, "threshold_latency": threshold_latency,
+                                      "threshold_accuracy": threshold_accuracy, "threshold_cost": threshold_cost,
+                                      "threshold_quality": threshold_quality, "priority": priority, "topic": topic})
+        return {"result": f"Created Policy"}, 200
+
+    def delete_policy(self, logos_key: str, id: int):
+        if not self.check_authorization(logos_key):
+            return {"error": "Database changes only allowed for root user."}, 500
+        self.delete("policies", id)
+        return {"result": f"Deleted Policy"}, 200
+
+    def get_policy(self, logos_key: str, id: int):
+        if not self.user_authorization(logos_key):
+            return {"error": "Not Authorized"}, 500
+        sql = text("""
+                   SELECT *
+                   FROM policies
+                   WHERE id = :policy_id
+                   """)
+        result = self.session.execute(sql, {"policy_id": int(id)}).fetchone()
+        if result is None:
+            return None
+        return {
+            "id": result.id,
+            "entity_id": result.entity_id,
+            "name": result.name,
+            "description": result.description,
+            "api_id": result.api_id,
+            "threshold_privacy": result.threshold_privacy,
+            "threshold_latency": result.threshold_latency,
+            "threshold_accuracy": result.threshold_accuracy,
+            "threshold_cost": result.threshold_cost,
+            "threshold_quality": result.threshold_quality,
+            "priority": result.priority,
+            "topic": result.topic
+        }, 200
+
     def add_service(self, logos_key: str, name: str):
         if not self.check_authorization(logos_key):
             return {"error": "Database changes only allowed for root user."}, 500
