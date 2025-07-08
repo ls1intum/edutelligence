@@ -39,7 +39,7 @@ sync-proto-artemis = "app.scripts.sync_proto_artemis:main"
 [tool.poetry.group.dev.dependencies]
 black = "25.1.0"
 flake8 = "7.1.2"
-mypy = "1.12.1"
+mypy = "1.16.1"
 
 [virtualenvs]
 create = true
