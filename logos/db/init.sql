@@ -135,8 +135,8 @@ CREATE TABLE token_types (
 
 CREATE TABLE usage_tokens (
     id SERIAL PRIMARY KEY,
-    type_id INTEGER NOT NULL REFERENCES token_types(id),
-    log_entry_id INTEGER NOT NULL REFERENCES log_entry(id),
+    type_id INTEGER NOT NULL REFERENCES token_types(id) ON DELETE CASCADE,
+    log_entry_id INTEGER NOT NULL REFERENCES log_entry(id) ON DELETE CASCADE,
     token_count INTEGER DEFAULT(0)
 );
 

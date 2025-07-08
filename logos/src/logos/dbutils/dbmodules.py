@@ -39,7 +39,7 @@ class Profile(Base):
     __tablename__ = 'profiles'
     id = Column(Integer, primary_key=True)
     name = Column(String, nullable=False)
-    process_id = Column(Integer, ForeignKey('process.id'), nullable=False)
+    process_id = Column(Integer, ForeignKey('process.id', ondelete="CASCADE"), nullable=False)
     process = relationship("Process")
 
 
@@ -48,8 +48,8 @@ class Process(Base):
     id = Column(Integer, primary_key=True)
     logos_key = Column(String, unique=True, nullable=False)
     name = Column(String, nullable=False)
-    user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
-    service_id = Column(Integer, ForeignKey('services.id'), nullable=False)
+    user_id = Column(Integer, ForeignKey('users.id', ondelete="SET NULL"))
+    service_id = Column(Integer, ForeignKey('services.id', ondelete="SET NULL"))
     log = Column(Enum(LoggingLevel))
     settings = Column(JSON)
 
@@ -87,8 +87,8 @@ class Provider(Base):
 class ModelProvider(Base):
     __tablename__ = 'model_provider'
     id = Column(Integer, primary_key=True)
-    provider_id = Column(Integer, ForeignKey('providers.id'), nullable=False)
-    model_id = Column(Integer, ForeignKey('models.id'), nullable=False)
+    provider_id = Column(Integer, ForeignKey('providers.id', ondelete="CASCADE"), nullable=False)
+    model_id = Column(Integer, ForeignKey('models.id', ondelete="CASCADE"), nullable=False)
 
     provider = relationship("Provider")
     model = relationship("Model")
@@ -97,8 +97,8 @@ class ModelProvider(Base):
 class ModelApiKey(Base):
     __tablename__ = 'model_api_keys'
     id = Column(Integer, primary_key=True)
-    profile_id = Column(Integer, ForeignKey('profiles.id'), nullable=False)
-    provider_id = Column(Integer, ForeignKey('providers.id'), nullable=False)
+    profile_id = Column(Integer, ForeignKey('profiles.id', ondelete="SET NULL"))
+    provider_id = Column(Integer, ForeignKey('providers.id', ondelete="CASCADE"), nullable=False)
     api_key = Column(Text, nullable=False)
 
     profile = relationship("Profile")
@@ -108,7 +108,7 @@ class ModelApiKey(Base):
 class Policy(Base):
     __tablename__ = 'policies'
     id = Column(Integer, primary_key=True)
-    entity_id = Column(Integer, ForeignKey('process.id'), nullable=False)
+    entity_id = Column(Integer, ForeignKey('process.id', ondelete="CASCADE"), nullable=False)
     name = Column(String, nullable=False)
     description = Column(Text)
     threshold_privacy = Column(Enum(ThresholdLevel))
@@ -125,8 +125,8 @@ class Policy(Base):
 class ProfileModelPermission(Base):
     __tablename__ = 'profile_model_permissions'
     id = Column(Integer, primary_key=True)
-    profile_id = Column(Integer, ForeignKey('profiles.id'), nullable=False)
-    model_id = Column(Integer, ForeignKey('models.id'), nullable=False)
+    profile_id = Column(Integer, ForeignKey('profiles.id', ondelete="CASCADE"), nullable=False)
+    model_id = Column(Integer, ForeignKey('models.id', ondelete="CASCADE"), nullable=False)
 
     profile = relationship("Profile")
     model = relationship("Model")
@@ -166,8 +166,8 @@ class UsageTokens(Base):
     __tablename__ = "usage_tokens"
 
     id = Column(Integer, primary_key=True)
-    type_id = Column(Integer, ForeignKey("token_types.id"), nullable=False)
-    log_entry_id = Column(Integer, ForeignKey("log_entry.id"), nullable=False)
+    type_id = Column(Integer, ForeignKey("token_types.id", ondelete="CASCADE"), nullable=False)
+    log_entry_id = Column(Integer, ForeignKey("log_entry.id", ondelete="CASCADE"), nullable=False)
     token_count = Column(Integer, default=0)
 
 
