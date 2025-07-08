@@ -13,6 +13,7 @@ import json
 from sqlalchemy import Table, MetaData
 from sqlalchemy import text, func
 
+from logos.classification.model_handler import ModelHandler
 from logos.dbutils.dbmodules import *
 
 
@@ -210,22 +211,18 @@ class DBManager:
         return {"result": f"Created Model", "model_id": pk}, 200
 
     def add_full_model(self, logos_key: str, name: str, endpoint: str, api_id: int = None,
-                       weight_privacy: str = "LOCAL", weight_accuracy: int = 0, weight_quality: int = 0,
-                       weight_latency: int = 0, weight_cost: int = 0, tags: str = "", parallel: int = 1,
+                       weight_privacy: str = "LOCAL", worse_accuracy: int = None, worse_quality: int = None, worse_latency: int = None, worse_cost: int = None, tags: str = "", parallel: int = 1,
                        description: str = ""):
         if not self.check_authorization(logos_key):
             return {"error": "Database changes only allowed for root user."}, 500
-        pk = self.insert("models", {"name": name, "endpoint": endpoint, "api_id": api_id,
-                                    "weight_privacy": weight_privacy, "weight_accuracy": weight_accuracy,
-                                    "weight_quality": weight_quality, "weight_latency": weight_latency,
-                                    "weight_cost": weight_cost, "tags": tags, "parallel": parallel,
-                                    "description": description})
+        pk = self.insert("models", {"name": name, "endpoint": endpoint, "api_id": api_id, "weight_privacy": weight_privacy, "tags": tags, "parallel": parallel, "description": description})
+        self.rebalance_added_model_weights(pk, worse_accuracy, worse_quality, worse_latency, worse_cost)
         return {"result": f"Created Model", "model_id": pk}, 200
 
     def update_model_weights(self, logos_key: str, id: int, privacy: str, accuracy: int, quality: int, latency: int, cost: int):
         if not self.check_authorization(logos_key):
             return {"error": "Database changes only allowed for root user."}, 500
-        self.update("models", id, {"privacy": privacy, "accuracy": accuracy, "quality": quality, "latency": latency, "cost": cost})
+        self.update("models", id, {"weight_privacy": privacy, "weight_accuracy": accuracy, "weight_quality": quality, "weight_latency": latency, "weight_cost": cost})
         return {"result": f"Updated Model"}, 200
 
     def delete_model(self, logos_key: str, id: int):
@@ -233,6 +230,69 @@ class DBManager:
             return {"error": "Database changes only allowed for root user."}, 500
         self.delete("models", id)
         return {"result": f"Deleted Model"}, 200
+
+    def rebalance_added_model_weights(self, new_model_id: int, worse_accuracy: int, worse_quality: int, worse_latency: int, worse_cost: int):
+        data = self.get_all_models_data()
+        accuracy_data = list()
+        quality_data = list()
+        latency_data = list()
+        cost_data = list()
+        privacy_data = list()
+        for model in data:
+            mid, p, l, a, c, q = model[0], model[4], model[5], model[6], model[7], model[8]
+            if mid == new_model_id:
+                continue
+            accuracy_data.append((mid, a))
+            quality_data.append((mid, q))
+            latency_data.append((mid, l))
+            cost_data.append((mid, c))
+            privacy_data.append((mid, p))
+        accuracy_data = list(sorted(accuracy_data, key=lambda x: x[1]))
+        quality_data = list(sorted(quality_data, key=lambda x: x[1]))
+        latency_data = list(sorted(latency_data, key=lambda x: x[1]))
+        cost_data = list(sorted(cost_data, key=lambda x: x[1]))
+        privacy_data = list(sorted(privacy_data, key=lambda x: x[1]))
+        accuracy = ModelHandler(accuracy_data)
+        accuracy.add_model(worse_accuracy, new_model_id)
+        quality = ModelHandler(quality_data)
+        quality.add_model(worse_quality, new_model_id)
+        latency = ModelHandler(latency_data)
+        latency.add_model(worse_latency, new_model_id)
+        cost = ModelHandler(cost_data)
+        cost.add_model(worse_cost, new_model_id)
+        print(f"Accuracy-Models: {accuracy.get_models()}")
+        print(f"Quality-Models: {quality.get_models()}")
+        print(f"Latency-Models: {latency.get_models()}")
+        print(f"Cost-Models: {cost.get_models()}")
+        # Collect rebalanced model weights
+        models = dict()
+        for model in accuracy.get_models():
+            if model[0] not in models:
+                models[model[0]] = {"privacy": "", "accuracy": model[1], "quality": -1, "latency": -1, "cost": -1}
+            else:
+                models[model[0]]["accuracy"] = model[1]
+        for model in quality.get_models():
+            if model[0] not in models:
+                models[model[0]] = {"privacy": "", "accuracy": -1, "quality": model[1], "latency": -1, "cost": -1}
+            else:
+                models[model[0]]["quality"] = model[1]
+        for model in latency.get_models():
+            if model[0] not in models:
+                models[model[0]] = {"privacy": "", "accuracy": -1, "quality": -1, "latency": model[1], "cost": -1}
+            else:
+                models[model[0]]["latency"] = model[1]
+        for model in cost.get_models():
+            if model[0] not in models:
+                models[model[0]] = {"privacy": "", "accuracy": -1, "quality": -1, "latency": -1, "cost": model[1]}
+            else:
+                models[model[0]]["cost"] = model[1]
+        for model in privacy_data:
+            if model[0] not in models:
+                models[model[0]] = {"privacy": model[1], "accuracy": -1, "quality": -1, "latency": -1, "cost": -1}
+            else:
+                models[model[0]]["privacy"] = model[1]
+        for model in models:
+            self.update("models", model, {"weight_privacy": models[model]["privacy"], "weight_accuracy": models[model]["accuracy"], "weight_quality": models[model]["quality"], "weight_latency": models[model]["latency"], "weight_cost": models[model]["cost"]})
 
     def add_policy(self, logos_key: str, entity_id: int, name: str, description: str, threshold_privacy: str,
                    threshold_latency: int, threshold_accuracy: int, threshold_cost: int, threshold_quality: int,
@@ -581,6 +641,32 @@ class DBManager:
         """)
         result = self.session.execute(sql, {"logos_key": logos_key}).fetchall()
         return [(i.id, i.name, i.endpoint, i.api_id, i.weight_privacy, i.weight_latency, i.weight_accuracy, i.weight_cost, i.weight_quality, i.tags, i.parallel, i.description) for i in result]
+
+    def get_all_models_data(self):
+        """
+        Get a list of models and their data in the database. Used for rebalancing.
+        """
+        sql = text("""
+            SELECT models.id, models.name, models.endpoint, models.api_id, models.weight_privacy, models.weight_latency, models.weight_accuracy, models.weight_cost, models.weight_quality, models.tags, models.parallel, models.description
+            FROM models
+        """)
+        result = self.session.execute(sql).fetchall()
+        return [(i.id, i.name, i.endpoint, i.api_id, i.weight_privacy, i.weight_latency, i.weight_accuracy, i.weight_cost, i.weight_quality, i.tags, i.parallel, i.description) for i in result]
+
+    def get_policy_info(self, logos_key: str):
+        """
+        Get a list of policies accessible by a given key.
+        """
+        sql = text("""
+            SELECT policies.id, policies.entity_id, policies.name, policies.description, policies.threshold_privacy, policies.threshold_latency, policies.threshold_accuracy, policies.threshold_cost, policies.threshold_quality, policies.priority, policies.topic
+            FROM policies, process
+            WHERE process.logos_key = :logos_key
+                and process.id = policies.entity_id
+                and profiles.id = profile_model_permissions.profile_id
+                and profile_model_permissions.model_id = models.id
+        """)
+        result = self.session.execute(sql, {"logos_key": logos_key}).fetchall()
+        return [(i.id, i.entity_id, i.name, i.description, i.threshold_privacy, i.threshold_latency, i.threshold_accuracy, i.threshold_cost, i.threshold_quality, i.priority, i.topic) for i in result]
 
 
     def get_general_model_stats(self, logos_key: str):

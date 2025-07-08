@@ -59,7 +59,7 @@ class LogosServicer(model_pb2_grpc.LogosServicer):
                 context.set_code(grpc.StatusCode.UNAVAILABLE)
                 context.set_details(f"Upstream error: {out[0]["error"]}")
                 return
-            proxy_headers, forward_url, model_id, model_name, provider_id = out
+            proxy_headers, forward_url, model_id, model_name, provider_id, _ = out
 
         # Standard request setup
 

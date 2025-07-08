@@ -77,10 +77,10 @@ class AddFullModelRequest(LogosKeyModel):
     endpoint: str
     api_id: int
     weight_privacy: str
-    weight_accuracy: int
-    weight_quality: int
-    weight_latency: int
-    weight_cost: int
+    worse_accuracy: int
+    worse_quality: int
+    worse_latency: int
+    worse_cost: int
     tags: str
     parallel: int
     description: str

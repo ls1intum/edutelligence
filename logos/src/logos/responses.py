@@ -247,7 +247,7 @@ def resource_behaviour(logos_key, headers, data, models):
         "Content-Type": "application/json"
     }
     # TODO: Add config header fields to proxy_headers
-    return proxy_headers, forward_url, model_id, model_name, int(provider["id"])
+    return proxy_headers, forward_url, model_id, model_name, int(provider["id"]), provider["name"]
 
 
 def merge_url(base_url, endpoint):

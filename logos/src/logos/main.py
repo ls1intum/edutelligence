@@ -284,6 +284,12 @@ async def get_models(data: LogosKeyModel):
         return db.get_models_info(**data.dict()), 200
 
 
+@app.post("/logosdb/get_policies")
+async def get_models(data: LogosKeyModel):
+    with DBManager() as db:
+        return db.get_policy_info(**data.dict()), 200
+
+
 @app.post("/logosdb/get_general_model_stats")
 async def get_general_model_stats(data: LogosKeyModel):
     with DBManager() as db:
@@ -358,11 +364,15 @@ async def logos_service(path: str, request: Request):
             return out
         proxy_headers, forward_url, provider_id = out
         model_id, model_name = None, None
+        provider_name = ""
     else:
         out = resource_behaviour(logos_key, headers, json_data, models)
         if isinstance(out[0], dict) and "error" in out[0]:
             return out
-        proxy_headers, forward_url, model_id, model_name, provider_id = out
+        proxy_headers, forward_url, model_id, model_name, provider_id, provider_name = out
+    # OpenWebUI expects the model name not in the endpoint but in the data
+    if "openwebui" in provider_name.lower():
+        json_data["model"] = model_name
     with DBManager() as db:
         if usage_id is not None:
             db.set_forward_timestamp(usage_id)
