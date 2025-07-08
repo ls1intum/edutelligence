@@ -8,161 +8,109 @@ option java_outer_classname = "HyperionServiceProto";
 option java_multiple_files = true;
 option java_generic_services = false;
 
-/***********************
- ***   Core types    ***
- ***********************/
 
-message ProgrammingExercise {
-  int32 id = 1;
-  Repository template_repository = 2;
-  Repository solution_repository = 3;
-  Repository test_repository = 4;
-  ProblemStatement problem_statement = 5;
-  BoundaryConditions boundary_conditions = 6;
-}
-
-message Repository {
-  string name = 1;
-  repeated RepositoryFile files = 2;
-}
-
+// Represents a file in a repository with content
 message RepositoryFile {
+  // File path relative to the repository root
   string path = 1;
+  
+  // File content
   string content = 2;
 }
 
-message ProblemStatement {
-  string title = 1;
-  string short_title = 2;
-  string description = 3;
-}
-
-message BoundaryConditions {
-  string language = 1;
-  string technical_environment = 2;
-  ProjectType project_type = 3;
-  ProgrammingLanguage programming_language = 4;
-  string difficulty = 5;
-  int32 points = 6;
-  int32 bonus_points = 7;
-  repeated string constraints = 8;
+// Represents a collection of files that form a repository
+message Repository {
+  // Files contained in the repository
+  repeated RepositoryFile files = 1;
 }
 
 enum ProgrammingLanguage {
   EMPTY = 0;
-  JAVA = 1;
-  PYTHON = 2;
+  ASSEMBLER = 1;
+  BASH = 2;
+  C = 3;
+  C_PLUS_PLUS = 4;
+  C_SHARP = 5;
+  DART = 6;
+  GO = 7;
+  HASKELL = 8;
+  JAVA = 9;
+  JAVASCRIPT = 10;
+  KOTLIN = 11;
+  MATLAB = 12;
+  OCAML = 13;
+  PYTHON = 14;
+  R = 15;
+  RUBY = 16;
+  RUST = 17;
+  SWIFT = 18;
+  TYPESCRIPT = 19;
+  VHDL = 20;
 }
 
 enum ProjectType {
-  PLAIN = 0;
-  MAVEN = 1;
-  GRADLE = 2;
+  MAVEN_MAVEN = 0;
+  PLAIN_MAVEN = 1;
+  MAVEN_BLACKBOX = 2;
+  PLAIN_GRADLE = 3;
+  GRADLE_GRADLE = 4;
+  PLAIN = 5;
+  XCODE = 6;
+  FACT = 7;
+  GCC = 8;
 }
 
-message PingRequest {
-  string client_id = 1;
+// Represents a programming exercise with all associated data
+message ProgrammingExercise {
+  // Unique identifier for the exercise
+  int32 id = 1;
+
+  // Title of the exercise
+  string title = 2;
+  
+  // Programming language used
+  ProgrammingLanguage programming_language = 3;
+
+  // Package name for the exercise
+  string package_name = 4;
+
+  // Type of project (e.g., Maven, Gradle)
+  ProjectType project_type = 5;
+
+  // Repository containing template files
+  Repository template_repository = 6;
+
+  // Repository containing solution files
+  Repository solution_repository = 7;
+
+  // Repository containing test files (optional)
+  Repository test_repository = 8;
+  
+  // Problem statement describing the exercise requirements
+  string problem_statement = 9;
+  
 }
 
-message PingResponse {
-  string status = 1;
-  string version = 2;
-  int64 timestamp = 3;
-}
-
-/******************************
- ***   Exercise Messages    ***
- ******************************/
 // Exercise Creation Step 1: Define Boundary Conditions
 service DefineBoundaryCondition { }
 
-message BoundaryConditionsDefinerRequest {
+// Exercise Creation Step 2: Create Draft Problem Statement
+service DraftProblemStatement {}
 
-}
+// Exercise Creation Step 3: Create Solution Repository
+service CreateSolutionRepository {}
 
-message BoundaryConditionsDefinerResponse {
-  BoundaryConditions boundary_conditions = 1;
-}
+// Exercise Creation Step 4: Create Template Repository
+service CreateTemplateRepository {}
 
-message ProblemStatementDrafterRequest {
-  BoundaryConditions boundary_conditions = 1;
-}
+// Exercise Creation Step 5: Create Test Repository
+service CreateTestRepository {}
 
-message ProblemStatementDrafterResponse {
-  BoundaryConditions boundary_conditions = 1;
-  ProblemStatement problem_statement = 2;
-}
+// Exercise Creation Step 6: Finalize Problem Statement
+service FinalizeProblemStatement {}
 
-message SolutionRepositoryCreatorRequest {
-  BoundaryConditions boundary_conditions = 1;
-  ProblemStatement problem_statement = 2;
-}
-
-message SolutionRepositoryCreatorResponse {
-  BoundaryConditions boundary_conditions = 1;
-  ProblemStatement problem_statement = 2;
-  Repository solution_repository = 3;
-}
-
-message TemplateRepositoryCreatorRequest {
-  BoundaryConditions boundary_conditions = 1;
-  ProblemStatement problem_statement = 2;
-  Repository solution_repository = 3;
-}
-
-message TemplateRepositoryCreatorResponse {
-  BoundaryConditions boundary_conditions = 1;
-  ProblemStatement problem_statement = 2;
-  Repository solution_repository = 3;
-  Repository template_repository = 4;
-}
-
-message TestRepositoryCreatorRequest {
-  BoundaryConditions boundary_conditions = 1;
-  ProblemStatement problem_statement = 2;
-  Repository solution_repository = 3;
-  Repository template_repository = 4;
-}
-
-message TestRepositoryCreatorResponse {
-  BoundaryConditions boundary_conditions = 1;
-  ProblemStatement problem_statement = 2;
-  Repository solution_repository = 3;
-  Repository template_repository = 4;
-  Repository test_repository = 5;
-}
-
-message ProblemStatementFinalizerRequest {
-  BoundaryConditions boundary_conditions = 1;
-  ProblemStatement problem_statement = 2;
-  Repository solution_repository = 3;
-  Repository template_repository = 4;
-  Repository test_repository = 5;
-}
-
-message ProblemStatementFinalizerResponse {
-  BoundaryConditions boundary_conditions = 1;
-  ProblemStatement problem_statement = 2;
-  Repository solution_repository = 3;
-  Repository template_repository = 4;
-  Repository test_repository = 5;
-}
-
-message GradingConfiguratorRequest {
-  BoundaryConditions boundary_conditions = 1;
-  ProblemStatement problem_statement = 2;
-  Repository solution_repository = 3;
-  Repository template_repository = 4;
-  Repository test_repository = 5;
-}
-
-message GradingConfiguratorResponse {
-  BoundaryConditions boundary_conditions = 1;
-  ProblemStatement problem_statement = 2;
-  Repository solution_repository = 3;
-  Repository template_repository = 4;
-  Repository test_repository = 5;
-}
+// Exercise Creation Step 7: Configure Grading
+service ConfigureGrading {}
 
 // Exercise Creation Step 8: Review and Refine
 service ReviewAndRefine {
@@ -171,66 +119,14 @@ service ReviewAndRefine {
 }
 
 message InconsistencyCheckRequest {
-  BoundaryConditions boundary_conditions = 1;
-  ProblemStatement problem_statement = 2;
-  Repository solution_repository = 3;
-  Repository template_repository = 4;
-  Repository test_repository = 5;
+  string problem_statement = 1;
+  Repository solution_repository = 2;
+  Repository template_repository = 3;
+  Repository test_repository = 4;
 }
 
 message InconsistencyCheckResponse {
   string inconsistencies = 1;
-}
-
-/******************************
- ***   Service Definitions  ***
- ******************************/
-
-// TODO: The return value should be the specific solution to this function, not all prev results.
-//       => Independence between steps.
-
-service Health {
-  rpc Ping (PingRequest) returns (PingResponse) {}
-}
-
-// Step 1: Define Boundary Conditions
-service BoundaryConditionsDefiner {
-  rpc DefineBoundaryConditions(BoundaryConditionsDefinerRequest) returns (BoundaryConditionsDefinerResponse) {}
-}
-
-// Step 2: Create Draft Problem Statement
-service ProblemStatementDrafter {
-  rpc DraftProblemStatement(ProblemStatementDrafterRequest) returns (ProblemStatementDrafterResponse) {}
-}
-
-// Step 3: Create Solution Repository
-service SolutionRepositoryCreator {
-  rpc CreateSolutionRepository(SolutionRepositoryCreatorRequest) returns (SolutionRepositoryCreatorResponse) {}
-}
-
-// Step 4: Create Template Repository
-service TemplateRepositoryCreator {
-  rpc CreateTemplateRepository(TemplateRepositoryCreatorRequest) returns (TemplateRepositoryCreatorResponse) {}
-}
-
-// Step 5: Create Test Repository
-service TestRepositoryCreator {
-  rpc CreateTestRepository(TestRepositoryCreatorRequest) returns (TestRepositoryCreatorResponse) {}
-}
-
-// Step 6: Finalize Problem Statement
-service ProblemStatementFinalizer {
-  rpc FinalizeProblemStatement(ProblemStatementFinalizerRequest) returns (ProblemStatementFinalizerResponse) {}
-}
-
-// Step 7: Configure Grading
-service GradingConfigurator {
-  rpc ConfigureGrading(GradingConfiguratorRequest) returns (GradingConfiguratorResponse) {}
-}
-
-// Step 8: Verify Configuration
-service ConfigurationVerifier {
-  rpc CheckInconsistencies(InconsistencyCheckRequest) returns (InconsistencyCheckResponse) {}
 }
 
 message RewriteProblemStatementRequest {
