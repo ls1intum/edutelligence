@@ -93,7 +93,7 @@ jobs:
           path: all-test-results
       - name: Test Report Summary
         id: test-report
-        uses: mikepenz/action-junit-report@v4
+        uses: mikepenz/action-junit-report@v5
         with:
           report_paths: "all-test-results/**/*.xml"
           check_name: "Athena Test Report"
