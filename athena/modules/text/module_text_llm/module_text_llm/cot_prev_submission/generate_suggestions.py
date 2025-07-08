@@ -18,21 +18,11 @@ from module_text_llm.cot_prev_submission.prompt_generate_feedback import Assessm
 
 
 async def generate_suggestions(exercise: Exercise, submission: Submission, config: ApproachConfig, *, debug: bool,
-                               is_graded: bool, learner_profile: Optional[LearnerProfile] = None, latest_submission: Optional[Submission]) -> List[Feedback]:
+                               is_graded: bool, latest_submission: Optional[Submission] = None) -> List[Feedback]:
     model = config.model.get_model()  # type: ignore[attr-defined]
 
-    # Use default preferences if none provided
-    if learner_profile is None:
-        logger.info("Overriding the learner profile with the config from the playground.")
-        learner_profile = config.profile
-
-    if learner_profile is None:
-        logger.info("Learner profile was not provided - continuing with the default values.")
-        learner_profile = LearnerProfile(
-            feedback_alternative_standard=2,
-            feedback_followup_summary=2,
-            feedback_brief_detailed=2
-        )
+    if latest_submission is None:
+        logger.info("Latest submission is not provided.")
 
     # Inject student preferences into the prompt
     prompt_input = {
@@ -40,7 +30,7 @@ async def generate_suggestions(exercise: Exercise, submission: Submission, confi
         "problem_statement": exercise.problem_statement or "No problem statement.",
         "example_solution": exercise.example_solution,
         "submission": add_sentence_numbers(submission.text),
-        "previous_submission": add_sentence_numbers(latest_submission.text)
+        "previous_submission": add_sentence_numbers(latest_submission.text) if latest_submission is not None else "Previous submission is not available.",
     }
 
     chat_prompt = get_chat_prompt_with_formatting_instructions(

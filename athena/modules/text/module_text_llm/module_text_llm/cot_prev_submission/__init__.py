@@ -22,5 +22,4 @@ class COTPrevSubmissionConfig(ApproachConfig):
 
     async def generate_suggestions(self, exercise: Exercise, submission: Submission, config, *, debug: bool,
                                    is_graded: bool, learner_profile: LearnerProfile = None, latest_submission: Submission = None):
-        return await generate_suggestions(exercise, submission, config, debug=debug, is_graded=is_graded,
-                                          learner_profile=learner_profile, latest_submission=latest_submission)
+        return await generate_suggestions(exercise, submission, config, debug=debug, is_graded=is_graded, latest_submission=latest_submission)

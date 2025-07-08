@@ -348,6 +348,7 @@ def feedback_provider(func: Union[
         store_exercise(exercise)
         store_submissions([submission])
 
+        # Build kwargs for the function
         kwargs = {}
         if "module_config" in inspect.signature(func).parameters:
             kwargs["module_config"] = module_config
@@ -361,11 +362,28 @@ def feedback_provider(func: Union[
         if "latest_submission" in inspect.signature(func).parameters:
             kwargs["latest_submission"] = latest_submission
 
+        # Filter out unexpected kwargs and log warnings
+        accepted_params = set(inspect.signature(func).parameters.keys())
+        all_possible_kwargs = {
+            "module_config": module_config,
+            "is_graded": isGraded,
+            "learner_profile": learner_profile,
+            "latest_submission": latest_submission,
+        }
+
+        # Only pass accepted kwargs
+        filtered_kwargs = {k: v for k, v in kwargs.items() if k in accepted_params}
+
+        # Log warning for any extra provided (not supported by the module)
+        for k in all_possible_kwargs.keys():
+            if k not in accepted_params and all_possible_kwargs[k] is not None:
+                logger.warning(f"{func.__name__}: Received unexpected argument '{k}' (value: {all_possible_kwargs[k]}), but this module does not support it. Ignoring.")
+
         # Call the actual provider
         if inspect.iscoroutinefunction(func):
-            feedbacks = await func(exercise, submission, **kwargs)
+            feedbacks = await func(exercise, submission, **filtered_kwargs)
         else:
-            feedbacks = func(exercise, submission, **kwargs)
+            feedbacks = func(exercise, submission, **filtered_kwargs)
 
         # Store feedback suggestions and assign internal IDs
         feedbacks = store_feedback_suggestions(feedbacks)
