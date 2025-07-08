@@ -41,6 +41,11 @@ class ClassificationManager:
             for model in self.models:
                 self.laura.register_model(model["id"], model["description"])
 
+    def update_manager(self, models):
+        self.models = models
+        for model in self.models:
+            self.laura.register_model(model["id"], model["description"])
+
     def classify(self, prompt: str, policy: dict, allowed=None) -> List[Tuple[int, int, int, int]]:
         """
         Classify prompts and assign them to a model.

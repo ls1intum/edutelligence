@@ -728,7 +728,7 @@ class DBManager:
         result = self.session.execute(sql, {"model_id": int(model_id)}).fetchone()
         if result is None:
             return None
-        return self.get_provider(result.id)
+        return self.get_provider(result.provider_id)
 
     def get_key_to_model_provider(self, model_id: int, provider_id: int):
         sql = text("""

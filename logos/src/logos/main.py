@@ -63,28 +63,33 @@ async def start_grpc():
 async def start_handlers():
     global _scheduler
     _scheduler = SchedulingManager(FCFSScheduler())
+    classifier()
+
+
+def classifier():
     mdls = list()
     with DBManager() as db:
         for model in db.get_all_models():
             tpl = db.get_model(model)
             model = {
-                "id": tpl[0],
-                "name": tpl[1],
-                "endpoint": tpl[2],
-                "api_id": tpl[3],
-                "weight_privacy": tpl[4],
-                "weight_latency": tpl[5],
-                "weight_accuracy": tpl[6],
-                "weight_cost": tpl[7],
-                "weight_quality": tpl[8],
-                "tags": tpl[9],
-                "parallel": tpl[10],
-                "description": tpl[11],
+                "id": tpl["id"],
+                "name": tpl["name"],
+                "endpoint": tpl["endpoint"],
+                "api_id": tpl["api_id"],
+                "weight_privacy": tpl["weight_privacy"],
+                "weight_latency": tpl["weight_latency"],
+                "weight_accuracy": tpl["weight_accuracy"],
+                "weight_cost": tpl["weight_cost"],
+                "weight_quality": tpl["weight_quality"],
+                "tags": tpl["tags"],
+                "parallel": tpl["parallel"],
+                "description": tpl["description"],
                 "classification_weight": Balancer(),
             }
             mdls.append(model)
     global _classifier
     _classifier = ClassificationManager(mdls)
+    _classifier.update_manager(mdls)
 
 
 @app.on_event("shutdown")
@@ -191,7 +196,9 @@ async def connect_model_api(data: ConnectModelApiRequest):
 @app.post("/logosdb/add_model")
 async def add_model(data: AddModelRequest):
     with DBManager() as db:
-        return db.add_model(**data.dict())
+        back = db.add_model(**data.dict())
+        classifier()
+        return back
 
 
 @app.post("/logosdb/add_full_model")
@@ -203,7 +210,9 @@ async def add_full_model(data: AddFullModelRequest):
 @app.post("/logosdb/update_model")
 async def update_model(data: UpdateModelRequest):
     with DBManager() as db:
-        return db.update_model_weights(**data.dict())
+        back = db.update_model_weights(**data.dict())
+        classifier()
+        return back
 
 
 @app.post("/logosdb/delete_model")
