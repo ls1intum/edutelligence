@@ -209,7 +209,7 @@ def resource_behaviour(logos_key, headers, data, models):
     # First, retrieve our used policy. If no one is given, use default ProxyPolicy
     if "policy" in headers:
         with DBManager() as db:
-            policy = db.get_policy(logos_key, headers["policy"])
+            policy = db.get_policy(logos_key, int(headers["policy"]))
     else:
         policy = ProxyPolicy()
 

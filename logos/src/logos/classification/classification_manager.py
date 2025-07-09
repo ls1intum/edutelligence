@@ -39,12 +39,14 @@ class ClassificationManager:
         self.filtered = models  # For debugging
         if not self.laura.model_db:
             for model in self.models:
-                self.laura.register_model(model["id"], model["description"])
+                if model["description"] is not None:
+                    self.laura.register_model(model["id"], model["description"])
 
     def update_manager(self, models):
         self.models = models
         for model in self.models:
-            self.laura.register_model(model["id"], model["description"])
+            if model["description"] is not None:
+                self.laura.register_model(model["id"], model["description"])
 
     def classify(self, prompt: str, policy: dict, allowed=None) -> List[Tuple[int, int, int, int]]:
         """
