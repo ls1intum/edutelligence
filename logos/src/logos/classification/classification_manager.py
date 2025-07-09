@@ -36,6 +36,7 @@ class ClassificationManager:
     def __init__(self, models) -> None:
         self.models = models
         self.laura = LauraEmbeddingClassifier()
+        self.laura.remove_db()
         self.filtered = models  # For debugging
         if not self.laura.model_db:
             for model in self.models:
