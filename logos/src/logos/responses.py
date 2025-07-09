@@ -76,6 +76,8 @@ def get_streaming_response(forward_url, proxy_headers, json_data, log_id, provid
                 for name in usage:
                     if "tokens_details" in name:
                         continue
+                    if name in {"approximate_total", "eval_count", "eval_duration", "load_duration", "prompt_eval_count", "prompt_eval_duration", "prompt_token/s", "response_token/s", "total_duration"} or "/s" in name:
+                        continue
                     usage_tokens[name] = usage[name]
                 if "prompt_tokens_details" in usage:
                     for name in usage["prompt_tokens_details"]:
@@ -115,6 +117,8 @@ async def get_standard_response(forward_url, proxy_headers, json_data, log_id, p
             usage_tokens = dict()
             for name in usage:
                 if "tokens_details" in name:
+                    continue
+                if name in {"approximate_total", "eval_count", "eval_duration", "load_duration", "prompt_eval_count", "prompt_eval_duration", "prompt_token/s", "response_token/s", "total_duration"} or "/s" in name:
                     continue
                 usage_tokens[name] = usage[name]
             if "prompt_tokens_details" in usage:

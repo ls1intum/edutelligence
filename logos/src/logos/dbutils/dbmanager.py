@@ -242,11 +242,11 @@ class DBManager:
             mid, p, l, a, c, q = model[0], model[4], model[5], model[6], model[7], model[8]
             if mid == new_model_id:
                 continue
-            accuracy_data.append((mid, a))
-            quality_data.append((mid, q))
-            latency_data.append((mid, l))
-            cost_data.append((mid, c))
-            privacy_data.append((mid, p))
+            accuracy_data.append((a, mid))
+            quality_data.append((q, mid))
+            latency_data.append((l, mid))
+            cost_data.append((c, mid))
+            privacy_data.append((p, mid))
         accuracy_data = list(sorted(accuracy_data, key=lambda x: x[1]))
         quality_data = list(sorted(quality_data, key=lambda x: x[1]))
         latency_data = list(sorted(latency_data, key=lambda x: x[1]))
