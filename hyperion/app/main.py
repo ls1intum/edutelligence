@@ -5,13 +5,12 @@ import signal
 from typing import Optional
 from concurrent import futures
 from logging import StreamHandler, getLogger
-from langchain_core.language_models.chat_models import BaseLanguageModel
 
 from grpc_health.v1 import health, health_pb2, health_pb2_grpc
 
 from app.settings import settings
 from app.grpc import hyperion_pb2_grpc
-from app.models import get_model
+
 
 from app.creation_steps.step1_define_boundary_condition.servicer import (
     DefineBoundaryConditionServicer,
@@ -20,7 +19,7 @@ from app.creation_steps.step2_draft_problem_statement.servicer import (
     DraftProblemStatementServicer,
 )
 from app.creation_steps.step3_create_solution_repository.servicer import (
-    SolutionRepositoryCreatorServicer,
+    CreateSolutionRepositoryServicer,
 )
 from app.creation_steps.step4_create_template_repository.servicer import (
     CreateTemplateRepositoryServicer,
@@ -57,30 +56,7 @@ class GrpcServer:
         """
         self.max_workers = max_workers or settings.GRPC_MAX_WORKERS
         self.server: Optional[grpc.Server] = None
-        self.model: Optional[BaseLanguageModel] = None
         self._shutdown_event = False
-
-    def _initialize_model(self) -> BaseLanguageModel:
-        """Initialize the AI model based on settings.
-
-        Returns:
-            Initialized language model instance
-
-        Raises:
-            ValueError: If model configuration is invalid
-            EnvironmentError: If model provider is not found
-        """
-        if not settings.MODEL_NAME:
-            raise ValueError("MODEL_NAME is not configured in settings")
-
-        logger.info(f"Initializing AI model: {settings.MODEL_NAME}")
-        try:
-            model = get_model(settings.MODEL_NAME)
-            logger.info(f"Successfully initialized model: {settings.MODEL_NAME}")
-            return model
-        except Exception as e:
-            logger.error(f"Failed to initialize model {settings.MODEL_NAME}: {e}")
-            raise
 
     def start(self):
         """Start the gRPC server."""
@@ -138,25 +114,13 @@ class GrpcServer:
 
         # Map of servicer classes to their registration functions
         servicers = {
-            "DefineBoundaryConditionServicer": DefineBoundaryConditionServicer(
-                model=self.model
-            ),
-            "DraftProblemStatementServicer": DraftProblemStatementServicer(
-                model=self.model
-            ),
-            "SolutionRepositoryCreatorServicer": SolutionRepositoryCreatorServicer(
-                model=self.model
-            ),
-            "CreateTemplateRepositoryServicer": CreateTemplateRepositoryServicer(
-                model=self.model
-            ),
-            "CreateTestRepositoryServicer": CreateTestRepositoryServicer(
-                model=self.model
-            ),
-            "FinalizeProblemStatementServicer": FinalizeProblemStatementServicer(
-                model=self.model
-            ),
-            "ConfigureGradingServicer": ConfigureGradingServicer(model=self.model),
+            "DefineBoundaryConditionServicer": DefineBoundaryConditionServicer(),
+            "DraftProblemStatementServicer": DraftProblemStatementServicer(),
+            "CreateSolutionRepositoryServicer": CreateSolutionRepositoryServicer(),
+            "CreateTemplateRepositoryServicer": CreateTemplateRepositoryServicer(),
+            "CreateTestRepositoryServicer": CreateTestRepositoryServicer(),
+            "FinalizeProblemStatementServicer": FinalizeProblemStatementServicer(),
+            "ConfigureGradingServicer": ConfigureGradingServicer(),
             "ReviewAndRefineServicer": ReviewAndRefineServicer(),
         }
 
