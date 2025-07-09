@@ -20,5 +20,5 @@ class COTLearnerProfileConfig(ApproachConfig):
     ))
 
     async def generate_suggestions(self, exercise: Exercise, submission: Submission, config, *, debug: bool,
-                                   is_graded: bool, learner_profile: LearnerProfile = None):
+                                   is_graded: bool, learner_profile: LearnerProfile = None, **kwargs):
         return await generate_suggestions(exercise, submission, config, debug=debug, is_graded=is_graded, learner_profile=learner_profile)

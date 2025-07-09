@@ -12,5 +12,5 @@ class SelfConsistencyConfig(ApproachConfig):
     type: Literal['self_consistency'] = 'self_consistency'
     generate_suggestions_prompt: GenerateSuggestionsPrompt = Field(default=GenerateSuggestionsPrompt())
     
-    async def generate_suggestions(self, exercise: Exercise, submission: Submission, config, *, debug: bool, is_graded: bool, learner_profile: LearnerProfile = None):
+    async def generate_suggestions(self, exercise: Exercise, submission: Submission, config, *, debug: bool, is_graded: bool, **kwargs):
         return await generate_suggestions(exercise, submission, config, debug=debug, is_graded=is_graded)

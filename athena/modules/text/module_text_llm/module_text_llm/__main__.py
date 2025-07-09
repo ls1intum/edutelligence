@@ -34,7 +34,15 @@ async def suggest_feedback(exercise: Exercise, submission: Submission, is_graded
                           learner_profile: Optional[LearnerProfile] = None, latest_submission: Optional[Submission] = None) -> List[Feedback]:
     logger.info("suggest_feedback: %s suggestions for submission %d of exercise %d were requested, with approach: %s",
                 "Graded" if is_graded else "Non-graded", submission.id, exercise.id, module_config.approach.__class__.__name__)
-    return await generate_suggestions(exercise, submission, module_config.approach, debug=module_config.debug, is_graded=is_graded, learner_profile=learner_profile, latest_submission=latest_submission)
+    kwargs = {
+        "learner_profile": learner_profile,
+        "latest_submission": latest_submission,
+    }
+    return await generate_suggestions(
+        exercise, submission, module_config.approach,
+        debug=module_config.debug, is_graded=is_graded,
+        **kwargs
+    )
 
 
 @evaluation_provider
