@@ -217,6 +217,8 @@ def resource_behaviour(logos_key, headers, data, models):
     # Extract our prompt (needed for classification)
     prompt = extract_prompt(data)
     models = select.classify(prompt, policy, allowed=models)
+    if not models:
+        return {"error": "Could not identify suitable model."}, 500
     sm = SchedulingManager(FCFSScheduler())
     sm.run()
     tid = sm.add_request(data, models)

@@ -58,10 +58,15 @@ class ClassificationManager:
         """
         if allowed is None:
             allowed = list()
+        print(f"Policy: {policy}", flush=True)
+        print(f"Models: {self.models}", flush=True)
         filtered = PolicyClassifier(self.models).classify(prompt, policy)
+        print(f"Policy-Classification: {filtered}", flush=True)
         filtered = TokenClassifier(filtered).classify(prompt, policy)
+        print(f"Token-Classification: {filtered}", flush=True)
         self.laura.allowed = allowed
         filtered = AIClassifier(filtered).classify(prompt, policy, laura=self.laura)
+        print(f"AI-Classification: {filtered}", flush=True)
         self.laura.allowed = list()
         self.filtered = filtered
         return sorted(
