@@ -13,7 +13,8 @@ class LauraEmbeddingClassifier:
         self.allowed = allowed if allowed else []
 
     def remove_db(self):
-        os.remove(self.db_path)
+        if os.path.exists(self.db_path):
+            os.remove(self.db_path)
         self.model_db = {}
 
     def load_db(self):
