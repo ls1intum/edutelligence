@@ -48,8 +48,8 @@ class LauraEmbeddingClassifier:
         if not self.model_db:
             return []
         query_emb = self.encode_text(prompt, prefix="query:")
-        print(f"Allowed: {self.allowed}", flush=True)
-        print(f"Keys: {list(self.model_db.keys())}", flush=True)
+        # print(f"Allowed: {self.allowed}", flush=True)
+        # print(f"Keys: {list(self.model_db.keys())}", flush=True)
         model_ids = list(i for i in self.model_db.keys() if i in self.allowed or not self.allowed)
         model_matrix = torch.stack([self.model_db[mid] for mid in model_ids])
         sims = util.cos_sim(query_emb, model_matrix).squeeze(0)  # shape: (N,)
