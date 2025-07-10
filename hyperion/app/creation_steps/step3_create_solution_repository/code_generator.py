@@ -111,7 +111,9 @@ class CodeGenerator:
 
     def _parse_solution_plan_response(self, response: str) -> SolutionPlan:
         """Parse the response from the AI model into a SolutionPlan object."""
-        logger.debug(f"Parsing solution plan response (first 100 chars): {response[:100]}")
+        logger.debug(
+            f"Parsing solution plan response (first 100 chars): {response[:100]}"
+        )
         try:
             parsed_data: Dict[str, Any] = json.loads(response.strip())
 
@@ -129,16 +131,22 @@ class CodeGenerator:
                 )
                 architecture_description = response
             if len(required_classes) == 0:
-                logger.debug("Required classes is not a list in response, using empty list")
+                logger.debug(
+                    "Required classes is not a list in response, using empty list"
+                )
                 required_classes = []
             if len(required_functions) == 0:
-                logger.debug("Required functions is not a list in response, using empty list")
+                logger.debug(
+                    "Required functions is not a list in response, using empty list"
+                )
                 required_functions = []
             if len(algorithms) == 0:
                 logger.debug("Algorithms is not a list in response, using empty list")
                 algorithms = []
             if len(design_patterns) == 0:
-                logger.debug("Design patterns is not a list in response, using empty list")
+                logger.debug(
+                    "Design patterns is not a list in response, using empty list"
+                )
                 design_patterns = []
 
             logger.debug("Successfully parsed solution plan from JSON response")
@@ -151,7 +159,9 @@ class CodeGenerator:
             )
 
         except json.JSONDecodeError as e:
-            logger.warning(f"Invalid JSON in response, using fallback solution plan: {e}")
+            logger.warning(
+                f"Invalid JSON in response, using fallback solution plan: {e}"
+            )
         except (KeyError, ValueError, TypeError) as e:
             logger.warning(f"Invalid solution plan structure, using fallback: {e}")
         except Exception as e:
@@ -254,7 +264,9 @@ class CodeGenerator:
 
     def _parse_file_structure_response(self, response: str) -> FileStructure:
         """Parse the response from the AI model into a FileStructure object."""
-        logger.debug(f"Parsing file structure response (first 100 chars): {response[:100]}")
+        logger.debug(
+            f"Parsing file structure response (first 100 chars): {response[:100]}"
+        )
         try:
             parsed_data: Dict[str, Any] = json.loads(response.strip())
 
@@ -281,11 +293,15 @@ class CodeGenerator:
             )
 
         except json.JSONDecodeError as e:
-            logger.warning(f"Invalid JSON in file structure response, using fallback: {e}")
+            logger.warning(
+                f"Invalid JSON in file structure response, using fallback: {e}"
+            )
         except (KeyError, ValueError, TypeError) as e:
             logger.warning(f"Invalid file structure format, using fallback: {e}")
         except Exception as e:
-            logger.error(f"Unexpected error parsing file structure, using fallback: {e}")
+            logger.error(
+                f"Unexpected error parsing file structure, using fallback: {e}"
+            )
 
         logger.info("Using empty file structure as fallback")
         return FileStructure(directories=[], files=[], build_files=[])
@@ -396,7 +412,9 @@ class CodeGenerator:
 
     def _parse_file_headers_response(self, response: str, file_path: str) -> str:
         """Parse the response from the AI model for file headers."""
-        logger.debug(f"Parsing headers for {file_path} (first 100 chars): {response[:100]}")
+        logger.debug(
+            f"Parsing headers for {file_path} (first 100 chars): {response[:100]}"
+        )
         try:
             content = response.strip()
 
