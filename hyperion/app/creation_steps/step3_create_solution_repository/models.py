@@ -1,16 +1,11 @@
 """Pydantic models for Step 3: Create Solution Repository."""
 
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, TYPE_CHECKING
 from pydantic import BaseModel, Field
 from langchain_core.language_models.chat_models import BaseLanguageModel
 
-from app.grpc import hyperion_pb2
-from app.grpc.models import (
-    GrpcMessage,
-    BoundaryConditions,
-    ProblemStatement,
-    Repository,
-)
+if TYPE_CHECKING:
+    from app.grpc import hyperion_pb2
 
 
 class SolutionPlan(BaseModel):
@@ -62,10 +57,10 @@ class FixAttempt(BaseModel):
 class SolutionCreationContext(BaseModel):
     """Context object passed between phases and steps."""
 
-    boundary_conditions: BoundaryConditions = Field(
-        ..., description="Exercise boundary conditions"
+    # Use string annotations to avoid import-time dependency on gRPC
+    boundary_conditions: "hyperion_pb2.SolutionRepositoryCreatorRequest" = Field(
+        ..., description="Exercise boundary conditions from gRPC request"
     )
-    problem_statement: ProblemStatement = Field(..., description="Problem statement")
     workspace_path: str = Field(..., description="Path to temporary workspace")
     model: Optional[BaseLanguageModel] = Field(
         None, description="AI language model for generation", exclude=True
@@ -76,7 +71,7 @@ class SolutionCreationContext(BaseModel):
     file_structure: Optional[FileStructure] = Field(
         None, description="Defined file structure"
     )
-    solution_repository: Optional[Repository] = Field(
+    solution_repository: Optional["hyperion_pb2.Repository"] = Field(
         None, description="Generated solution repository"
     )
     fix_attempts: List[FixAttempt] = Field(
@@ -88,79 +83,3 @@ class SolutionCreationContext(BaseModel):
 
     class Config:
         arbitrary_types_allowed = True
-
-
-class SolutionRepositoryCreatorRequest(GrpcMessage):
-    """Request for creating solution repository."""
-
-    boundary_conditions: BoundaryConditions = Field(
-        ..., description="Exercise boundary conditions"
-    )
-    problem_statement: ProblemStatement = Field(..., description="Problem statement")
-
-    def to_grpc(self) -> hyperion_pb2.SolutionRepositoryCreatorRequest:
-        return hyperion_pb2.SolutionRepositoryCreatorRequest(
-            programming_language=self.boundary_conditions.programming_language,
-            project_type=self.boundary_conditions.project_type,
-            difficulty=self.boundary_conditions.difficulty,
-            points=self.boundary_conditions.points,
-            bonus_points=self.boundary_conditions.bonus_points,
-            constraints=self.boundary_conditions.constraints,
-            title=self.problem_statement.title,
-            short_title=self.problem_statement.short_title,
-            description=self.problem_statement.description,
-        )
-
-    @classmethod
-    def from_grpc(
-        cls, grpc_request: hyperion_pb2.SolutionRepositoryCreatorRequest
-    ) -> "SolutionRepositoryCreatorRequest":
-        return cls(
-            boundary_conditions=BoundaryConditions.from_grpc(grpc_request),
-            problem_statement=ProblemStatement.from_grpc(grpc_request),
-        )
-
-
-class SolutionRepositoryCreatorResponse(GrpcMessage):
-    """Response from creating solution repository."""
-
-    boundary_conditions: BoundaryConditions = Field(
-        ..., description="Exercise boundary conditions"
-    )
-    problem_statement: ProblemStatement = Field(..., description="Problem statement")
-    solution_repository: Repository = Field(
-        ..., description="Generated solution repository"
-    )
-    success: bool = Field(..., description="Whether creation was successful")
-    error_message: Optional[str] = Field(
-        None, description="Error message if creation failed"
-    )
-    metadata: Dict[str, Any] = Field(
-        default_factory=dict, description="Additional metadata"
-    )
-
-    def to_grpc(self) -> hyperion_pb2.SolutionRepositoryCreatorResponse:
-        return hyperion_pb2.SolutionRepositoryCreatorResponse(
-            programming_language=self.boundary_conditions.programming_language,
-            project_type=self.boundary_conditions.project_type,
-            difficulty=self.boundary_conditions.difficulty,
-            points=self.boundary_conditions.points,
-            bonus_points=self.boundary_conditions.bonus_points,
-            constraints=self.boundary_conditions.constraints,
-            title=self.problem_statement.title,
-            short_title=self.problem_statement.short_title,
-            description=self.problem_statement.description,
-            solution_repository=self.solution_repository.to_grpc(),
-        )
-
-    @classmethod
-    def from_grpc(
-        cls, grpc_response: hyperion_pb2.SolutionRepositoryCreatorResponse
-    ) -> "SolutionRepositoryCreatorResponse":
-        return cls(
-            boundary_conditions=BoundaryConditions.from_grpc(grpc_response),
-            problem_statement=ProblemStatement.from_grpc(grpc_response),
-            solution_repository=Repository.from_grpc(grpc_response.solution_repository),
-            success=True,  # Default to success for now
-            error_message=None,  # Default to no error
-        )

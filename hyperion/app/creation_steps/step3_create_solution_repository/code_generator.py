@@ -2,13 +2,15 @@
 
 import logging
 import json
-from typing import List, Dict, Any
+from typing import List, Dict, Any, TYPE_CHECKING
 from langchain_core.language_models.chat_models import BaseLanguageModel
 
 from .models import SolutionCreationContext, SolutionPlan, FileStructure
-from app.grpc.models import Repository, RepositoryFile
 from .exceptions import SolutionCreatorException
 from ..workspace.file_manager import FileManager
+
+if TYPE_CHECKING:
+    from app.grpc import hyperion_pb2
 
 logger = logging.getLogger(__name__)
 
@@ -75,8 +77,8 @@ class CodeGenerator:
             You are an expert software engineer tasked with creating a solution plan for a programming exercise.
 
             Problem Statement:
-            Title: {context.problem_statement.title}
-            Description: {context.problem_statement.description}
+            Title: {context.boundary_conditions.title}
+            Description: {context.boundary_conditions.description}
 
             Boundary Conditions:
             - Programming Language: {context.boundary_conditions.programming_language}
@@ -210,8 +212,8 @@ class CodeGenerator:
             structure for a programming exercise solution.
 
             Problem Statement:
-            Title: {context.problem_statement.title}
-            Description: {context.problem_statement.description}
+            Title: {context.boundary_conditions.title}
+            Description: {context.boundary_conditions.description}
 
             Boundary Conditions:
             - Programming Language: {context.boundary_conditions.programming_language}
@@ -350,8 +352,8 @@ class CodeGenerator:
             function headers for a specific file in a programming exercise solution.
 
             Problem Statement:
-            Title: {context.problem_statement.title}
-            Description: {context.problem_statement.description}
+            Title: {context.boundary_conditions.title}
+            Description: {context.boundary_conditions.description}
 
             Boundary Conditions:
             - Programming Language: {context.boundary_conditions.programming_language}
@@ -508,24 +510,17 @@ class CodeGenerator:
             solution_plan.required_functions if solution_plan else []
         )
         algorithms: List[str] = solution_plan.algorithms if solution_plan else []
-        design_patterns: List[str] = (
-            solution_plan.design_patterns if solution_plan else []
-        )
-
         file_purpose: str = self._determine_file_purpose(file_path, context)
-        all_files: List[str] = (
-            context.file_structure.files if context.file_structure else []
-        )
 
         other_files_context: str = self._get_other_files_context(context, file_path)
 
         prompt = f"""
-            You are an expert software engineer tasked with implementing the
-            complete solution for a programming exercise file.
+            You are an expert software engineer tasked with implementing the complete
+            logic for a specific file in a programming exercise solution.
 
             Problem Statement:
-            Title: {context.problem_statement.title}
-            Description: {context.problem_statement.description}
+            Title: {context.boundary_conditions.title}
+            Description: {context.boundary_conditions.description}
 
             Boundary Conditions:
             - Programming Language: {context.boundary_conditions.programming_language}
@@ -537,57 +532,50 @@ class CodeGenerator:
             Required Classes: {', '.join(required_classes) if required_classes else 'None specified'}
             Required Functions: {', '.join(required_functions) if required_functions else 'None specified'}
             Algorithms: {', '.join(algorithms) if algorithms else 'None specified'}
-            Design Patterns: {', '.join(design_patterns) if design_patterns else 'None specified'}
 
-            File Structure Context:
-            All Files: {', '.join(all_files)}
+            File Context:
             Current File: {file_path}
             File Purpose: {file_purpose}
 
-            Current File Content (Headers Only):
-            ```
+            Current File Headers:
             {existing_content}
-            ```
 
             Other Files Context:
             {other_files_context}
 
-            Generate the COMPLETE implementation for the file "{file_path}". Requirements:
+            Generate the complete implementation for the file "{file_path}". Requirements:
 
-            1. **Keep All Headers**: Preserve all existing imports, class definitions,
-            function signatures, and documentation
-            2. **Implement All Functions**: Add complete implementation bodies to all functions and methods
-            3. **Follow Solution Plan**: Implement the algorithms and design patterns specified in the solution plan
-            4. **Solve the Problem**: Ensure the implementation actually solves the
-            problem described in the problem statement
-            5. **Maintain Consistency**: Ensure the implementation works cohesively with other files in the project
-            6. **Handle Edge Cases**: Include proper error handling and edge case management
-            7. **Code Quality**: Write clean, readable, and well-commented code
-            8. **Language Conventions**: Follow
+            1. **Complete Implementation**: Fill in all method bodies and function implementations
+            2. **Algorithm Implementation**: Implement the required algorithms and logic
+            3. **Error Handling**: Add appropriate error handling and validation
+            4. **Documentation**: Maintain existing documentation and add implementation comments
+            5. **Integration**: Ensure the implementation works with other files in the project
+            6. **Best Practices**: Follow
             {context.boundary_conditions.programming_language} best practices and conventions
 
-            Implementation Guidelines:
-            - Replace all "TODO" comments with actual implementation
-            - Add inline comments for complex logic
-            - Ensure proper return values and types
-            - Handle input validation where appropriate
-            - Make the code production-ready and robust
+            Important Guidelines:
+            - **Replace the entire file content** with the complete implementation
+            - **Keep existing structure** but add full implementation
+            - **Implement all methods and functions** completely
+            - **Add necessary imports** at the top of the file
+            - **Follow the solution plan** and architecture requirements
+            - **Make it functional** - the code should be executable and solve the problem
 
-            Generate ONLY the complete code content for this file. Do not include explanations or markdown formatting.
+            Generate ONLY the complete file content. Do not include explanations or markdown formatting.
         """
         return prompt.strip()
 
     def _get_other_files_context(
         self, context: SolutionCreationContext, current_file_path: str
     ) -> str:
-        """Get context from other files to maintain consistency.
+        """Get context about other files in the project.
 
         Args:
             context: The solution creation context
-            current_file_path: Path to the current file being processed
+            current_file_path: Path to the current file
 
         Returns:
-            Context string describing other files
+            String containing context about other files
         """
         if not context.file_structure or not context.file_structure.files:
             return "No other files in the project."
@@ -597,97 +585,95 @@ class CodeGenerator:
         ]
 
         if not other_files:
-            return "This is the only file in the project."
+            return "No other files in the project."
 
-        context_parts = []
-
-        for file_path in other_files[:5]:
+        context_lines = []
+        for file_path in other_files[:5]:  # Limit to first 5 files to avoid token limits
             try:
                 file_content = self.file_manager.read_file(context, file_path)
-                preview = self._get_file_preview(file_content, file_path)
-                context_parts.append(f"File {file_path}:\n{preview}")
+                file_preview = self._get_file_preview(file_content, file_path)
+                context_lines.append(f"File: {file_path}\n{file_preview}")
             except Exception as e:
-                print(
-                    f"   [CodeGenerator] Could not read file {file_path} for context: {e}"
-                )
-                context_parts.append(f"File {file_path}: (Could not read content)")
+                context_lines.append(f"File: {file_path}\nError reading file: {e}")
 
-        if len(other_files) > 3:
-            context_parts.append(f"... and {len(other_files) - 3} more files")
-
-        return "\n\n".join(context_parts)
+        return "\n\n".join(context_lines)
 
     def _get_file_preview(self, content: str, file_path: str) -> str:
-        """Get a preview of file content showing key signatures.
+        """Get a preview of a file's content.
 
         Args:
-            content: Full file content
+            content: The file content
             file_path: Path to the file
 
         Returns:
-            Preview string with key signatures
+            String containing a preview of the file content
         """
+        if not content.strip():
+            return "Empty file"
+
         lines = content.split("\n")
-        preview_lines = []
+        if len(lines) <= 20:
+            return content
 
-        for i, line in enumerate(lines[:15]):
-            stripped = line.strip()
-
-            if (
-                stripped.startswith(
-                    (
-                        "import ",
-                        "from ",
-                        "class ",
-                        "def ",
-                        "public ",
-                        "private ",
-                        "protected ",
-                    )
-                )
-                or stripped.startswith("/**")
-                or stripped.startswith('"""')
-                or "(" in stripped
-                and ":" in stripped
-            ):
-                preview_lines.append(line)
-            elif stripped.startswith("//") or stripped.startswith("#"):
-                preview_lines.append(line)
-            elif not stripped:  # Empty line
-                preview_lines.append("")
-            elif "TODO" in stripped:
-                preview_lines.append(line)
-                break
-
-        preview = "\n".join(preview_lines)
-        if len(lines) > 15:
-            preview += "\n// ... (rest of file)"
-
-        return preview
+        # Show first 10 lines and last 5 lines
+        preview_lines = lines[:10] + ["... (content truncated) ..."] + lines[-5:]
+        return "\n".join(preview_lines)
 
     def _create_solution_repository(
         self, context: SolutionCreationContext
     ) -> SolutionCreationContext:
-        """Package the generated files into a Repository object."""
-        logger.info("Creating repository object from generated files.")
-        if not context.file_structure:
-            logger.warning("No file structure found, cannot create repository object.")
-            return context
+        """Create the solution repository from the generated files.
 
-        repo_files = []
-        all_files = (context.file_structure.files or []) + (
-            context.file_structure.build_files or []
-        )
-        for file_path in all_files:
-            try:
-                content = self.file_manager.read_file(context, file_path)
-                repo_files.append(RepositoryFile(path=file_path, content=content))
-                logger.debug(f"Read file '{file_path}' for repository object.")
-            except Exception as e:
-                logger.error(
-                    f"Could not read file '{file_path}' to create repository object: {e}"
-                )
+        Args:
+            context: The solution creation context
 
-        context.solution_repository = Repository(files=repo_files)
-        logger.info(f"Created repository with {len(repo_files)} files.")
+        Returns:
+            Updated context with solution repository
+        """
+        logger.info("Creating solution repository from generated files")
+
+        try:
+            # Import at runtime to avoid protobuf version issues
+            from app.grpc import hyperion_pb2
+
+            repository_files = []
+
+            if context.file_structure:
+                # Add source files
+                for file_path in context.file_structure.files:
+                    try:
+                        file_content = self.file_manager.read_file(context, file_path)
+                        repository_files.append(
+                            hyperion_pb2.RepositoryFile(
+                                path=file_path, content=file_content
+                            )
+                        )
+                        logger.debug(f"Added file to repository: {file_path}")
+                    except Exception as e:
+                        logger.warning(f"Failed to read file {file_path}: {e}")
+
+                # Add build files
+                for file_path in context.file_structure.build_files:
+                    try:
+                        file_content = self.file_manager.read_file(context, file_path)
+                        repository_files.append(
+                            hyperion_pb2.RepositoryFile(
+                                path=file_path, content=file_content
+                            )
+                        )
+                        logger.debug(f"Added build file to repository: {file_path}")
+                    except Exception as e:
+                        logger.warning(f"Failed to read build file {file_path}: {e}")
+
+            context.solution_repository = hyperion_pb2.Repository(files=repository_files)
+            logger.info(
+                f"Solution repository created with {len(repository_files)} files"
+            )
+
+        except Exception as e:
+            logger.error(f"Failed to create solution repository: {e}")
+            # Import at runtime to avoid protobuf version issues
+            from app.grpc import hyperion_pb2
+            context.solution_repository = hyperion_pb2.Repository(files=[])
+
         return context

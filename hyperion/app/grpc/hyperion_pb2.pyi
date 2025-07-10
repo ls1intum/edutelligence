@@ -31,52 +31,16 @@ class _ProgrammingLanguageEnumTypeWrapper(
 ):
     DESCRIPTOR: google.protobuf.descriptor.EnumDescriptor
     EMPTY: _ProgrammingLanguage.ValueType  # 0
-    ASSEMBLER: _ProgrammingLanguage.ValueType  # 1
-    BASH: _ProgrammingLanguage.ValueType  # 2
-    C: _ProgrammingLanguage.ValueType  # 3
-    C_PLUS_PLUS: _ProgrammingLanguage.ValueType  # 4
-    C_SHARP: _ProgrammingLanguage.ValueType  # 5
-    DART: _ProgrammingLanguage.ValueType  # 6
-    GO: _ProgrammingLanguage.ValueType  # 7
-    HASKELL: _ProgrammingLanguage.ValueType  # 8
-    JAVA: _ProgrammingLanguage.ValueType  # 9
-    JAVASCRIPT: _ProgrammingLanguage.ValueType  # 10
-    KOTLIN: _ProgrammingLanguage.ValueType  # 11
-    MATLAB: _ProgrammingLanguage.ValueType  # 12
-    OCAML: _ProgrammingLanguage.ValueType  # 13
-    PYTHON: _ProgrammingLanguage.ValueType  # 14
-    R: _ProgrammingLanguage.ValueType  # 15
-    RUBY: _ProgrammingLanguage.ValueType  # 16
-    RUST: _ProgrammingLanguage.ValueType  # 17
-    SWIFT: _ProgrammingLanguage.ValueType  # 18
-    TYPESCRIPT: _ProgrammingLanguage.ValueType  # 19
-    VHDL: _ProgrammingLanguage.ValueType  # 20
+    JAVA: _ProgrammingLanguage.ValueType  # 1
+    PYTHON: _ProgrammingLanguage.ValueType  # 2
 
 class ProgrammingLanguage(
     _ProgrammingLanguage, metaclass=_ProgrammingLanguageEnumTypeWrapper
 ): ...
 
 EMPTY: ProgrammingLanguage.ValueType  # 0
-ASSEMBLER: ProgrammingLanguage.ValueType  # 1
-BASH: ProgrammingLanguage.ValueType  # 2
-C: ProgrammingLanguage.ValueType  # 3
-C_PLUS_PLUS: ProgrammingLanguage.ValueType  # 4
-C_SHARP: ProgrammingLanguage.ValueType  # 5
-DART: ProgrammingLanguage.ValueType  # 6
-GO: ProgrammingLanguage.ValueType  # 7
-HASKELL: ProgrammingLanguage.ValueType  # 8
-JAVA: ProgrammingLanguage.ValueType  # 9
-JAVASCRIPT: ProgrammingLanguage.ValueType  # 10
-KOTLIN: ProgrammingLanguage.ValueType  # 11
-MATLAB: ProgrammingLanguage.ValueType  # 12
-OCAML: ProgrammingLanguage.ValueType  # 13
-PYTHON: ProgrammingLanguage.ValueType  # 14
-R: ProgrammingLanguage.ValueType  # 15
-RUBY: ProgrammingLanguage.ValueType  # 16
-RUST: ProgrammingLanguage.ValueType  # 17
-SWIFT: ProgrammingLanguage.ValueType  # 18
-TYPESCRIPT: ProgrammingLanguage.ValueType  # 19
-VHDL: ProgrammingLanguage.ValueType  # 20
+JAVA: ProgrammingLanguage.ValueType  # 1
+PYTHON: ProgrammingLanguage.ValueType  # 2
 global___ProgrammingLanguage = ProgrammingLanguage
 
 class _ProjectType:
@@ -88,41 +52,32 @@ class _ProjectTypeEnumTypeWrapper(
     builtins.type,
 ):
     DESCRIPTOR: google.protobuf.descriptor.EnumDescriptor
-    MAVEN_MAVEN: _ProjectType.ValueType  # 0
-    PLAIN_MAVEN: _ProjectType.ValueType  # 1
-    MAVEN_BLACKBOX: _ProjectType.ValueType  # 2
-    PLAIN_GRADLE: _ProjectType.ValueType  # 3
-    GRADLE_GRADLE: _ProjectType.ValueType  # 4
-    PLAIN: _ProjectType.ValueType  # 5
-    XCODE: _ProjectType.ValueType  # 6
-    FACT: _ProjectType.ValueType  # 7
-    GCC: _ProjectType.ValueType  # 8
+    PLAIN: _ProjectType.ValueType  # 0
+    MAVEN: _ProjectType.ValueType  # 1
+    GRADLE: _ProjectType.ValueType  # 2
 
 class ProjectType(_ProjectType, metaclass=_ProjectTypeEnumTypeWrapper): ...
 
-MAVEN_MAVEN: ProjectType.ValueType  # 0
-PLAIN_MAVEN: ProjectType.ValueType  # 1
-MAVEN_BLACKBOX: ProjectType.ValueType  # 2
-PLAIN_GRADLE: ProjectType.ValueType  # 3
-GRADLE_GRADLE: ProjectType.ValueType  # 4
-PLAIN: ProjectType.ValueType  # 5
-XCODE: ProjectType.ValueType  # 6
-FACT: ProjectType.ValueType  # 7
-GCC: ProjectType.ValueType  # 8
+PLAIN: ProjectType.ValueType  # 0
+MAVEN: ProjectType.ValueType  # 1
+GRADLE: ProjectType.ValueType  # 2
 global___ProjectType = ProjectType
 
 @typing.final
 class RepositoryFile(google.protobuf.message.Message):
-    """Represents a file in a repository with content"""
+    """**********************
+    **   Core types    ***
+    *********************
+
+    Represents a file in a repository with content
+    """
 
     DESCRIPTOR: google.protobuf.descriptor.Descriptor
 
     PATH_FIELD_NUMBER: builtins.int
     CONTENT_FIELD_NUMBER: builtins.int
     path: builtins.str
-    """File path relative to the repository root"""
     content: builtins.str
-    """File content"""
     def __init__(
         self,
         *,
@@ -147,9 +102,7 @@ class Repository(google.protobuf.message.Message):
         self,
     ) -> google.protobuf.internal.containers.RepeatedCompositeFieldContainer[
         global___RepositoryFile
-    ]:
-        """Files contained in the repository"""
-
+    ]: ...
     def __init__(
         self,
         *,
@@ -247,6 +200,156 @@ class ProgrammingExercise(google.protobuf.message.Message):
     ) -> None: ...
 
 global___ProgrammingExercise = ProgrammingExercise
+
+@typing.final
+class SolutionRepositoryCreatorRequest(google.protobuf.message.Message):
+    """********************
+    **   Messages    ***
+    *******************
+
+    Request for creating solution repository
+    """
+
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    PROGRAMMING_LANGUAGE_FIELD_NUMBER: builtins.int
+    PROJECT_TYPE_FIELD_NUMBER: builtins.int
+    DIFFICULTY_FIELD_NUMBER: builtins.int
+    POINTS_FIELD_NUMBER: builtins.int
+    BONUS_POINTS_FIELD_NUMBER: builtins.int
+    CONSTRAINTS_FIELD_NUMBER: builtins.int
+    TITLE_FIELD_NUMBER: builtins.int
+    SHORT_TITLE_FIELD_NUMBER: builtins.int
+    DESCRIPTION_FIELD_NUMBER: builtins.int
+    programming_language: global___ProgrammingLanguage.ValueType
+    project_type: global___ProjectType.ValueType
+    difficulty: builtins.str
+    points: builtins.int
+    bonus_points: builtins.int
+    title: builtins.str
+    short_title: builtins.str
+    description: builtins.str
+    @property
+    def constraints(
+        self,
+    ) -> google.protobuf.internal.containers.RepeatedScalarFieldContainer[
+        builtins.str
+    ]: ...
+    def __init__(
+        self,
+        *,
+        programming_language: global___ProgrammingLanguage.ValueType = ...,
+        project_type: global___ProjectType.ValueType = ...,
+        difficulty: builtins.str = ...,
+        points: builtins.int = ...,
+        bonus_points: builtins.int = ...,
+        constraints: collections.abc.Iterable[builtins.str] | None = ...,
+        title: builtins.str = ...,
+        short_title: builtins.str = ...,
+        description: builtins.str = ...,
+    ) -> None: ...
+    def ClearField(
+        self,
+        field_name: typing.Literal[
+            "bonus_points",
+            b"bonus_points",
+            "constraints",
+            b"constraints",
+            "description",
+            b"description",
+            "difficulty",
+            b"difficulty",
+            "points",
+            b"points",
+            "programming_language",
+            b"programming_language",
+            "project_type",
+            b"project_type",
+            "short_title",
+            b"short_title",
+            "title",
+            b"title",
+        ],
+    ) -> None: ...
+
+global___SolutionRepositoryCreatorRequest = SolutionRepositoryCreatorRequest
+
+@typing.final
+class SolutionRepositoryCreatorResponse(google.protobuf.message.Message):
+    """Response from creating solution repository"""
+
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    PROGRAMMING_LANGUAGE_FIELD_NUMBER: builtins.int
+    PROJECT_TYPE_FIELD_NUMBER: builtins.int
+    DIFFICULTY_FIELD_NUMBER: builtins.int
+    POINTS_FIELD_NUMBER: builtins.int
+    BONUS_POINTS_FIELD_NUMBER: builtins.int
+    CONSTRAINTS_FIELD_NUMBER: builtins.int
+    TITLE_FIELD_NUMBER: builtins.int
+    SHORT_TITLE_FIELD_NUMBER: builtins.int
+    DESCRIPTION_FIELD_NUMBER: builtins.int
+    SOLUTION_REPOSITORY_FIELD_NUMBER: builtins.int
+    programming_language: global___ProgrammingLanguage.ValueType
+    project_type: global___ProjectType.ValueType
+    difficulty: builtins.str
+    points: builtins.int
+    bonus_points: builtins.int
+    title: builtins.str
+    short_title: builtins.str
+    description: builtins.str
+    @property
+    def constraints(
+        self,
+    ) -> google.protobuf.internal.containers.RepeatedScalarFieldContainer[
+        builtins.str
+    ]: ...
+    @property
+    def solution_repository(self) -> global___Repository: ...
+    def __init__(
+        self,
+        *,
+        programming_language: global___ProgrammingLanguage.ValueType = ...,
+        project_type: global___ProjectType.ValueType = ...,
+        difficulty: builtins.str = ...,
+        points: builtins.int = ...,
+        bonus_points: builtins.int = ...,
+        constraints: collections.abc.Iterable[builtins.str] | None = ...,
+        title: builtins.str = ...,
+        short_title: builtins.str = ...,
+        description: builtins.str = ...,
+        solution_repository: global___Repository | None = ...,
+    ) -> None: ...
+    def HasField(
+        self, field_name: typing.Literal["solution_repository", b"solution_repository"]
+    ) -> builtins.bool: ...
+    def ClearField(
+        self,
+        field_name: typing.Literal[
+            "bonus_points",
+            b"bonus_points",
+            "constraints",
+            b"constraints",
+            "description",
+            b"description",
+            "difficulty",
+            b"difficulty",
+            "points",
+            b"points",
+            "programming_language",
+            b"programming_language",
+            "project_type",
+            b"project_type",
+            "short_title",
+            b"short_title",
+            "solution_repository",
+            b"solution_repository",
+            "title",
+            b"title",
+        ],
+    ) -> None: ...
+
+global___SolutionRepositoryCreatorResponse = SolutionRepositoryCreatorResponse
 
 @typing.final
 class InconsistencyCheckRequest(google.protobuf.message.Message):

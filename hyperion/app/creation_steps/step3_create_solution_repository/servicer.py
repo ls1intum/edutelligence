@@ -1,12 +1,8 @@
 import logging
-from typing import Dict, Any, List
+from typing import Dict, Any, List, TYPE_CHECKING
 from langchain_core.language_models.chat_models import BaseLanguageModel
-from app.grpc import hyperion_pb2_grpc, hyperion_pb2
-from app.grpc.models import Repository
 
 from .models import (
-    SolutionRepositoryCreatorRequest,
-    SolutionRepositoryCreatorResponse,
     SolutionCreationContext,
 )
 from .code_generator import CodeGenerator
@@ -16,12 +12,13 @@ from ..config import config
 
 import grpc
 
+if TYPE_CHECKING:
+    from app.grpc import hyperion_pb2_grpc, hyperion_pb2
+
 logger = logging.getLogger(__name__)
 
 
-class CreateSolutionRepositoryServicer(
-    hyperion_pb2_grpc.CreateSolutionRepositoryServicer
-):
+class CreateSolutionRepositoryServicer:
     """
     Step 3: Create Solution Repository
 
@@ -44,8 +41,8 @@ class CreateSolutionRepositoryServicer(
         self.code_generator = CodeGenerator(model=model)
 
     async def CreateSolutionRepository(
-        self, request: hyperion_pb2.SolutionRepositoryCreatorRequest, context: Any
-    ) -> hyperion_pb2.SolutionRepositoryCreatorResponse:
+        self, request, context: Any
+    ):
         """
         Create a solution repository based on boundary conditions and problem statement.
 
@@ -59,10 +56,11 @@ class CreateSolutionRepositoryServicer(
         logger.info("Creating solution repository...")
 
         try:
-            request_model = SolutionRepositoryCreatorRequest.from_grpc(request)
+            # Import at runtime to avoid protobuf version issues
+            from app.grpc import hyperion_pb2
 
             solution_context: SolutionCreationContext = self._initialize_context(
-                request_model
+                request
             )
             self._validate_language_support(solution_context)
 
@@ -74,14 +72,14 @@ class CreateSolutionRepositoryServicer(
 
             solution_context = await self.code_generator.execute(solution_context)
 
-            response: SolutionRepositoryCreatorResponse = self._create_response(
-                solution_context, request_model
+            response = self._create_response(
+                solution_context, request
             )
 
             self._cleanup_workspace(solution_context)
 
             logger.info("Solution repository created successfully")
-            return response.to_grpc()
+            return response
 
         except SolutionCreatorException as e:
             logger.error(f"Solution creator error: {str(e)}")
@@ -97,11 +95,10 @@ class CreateSolutionRepositoryServicer(
             )
 
     def _initialize_context(
-        self, request: SolutionRepositoryCreatorRequest
+        self, request
     ) -> SolutionCreationContext:
         return SolutionCreationContext(
-            boundary_conditions=request.boundary_conditions,
-            problem_statement=request.problem_statement,
+            boundary_conditions=request,
             workspace_path="",  # Will be set after workspace creation
             model=self.model,
         )
@@ -126,8 +123,11 @@ class CreateSolutionRepositoryServicer(
     def _create_response(
         self,
         context: SolutionCreationContext,
-        request: SolutionRepositoryCreatorRequest,
-    ) -> SolutionRepositoryCreatorResponse:
+        request,
+    ):
+        # Import at runtime to avoid protobuf version issues
+        from app.grpc import hyperion_pb2
+
         # Determine success based on context
         success = (
             context.solution_repository is not None
@@ -142,21 +142,24 @@ class CreateSolutionRepositoryServicer(
             elif len(context.fix_attempts) >= config.solution_creator_max_iterations:
                 error_message = f"Maximum iterations ({config.solution_creator_max_iterations}) exceeded"
 
-        return SolutionRepositoryCreatorResponse(
-            boundary_conditions=request.boundary_conditions,
-            problem_statement=request.problem_statement,
+        return hyperion_pb2.SolutionRepositoryCreatorResponse(
+            programming_language=request.programming_language,
+            project_type=request.project_type,
+            difficulty=request.difficulty,
+            points=request.points,
+            bonus_points=request.bonus_points,
+            constraints=request.constraints,
+            title=request.title,
+            short_title=request.short_title,
+            description=request.description,
             solution_repository=context.solution_repository
             or self._create_empty_repository(),
-            success=success,
-            error_message=error_message,
-            metadata={
-                "fix_attempts": len(context.fix_attempts),
-                "workspace_path": context.workspace_path,
-            },
         )
 
-    def _create_empty_repository(self) -> Repository:
-        return Repository(files=[])
+    def _create_empty_repository(self):
+        # Import at runtime to avoid protobuf version issues
+        from app.grpc import hyperion_pb2
+        return hyperion_pb2.Repository(files=[])
 
     def _cleanup_workspace(self, context: SolutionCreationContext) -> None:
         try:

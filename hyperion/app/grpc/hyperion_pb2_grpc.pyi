@@ -22,7 +22,12 @@ class _ServicerContext(grpc.ServicerContext, grpc.aio.ServicerContext):  # type:
     ...
 
 class DefineBoundaryConditionStub:
-    """Exercise Creation Step 1: Define Boundary Conditions"""
+    """*****************************
+    **   Service Definitions  ***
+    ****************************
+
+    Exercise Creation Step 1: Define Boundary Conditions
+    """
 
     def __init__(
         self, channel: typing.Union[grpc.Channel, grpc.aio.Channel]
@@ -30,12 +35,22 @@ class DefineBoundaryConditionStub:
     ...
 
 class DefineBoundaryConditionAsyncStub:
-    """Exercise Creation Step 1: Define Boundary Conditions"""
+    """*****************************
+    **   Service Definitions  ***
+    ****************************
+
+    Exercise Creation Step 1: Define Boundary Conditions
+    """
 
     ...
 
 class DefineBoundaryConditionServicer(metaclass=abc.ABCMeta):
-    """Exercise Creation Step 1: Define Boundary Conditions"""
+    """*****************************
+    **   Service Definitions  ***
+    ****************************
+
+    Exercise Creation Step 1: Define Boundary Conditions
+    """
 
     ...
 
@@ -73,17 +88,31 @@ class CreateSolutionRepositoryStub:
     def __init__(
         self, channel: typing.Union[grpc.Channel, grpc.aio.Channel]
     ) -> None: ...
-    ...
+    CreateSolutionRepository: grpc.UnaryUnaryMultiCallable[
+        hyperion_pb2.SolutionRepositoryCreatorRequest,
+        hyperion_pb2.SolutionRepositoryCreatorResponse,
+    ]
 
 class CreateSolutionRepositoryAsyncStub:
     """Exercise Creation Step 3: Create Solution Repository"""
 
-    ...
+    CreateSolutionRepository: grpc.aio.UnaryUnaryMultiCallable[
+        hyperion_pb2.SolutionRepositoryCreatorRequest,
+        hyperion_pb2.SolutionRepositoryCreatorResponse,
+    ]
 
 class CreateSolutionRepositoryServicer(metaclass=abc.ABCMeta):
     """Exercise Creation Step 3: Create Solution Repository"""
 
-    ...
+    @abc.abstractmethod
+    def CreateSolutionRepository(
+        self,
+        request: hyperion_pb2.SolutionRepositoryCreatorRequest,
+        context: _ServicerContext,
+    ) -> typing.Union[
+        hyperion_pb2.SolutionRepositoryCreatorResponse,
+        collections.abc.Awaitable[hyperion_pb2.SolutionRepositoryCreatorResponse],
+    ]: ...
 
 def add_CreateSolutionRepositoryServicer_to_server(
     servicer: CreateSolutionRepositoryServicer,
