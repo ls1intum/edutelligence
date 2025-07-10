@@ -1,6 +1,6 @@
 """Pydantic models for gRPC message conversion."""
 
-from typing import List, Optional
+from typing import List
 from pydantic import BaseModel, Field
 from abc import ABC, abstractmethod
 

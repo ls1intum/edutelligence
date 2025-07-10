@@ -59,7 +59,7 @@ class FileManager:
                 else:
                     file_path = file_item
                     content = ""
-                
+
                 if file_path:
                     full_path = workspace_path / file_path
                     try:
@@ -83,7 +83,7 @@ class FileManager:
                 else:
                     file_path = build_item
                     content = ""
-                
+
                 if file_path:
                     full_path = workspace_path / file_path
                     try:
@@ -103,7 +103,7 @@ class FileManager:
         """Write content to a file in the workspace."""
         if not file_path:
             raise FileSystemException("File path cannot be empty", file_path=file_path)
-            
+
         if not context.workspace_path:
             raise FileSystemException(
                 "Workspace path is not set in the context.", file_path=file_path
@@ -124,7 +124,7 @@ class FileManager:
         """Read content from a file in the workspace."""
         if not file_path:
             raise FileSystemException("File path cannot be empty", file_path=file_path)
-            
+
         if not context.workspace_path:
             raise FileSystemException(
                 "Workspace path is not set in the context.", file_path=file_path
