@@ -81,5 +81,4 @@ class SolutionCreationContext(BaseModel):
         default_factory=dict, description="Additional metadata"
     )
 
-    class Config:
-        arbitrary_types_allowed = True
+    model_config = {"arbitrary_types_allowed": True}

@@ -47,7 +47,7 @@ class CodeGenerator:
             context = self._create_solution_repository(context)
         except Exception as e:
             logger.error(f"CodeGenerator execution failed: {e}", exc_info=True)
-            raise SolutionCreatorException(f"CodeGenerator failed: {e}")
+            raise SolutionCreatorException(f"CodeGenerator failed: {e}") from e
 
         logger.info("Completed Phase 1: Solution Planning & Structure")
         return context
@@ -113,7 +113,7 @@ class CodeGenerator:
 
     def _parse_solution_plan_response(self, response: str) -> SolutionPlan:
         """Parse the response from the AI model into a SolutionPlan object."""
-        print(f"Parsing solution plan response (first 100 chars): {response[:100]}")
+        logger.debug(f"Parsing solution plan response (first 100 chars): {response[:100]}")
         try:
             parsed_data: Dict[str, Any] = json.loads(response.strip())
 
@@ -126,24 +126,24 @@ class CodeGenerator:
             design_patterns: List[str] = parsed_data.get("design_patterns", [])
 
             if len(architecture_description) == 0:
-                print(
+                logger.debug(
                     "No architecture description found in response, using raw response"
                 )
                 architecture_description = response
             if len(required_classes) == 0:
-                print("Required classes is not a list in response, using empty list")
+                logger.debug("Required classes is not a list in response, using empty list")
                 required_classes = []
             if len(required_functions) == 0:
-                print("Required functions is not a list in response, using empty list")
+                logger.debug("Required functions is not a list in response, using empty list")
                 required_functions = []
             if len(algorithms) == 0:
-                print("Algorithms is not a list in response, using empty list")
+                logger.debug("Algorithms is not a list in response, using empty list")
                 algorithms = []
             if len(design_patterns) == 0:
-                print("Design patterns is not a list in response, using empty list")
+                logger.debug("Design patterns is not a list in response, using empty list")
                 design_patterns = []
 
-            print("Successfully parsed solution plan from JSON response")
+            logger.debug("Successfully parsed solution plan from JSON response")
             return SolutionPlan(
                 architecture_description=architecture_description,
                 required_classes=required_classes,
@@ -153,13 +153,13 @@ class CodeGenerator:
             )
 
         except json.JSONDecodeError as e:
-            print(f"Invalid JSON in response, using fallback solution plan: {e}")
+            logger.warning(f"Invalid JSON in response, using fallback solution plan: {e}")
         except (KeyError, ValueError, TypeError) as e:
-            print(f"Invalid solution plan structure, using fallback: {e}")
+            logger.warning(f"Invalid solution plan structure, using fallback: {e}")
         except Exception as e:
-            print(f"Unexpected error parsing solution plan, using fallback: {e}")
+            logger.error(f"Unexpected error parsing solution plan, using fallback: {e}")
 
-        print(
+        logger.info(
             "Using fallback solution plan with raw response as architecture description"
         )
         return SolutionPlan(
@@ -257,7 +257,7 @@ class CodeGenerator:
 
     def _parse_file_structure_response(self, response: str) -> FileStructure:
         """Parse the response from the AI model into a FileStructure object."""
-        print(f"Parsing file structure response (first 100 chars): {response[:100]}")
+        logger.debug(f"Parsing file structure response (first 100 chars): {response[:100]}")
         try:
             parsed_data: Dict[str, Any] = json.loads(response.strip())
 
@@ -275,7 +275,7 @@ class CodeGenerator:
                 b.strip().replace("\\", "/") for b in build_files if b.strip()
             ]
 
-            print(
+            logger.debug(
                 f"Successfully parsed file structure: {len(directories)} dirs, "
                 f"{len(files)} files, {len(build_files)} build files"
             )
@@ -284,13 +284,13 @@ class CodeGenerator:
             )
 
         except json.JSONDecodeError as e:
-            print(f"Invalid JSON in file structure response, using fallback: {e}")
+            logger.warning(f"Invalid JSON in file structure response, using fallback: {e}")
         except (KeyError, ValueError, TypeError) as e:
-            print(f"Invalid file structure format, using fallback: {e}")
+            logger.warning(f"Invalid file structure format, using fallback: {e}")
         except Exception as e:
-            print(f"Unexpected error parsing file structure, using fallback: {e}")
+            logger.error(f"Unexpected error parsing file structure, using fallback: {e}")
 
-        print("Using empty file structure as fallback")
+        logger.info("Using empty file structure as fallback")
         return FileStructure(directories=[], files=[], build_files=[])
 
     async def _step_1_3_generate_headers(
@@ -400,7 +400,7 @@ class CodeGenerator:
 
     def _parse_file_headers_response(self, response: str, file_path: str) -> str:
         """Parse the response from the AI model for file headers."""
-        print(f"Parsing headers for {file_path} (first 100 chars): {response[:100]}")
+        logger.debug(f"Parsing headers for {file_path} (first 100 chars): {response[:100]}")
         try:
             content = response.strip()
 
@@ -419,13 +419,13 @@ class CodeGenerator:
             if content and not content.endswith("\n"):
                 content += "\n"
 
-            print(
+            logger.debug(
                 f"Successfully parsed headers for {file_path}: {len(content)} characters"
             )
             return content
 
         except Exception as e:
-            print(f"Error parsing headers response for {file_path}: {e}")
+            logger.error(f"Error parsing headers response for {file_path}: {e}")
             return response.strip() + "\n"
 
     def _determine_file_purpose(
@@ -588,7 +588,9 @@ class CodeGenerator:
             return "No other files in the project."
 
         context_lines = []
-        for file_path in other_files[:5]:  # Limit to first 5 files to avoid token limits
+        for file_path in other_files[
+            :5
+        ]:  # Limit to first 5 files to avoid token limits
             try:
                 file_content = self.file_manager.read_file(context, file_path)
                 file_preview = self._get_file_preview(file_content, file_path)
@@ -665,7 +667,9 @@ class CodeGenerator:
                     except Exception as e:
                         logger.warning(f"Failed to read build file {file_path}: {e}")
 
-            context.solution_repository = hyperion_pb2.Repository(files=repository_files)
+            context.solution_repository = hyperion_pb2.Repository(
+                files=repository_files
+            )
             logger.info(
                 f"Solution repository created with {len(repository_files)} files"
             )
@@ -674,6 +678,7 @@ class CodeGenerator:
             logger.error(f"Failed to create solution repository: {e}")
             # Import at runtime to avoid protobuf version issues
             from app.grpc import hyperion_pb2
+
             context.solution_repository = hyperion_pb2.Repository(files=[])
 
         return context

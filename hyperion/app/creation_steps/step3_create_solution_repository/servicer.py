@@ -9,6 +9,7 @@ from .code_generator import CodeGenerator
 from .language_handlers import registry as language_registry
 from .exceptions import SolutionCreatorException, LanguageHandlerException
 from ..config import config
+from ..workspace.workspace_manager import WorkspaceManager
 
 import grpc
 
@@ -39,10 +40,9 @@ class CreateSolutionRepositoryServicer:
         """
         self.model = model
         self.code_generator = CodeGenerator(model=model)
+        self.workspace_manager = WorkspaceManager()
 
-    async def CreateSolutionRepository(
-        self, request, context: Any
-    ):
+    async def CreateSolutionRepository(self, request, context: Any):
         """
         Create a solution repository based on boundary conditions and problem statement.
 
@@ -64,17 +64,14 @@ class CreateSolutionRepositoryServicer:
             )
             self._validate_language_support(solution_context)
 
-            # Set workspace path to a temporary directory for testing
-            # In a real implementation, this would be managed by a workspace manager
-            import tempfile
-
-            solution_context.workspace_path = tempfile.mkdtemp()
+            # Create workspace using the workspace manager
+            solution_context.workspace_path = self.workspace_manager.create_workspace(
+                prefix="solution_creation_"
+            )
 
             solution_context = await self.code_generator.execute(solution_context)
 
-            response = self._create_response(
-                solution_context, request
-            )
+            response = self._create_response(solution_context, request)
 
             self._cleanup_workspace(solution_context)
 
@@ -94,9 +91,7 @@ class CreateSolutionRepositoryServicer:
                 f"Failed to create solution repository: {str(e)}",
             )
 
-    def _initialize_context(
-        self, request
-    ) -> SolutionCreationContext:
+    def _initialize_context(self, request) -> SolutionCreationContext:
         return SolutionCreationContext(
             boundary_conditions=request,
             workspace_path="",  # Will be set after workspace creation
@@ -115,10 +110,26 @@ class CreateSolutionRepositoryServicer:
             )
 
     def _convert_language_enum_to_string(self, language_enum: int) -> str:
-        """Convert programming language enum value to string."""
-        # Map from hyperion_pb2.ProgrammingLanguage enum values to strings
-        language_map = {0: "EMPTY", 1: "JAVA", 2: "PYTHON"}
-        return language_map.get(language_enum, f"UNKNOWN_{language_enum}")
+        """Convert programming language enum value to string using protobuf enum descriptor."""
+        try:
+            # Import at runtime to avoid protobuf version issues
+            from app.grpc import hyperion_pb2
+            
+            # Use the protobuf enum descriptor to get the name
+            enum_descriptor = hyperion_pb2.ProgrammingLanguage.DESCRIPTOR
+            enum_value = enum_descriptor.values_by_number.get(language_enum)
+            
+            if enum_value:
+                return enum_value.name
+            else:
+                logger.warning(f"Unknown programming language enum value: {language_enum}")
+                return "EMPTY"  # Default fallback
+                
+        except Exception as e:
+            logger.error(f"Error converting language enum {language_enum}: {e}")
+            # Fallback to hardcoded mapping as last resort
+            language_map = {0: "EMPTY", 1: "JAVA", 2: "PYTHON"}
+            return language_map.get(language_enum, "EMPTY")
 
     def _create_response(
         self,
@@ -159,19 +170,28 @@ class CreateSolutionRepositoryServicer:
     def _create_empty_repository(self):
         # Import at runtime to avoid protobuf version issues
         from app.grpc import hyperion_pb2
+
         return hyperion_pb2.Repository(files=[])
 
     def _cleanup_workspace(self, context: SolutionCreationContext) -> None:
-        try:
-            # Determine if we should cleanup based on success and configuration
-            should_cleanup = (
-                context.solution_repository is not None and config.cleanup_on_success
-            ) or (context.solution_repository is None and config.cleanup_on_failure)
+        """Clean up the temporary workspace directory.
 
-            if should_cleanup:
-                logger.warning("Workspace not cleaned up. Logic missing")
+        Args:
+            context: The solution creation context
+        """
+        try:
+            if context.workspace_path:
+                # Use the workspace manager for proper cleanup
+                cleanup_performed = self.workspace_manager.cleanup_workspace(
+                    context.workspace_path
+                )
+                
+                if cleanup_performed:
+                    logger.info(f"Workspace cleaned up: {context.workspace_path}")
+                else:
+                    logger.info(f"Workspace preserved at: {context.workspace_path}")
             else:
-                logger.info(f"Workspace preserved at: {context.workspace_path}")
+                logger.warning("No workspace path set in context")
 
         except Exception as e:
             logger.warning(f"Failed to cleanup workspace: {str(e)}")

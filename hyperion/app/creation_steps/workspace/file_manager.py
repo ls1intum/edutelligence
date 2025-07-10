@@ -118,7 +118,7 @@ class FileManager:
             logger.error(f"Error writing to file {full_path}: {e}")
             raise FileSystemException(
                 f"Failed to write file: {str(e)}", file_path=file_path
-            )
+            ) from e
 
     def read_file(self, context: SolutionCreationContext, file_path: str) -> str:
         """Read content from a file in the workspace."""
@@ -149,7 +149,7 @@ class FileManager:
             logger.error(f"Error reading file {full_path}: {e}")
             raise FileSystemException(
                 f"Failed to read file: {str(e)}", file_path=file_path
-            )
+            ) from e
 
     def copy_file(
         self, context: SolutionCreationContext, source_path: str, dest_path: str
@@ -198,7 +198,7 @@ class FileManager:
             logger.error(f"Error copying file from {source_path} to {dest_path}: {e}")
             raise FileSystemException(
                 f"Failed to copy file: {str(e)}", file_path=source_path
-            )
+            ) from e
 
     def move_file(
         self, context: SolutionCreationContext, source_path: str, dest_path: str
@@ -242,7 +242,7 @@ class FileManager:
             logger.error(f"Error moving file from {source_path} to {dest_path}: {e}")
             raise FileSystemException(
                 f"Failed to move file: {str(e)}", file_path=source_path
-            )
+            ) from e
 
     def delete_file(self, context: SolutionCreationContext, file_path: str) -> None:
         """Delete a file from the workspace.
@@ -284,7 +284,7 @@ class FileManager:
             logger.error(f"Error deleting file {file_path}: {e}")
             raise FileSystemException(
                 f"Failed to delete file: {str(e)}", file_path=file_path
-            )
+            ) from e
 
     def create_directory(self, context: SolutionCreationContext, dir_path: str) -> None:
         """Create a directory in the workspace.
@@ -316,7 +316,7 @@ class FileManager:
             logger.error(f"Error creating directory {dir_path}: {e}")
             raise FileSystemException(
                 f"Failed to create directory: {str(e)}", file_path=dir_path
-            )
+            ) from e
 
     def list_files(
         self, context: SolutionCreationContext, dir_path: str = ""
@@ -364,7 +364,7 @@ class FileManager:
             logger.error(f"Error listing files in directory {dir_path}: {e}")
             raise FileSystemException(
                 f"Failed to list files: {str(e)}", file_path=dir_path
-            )
+            ) from e
 
     def file_exists(self, context: SolutionCreationContext, file_path: str) -> bool:
         """Check if a file exists in the workspace.
@@ -427,7 +427,7 @@ class FileManager:
             logger.error(f"Error getting file size for {file_path}: {e}")
             raise FileSystemException(
                 f"Failed to get file size: {str(e)}", file_path=file_path
-            )
+            ) from e
 
     def set_file_permissions(
         self, context: SolutionCreationContext, file_path: str, permissions: int
@@ -476,7 +476,7 @@ class FileManager:
             logger.error(f"Error setting permissions for {file_path}: {e}")
             raise FileSystemException(
                 f"Failed to set file permissions: {str(e)}", file_path=file_path
-            )
+            ) from e
 
     def _resolve_workspace_path(
         self, context: SolutionCreationContext, relative_path: str
@@ -512,7 +512,7 @@ class FileManager:
             logger.error(f"Error resolving path {relative_path}: {e}")
             raise FileSystemException(
                 f"Failed to resolve path: {str(e)}", file_path=relative_path
-            )
+            ) from e
 
     def _validate_path_in_workspace(
         self, context: SolutionCreationContext, path: Union[str, Path]
@@ -557,7 +557,7 @@ class FileManager:
             logger.error(f"Error validating path {path}: {e}")
             raise FileSystemException(
                 f"Failed to validate path: {str(e)}", file_path=str(path)
-            )
+            ) from e
 
     def get_file_tree(self, context: SolutionCreationContext) -> str:
         """Return a string representing the file tree of the workspace."""

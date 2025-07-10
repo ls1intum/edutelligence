@@ -53,9 +53,7 @@ class WorkspaceConfig(BaseSettings):
         default="/tmp/hyperion_solution_", description="Prefix for temporary workspace"
     )
 
-    class Config:
-        env_prefix = "HYPERION_WORKSPACE_"
-        case_sensitive = False
+    model_config = {"env_prefix": "HYPERION_WORKSPACE_", "case_sensitive": False}
 
 
 config = WorkspaceConfig()

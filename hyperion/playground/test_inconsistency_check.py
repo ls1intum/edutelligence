@@ -53,10 +53,10 @@ SAMPLE_TEMPLATE_FILES = [
     \"\"\"
     # TODO: Implement binary search
     pass
-"""
+""",
     },
     {
-        "path": "test_binary_search.py", 
+        "path": "test_binary_search.py",
         "content": """import unittest
 from binary_search import binary_search
 
@@ -71,8 +71,8 @@ class TestBinarySearch(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
-"""
-    }
+""",
+    },
 ]
 
 SAMPLE_SOLUTION_FILES = [
@@ -101,7 +101,7 @@ SAMPLE_SOLUTION_FILES = [
             right = mid - 1
     
     return -1
-"""
+""",
     },
     {
         "path": "test_binary_search.py",
@@ -126,68 +126,74 @@ class TestBinarySearch(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
-"""
-    }
+""",
+    },
 ]
+
 
 def create_repository_files(file_data: List[dict]) -> List[hyperion_pb2.RepositoryFile]:
     """Create gRPC RepositoryFile objects from file data."""
     return [
-        hyperion_pb2.RepositoryFile(path=file_info["path"], content=file_info["content"])
+        hyperion_pb2.RepositoryFile(
+            path=file_info["path"], content=file_info["content"]
+        )
         for file_info in file_data
     ]
+
 
 async def test_inconsistency_check():
     """Test the CheckInconsistencies RPC method."""
     logger.info("Starting inconsistency check test...")
-    
+
     # Create the request
     template_files = create_repository_files(SAMPLE_TEMPLATE_FILES)
     solution_files = create_repository_files(SAMPLE_SOLUTION_FILES)
-    
+
     template_repository = hyperion_pb2.Repository(files=template_files)
     solution_repository = hyperion_pb2.Repository(files=solution_files)
-    
+
     request = hyperion_pb2.InconsistencyCheckRequest(
         problem_statement=SAMPLE_PROBLEM_STATEMENT,
         template_repository=template_repository,
         solution_repository=solution_repository,
-        test_repository=hyperion_pb2.Repository(files=[])  # Empty test repository
+        test_repository=hyperion_pb2.Repository(files=[]),  # Empty test repository
     )
-    
+
     # Create a channel and stub
-    channel = grpc.insecure_channel('localhost:50051')
+    channel = grpc.insecure_channel("localhost:50051")
     stub = hyperion_pb2_grpc.ReviewAndRefineStub(channel)
-    
+
     try:
         # Make the RPC call
         logger.info("Calling CheckInconsistencies...")
         response = stub.CheckInconsistencies(request)
-        
+
         logger.info("Response received:")
         logger.info(f"Inconsistencies found:\n{response.inconsistencies}")
-        
+
         return response.inconsistencies
-        
+
     except grpc.RpcError as e:
         logger.error(f"RPC failed: {e.code()}: {e.details()}")
         return None
     finally:
         channel.close()
 
+
 async def main():
     """Main test function."""
     logger.info("Testing Hyperion inconsistency check functionality...")
-    
+
     result = await test_inconsistency_check()
-    
+
     if result:
         logger.info("Test completed successfully!")
         logger.info(f"Result length: {len(result)} characters")
     else:
         logger.error("Test failed!")
-        
+
     return result
+
 
 if __name__ == "__main__":
     asyncio.run(main())

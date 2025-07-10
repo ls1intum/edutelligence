@@ -65,9 +65,11 @@ global___ProjectType = ProjectType
 
 @typing.final
 class RepositoryFile(google.protobuf.message.Message):
-    """**********************
-    **   Core types    ***
-    *********************
+    """BREAKING CHANGES in v2:
+    - ProgrammingLanguage enum reduced from 21 to 3 values (EMPTY, JAVA, PYTHON)
+    - ProjectType enum reduced from multiple values to 3 (PLAIN, MAVEN, GRADLE)
+    - Removed deprecated enum values for unsupported languages and project types
+    - Clients should handle unknown enum values gracefully by treating them as EMPTY/PLAIN
 
     Represents a file in a repository with content
     """

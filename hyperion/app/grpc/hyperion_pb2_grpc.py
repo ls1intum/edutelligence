@@ -56,11 +56,13 @@ class DefineBoundaryConditionServicer(object):
 def add_DefineBoundaryConditionServicer_to_server(servicer, server):
     rpc_method_handlers = {}
     generic_handler = grpc.method_handlers_generic_handler(
-        "de.tum.cit.aet.artemis.hyperion.DefineBoundaryCondition", rpc_method_handlers
+        "de.tum.cit.aet.artemis.hyperion.v2.DefineBoundaryCondition",
+        rpc_method_handlers,
     )
     server.add_generic_rpc_handlers((generic_handler,))
     server.add_registered_method_handlers(
-        "de.tum.cit.aet.artemis.hyperion.DefineBoundaryCondition", rpc_method_handlers
+        "de.tum.cit.aet.artemis.hyperion.v2.DefineBoundaryCondition",
+        rpc_method_handlers,
     )
 
 
@@ -92,11 +94,11 @@ class DraftProblemStatementServicer(object):
 def add_DraftProblemStatementServicer_to_server(servicer, server):
     rpc_method_handlers = {}
     generic_handler = grpc.method_handlers_generic_handler(
-        "de.tum.cit.aet.artemis.hyperion.DraftProblemStatement", rpc_method_handlers
+        "de.tum.cit.aet.artemis.hyperion.v2.DraftProblemStatement", rpc_method_handlers
     )
     server.add_generic_rpc_handlers((generic_handler,))
     server.add_registered_method_handlers(
-        "de.tum.cit.aet.artemis.hyperion.DraftProblemStatement", rpc_method_handlers
+        "de.tum.cit.aet.artemis.hyperion.v2.DraftProblemStatement", rpc_method_handlers
     )
 
 
@@ -115,7 +117,7 @@ class CreateSolutionRepositoryStub(object):
             channel: A grpc.Channel.
         """
         self.CreateSolutionRepository = channel.unary_unary(
-            "/de.tum.cit.aet.artemis.hyperion.CreateSolutionRepository/CreateSolutionRepository",
+            "/de.tum.cit.aet.artemis.hyperion.v2.CreateSolutionRepository/CreateSolutionRepository",
             request_serializer=hyperion__pb2.SolutionRepositoryCreatorRequest.SerializeToString,
             response_deserializer=hyperion__pb2.SolutionRepositoryCreatorResponse.FromString,
             _registered_method=True,
@@ -141,11 +143,13 @@ def add_CreateSolutionRepositoryServicer_to_server(servicer, server):
         ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
-        "de.tum.cit.aet.artemis.hyperion.CreateSolutionRepository", rpc_method_handlers
+        "de.tum.cit.aet.artemis.hyperion.v2.CreateSolutionRepository",
+        rpc_method_handlers,
     )
     server.add_generic_rpc_handlers((generic_handler,))
     server.add_registered_method_handlers(
-        "de.tum.cit.aet.artemis.hyperion.CreateSolutionRepository", rpc_method_handlers
+        "de.tum.cit.aet.artemis.hyperion.v2.CreateSolutionRepository",
+        rpc_method_handlers,
     )
 
 
@@ -169,7 +173,7 @@ class CreateSolutionRepository(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            "/de.tum.cit.aet.artemis.hyperion.CreateSolutionRepository/CreateSolutionRepository",
+            "/de.tum.cit.aet.artemis.hyperion.v2.CreateSolutionRepository/CreateSolutionRepository",
             hyperion__pb2.SolutionRepositoryCreatorRequest.SerializeToString,
             hyperion__pb2.SolutionRepositoryCreatorResponse.FromString,
             options,
@@ -202,11 +206,13 @@ class CreateTemplateRepositoryServicer(object):
 def add_CreateTemplateRepositoryServicer_to_server(servicer, server):
     rpc_method_handlers = {}
     generic_handler = grpc.method_handlers_generic_handler(
-        "de.tum.cit.aet.artemis.hyperion.CreateTemplateRepository", rpc_method_handlers
+        "de.tum.cit.aet.artemis.hyperion.v2.CreateTemplateRepository",
+        rpc_method_handlers,
     )
     server.add_generic_rpc_handlers((generic_handler,))
     server.add_registered_method_handlers(
-        "de.tum.cit.aet.artemis.hyperion.CreateTemplateRepository", rpc_method_handlers
+        "de.tum.cit.aet.artemis.hyperion.v2.CreateTemplateRepository",
+        rpc_method_handlers,
     )
 
 
@@ -233,11 +239,11 @@ class CreateTestRepositoryServicer(object):
 def add_CreateTestRepositoryServicer_to_server(servicer, server):
     rpc_method_handlers = {}
     generic_handler = grpc.method_handlers_generic_handler(
-        "de.tum.cit.aet.artemis.hyperion.CreateTestRepository", rpc_method_handlers
+        "de.tum.cit.aet.artemis.hyperion.v2.CreateTestRepository", rpc_method_handlers
     )
     server.add_generic_rpc_handlers((generic_handler,))
     server.add_registered_method_handlers(
-        "de.tum.cit.aet.artemis.hyperion.CreateTestRepository", rpc_method_handlers
+        "de.tum.cit.aet.artemis.hyperion.v2.CreateTestRepository", rpc_method_handlers
     )
 
 
@@ -264,11 +270,13 @@ class FinalizeProblemStatementServicer(object):
 def add_FinalizeProblemStatementServicer_to_server(servicer, server):
     rpc_method_handlers = {}
     generic_handler = grpc.method_handlers_generic_handler(
-        "de.tum.cit.aet.artemis.hyperion.FinalizeProblemStatement", rpc_method_handlers
+        "de.tum.cit.aet.artemis.hyperion.v2.FinalizeProblemStatement",
+        rpc_method_handlers,
     )
     server.add_generic_rpc_handlers((generic_handler,))
     server.add_registered_method_handlers(
-        "de.tum.cit.aet.artemis.hyperion.FinalizeProblemStatement", rpc_method_handlers
+        "de.tum.cit.aet.artemis.hyperion.v2.FinalizeProblemStatement",
+        rpc_method_handlers,
     )
 
 
@@ -295,11 +303,11 @@ class ConfigureGradingServicer(object):
 def add_ConfigureGradingServicer_to_server(servicer, server):
     rpc_method_handlers = {}
     generic_handler = grpc.method_handlers_generic_handler(
-        "de.tum.cit.aet.artemis.hyperion.ConfigureGrading", rpc_method_handlers
+        "de.tum.cit.aet.artemis.hyperion.v2.ConfigureGrading", rpc_method_handlers
     )
     server.add_generic_rpc_handlers((generic_handler,))
     server.add_registered_method_handlers(
-        "de.tum.cit.aet.artemis.hyperion.ConfigureGrading", rpc_method_handlers
+        "de.tum.cit.aet.artemis.hyperion.v2.ConfigureGrading", rpc_method_handlers
     )
 
 
@@ -318,13 +326,13 @@ class ReviewAndRefineStub(object):
             channel: A grpc.Channel.
         """
         self.CheckInconsistencies = channel.unary_unary(
-            "/de.tum.cit.aet.artemis.hyperion.ReviewAndRefine/CheckInconsistencies",
+            "/de.tum.cit.aet.artemis.hyperion.v2.ReviewAndRefine/CheckInconsistencies",
             request_serializer=hyperion__pb2.InconsistencyCheckRequest.SerializeToString,
             response_deserializer=hyperion__pb2.InconsistencyCheckResponse.FromString,
             _registered_method=True,
         )
         self.RewriteProblemStatement = channel.unary_unary(
-            "/de.tum.cit.aet.artemis.hyperion.ReviewAndRefine/RewriteProblemStatement",
+            "/de.tum.cit.aet.artemis.hyperion.v2.ReviewAndRefine/RewriteProblemStatement",
             request_serializer=hyperion__pb2.RewriteProblemStatementRequest.SerializeToString,
             response_deserializer=hyperion__pb2.RewriteProblemStatementResponse.FromString,
             _registered_method=True,
@@ -361,11 +369,11 @@ def add_ReviewAndRefineServicer_to_server(servicer, server):
         ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
-        "de.tum.cit.aet.artemis.hyperion.ReviewAndRefine", rpc_method_handlers
+        "de.tum.cit.aet.artemis.hyperion.v2.ReviewAndRefine", rpc_method_handlers
     )
     server.add_generic_rpc_handlers((generic_handler,))
     server.add_registered_method_handlers(
-        "de.tum.cit.aet.artemis.hyperion.ReviewAndRefine", rpc_method_handlers
+        "de.tum.cit.aet.artemis.hyperion.v2.ReviewAndRefine", rpc_method_handlers
     )
 
 
@@ -389,7 +397,7 @@ class ReviewAndRefine(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            "/de.tum.cit.aet.artemis.hyperion.ReviewAndRefine/CheckInconsistencies",
+            "/de.tum.cit.aet.artemis.hyperion.v2.ReviewAndRefine/CheckInconsistencies",
             hyperion__pb2.InconsistencyCheckRequest.SerializeToString,
             hyperion__pb2.InconsistencyCheckResponse.FromString,
             options,
@@ -419,7 +427,7 @@ class ReviewAndRefine(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            "/de.tum.cit.aet.artemis.hyperion.ReviewAndRefine/RewriteProblemStatement",
+            "/de.tum.cit.aet.artemis.hyperion.v2.ReviewAndRefine/RewriteProblemStatement",
             hyperion__pb2.RewriteProblemStatementRequest.SerializeToString,
             hyperion__pb2.RewriteProblemStatementResponse.FromString,
             options,
