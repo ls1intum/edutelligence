@@ -978,6 +978,52 @@ class DBManager:
 
         return {"result": data}, 200
 
+    def reset_sequences(self):
+        # Adjust ID's after importing data
+        for table_name in [
+            "users",
+            "services",
+            "process",
+            "profiles",
+            "providers",
+            "model_api_keys",
+            "models",
+            "model_provider",
+            "profile_model_permissions",
+            "policies",
+            "log_entry",
+            "token_types",
+            "usage_tokens",
+            "token_prices"
+        ]:
+            # Check if table exists
+            table = Base.metadata.tables.get(table_name)
+            if table is None:
+                continue
+
+            # Check if column 'id' exists
+            if 'id' in table.c:
+                # Get name of related sequence (PostgreSQL-Name-convention)
+                sequence_name = f"{table_name}_id_seq"
+
+                # Max ID of Table
+                result = self.session.execute(text(f"SELECT MAX(id) FROM {table_name}"))
+                max_id = result.scalar()
+
+                if max_id is not None:
+                    # Data → next ID = max_id + 1
+                    self.session.execute(
+                        text("SELECT setval(:sequence_name, :new_value, true)"),
+                        {"sequence_name": sequence_name, "new_value": max_id + 1}
+                    )
+                else:
+                    # Empty Table
+                    self.session.execute(
+                        text("SELECT setval(:sequence_name, 1, false)"),
+                        {"sequence_name": sequence_name}
+                    )
+        self.session.commit()
+
     def import_from_json(self, logos_key: str, json_data: dict):
         if not self.check_authorization(logos_key):
             return {"error": "Database changes only allowed for root user."}, 500
@@ -1018,6 +1064,7 @@ class DBManager:
                 if not found:
                     return {"error": "Try to delete root user detected. Aborting"}, 500
         self.session.commit()
+        self.reset_sequences()
         return {"result": f"Imported data"}, 200
 
     def check_authorization(self, logos_key: str):

@@ -35,7 +35,7 @@ export default function Policies() {
 
     const loadpolicies = async () => {
         try {
-            const response = await fetch('http://0.0.0.0:8080/logosdb/get_policies', {
+            const response = await fetch('https://logos.ase.cit.tum.de:8080/logosdb/get_policies', {
                 method: 'POST',
                 headers: {
                     'Authorization': `Bearer ${apiKey}`,
