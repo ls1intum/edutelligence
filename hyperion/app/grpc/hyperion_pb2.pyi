@@ -111,6 +111,26 @@ FACT: ProjectType.ValueType  # 7
 GCC: ProjectType.ValueType  # 8
 global___ProjectType = ProjectType
 
+class _Priority:
+    ValueType = typing.NewType("ValueType", builtins.int)
+    V: typing_extensions.TypeAlias = ValueType
+
+class _PriorityEnumTypeWrapper(
+    google.protobuf.internal.enum_type_wrapper._EnumTypeWrapper[_Priority.ValueType],
+    builtins.type,
+):
+    DESCRIPTOR: google.protobuf.descriptor.EnumDescriptor
+    LOW: _Priority.ValueType  # 0
+    MEDIUM: _Priority.ValueType  # 1
+    HIGH: _Priority.ValueType  # 2
+
+class Priority(_Priority, metaclass=_PriorityEnumTypeWrapper): ...
+
+LOW: Priority.ValueType  # 0
+MEDIUM: Priority.ValueType  # 1
+HIGH: Priority.ValueType  # 2
+global___Priority = Priority
+
 @typing.final
 class RepositoryFile(google.protobuf.message.Message):
     """Represents a file in a repository with content"""
@@ -346,3 +366,65 @@ class RewriteProblemStatementResponse(google.protobuf.message.Message):
     ) -> None: ...
 
 global___RewriteProblemStatementResponse = RewriteProblemStatementResponse
+
+@typing.final
+class SuggestImprovementsRequest(google.protobuf.message.Message):
+    """Request for streaming improvement suggestions."""
+
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    PROBLEM_STATEMENT_FIELD_NUMBER: builtins.int
+    problem_statement: builtins.str
+    """Full text of the problem statement to review"""
+    def __init__(
+        self,
+        *,
+        problem_statement: builtins.str = ...,
+    ) -> None: ...
+    def ClearField(
+        self, field_name: typing.Literal["problem_statement", b"problem_statement"]
+    ) -> None: ...
+
+global___SuggestImprovementsRequest = SuggestImprovementsRequest
+
+@typing.final
+class SuggestionItem(google.protobuf.message.Message):
+    """A single suggestion item pinpointing a character span within the problem statement."""
+
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    DESCRIPTION_FIELD_NUMBER: builtins.int
+    INDEX_START_FIELD_NUMBER: builtins.int
+    INDEX_END_FIELD_NUMBER: builtins.int
+    PRIORITY_FIELD_NUMBER: builtins.int
+    description: builtins.str
+    """Human‑readable suggestion text"""
+    index_start: builtins.int
+    """Zero‑based inclusive character index"""
+    index_end: builtins.int
+    """Exclusive character index"""
+    priority: global___Priority.ValueType
+    """Importance level of the suggestion"""
+    def __init__(
+        self,
+        *,
+        description: builtins.str = ...,
+        index_start: builtins.int = ...,
+        index_end: builtins.int = ...,
+        priority: global___Priority.ValueType = ...,
+    ) -> None: ...
+    def ClearField(
+        self,
+        field_name: typing.Literal[
+            "description",
+            b"description",
+            "index_end",
+            b"index_end",
+            "index_start",
+            b"index_start",
+            "priority",
+            b"priority",
+        ],
+    ) -> None: ...
+
+global___SuggestionItem = SuggestionItem

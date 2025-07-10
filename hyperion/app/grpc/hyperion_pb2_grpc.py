@@ -266,6 +266,12 @@ class ReviewAndRefineStub(object):
             response_deserializer=hyperion__pb2.RewriteProblemStatementResponse.FromString,
             _registered_method=True,
         )
+        self.SuggestImprovements = channel.unary_stream(
+            "/de.tum.cit.aet.artemis.hyperion.ReviewAndRefine/SuggestImprovements",
+            request_serializer=hyperion__pb2.SuggestImprovementsRequest.SerializeToString,
+            response_deserializer=hyperion__pb2.SuggestionItem.FromString,
+            _registered_method=True,
+        )
 
 
 class ReviewAndRefineServicer(object):
@@ -283,6 +289,14 @@ class ReviewAndRefineServicer(object):
         context.set_details("Method not implemented!")
         raise NotImplementedError("Method not implemented!")
 
+    def SuggestImprovements(self, request, context):
+        """Stream back targeted improvement suggestions for the provided problem statement.
+        Each SuggestionItem pinpoints a character range within the problem statement text.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details("Method not implemented!")
+        raise NotImplementedError("Method not implemented!")
+
 
 def add_ReviewAndRefineServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -295,6 +309,11 @@ def add_ReviewAndRefineServicer_to_server(servicer, server):
             servicer.RewriteProblemStatement,
             request_deserializer=hyperion__pb2.RewriteProblemStatementRequest.FromString,
             response_serializer=hyperion__pb2.RewriteProblemStatementResponse.SerializeToString,
+        ),
+        "SuggestImprovements": grpc.unary_stream_rpc_method_handler(
+            servicer.SuggestImprovements,
+            request_deserializer=hyperion__pb2.SuggestImprovementsRequest.FromString,
+            response_serializer=hyperion__pb2.SuggestionItem.SerializeToString,
         ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -359,6 +378,36 @@ class ReviewAndRefine(object):
             "/de.tum.cit.aet.artemis.hyperion.ReviewAndRefine/RewriteProblemStatement",
             hyperion__pb2.RewriteProblemStatementRequest.SerializeToString,
             hyperion__pb2.RewriteProblemStatementResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True,
+        )
+
+    @staticmethod
+    def SuggestImprovements(
+        request,
+        target,
+        options=(),
+        channel_credentials=None,
+        call_credentials=None,
+        insecure=False,
+        compression=None,
+        wait_for_ready=None,
+        timeout=None,
+        metadata=None,
+    ):
+        return grpc.experimental.unary_stream(
+            request,
+            target,
+            "/de.tum.cit.aet.artemis.hyperion.ReviewAndRefine/SuggestImprovements",
+            hyperion__pb2.SuggestImprovementsRequest.SerializeToString,
+            hyperion__pb2.SuggestionItem.FromString,
             options,
             channel_credentials,
             insecure,

@@ -1,11 +1,14 @@
 import logging
 import re
+import time
 from typing import Dict
 
 from app.grpc import hyperion_pb2_grpc
 from app.grpc.hyperion_pb2 import (
     InconsistencyCheckResponse,
+    Priority,
     RewriteProblemStatementResponse,
+    SuggestionItem,
 )
 from app.models import get_model
 from app.settings import settings
@@ -104,3 +107,43 @@ class ReviewAndRefineServicer(hyperion_pb2_grpc.ReviewAndRefineServicer):
         rewritten_text = response.content.strip()
 
         return RewriteProblemStatementResponse(rewritten_text=rewritten_text)
+    
+    def SuggestImprovements(self, request, context):
+        logger.info("Suggesting improvements for problem statement...")
+
+        yield SuggestionItem(
+            description=f"Here is the problem statement from the request: {request.problem_statement}",
+            index_start=0,
+            index_end=0,
+            priority=Priority.LOW
+        )
+        
+        # Add delay to observe streaming
+        time.sleep(1)
+
+        yield SuggestionItem(
+            description="This is a low priority suggestion.",
+            index_start=0,
+            index_end=10,
+            priority=Priority.LOW
+        )
+        
+        # Add delay to observe streaming
+        time.sleep(1)
+        
+        yield SuggestionItem(
+            description="This is a medium priority suggestion.",
+            index_start=11,
+            index_end=20,
+            priority=Priority.MEDIUM
+        )
+        
+        # Add delay to observe streaming
+        time.sleep(1)
+                
+        yield SuggestionItem(
+            description="This is a high priority suggestion.",
+            index_start=21,
+            index_end=30,
+            priority=Priority.HIGH
+        )

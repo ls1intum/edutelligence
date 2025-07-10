@@ -198,6 +198,14 @@ class ReviewAndRefineStub:
         hyperion_pb2.RewriteProblemStatementResponse,
     ]
 
+    SuggestImprovements: grpc.UnaryStreamMultiCallable[
+        hyperion_pb2.SuggestImprovementsRequest,
+        hyperion_pb2.SuggestionItem,
+    ]
+    """Stream back targeted improvement suggestions for the provided problem statement.
+    Each SuggestionItem pinpoints a character range within the problem statement text.
+    """
+
 class ReviewAndRefineAsyncStub:
     """Exercise Creation Step 8: Review and Refine"""
 
@@ -210,6 +218,14 @@ class ReviewAndRefineAsyncStub:
         hyperion_pb2.RewriteProblemStatementRequest,
         hyperion_pb2.RewriteProblemStatementResponse,
     ]
+
+    SuggestImprovements: grpc.aio.UnaryStreamMultiCallable[
+        hyperion_pb2.SuggestImprovementsRequest,
+        hyperion_pb2.SuggestionItem,
+    ]
+    """Stream back targeted improvement suggestions for the provided problem statement.
+    Each SuggestionItem pinpoints a character range within the problem statement text.
+    """
 
 class ReviewAndRefineServicer(metaclass=abc.ABCMeta):
     """Exercise Creation Step 8: Review and Refine"""
@@ -232,6 +248,18 @@ class ReviewAndRefineServicer(metaclass=abc.ABCMeta):
         hyperion_pb2.RewriteProblemStatementResponse,
         collections.abc.Awaitable[hyperion_pb2.RewriteProblemStatementResponse],
     ]: ...
+    @abc.abstractmethod
+    def SuggestImprovements(
+        self,
+        request: hyperion_pb2.SuggestImprovementsRequest,
+        context: _ServicerContext,
+    ) -> typing.Union[
+        collections.abc.Iterator[hyperion_pb2.SuggestionItem],
+        collections.abc.AsyncIterator[hyperion_pb2.SuggestionItem],
+    ]:
+        """Stream back targeted improvement suggestions for the provided problem statement.
+        Each SuggestionItem pinpoints a character range within the problem statement text.
+        """
 
 def add_ReviewAndRefineServicer_to_server(
     servicer: ReviewAndRefineServicer,
