@@ -17,7 +17,7 @@ class AIClassifier(Classifier):
         for model in self.models:
             if model["id"] not in laura.model_db:
                 laura.register_model(model["id"], model["description"])
-        ranking = laura.classify_prompt(prompt, top_k=len(laura.model_db))
+        ranking = laura.classify_prompt(prompt, top_k=len(laura.allowed) if laura.allowed else len(laura.model_db))
         ranking = {idx: value for (idx, value) in ranking}
         for model in self.models:
             model["classification_weight"].add_weight(ranking[model["id"]], "ai")

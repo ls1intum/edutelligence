@@ -149,8 +149,9 @@ class LogEntry(Base):
     input_payload = Column(JSON)
     headers = Column(JSON)
     response_payload = Column(JSON)
-    provider_id = Column(Integer)
-    model_id = Column(Integer)
+    provider_id = Column(Integer, ForeignKey('providers.id', ondelete="SET NULL"))
+    model_id = Column(Integer, ForeignKey('models.id', ondelete="SET NULL"))
+    policy_id = Column(Integer, ForeignKey('policies.id', ondelete="SET NULL"))
 
     usage_tokens = relationship("UsageTokens")
 

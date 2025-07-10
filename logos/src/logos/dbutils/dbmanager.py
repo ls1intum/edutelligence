@@ -272,7 +272,7 @@ class DBManager:
         privacy_data = list()
         for model in data:
             mid, p, l, a, c, q = model[0], model[4], model[5], model[6], model[7], model[8]
-            if mid == updated_model_id:
+            if mid == updated_model_id and category == "privacy":
                 privacy_data.append((feedback, mid))
             else:
                 privacy_data.append((p, mid))

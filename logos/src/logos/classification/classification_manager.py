@@ -58,6 +58,8 @@ class ClassificationManager:
         """
         if allowed is None:
             allowed = list()
+        else:
+            self.models = [model for model in self.models if model["id"] in allowed]
         print(f"Policy: {policy}", flush=True)
         print(f"Models: {self.models}", flush=True)
         filtered = PolicyClassifier(self.models).classify(prompt, policy)

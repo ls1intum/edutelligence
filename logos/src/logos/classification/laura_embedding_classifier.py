@@ -48,10 +48,12 @@ class LauraEmbeddingClassifier:
         if not self.model_db:
             return []
         query_emb = self.encode_text(prompt, prefix="query:")
+        print(f"Allowed: {self.allowed}", flush=True)
+        print(f"Keys: {list(self.model_db.keys())}", flush=True)
         model_ids = list(i for i in self.model_db.keys() if i in self.allowed or not self.allowed)
         model_matrix = torch.stack([self.model_db[mid] for mid in model_ids])
         sims = util.cos_sim(query_emb, model_matrix).squeeze(0)  # shape: (N,)
-        top_indices = torch.topk(sims, k=top_k).indices.tolist()
+        top_indices = torch.topk(sims, k=min(top_k, len(model_ids))).indices.tolist()
         return [(model_ids[i], sims[i].item()) for i in top_indices]
 
     def update_feedback(self, prompt: str, correct_model_id: str, alpha: float = 0.05):
