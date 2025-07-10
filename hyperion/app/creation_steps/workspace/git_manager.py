@@ -184,7 +184,9 @@ class GitManager:
 
         except Exception as e:
             logger.error(f"Failed to create branch '{branch_name}': {e}")
-            raise GitException(f"Failed to create branch '{branch_name}': {str(e)}") from e
+            raise GitException(
+                f"Failed to create branch '{branch_name}': {str(e)}"
+            ) from e
 
     def get_status(self, context: SolutionCreationContext) -> Dict[str, List[str]]:
         """Get the Git status of the repository.

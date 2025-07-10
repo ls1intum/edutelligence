@@ -29,9 +29,7 @@ if _version_not_supported:
 
 
 class DefineBoundaryConditionStub(object):
-    """*****************************
-    **   Service Definitions  ***
-    ****************************
+    """Service Definitions
 
     Exercise Creation Step 1: Define Boundary Conditions
     """
@@ -45,9 +43,7 @@ class DefineBoundaryConditionStub(object):
 
 
 class DefineBoundaryConditionServicer(object):
-    """*****************************
-    **   Service Definitions  ***
-    ****************************
+    """Service Definitions
 
     Exercise Creation Step 1: Define Boundary Conditions
     """
@@ -68,9 +64,7 @@ def add_DefineBoundaryConditionServicer_to_server(servicer, server):
 
 # This class is part of an EXPERIMENTAL API.
 class DefineBoundaryCondition(object):
-    """*****************************
-    **   Service Definitions  ***
-    ****************************
+    """Service Definitions
 
     Exercise Creation Step 1: Define Boundary Conditions
     """
@@ -118,8 +112,8 @@ class CreateSolutionRepositoryStub(object):
         """
         self.CreateSolutionRepository = channel.unary_unary(
             "/de.tum.cit.aet.artemis.hyperion.v2.CreateSolutionRepository/CreateSolutionRepository",
-            request_serializer=hyperion__pb2.SolutionRepositoryCreatorRequest.SerializeToString,
-            response_deserializer=hyperion__pb2.SolutionRepositoryCreatorResponse.FromString,
+            request_serializer=hyperion__pb2.CreateSolutionRepositoryRequest.SerializeToString,
+            response_deserializer=hyperion__pb2.CreateSolutionRepositoryResponse.FromString,
             _registered_method=True,
         )
 
@@ -138,8 +132,8 @@ def add_CreateSolutionRepositoryServicer_to_server(servicer, server):
     rpc_method_handlers = {
         "CreateSolutionRepository": grpc.unary_unary_rpc_method_handler(
             servicer.CreateSolutionRepository,
-            request_deserializer=hyperion__pb2.SolutionRepositoryCreatorRequest.FromString,
-            response_serializer=hyperion__pb2.SolutionRepositoryCreatorResponse.SerializeToString,
+            request_deserializer=hyperion__pb2.CreateSolutionRepositoryRequest.FromString,
+            response_serializer=hyperion__pb2.CreateSolutionRepositoryResponse.SerializeToString,
         ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -174,8 +168,8 @@ class CreateSolutionRepository(object):
             request,
             target,
             "/de.tum.cit.aet.artemis.hyperion.v2.CreateSolutionRepository/CreateSolutionRepository",
-            hyperion__pb2.SolutionRepositoryCreatorRequest.SerializeToString,
-            hyperion__pb2.SolutionRepositoryCreatorResponse.FromString,
+            hyperion__pb2.CreateSolutionRepositoryRequest.SerializeToString,
+            hyperion__pb2.CreateSolutionRepositoryResponse.FromString,
             options,
             channel_credentials,
             insecure,

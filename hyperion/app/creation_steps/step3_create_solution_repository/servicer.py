@@ -114,17 +114,19 @@ class CreateSolutionRepositoryServicer:
         try:
             # Import at runtime to avoid protobuf version issues
             from app.grpc import hyperion_pb2
-            
+
             # Use the protobuf enum descriptor to get the name
             enum_descriptor = hyperion_pb2.ProgrammingLanguage.DESCRIPTOR
             enum_value = enum_descriptor.values_by_number.get(language_enum)
-            
+
             if enum_value:
                 return enum_value.name
             else:
-                logger.warning(f"Unknown programming language enum value: {language_enum}")
+                logger.warning(
+                    f"Unknown programming language enum value: {language_enum}"
+                )
                 return "EMPTY"  # Default fallback
-                
+
         except Exception as e:
             logger.error(f"Error converting language enum {language_enum}: {e}")
             # Fallback to hardcoded mapping as last resort
@@ -153,18 +155,8 @@ class CreateSolutionRepositoryServicer:
             elif len(context.fix_attempts) >= config.solution_creator_max_iterations:
                 error_message = f"Maximum iterations ({config.solution_creator_max_iterations}) exceeded"
 
-        return hyperion_pb2.SolutionRepositoryCreatorResponse(
-            programming_language=request.programming_language,
-            project_type=request.project_type,
-            difficulty=request.difficulty,
-            points=request.points,
-            bonus_points=request.bonus_points,
-            constraints=request.constraints,
-            title=request.title,
-            short_title=request.short_title,
-            description=request.description,
-            solution_repository=context.solution_repository
-            or self._create_empty_repository(),
+        return hyperion_pb2.CreateSolutionRepositoryResponse(
+            repository=context.solution_repository or self._create_empty_repository()
         )
 
     def _create_empty_repository(self):
@@ -185,7 +177,7 @@ class CreateSolutionRepositoryServicer:
                 cleanup_performed = self.workspace_manager.cleanup_workspace(
                     context.workspace_path
                 )
-                
+
                 if cleanup_performed:
                     logger.info(f"Workspace cleaned up: {context.workspace_path}")
                 else:
