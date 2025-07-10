@@ -2,7 +2,7 @@
 Integration test for Step 3 Solution Repository Creator.
 
 Run with:
-    pytest -s app/creation_steps/step3_create_solution_repository/tests/integration.py
+    pytest -s tests/creation_steps/step3_create_solution_repository/step3_integration.py
 
 """
 
@@ -16,7 +16,7 @@ from unittest.mock import Mock, AsyncMock, patch
 from langchain_core.language_models.chat_models import BaseLanguageModel
 
 # Add project root to path for imports
-project_root = Path(__file__).parent.parent.parent.parent.parent
+project_root = Path(__file__).parent.parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 from app.creation_steps.step3_create_solution_repository.servicer import (  # noqa: E402
@@ -404,7 +404,7 @@ class TestSolutionRepositoryCreatorIntegration:
         request.points = 100
         request.bonus_points = 0
         request.constraints = []
-        
+
         # Problem statement fields
         request.title = "Binary Search Implementation"
         request.short_title = "Binary Search"
@@ -455,7 +455,6 @@ class TestSolutionRepositoryCreatorIntegration:
                 # Create servicer with the real CodeGenerator and mocked model
                 servicer = CreateSolutionRepositoryServicer(model=mock_model)
 
-
                 # Mock gRPC context
                 grpc_context = Mock()
 
@@ -477,7 +476,7 @@ class TestSolutionRepositoryCreatorIntegration:
                 # Get the actual workspace path from the response metadata
                 # Note: In the current implementation, files are created in the repository object
                 # and also written to the workspace directory. We verify both.
-                
+
                 # Verify the repository object contains the expected files
                 assert len(response.solution_repository.files) == 3
                 file_paths = [f.path for f in response.solution_repository.files]
@@ -487,7 +486,10 @@ class TestSolutionRepositoryCreatorIntegration:
 
                 # Verify file contents are not empty in the repository
                 for repo_file in response.solution_repository.files:
-                    if repo_file.path in ["src/binary_search.py", "tests/test_binary_search.py"]:
+                    if repo_file.path in [
+                        "src/binary_search.py",
+                        "tests/test_binary_search.py",
+                    ]:
                         assert len(repo_file.content) > 50
 
                 # Verify that the model was called the expected number of times

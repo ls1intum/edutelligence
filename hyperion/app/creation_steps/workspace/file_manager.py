@@ -39,41 +39,71 @@ class FileManager:
             workspace_path.mkdir(parents=True, exist_ok=True)
 
         # Create directories
-        for directory in file_structure.directories:
-            dir_path = workspace_path / directory
-            try:
-                dir_path.mkdir(parents=True, exist_ok=True)
-                logger.debug(f"Created directory: {dir_path}")
-            except OSError as e:
-                logger.error(f"Error creating directory {dir_path}: {e}")
-                raise
+        if file_structure.directories:
+            for directory in file_structure.directories:
+                dir_path = workspace_path / directory
+                try:
+                    dir_path.mkdir(parents=True, exist_ok=True)
+                    logger.debug(f"Created directory: {dir_path}")
+                except OSError as e:
+                    logger.error(f"Error creating directory {dir_path}: {e}")
+                    raise
 
         # Create source files
-        for file_path in file_structure.files:
-            full_path = workspace_path / file_path
-            try:
-                full_path.parent.mkdir(parents=True, exist_ok=True)
-                full_path.touch()
-                logger.debug(f"Created source file: {full_path}")
-            except OSError as e:
-                logger.error(f"Error creating file {full_path}: {e}")
-                raise
+        if file_structure.files:
+            for file_item in file_structure.files:
+                # Handle both string paths and dict with path/content
+                if isinstance(file_item, dict):
+                    file_path = file_item.get("path")
+                    content = file_item.get("content", "")
+                else:
+                    file_path = file_item
+                    content = ""
+                
+                if file_path:
+                    full_path = workspace_path / file_path
+                    try:
+                        full_path.parent.mkdir(parents=True, exist_ok=True)
+                        if content:
+                            full_path.write_text(content, encoding="utf-8")
+                        else:
+                            full_path.touch()
+                        logger.debug(f"Created source file: {full_path}")
+                    except OSError as e:
+                        logger.error(f"Error creating file {full_path}: {e}")
+                        raise
 
         # Create build files
-        for build_file in file_structure.build_files:
-            full_path = workspace_path / build_file
-            try:
-                full_path.parent.mkdir(parents=True, exist_ok=True)
-                full_path.touch()
-                logger.debug(f"Created build file: {full_path}")
-            except OSError as e:
-                logger.error(f"Error creating file {full_path}: {e}")
-                raise
+        if file_structure.build_files:
+            for build_item in file_structure.build_files:
+                # Handle both string paths and dict with path/content
+                if isinstance(build_item, dict):
+                    file_path = build_item.get("path")
+                    content = build_item.get("content", "")
+                else:
+                    file_path = build_item
+                    content = ""
+                
+                if file_path:
+                    full_path = workspace_path / file_path
+                    try:
+                        full_path.parent.mkdir(parents=True, exist_ok=True)
+                        if content:
+                            full_path.write_text(content, encoding="utf-8")
+                        else:
+                            full_path.touch()
+                        logger.debug(f"Created build file: {full_path}")
+                    except OSError as e:
+                        logger.error(f"Error creating file {full_path}: {e}")
+                        raise
 
     def write_file(
         self, context: SolutionCreationContext, file_path: str, content: str
     ) -> None:
         """Write content to a file in the workspace."""
+        if not file_path:
+            raise FileSystemException("File path cannot be empty", file_path=file_path)
+            
         if not context.workspace_path:
             raise FileSystemException(
                 "Workspace path is not set in the context.", file_path=file_path
@@ -86,10 +116,15 @@ class FileManager:
             logger.debug(f"Wrote {len(content)} chars to {full_path}")
         except OSError as e:
             logger.error(f"Error writing to file {full_path}: {e}")
-            raise
+            raise FileSystemException(
+                f"Failed to write file: {str(e)}", file_path=file_path
+            )
 
     def read_file(self, context: SolutionCreationContext, file_path: str) -> str:
         """Read content from a file in the workspace."""
+        if not file_path:
+            raise FileSystemException("File path cannot be empty", file_path=file_path)
+            
         if not context.workspace_path:
             raise FileSystemException(
                 "Workspace path is not set in the context.", file_path=file_path
@@ -97,15 +132,24 @@ class FileManager:
         full_path = Path(context.workspace_path) / file_path
         logger.debug(f"Reading from file: {full_path}")
         try:
+            if not full_path.exists():
+                raise FileSystemException(
+                    f"File does not exist: {file_path}", file_path=file_path
+                )
+            if not full_path.is_file():
+                raise FileSystemException(
+                    f"Path is not a file: {file_path}", file_path=file_path
+                )
             content = full_path.read_text(encoding="utf-8")
             logger.debug(f"Read {len(content)} chars from {full_path}")
             return content
-        except FileNotFoundError:
-            logger.warning(f"File not found during read: {full_path}")
-            return ""
+        except FileSystemException:
+            raise
         except OSError as e:
             logger.error(f"Error reading file {full_path}: {e}")
-            raise
+            raise FileSystemException(
+                f"Failed to read file: {str(e)}", file_path=file_path
+            )
 
     def copy_file(
         self, context: SolutionCreationContext, source_path: str, dest_path: str

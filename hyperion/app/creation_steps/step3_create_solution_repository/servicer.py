@@ -65,10 +65,11 @@ class CreateSolutionRepositoryServicer(
                 request_model
             )
             self._validate_language_support(solution_context)
-            
+
             # Set workspace path to a temporary directory for testing
             # In a real implementation, this would be managed by a workspace manager
             import tempfile
+
             solution_context.workspace_path = tempfile.mkdtemp()
 
             solution_context = await self.code_generator.execute(solution_context)
@@ -119,11 +120,7 @@ class CreateSolutionRepositoryServicer(
     def _convert_language_enum_to_string(self, language_enum: int) -> str:
         """Convert programming language enum value to string."""
         # Map from hyperion_pb2.ProgrammingLanguage enum values to strings
-        language_map = {
-            0: "EMPTY",
-            1: "JAVA", 
-            2: "PYTHON"
-        }
+        language_map = {0: "EMPTY", 1: "JAVA", 2: "PYTHON"}
         return language_map.get(language_enum, f"UNKNOWN_{language_enum}")
 
     def _create_response(

@@ -220,6 +220,73 @@ This command:
 3. Validates the proto file syntax
 4. Reports the synchronization status
 
+## Testing
+
+Hyperion includes a comprehensive test suite organized in a global test directory structure.
+
+### Running Tests
+
+#### Run All Tests
+
+```bash
+# Using pytest directly
+pytest tests/ -v
+
+# Using the test runner script
+python run_tests.py
+```
+
+#### Run Specific Test Modules
+
+```bash
+# Run step 3 integration tests
+pytest tests/creation_steps/step3_create_solution_repository/step3_integration.py -v
+
+# Run workspace tests
+pytest tests/creation_steps/workspace/ -v
+
+# Run specific test file
+pytest tests/creation_steps/workspace/test_file_manager.py -v
+```
+
+#### Run Specific Test Cases
+
+```bash
+# Run a specific test class
+pytest tests/creation_steps/step3_create_solution_repository/step3_integration.py::TestSolutionRepositoryCreatorIntegration -v
+
+# Run a specific test method
+pytest tests/creation_steps/workspace/test_file_manager.py::TestFileManager::test_write_file_success -v
+```
+
+#### Test Options
+
+```bash
+# Run with coverage
+pytest tests/ --cov=app --cov-report=html
+
+# Run with detailed output
+pytest tests/ -v --tb=long
+
+# Run tests in parallel (if pytest-xdist is installed)
+pytest tests/ -n auto
+
+# Run only failed tests from last run
+pytest tests/ --lf
+```
+
+### Test Dependencies
+
+The tests require additional dependencies that are included in the development group:
+
+```bash
+# Install test dependencies
+poetry install --with dev
+
+# Or install specific test packages
+poetry add --group dev pytest pytest-asyncio pytest-cov
+```
+
 ## Formatting
 
 ### Black
