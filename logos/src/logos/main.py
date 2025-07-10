@@ -208,7 +208,7 @@ async def add_full_model(data: AddFullModelRequest):
 
 
 @app.post("/logosdb/update_model")
-async def update_model(data: UpdateModelRequest):
+async def update_model(data: GiveFeedbackRequest):
     with DBManager() as db:
         back = db.update_model_weights(**data.dict())
         classifier()

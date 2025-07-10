@@ -216,21 +216,135 @@ class DBManager:
         if not self.check_authorization(logos_key):
             return {"error": "Database changes only allowed for root user."}, 500
         pk = self.insert("models", {"name": name, "endpoint": endpoint, "api_id": api_id, "weight_privacy": weight_privacy, "tags": tags, "parallel": parallel, "description": description})
-        return self.rebalance_added_model_weights(pk, worse_accuracy, worse_quality, worse_latency, worse_cost)
+        return self.rebalance_added_model(pk, worse_accuracy, worse_quality, worse_latency, worse_cost)
 
-    def update_model_weights(self, logos_key: str, id: int, privacy: str, accuracy: int, quality: int, latency: int, cost: int):
+    def update_model_weights(self, logos_key: str, id: int, category: str, value: int):
         if not self.check_authorization(logos_key):
             return {"error": "Database changes only allowed for root user."}, 500
-        self.update("models", id, {"weight_privacy": privacy, "weight_accuracy": accuracy, "weight_quality": quality, "weight_latency": latency, "weight_cost": cost})
-        return {"result": f"Updated Model"}, 200
+        if category not in {"latency", "accuracy", "quality", "cost", "privacy"}:
+            return {"error": f"Invalid category '{category}'"}, 500
+        return self.rebalance_updated_model(id, category, value)
 
     def delete_model(self, logos_key: str, id: int):
         if not self.check_authorization(logos_key):
             return {"error": "Database changes only allowed for root user."}, 500
-        self.delete("models", id)
+        return self.rebalance_deleted_model(id)
+
+    def rebuild_model_weights(self, accuracy: ModelHandler, quality: ModelHandler, latency: ModelHandler, cost: ModelHandler, privacy_data: list):
+        models = dict()
+        for model in accuracy.get_models():
+            if model[1] not in models:
+                models[model[1]] = {"privacy": "", "accuracy": model[0], "quality": -1, "latency": -1, "cost": -1}
+            else:
+                models[model[1]]["accuracy"] = model[0]
+        for model in quality.get_models():
+            if model[1] not in models:
+                models[model[1]] = {"privacy": "", "accuracy": -1, "quality": model[0], "latency": -1, "cost": -1}
+            else:
+                models[model[1]]["quality"] = model[0]
+        for model in latency.get_models():
+            if model[1] not in models:
+                models[model[1]] = {"privacy": "", "accuracy": -1, "quality": -1, "latency": model[0], "cost": -1}
+            else:
+                models[model[1]]["latency"] = model[0]
+        for model in cost.get_models():
+            if model[1] not in models:
+                models[model[1]] = {"privacy": "", "accuracy": -1, "quality": -1, "latency": -1, "cost": model[0]}
+            else:
+                models[model[1]]["cost"] = model[0]
+        for model in privacy_data:
+            if model[1] not in models:
+                models[model[1]] = {"privacy": model[0], "accuracy": -1, "quality": -1, "latency": -1, "cost": -1}
+            else:
+                models[model[1]]["privacy"] = model[0]
+        for model in models:
+            self.update("models", model,
+                        {"weight_privacy": models[model]["privacy"], "weight_accuracy": models[model]["accuracy"],
+                         "weight_quality": models[model]["quality"], "weight_latency": models[model]["latency"],
+                         "weight_cost": models[model]["cost"]})
+
+    def rebalance_updated_model(self, updated_model_id: int, category: str, feedback: Union[str, int]):
+        data = self.get_all_models_data()
+        accuracy_data = list()
+        quality_data = list()
+        latency_data = list()
+        cost_data = list()
+        privacy_data = list()
+        for model in data:
+            mid, p, l, a, c, q = model[0], model[4], model[5], model[6], model[7], model[8]
+            if mid == updated_model_id:
+                privacy_data.append((feedback, mid))
+            else:
+                privacy_data.append((p, mid))
+            accuracy_data.append((a, mid))
+            quality_data.append((q, mid))
+            latency_data.append((l, mid))
+            cost_data.append((c, mid))
+        accuracy_data = list(sorted(accuracy_data, key=lambda x: x[1]))
+        quality_data = list(sorted(quality_data, key=lambda x: x[1]))
+        latency_data = list(sorted(latency_data, key=lambda x: x[1]))
+        cost_data = list(sorted(cost_data, key=lambda x: x[1]))
+        privacy_data = list(sorted(privacy_data, key=lambda x: x[1]))
+        accuracy = ModelHandler(accuracy_data)
+        quality = ModelHandler(quality_data)
+        latency = ModelHandler(latency_data)
+        cost = ModelHandler(cost_data)
+        if category == "accuracy":
+            accuracy.give_feedback(updated_model_id, feedback)
+        elif category == "quality":
+            quality.give_feedback(updated_model_id, feedback)
+        elif category == "latency":
+            latency.give_feedback(updated_model_id, feedback)
+        elif category == "cost":
+            cost.give_feedback(updated_model_id, feedback)
+        print(f"Accuracy-Models: {accuracy.get_models()}", flush=True)
+        print(f"Quality-Models: {quality.get_models()}", flush=True)
+        print(f"Latency-Models: {latency.get_models()}", flush=True)
+        print(f"Cost-Models: {cost.get_models()}", flush=True)
+        print(f"Privacy-Models: {privacy_data}", flush=True)
+        # Collect rebalanced model weights
+        self.rebuild_model_weights(accuracy, quality, latency, cost, privacy_data)
+        return {"result": f"Updated Model"}, 200
+
+    def rebalance_deleted_model(self, deleted_model_id: int):
+        data = self.get_all_models_data()
+        accuracy_data = list()
+        quality_data = list()
+        latency_data = list()
+        cost_data = list()
+        privacy_data = list()
+        for model in data:
+            mid, p, l, a, c, q = model[0], model[4], model[5], model[6], model[7], model[8]
+            if mid != deleted_model_id:
+                privacy_data.append((p, mid))
+            accuracy_data.append((a, mid))
+            quality_data.append((q, mid))
+            latency_data.append((l, mid))
+            cost_data.append((c, mid))
+        accuracy_data = list(sorted(accuracy_data, key=lambda x: x[1]))
+        quality_data = list(sorted(quality_data, key=lambda x: x[1]))
+        latency_data = list(sorted(latency_data, key=lambda x: x[1]))
+        cost_data = list(sorted(cost_data, key=lambda x: x[1]))
+        privacy_data = list(sorted(privacy_data, key=lambda x: x[1]))
+        accuracy = ModelHandler(accuracy_data)
+        accuracy.remove_model(deleted_model_id)
+        quality = ModelHandler(quality_data)
+        quality.remove_model(deleted_model_id)
+        latency = ModelHandler(latency_data)
+        latency.remove_model(deleted_model_id)
+        cost = ModelHandler(cost_data)
+        cost.remove_model(deleted_model_id)
+        print(f"Accuracy-Models: {accuracy.get_models()}", flush=True)
+        print(f"Quality-Models: {quality.get_models()}", flush=True)
+        print(f"Latency-Models: {latency.get_models()}", flush=True)
+        print(f"Cost-Models: {cost.get_models()}", flush=True)
+        print(f"Privacy-Models: {privacy_data}", flush=True)
+        # Collect rebalanced model weights
+        self.rebuild_model_weights(accuracy, quality, latency, cost, privacy_data)
+        self.delete("models", deleted_model_id)
         return {"result": f"Deleted Model"}, 200
 
-    def rebalance_added_model_weights(self, new_model_id: int, worse_accuracy: int, worse_quality: int, worse_latency: int, worse_cost: int):
+    def rebalance_added_model(self, new_model_id: int, worse_accuracy: int, worse_quality: int, worse_latency: int, worse_cost: int):
         data = self.get_all_models_data()
         accuracy_data = list()
         quality_data = list()
@@ -268,34 +382,7 @@ class DBManager:
         print(f"Cost-Models: {cost.get_models()}", flush=True)
         print(f"Privacy-Models: {privacy_data}", flush=True)
         # Collect rebalanced model weights
-        models = dict()
-        for model in accuracy.get_models():
-            if model[1] not in models:
-                models[model[1]] = {"privacy": "", "accuracy": model[0], "quality": -1, "latency": -1, "cost": -1}
-            else:
-                models[model[1]]["accuracy"] = model[0]
-        for model in quality.get_models():
-            if model[1] not in models:
-                models[model[1]] = {"privacy": "", "accuracy": -1, "quality": model[0], "latency": -1, "cost": -1}
-            else:
-                models[model[1]]["quality"] = model[0]
-        for model in latency.get_models():
-            if model[1] not in models:
-                models[model[1]] = {"privacy": "", "accuracy": -1, "quality": -1, "latency": model[0], "cost": -1}
-            else:
-                models[model[1]]["latency"] = model[0]
-        for model in cost.get_models():
-            if model[1] not in models:
-                models[model[1]] = {"privacy": "", "accuracy": -1, "quality": -1, "latency": -1, "cost": model[0]}
-            else:
-                models[model[1]]["cost"] = model[0]
-        for model in privacy_data:
-            if model[1] not in models:
-                models[model[1]] = {"privacy": model[0], "accuracy": -1, "quality": -1, "latency": -1, "cost": -1}
-            else:
-                models[model[1]]["privacy"] = model[0]
-        for model in models:
-            self.update("models", model, {"weight_privacy": models[model]["privacy"], "weight_accuracy": models[model]["accuracy"], "weight_quality": models[model]["quality"], "weight_latency": models[model]["latency"], "weight_cost": models[model]["cost"]})
+        self.rebuild_model_weights(accuracy, quality, latency, cost, privacy_data)
         return {"result": f"Created Model", "model_id": new_model_id}, 200
 
     def add_policy(self, logos_key: str, entity_id: int, name: str, description: str, threshold_privacy: str,

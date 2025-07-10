@@ -88,13 +88,10 @@ class AddFullModelRequest(LogosKeyModel):
     description: str
 
 
-class UpdateModelRequest(LogosKeyModel):
+class GiveFeedbackRequest(LogosKeyModel):
     id: int
-    privacy: str
-    accuracy: int
-    quality: int
-    latency: int
-    cost: int
+    category: str
+    value: Union[str, int]
 
 
 class DeleteModelRequest(LogosKeyModel):
