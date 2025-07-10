@@ -15,10 +15,8 @@ from logos.dbutils.dbmanager import DBManager
 from logos.scheduling.scheduling_fcfs import FCFSScheduler
 from logos.scheduling.scheduling_manager import SchedulingManager
 
-from src.logos.classification.classification_balancer import Balancer
 
-
-def get_streaming_response(forward_url, proxy_headers, json_data, log_id, provider_id, model_id):
+def get_streaming_response(forward_url, proxy_headers, json_data, log_id, provider_id, model_id, policy_id):
     json_data = json_data.copy()
     json_data["stream"] = True
     json_data["stream_options"] = {"include_usage": True}
@@ -92,13 +90,13 @@ def get_streaming_response(forward_url, proxy_headers, json_data, log_id, provid
                 usage_tokens = dict()
             if ttft is None:
                 db.set_time_at_first_token(log_id)
-            db.set_response_payload(log_id, first_response, provider_id, model_id, usage_tokens)
+            db.set_response_payload(log_id, first_response, provider_id, model_id, usage_tokens, policy_id)
 
     # Response + call_on_close
     return StreamingResponse(streamer(), media_type="application/json")
 
 
-async def get_standard_response(forward_url, proxy_headers, json_data, log_id, provider_id, model_id):
+async def get_standard_response(forward_url, proxy_headers, json_data, log_id, provider_id, model_id, policy_id):
     try:
         async with httpx.AsyncClient() as client:
             response: Response = await client.request(
@@ -130,7 +128,7 @@ async def get_standard_response(forward_url, proxy_headers, json_data, log_id, p
             with DBManager() as db:
                 db.set_time_at_first_token(log_id)
                 db.set_response_timestamp(log_id)
-                db.set_response_payload(log_id, response, provider_id, model_id, usage_tokens)
+                db.set_response_payload(log_id, response, provider_id, model_id, usage_tokens, policy_id)
         return response
     finally:
         if model_id is not None:
@@ -225,6 +223,7 @@ def resource_behaviour(logos_key, headers, data, models):
     models = select.classify(prompt, policy, allowed=models)
     if not models:
         return {"error": "Could not identify suitable model."}, 500
+    print(f"Model weights after classification: {[(i, j) for i, j, _, _ in models]}")
     sm = SchedulingManager(FCFSScheduler())
     sm.run()
     tid = sm.add_request(data, models)
@@ -247,6 +246,7 @@ def resource_behaviour(logos_key, headers, data, models):
     if api_key is None:
         return {"error": f"No api_key found for task {tid} with model {model_id} and provider {provider["name"]}"}, 500
     model_name = model["name"]
+    print(f"Forwarding to model {model_name} after classification")
     forward_url = merge_url(provider["base_url"], model["endpoint"])
     auth_name = provider["auth_name"]
     auth_format = provider["auth_format"].format(api_key)
@@ -254,8 +254,7 @@ def resource_behaviour(logos_key, headers, data, models):
         auth_name: auth_format,
         "Content-Type": "application/json"
     }
-    # TODO: Add config header fields to proxy_headers
-    return proxy_headers, forward_url, model_id, model_name, int(provider["id"]), provider["name"]
+    return proxy_headers, forward_url, model_id, model_name, int(provider["id"]), provider["name"], policy["id"]
 
 
 def merge_url(base_url, endpoint):

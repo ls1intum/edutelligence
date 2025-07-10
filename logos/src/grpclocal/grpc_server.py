@@ -59,7 +59,7 @@ class LogosServicer(model_pb2_grpc.LogosServicer):
                 context.set_code(grpc.StatusCode.UNAVAILABLE)
                 context.set_details(f"Upstream error: {out[0]["error"]}")
                 return
-            proxy_headers, forward_url, model_id, model_name, provider_id, _ = out
+            proxy_headers, forward_url, model_id, model_name, provider_id, _, policy_id = out
 
         # Standard request setup
 
@@ -143,7 +143,7 @@ class LogosServicer(model_pb2_grpc.LogosServicer):
                     usage_tokens = dict()
 
                 with DBManager() as db:
-                    db.set_response_payload(usage_id, response_for_log, provider_id, model_id, usage_tokens)
+                    db.set_response_payload(usage_id, response_for_log, provider_id, model_id, usage_tokens, policy_id)
             except Exception:
                 traceback.print_exc()
 

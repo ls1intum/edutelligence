@@ -920,7 +920,7 @@ class DBManager:
         self.session.commit()
         return {"result": "timestamp_response set"}, 200
 
-    def set_response_payload(self, log_id: int, payload: dict, provider_id=None, model_id=None, usage=None):
+    def set_response_payload(self, log_id: int, payload: dict, provider_id=None, model_id=None, usage=None, policy_id=-1):
         # Hole Privacy-Level
         if usage is None:
             usage = dict()
@@ -952,6 +952,7 @@ class DBManager:
                    SET response_payload = :payload,
                        provider_id      = COALESCE(:provider_id, provider_id),
                        model_id         = COALESCE(:model_id, model_id),
+                       policy_id         = COALESCE(:policy_id, policy_id),
                        timestamp_response = :timestamp_response
                    WHERE id = :log_id
                    """)
@@ -960,6 +961,7 @@ class DBManager:
             "provider_id": provider_id,
             "model_id": model_id,
             "log_id": log_id,
+            "policy_id": policy_id,
             "timestamp_response": datetime.datetime.now(datetime.timezone.utc)
         })
         self.session.commit()

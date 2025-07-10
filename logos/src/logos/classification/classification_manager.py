@@ -60,15 +60,15 @@ class ClassificationManager:
             allowed = list()
         else:
             self.models = [model for model in self.models if model["id"] in allowed]
-        print(f"Policy: {policy}", flush=True)
-        print(f"Models: {self.models}", flush=True)
+        print(f"Policy: {policy['id']}", flush=True)
+        print(f"Models: {[model['id'] for model in self.models]}", flush=True)
         filtered = PolicyClassifier(self.models).classify(prompt, policy)
-        print(f"Policy-Classification: {filtered}", flush=True)
+        print(f"Policy-Classification: {[model['id'] for model in filtered]}", flush=True)
         filtered = TokenClassifier(filtered).classify(prompt, policy)
-        print(f"Token-Classification: {filtered}", flush=True)
+        print(f"Token-Classification: {[model['id'] for model in filtered]}", flush=True)
         self.laura.allowed = allowed
         filtered = AIClassifier(filtered).classify(prompt, policy, laura=self.laura)
-        print(f"AI-Classification: {filtered}", flush=True)
+        print(f"AI-Classification: {[model['id'] for model in filtered]}", flush=True)
         self.laura.allowed = list()
         self.filtered = filtered
         return sorted(

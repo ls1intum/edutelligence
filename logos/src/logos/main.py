@@ -374,11 +374,12 @@ async def logos_service(path: str, request: Request):
         proxy_headers, forward_url, provider_id = out
         model_id, model_name = None, None
         provider_name = ""
+        policy_id = -1
     else:
         out = resource_behaviour(logos_key, headers, json_data, models)
         if isinstance(out[0], dict) and "error" in out[0]:
             return out
-        proxy_headers, forward_url, model_id, model_name, provider_id, provider_name = out
+        proxy_headers, forward_url, model_id, model_name, provider_id, provider_name, policy_id = out
     # OpenWebUI expects the model name not in the endpoint but in the data
     if "openwebui" in provider_name.lower():
         json_data["model"] = model_name
@@ -391,14 +392,14 @@ async def logos_service(path: str, request: Request):
         if "stream" not in json_data or json_data["stream"]:
             print("Sending Streaming Request")
             json_data["stream"] = True
-            return get_streaming_response(forward_url, proxy_headers, json_data, usage_id, provider_id, model_id)
+            return get_streaming_response(forward_url, proxy_headers, json_data, usage_id, provider_id, model_id, policy_id)
     except:
         traceback.print_exc()
     # Fall back to naive request method
     try:
         print("Falling back to Standard Request")
         json_data["stream"] = False
-        return await get_standard_response(forward_url, proxy_headers, json_data, usage_id, provider_id, model_id)
+        return await get_standard_response(forward_url, proxy_headers, json_data, usage_id, provider_id, model_id, policy_id)
     except:
         traceback.print_exc()
     return {"error": "provider not reachable"}, 500
