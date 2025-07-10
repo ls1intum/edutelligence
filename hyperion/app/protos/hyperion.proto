@@ -89,7 +89,6 @@ message SolutionRepositoryCreatorRequest {
   string description = 9;
 }
 
-// Response from creating solution repository
 message SolutionRepositoryCreatorResponse {
   Repository repository = 1;
 }
