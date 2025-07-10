@@ -9,55 +9,31 @@ option java_multiple_files = true;
 option java_generic_services = false;
 
 
+/***********************
+ ***   Core types    ***
+ ***********************/
+ 
 // Represents a file in a repository with content
 message RepositoryFile {
-  // File path relative to the repository root
   string path = 1;
-  
-  // File content
   string content = 2;
 }
 
 // Represents a collection of files that form a repository
 message Repository {
-  // Files contained in the repository
   repeated RepositoryFile files = 1;
 }
 
 enum ProgrammingLanguage {
   EMPTY = 0;
-  ASSEMBLER = 1;
-  BASH = 2;
-  C = 3;
-  C_PLUS_PLUS = 4;
-  C_SHARP = 5;
-  DART = 6;
-  GO = 7;
-  HASKELL = 8;
-  JAVA = 9;
-  JAVASCRIPT = 10;
-  KOTLIN = 11;
-  MATLAB = 12;
-  OCAML = 13;
-  PYTHON = 14;
-  R = 15;
-  RUBY = 16;
-  RUST = 17;
-  SWIFT = 18;
-  TYPESCRIPT = 19;
-  VHDL = 20;
+  JAVA = 1;
+  PYTHON = 2;
 }
 
 enum ProjectType {
-  MAVEN_MAVEN = 0;
-  PLAIN_MAVEN = 1;
-  MAVEN_BLACKBOX = 2;
-  PLAIN_GRADLE = 3;
-  GRADLE_GRADLE = 4;
-  PLAIN = 5;
-  XCODE = 6;
-  FACT = 7;
-  GCC = 8;
+  PLAIN = 0;
+  MAVEN = 1;
+  GRADLE = 2;
 }
 
 // Represents a programming exercise with all associated data
@@ -91,31 +67,35 @@ message ProgrammingExercise {
   
 }
 
-// Exercise Creation Step 1: Define Boundary Conditions
-service DefineBoundaryCondition { }
+/*********************
+ ***   Messages    ***
+ *********************/
 
-// Exercise Creation Step 2: Create Draft Problem Statement
-service DraftProblemStatement {}
+// Request for creating solution repository
+message SolutionRepositoryCreatorRequest {
+  ProgrammingLanguage programming_language = 1;
+  ProjectType project_type = 2;
+  string difficulty = 3;
+  int32 points = 4;
+  int32 bonus_points = 5;
+  repeated string constraints = 6;
+  string title = 7;
+  string short_title = 8;
+  string description = 9;
+}
 
-// Exercise Creation Step 3: Create Solution Repository
-service CreateSolutionRepository {}
-
-// Exercise Creation Step 4: Create Template Repository
-service CreateTemplateRepository {}
-
-// Exercise Creation Step 5: Create Test Repository
-service CreateTestRepository {}
-
-// Exercise Creation Step 6: Finalize Problem Statement
-service FinalizeProblemStatement {}
-
-// Exercise Creation Step 7: Configure Grading
-service ConfigureGrading {}
-
-// Exercise Creation Step 8: Review and Refine
-service ReviewAndRefine {
-  rpc CheckInconsistencies(InconsistencyCheckRequest) returns (InconsistencyCheckResponse) {}
-  rpc RewriteProblemStatement(RewriteProblemStatementRequest) returns (RewriteProblemStatementResponse) {}
+// Response from creating solution repository
+message SolutionRepositoryCreatorResponse {
+  ProgrammingLanguage programming_language = 1;
+  ProjectType project_type = 2;
+  string difficulty = 3;
+  int32 points = 4;
+  int32 bonus_points = 5;
+  repeated string constraints = 6;
+  string title = 7;
+  string short_title = 8;
+  string description = 9;
+  Repository solution_repository = 10;
 }
 
 message InconsistencyCheckRequest {
@@ -135,4 +115,39 @@ message RewriteProblemStatementRequest {
 
 message RewriteProblemStatementResponse {
   string rewritten_text = 1;
+}
+
+
+/******************************
+ ***   Service Definitions  ***
+ ******************************/
+
+
+// Exercise Creation Step 1: Define Boundary Conditions
+service DefineBoundaryCondition { }
+
+// Exercise Creation Step 2: Create Draft Problem Statement
+service DraftProblemStatement {}
+
+// Exercise Creation Step 3: Create Solution Repository
+service CreateSolutionRepository {
+  rpc CreateSolutionRepository(SolutionRepositoryCreatorRequest) returns (SolutionRepositoryCreatorResponse) {}
+}
+
+// Exercise Creation Step 4: Create Template Repository
+service CreateTemplateRepository {}
+
+// Exercise Creation Step 5: Create Test Repository
+service CreateTestRepository {}
+
+// Exercise Creation Step 6: Finalize Problem Statement
+service FinalizeProblemStatement {}
+
+// Exercise Creation Step 7: Configure Grading
+service ConfigureGrading {}
+
+// Exercise Creation Step 8: Review and Refine
+service ReviewAndRefine {
+  rpc CheckInconsistencies(InconsistencyCheckRequest) returns (InconsistencyCheckResponse) {}
+  rpc RewriteProblemStatement(RewriteProblemStatementRequest) returns (RewriteProblemStatementResponse) {}
 }
