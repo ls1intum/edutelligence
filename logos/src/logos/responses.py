@@ -216,6 +216,8 @@ def resource_behaviour(logos_key, headers, data, models):
             policy = db.get_policy(logos_key, int(headers["policy"]))
     else:
         policy = ProxyPolicy()
+    if isinstance(policy, dict) and "error" in policy:
+        return {"error": "Could not identify suitable policy."}, 500
 
     select = ClassificationManager(list())
     # Extract our prompt (needed for classification)

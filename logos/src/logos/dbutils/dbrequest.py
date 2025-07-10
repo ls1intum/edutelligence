@@ -1,3 +1,5 @@
+from typing import Union
+
 from pydantic import BaseModel
 
 
@@ -77,10 +79,10 @@ class AddFullModelRequest(LogosKeyModel):
     endpoint: str
     api_id: int
     weight_privacy: str
-    worse_accuracy: int
-    worse_quality: int
-    worse_latency: int
-    worse_cost: int
+    worse_accuracy: Union[int, None]
+    worse_quality: Union[int, None]
+    worse_latency: Union[int, None]
+    worse_cost: Union[int, None]
     tags: str
     parallel: int
     description: str

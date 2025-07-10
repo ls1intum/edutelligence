@@ -216,8 +216,7 @@ class DBManager:
         if not self.check_authorization(logos_key):
             return {"error": "Database changes only allowed for root user."}, 500
         pk = self.insert("models", {"name": name, "endpoint": endpoint, "api_id": api_id, "weight_privacy": weight_privacy, "tags": tags, "parallel": parallel, "description": description})
-        self.rebalance_added_model_weights(pk, worse_accuracy, worse_quality, worse_latency, worse_cost)
-        return {"result": f"Created Model", "model_id": pk}, 200
+        return self.rebalance_added_model_weights(pk, worse_accuracy, worse_quality, worse_latency, worse_cost)
 
     def update_model_weights(self, logos_key: str, id: int, privacy: str, accuracy: int, quality: int, latency: int, cost: int):
         if not self.check_authorization(logos_key):
@@ -240,13 +239,16 @@ class DBManager:
         privacy_data = list()
         for model in data:
             mid, p, l, a, c, q = model[0], model[4], model[5], model[6], model[7], model[8]
+            # Add privacy data (we don't add it later as it's not handled via the model handler)
+            privacy_data.append((p, mid))
             if mid == new_model_id:
+                if p not in {'LOCAL', 'CLOUD_IN_EU_BY_US_PROVIDER', 'CLOUD_NOT_IN_EU_BY_US_PROVIDER', 'CLOUD_IN_EU_BY_EU_PROVIDER'}:
+                    return {"error": f"Could not add model: Unknown Privacy Level"}, 500
                 continue
             accuracy_data.append((a, mid))
             quality_data.append((q, mid))
             latency_data.append((l, mid))
             cost_data.append((c, mid))
-            privacy_data.append((p, mid))
         accuracy_data = list(sorted(accuracy_data, key=lambda x: x[1]))
         quality_data = list(sorted(quality_data, key=lambda x: x[1]))
         latency_data = list(sorted(latency_data, key=lambda x: x[1]))
@@ -260,39 +262,41 @@ class DBManager:
         latency.add_model(worse_latency, new_model_id)
         cost = ModelHandler(cost_data)
         cost.add_model(worse_cost, new_model_id)
-        print(f"Accuracy-Models: {accuracy.get_models()}")
-        print(f"Quality-Models: {quality.get_models()}")
-        print(f"Latency-Models: {latency.get_models()}")
-        print(f"Cost-Models: {cost.get_models()}")
+        print(f"Accuracy-Models: {accuracy.get_models()}", flush=True)
+        print(f"Quality-Models: {quality.get_models()}", flush=True)
+        print(f"Latency-Models: {latency.get_models()}", flush=True)
+        print(f"Cost-Models: {cost.get_models()}", flush=True)
+        print(f"Privacy-Models: {privacy_data}", flush=True)
         # Collect rebalanced model weights
         models = dict()
         for model in accuracy.get_models():
-            if model[0] not in models:
-                models[model[0]] = {"privacy": "", "accuracy": model[1], "quality": -1, "latency": -1, "cost": -1}
+            if model[1] not in models:
+                models[model[1]] = {"privacy": "", "accuracy": model[0], "quality": -1, "latency": -1, "cost": -1}
             else:
-                models[model[0]]["accuracy"] = model[1]
+                models[model[1]]["accuracy"] = model[0]
         for model in quality.get_models():
-            if model[0] not in models:
-                models[model[0]] = {"privacy": "", "accuracy": -1, "quality": model[1], "latency": -1, "cost": -1}
+            if model[1] not in models:
+                models[model[1]] = {"privacy": "", "accuracy": -1, "quality": model[0], "latency": -1, "cost": -1}
             else:
-                models[model[0]]["quality"] = model[1]
+                models[model[1]]["quality"] = model[0]
         for model in latency.get_models():
-            if model[0] not in models:
-                models[model[0]] = {"privacy": "", "accuracy": -1, "quality": -1, "latency": model[1], "cost": -1}
+            if model[1] not in models:
+                models[model[1]] = {"privacy": "", "accuracy": -1, "quality": -1, "latency": model[0], "cost": -1}
             else:
-                models[model[0]]["latency"] = model[1]
+                models[model[1]]["latency"] = model[0]
         for model in cost.get_models():
-            if model[0] not in models:
-                models[model[0]] = {"privacy": "", "accuracy": -1, "quality": -1, "latency": -1, "cost": model[1]}
+            if model[1] not in models:
+                models[model[1]] = {"privacy": "", "accuracy": -1, "quality": -1, "latency": -1, "cost": model[0]}
             else:
-                models[model[0]]["cost"] = model[1]
+                models[model[1]]["cost"] = model[0]
         for model in privacy_data:
-            if model[0] not in models:
-                models[model[0]] = {"privacy": model[1], "accuracy": -1, "quality": -1, "latency": -1, "cost": -1}
+            if model[1] not in models:
+                models[model[1]] = {"privacy": model[0], "accuracy": -1, "quality": -1, "latency": -1, "cost": -1}
             else:
-                models[model[0]]["privacy"] = model[1]
+                models[model[1]]["privacy"] = model[0]
         for model in models:
             self.update("models", model, {"weight_privacy": models[model]["privacy"], "weight_accuracy": models[model]["accuracy"], "weight_quality": models[model]["quality"], "weight_latency": models[model]["latency"], "weight_cost": models[model]["cost"]})
+        return {"result": f"Created Model", "model_id": new_model_id}, 200
 
     def add_policy(self, logos_key: str, entity_id: int, name: str, description: str, threshold_privacy: str,
                    threshold_latency: int, threshold_accuracy: int, threshold_cost: int, threshold_quality: int,
@@ -322,31 +326,33 @@ class DBManager:
         self.delete("policies", id)
         return {"result": f"Deleted Policy"}, 200
 
-    def get_policy(self, logos_key: str, id: int):
-        if not self.user_authorization(logos_key):
-            return {"error": "Not Authorized"}, 500
+    def get_policy(self, logos_key: str, policy_id: int):
         sql = text("""
-                   SELECT *
-                   FROM policies
-                   WHERE id = :policy_id
+                   SELECT policies.id, policies.name, policies.entity_id, policies.description, policies.threshold_privacy, 
+                          policies.threshold_latency, policies.threshold_accuracy, policies.threshold_cost, 
+                          policies.threshold_quality, policies.priority, policies.topic
+                   FROM process, policies
+                   WHERE process.logos_key = :logos_key
+                       and process.id = policies.entity_id
+                       and policies.id = :policy_id
                    """)
-        result = self.session.execute(sql, {"policy_id": int(id)}).fetchone()
+        result = self.session.execute(sql, {"logos_key": logos_key, "policy_id": int(policy_id)}).fetchone()
         if result is None:
-            return None
+            return {"error": "Not Found"}
         return {
             "id": result.id,
-            "entity_id": result.entity_id,
             "name": result.name,
+            "entity_id": result.entity_id,
             "description": result.description,
-            "api_id": result.api_id,
             "threshold_privacy": result.threshold_privacy,
             "threshold_latency": result.threshold_latency,
             "threshold_accuracy": result.threshold_accuracy,
             "threshold_cost": result.threshold_cost,
             "threshold_quality": result.threshold_quality,
             "priority": result.priority,
-            "topic": result.topic
-        }, 200
+            "topic": result.topic,
+        }
+
 
     def add_service(self, logos_key: str, name: str):
         if not self.check_authorization(logos_key):
@@ -745,33 +751,6 @@ class DBManager:
         if result is None:
             return None
         return result.api_key
-
-    def get_policy(self, logos_key: str, policy_id: int):
-        sql = text("""
-                   SELECT policies.id, policies.name, policies.entity_id, policies.description, policies.threshold_privacy, 
-                          policies.threshold_latency, policies.threshold_accuracy, policies.threshold_cost, 
-                          policies.threshold_quality, policies.priority, policies.topic
-                   FROM process, policies
-                   WHERE process.logos_key = :logos_key
-                       and process.id = policies.entity_id
-                       and policies.id = :policy_id
-                   """)
-        result = self.session.execute(sql, {"logos_key": logos_key, "policy_id": int(policy_id)}).fetchone()
-        if result is None:
-            return None
-        return {
-            "id": result.id,
-            "name": result.name,
-            "entity_id": result.entity_id,
-            "description": result.description,
-            "threshold_privacy": result.threshold_privacy,
-            "threshold_latency": result.threshold_latency,
-            "threshold_accuracy": result.threshold_accuracy,
-            "threshold_cost": result.threshold_cost,
-            "threshold_quality": result.threshold_quality,
-            "priority": result.priority,
-            "topic": result.topic,
-        }
 
     def log(self, process_id: int):
         sql = text("""
