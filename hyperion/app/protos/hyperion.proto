@@ -77,7 +77,6 @@ message ProgrammingExercise {
  ***   Messages    ***
  *********************/
 
-// Request for creating solution repository
 message SolutionRepositoryCreatorRequest {
   ProgrammingLanguage programming_language = 1;
   ProjectType project_type = 2;
