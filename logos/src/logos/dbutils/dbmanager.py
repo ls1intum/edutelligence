@@ -752,7 +752,7 @@ class DBManager:
         """
         sql = text("""
             SELECT policies.id, policies.entity_id, policies.name, policies.description, policies.threshold_privacy, policies.threshold_latency, policies.threshold_accuracy, policies.threshold_cost, policies.threshold_quality, policies.priority, policies.topic
-            FROM policies, process, profiles
+            FROM policies, process, profiles, profile_model_permissions, models
             WHERE process.logos_key = :logos_key
                 and process.id = policies.entity_id
                 and profiles.id = profile_model_permissions.profile_id
