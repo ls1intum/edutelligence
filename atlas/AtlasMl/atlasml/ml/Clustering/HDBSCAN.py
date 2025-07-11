@@ -28,9 +28,9 @@ def apply_hdbscan(
     clusterer = HDBSCAN(
         min_samples=min_samples,
         metric=metric,
+        store_centers='both',
         cluster_selection_epsilon=eps,
         min_cluster_size=min_cluster_size,
     )
     clusterer.fit(matrix)
-
-    return clusterer.labels_
+    return clusterer.labels_, clusterer.centroids_, clusterer.medoids_
