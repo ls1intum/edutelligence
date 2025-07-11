@@ -19,7 +19,7 @@ class TokenClassifier(Classifier):
         for model in self.models:
             tags = model["tags"].split(" ")
             matches = sum(1 for tag in tags if tag.lower() in prompt.lower())
-            relative = matches / len(tags)
+            relative = matches / len(tags) if tags else 0
             absolute = matches
             score = weighted_average(relative, absolute)
             model["classification_weight"].add_weight(score, "token")
