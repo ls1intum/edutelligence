@@ -1,5 +1,6 @@
 import datetime
 import json
+import time
 from typing import Union
 
 from fastapi.responses import StreamingResponse
@@ -16,7 +17,7 @@ from logos.scheduling.scheduling_fcfs import FCFSScheduler
 from logos.scheduling.scheduling_manager import SchedulingManager
 
 
-def get_streaming_response(forward_url, proxy_headers, json_data, log_id, provider_id, model_id, policy_id):
+def get_streaming_response(forward_url, proxy_headers, json_data, log_id, provider_id, model_id, policy_id, classified):
     json_data = json_data.copy()
     json_data["stream"] = True
     json_data["stream_options"] = {"include_usage": True}
@@ -90,13 +91,13 @@ def get_streaming_response(forward_url, proxy_headers, json_data, log_id, provid
                 usage_tokens = dict()
             if ttft is None:
                 db.set_time_at_first_token(log_id)
-            db.set_response_payload(log_id, first_response, provider_id, model_id, usage_tokens, policy_id)
+            db.set_response_payload(log_id, first_response, provider_id, model_id, usage_tokens, policy_id, classified)
 
     # Response + call_on_close
     return StreamingResponse(streamer(), media_type="application/json")
 
 
-async def get_standard_response(forward_url, proxy_headers, json_data, log_id, provider_id, model_id, policy_id):
+async def get_standard_response(forward_url, proxy_headers, json_data, log_id, provider_id, model_id, policy_id, classified):
     try:
         async with httpx.AsyncClient() as client:
             response: Response = await client.request(
@@ -128,7 +129,7 @@ async def get_standard_response(forward_url, proxy_headers, json_data, log_id, p
             with DBManager() as db:
                 db.set_time_at_first_token(log_id)
                 db.set_response_timestamp(log_id)
-                db.set_response_payload(log_id, response, provider_id, model_id, usage_tokens, policy_id)
+                db.set_response_payload(log_id, response, provider_id, model_id, usage_tokens, policy_id, classified)
         return response
     finally:
         if model_id is not None:
@@ -220,13 +221,35 @@ def resource_behaviour(logos_key, headers, data, models):
     select = ClassificationManager(list())
     # Extract our prompt (needed for classification)
     prompt = extract_prompt(data)
-    models = select.classify(prompt, policy, allowed=models)
-    if not models:
+    start = time.time()
+    mdls = select.classify(prompt, policy, allowed=models)
+    end = time.time()
+    if not mdls:
         return {"error": "Could not identify suitable model."}, 500
-    print(f"Model weights after classification: {[(i, j) for i, j, _, _ in models]}")
+    print(f"Model weights after classification: {[(i, j) for i, j, _, _ in mdls]}")
+    # Get IDs of classified models
+    classified = {i for i, _, _, _ in mdls}
+    classified = {
+        "classification_data": [
+            {
+                "latency_weight": model["classification_weight"].weights["policy"][0] if len(model["classification_weight"].weights["policy"]) > 0 else -1,
+                "accuracy_weight": model["classification_weight"].weights["policy"][1] if len(model["classification_weight"].weights["policy"]) > 1 else -1,
+                "quality_weight": model["classification_weight"].weights["policy"][2] if len(model["classification_weight"].weights["policy"]) > 2 else -1,
+                "token_weight": model["classification_weight"].weights["token"][0] if len(model["classification_weight"].weights["token"]) > 0 else -1,
+                "laura_weight": model["classification_weight"].weights["ai"][0] if len(model["classification_weight"].weights["ai"]) > 0 else -1,
+                "laura_factor": model["classification_weight"].LAURA_WEIGHT,
+                "token_factor": model["classification_weight"].TOKEN_WEIGHT,
+                "combined_weight": model["classification_weight"].get_weight(),
+                "model_id": model["id"],
+            }
+            for model in select.filtered
+            if model["id"] in classified
+        ],
+        "classification_time": end - start,
+    }
     sm = SchedulingManager(FCFSScheduler())
     sm.run()
-    tid = sm.add_request(data, models)
+    tid = sm.add_request(data, mdls)
 
     # Wait for this task to be executed
     while not sm.is_finished(tid):
@@ -254,7 +277,7 @@ def resource_behaviour(logos_key, headers, data, models):
         auth_name: auth_format,
         "Content-Type": "application/json"
     }
-    return proxy_headers, forward_url, model_id, model_name, int(provider["id"]), provider["name"], policy["id"]
+    return proxy_headers, forward_url, model_id, model_name, int(provider["id"]), provider["name"], policy["id"], classified
 
 
 def merge_url(base_url, endpoint):
@@ -282,6 +305,7 @@ def request_setup(headers: dict, logos_key: str):
             return list()
         else:
             # Return ids of all available models
+            print(f"Found models {models} for classification", flush=True)
             return models
     except PermissionError as e:
         return {"error": str(e)}, 401

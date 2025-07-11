@@ -4,6 +4,9 @@ Module handling balancing of different weights categories.
 
 
 class Balancer:
+    TOKEN_WEIGHT = 2
+    LAURA_WEIGHT = 4
+
     def __init__(self):
         self.weights = {
             "policy": list(),
@@ -33,4 +36,4 @@ class Balancer:
         self.weights[category].append(weight)
 
     def get_weight(self):
-        return self.__combine_policy() + self.__combine_token() * 2 + self.__combine_ai() * 4
+        return self.__combine_policy() + self.__combine_token() * self.TOKEN_WEIGHT + self.__combine_ai() * self.LAURA_WEIGHT

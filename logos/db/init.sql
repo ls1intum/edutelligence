@@ -125,7 +125,8 @@ CREATE TABLE log_entry (
     response_payload JSONB,
     provider_id INTEGER REFERENCES providers(id) ON DELETE SET NULL,
     model_id INTEGER REFERENCES models(id) ON DELETE SET NULL,
-    policy_id INTEGER REFERENCES policies(id) ON DELETE SET NULL
+    policy_id INTEGER REFERENCES policies(id) ON DELETE SET NULL,
+    classification_statistics JSONB
 );
 
 CREATE TABLE token_types (

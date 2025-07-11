@@ -153,6 +153,8 @@ class LogEntry(Base):
     model_id = Column(Integer, ForeignKey('models.id', ondelete="SET NULL"))
     policy_id = Column(Integer, ForeignKey('policies.id', ondelete="SET NULL"))
 
+    classification_statistics = Column(JSON)
+
     usage_tokens = relationship("UsageTokens")
 
 

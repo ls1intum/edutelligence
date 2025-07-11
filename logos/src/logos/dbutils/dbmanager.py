@@ -662,7 +662,7 @@ class DBManager:
             WHERE process.logos_key = :logos_key
                 and process.id = profiles.process_id
                 and profiles.id = profile_model_permissions.profile_id
-                and profile_model_permissions.model_id = model_provider.model_id
+                and profile_model_permissions.model_id = models.id
                 and model_api_keys.id = models.api_id
                 and model_api_keys.profile_id = profiles.id
                 and model_api_keys.provider_id = providers.id
@@ -920,8 +920,11 @@ class DBManager:
         self.session.commit()
         return {"result": "timestamp_response set"}, 200
 
-    def set_response_payload(self, log_id: int, payload: dict, provider_id=None, model_id=None, usage=None, policy_id=-1):
+    def set_response_payload(self, log_id: int, payload: dict, provider_id=None, model_id=None, usage=None, policy_id=-1,
+                             classified=None):
         # Hole Privacy-Level
+        if classified is None:
+            classified = dict()
         if usage is None:
             usage = dict()
         result = self.session.execute(
@@ -953,7 +956,8 @@ class DBManager:
                        provider_id      = COALESCE(:provider_id, provider_id),
                        model_id         = COALESCE(:model_id, model_id),
                        policy_id         = COALESCE(:policy_id, policy_id),
-                       timestamp_response = :timestamp_response
+                       timestamp_response = :timestamp_response,
+                       classification_statistics = :classification_statistics
                    WHERE id = :log_id
                    """)
         self.session.execute(sql, {
@@ -962,7 +966,8 @@ class DBManager:
             "model_id": model_id,
             "log_id": log_id,
             "policy_id": policy_id,
-            "timestamp_response": datetime.datetime.now(datetime.timezone.utc)
+            "timestamp_response": datetime.datetime.now(datetime.timezone.utc),
+            "classification_statistics": json.dumps(classified)
         })
         self.session.commit()
         return {"result": "response_payload set"}, 200
