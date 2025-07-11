@@ -17,7 +17,7 @@ class TokenClassifier(Classifier):
 
     def classify(self, prompt: str, _: dict, *args, **kwargs) -> List:
         for model in self.models:
-            tags = model["tags"].split(";").split(" ")
+            tags = model["tags"].split(" ")
             matches = sum(1 for tag in tags if tag.lower() in prompt.lower())
             relative = matches / len(tags)
             absolute = matches
