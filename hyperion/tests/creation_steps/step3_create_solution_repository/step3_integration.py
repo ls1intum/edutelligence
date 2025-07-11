@@ -35,7 +35,8 @@ class TestSolutionRepositoryCreatorIntegration:
 
         mock_responses = {
             # Step 1.1: Solution Plan (JSON response)
-            "solution_plan": """{
+            "solution_plan": (
+                """{
                 "architecture_description": "A simple binary search implementation with input validation and "
                 "comprehensive testing. The solution follows a modular approach with separate functions for "
                 "validation and the core search algorithm.",
@@ -43,15 +44,19 @@ class TestSolutionRepositoryCreatorIntegration:
                 "required_functions": ["binary_search", "validate_input", "main"],
                 "algorithms": ["Binary Search", "Input Validation"],
                 "design_patterns": ["Guard Clause Pattern", "Single Responsibility Principle"]
-            }""",
+            }"""
+            ),
             # Step 1.2: File Structure (JSON response)
-            "file_structure": """{
+            "file_structure": (
+                """{
                 "directories": ["src", "tests"],
                 "files": ["src/binary_search.py", "tests/test_binary_search.py"],
                 "build_files": ["requirements.txt"]
-            }""",
+            }"""
+            ),
             # Step 1.3: Headers for binary_search.py
-            "headers_binary_search": '''
+            "headers_binary_search": (
+                '''
                 """
                 Binary Search Implementation
 
@@ -104,9 +109,11 @@ class TestSolutionRepositoryCreatorIntegration:
 
                 if __name__ == "__main__":
                     main()
-            ''',
+            '''
+            ),
             # Step 1.3: Headers for test_binary_search.py
-            "headers_test": '''
+            "headers_test": (
+                '''
                 """
                 Test module for binary search implementation.
                 """
@@ -145,9 +152,11 @@ class TestSolutionRepositoryCreatorIntegration:
 
                 if __name__ == "__main__":
                     unittest.main()
-            ''',
+            '''
+            ),
             # Step 1.4: Implementation for binary_search.py
-            "implementation_binary_search": '''"""
+            "implementation_binary_search": (
+                '''"""
                 Binary Search Implementation
 
                 This module provides a binary search algorithm implementation
@@ -244,9 +253,11 @@ class TestSolutionRepositoryCreatorIntegration:
 
                 if __name__ == "__main__":
                     main()
-                ''',
+                '''
+            ),
             # Step 1.4: Implementation for test_binary_search.py
-            "implementation_test": '''
+            "implementation_test": (
+                '''
                     """
                     Test module for binary search implementation.
                     """
@@ -311,7 +322,8 @@ class TestSolutionRepositoryCreatorIntegration:
 
                     if __name__ == "__main__":
                         unittest.main()
-                ''',
+                '''
+            ),
         }
 
         # Track call count to return appropriate response

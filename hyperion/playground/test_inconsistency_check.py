@@ -40,7 +40,8 @@ result = binary_search(arr, target)  # Should return 3
 SAMPLE_TEMPLATE_FILES = [
     {
         "path": "binary_search.py",
-        "content": """def binary_search(arr, target):
+        "content": (
+            """def binary_search(arr, target):
     \"\"\"
     Implement binary search algorithm.
     
@@ -53,11 +54,13 @@ SAMPLE_TEMPLATE_FILES = [
     \"\"\"
     # TODO: Implement binary search
     pass
-""",
+"""
+        ),
     },
     {
         "path": "test_binary_search.py",
-        "content": """import unittest
+        "content": (
+            """import unittest
 from binary_search import binary_search
 
 class TestBinarySearch(unittest.TestCase):
@@ -71,14 +74,16 @@ class TestBinarySearch(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
-""",
+"""
+        ),
     },
 ]
 
 SAMPLE_SOLUTION_FILES = [
     {
         "path": "binary_search.py",
-        "content": """def binary_search(arr, target):
+        "content": (
+            """def binary_search(arr, target):
     \"\"\"
     Binary search implementation.
     
@@ -101,11 +106,13 @@ SAMPLE_SOLUTION_FILES = [
             right = mid - 1
     
     return -1
-""",
+"""
+        ),
     },
     {
         "path": "test_binary_search.py",
-        "content": """import unittest
+        "content": (
+            """import unittest
 from binary_search import binary_search
 
 class TestBinarySearch(unittest.TestCase):
@@ -126,7 +133,8 @@ class TestBinarySearch(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
-""",
+"""
+        ),
     },
 ]
 
