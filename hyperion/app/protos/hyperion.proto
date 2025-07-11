@@ -118,11 +118,18 @@ service ReviewAndRefine {
   rpc RewriteProblemStatement(RewriteProblemStatementRequest) returns (RewriteProblemStatementResponse) {}
 }
 
+message Metadata {
+  string traceId = 1; // UUID with LLM trace ID
+}
+
 message ConsistencyCheckRequest {
   string problem_statement = 1;
   Repository solution_repository = 2;
   Repository template_repository = 3;
   Repository test_repository = 4;
+
+  // Optional: Specify issue categories to check
+  repeated ConsistencyIssueCategory issue_categories = 5;
 }
 
 enum ArtifactType {
@@ -132,79 +139,59 @@ enum ArtifactType {
   TEST_REPOSITORY = 3;
 }
 
-message ArtifactAnchor {
+message ArtifactLocation {
   ArtifactType type = 1;
   string file_path = 2;  // Path in the repository, empty for problem statement
-  
-  // Location reference - use what makes sense for the context
-  oneof location_reference {
-    TextRange text_range = 3;
-    LineRange line_range = 4;
-    StructuralReference structural_ref = 5;
-  }
-}
-
-message TextRange {
-  int32 start_index = 1;
-  int32 end_index = 2;
-}
-
-message LineRange {
-  int32 start_line = 1;
-  int32 end_line = 2;
-}
-
-message StructuralReference {
-  string element_type = 1;    // e.g., "class", "method", "variable"
-  string element_name = 2;    // e.g., "Student", "getName"
-  repeated string path = 3;   // Hierarchical path: ["package.name", "ClassName"]
+  int32 start_line = 3;  // Start line in the content
+  int32 end_line = 4;    // End line in the content
+  string description = 5; // Optional description of the location
 }
 
 enum ConsistencyIssueSeverity {
   LOW = 0;
   MEDIUM = 1;
   HIGH = 2;
-  CRITICAL = 3;
 }
 
 enum ConsistencyIssueType {
-  STRUCTURAL = 0;           // Class structure, inheritance, signatures
-  BEHAVIORAL = 1;           // Logic implementation, algorithm differences  
-  SPECIFICATION = 2;        // Problem statement vs implementation alignment
-  TESTING = 3;              // Test coverage and assertion consistency
+  STRUCTURAL = 0;      // Required interface/structure differs between artifacts, preventing technical implementation
+  SEMANTIC = 1;        // Same concept represented differently across artifacts, creating cognitive confusion  
+  ASSESSMENT = 2;      // Tests/evaluation criteria don't match instructional objectives
+  PEDAGOGICAL = 3;     // Exercise violates learning objective alignment and pedagogical design principles
 }
 
 enum ConsistencyIssueCategory {
-  // STRUCTURAL Issues (0-19) - Core class/method structure mismatches
-  CLASS_MODIFIER_MISMATCH = 0;          // abstract vs concrete, interface vs class
-  INHERITANCE_HIERARCHY_MISMATCH = 1;   // extends/implements different classes/interfaces
-  METHOD_SIGNATURE_MISMATCH = 2;        // return type, parameters, visibility, static
-  CONSTRUCTOR_SIGNATURE_MISMATCH = 3;   // parameters, visibility mismatch
-  ATTRIBUTE_DECLARATION_MISMATCH = 4;   // type, visibility, static modifiers
-  MISSING_REQUIRED_ELEMENT = 5;         // class, method, attribute missing entirely
-  UNEXPECTED_ELEMENT_PRESENT = 6;       // extra classes/methods not in specification
+  // === STRUCTURAL Issues (0-19) ===
+  METHOD_SIGNATURE_MISMATCH = 0;            // Method return type, parameters, or visibility differs between artifacts
+  CONSTRUCTOR_SIGNATURE_MISMATCH = 1;       // Constructor parameters differ between specification and template
+  INTERFACE_IMPLEMENTATION_CONFLICT = 2;    // Required interface cannot be implemented as specified
+  TYPE_DECLARATION_CONFLICT = 3;            // Data types inconsistent across artifacts
+  INHERITANCE_HIERARCHY_MISMATCH = 4;       // Extends/implements relationships differ between UML and template
+  PACKAGE_STRUCTURE_MISMATCH = 5;           // Import/package organization prevents compilation
+  MISSING_REQUIRED_ELEMENT = 6;             // Essential class/method/attribute missing from template
   
-  // BEHAVIORAL Issues (20-39) - Implementation logic differences  
-  ALGORITHM_IMPLEMENTATION_DIFFERENT = 20;   // Different approach to solve same problem
-  VALIDATION_LOGIC_MISMATCH = 21;            // Different input/runtime validation
-  ERROR_HANDLING_MISMATCH = 22;              // Different exception handling approach
-  EDGE_CASE_HANDLING_DIFFERENT = 23;         // Different boundary condition handling
-  RETURN_VALUE_LOGIC_DIFFERENT = 24;         // Same signature but different return logic
+  // === SEMANTIC Issues (20-39) ===
+  NAMING_INCONSISTENCY = 20;                // Same concept has different names across artifacts
+  UML_TEXT_DEVIATION = 21;                  // UML diagram structure doesn't match textual specification
+  EXAMPLE_CONTRADICTION = 22;               // Provided examples contradict stated requirements
+  SPECIFICATION_AMBIGUITY = 23;             // Multiple valid interpretations possible from unclear wording
+  CONSTRAINT_VIOLATION = 24;                // Template violates explicit constraints from problem statement
+  REQUIREMENT_GAP = 25;                     // Specification missing from implementation guidance
   
-  // SPECIFICATION Issues (40-59) - Problem statement alignment problems
-  REQUIREMENT_NOT_IMPLEMENTED = 40;         // Problem statement requirement missing
-  CONSTRAINT_VIOLATION = 41;                // Violates specific constraints (e.g., "use ternary")
-  UML_DIAGRAM_DEVIATION = 42;               // Implementation doesn't match UML
-  TASK_INSTRUCTION_IGNORED = 43;            // Specific [task] instructions not followed
-  PACKAGE_STRUCTURE_MISMATCH = 44;          // Wrong package names/structure
-  NAMING_CONVENTION_VIOLATION = 45;         // Violates specified naming requirements
+  // === ASSESSMENT Issues (40-59) ===
+  TEST_OBJECTIVE_MISMATCH = 40;             // Tests measure different cognitive skills than learning objectives
+  TEST_COVERAGE_INCOMPLETE = 41;            // Missing tests for specified functionality
+  TEST_DATA_INCONSISTENT = 42;              // Test data format/values differ from problem examples
+  GRADING_CRITERIA_CONFLICT = 43;           // Assessment emphasizes different aspects than instruction
+  TEST_METHOD_NAMING_CONFLICT = 44;         // Required test method names differ between specification sources
   
-  // TESTING Issues (60-79) - Test and assertion consistency
-  TEST_CASE_SPECIFICATION_MISMATCH = 60;    // Test doesn't match what problem describes
-  TEST_ASSERTION_INADEQUATE = 61;           // Test exists but doesn't verify correctly
-  TEST_COVERAGE_INCOMPLETE = 62;            // Missing tests for specified functionality
-  TEST_DATA_INCONSISTENT = 63;              // Test data doesn't match problem examples
-  TEST_METHOD_NAME_MISMATCH = 64;           // Test name doesn't match specification
+  // === PEDAGOGICAL Issues (60-79) ===
+  COGNITIVE_LEVEL_MISMATCH = 60;            // Exercise cognitive demands don't match stated learning objectives
+  SCAFFOLDING_DISCONTINUITY = 61;           // Support provided doesn't match cognitive demands of learning objectives
+  PREREQUISITE_ASSUMPTION_VIOLATION = 62;   // Exercise assumes knowledge/skills not established in curriculum sequence
+  LEARNING_OBJECTIVE_CONTRADICTION = 63;    // Exercise requirements contradict stated pedagogical goals
+  COMPLEXITY_PROGRESSION_VIOLATION = 64;    // Difficulty level inappropriate for curriculum sequence
+  SKILL_TRANSFER_IMPEDIMENT = 65;           // Exercise design inhibits real-world application of learned skills
 }
 
 message ConsistencyIssue {
@@ -214,10 +201,10 @@ message ConsistencyIssue {
   ConsistencyIssueCategory category = 4;
   
   // Primary location where issue was detected
-  ArtifactAnchor primary_location = 5;
+  ArtifactLocation primary_location = 5;
   
   // Related locations across artifacts
-  repeated ArtifactAnchor related_locations = 6;
+  repeated ArtifactLocation related_locations = 6;
   
   // Simple suggested fix as a string
   string suggested_fix = 7;
@@ -225,6 +212,8 @@ message ConsistencyIssue {
 
 message ConsistencyCheckResponse {
   repeated ConsistencyIssue issues = 1;
+
+  Metadata metadata = 2;
 }
 
 message RewriteProblemStatementRequest {

@@ -254,10 +254,10 @@ class ReviewAndRefineStub(object):
         Args:
             channel: A grpc.Channel.
         """
-        self.CheckInconsistencies = channel.unary_unary(
-            "/de.tum.cit.aet.artemis.hyperion.ReviewAndRefine/CheckInconsistencies",
-            request_serializer=hyperion__pb2.InconsistencyCheckRequest.SerializeToString,
-            response_deserializer=hyperion__pb2.InconsistencyCheckResponse.FromString,
+        self.CheckConsistency = channel.unary_unary(
+            "/de.tum.cit.aet.artemis.hyperion.ReviewAndRefine/CheckConsistency",
+            request_serializer=hyperion__pb2.ConsistencyCheckRequest.SerializeToString,
+            response_deserializer=hyperion__pb2.ConsistencyCheckResponse.FromString,
             _registered_method=True,
         )
         self.RewriteProblemStatement = channel.unary_unary(
@@ -271,7 +271,7 @@ class ReviewAndRefineStub(object):
 class ReviewAndRefineServicer(object):
     """Exercise Creation Step 8: Review and Refine"""
 
-    def CheckInconsistencies(self, request, context):
+    def CheckConsistency(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details("Method not implemented!")
@@ -286,10 +286,10 @@ class ReviewAndRefineServicer(object):
 
 def add_ReviewAndRefineServicer_to_server(servicer, server):
     rpc_method_handlers = {
-        "CheckInconsistencies": grpc.unary_unary_rpc_method_handler(
-            servicer.CheckInconsistencies,
-            request_deserializer=hyperion__pb2.InconsistencyCheckRequest.FromString,
-            response_serializer=hyperion__pb2.InconsistencyCheckResponse.SerializeToString,
+        "CheckConsistency": grpc.unary_unary_rpc_method_handler(
+            servicer.CheckConsistency,
+            request_deserializer=hyperion__pb2.ConsistencyCheckRequest.FromString,
+            response_serializer=hyperion__pb2.ConsistencyCheckResponse.SerializeToString,
         ),
         "RewriteProblemStatement": grpc.unary_unary_rpc_method_handler(
             servicer.RewriteProblemStatement,
@@ -311,7 +311,7 @@ class ReviewAndRefine(object):
     """Exercise Creation Step 8: Review and Refine"""
 
     @staticmethod
-    def CheckInconsistencies(
+    def CheckConsistency(
         request,
         target,
         options=(),
@@ -326,9 +326,9 @@ class ReviewAndRefine(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            "/de.tum.cit.aet.artemis.hyperion.ReviewAndRefine/CheckInconsistencies",
-            hyperion__pb2.InconsistencyCheckRequest.SerializeToString,
-            hyperion__pb2.InconsistencyCheckResponse.FromString,
+            "/de.tum.cit.aet.artemis.hyperion.ReviewAndRefine/CheckConsistency",
+            hyperion__pb2.ConsistencyCheckRequest.SerializeToString,
+            hyperion__pb2.ConsistencyCheckResponse.FromString,
             options,
             channel_credentials,
             insecure,

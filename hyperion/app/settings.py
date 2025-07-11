@@ -23,6 +23,7 @@ class Settings(BaseSettings):
 
     # Model to use prefixed by provider, i.e. "openai:gpt-4o"
     MODEL_NAME: str = ""
+    MODEL_PROVIDER: str = "openai"  # Default provider
 
     # Non-Azure OpenAI
     OPENAI_API_KEY: str = ""
