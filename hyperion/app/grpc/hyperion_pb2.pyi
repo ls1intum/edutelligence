@@ -111,6 +111,218 @@ FACT: ProjectType.ValueType  # 7
 GCC: ProjectType.ValueType  # 8
 global___ProjectType = ProjectType
 
+class _ArtifactType:
+    ValueType = typing.NewType("ValueType", builtins.int)
+    V: typing_extensions.TypeAlias = ValueType
+
+class _ArtifactTypeEnumTypeWrapper(
+    google.protobuf.internal.enum_type_wrapper._EnumTypeWrapper[
+        _ArtifactType.ValueType
+    ],
+    builtins.type,
+):
+    DESCRIPTOR: google.protobuf.descriptor.EnumDescriptor
+    PROBLEM_STATEMENT: _ArtifactType.ValueType  # 0
+    TEMPLATE_REPOSITORY: _ArtifactType.ValueType  # 1
+    SOLUTION_REPOSITORY: _ArtifactType.ValueType  # 2
+    TEST_REPOSITORY: _ArtifactType.ValueType  # 3
+
+class ArtifactType(_ArtifactType, metaclass=_ArtifactTypeEnumTypeWrapper): ...
+
+PROBLEM_STATEMENT: ArtifactType.ValueType  # 0
+TEMPLATE_REPOSITORY: ArtifactType.ValueType  # 1
+SOLUTION_REPOSITORY: ArtifactType.ValueType  # 2
+TEST_REPOSITORY: ArtifactType.ValueType  # 3
+global___ArtifactType = ArtifactType
+
+class _ConsistencyIssueSeverity:
+    ValueType = typing.NewType("ValueType", builtins.int)
+    V: typing_extensions.TypeAlias = ValueType
+
+class _ConsistencyIssueSeverityEnumTypeWrapper(
+    google.protobuf.internal.enum_type_wrapper._EnumTypeWrapper[
+        _ConsistencyIssueSeverity.ValueType
+    ],
+    builtins.type,
+):
+    DESCRIPTOR: google.protobuf.descriptor.EnumDescriptor
+    LOW: _ConsistencyIssueSeverity.ValueType  # 0
+    MEDIUM: _ConsistencyIssueSeverity.ValueType  # 1
+    HIGH: _ConsistencyIssueSeverity.ValueType  # 2
+
+class ConsistencyIssueSeverity(
+    _ConsistencyIssueSeverity, metaclass=_ConsistencyIssueSeverityEnumTypeWrapper
+): ...
+
+LOW: ConsistencyIssueSeverity.ValueType  # 0
+MEDIUM: ConsistencyIssueSeverity.ValueType  # 1
+HIGH: ConsistencyIssueSeverity.ValueType  # 2
+global___ConsistencyIssueSeverity = ConsistencyIssueSeverity
+
+class _ConsistencyIssueType:
+    ValueType = typing.NewType("ValueType", builtins.int)
+    V: typing_extensions.TypeAlias = ValueType
+
+class _ConsistencyIssueTypeEnumTypeWrapper(
+    google.protobuf.internal.enum_type_wrapper._EnumTypeWrapper[
+        _ConsistencyIssueType.ValueType
+    ],
+    builtins.type,
+):
+    DESCRIPTOR: google.protobuf.descriptor.EnumDescriptor
+    STRUCTURAL: _ConsistencyIssueType.ValueType  # 0
+    """Required interface/structure differs between artifacts, preventing technical implementation"""
+    SEMANTIC: _ConsistencyIssueType.ValueType  # 1
+    """Same concept represented differently across artifacts, creating cognitive confusion"""
+    ASSESSMENT: _ConsistencyIssueType.ValueType  # 2
+    """Tests/evaluation criteria don't match instructional objectives"""
+    PEDAGOGICAL: _ConsistencyIssueType.ValueType  # 3
+    """Exercise violates learning objective alignment and pedagogical design principles"""
+
+class ConsistencyIssueType(
+    _ConsistencyIssueType, metaclass=_ConsistencyIssueTypeEnumTypeWrapper
+): ...
+
+STRUCTURAL: ConsistencyIssueType.ValueType  # 0
+"""Required interface/structure differs between artifacts, preventing technical implementation"""
+SEMANTIC: ConsistencyIssueType.ValueType  # 1
+"""Same concept represented differently across artifacts, creating cognitive confusion"""
+ASSESSMENT: ConsistencyIssueType.ValueType  # 2
+"""Tests/evaluation criteria don't match instructional objectives"""
+PEDAGOGICAL: ConsistencyIssueType.ValueType  # 3
+"""Exercise violates learning objective alignment and pedagogical design principles"""
+global___ConsistencyIssueType = ConsistencyIssueType
+
+class _ConsistencyIssueCategory:
+    ValueType = typing.NewType("ValueType", builtins.int)
+    V: typing_extensions.TypeAlias = ValueType
+
+class _ConsistencyIssueCategoryEnumTypeWrapper(
+    google.protobuf.internal.enum_type_wrapper._EnumTypeWrapper[
+        _ConsistencyIssueCategory.ValueType
+    ],
+    builtins.type,
+):
+    DESCRIPTOR: google.protobuf.descriptor.EnumDescriptor
+    METHOD_SIGNATURE_MISMATCH: _ConsistencyIssueCategory.ValueType  # 0
+    """=== STRUCTURAL Issues (0-19) ===
+    Method return type, parameters, or visibility differs between artifacts
+    """
+    CONSTRUCTOR_SIGNATURE_MISMATCH: _ConsistencyIssueCategory.ValueType  # 1
+    """Constructor parameters differ between specification and template"""
+    INTERFACE_IMPLEMENTATION_CONFLICT: _ConsistencyIssueCategory.ValueType  # 2
+    """Required interface cannot be implemented as specified"""
+    TYPE_DECLARATION_CONFLICT: _ConsistencyIssueCategory.ValueType  # 3
+    """Data types inconsistent across artifacts"""
+    INHERITANCE_HIERARCHY_MISMATCH: _ConsistencyIssueCategory.ValueType  # 4
+    """Extends/implements relationships differ between UML and template"""
+    PACKAGE_STRUCTURE_MISMATCH: _ConsistencyIssueCategory.ValueType  # 5
+    """Import/package organization prevents compilation"""
+    MISSING_REQUIRED_ELEMENT: _ConsistencyIssueCategory.ValueType  # 6
+    """Essential class/method/attribute missing from template"""
+    NAMING_INCONSISTENCY: _ConsistencyIssueCategory.ValueType  # 20
+    """=== SEMANTIC Issues (20-39) ===
+    Same concept has different names across artifacts
+    """
+    UML_TEXT_DEVIATION: _ConsistencyIssueCategory.ValueType  # 21
+    """UML diagram structure doesn't match textual specification"""
+    EXAMPLE_CONTRADICTION: _ConsistencyIssueCategory.ValueType  # 22
+    """Provided examples contradict stated requirements"""
+    SPECIFICATION_AMBIGUITY: _ConsistencyIssueCategory.ValueType  # 23
+    """Multiple valid interpretations possible from unclear wording"""
+    CONSTRAINT_VIOLATION: _ConsistencyIssueCategory.ValueType  # 24
+    """Template violates explicit constraints from problem statement"""
+    REQUIREMENT_GAP: _ConsistencyIssueCategory.ValueType  # 25
+    """Specification missing from implementation guidance"""
+    TEST_OBJECTIVE_MISMATCH: _ConsistencyIssueCategory.ValueType  # 40
+    """=== ASSESSMENT Issues (40-59) ===
+    Tests measure different cognitive skills than learning objectives
+    """
+    TEST_COVERAGE_INCOMPLETE: _ConsistencyIssueCategory.ValueType  # 41
+    """Missing tests for specified functionality"""
+    TEST_DATA_INCONSISTENT: _ConsistencyIssueCategory.ValueType  # 42
+    """Test data format/values differ from problem examples"""
+    GRADING_CRITERIA_CONFLICT: _ConsistencyIssueCategory.ValueType  # 43
+    """Assessment emphasizes different aspects than instruction"""
+    TEST_METHOD_NAMING_CONFLICT: _ConsistencyIssueCategory.ValueType  # 44
+    """Required test method names differ between specification sources"""
+    COGNITIVE_LEVEL_MISMATCH: _ConsistencyIssueCategory.ValueType  # 60
+    """=== PEDAGOGICAL Issues (60-79) ===
+    Exercise cognitive demands don't match stated learning objectives
+    """
+    SCAFFOLDING_DISCONTINUITY: _ConsistencyIssueCategory.ValueType  # 61
+    """Support provided doesn't match cognitive demands of learning objectives"""
+    PREREQUISITE_ASSUMPTION_VIOLATION: _ConsistencyIssueCategory.ValueType  # 62
+    """Exercise assumes knowledge/skills not established in curriculum sequence"""
+    LEARNING_OBJECTIVE_CONTRADICTION: _ConsistencyIssueCategory.ValueType  # 63
+    """Exercise requirements contradict stated pedagogical goals"""
+    COMPLEXITY_PROGRESSION_VIOLATION: _ConsistencyIssueCategory.ValueType  # 64
+    """Difficulty level inappropriate for curriculum sequence"""
+    SKILL_TRANSFER_IMPEDIMENT: _ConsistencyIssueCategory.ValueType  # 65
+    """Exercise design inhibits real-world application of learned skills"""
+
+class ConsistencyIssueCategory(
+    _ConsistencyIssueCategory, metaclass=_ConsistencyIssueCategoryEnumTypeWrapper
+): ...
+
+METHOD_SIGNATURE_MISMATCH: ConsistencyIssueCategory.ValueType  # 0
+"""=== STRUCTURAL Issues (0-19) ===
+Method return type, parameters, or visibility differs between artifacts
+"""
+CONSTRUCTOR_SIGNATURE_MISMATCH: ConsistencyIssueCategory.ValueType  # 1
+"""Constructor parameters differ between specification and template"""
+INTERFACE_IMPLEMENTATION_CONFLICT: ConsistencyIssueCategory.ValueType  # 2
+"""Required interface cannot be implemented as specified"""
+TYPE_DECLARATION_CONFLICT: ConsistencyIssueCategory.ValueType  # 3
+"""Data types inconsistent across artifacts"""
+INHERITANCE_HIERARCHY_MISMATCH: ConsistencyIssueCategory.ValueType  # 4
+"""Extends/implements relationships differ between UML and template"""
+PACKAGE_STRUCTURE_MISMATCH: ConsistencyIssueCategory.ValueType  # 5
+"""Import/package organization prevents compilation"""
+MISSING_REQUIRED_ELEMENT: ConsistencyIssueCategory.ValueType  # 6
+"""Essential class/method/attribute missing from template"""
+NAMING_INCONSISTENCY: ConsistencyIssueCategory.ValueType  # 20
+"""=== SEMANTIC Issues (20-39) ===
+Same concept has different names across artifacts
+"""
+UML_TEXT_DEVIATION: ConsistencyIssueCategory.ValueType  # 21
+"""UML diagram structure doesn't match textual specification"""
+EXAMPLE_CONTRADICTION: ConsistencyIssueCategory.ValueType  # 22
+"""Provided examples contradict stated requirements"""
+SPECIFICATION_AMBIGUITY: ConsistencyIssueCategory.ValueType  # 23
+"""Multiple valid interpretations possible from unclear wording"""
+CONSTRAINT_VIOLATION: ConsistencyIssueCategory.ValueType  # 24
+"""Template violates explicit constraints from problem statement"""
+REQUIREMENT_GAP: ConsistencyIssueCategory.ValueType  # 25
+"""Specification missing from implementation guidance"""
+TEST_OBJECTIVE_MISMATCH: ConsistencyIssueCategory.ValueType  # 40
+"""=== ASSESSMENT Issues (40-59) ===
+Tests measure different cognitive skills than learning objectives
+"""
+TEST_COVERAGE_INCOMPLETE: ConsistencyIssueCategory.ValueType  # 41
+"""Missing tests for specified functionality"""
+TEST_DATA_INCONSISTENT: ConsistencyIssueCategory.ValueType  # 42
+"""Test data format/values differ from problem examples"""
+GRADING_CRITERIA_CONFLICT: ConsistencyIssueCategory.ValueType  # 43
+"""Assessment emphasizes different aspects than instruction"""
+TEST_METHOD_NAMING_CONFLICT: ConsistencyIssueCategory.ValueType  # 44
+"""Required test method names differ between specification sources"""
+COGNITIVE_LEVEL_MISMATCH: ConsistencyIssueCategory.ValueType  # 60
+"""=== PEDAGOGICAL Issues (60-79) ===
+Exercise cognitive demands don't match stated learning objectives
+"""
+SCAFFOLDING_DISCONTINUITY: ConsistencyIssueCategory.ValueType  # 61
+"""Support provided doesn't match cognitive demands of learning objectives"""
+PREREQUISITE_ASSUMPTION_VIOLATION: ConsistencyIssueCategory.ValueType  # 62
+"""Exercise assumes knowledge/skills not established in curriculum sequence"""
+LEARNING_OBJECTIVE_CONTRADICTION: ConsistencyIssueCategory.ValueType  # 63
+"""Exercise requirements contradict stated pedagogical goals"""
+COMPLEXITY_PROGRESSION_VIOLATION: ConsistencyIssueCategory.ValueType  # 64
+"""Difficulty level inappropriate for curriculum sequence"""
+SKILL_TRANSFER_IMPEDIMENT: ConsistencyIssueCategory.ValueType  # 65
+"""Exercise design inhibits real-world application of learned skills"""
+global___ConsistencyIssueCategory = ConsistencyIssueCategory
+
 @typing.final
 class RepositoryFile(google.protobuf.message.Message):
     """Represents a file in a repository with content"""
@@ -249,13 +461,30 @@ class ProgrammingExercise(google.protobuf.message.Message):
 global___ProgrammingExercise = ProgrammingExercise
 
 @typing.final
-class InconsistencyCheckRequest(google.protobuf.message.Message):
+class Metadata(google.protobuf.message.Message):
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    TRACEID_FIELD_NUMBER: builtins.int
+    traceId: builtins.str
+    """UUID with LLM trace ID"""
+    def __init__(
+        self,
+        *,
+        traceId: builtins.str = ...,
+    ) -> None: ...
+    def ClearField(self, field_name: typing.Literal["traceId", b"traceId"]) -> None: ...
+
+global___Metadata = Metadata
+
+@typing.final
+class ConsistencyCheckRequest(google.protobuf.message.Message):
     DESCRIPTOR: google.protobuf.descriptor.Descriptor
 
     PROBLEM_STATEMENT_FIELD_NUMBER: builtins.int
     SOLUTION_REPOSITORY_FIELD_NUMBER: builtins.int
     TEMPLATE_REPOSITORY_FIELD_NUMBER: builtins.int
     TEST_REPOSITORY_FIELD_NUMBER: builtins.int
+    ISSUE_CATEGORIES_FIELD_NUMBER: builtins.int
     problem_statement: builtins.str
     @property
     def solution_repository(self) -> global___Repository: ...
@@ -263,6 +492,14 @@ class InconsistencyCheckRequest(google.protobuf.message.Message):
     def template_repository(self) -> global___Repository: ...
     @property
     def test_repository(self) -> global___Repository: ...
+    @property
+    def issue_categories(
+        self,
+    ) -> google.protobuf.internal.containers.RepeatedScalarFieldContainer[
+        global___ConsistencyIssueCategory.ValueType
+    ]:
+        """Optional: Specify issue categories to check"""
+
     def __init__(
         self,
         *,
@@ -270,6 +507,9 @@ class InconsistencyCheckRequest(google.protobuf.message.Message):
         solution_repository: global___Repository | None = ...,
         template_repository: global___Repository | None = ...,
         test_repository: global___Repository | None = ...,
+        issue_categories: (
+            collections.abc.Iterable[global___ConsistencyIssueCategory.ValueType] | None
+        ) = ...,
     ) -> None: ...
     def HasField(
         self,
@@ -285,6 +525,8 @@ class InconsistencyCheckRequest(google.protobuf.message.Message):
     def ClearField(
         self,
         field_name: typing.Literal[
+            "issue_categories",
+            b"issue_categories",
             "problem_statement",
             b"problem_statement",
             "solution_repository",
@@ -296,24 +538,148 @@ class InconsistencyCheckRequest(google.protobuf.message.Message):
         ],
     ) -> None: ...
 
-global___InconsistencyCheckRequest = InconsistencyCheckRequest
+global___ConsistencyCheckRequest = ConsistencyCheckRequest
 
 @typing.final
-class InconsistencyCheckResponse(google.protobuf.message.Message):
+class ArtifactLocation(google.protobuf.message.Message):
     DESCRIPTOR: google.protobuf.descriptor.Descriptor
 
-    INCONSISTENCIES_FIELD_NUMBER: builtins.int
-    inconsistencies: builtins.str
+    TYPE_FIELD_NUMBER: builtins.int
+    FILE_PATH_FIELD_NUMBER: builtins.int
+    START_LINE_FIELD_NUMBER: builtins.int
+    END_LINE_FIELD_NUMBER: builtins.int
+    DESCRIPTION_FIELD_NUMBER: builtins.int
+    type: global___ArtifactType.ValueType
+    file_path: builtins.str
+    """Path in the repository, empty for problem statement"""
+    start_line: builtins.int
+    """Start line in the content"""
+    end_line: builtins.int
+    """End line in the content"""
+    description: builtins.str
+    """Optional description of the location"""
     def __init__(
         self,
         *,
-        inconsistencies: builtins.str = ...,
+        type: global___ArtifactType.ValueType = ...,
+        file_path: builtins.str = ...,
+        start_line: builtins.int = ...,
+        end_line: builtins.int = ...,
+        description: builtins.str = ...,
     ) -> None: ...
     def ClearField(
-        self, field_name: typing.Literal["inconsistencies", b"inconsistencies"]
+        self,
+        field_name: typing.Literal[
+            "description",
+            b"description",
+            "end_line",
+            b"end_line",
+            "file_path",
+            b"file_path",
+            "start_line",
+            b"start_line",
+            "type",
+            b"type",
+        ],
     ) -> None: ...
 
-global___InconsistencyCheckResponse = InconsistencyCheckResponse
+global___ArtifactLocation = ArtifactLocation
+
+@typing.final
+class ConsistencyIssue(google.protobuf.message.Message):
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    DESCRIPTION_FIELD_NUMBER: builtins.int
+    SEVERITY_FIELD_NUMBER: builtins.int
+    TYPE_FIELD_NUMBER: builtins.int
+    CATEGORY_FIELD_NUMBER: builtins.int
+    PRIMARY_LOCATION_FIELD_NUMBER: builtins.int
+    RELATED_LOCATIONS_FIELD_NUMBER: builtins.int
+    SUGGESTED_FIX_FIELD_NUMBER: builtins.int
+    description: builtins.str
+    severity: global___ConsistencyIssueSeverity.ValueType
+    type: global___ConsistencyIssueType.ValueType
+    category: global___ConsistencyIssueCategory.ValueType
+    suggested_fix: builtins.str
+    """Simple suggested fix as a string"""
+    @property
+    def primary_location(self) -> global___ArtifactLocation:
+        """Primary location where issue was detected"""
+
+    @property
+    def related_locations(
+        self,
+    ) -> google.protobuf.internal.containers.RepeatedCompositeFieldContainer[
+        global___ArtifactLocation
+    ]:
+        """Related locations across artifacts"""
+
+    def __init__(
+        self,
+        *,
+        description: builtins.str = ...,
+        severity: global___ConsistencyIssueSeverity.ValueType = ...,
+        type: global___ConsistencyIssueType.ValueType = ...,
+        category: global___ConsistencyIssueCategory.ValueType = ...,
+        primary_location: global___ArtifactLocation | None = ...,
+        related_locations: (
+            collections.abc.Iterable[global___ArtifactLocation] | None
+        ) = ...,
+        suggested_fix: builtins.str = ...,
+    ) -> None: ...
+    def HasField(
+        self, field_name: typing.Literal["primary_location", b"primary_location"]
+    ) -> builtins.bool: ...
+    def ClearField(
+        self,
+        field_name: typing.Literal[
+            "category",
+            b"category",
+            "description",
+            b"description",
+            "primary_location",
+            b"primary_location",
+            "related_locations",
+            b"related_locations",
+            "severity",
+            b"severity",
+            "suggested_fix",
+            b"suggested_fix",
+            "type",
+            b"type",
+        ],
+    ) -> None: ...
+
+global___ConsistencyIssue = ConsistencyIssue
+
+@typing.final
+class ConsistencyCheckResponse(google.protobuf.message.Message):
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    ISSUES_FIELD_NUMBER: builtins.int
+    METADATA_FIELD_NUMBER: builtins.int
+    @property
+    def issues(
+        self,
+    ) -> google.protobuf.internal.containers.RepeatedCompositeFieldContainer[
+        global___ConsistencyIssue
+    ]: ...
+    @property
+    def metadata(self) -> global___Metadata: ...
+    def __init__(
+        self,
+        *,
+        issues: collections.abc.Iterable[global___ConsistencyIssue] | None = ...,
+        metadata: global___Metadata | None = ...,
+    ) -> None: ...
+    def HasField(
+        self, field_name: typing.Literal["metadata", b"metadata"]
+    ) -> builtins.bool: ...
+    def ClearField(
+        self, field_name: typing.Literal["issues", b"issues", "metadata", b"metadata"]
+    ) -> None: ...
+
+global___ConsistencyCheckResponse = ConsistencyCheckResponse
 
 @typing.final
 class RewriteProblemStatementRequest(google.protobuf.message.Message):

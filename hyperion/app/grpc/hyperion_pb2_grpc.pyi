@@ -188,9 +188,9 @@ class ReviewAndRefineStub:
     def __init__(
         self, channel: typing.Union[grpc.Channel, grpc.aio.Channel]
     ) -> None: ...
-    CheckInconsistencies: grpc.UnaryUnaryMultiCallable[
-        hyperion_pb2.InconsistencyCheckRequest,
-        hyperion_pb2.InconsistencyCheckResponse,
+    CheckConsistency: grpc.UnaryUnaryMultiCallable[
+        hyperion_pb2.ConsistencyCheckRequest,
+        hyperion_pb2.ConsistencyCheckResponse,
     ]
 
     RewriteProblemStatement: grpc.UnaryUnaryMultiCallable[
@@ -201,9 +201,9 @@ class ReviewAndRefineStub:
 class ReviewAndRefineAsyncStub:
     """Exercise Creation Step 8: Review and Refine"""
 
-    CheckInconsistencies: grpc.aio.UnaryUnaryMultiCallable[
-        hyperion_pb2.InconsistencyCheckRequest,
-        hyperion_pb2.InconsistencyCheckResponse,
+    CheckConsistency: grpc.aio.UnaryUnaryMultiCallable[
+        hyperion_pb2.ConsistencyCheckRequest,
+        hyperion_pb2.ConsistencyCheckResponse,
     ]
 
     RewriteProblemStatement: grpc.aio.UnaryUnaryMultiCallable[
@@ -215,13 +215,13 @@ class ReviewAndRefineServicer(metaclass=abc.ABCMeta):
     """Exercise Creation Step 8: Review and Refine"""
 
     @abc.abstractmethod
-    def CheckInconsistencies(
+    def CheckConsistency(
         self,
-        request: hyperion_pb2.InconsistencyCheckRequest,
+        request: hyperion_pb2.ConsistencyCheckRequest,
         context: _ServicerContext,
     ) -> typing.Union[
-        hyperion_pb2.InconsistencyCheckResponse,
-        collections.abc.Awaitable[hyperion_pb2.InconsistencyCheckResponse],
+        hyperion_pb2.ConsistencyCheckResponse,
+        collections.abc.Awaitable[hyperion_pb2.ConsistencyCheckResponse],
     ]: ...
     @abc.abstractmethod
     def RewriteProblemStatement(
