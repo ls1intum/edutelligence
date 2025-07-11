@@ -3,28 +3,36 @@ from typing import List, Optional
 from athena import emit_meta
 from athena.text import Exercise, Submission, Feedback
 from athena.logger import logger
-from athena.schemas import LearnerProfile
-from module_text_llm.approach_config import ApproachConfig
 from llm_core.utils.llm_utils import (
-    get_chat_prompt_with_formatting_instructions,
+    get_chat_prompt,
     check_prompt_length_and_omit_features_if_necessary,
     num_tokens_from_prompt,
 )
-from llm_core.utils.predict_and_parse import predict_and_parse
-from module_text_llm.helpers.utils import add_sentence_numbers, get_index_range_from_line_range, \
-    format_grading_instructions
+from llm_core.core.predict_and_parse import predict_and_parse
+from module_text_llm.registry import register_approach
+from module_text_llm.helpers.utils import (
+    add_sentence_numbers,
+    get_index_range_from_line_range,
+    format_grading_instructions,
+)
+from module_text_llm.cot_prev_submission import COTPrevSubmissionConfig
 from module_text_llm.cot_prev_submission.prompt_analyzer import SubmissionComparisonResult
 from module_text_llm.cot_prev_submission.prompt_generate_feedback import AssessmentModel
 
 
-async def generate_suggestions(exercise: Exercise, submission: Submission, config: ApproachConfig, *, debug: bool,
-                               is_graded: bool, latest_submission: Optional[Submission] = None) -> List[Feedback]:
-    model = config.model.get_model()  # type: ignore[attr-defined]
-
+@register_approach("cot_prev_submission")
+async def generate_suggestions(
+    exercise: Exercise,
+    submission: Submission,
+    config: COTPrevSubmissionConfig,
+    *,
+    debug: bool,
+    is_graded: bool,
+    latest_submission: Optional[Submission] = None,
+) -> List[Feedback]:
     if latest_submission is None:
         logger.info("Latest submission is not provided.")
 
-    # Inject student preferences into the prompt
     prompt_input = {
         "grading_instructions": format_grading_instructions(exercise.grading_instructions, exercise.grading_criteria),
         "problem_statement": exercise.problem_statement or "No problem statement.",
@@ -33,15 +41,17 @@ async def generate_suggestions(exercise: Exercise, submission: Submission, confi
         "previous_submission": add_sentence_numbers(latest_submission.text) if latest_submission is not None else "Previous submission is not available.",
     }
 
-    chat_prompt = get_chat_prompt_with_formatting_instructions(
-        model=model,
+    chat_prompt = get_chat_prompt(
         system_message=config.analyzing_prompt.system_message,
         human_message=config.analyzing_prompt.human_message,
-        pydantic_object=SubmissionComparisonResult
     )
 
     # Check if the prompt is too long and omit features if necessary (in order of importance)
-    omittable_features = ["example_solution", "problem_statement", "grading_instructions"]
+    omittable_features = [
+        "example_solution",
+        "problem_statement",
+        "grading_instructions",
+    ]
     prompt_input, should_run = check_prompt_length_and_omit_features_if_necessary(
         prompt=chat_prompt,
         prompt_input=prompt_input,
@@ -60,7 +70,7 @@ async def generate_suggestions(exercise: Exercise, submission: Submission, confi
         return []
 
     initial_result: SubmissionComparisonResult = await predict_and_parse(
-        model=model,
+        model=config.model,
         chat_prompt=chat_prompt,
         prompt_input=prompt_input,
         pydantic_object=SubmissionComparisonResult,
@@ -68,7 +78,6 @@ async def generate_suggestions(exercise: Exercise, submission: Submission, confi
             f"exercise-{exercise.id}",
             f"submission-{submission.id}",
         ],
-        use_function_calling=True
     )
 
     second_prompt_input = {
@@ -80,14 +89,13 @@ async def generate_suggestions(exercise: Exercise, submission: Submission, confi
         "submission_comparison": initial_result.dict()
     }
 
-    second_chat_prompt = get_chat_prompt_with_formatting_instructions(
-        model=model,
+    second_chat_prompt = get_chat_prompt(
         system_message=config.generate_suggestions_prompt.second_system_message,
         human_message=config.generate_suggestions_prompt.answer_message,
-        pydantic_object=AssessmentModel)
+    )
 
     result = await predict_and_parse(
-        model=model,
+        model=config.model,
         chat_prompt=second_chat_prompt,
         prompt_input=second_prompt_input,
         pydantic_object=AssessmentModel,
@@ -95,14 +103,16 @@ async def generate_suggestions(exercise: Exercise, submission: Submission, confi
             f"exercise-{exercise.id}",
             f"submission-{submission.id}",
         ],
-        use_function_calling=True
     )
 
     if debug:
-        emit_meta("generate_suggestions", {
-            "prompt": chat_prompt.format(**prompt_input),
-            "result": result.dict() if result is not None else None
-        })
+        emit_meta(
+            "generate_suggestions",
+            {
+                "prompt": chat_prompt.format(**prompt_input),
+                "result": result.dict() if result is not None else None
+            }
+        )
 
     if result is None:
         return []
@@ -115,20 +125,27 @@ async def generate_suggestions(exercise: Exercise, submission: Submission, confi
 
     feedbacks = []
     for feedback in result.feedbacks:
-        index_start, index_end = get_index_range_from_line_range(feedback.line_start, feedback.line_end,
-                                                                 submission.text)
-        grading_instruction_id = feedback.grading_instruction_id if feedback.grading_instruction_id in grading_instruction_ids else None
-        feedbacks.append(Feedback(
-            exercise_id=exercise.id,
-            submission_id=submission.id,
-            title=feedback.title,
-            description=feedback.description,
-            index_start=index_start,
-            index_end=index_end,
-            credits=feedback.credits,
-            is_graded=is_graded,
-            structured_grading_instruction_id=grading_instruction_id,
-            meta={}
-        ))
+        index_start, index_end = get_index_range_from_line_range(
+            feedback.line_start, feedback.line_end, submission.text
+        )
+        grading_instruction_id = (
+            feedback.grading_instruction_id
+            if feedback.grading_instruction_id in grading_instruction_ids
+            else None
+        )
+        feedbacks.append(
+            Feedback(
+                exercise_id=exercise.id,
+                submission_id=submission.id,
+                title=feedback.title,
+                description=feedback.description,
+                index_start=index_start,
+                index_end=index_end,
+                credits=feedback.credits,
+                is_graded=is_graded,
+                structured_grading_instruction_id=grading_instruction_id,
+                meta={}
+            )
+        )
 
     return feedbacks
