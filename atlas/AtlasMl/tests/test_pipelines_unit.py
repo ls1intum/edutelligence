@@ -9,8 +9,7 @@ def workflows():
     with patch("atlasml.ml.MLPipelines.PipelineWorkflows.get_weaviate_client") as mock_get_client:
         mock_client = MagicMock()
         mock_get_client.return_value = mock_client
-        wf = PipelineWorkflows()
-        wf.weaviate_client = mock_client  # just in case
+        wf = PipelineWorkflows(weaviate_client=mock_client)
         yield wf
 
 def test_initial_texts_calls_add_embeddings(workflows):
