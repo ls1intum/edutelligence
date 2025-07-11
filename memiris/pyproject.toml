@@ -1,0 +1,74 @@
+[tool.poetry]
+name = "memiris"
+version = "0.1.0"
+description = ""
+authors = ["Timor Morrien <timor.morrien@tum.de>"]
+readme = "README.MD"
+packages = [
+    {include = "memiris", from = "src"},
+    {include = "memiris_tests", from = "tests"}
+]
+include = ["src/memiris/py.typed"]
+
+[tool.poetry.dependencies]
+python = ">=3.12,<4.0.0"
+weaviate-client = "^4.15.4"
+jinja2 = "^3.1.6"
+ollama = "^0.5.1"
+cachetools = "^6.1.0"
+pylint-per-file-ignores = "^1.4.0"
+langfuse = "^3.1.2"
+
+[tool.poetry.group.dev.dependencies]
+mypy = "^1.10.0"
+pylint = "^3.2.3"
+black = "^25.1.0"
+isort = "^6.0.1"
+yamllint = "^1.35.1"
+bandit = "^1.8.3"
+pytest = "^8.3.3"
+coverage = "^7.6.1"
+detect-secrets = "^1.5.0"
+prettier = "^0.0.7"
+pre-commit = "^4.1.0"
+types-cachetools = "^5.5.0.20240820"
+testcontainers = {extras = ["weaviate"], version = "^4.10.0"}
+pytest-mock = "^3.14.1"
+
+[tool.isort]
+profile = "black"
+multi_line_output = 3
+
+[tool.bandit]
+exclude_dirs = ["tests"]
+skips = ["B311"]
+
+[tool.mypy]
+
+[[tool.mypy.overrides]]
+module = "langfuse.*"
+ignore_missing_imports = true
+
+[tool.pylint."MESSAGES CONTROL"]
+disable = ["not-context-manager"]
+
+[tool.coverage.run]
+branch = true
+source = ["src"]
+dynamic_context = "test_function"
+
+[tool.coverage.report]
+show_missing = true
+# fail_under = 80
+# omit = ["tests/*", "your_module_name/__init__.py"]
+
+[tool.coverage.html]
+directory = "htmlcov"
+
+[virtualenvs]
+create = true
+in-project = true
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

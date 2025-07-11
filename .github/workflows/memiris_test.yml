@@ -1,0 +1,89 @@
+---
+name: MemIris - Test
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+    paths:
+      - "memiris/**"
+      - ".github/workflows/memiris_test.yml"
+      - ".pre-commit-config.yaml"
+  pull_request:
+    branches:
+      - main
+      - develop
+    paths:
+      - "memiris/**"
+      - ".github/workflows/memiris_test.yml"
+      - ".pre-commit-config.yaml"
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Install Poetry
+        run: |
+          curl -sSL https://install.python-poetry.org | python3 -
+          poetry config virtualenvs.create true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "poetry"
+
+      - name: Install Dependencies
+        run: poetry install
+        working-directory: memiris
+
+      - name: Run pre-commit hooks
+        run: |
+          # Activate poetry env
+          cd memiris
+          poetry env use python
+          source $(poetry env info --path)/bin/activate
+          # Run pre-commit hooks
+          cd ..
+          pre-commit run --all-files --hook-stage manual memiris
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Install Poetry
+        run: |
+          curl -sSL https://install.python-poetry.org | python3 -
+          poetry config virtualenvs.create true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Dependencies
+        run: poetry install
+        working-directory: memiris
+
+      - name: Run Tests
+        run: poetry run coverage run -m pytest
+        working-directory: memiris
+
+      - name: Generate Coverage Report
+        run: poetry run coverage xml
+        working-directory: memiris
+
+      #- name: Upload Coverage Report
+      #  uses: codecov/codecov-action@v2
+      #  with:
+      #    token: ${{ secrets.CODECOV_TOKEN }}
+      #    file: memiris/coverage.xml
+      #    fail_ci_if_error: true
