@@ -167,29 +167,60 @@ enum ConsistencyIssueSeverity {
   CRITICAL = 3;
 }
 
+enum ConsistencyIssueType {
+  STRUCTURAL = 0;           // Class structure, inheritance, signatures
+  BEHAVIORAL = 1;           // Logic implementation, algorithm differences  
+  SPECIFICATION = 2;        // Problem statement vs implementation alignment
+  TESTING = 3;              // Test coverage and assertion consistency
+}
+
 enum ConsistencyIssueCategory {
-  SEMANTIC_MISMATCH = 0;
-  MISSING_IMPLEMENTATION = 1;
-  EXTRA_IMPLEMENTATION = 2;
-  TEST_COVERAGE_GAP = 3;
-  NAMING_INCONSISTENCY = 4;
-  TYPE_MISMATCH = 5;
-  BEHAVIORAL_INCONSISTENCY = 6;
+  // STRUCTURAL Issues (0-19) - Core class/method structure mismatches
+  CLASS_MODIFIER_MISMATCH = 0;          // abstract vs concrete, interface vs class
+  INHERITANCE_HIERARCHY_MISMATCH = 1;   // extends/implements different classes/interfaces
+  METHOD_SIGNATURE_MISMATCH = 2;        // return type, parameters, visibility, static
+  CONSTRUCTOR_SIGNATURE_MISMATCH = 3;   // parameters, visibility mismatch
+  ATTRIBUTE_DECLARATION_MISMATCH = 4;   // type, visibility, static modifiers
+  MISSING_REQUIRED_ELEMENT = 5;         // class, method, attribute missing entirely
+  UNEXPECTED_ELEMENT_PRESENT = 6;       // extra classes/methods not in specification
+  
+  // BEHAVIORAL Issues (20-39) - Implementation logic differences  
+  ALGORITHM_IMPLEMENTATION_DIFFERENT = 20;   // Different approach to solve same problem
+  VALIDATION_LOGIC_MISMATCH = 21;            // Different input/runtime validation
+  ERROR_HANDLING_MISMATCH = 22;              // Different exception handling approach
+  EDGE_CASE_HANDLING_DIFFERENT = 23;         // Different boundary condition handling
+  RETURN_VALUE_LOGIC_DIFFERENT = 24;         // Same signature but different return logic
+  
+  // SPECIFICATION Issues (40-59) - Problem statement alignment problems
+  REQUIREMENT_NOT_IMPLEMENTED = 40;         // Problem statement requirement missing
+  CONSTRAINT_VIOLATION = 41;                // Violates specific constraints (e.g., "use ternary")
+  UML_DIAGRAM_DEVIATION = 42;               // Implementation doesn't match UML
+  TASK_INSTRUCTION_IGNORED = 43;            // Specific [task] instructions not followed
+  PACKAGE_STRUCTURE_MISMATCH = 44;          // Wrong package names/structure
+  NAMING_CONVENTION_VIOLATION = 45;         // Violates specified naming requirements
+  
+  // TESTING Issues (60-79) - Test and assertion consistency
+  TEST_CASE_SPECIFICATION_MISMATCH = 60;    // Test doesn't match what problem describes
+  TEST_ASSERTION_INADEQUATE = 61;           // Test exists but doesn't verify correctly
+  TEST_COVERAGE_INCOMPLETE = 62;            // Missing tests for specified functionality
+  TEST_DATA_INCONSISTENT = 63;              // Test data doesn't match problem examples
+  TEST_METHOD_NAME_MISMATCH = 64;           // Test name doesn't match specification
 }
 
 message ConsistencyIssue {
   string description = 1;
   ConsistencyIssueSeverity severity = 2;
-  ConsistencyIssueCategory category = 3;
+  ConsistencyIssueType type = 3;
+  ConsistencyIssueCategory category = 4;
   
   // Primary location where issue was detected
-  ArtifactAnchor primary_location = 4;
+  ArtifactAnchor primary_location = 5;
   
   // Related locations across artifacts
-  repeated ArtifactAnchor related_locations = 5;
+  repeated ArtifactAnchor related_locations = 6;
   
   // Simple suggested fix as a string
-  string suggested_fix = 6;
+  string suggested_fix = 7;
 }
 
 message ConsistencyCheckResponse {
