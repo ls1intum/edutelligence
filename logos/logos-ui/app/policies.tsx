@@ -53,14 +53,13 @@ export default function Policies() {
                     entity_id: policy[1],
                     name: policy[2],
                     description: policy[3],
-                    api_id: policy[4],
-                    threshold_privacy: policy[5],
-                    threshold_latency: policy[6],
-                    threshold_accuracy: policy[7],
-                    threshold_cost: policy[8],
-                    threshold_quality: policy[9],
-                    priority: policy[10],
-                    topic: policy[11],
+                    threshold_privacy: policy[4],
+                    threshold_latency: policy[5],
+                    threshold_accuracy: policy[6],
+                    threshold_cost: policy[7],
+                    threshold_quality: policy[8],
+                    priority: policy[9],
+                    topic: policy[10],
                 }));
                 setpolicies(formattedpolicies);
             } else {
@@ -123,7 +122,6 @@ const Table = ({policies, theme}) => {
                     <th style={{padding: 10, borderBottom: '1px solid #ccc'}}>Service-ID</th>
                     <th style={{padding: 10, borderBottom: '1px solid #ccc'}}>Name</th>
                     <th style={{padding: 10, borderBottom: '1px solid #ccc'}}>Description</th>
-                    <th style={{padding: 10, borderBottom: '1px solid #ccc'}}>API-ID</th>
                     <th style={{padding: 10, borderBottom: '1px solid #ccc'}}>Threshold Privacy</th>
                     <th style={{padding: 10, borderBottom: '1px solid #ccc'}}>Threshold Latency</th>
                     <th style={{padding: 10, borderBottom: '1px solid #ccc'}}>Threshold Accuracy</th>
@@ -140,7 +138,6 @@ const Table = ({policies, theme}) => {
                         <td style={{padding: 10, borderRight: '1px solid #ccc'}}>{policy.entity_id}</td>
                         <td style={{padding: 10, borderRight: '1px solid #ccc'}}>{policy.name}</td>
                         <td style={{padding: 10, borderRight: '1px solid #ccc'}}>{policy.description}</td>
-                        <td style={{padding: 10, borderRight: '1px solid #ccc'}}>{policy.api_id}</td>
                         <td style={{padding: 10, borderRight: '1px solid #ccc'}}>{policy.threshold_privacy}</td>
                         <td style={{padding: 10, borderRight: '1px solid #ccc'}}>{policy.threshold_latency}</td>
                         <td style={{padding: 10, borderRight: '1px solid #ccc'}}>{policy.threshold_accuracy}</td>
