@@ -9,21 +9,19 @@ from weaviate import WeaviateClient
 from weaviate.classes.query import Filter
 
 from iris.common.pipeline_enum import PipelineEnum
+from iris.domain.data.lecture_unit_page_dto import LectureUnitPageDTO
 from iris.domain.data.metrics.transcription_dto import (
     TranscriptionSegmentDTO,
-    TranscriptionWebhookDTO,
 )
-from iris.domain.ingestion.transcription_ingestion.transcription_ingestion_pipeline_execution_dto import (
-    TranscriptionIngestionPipelineExecutionDto,
+from iris.domain.ingestion.ingestion_pipeline_execution_dto import (
+    IngestionPipelineExecutionDto,
 )
-from iris.domain.lecture.lecture_unit_dto import LectureUnitDTO
 from iris.llm import (
     CompletionArguments,
     ModelVersionRequestHandler,
 )
 from iris.llm.langchain import IrisLangchainChatModel
 from iris.pipeline import Pipeline
-from iris.pipeline.lecture_unit_pipeline import LectureUnitPipeline
 from iris.pipeline.prompts.transcription_ingestion_prompts import (
     transcription_summary_prompt,
 )
@@ -32,9 +30,7 @@ from iris.vector_database.lecture_transcription_schema import (
     LectureTranscriptionSchema,
     init_lecture_transcription_schema,
 )
-from iris.web.status.transcription_ingestion_callback import (
-    TranscriptionIngestionStatus,
-)
+from iris.web.status.ingestion_status_callback import IngestionStatusCallback
 
 CHUNK_SEPARATOR_CHAR = "\31"
 
@@ -53,8 +49,8 @@ class TranscriptionIngestionPipeline(Pipeline):
     def __init__(
         self,
         client: WeaviateClient,
-        dto: Optional[TranscriptionIngestionPipelineExecutionDto],
-        callback: TranscriptionIngestionStatus,
+        dto: Optional[IngestionPipelineExecutionDto],
+        callback: IngestionStatusCallback,
     ) -> None:
         super().__init__()
         self.client = client
@@ -71,14 +67,18 @@ class TranscriptionIngestionPipeline(Pipeline):
         self.pipeline = self.llm | StrOutputParser()
         self.tokens = []
 
-    def __call__(self) -> None:
+    def __call__(self) -> (str, []):
         try:
             self.callback.in_progress("Deleting existing transcription data")
-            self.delete_existing_transcription_data(self.dto.transcription)
+            self.delete_existing_transcription_data(self.dto.lecture_unit)
+            self.callback.done("Old slides deleted")
+
             self.callback.in_progress("Chunking transcription")
-            chunks = self.chunk_transcription(self.dto.transcription)
+            chunks = self.chunk_transcription(self.dto.lecture_unit)
             self.callback.done("Chunked transcription")
+
             logger.info("chunked data")
+
             self.callback.in_progress("Summarizing transcription")
             chunks = self.summarize_chunks(chunks)
             self.callback.done("Summarized transcription")
@@ -87,29 +87,7 @@ class TranscriptionIngestionPipeline(Pipeline):
             self.batch_insert(chunks)
             self.callback.done("Transcriptions ingested successfully")
 
-            self.callback.in_progress(
-                "Ingesting lecture unit summary into vector database"
-            )
-            lecture_unit_dto = LectureUnitDTO(
-                course_id=self.dto.transcription.course_id,
-                course_name=self.dto.transcription.course_name,
-                course_description=self.dto.transcription.course_description,
-                lecture_id=self.dto.transcription.lecture_id,
-                lecture_name=self.dto.transcription.lecture_name,
-                lecture_unit_id=self.dto.lecture_unit_id,
-                lecture_unit_name=self.dto.transcription.lecture_unit_name,
-                lecture_unit_link=self.dto.transcription.lecture_unit_link,
-                course_language=self.dto.transcription.transcription.language,
-                base_url=self.dto.settings.artemis_base_url,
-            )
-
-            LectureUnitPipeline()(lecture_unit_dto)
-
-            self.callback.done(
-                "Ingested lecture unit summary into vector database",
-                tokens=self.tokens,
-            )
-
+            return self.dto.lecture_unit.transcription.language, self.tokens
         except Exception as e:
             logger.error("Error processing transcription ingestion pipeline: %s", e)
             self.callback.error(
@@ -117,10 +95,9 @@ class TranscriptionIngestionPipeline(Pipeline):
                 exception=e,
                 tokens=self.tokens,
             )
+            return "", []
 
-    def delete_existing_transcription_data(
-        self, transcription: TranscriptionWebhookDTO
-    ):
+    def delete_existing_transcription_data(self, transcription: LectureUnitPageDTO):
         self.collection.data.delete_many(
             where=Filter.by_property(LectureTranscriptionSchema.COURSE_ID.value).equal(
                 transcription.course_id
@@ -131,8 +108,10 @@ class TranscriptionIngestionPipeline(Pipeline):
             & Filter.by_property(
                 LectureTranscriptionSchema.LECTURE_UNIT_ID.value
             ).equal(transcription.lecture_unit_id)
+            & Filter.by_property(LectureTranscriptionSchema.BASE_URL.value).equal(
+                self.dto.settings.artemis_base_url
+            )
         )
-        # TODO: Add Base Url
 
     def batch_insert(self, chunks):
         with batch_update_lock:
@@ -152,7 +131,7 @@ class TranscriptionIngestionPipeline(Pipeline):
                     )
 
     def chunk_transcription(
-        self, transcription: TranscriptionWebhookDTO
+        self, transcription: LectureUnitPageDTO
     ) -> List[Dict[str, Any]]:
         chunks = []
 
@@ -272,7 +251,7 @@ class TranscriptionIngestionPipeline(Pipeline):
                     (
                         "system",
                         transcription_summary_prompt(
-                            self.dto.transcription.lecture_name,
+                            self.dto.lecture_unit.lecture_name,
                             chunk[LectureTranscriptionSchema.SEGMENT_TEXT.value],
                         ),
                     ),

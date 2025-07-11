@@ -4,6 +4,8 @@ from pydantic import BaseModel
 
 
 class LectureUnitDTO(BaseModel):
+    """DTO to store all lecture unit information."""
+
     course_id: int
     course_name: str
     course_description: str
@@ -13,5 +15,6 @@ class LectureUnitDTO(BaseModel):
     lecture_unit_id: int
     lecture_unit_name: str
     lecture_unit_link: Optional[str] = ""
+    video_link: Optional[str] = ""
     base_url: str
     lecture_unit_summary: Optional[str] = ""
