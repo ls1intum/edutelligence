@@ -304,3 +304,35 @@ To lint the code, run the following command:
 ```bash
 poetry run flake8 .
 ```
+
+def add_mask(
+        self,
+        keys: Any,
+        queries: Any,
+        values: Any,
+        attention_mask: Any,
+        sparse_meta_data: Any,
+        previous_mask: Any,
+        **kwargs: Any,
+    ) -> Any:
+        if previous_mask.is_full_mask():
+            return previous_mask
+
+        batch_size, num_heads, seq_len_queries, _ = queries.shape
+        seq_len_keys = keys.shape[2]
+
+        heavy_size = compute_heavy_size(...)
+
+        if seq_len_keys <= heavy_size:
+            return Mask.create_full_mask(batch_size, num_heads, seq_len_queries, seq_len_keys)
+
+        raw_attention_scores = torch.matmul(queries, keys.transpose(-2, -1))
+
+        masked_scores = compute_masked_scores(...)
+
+        _, top_k_indices = torch.topk(masked_scores, k=heavy_size, dim=-1, largest=True)
+        data = torch.ones_like(top_k_indices, dtype=torch.float32)
+
+        this_mask = create_mask(data, top_k_indices, ...)
+
+        return previous_mask.merge_mask(this_mask, inplace=False)

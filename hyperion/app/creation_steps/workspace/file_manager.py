@@ -540,7 +540,7 @@ class FileManager:
             except ValueError:
                 raise FileSystemException(
                     f"Path is outside workspace boundaries: {path}", file_path=str(path)
-                )
+                ) from None
 
             path_str = str(target_path)
 
