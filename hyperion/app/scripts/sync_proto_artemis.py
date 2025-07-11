@@ -13,7 +13,6 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-
 # Configuration file name (will be gitignored)
 CONFIG_FILE = ".artemis_sync_config.json"
 
