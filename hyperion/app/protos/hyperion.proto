@@ -114,19 +114,86 @@ service ConfigureGrading {}
 
 // Exercise Creation Step 8: Review and Refine
 service ReviewAndRefine {
-  rpc CheckInconsistencies(InconsistencyCheckRequest) returns (InconsistencyCheckResponse) {}
+  rpc CheckConsistency(ConsistencyCheckRequest) returns (ConsistencyCheckResponse) {}
   rpc RewriteProblemStatement(RewriteProblemStatementRequest) returns (RewriteProblemStatementResponse) {}
 }
 
-message InconsistencyCheckRequest {
+message ConsistencyCheckRequest {
   string problem_statement = 1;
   Repository solution_repository = 2;
   Repository template_repository = 3;
   Repository test_repository = 4;
 }
 
-message InconsistencyCheckResponse {
-  string inconsistencies = 1;
+enum ArtifactType {
+  PROBLEM_STATEMENT = 0;
+  TEMPLATE_REPOSITORY = 1;
+  SOLUTION_REPOSITORY = 2;
+  TEST_REPOSITORY = 3;
+}
+
+message ArtifactAnchor {
+  ArtifactType type = 1;
+  string file_path = 2;  // Path in the repository, empty for problem statement
+  
+  // Location reference - use what makes sense for the context
+  oneof location_reference {
+    TextRange text_range = 3;
+    LineRange line_range = 4;
+    StructuralReference structural_ref = 5;
+  }
+}
+
+message TextRange {
+  int32 start_index = 1;
+  int32 end_index = 2;
+}
+
+message LineRange {
+  int32 start_line = 1;
+  int32 end_line = 2;
+}
+
+message StructuralReference {
+  string element_type = 1;    // e.g., "class", "method", "variable"
+  string element_name = 2;    // e.g., "Student", "getName"
+  repeated string path = 3;   // Hierarchical path: ["package.name", "ClassName"]
+}
+
+enum ConsistencyIssueSeverity {
+  LOW = 0;
+  MEDIUM = 1;
+  HIGH = 2;
+  CRITICAL = 3;
+}
+
+enum ConsistencyIssueCategory {
+  SEMANTIC_MISMATCH = 0;
+  MISSING_IMPLEMENTATION = 1;
+  EXTRA_IMPLEMENTATION = 2;
+  TEST_COVERAGE_GAP = 3;
+  NAMING_INCONSISTENCY = 4;
+  TYPE_MISMATCH = 5;
+  BEHAVIORAL_INCONSISTENCY = 6;
+}
+
+message ConsistencyIssue {
+  string description = 1;
+  ConsistencyIssueSeverity severity = 2;
+  ConsistencyIssueCategory category = 3;
+  
+  // Primary location where issue was detected
+  ArtifactAnchor primary_location = 4;
+  
+  // Related locations across artifacts
+  repeated ArtifactAnchor related_locations = 5;
+  
+  // Simple suggested fix as a string
+  string suggested_fix = 6;
+}
+
+message ConsistencyCheckResponse {
+  repeated ConsistencyIssue issues = 1;
 }
 
 message RewriteProblemStatementRequest {
