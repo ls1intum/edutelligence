@@ -20,34 +20,7 @@ class CollectionNames(str, Enum):
 
 logger = logging.getLogger(__name__)
 
-
-class WeaviateClient:
-    def __init__(
-        self,
-        host: str = settings.weaviate.host,
-        port: int = settings.weaviate.port,
-        grpc_port: int = settings.weaviate.grpc_port,
-    ):
-        self.client = weaviate.connect_to_local(
-            host=host,
-            port=port,
-            grpc_port=grpc_port,
-        )
-
-        self._ensure_collections_exist()
-
-    def _check_if_collection_exists(self, collection_name: str):
-        """Check if a collection exists and create it if it doesn't."""
-        if not self.client.collections.exists(collection_name):
-            raise ValueError(f"Collection '{collection_name}' does not exist")
-
-    def _ensure_collections_exist(self):
-        """Ensure collections exist with proper schema."""
-        # Define schemas for each collection
-        # TODO: ARDA: Add properties for each collection
-        # After, schema updated automatically and u can fetch the data from the
-        # collection with the new properties
-        collection_schemas = {
+COLLECTION_SCHEMAS = {  
             CollectionNames.COMPETENCY.value: {
                 "properties": [
                     {"name": "text", "dataType": "text"},
@@ -90,14 +63,43 @@ class WeaviateClient:
             },
         }
 
-        for collection_name, schema in collection_schemas.items():
+
+
+class WeaviateClient:
+    def __init__(
+        self,
+        host: str = settings.weaviate.host,
+        port: int = settings.weaviate.port,
+        grpc_port: int = settings.weaviate.grpc_port,
+    ):
+        self.client = weaviate.connect_to_local(
+            host=host,
+            port=port,
+            grpc_port=grpc_port,
+        )
+
+        self._ensure_collections_exist()
+
+    def _check_if_collection_exists(self, collection_name: str):
+        """Check if a collection exists and create it if it doesn't."""
+        if not self.client.collections.exists(collection_name):
+            raise ValueError(f"Collection '{collection_name}' does not exist")
+
+    def _ensure_collections_exist(self):
+        """Ensure collections exist with proper schema."""
+        # Define schemas for each collection
+        # TODO: ARDA: Add properties for each collection
+        # After, schema updated automatically and u can fetch the data from the
+        # collection with the new properties
+      
+        for collection_name, schema in COLLECTION_SCHEMAS.items():
             if not self.client.collections.exists(collection_name):
                 self.client.collections.create(
                     name=collection_name,
                     vectorizer_config=weaviate.classes.config.Configure.Vectorizer.none(),
                     properties=schema["properties"],
                 )
-                logger.info(f"✅ {collection_name} collection created with schema.")
+                logger.info(f"{collection_name} ---> CREATED")
             else:
                 collection = self.client.collections.get(collection_name)
                 existing_props = {prop.name for prop in collection.config.get(simple=False).properties}
@@ -355,10 +357,26 @@ class WeaviateClient:
         """Delete all data from a collection."""
 
         self._check_if_collection_exists(collection_name)
+        logger.info(f"{collection_name} ---> ALL DATA DELETED")
 
-        collection = self.client.collections.get(collection_name)
-        collection.data.delete_all()
-        logger.info(f"--- ALL DATA DELETED FROM {collection_name} ---")
+        self.recreate_collection(collection_name)
+
+    def recreate_collection(self, collection_name: str):
+        """Recreate a collection after it has been deleted."""
+        logger.info(f"--- RECREATING COLLECTION '{collection_name}' ---")
+        if collection_name not in COLLECTION_SCHEMAS:
+            raise ValueError(f"No schema defined for collection '{collection_name}'")
+
+        schema = COLLECTION_SCHEMAS[collection_name]
+        
+        # Create the collection with the schema
+        self.client.collections.create(
+            name=collection_name,
+            vectorizer_config=weaviate.classes.config.Configure.Vectorizer.none(),
+            properties=schema["properties"],
+        )
+
+        logger.info(f"{collection_name} ---> RECREATED")
 
     def delete_data_by_id(self, collection_name: str, id: str):
         """Delete data from a collection by ID."""
