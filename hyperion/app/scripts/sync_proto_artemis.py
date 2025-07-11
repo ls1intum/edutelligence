@@ -191,13 +191,6 @@ Examples:
         artemis_path
         / "src"
         / "main"
-        / "java"
-        / "de"
-        / "tum"
-        / "cit"
-        / "aet"
-        / "artemis"
-        / "hyperion"
         / "proto"
         / "hyperion.proto"
     )

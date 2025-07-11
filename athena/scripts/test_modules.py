@@ -4,6 +4,7 @@ import sys
 import argparse
 import shutil
 
+
 def main():
     parser = argparse.ArgumentParser(description='Run tests for Athena modules')
     parser.add_argument('--include-real', action='store_true',
@@ -26,6 +27,15 @@ def main():
 
     success = True
     path_env = os.environ["PATH"]
+    
+    # Set up Python path to include parent directories for llm_core imports
+    current_dir = os.getcwd()
+    python_path_dirs = [
+        current_dir,  # athena root
+        os.path.join(current_dir, "llm_core"),  # llm_core module
+    ]
+    python_path = os.pathsep.join(python_path_dirs)
+    os.environ["PYTHONPATH"] = python_path
 
     test_results_dir = "test-results"
     if os.path.exists(test_results_dir):
@@ -48,10 +58,10 @@ def main():
         # Set environment variables for the virtual environment
         os.environ["VIRTUAL_ENV"] = venv_path
         os.environ["PATH"] = os.path.join(venv_path, "bin") + os.pathsep + path_env
-        python_path = os.path.join(venv_path, "bin", "python")
+        python_path_exec = os.path.join(venv_path, "bin", "python")
         pip_path = os.path.join(venv_path, "bin", "pip")
 
-        print(f"Using Python path: {python_path}")
+        print(f"Using Python path: {python_path_exec}")
 
         try:
             # Install pytest and pytest-asyncio in the virtual environment
@@ -64,8 +74,8 @@ def main():
                 print(f"\nRunning mock tests for {module}...")
                 junit_file = os.path.join(test_results_dir, f"{module.replace('/', '_')}_mock.xml")
                 result = subprocess.run(
-                    [python_path, "-m", "pytest", mock_test_dir, "-v", f"--junitxml={junit_file}"],
-                    check=False)
+                    [python_path_exec, "-m", "pytest", mock_test_dir, "-v", f"--junitxml={junit_file}"],
+                    check=False, env=dict(os.environ, PYTHONPATH=python_path))
                 if result.returncode != 0:
                     print(f"\nMock tests failed for {module}")
                     success = False
@@ -89,8 +99,8 @@ def main():
                         junit_file_real = os.path.join(original_dir, test_results_dir, f"{module.replace('/', '_')}_real.xml")
                         # Run pytest with the real test directory as the test path
                         result = subprocess.run(
-                            [python_path, "-m", "pytest", '../../../' + real_test_dir, "-v", f"--junitxml={junit_file_real}"],
-                            check=False
+                            [python_path_exec, "-m", "pytest", '../../../' + real_test_dir, "-v", f"--junitxml={junit_file_real}"],
+                            check=False, env=dict(os.environ, PYTHONPATH=python_path)
                         )
                         if result.returncode != 0:
                             print(f"\nReal tests failed for {module}")
