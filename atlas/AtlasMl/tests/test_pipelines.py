@@ -114,6 +114,66 @@ def test_newTextPipeline_integration(workflows):
     found = any(t["properties"].get("text_id") == test_id for t in texts)
     assert found
 
+def test_feedbackLoopPipeline_integration(workflows):
+    # Setup: Create one text, one competency, and one cluster
+    text_id = str(uuid.uuid4())
+    text_id2 = str(uuid.uuid4())
+    competency_id = str(uuid.uuid4())
+    cluster_id = str(uuid.uuid4())
+
+    # Insert text with no competency_ids
+    workflows.weaviate_client.collections["Text"].append({
+        "id": text_id,
+        "vector": {"default": [0.5, 0.5]},
+        "properties": {
+            "text_id": text_id,
+            "text": "Feedback test text",
+            "competency_ids": []
+        }
+    })
+    workflows.weaviate_client.collections["Text"].append({
+        "id": text_id2,
+        "vector": {"default": [0.1, 0.9]},
+        "properties": {
+            "text_id": text_id,
+            "text": "Feedback test text",
+            "competency_ids": [competency_id]
+        }
+    })
+
+    # Insert competency referencing the cluster
+    workflows.weaviate_client.collections["Competency"].append({
+        "id": competency_id,
+        "vector": {"default": [0.2, 0.8]},
+        "properties": {
+            "competency_id": competency_id,
+            "name": "Feedback Competency",
+            "text": "Feedback description",
+            "cluster_id": cluster_id
+        }
+    })
+
+    # Insert cluster
+    workflows.weaviate_client.collections["ClusterCenter"].append({
+        "id": cluster_id,
+        "vector": {"default": [0.1, 0.9]},
+        "properties": {
+            "cluster_id": cluster_id
+        }
+    })
+
+    # Call the feedbackLoopPipeline
+    workflows.feedbackLoopPipeline(text_id, competency_id)
+
+    # Assert that the text now contains the competency_id in its competency_ids
+    updated_text = workflows.weaviate_client.get_embeddings_by_property("Text", "text_id", text_id)[0]
+    assert competency_id in updated_text["properties"]["competency_ids"]
+
+    # Optionally, check that the cluster has a new centroid (implementation dependent)
+    clusters = workflows.weaviate_client.get_all_embeddings("ClusterCenter")
+    found = any(cluster["id"] == cluster_id for cluster in clusters)
+    assert found, "Cluster should still exist"
+
 
 class FakeWeaviateClient:
     def __init__(self):

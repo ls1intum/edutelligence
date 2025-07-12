@@ -248,7 +248,7 @@ class PipelineWorkflows:
             - Modifies both TEXT and CLUSTERCENTER collections
             - Preserves the text's previous competency associations
             - Updates cluster medoid using a weighted average approach
-            - All changes are atomic - either all succeed or none are applied
+            - All changes are atomic - either all succeeded or none are applied
 
         Warning:
             Ensure both text_id and competency_id exist in the database before calling
@@ -256,27 +256,37 @@ class PipelineWorkflows:
         """
 
         text = self.weaviate_client.get_embeddings_by_property(CollectionNames.TEXT.value, "text_id", text_id)
+        found_text = None
+        if text: found_text = text[0]
+
         competency = self.weaviate_client.get_embeddings_by_property(CollectionNames.COMPETENCY.value, "competency_id",
                                                                      competency_id)
+        found_competency = None
+        if competency: found_competency = competency[0]
         cluster = self.weaviate_client.get_embeddings_by_property(CollectionNames.CLUSTERCENTER.value, "cluster_id",
-                                                                  competency["properties"]["cluster_id"])
+                                                                  found_competency["properties"]["cluster_id"])
+        found_cluster = None
+        if cluster: found_cluster = cluster[0]
 
-        new_text_competencyID = text["properties"]["competency_ids"]
+        new_text_competencyID = found_text["properties"]["competency_ids"]
         new_text_competencyID.append(competency_id)
 
         new_text = {"properties": [{
-            "text_id": text["properties"]["text_id"],
-            "text": text["properties"]["text"],
+            "text_id": found_text["properties"]["text_id"],
+            "text": found_text["properties"]["text"],
             "competency_ids": new_text_competencyID
         }]}
 
-        self.weaviate_client.update_property_by_id(CollectionNames.TEXT.value, text["properties"]["text_id"], new_text)
+        self.weaviate_client.update_property_by_id(CollectionNames.TEXT.value, found_text["properties"]["text_id"], new_text)
 
         members = self.weaviate_client.get_embeddings_by_property(CollectionNames.TEXT.value, "competency_ids",
                                                                   competency_id)
-        newMedoid = update_cluster_centroid(cluster["vector"], len(members) - 1, text["vector"])
+        cluster_vector = np.array(found_cluster["vector"]["default"])
+        text_vector = np.array(found_text["vector"]["default"])
+
+        newMedoid = update_cluster_centroid(cluster_vector, len(members), text_vector)
 
         new_cluster = {"properties": [{
-            "cluster_id": cluster["properties"]["cluster_id"],
+            "cluster_id": found_cluster["properties"]["cluster_id"],
         }]}
         self.weaviate_client.add_embeddings(CollectionNames.CLUSTERCENTER.value, newMedoid.tolist(), new_cluster)
