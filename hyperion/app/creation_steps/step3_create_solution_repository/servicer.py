@@ -110,23 +110,17 @@ class CreateSolutionRepositoryServicer:
             )
 
     def _convert_language_enum_to_string(self, language_enum: int) -> str:
-        """Convert programming language enum value to string using protobuf enum descriptor."""
+        """Convert programming language enum value to string using config enums."""
         try:
-            # Import at runtime to avoid protobuf version issues
-            from app.grpc import hyperion_pb2
+            from ..config import protobuf_to_language_enum
 
-            # Use the protobuf enum descriptor to get the name
-            enum_descriptor = hyperion_pb2.ProgrammingLanguage.DESCRIPTOR
-            enum_value = enum_descriptor.values_by_number.get(language_enum)
+            # Convert to internal enum and get string value
+            internal_enum = protobuf_to_language_enum(language_enum)
+            return internal_enum.value
 
-            if enum_value:
-                return enum_value.name
-            else:
-                logger.warning(
-                    f"Unknown programming language enum value: {language_enum}"
-                )
-                return "EMPTY"  # Default fallback
-
+        except ValueError as e:
+            logger.warning(f"Unknown programming language enum value: {language_enum}")
+            return "EMPTY"  # Default fallback
         except Exception as e:
             logger.error(f"Error converting language enum {language_enum}: {e}")
             # Fallback to hardcoded mapping as last resort

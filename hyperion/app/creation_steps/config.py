@@ -57,25 +57,3 @@ class WorkspaceConfig(BaseSettings):
 
 
 config = WorkspaceConfig()
-
-LANGUAGE_CONFIGS: Dict[str, Dict[str, Any]] = {
-    "PYTHON": {
-        "file_extensions": [".py"],
-        "test_frameworks": ["pytest", "unittest"],
-        "build_tools": ["pip", "poetry", "setuptools"],
-        "style_guides": ["pep8", "black"],
-        "common_dependencies": ["pytest", "mock", "requests"],
-    }
-}
-
-
-PROJECT_TYPE_CONFIGS: Dict[str, Dict[str, Any]] = {
-    "PLAIN": {
-        "build_file": None,
-        "source_dir": "src",
-        "test_dir": "tests",
-        "resources_dir": "resources",
-        "build_command": None,
-        "test_command": "python -m pytest",
-    }
-}
