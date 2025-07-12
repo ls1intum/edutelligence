@@ -1,20 +1,13 @@
 import pytest
 import uuid
-from sympy import false
-from weaviate.collections.classes.filters import Filter
-from atlasml.clients.weaviate import CollectionNames
 from atlasml.ml.MLPipelines.PipelineWorkflows import PipelineWorkflows
 
-@pytest.fixture(scope="function")
+@pytest.fixture
 def workflows():
-    wf = PipelineWorkflows()
-    collections = [CollectionNames.TEXT.value, CollectionNames.COMPETENCY.value, CollectionNames.CLUSTERCENTER.value]
-    for name in collections:
-        try:
-            wf.weaviate_client.delete_all_data_from_collection(name)
-        except Exception:
-            pass
-    wf.weaviate_client._ensure_collections_exist()
+    wf = PipelineWorkflows(weaviate_client=FakeWeaviateClient())
+    # Clear all collections before each test
+    for collection in wf.weaviate_client.collections:
+        wf.weaviate_client.delete_all_data_from_collection(collection)
     return wf
 
 def test_initial_texts_integration(workflows):
@@ -120,3 +113,108 @@ def test_newTextPipeline_integration(workflows):
     texts = workflows.weaviate_client.get_all_embeddings("Text")
     found = any(t["properties"].get("text_id") == test_id for t in texts)
     assert found
+
+def test_feedbackLoopPipeline_integration(workflows):
+    # Setup: Create one text, one competency, and one cluster
+    text_id = str(uuid.uuid4())
+    text_id2 = str(uuid.uuid4())
+    competency_id = str(uuid.uuid4())
+    cluster_id = str(uuid.uuid4())
+
+    # Insert text with no competency_ids
+    workflows.weaviate_client.collections["Text"].append({
+        "id": text_id,
+        "vector": {"default": [0.5, 0.5]},
+        "properties": {
+            "text_id": text_id,
+            "text": "Feedback test text",
+            "competency_ids": []
+        }
+    })
+    workflows.weaviate_client.collections["Text"].append({
+        "id": text_id2,
+        "vector": {"default": [0.1, 0.9]},
+        "properties": {
+            "text_id": text_id,
+            "text": "Feedback test text",
+            "competency_ids": [competency_id]
+        }
+    })
+
+    # Insert competency referencing the cluster
+    workflows.weaviate_client.collections["Competency"].append({
+        "id": competency_id,
+        "vector": {"default": [0.2, 0.8]},
+        "properties": {
+            "competency_id": competency_id,
+            "name": "Feedback Competency",
+            "text": "Feedback description",
+            "cluster_id": cluster_id
+        }
+    })
+
+    # Insert cluster
+    workflows.weaviate_client.collections["ClusterCenter"].append({
+        "id": cluster_id,
+        "vector": {"default": [0.1, 0.9]},
+        "properties": {
+            "cluster_id": cluster_id
+        }
+    })
+
+    # Call the feedbackLoopPipeline
+    workflows.feedbackLoopPipeline(text_id, competency_id)
+
+    # Assert that the text now contains the competency_id in its competency_ids
+    updated_text = workflows.weaviate_client.get_embeddings_by_property("Text", "text_id", text_id)[0]
+    assert competency_id in updated_text["properties"]["competency_ids"]
+
+    # Optionally, check that the cluster has a new centroid (implementation dependent)
+    clusters = workflows.weaviate_client.get_all_embeddings("ClusterCenter")
+    found = any(cluster["id"] == cluster_id for cluster in clusters)
+    assert found, "Cluster should still exist"
+
+
+class FakeWeaviateClient:
+    def __init__(self):
+        self.collections = {
+            "Text": [],
+            "Competency": [],
+            "ClusterCenter": [],
+        }
+
+    def add_embeddings(self, collection, vector, properties):
+        # Always generate or use a unique object UUID as the top-level "id"
+        obj_id = (
+            properties.get("text_id") or
+            properties.get("competency_id") or
+            properties.get("cluster_id") or
+            str(uuid.uuid4())
+        )
+        obj = {
+            "id": obj_id,
+            "vector": vector if isinstance(vector, dict) else {"default": vector},
+            "properties": properties.copy()
+        }
+        self.collections[collection].append(obj)
+        return obj_id
+
+    def get_all_embeddings(self, collection):
+        # Return a list of all objects (each is a dict with "id", "vector", "properties")
+        return self.collections[collection][:]
+
+    def update_property_by_id(self, collection, obj_id, new_properties):
+        for obj in self.collections[collection]:
+            if obj["id"] == obj_id:
+                obj["properties"].update(new_properties)
+                return
+        raise KeyError(f'id: {obj_id} not found in {collection}')
+
+    def get_embeddings_by_property(self, collection, property_key, value):
+        return [
+            obj for obj in self.collections[collection]
+            if obj["properties"].get(property_key) == value
+        ]
+
+    def delete_all_data_from_collection(self, collection):
+        self.collections[collection] = []
