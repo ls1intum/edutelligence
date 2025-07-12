@@ -40,6 +40,8 @@ sync-proto-artemis = "app.scripts.sync_proto_artemis:main"
 black = "25.1.0"
 flake8 = "7.1.2"
 mypy = "1.16.1"
+pytest = "^8.4.1"
+pytest-asyncio = "^1.0.0"
 
 [virtualenvs]
 create = true

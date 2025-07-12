@@ -5,7 +5,6 @@ from app.models.azure_openai import azure_openai_provider
 from app.models.ollama import ollama_provider
 from app.models.fake import fake_provider
 
-
 model_providers: List[ModelProvider] = [
     openai_provider,
     azure_openai_provider,

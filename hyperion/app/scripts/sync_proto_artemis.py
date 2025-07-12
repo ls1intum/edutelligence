@@ -13,7 +13,6 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-
 # Configuration file name (will be gitignored)
 CONFIG_FILE = ".artemis_sync_config.json"
 
@@ -188,13 +187,7 @@ Examples:
 
     # Get Artemis path
     artemis_path = get_artemis_path(config, args.artemis_path)
-    target_proto = (
-        artemis_path
-        / "src"
-        / "main"
-        / "proto"
-        / "hyperion.proto"
-    )
+    target_proto = artemis_path / "src" / "main" / "proto" / "hyperion.proto"
 
     # Perform synchronization
     success = sync_proto_file(source_proto, target_proto, args.dry_run)
