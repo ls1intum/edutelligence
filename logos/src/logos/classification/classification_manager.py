@@ -61,8 +61,8 @@ class ClassificationManager:
         else:
             self.models = [model for model in self.models if model["id"] in allowed]
         print(f"Policy: {policy['id']}", flush=True)
-        print(f"Models: {[model['id'] for model in self.models]}", flush=True)
-        print(f"Allowed: {allowed}", flush=True)
+        # print(f"Models: {[model['id'] for model in self.models]}", flush=True)
+        print(f"Models: {allowed}", flush=True)
         filtered = PolicyClassifier(self.models).classify(prompt, policy)
         print(f"Policy-Classification: {[model['id'] for model in filtered]}", flush=True)
         filtered = TokenClassifier(filtered).classify(prompt, policy)

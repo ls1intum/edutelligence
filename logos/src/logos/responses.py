@@ -319,4 +319,8 @@ def extract_prompt(json_data: dict) -> str:
             if json_data["input_payload"]["messages"]:
                 if "content" in json_data["input_payload"]["messages"][0]:
                     return json_data["input_payload"]["messages"][0]["content"]
+    elif "messages" in json_data:
+        if json_data["messages"]:
+            if "content" in json_data["messages"][0]:
+                return json_data["messages"][0]["content"]
     return ""
