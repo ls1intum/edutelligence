@@ -12,8 +12,10 @@ from atlasml.ml.VectorEmbeddings.ModelDimension import ModelDimension
 
 
 class PipelineWorkflows:
-    def __init__(self):
-        self.weaviate_client = get_weaviate_client()
+    def __init__(self, weaviate_client=None):
+        if weaviate_client is None:
+            weaviate_client = get_weaviate_client()
+        self.weaviate_client = weaviate_client
 
     def initial_texts(self, texts: list[str]):
         """Process and store initial text entries in the database.

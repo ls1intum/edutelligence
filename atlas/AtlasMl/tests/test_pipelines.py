@@ -4,8 +4,7 @@ from atlasml.ml.MLPipelines.PipelineWorkflows import PipelineWorkflows
 
 @pytest.fixture
 def workflows():
-    wf = PipelineWorkflows()
-    wf.weaviate_client = FakeWeaviateClient()
+    wf = PipelineWorkflows(weaviate_client=FakeWeaviateClient())
     # Clear all collections before each test
     for collection in wf.weaviate_client.collections:
         wf.weaviate_client.delete_all_data_from_collection(collection)
