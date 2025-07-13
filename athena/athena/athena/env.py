@@ -2,7 +2,7 @@
 import os
 
 PRODUCTION = os.environ.get("PRODUCTION", "0") == "1"
-DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///../data/data.sqlite")
+DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///../../../data/data.sqlite")
 
 # a key is needed to authorize a module to
 # communicate with the assessment module manager

@@ -1,19 +1,18 @@
+import datetime
 import os
 from asyncio.log import logger
 from enum import Enum
 
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate, PromptTemplate
-from langchain_core.runnables import Runnable
 
 from iris.common.pipeline_enum import PipelineEnum
 from iris.domain.retrieval.lecture.lecture_retrieval_dto import (
     LectureRetrievalDTO,
 )
 from iris.llm import (
-    CapabilityRequestHandler,
     CompletionArguments,
-    RequirementList,
+    ModelVersionRequestHandler,
 )
 from iris.llm.langchain import IrisLangchainChatModel
 from iris.pipeline import Pipeline
@@ -28,23 +27,13 @@ class InformationType(str, Enum):
 class CitationPipeline(Pipeline):
     """A generic reranker pipeline that can be used to rerank a list of documents based on a question"""
 
-    llm: IrisLangchainChatModel
-    pipeline: Runnable
+    llms: dict
+    pipelines: dict
     prompt_str: str
     prompt: ChatPromptTemplate
 
     def __init__(self):
         super().__init__(implementation_id="citation_pipeline")
-        request_handler = CapabilityRequestHandler(
-            requirements=RequirementList(
-                gpt_version_equivalent=4.25,
-                context_length=16385,
-            )
-        )
-        self.llm = IrisLangchainChatModel(
-            request_handler=request_handler,
-            completion_args=CompletionArguments(temperature=0, max_tokens=4000),
-        )
         dirname = os.path.dirname(__file__)
         prompt_file_path = os.path.join(dirname, "..", "prompts", "citation_prompt.txt")
         with open(prompt_file_path, "r", encoding="utf-8") as file:
@@ -54,14 +43,35 @@ class CitationPipeline(Pipeline):
         )
         with open(prompt_file_path, "r", encoding="utf-8") as file:
             self.faq_prompt_str = file.read()
-        self.pipeline = self.llm | StrOutputParser()
         self.tokens = []
 
+        # Create LLM variants
+        self.llms = {}
+        self.pipelines = {}
+
+        # Default variant
+        default_request_handler = ModelVersionRequestHandler(version="gpt-4.1-nano")
+        default_llm = IrisLangchainChatModel(
+            request_handler=default_request_handler,
+            completion_args=CompletionArguments(temperature=0, max_tokens=4000),
+        )
+        self.llms["default"] = default_llm
+        self.pipelines["default"] = default_llm | StrOutputParser()
+
+        # Advanced variant
+        advanced_request_handler = ModelVersionRequestHandler(version="gpt-4.1-mini")
+        advanced_llm = IrisLangchainChatModel(
+            request_handler=advanced_request_handler,
+            completion_args=CompletionArguments(temperature=0, max_tokens=4000),
+        )
+        self.llms["advanced"] = advanced_llm
+        self.pipelines["advanced"] = advanced_llm | StrOutputParser()
+
     def __repr__(self):
-        return f"{self.__class__.__name__}(llm={self.llm})"
+        return f"{self.__class__.__name__}(llms={list(self.llms.keys())})"
 
     def __str__(self):
-        return f"{self.__class__.__name__}(llm={self.llm})"
+        return f"{self.__class__.__name__}(llms={list(self.llms.keys())})"
 
     def create_formatted_lecture_string(
         self, lecture_retrieval_dto: LectureRetrievalDTO
@@ -72,6 +82,13 @@ class CitationPipeline(Pipeline):
 
         formatted_string_lecture_page_chunks = ""
         for paragraph in lecture_retrieval_dto.lecture_unit_page_chunks:
+            if not paragraph.page_text_content:
+                continue
+            # Temporary fix for wrong links, e.g. https://artemis.tum.deattachments/...
+            if ".deattachment" in paragraph.lecture_unit_link:
+                paragraph.lecture_unit_link = paragraph.lecture_unit_link.replace(
+                    ".deattachment", ".de/api/core/files/attachment"
+                )
             lct = (
                 f"Lecture: {paragraph.lecture_name},"
                 f" Unit: {paragraph.lecture_unit_name},"
@@ -84,10 +101,14 @@ class CitationPipeline(Pipeline):
         formatted_string_lecture_transcriptions = ""
 
         for paragraph in lecture_retrieval_dto.lecture_transcriptions:
+            start_time_sec = paragraph.segment_start_time
+            end_time_sec = paragraph.segment_end_time
+            start_time_str = str(datetime.timedelta(seconds=int(start_time_sec)))
+            end_time_str = str(datetime.timedelta(seconds=int(end_time_sec)))
             lct = (
                 f"Lecture Transcription: {paragraph.lecture_name}, Unit: {paragraph.lecture_unit_name}, "
                 f"Page: {paragraph.page_number}, Link: {paragraph.lecture_unit_link}, "
-                f"Start Time: {paragraph.segment_start_time}, End Time: {paragraph.segment_end_time},\n"
+                f"Start Time: {start_time_str} ({start_time_sec}s), End Time: {end_time_str} ({end_time_sec}s),\n"
                 f"Content:\n"
                 f"---{paragraph.segment_text}---\n\n"
             )
@@ -120,6 +141,7 @@ class CitationPipeline(Pipeline):
         information,  #: #Union[List[dict], List[str]],
         answer: str,
         information_type: InformationType = InformationType.PARAGRAPHS,
+        variant: str = "default",
         **kwargs,
     ) -> str:
         """
@@ -127,11 +149,18 @@ class CitationPipeline(Pipeline):
             :param information: List of info as list of dicts or strings to augment response
             :param query: The query
             :param information_type: The type of information provided. can be either lectures or faqs
+            :param variant: The variant of the model to use ("default" or "advanced")
             :return: Selected file content
         """
         paras = ""
         paragraphs_page_chunks = ""
         paragraphs_transcriptions = ""
+
+        if variant not in self.llms:
+            variant = "default"
+
+        llm = self.llms[variant]
+        pipeline = self.pipelines[variant]
 
         if information_type == InformationType.FAQS:
             paras = self.create_formatted_faq_string(
@@ -150,19 +179,19 @@ class CitationPipeline(Pipeline):
                 input_variables=["Answer", "Paragraphs"],
             )
             if information_type == InformationType.FAQS:
-                response = (self.default_prompt | self.pipeline).invoke(
+                response = (self.default_prompt | pipeline).invoke(
                     {"Answer": answer, "Paragraphs": paras}
                 )
             else:
-                response = (self.default_prompt | self.pipeline).invoke(
+                response = (self.default_prompt | pipeline).invoke(
                     {
                         "Answer": answer,
                         "Paragraphs": paragraphs_page_chunks,
                         "TranscriptionParagraphs": paragraphs_transcriptions,
                     }
                 )
-            self._append_tokens(self.llm.tokens, PipelineEnum.IRIS_CITATION_PIPELINE)
-            if response == "!NONE!":
+            self._append_tokens(llm.tokens, PipelineEnum.IRIS_CITATION_PIPELINE)
+            if "!NONE!" in str(response):
                 return answer
             return response
         except Exception as e:
