@@ -11,7 +11,7 @@ from iris.domain.communication.communication_tutor_suggestion_pipeline_execution
     CommunicationTutorSuggestionPipelineExecutionDTO,
 )
 from iris.domain.data.text_message_content_dto import TextMessageContentDTO
-from iris.llm import BasicRequestHandler, CompletionArguments
+from iris.llm import CompletionArguments, ModelVersionRequestHandler
 from iris.llm.langchain import IrisLangchainChatModel
 from iris.pipeline import Pipeline
 from iris.pipeline.chat.code_feedback_pipeline import CodeFeedbackPipeline
@@ -37,15 +37,19 @@ class TutorSuggestionProgrammingExercisePipeline(Pipeline):
     llm: IrisLangchainChatModel
     pipeline: Runnable
 
-    def __init__(self):
+    def __init__(self, variant: str = "default"):
         super().__init__(
             implementation_id="tutor_suggestion_programming_exercise_pipeline"
         )
         completion_args = CompletionArguments(temperature=0, max_tokens=8000)
-        request_handler = BasicRequestHandler("gemma3:27b")
+
+        if variant == "advanced":
+            model = "gemma3:27b"
+        else:
+            model = "deepseek-r1:8b"
 
         self.llm = IrisLangchainChatModel(
-            request_handler=request_handler,
+            request_handler=ModelVersionRequestHandler(version=model),
             completion_args=completion_args,
         )
 
