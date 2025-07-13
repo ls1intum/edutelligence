@@ -113,7 +113,7 @@ async def run_transcription(req: TranscribeRequestDTO, job_id: str):
         await cleanup_temp_files(uid, video_path, audio_path)
 
 
-@router.post("/start-transcribe", tags=["internal"])
+@router.post("/start", tags=["internal"])
 async def start_transcribe(req: TranscribeRequestDTO):
     if not req.videoUrl:
         raise HTTPException(status_code=400, detail="Missing videoUrl")

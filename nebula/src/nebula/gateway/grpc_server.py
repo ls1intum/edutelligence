@@ -1,20 +1,21 @@
-import os
 import logging
-import grpc
+import os
 from concurrent import futures
 
-from nebula.grpc_stubs import faq_pb2_grpc
+import grpc
+
 from nebula.gateway.handlers.faq_handler import FAQServiceHandler
+from nebula.grpc_stubs import faq_pb2_grpc
 
 logger = logging.getLogger("nebula.gateway")
 logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+    level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 )
 
 # Read port from environment variable (default: 50051)
 GATEWAY_SERVICE_PORT = os.getenv("GATEWAY_SERVICE_PORT", "50051")
 server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
+
 
 def serve():
     # Register FAQ handler
@@ -24,6 +25,7 @@ def serve():
     logger.info(f"gRPC server running on port {GATEWAY_SERVICE_PORT}")
     server.start()
     server.wait_for_termination()
+
 
 def stop():
     server.stop(grace=None)  # grace=None = sofort

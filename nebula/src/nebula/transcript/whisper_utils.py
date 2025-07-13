@@ -35,13 +35,13 @@ def transcribe_with_azure_whisper(audio_path: str, llm_id: str | None = None) ->
         success = False
         for attempt in range(max_retries):
             with open(chunk_path, "rb") as f:
-                logger.info(
-                    f"📤 Azure uploading chunk {i+1}/{len(chunk_paths)}: {chunk_path}"
-                )
+                logger.info("📤 Azure uploading chunk %s/%s: %s", i + 1, len(chunk_paths), chunk_path)
                 try:
                     response = requests.post(
-                        url=f"{config['endpoint']}/openai/deployments/whisper/audio/transcriptions"
-                        f"?api-version={config['api_version']}",
+                        url=(
+                            f"{config['endpoint']}/openai/deployments/whisper/audio/transcriptions"
+                            f"?api-version={config['api_version']}"
+                        ),
                         headers=headers,
                         files={"file": (os.path.basename(chunk_path), f, "audio/wav")},
                         data={
@@ -53,7 +53,7 @@ def transcribe_with_azure_whisper(audio_path: str, llm_id: str | None = None) ->
 
                     if response.status_code == 429:
                         wait = 10 * (attempt + 1)
-                        logger.warning(f"429 Too Many Requests. Retrying in {wait}s...")
+                        logger.warning("429 Too Many Requests. Retrying in %ss...", wait)
                         time.sleep(wait)
                         continue
 
@@ -71,12 +71,10 @@ def transcribe_with_azure_whisper(audio_path: str, llm_id: str | None = None) ->
                     break
 
                 except requests.RequestException as e:
-                    logger.error(f"❌ Azure Whisper failed on chunk {chunk_path}: {e}")
+                    logger.error("❌ Azure Whisper failed on chunk %s: %s", chunk_path, e)
 
         if not success:
-            raise RuntimeError(
-                f"⚠️ Azure Whisper too many retries for chunk {chunk_path}"
-            )
+            raise RuntimeError("⚠️ Azure Whisper too many retries for chunk %s" % chunk_path)
 
         offset += get_audio_duration(chunk_path)
 
@@ -100,9 +98,7 @@ def transcribe_with_openai_whisper(audio_path: str, llm_id: str | None = None) -
         success = False
         for attempt in range(max_retries):
             with open(chunk_path, "rb") as f:
-                logger.info(
-                    f"📤 OpenAI uploading chunk {i+1}/{len(chunk_paths)}: {chunk_path}"
-                )
+                logger.info("📤 OpenAI uploading chunk %s/%s: %s", i + 1, len(chunk_paths), chunk_path)
                 try:
                     response = requests.post(
                         url="https://api.openai.com/v1/audio/transcriptions",
@@ -118,7 +114,7 @@ def transcribe_with_openai_whisper(audio_path: str, llm_id: str | None = None) -
 
                     if response.status_code == 429:
                         wait = 10 * (attempt + 1)
-                        logger.warning(f"429 Too Many Requests. Retrying in {wait}s...")
+                        logger.warning("429 Too Many Requests. Retrying in %ss...", wait)
                         time.sleep(wait)
                         continue
 
@@ -136,12 +132,10 @@ def transcribe_with_openai_whisper(audio_path: str, llm_id: str | None = None) -
                     break
 
                 except requests.RequestException as e:
-                    logger.error(f"❌ OpenAI Whisper failed on chunk {chunk_path}: {e}")
+                    logger.error("❌ OpenAI Whisper failed on chunk %s: %s", chunk_path, e)
 
         if not success:
-            raise RuntimeError(
-                f"⚠️ OpenAI Whisper too many retries for chunk {chunk_path}"
-            )
+            raise RuntimeError("⚠️ OpenAI Whisper too many retries for chunk %s" % chunk_path)
 
         offset += get_audio_duration(chunk_path)
 

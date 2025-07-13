@@ -84,7 +84,7 @@ static_resources:
       connect_timeout: 0.5s
       type: logical_dns
       lb_policy: round_robin
-      http2_protocol_options: {}  # Required for gRPC
+      http2_protocol_options: {} # Required for gRPC
       load_assignment:
         cluster_name: faq
         endpoints:

@@ -1,7 +1,9 @@
 import logging
 import os
+
 import grpc
 from grpc import ServicerContext
+
 from nebula.grpc_stubs import faq_pb2, faq_pb2_grpc
 
 logger = logging.getLogger("nebula.gateway.grpc.faq")
@@ -13,8 +15,12 @@ FAQ_SERVICE_ADDRESS = f"{FAQ_SERVICE_NAME}:{FAQ_SERVICE_PORT}"
 
 
 class FAQServiceHandler(faq_pb2_grpc.FAQServiceServicer):
-    def RewriteFAQ(self, request: faq_pb2.FaqRewritingRequest, context: ServicerContext) -> faq_pb2.FaqRewritingResponse:
-        logger.info(f"Received RewriteFAQ request – forwarding to downstream service at {FAQ_SERVICE_ADDRESS}")
+    def RewriteFAQ(
+        self, request: faq_pb2.FaqRewritingRequest, context: ServicerContext
+    ) -> faq_pb2.FaqRewritingResponse:
+        logger.info(
+            f"Received RewriteFAQ request – forwarding to downstream service at {FAQ_SERVICE_ADDRESS}"
+        )
 
         try:
             with grpc.insecure_channel(FAQ_SERVICE_ADDRESS) as channel:
@@ -27,4 +33,6 @@ class FAQServiceHandler(faq_pb2_grpc.FAQServiceServicer):
             logger.error("Failed to forward request: %s", str(e))
             context.set_details(str(e))
             context.set_code(grpc.StatusCode.INTERNAL)
-            return faq_pb2.FaqRewritingResponse(result="Internal error while forwarding request")
+            return faq_pb2.FaqRewritingResponse(
+                result="Internal error while forwarding request"
+            )
