@@ -1,0 +1,32 @@
+[tool.poetry]
+name = "athena-tests"
+version = "0.1.0"
+description = "Testing environment for the Athena project, orchestrating tests for all modules."
+license = "MIT"
+package-mode = false
+
+[tool.poetry.dependencies]
+python = "3.11.*"
+
+pytest = "^8.2.0"
+pytest-asyncio = "^0.23.0"
+requests = "^2.31.0"
+pydantic = "<2.0"
+
+athena = { path = "../athena", develop = true }
+llm_core = { path = "../llm_core", develop = true }
+assessment_module_manager = { path = "../assessment_module_manager", develop = true }
+module_text_llm = { path = "../modules/text/module_text_llm", develop = true }
+module_modeling_llm = { path = "../modules/modeling/module_modeling_llm", develop = true }
+
+[tool.poetry.group.dev.dependencies]
+prospector = "^1.10.2"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+pythonpath = ["."]
+markers = ["e2e: marks tests as end-to-end tests"]
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
