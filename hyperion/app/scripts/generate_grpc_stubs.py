@@ -44,15 +44,16 @@ def main():
     for proto_file in proto_files:
         logger.info(f"Generating stubs for {proto_file.name}")
 
-        # Build command
+        # Build command with mypy-protobuf for type safety
         cmd = [
             sys.executable,
             "-m",
             "grpc_tools.protoc",
             f"--proto_path={proto_dir}",
             f"--python_out={output_dir}",
-            f"--pyi_out={output_dir}",
             f"--grpc_python_out={output_dir}",
+            f"--mypy_out={output_dir}",
+            f"--mypy_grpc_out={output_dir}",
             str(proto_file),
         ]
 
@@ -86,6 +87,23 @@ def main():
                 f.write(fixed_content)
 
             logger.info(f"Fixed import statements in {grpc_file.name}")
+
+    # Run Black formatter on the grpc folder
+    logger.info("Running Black formatter on the grpc folder...")
+    try:
+        black_cmd = [
+            sys.executable,
+            "-m",
+            "black",
+            str(output_dir),
+        ]
+        subprocess.run(black_cmd, check=True, capture_output=True, text=True)
+        logger.info("Successfully formatted grpc folder with Black")
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Error running Black formatter: {e}")
+        logger.error(f"STDOUT: {e.stdout}")
+        logger.error(f"STDERR: {e.stderr}")
+        # Continue execution even if Black fails
 
     logger.info("Stub generation complete!")
 
