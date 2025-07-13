@@ -123,7 +123,7 @@ class TutorSuggestionProgrammingExercisePipeline(Pipeline):
                 )
             else:
                 html_response = (
-                    "<p>I was not able to answer this question based on the text exercise.</p><br>"
+                    "<p>I was not able to answer this question based on the programming exercise.</p><br>"
                     "<p>It seems that the question is too general or not related to the programming exercise.</p>"
                 )
                 self._append_tokens(

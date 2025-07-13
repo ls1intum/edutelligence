@@ -27,6 +27,8 @@ def sort_post_answers(dto):
     Sort the answers of the post by their id
     :param dto: execution data transfer object
     """
+    if dto.post is None or dto.post.answers is None:
+        return dto
     dto.post.answers.sort(key=lambda x: x.id)
     return dto
 
@@ -85,6 +87,7 @@ class TutorSuggestionSummaryPipeline(Pipeline):
         self.callback = callback
         self.pipeline = self.llm | StrOutputParser()
         self.tokens = []
+        self.prompt = None
 
     def __str__(self):
         return f"{self.__class__.__name__}(llm={self.llm})"
@@ -95,7 +98,7 @@ class TutorSuggestionSummaryPipeline(Pipeline):
         Run the pipeline.
         :param dto: execution data transfer object
         :return: json of the summary of the post in the form
-        {"summary": "<summary>", "is_question": "<is_question>", "number_of_answers": <number_of_answers>}
+        {"summary": "<summary>", "is_question": "<is_question>"}
         """
         dto = sort_post_answers(dto=dto)
         summary = self._run_tutor_suggestion_summary_pipeline(dto=dto)
