@@ -7,7 +7,6 @@ from pydantic import BaseModel
 
 from ...common.pyris_message import PyrisMessage
 from ...llm import CompletionArguments
-from ...llm.capability import CapabilityList
 
 
 class LanguageModel(BaseModel, metaclass=ABCMeta):
@@ -16,7 +15,7 @@ class LanguageModel(BaseModel, metaclass=ABCMeta):
     id: str
     name: str
     description: str
-    capabilities: CapabilityList
+    model: str
 
 
 class CompletionModel(LanguageModel, metaclass=ABCMeta):
@@ -34,6 +33,9 @@ class CompletionModel(LanguageModel, metaclass=ABCMeta):
 
 class ChatModel(LanguageModel, metaclass=ABCMeta):
     """Abstract class for the llm chat completion wrappers"""
+
+    cost_per_million_input_token: float = 0
+    cost_per_million_output_token: float = 0
 
     @classmethod
     def __subclasshook__(cls, subclass) -> bool:
@@ -56,6 +58,8 @@ class ChatModel(LanguageModel, metaclass=ABCMeta):
 
 class EmbeddingModel(LanguageModel, metaclass=ABCMeta):
     """Abstract class for the llm embedding wrappers"""
+
+    cost_per_million_input_token: float = 0
 
     @classmethod
     def __subclasshook__(cls, subclass) -> bool:

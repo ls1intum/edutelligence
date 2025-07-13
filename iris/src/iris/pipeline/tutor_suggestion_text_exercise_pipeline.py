@@ -8,7 +8,7 @@ from langsmith import traceable
 
 from iris.common.pipeline_enum import PipelineEnum
 from iris.domain.data.text_exercise_dto import TextExerciseDTO
-from iris.llm import CapabilityRequestHandler, CompletionArguments, RequirementList
+from iris.llm import CompletionArguments, ModelVersionRequestHandler
 from iris.llm.langchain import IrisLangchainChatModel
 from iris.pipeline import Pipeline
 from iris.pipeline.prompts.tutor_suggestion.text_exercise_prompt import (
@@ -43,19 +43,27 @@ def _has_html(text: str):
 
 
 class TutorSuggestionTextExercisePipeline(Pipeline):
+    """
+    The TutorSuggestionTextExercisePipeline creates a suggestion for a text exercise.
+
+    When called, it uses the text exercise DTO and chat summary to generate suggestions
+    """
 
     llm: IrisLangchainChatModel
     pipeline: Runnable
 
-    def __init__(self):
+    def __init__(self, variant: str = "default"):
         super().__init__(implementation_id="tutor_suggestion_text_exercise_pipeline")
         completion_args = CompletionArguments(temperature=0, max_tokens=2000)
-        request_handler = CapabilityRequestHandler(
-            requirements=RequirementList(self_hosted=False)
-        )
+
+        if variant == "advanced":
+            model = "gemma3:27b"
+        else:
+            model = "deepseek-r1:8b"
+
         self.llm = IrisLangchainChatModel(
-            request_handler=request_handler,
-            completion_arguments=completion_args,
+            request_handler=ModelVersionRequestHandler(version=model),
+            completion_args=completion_args,
         )
 
         self.pipeline = self.llm | StrOutputParser()
@@ -67,18 +75,7 @@ class TutorSuggestionTextExercisePipeline(Pipeline):
     @traceable(name="Tutor Suggestion Text Exercise Pipeline")
     def __call__(self, dto: TextExerciseDTO, chat_summary: str):
         result = "Error generating suggestions for text exercise"
-        text_exercise_result = self._run_text_exercise_pipeline(
-            dto=dto, summary=chat_summary
-        )
-        try:
-            result = text_exercise_result
-        except Exception as e:
-            logger.error(f"Failed to generate suggestions for text exercise: {e}")
-
-        return result
-
-    def _run_text_exercise_pipeline(self, dto, summary: str):
-        self.prompt = ChatPromptTemplate.from_messages(
+        prompt = ChatPromptTemplate.from_messages(
             [
                 (
                     "system",
@@ -87,9 +84,9 @@ class TutorSuggestionTextExercisePipeline(Pipeline):
             ]
         )
         try:
-            response = (self.prompt | self.pipeline).invoke(
+            response = (prompt | self.pipeline).invoke(
                 {
-                    "thread_summary": summary,
+                    "thread_summary": chat_summary,
                     "problem_statement": dto.problem_statement,
                     "example_solution": dto.example_solution,
                 }
@@ -117,4 +114,5 @@ class TutorSuggestionTextExercisePipeline(Pipeline):
                 )
             return html_response
         except Exception as e:
-            raise e
+            logger.error("Failed to generate suggestions for text exercise: %s", e)
+            return result

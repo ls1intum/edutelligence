@@ -11,7 +11,6 @@ class OpenAICompletionModel(CompletionModel):
     """OpenAICompletionModel uses the OpenAI API to generate completions based on a provided prompt and completion
     arguments."""
 
-    model: str
     api_key: str
     _client: OpenAI
 
