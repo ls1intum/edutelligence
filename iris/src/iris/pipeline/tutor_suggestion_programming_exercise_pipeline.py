@@ -114,7 +114,7 @@ class TutorSuggestionProgrammingExercisePipeline(Pipeline):
                 result = json.get("result")
             except AttributeError:
                 logger.error("No result found in JSON response.")
-                return None
+                return "Error: Unable to parse response from language model"
             html_check = _has_html(result)
             if html_check:
                 html_response = _extract_html_from_text(result)
