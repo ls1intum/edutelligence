@@ -234,7 +234,9 @@ class TutorSuggestionPipeline(Pipeline):
         """
         self.callback.in_progress("Generating suggestions for lecture")
 
-        lecture_pipeline = TutorSuggestionLecturePipeline(callback=self.callback)
+        lecture_pipeline = TutorSuggestionLecturePipeline(
+            callback=self.callback, variant=self.variant
+        )
 
         try:
             lecture_result = lecture_pipeline(dto=dto, chat_summary=summary)
@@ -244,7 +246,7 @@ class TutorSuggestionPipeline(Pipeline):
 
         self.callback.done(
             "Generated tutor suggestions",
-            tutor_suggestion=lecture_result,
+            artifact=lecture_result,
             tokens=self.tokens,
         )
 

@@ -6,19 +6,24 @@ from langchain_core.runnables import Runnable
 from langsmith import traceable
 
 from iris.common.pipeline_enum import PipelineEnum
-from iris.domain.communication.communication_tutor_suggestion_pipeline_execution_dto import \
-    CommunicationTutorSuggestionPipelineExecutionDTO
-from iris.llm import CompletionArguments, BasicRequestHandler
+from iris.domain.communication.communication_tutor_suggestion_pipeline_execution_dto import (
+    CommunicationTutorSuggestionPipelineExecutionDTO,
+)
+from iris.llm import CompletionArguments, ModelVersionRequestHandler
 from iris.llm.langchain import IrisLangchainChatModel
 from iris.pipeline import Pipeline
 from iris.pipeline.prompts.tutor_suggestion.lecture_prompt import lecture_prompt
 from iris.pipeline.tutor_suggestion_summary_pipeline import _extract_json_from_text
-from iris.pipeline.tutor_suggestion_text_exercise_pipeline import _has_html, _extract_html_from_text
+from iris.pipeline.tutor_suggestion_text_exercise_pipeline import (
+    _extract_html_from_text,
+    _has_html,
+)
 from iris.retrieval.lecture.lecture_retrieval import LectureRetrieval
 from iris.vector_database.database import VectorDatabase
 from iris.web.status.status_update import TutorSuggestionCallback
 
 logger = logging.getLogger(__name__)
+
 
 class TutorSuggestionLecturePipeline(Pipeline):
 
@@ -26,15 +31,21 @@ class TutorSuggestionLecturePipeline(Pipeline):
     pipeline: Runnable
     callback: TutorSuggestionCallback
 
-    def __init__(self, callback: TutorSuggestionCallback):
+    def __init__(self, callback: TutorSuggestionCallback, variant: str = "default"):
         super().__init__(implementation_id="tutor_suggestion_lecture_pipeline")
 
         completion_args = CompletionArguments(temperature=0, max_tokens=2000)
-        request_handler = BasicRequestHandler("gemma3:27b")
+
+        if variant == "advanced":
+            model = "gemma3:27b"
+        else:
+            model = "deepseek-r1:8b"
+
         self.llm = IrisLangchainChatModel(
-            request_handler=request_handler,
+            request_handler=ModelVersionRequestHandler(version=model),
             completion_args=completion_args,
         )
+
         self.pipeline = self.llm | StrOutputParser()
         self.tokens = []
         self.callback = callback
@@ -73,10 +84,12 @@ class TutorSuggestionLecturePipeline(Pipeline):
         )
 
         try:
-            response = (self.prompt | self.pipeline).invoke({
-                "lecture_content": lecture_content,
-                "thread_summary": summary,
-            })
+            response = (self.prompt | self.pipeline).invoke(
+                {
+                    "lecture_content": lecture_content,
+                    "thread_summary": summary,
+                }
+            )
             logging.info(response)
             json = _extract_json_from_text(response)
             try:
@@ -103,7 +116,9 @@ class TutorSuggestionLecturePipeline(Pipeline):
             logger.error("Error in Tutor Suggestion Lecture Pipeline: %s", e)
             return "Error generation suggestions for lecture"
 
-    def lecture_content_retrieval(self, dto: CommunicationTutorSuggestionPipelineExecutionDTO, summary: str) -> str:
+    def lecture_content_retrieval(
+        self, dto: CommunicationTutorSuggestionPipelineExecutionDTO, summary: str
+    ) -> str:
         """
         Retrieve content from indexed lecture content.
         This will run a RAG retrieval based on the chat history on the indexed lecture slides,
