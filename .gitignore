@@ -99,3 +99,8 @@ Desktop.ini
 # Python
 ######################
 **/__pycache__
+
+######################
+# Test Results
+######################
+athena/test-results/

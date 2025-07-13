@@ -182,7 +182,10 @@ class LectureChatPipeline(Pipeline):
             response = (self.prompt | self.pipeline).invoke({})
             self._append_tokens(self.llm.tokens, PipelineEnum.IRIS_CHAT_LECTURE_MESSAGE)
             response_with_citation = self.citation_pipeline(
-                self.lecture_content, response
+                self.lecture_content,
+                response,
+                variant=self.variant,
+                base_url=dto.settings.artemis_base_url,
             )
             self.tokens.extend(self.citation_pipeline.tokens)
             logger.info(
