@@ -62,15 +62,23 @@ class TutorSuggestionPipeline(Pipeline):
     llm: IrisLangchainChatModel
     pipeline: Runnable
     callback: TutorSuggestionCallback
+    variant: str
 
-    def __init__(self, callback: TutorSuggestionCallback):
+    def __init__(self, callback: TutorSuggestionCallback, variant: str = "default"):
         super().__init__(implementation_id="tutor_suggestion_pipeline")
-        completion_args = CompletionArguments()
-        request_handler = ModelVersionRequestHandler(version="gemma3:27b")
+        self.variant = variant
+        completion_args = CompletionArguments(temperature=0, max_tokens=8000)
+
+        if variant == "advanced":
+            model = "gemma3:27b"
+        else:
+            model = "deepseek-r1:8b"
+
         self.llm = IrisLangchainChatModel(
-            request_handler=request_handler,
+            request_handler=ModelVersionRequestHandler(version=model),
             completion_args=completion_args,
         )
+
         self.callback = callback
         self.pipeline = self.llm | StrOutputParser()
         self.tokens = []
@@ -85,7 +93,9 @@ class TutorSuggestionPipeline(Pipeline):
         :param dto: execution data transfer object
         """
         self.callback.in_progress("Summarizing post content")
-        summary_pipeline = TutorSuggestionSummaryPipeline(callback=self.callback)
+        summary_pipeline = TutorSuggestionSummaryPipeline(
+            callback=self.callback, variant=self.variant
+        )
         try:
             summary = summary_pipeline(dto=dto)
         except AttributeError as e:
@@ -167,7 +177,9 @@ class TutorSuggestionPipeline(Pipeline):
         :return: The result of the text exercise pipeline.
         """
         self.callback.in_progress("Generating suggestions for text exercise")
-        text_exercise_pipeline = TutorSuggestionTextExercisePipeline()
+        text_exercise_pipeline = TutorSuggestionTextExercisePipeline(
+            variant=self.variant
+        )
         try:
             logging.info(summary)
             text_exercise_result = text_exercise_pipeline(
@@ -194,7 +206,9 @@ class TutorSuggestionPipeline(Pipeline):
         :return: The result of the programming exercise pipeline.
         """
         self.callback.in_progress("Generating suggestions for programming exercise")
-        programming_exercise_pipeline = TutorSuggestionProgrammingExercisePipeline()
+        programming_exercise_pipeline = TutorSuggestionProgrammingExercisePipeline(
+            variant=self.variant
+        )
         try:
             programming_exercise_result = programming_exercise_pipeline(
                 dto=dto, chat_summary=summary
