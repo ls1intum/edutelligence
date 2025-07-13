@@ -48,13 +48,15 @@ jobs:
           for module in modules/programming/module_programming_llm modules/text/module_text_llm modules/modeling/module_modeling_llm; do
             if [ -d "$module/.venv" ]; then
               echo "Running tests for $module..."
-              # Install pytest in the module's environment
-              $module/.venv/bin/pip install pytest pytest-asyncio
-              # Run tests using the module's environment
-              if ! $module/.venv/bin/python -m pytest tests/$module/mock --junitxml=test-results/${module//\//_}_mock.xml; then
+              # Install pytest and coverage in the module's environment
+              $module/.venv/bin/pip install pytest pytest-asyncio coverage
+              # Run tests with coverage using the module's environment
+              if ! $module/.venv/bin/python -m coverage run -m pytest tests/$module/mock --junitxml=test-results/${module//\//_}_mock.xml; then
                 echo "Tests failed for $module"
                 overall_success=false
               fi
+              # Generate coverage report for this module
+              $module/.venv/bin/python -m coverage xml -o test-results/${module//\//_}_coverage.xml
             else
               echo "Virtual environment not found for $module, skipping..."
             fi
@@ -64,6 +66,17 @@ jobs:
           if [ "$overall_success" = false ]; then
             exit 1
           fi
+          
+          # Display coverage reports in CI
+          echo "📊 Coverage Reports:"
+          echo "===================="
+          for module in modules/programming/module_programming_llm modules/text/module_text_llm modules/modeling/module_modeling_llm; do
+            if [ -d "$module/.venv" ]; then
+              echo "📈 $module:"
+              $module/.venv/bin/python -m coverage report --show-missing || echo "No coverage data available"
+              echo ""
+            fi
+          done
       - name: Run linting
         run: |
           cd athena
@@ -79,6 +92,13 @@ jobs:
         with:
           name: junit-results
           path: athena/test-results/
+      
+      - name: Upload Coverage Reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-reports
+          path: athena/test-results/*_coverage.xml
   report:
     runs-on: ubuntu-latest
     if: always()
