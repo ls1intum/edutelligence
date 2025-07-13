@@ -41,7 +41,7 @@ def get_channel_type(dto: CommunicationTutorSuggestionPipelineExecutionDTO) -> s
     """
     if dto.exercise is not None:
         return "programming_exercise"
-    elif dto.textExercise is not None:
+    elif dto.text_exercise is not None:
         return "text_exercise"
     elif dto.lecture_id is not None:
         return "lecture"
@@ -85,8 +85,13 @@ class TutorSuggestionPipeline(Pipeline):
         summary_pipeline = TutorSuggestionSummaryPipeline(callback=self.callback)
         try:
             summary = summary_pipeline(dto=dto)
-        except AttributeError:
+        except AttributeError as e:
+            logger.error("AttributeError in summary pipeline: %s", str(e))
             self.callback.error("Error running summary pipeline")
+            return
+        except Exception as e:
+            logger.error("Unexpected error in summary pipeline: %s", str(e))
+            self.callback.error("Unexpected error running summary pipeline")
             return
 
         logger.info(summary)
@@ -96,13 +101,15 @@ class TutorSuggestionPipeline(Pipeline):
             return
 
         try:
-            is_question = "yes" in summary.get("is_question").lower()
+            is_question_str = summary.get("is_question", "").lower()
+            is_question = is_question_str in ["yes", "true", "1"]
             number_of_answers = summary.get("num_answers")
             summary = summary.get("summary")
-            logging.info(
+            logger.info(
                 "is_question: %s, num_answers: %s", is_question, number_of_answers
             )
-        except AttributeError:
+        except (AttributeError, TypeError) as e:
+            logger.error("Error parsing summary JSON: %s", str(e))
             self.callback.error("Error parsing summary JSON")
             return
 
@@ -123,9 +130,8 @@ class TutorSuggestionPipeline(Pipeline):
                     self.llm.tokens, PipelineEnum.IRIS_TUTOR_SUGGESTION_PIPELINE
                 )
             except Exception as e:
-                logging.error(e)
+                logger.error("Error checking if question is answered: %s", str(e))
                 response = "no"
-            logging.info(response)
             if "yes" in response.lower():
                 self.callback.done(
                     "The question has already been answered",
