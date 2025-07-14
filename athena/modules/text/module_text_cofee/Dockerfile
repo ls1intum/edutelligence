@@ -4,7 +4,7 @@
 
 # Protobuf build
 FROM golang:alpine AS cofee_protobuf
-RUN apk update && apk add --no-cache make protobuf-dev=29.5
+RUN apk update && apk add --no-cache make protobuf-dev=29.4-r0
 WORKDIR /proto
 COPY cofee.proto .
 RUN protoc --python_out . cofee.proto
