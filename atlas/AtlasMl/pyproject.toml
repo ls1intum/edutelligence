@@ -15,6 +15,7 @@ pydantic-settings = "^2.8.1"
 matplotlib = "^3.10.1"
 scipy = "^1.15.2"
 apscheduler = "^3.10.4"
+openai = "==1.93.0"
 
 
 [tool.poetry.group.dev.dependencies]
