@@ -135,7 +135,7 @@ def test_feedbackLoopPipeline_integration(workflows):
         "id": text_id2,
         "vector": {"default": [0.1, 0.9]},
         "properties": {
-            "text_id": text_id,
+            "text_id": text_id2,
             "text": "Feedback test text",
             "competency_ids": [competency_id]
         }

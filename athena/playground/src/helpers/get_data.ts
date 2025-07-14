@@ -332,9 +332,6 @@ export function anonymizeFeedbackCategoriesAndShuffle(
   for (const exercise of expertEvaluationConfig.exercises) {
     const submissions = exercise.submissions;
     if (submissions) {
-      // Shuffle submissions
-      exercise.submissions = submissions.sort(() => Math.random() - 0.5);
-
       // Iterate over submissions
       for (const submission of submissions) {
         const feedback = submission.feedbacks;

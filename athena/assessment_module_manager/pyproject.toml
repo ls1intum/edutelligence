@@ -7,7 +7,7 @@ license = "MIT"
 
 [tool.poetry.dependencies]
 python = "3.11.*"
-athena = {path = "../athena", develop = true}
+athena = { path = "../athena", develop = true }
 fastapi = "^0.109.1"
 uvicorn = "^0.23.0"
 httpx = "^0.24.1"
@@ -16,6 +16,7 @@ httpx = "^0.24.1"
 types-requests = "^2.31.0.8"
 pydantic = "1.10.17"
 prospector = "^1.10.2"
+setuptools = "^69.0.0"
 
 [tool.poetry.scripts]
 assessment_module_manager = "assessment_module_manager.__main__:main"

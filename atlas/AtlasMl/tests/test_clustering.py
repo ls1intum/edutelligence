@@ -69,7 +69,7 @@ def test_hdbscan_noise_detection():
 
     # Run HDBSCAN with parameters tuned to detect noise.
     # Adjust parameters by using 'min_cluster_size' instead of 'eps' to better isolate the noise points.
-    labels, centroids, medoids = apply_hdbscan(matrix, min_samples=3, metric="euclidean", min_cluster_size=15)
+    labels, centroids, medoids = apply_hdbscan(matrix, min_samples=3, min_cluster_size=15)
 
     # HDBSCAN typically marks noise points as -1.
     # Check that some points have been labeled as noise and provide a debug message if not.
