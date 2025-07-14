@@ -17,6 +17,7 @@ scipy = "^1.15.2"
 apscheduler = "^3.10.4"
 bs4 = "^0.0.2"
 markdown = "^3.8"
+openai = "==1.93.0"
 
 
 [tool.poetry.group.dev.dependencies]
