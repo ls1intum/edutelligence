@@ -51,7 +51,7 @@ class PipelineWorkflows:
 
         Args:
             competencies (list[dict]): List of competency dictionaries containing 'title' and 'description'
-
+        
         The workflow:
             1. For each competency:
             2. Generate a unique UUID
@@ -95,8 +95,7 @@ class PipelineWorkflows:
         competencies = self.weaviate_client.get_all_embeddings(CollectionNames.COMPETENCY.value)
 
         for competency in competencies:
-            uuid, embedding = generate_embeddings_local(competency["properties"]["competency_id"],
-                                                        competency["properties"]["text"])
+            uuid, embedding = generate_embeddings_local(competency["properties"]["competency_id"], competency["properties"]["text"])
             similarity_score = np.array([compute_cosine_similarity(embedding, medoid) for medoid in medoids])
             best_medoid_idx = int(np.argmax(similarity_score))
             properties = {
@@ -172,8 +171,7 @@ class PipelineWorkflows:
 
         for index in range(len(texts)):
             text_entry = texts[index]
-            competency = self.weaviate_client.get_embeddings_by_property(CollectionNames.COMPETENCY.value, "cluster_id",
-                                                                         str(labels[index]))
+            competency = self.weaviate_client.get_embeddings_by_property(CollectionNames.COMPETENCY.value, "cluster_id", str(labels[index]))
             if not competency: continue
             competency_id = competency[0]["properties"]["competency_id"]
             properties = {
@@ -213,9 +211,7 @@ class PipelineWorkflows:
         medoids = np.array([entry["vector"]["default"] for entry in clusters])
         similarity_scores = np.array([compute_cosine_similarity(embedding, medoid) for medoid in medoids])
         best_medoid_idx = int(np.argmax(similarity_scores))
-        competency = self.weaviate_client.get_embeddings_by_property(CollectionNames.COMPETENCY.value, "cluster_id",
-                                                                     clusters[best_medoid_idx]["properties"][
-                                                                         "cluster_id"])
+        competency = self.weaviate_client.get_embeddings_by_property(CollectionNames.COMPETENCY.value, "cluster_id", clusters[best_medoid_idx]["properties"]["cluster_id"])
         competency_to_match = None
         if competency: competency_to_match = competency[0]
 
