@@ -56,26 +56,29 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Build athena image
-        id: set-image
-        run: |
-          cd athena/athena
-          docker build -t athena .
-          cd ..
-          cd ..
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push athena image
+        uses: docker/build-push-action@v6
+        with:
+          context: athena/athena
+          push: false
+          tags: athena
 
       - name: Build llm_core image
-        id: set-image-core_llm
-        run: |
-          cd athena/llm_core
-          docker build -t llm_core .
-          cd ..
-          cd ..
+        uses: docker/build-push-action@v6
+        with:
+          context: athena/llm_core
+          push: false
+          tags: llm_core
 
       - name: Docker Login
-        id: docker-login
-        run: |
-          docker login -u ${{secrets.DOCKER_USERNAME}} -p ${{secrets.DOCKER_PASSWORD}}
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
@@ -104,6 +107,7 @@ jobs:
         with:
           context: ${{ matrix.image }}
           push: true
+          platforms: linux/amd64,linux/arm64
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
