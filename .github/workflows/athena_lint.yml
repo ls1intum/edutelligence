@@ -35,7 +35,7 @@ jobs:
       working-directory: athena
       run: |
         echo "$HOME/.local/bin" >> $GITHUB_PATH
-        poetry install
+        poetry install --with dev
         poetry run install_all
 
     - name: Run Prospector

@@ -1,16 +1,15 @@
 from typing import List, Sequence, Dict, Literal
+from llm_core.loaders.llm_config_loader import get_llm_config
 from pydantic import BaseModel, Field
 import json
 
 from athena.text import Exercise, Submission, Feedback
 from athena.logger import logger
-
-from llm_core.models import evaluation_model
 from llm_core.utils.llm_utils import (
-    get_chat_prompt_with_formatting_instructions,
+    get_chat_prompt,
     check_prompt_length_and_omit_features_if_necessary,
 )
-from llm_core.utils.predict_and_parse import predict_and_parse
+from llm_core.core.predict_and_parse import predict_and_parse
 
 from module_text_llm.helpers.utils import add_sentence_numbers, get_line_range_from_index_range
 from module_text_llm.prompts.generate_evaluation import system_message, human_message
@@ -33,9 +32,6 @@ async def generate_evaluation(
     predicted_feedbacks: List[Feedback]
 ) -> Dict[int, dict]:
 
-    if evaluation_model is None:
-        raise EnvironmentError("No evaluation model available, please set up LLM_EVALUATION_MODEL correctly"
-                               "by setting it to one of the available models logged during startup.")
     max_input_tokens = 3000
 
     def feedback_to_dict(feedback: Feedback):
@@ -56,11 +52,9 @@ async def generate_evaluation(
         "predicted_feedbacks": json.dumps([feedback_to_dict(feedback) for feedback in predicted_feedbacks]),
     }
 
-    chat_prompt = get_chat_prompt_with_formatting_instructions(
-        model=evaluation_model,
+    chat_prompt = get_chat_prompt(
         system_message=system_message,
         human_message=human_message,
-        pydantic_object=Evaluation
     )
 
     # Check if the prompt is too long and omit features if necessary (in order of importance)
@@ -78,7 +72,7 @@ async def generate_evaluation(
         return {}
 
     result = await predict_and_parse(
-        model=evaluation_model,
+        model=get_llm_config().models.base_model_config,
         chat_prompt=chat_prompt,
         prompt_input=prompt_input,
         pydantic_object=Evaluation,

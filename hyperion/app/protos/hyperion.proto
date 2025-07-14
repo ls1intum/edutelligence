@@ -1,11 +1,12 @@
 syntax = "proto3";
 
-option java_multiple_files = true;
-option java_package = "de.tum.cit.aet.hyperion";
-option java_outer_classname = "HyperionProto";
-option objc_class_prefix = "Hyperion";
+package de.tum.cit.aet.artemis.hyperion;
 
-package hyperion;
+// --- Java-specific file-level options ---
+option java_package        = "de.tum.cit.aet.artemis.hyperion.proto";
+option java_outer_classname = "HyperionServiceProto";
+option java_multiple_files = true;
+option java_generic_services = false;
 
 
 // Represents a file in a repository with content
@@ -90,12 +91,6 @@ message ProgrammingExercise {
   
 }
 
-// Health check service
-service Health {
-  // Check if the server is running
-  rpc Ping (PingRequest) returns (PingResponse) {}
-}
-
 // Exercise Creation Step 1: Define Boundary Conditions
 service DefineBoundaryCondition { }
 
@@ -117,9 +112,10 @@ service FinalizeProblemStatement {}
 // Exercise Creation Step 7: Configure Grading
 service ConfigureGrading {}
 
-// Exercise Creation Step 8: Verify Configuration
-service VerifyConfiguration {
+// Exercise Creation Step 8: Review and Refine
+service ReviewAndRefine {
   rpc CheckInconsistencies(InconsistencyCheckRequest) returns (InconsistencyCheckResponse) {}
+  rpc RewriteProblemStatement(RewriteProblemStatementRequest) returns (RewriteProblemStatementResponse) {}
 }
 
 message InconsistencyCheckRequest {
@@ -133,18 +129,10 @@ message InconsistencyCheckResponse {
   string inconsistencies = 1;
 }
 
-// Simple ping request message
-message PingRequest {
-  // Optional client identifier 
-  string client_id = 1;
+message RewriteProblemStatementRequest {
+  string text = 1;
 }
 
-// Ping response with server status
-message PingResponse {
-  // Server status message
-  string status = 1;
-  // Server version
-  string version = 2;
-  // Timestamp of the server response
-  int64 timestamp = 3;
+message RewriteProblemStatementResponse {
+  string rewritten_text = 1;
 }
