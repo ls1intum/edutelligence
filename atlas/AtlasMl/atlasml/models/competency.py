@@ -49,7 +49,6 @@ class GenerateEmbeddingsResponse(BaseModel):
 
 
 class SuggestCompetencyRequest(BaseModel):
-    id: str
     description: str
 
 

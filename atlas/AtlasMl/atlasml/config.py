@@ -54,6 +54,7 @@ class Settings(BaseModel):
         
     @classmethod
     def get_api_keys(cls):
+        logger.debug(f"Getting API keys: {cls.get_settings().api_keys}")
         return cls.get_settings().api_keys
 
 settings = Settings.get_settings()

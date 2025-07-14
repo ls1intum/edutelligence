@@ -3,8 +3,8 @@ api_keys:
 
 weaviate:
   host: 'localhost'
-  port: '8080'
+  port: '8085'
   grpc_port: '50051'
 
 env_vars:
-  SOME: 'value'
+  test: 'Test'

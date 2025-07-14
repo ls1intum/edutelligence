@@ -118,7 +118,7 @@ async def get_competency(id: str):
 @router.post(
     "/suggest",
     response_model=SuggestCompetencyResponse,
-    dependencies=[Depends(TokenValidator())],
+    dependencies=[],
 )
 async def suggest_competencies(request: SuggestCompetencyRequest):
     # TODO: @ArdaKaraman  call required pipeline with the input and return list of competencies
