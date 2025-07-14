@@ -10,10 +10,7 @@
 			"path": "athena"
 		},
 		{
-			"path": "log_viewer"
-		},
-		{
-			"path": "modules/programming/module_example"
+			"path": "llm_core"
 		},
 		{
 			"path": "modules/programming/module_programming_llm"
@@ -22,23 +19,11 @@
 			"path": "modules/text/module_text_llm"
 		},
 		{
-			"path": "modules/text/module_text_cofee"
-		},
-		{
-			"path": "modules/programming/module_programming_themisml"
-		},
-		{
-      		"path": "modules/programming/module_programming_apted"
-		},
-		{
       		"path": "modules/modeling/module_modeling_llm"
 		},
 		{
             "path": "playground"
         },
-		{
-			"path": "llm_core"
-		},
 		{
 			"path": "tests"
 		}
