@@ -557,7 +557,11 @@ class CourseChatPipeline(Pipeline):
             if self.lecture_content:
                 self.callback.in_progress("Augmenting response ...")
                 out = self.citation_pipeline(
-                    self.lecture_content, out, InformationType.PARAGRAPHS
+                    self.lecture_content,
+                    out,
+                    InformationType.PARAGRAPHS,
+                    variant=self.variant,
+                    base_url=dto.settings.artemis_base_url,
                 )
             self.tokens.extend(self.citation_pipeline.tokens)
 
@@ -567,6 +571,7 @@ class CourseChatPipeline(Pipeline):
                     self.retrieved_faqs,
                     out,
                     InformationType.FAQS,
+                    variant=self.variant,
                     base_url=dto.settings.artemis_base_url,
                 )
             self.callback.done("Response created", final_result=out, tokens=self.tokens)

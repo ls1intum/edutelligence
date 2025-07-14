@@ -1,10 +1,28 @@
-# Import OpenAI mocks first to ensure they're in place before any other imports
-from tests.modules.text.utils.mock_openai import mock_openai, mock_openai_client
-
+from unittest.mock import patch
 import pytest
-from tests.modules.text.utils.mock_llm import MockLanguageModel, MockStructuredMockLanguageModel, MockAssessmentModel
-from tests.modules.text.utils.mock_config import MockApproachConfig, MockModelConfig
-from tests.modules.text.utils.mock_env import mock_sent_tokenize
+from athena.module_config import ModuleConfig
+from athena.schemas.exercise_type import ExerciseType
+
+stub = ModuleConfig(name="module_text_llm", type=ExerciseType.text, port=5001)
+patch("athena.module_config.get_module_config", return_value=stub).start()
+
+from modules.modeling.module_modeling_llm.mock.utils.mock_llm_config import (
+    mock_get_llm_config,
+)
+from modules.text.utils.mock_llm import (
+    MockLanguageModel,
+    MockStructuredMockLanguageModel,
+    MockAssessmentModel,
+)
+from modules.text.utils.mock_config import MockApproachConfig, MockModelConfig
+
+
+@pytest.fixture(autouse=True)
+def _mock_llm_config(monkeypatch):
+    monkeypatch.setattr(
+        "llm_core.loaders.llm_config_loader.get_llm_config",
+        mock_get_llm_config,
+    )
 
 
 @pytest.fixture
@@ -29,7 +47,5 @@ def mock_assessment_model():
 def mock_config():
     """Create a mock configuration for testing."""
     return MockApproachConfig(
-        max_input_tokens=5000,
-        model=MockModelConfig(),
-        type="basic"
+        max_input_tokens=5000, model=MockModelConfig(), type="basic"
     )
