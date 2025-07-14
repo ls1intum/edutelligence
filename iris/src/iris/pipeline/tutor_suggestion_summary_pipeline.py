@@ -75,9 +75,9 @@ class TutorSuggestionSummaryPipeline(Pipeline):
         completion_args = CompletionArguments(temperature=0, max_tokens=2000)
 
         if variant == "advanced":
-            model = "gemma3:27b"
-        else:
             model = "deepseek-r1:8b"
+        else:
+            model = "gemma3:27b"
 
         self.llm = IrisLangchainChatModel(
             request_handler=ModelVersionRequestHandler(version=model),
