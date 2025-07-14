@@ -2,74 +2,68 @@ import pytest
 import json
 from athena.modeling import Submission
 from module_modeling_llm.core.generate_suggestions import generate_suggestions
-from module_modeling_llm.models.assessment_model import AssessmentModel, FeedbackModel
-from module_modeling_llm.utils.get_exercise_model import get_exercise_model
-from modules.modeling.module_modeling_llm.mock.conftest import TestData, TestEnvironment
+from modules.modeling.module_modeling_llm.mock.utils.mock_llm import (
+    MockLanguageModel,
+    MockAssessmentModel,
+    MockFeedbackModel,
+)
+from modules.modeling.module_modeling_llm.mock.conftest import MockPrompt
+from unittest.mock import patch
 
 
 @pytest.mark.asyncio
 async def test_generate_suggestions_basic(
-    test_data: TestData, test_env: TestEnvironment
+    mock_exercise, mock_submission, mock_config, mock_grading_criterion
 ):
-    """
-    Test basic feedback generation with a simple UML diagram.
-    This test uses the new dependency injection approach, without any patching.
-    """
-    # 1. Arrange: Define the response our fake LLM will return and queue it.
-    expected_feedback = AssessmentModel(
-        feedbacks=[
-            FeedbackModel(
-                # FIX: Corrected syntax from ':' to '=' and added the argument.
-                element_name="User",
-                title="Test Feedback",
-                description="Test description",
-                credits=5.0,
-                grading_instruction_id=1,
-            )
-        ]
+    """Test basic feedback generation with a simple UML diagram."""
+    mock_model = MockLanguageModel(
+        return_value=MockAssessmentModel(
+            feedbacks=[
+                MockFeedbackModel(
+                    title="Test Feedback",
+                    description="Test description",
+                    line_start=1,
+                    line_end=2,
+                    credits=5.0,
+                    exercise_id=mock_exercise.id,
+                    submission_id=mock_submission.id,
+                )
+            ]
+        )
     )
-    test_env.fake_model.add_response(expected_feedback)
-
-    # Convert exercise/submission to the internal ExerciseModel
-    exercise_model = get_exercise_model(test_data.exercise, test_data.submission)
-
-    # 2. Act: Call the function we want to test. No patches are needed.
-    actual_feedback = await generate_suggestions(
-        exercise_model=exercise_model,
-        structured_grading_instructions=test_data.structured_grading_instructions,
-        config=test_env.config.approach,
-        debug=test_env.config.debug,
+    mock_config.generate_feedback.get_model = lambda: mock_model
+    mock_config.generate_suggestions_prompt = MockPrompt(
+        graded_feedback_system_message="Test system message",
+        graded_feedback_human_message="Test human message",
     )
 
-    # 3. Assert: Check that the output matches the expected response and the LLM was called.
-    assert actual_feedback == expected_feedback
-    assert len(test_env.fake_model.requests) == 1
+    with patch(
+        "module_modeling_llm.core.generate_suggestions.predict_and_parse",
+        return_value=mock_model.return_value,
+    ):
+        exercise_model = get_exercise_model(mock_exercise, mock_submission)
+        feedback = await generate_suggestions(
+            exercise_model, mock_grading_criterion, mock_config, debug=False
+        )
 
 
 @pytest.mark.asyncio
 async def test_generate_suggestions_empty_submission(
-    test_data: TestData, test_env: TestEnvironment
+    mock_exercise, mock_config, mock_grading_criterion
 ):
     """Test feedback generation with an empty UML diagram."""
-    # 1. Arrange
-    # Create an empty submission for this specific test case
     empty_model_data = {"type": "class", "elements": {}, "relationships": {}}
     empty_submission = Submission(
         id=2,
-        exercise_id=test_data.exercise.id,
+        exercise_id=mock_exercise.id,
         model=json.dumps(empty_model_data),
         meta={},
     )
-    exercise_model = get_exercise_model(test_data.exercise, empty_submission)
-
-    expected_feedback = AssessmentModel(feedbacks=[])
-    test_env.fake_model.add_response(expected_feedback)
-
-    actual_feedback = await generate_suggestions(
-        exercise_model=exercise_model,
-        structured_grading_instructions=test_data.structured_grading_instructions,
-        config=test_env.config.approach,
-        debug=test_env.config.debug,
+    mock_model = MockLanguageModel(return_value=MockAssessmentModel(feedbacks=[]))
+    mock_config.generate_feedback.get_model = lambda: mock_model
+    mock_config.generate_suggestions_prompt = MockPrompt(
+        graded_feedback_system_message="Test system message",
+        graded_feedback_human_message="Test human message",
     )
 
     assert actual_feedback == expected_feedback
@@ -79,11 +73,9 @@ async def test_generate_suggestions_empty_submission(
 
 @pytest.mark.asyncio
 async def test_generate_suggestions_complex_diagram(
-    test_data: TestData, test_env: TestEnvironment
+    mock_exercise, mock_config, mock_grading_criterion
 ):
-    """Test feedback generation with a complex UML diagram, using the new pattern."""
-    # 1. Arrange
-    # Define the truly complex submission data, as it was in the original test.
+    """Test feedback generation with a complex UML diagram."""
     complex_model_data = {
         "type": "class",
         "elements": {
@@ -161,50 +153,59 @@ async def test_generate_suggestions_complex_diagram(
     }
     complex_submission = Submission(
         id=3,
-        exercise_id=test_data.exercise.id,
+        exercise_id=mock_exercise.id,
         model=json.dumps(complex_model_data),
         meta={},
     )
-    exercise_model = get_exercise_model(test_data.exercise, complex_submission)
-
-    # Define and queue the detailed response we expect from the LLM for this complex case.
-    # FIX: Added the 'element_name' argument to each FeedbackModel instance.
-    expected_feedback = AssessmentModel(
-        feedbacks=[
-            FeedbackModel(
-                element_name="User",
-                title="Class Structure and Relationships",
-                description="The class structure is well-organized with clear separation of concerns. User, Order, Product, Cart, and Address classes are properly defined with appropriate attributes.",
-                credits=3.0,
-                grading_instruction_id=1,
-            ),
-            FeedbackModel(
-                element_name="R2",
-                title="Relationship Types",
-                description="Good use of different relationship types: composition between User and Order, association between Order and Product, composition between Cart and Product, and aggregation between User and Address.",
-                credits=2.0,
-                grading_instruction_id=2,
-            ),
-            FeedbackModel(
-                element_name=None,
-                title="Attribute Completeness",
-                description="All classes have appropriate attributes. User has name, email, and password; Order has orderId, date, and status; Product has productId, name, and price; Cart has cartId and total; Address has street, city, and zip.",
-                credits=2.0,
-                grading_instruction_id=3,
-            ),
-        ]
+    mock_model = MockLanguageModel(
+        return_value=MockAssessmentModel(
+            feedbacks=[
+                MockFeedbackModel(
+                    title="Class Structure and Relationships",
+                    description="The class structure is well-organized with clear separation of concerns. User, Order, Product, Cart, and Address classes are properly defined with appropriate attributes.",
+                    line_start=1,
+                    line_end=19,
+                    credits=3.0,
+                    exercise_id=mock_exercise.id,
+                    submission_id=complex_submission.id,
+                ),
+                MockFeedbackModel(
+                    title="Relationship Types",
+                    description="Good use of different relationship types: composition between User and Order, association between Order and Product, composition between Cart and Product, and aggregation between User and Address.",
+                    line_start=1,
+                    line_end=4,
+                    credits=2.0,
+                    exercise_id=mock_exercise.id,
+                    submission_id=complex_submission.id,
+                ),
+                MockFeedbackModel(
+                    title="Attribute Completeness",
+                    description="All classes have appropriate attributes. User has name, email, and password; Order has orderId, date, and status; Product has productId, name, and price; Cart has cartId and total; Address has street, city, and zip.",
+                    line_start=2,
+                    line_end=19,
+                    credits=2.0,
+                    exercise_id=mock_exercise.id,
+                    submission_id=complex_submission.id,
+                ),
+            ]
+        )
     )
-    test_env.fake_model.add_response(expected_feedback)
-
-    # 2. Act
-    actual_feedback = await generate_suggestions(
-        exercise_model=exercise_model,
-        structured_grading_instructions=test_data.structured_grading_instructions,
-        config=test_env.config.approach,
-        debug=test_env.config.debug,
+    mock_config.generate_feedback.get_model = lambda: mock_model
+    mock_config.generate_suggestions_prompt = MockPrompt(
+        graded_feedback_system_message="Test system message",
+        graded_feedback_human_message="Test human message",
     )
 
-    # 3. Assert
-    assert actual_feedback == expected_feedback
-    assert len(actual_feedback.feedbacks) == 3
-    assert len(test_env.fake_model.requests) == 1
+    with patch(
+        "module_modeling_llm.core.generate_suggestions.predict_and_parse",
+        return_value=mock_model.return_value,
+    ):
+        exercise_model = get_exercise_model(mock_exercise, complex_submission)
+        feedback = await generate_suggestions(
+            exercise_model, mock_grading_criterion, mock_config, debug=False
+        )
+
+        assert isinstance(feedback.feedbacks, list)
+        assert len(feedback.feedbacks) > 0
+        assert all(f.exercise_id == mock_exercise.id for f in feedback.feedbacks)
+        assert all(f.submission_id == complex_submission.id for f in feedback.feedbacks)

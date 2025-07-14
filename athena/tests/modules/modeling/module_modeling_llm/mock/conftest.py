@@ -1,130 +1,181 @@
+from unittest.mock import patch, MagicMock
 import pytest
+import pytest_asyncio
 import json
-from pydantic import dataclasses
-from unittest.mock import patch
 from athena.module_config import ModuleConfig
 from athena.schemas.exercise_type import ExerciseType
 
-patcher = patch(
-    "athena.module_config.get_module_config",
-    return_value=ModuleConfig(
-        name="module_modeling_llm", type=ExerciseType.modeling, port=5008
-    ),
-)
-patcher.start()
+stub = ModuleConfig(name="module_modeling_llm", type=ExerciseType.modeling, port=5001)
+patch("athena.module_config.get_module_config", return_value=stub).start()
 
+
+from modules.modeling.module_modeling_llm.mock.utils.mock_llm import (
+    MockLanguageModel,
+    MockAssessmentModel,
+)
 from athena.modeling import Exercise, Submission
-from athena.schemas.exercise_type import ExerciseType
-from athena.schemas.structured_grading_criterion import StructuredGradingCriterion
-
-from module_modeling_llm.config import (
-    BasicApproachConfig,
-    Configuration,
-    GenerateSuggestionsPrompt,
-)
-from utils.fake_llm import FakeChatModel, FakeModelConfig
-from unittest.mock import patch
-from athena.module_config import ModuleConfig
-
-
-@dataclasses.dataclass
-class TestData:
-    exercise: Exercise
-    submission: Submission
-    structured_grading_instructions: StructuredGradingCriterion
+from utils.mock_llm_config import mock_get_llm_config
 
 
 @pytest.fixture(autouse=True)
-def mock_athena_module_config():
-    """
-    Automatically mocks get_module_config for all tests in this directory.
-    This prevents the tests from trying to read a 'module.conf' file from the filesystem.
-    """
-    # This is the configuration that 'module_modeling_llm' would have at runtime.
-    mock_config = ModuleConfig(
-        name="module_modeling_llm", type=ExerciseType.modeling, port=5008
+def _mock_llm_config(monkeypatch):
+    monkeypatch.setattr(
+        "llm_core.loaders.llm_config_loader.get_llm_config",
+        mock_get_llm_config,
     )
-    with patch(
-        "athena.module_config.get_module_config", return_value=mock_config
-    ) as mock:
-        yield mock
+
+
+class MockModelConfig:
+    """Mock model configuration that doesn't raise errors."""
+
+    def get_model(self):
+        # Return a mock model that doesn't raise an error
+        from unittest.mock import Mock
+
+        mock_model = Mock()
+        mock_model.name = "mock-model"
+        return mock_model
+
+    def supports_system_messages(self):
+        return True
+
+    def supports_function_calling(self):
+        return True
+
+    def supports_structured_output(self):
+        return True
+
+
+@pytest_asyncio.fixture
+async def mock_config():
+    """
+    Create a flexible mock configuration for testing using MagicMock.
+    This avoids issues with Pydantic model validation and field assignment.
+    """
+    config = MagicMock()
+    config.generate_feedback = MockModelConfig()
+    config.generate_suggestions_prompt = MagicMock()
+
+    return config
 
 
 @pytest.fixture
-def test_data() -> TestData:
-    """Provides a standard set of exercise and submission data for tests."""
-    exercise = Exercise(
+def mock_llm():
+    """Fixture providing a basic mock language model."""
+    return MockLanguageModel()
+
+
+@pytest.fixture
+def mock_assessment_model():
+    """Fixture providing a mock assessment model."""
+    return MockAssessmentModel()
+
+
+class MockPrompt:
+    def __init__(
+        self,
+        graded_feedback_system_message="Test system message",
+        graded_feedback_human_message="Test human message",
+    ):
+        self.graded_feedback_system_message = graded_feedback_system_message
+        self.graded_feedback_human_message = graded_feedback_human_message
+
+
+class MockStructuredGradingCriterion:
+    def __init__(self):
+        self.criteria = [
+            {
+                "id": "1",
+                "title": "Class Structure",
+                "description": "Classes should have appropriate attributes and methods",
+                "max_points": 5.0,
+            },
+            {
+                "id": "2",
+                "title": "Relationships",
+                "description": "Relationships between classes should be correctly modeled",
+                "max_points": 5.0,
+            },
+        ]
+
+    def json(self):
+        return json.dumps(self.criteria)
+
+
+@pytest.fixture
+def mock_grading_criterion():
+    """Create a mock structured grading criterion."""
+    return MockStructuredGradingCriterion()
+
+
+@pytest.fixture
+def mock_exercise():
+    """Create a mock exercise for testing."""
+    example_solution = {
+        "type": "class",
+        "elements": {
+            "1": {"id": "1", "type": "class", "name": "User", "attributes": ["2", "3"]},
+            "2": {"id": "2", "type": "attribute", "name": "name"},
+            "3": {"id": "3", "type": "attribute", "name": "password"},
+            "4": {
+                "id": "4",
+                "type": "class",
+                "name": "Order",
+                "attributes": ["5", "6"],
+            },
+            "5": {"id": "5", "type": "attribute", "name": "orderId"},
+            "6": {"id": "6", "type": "attribute", "name": "date"},
+        },
+        "relationships": {
+            "1": {
+                "id": "1",
+                "type": "association",
+                "source": {"element": "1"},
+                "target": {"element": "4"},
+            }
+        },
+    }
+    return Exercise(
         id=1,
         title="Test Exercise",
         type=ExerciseType.modeling,
         max_points=10,
-        problem_statement="Create a class diagram with User and Order.",
-        grading_instructions="User must have name. Order must exist.",
+        bonus_points=2,
+        grading_instructions="Test grading instructions",
+        problem_statement="Test problem statement",
+        example_solution=json.dumps(example_solution),
         grading_criteria=[],
-        example_solution=json.dumps(
-            {"type": "ClassDiagram", "elements": {}, "relationships": {}}
-        ),
-        meta={},
-        bonus_points=0,
-    )
-    submission = Submission(
-        id=1,
-        exercise_id=exercise.id,
-        model=json.dumps(
-            {
-                "type": "ClassDiagram",
-                "elements": {"1": {"id": "1", "type": "Class", "name": "User"}},
-                "relationships": {},
-            }
-        ),
         meta={},
     )
-    sgi = StructuredGradingCriterion(criteria=[])
-
-    return TestData(
-        exercise=exercise, submission=submission, structured_grading_instructions=sgi
-    )
-
-
-@dataclasses.dataclass
-class TestEnvironment:
-    config: Configuration
-    fake_model: FakeChatModel
 
 
 @pytest.fixture
-def test_env() -> TestEnvironment:
-    """
-    Sets up a complete and isolated test environment using the Fake LLM.
-    This replaces all the complex patching and mocking.
-    """
-    # 1. Create the fake LLM instance that we can control
-    fake_chat_model = FakeChatModel()
-
-    # 2. Create the fake model config, injecting our fake LLM and setting capabilities.
-    # The `BadRequestError` showed the real 'o1-mini' model was called, which
-    # doesn't support system messages. We set this capability to False to ensure
-    # the code under test (which should remove system messages) is triggered correctly.
-    fake_model_config = FakeModelConfig(
-        _fake_chat_model=fake_chat_model,
-        _capability_system_messages=False,
-        _capability_function_calling=False,
-        _capability_structured_output=False,
+def mock_submission(mock_exercise):
+    """Create a mock submission for testing."""
+    model_data = {
+        "type": "class",
+        "elements": {
+            "1": {"id": "1", "type": "class", "name": "User", "attributes": ["2", "3"]},
+            "2": {"id": "2", "type": "attribute", "name": "name"},
+            "3": {"id": "3", "type": "attribute", "name": "password"},
+            "4": {
+                "id": "4",
+                "type": "class",
+                "name": "Order",
+                "attributes": ["5", "6"],
+            },
+            "5": {"id": "5", "type": "attribute", "name": "orderId"},
+            "6": {"id": "6", "type": "attribute", "name": "date"},
+        },
+        "relationships": {
+            "1": {
+                "id": "1",
+                "type": "association",
+                "source": {"element": "1"},
+                "target": {"element": "4"},
+            }
+        },
+    }
+    return Submission(
+        id=1, exercise_id=mock_exercise.id, model=json.dumps(model_data), meta={}
     )
-
-    # 3. Create the actual module configuration, injecting the fake config.
-    # This works because FakeModelConfig is a subclass of OpenAIModelConfig,
-    # so Pydantic validation passes without coercing it to a new object.
-    module_config = Configuration(
-        debug=True,
-        approach=BasicApproachConfig(
-            generate_feedback=fake_model_config,
-            filter_feedback=fake_model_config,
-            review_feedback=fake_model_config,
-            generate_grading_instructions=fake_model_config,
-            # Prompts can be left as default or customized here
-            generate_suggestions_prompt=GenerateSuggestionsPrompt(),
-        ),
-    )
-
-    return TestEnvironment(config=module_config, fake_model=fake_chat_model)

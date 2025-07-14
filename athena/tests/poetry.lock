@@ -1126,29 +1126,6 @@ type = "directory"
 url = "../modules/modeling/module_modeling_llm"
 
 [[package]]
-name = "module-programming-llm"
-version = "0.1.0"
-description = "Programming assessment LLM module."
-optional = false
-python-versions = "3.11.*"
-groups = ["main"]
-files = []
-develop = true
-
-[package.dependencies]
-athena = {path = "../../../athena", develop = true}
-gitpython = "^3.1.41"
-llm_core = {path = "../../../llm_core", develop = true}
-nltk = "3.9.1"
-promptlayer = "^0.1.85"
-python-dotenv = "^1.0.0"
-tiktoken = "0.7.0"
-
-[package.source]
-type = "directory"
-url = "../modules/programming/module_programming_llm"
-
-[[package]]
 name = "module-text-llm"
 version = "0.1.0"
 description = "Text assessment LLM module."
@@ -1608,22 +1585,6 @@ files = [
 [package.extras]
 dev = ["pre-commit", "tox"]
 testing = ["coverage", "pytest", "pytest-benchmark"]
-
-[[package]]
-name = "promptlayer"
-version = "0.1.99"
-description = "PromptLayer is a package to keep track of your GPT models training"
-optional = false
-python-versions = ">=3.8.1,<4.0"
-groups = ["main"]
-files = [
-    {file = "promptlayer-0.1.99-py3-none-any.whl", hash = "sha256:8cfdb67adfa9ad2508e35a67dd0d1f42aa80afe6e43fbf74e0b5c9ab3f9e7b32"},
-    {file = "promptlayer-0.1.99.tar.gz", hash = "sha256:7bf839c50a921d2c7244ebf48c88ccb761df3d05c0dd18978d1be3c792287688"},
-]
-
-[package.dependencies]
-pydantic = ">=1,<2"
-requests = ">=2.31.0,<3.0.0"
 
 [[package]]
 name = "propcache"

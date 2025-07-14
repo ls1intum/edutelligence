@@ -9,13 +9,12 @@ from weaviate.collections.classes.config import DataType
 from atlasml.config import settings
 
 
-# TODO: ARDA: Add proper collection names according to your use cases.
 # If you define all the collections here all the collections will be created
 # automatically when you run the project.
 class CollectionNames(str, Enum):
+    TEXT = "Text"
     COMPETENCY = "Competency"
-    CLUSTER = "Cluster"
-    COURSE = "Course"
+    CLUSTERCENTER = "ClusterCenter"
 
 
 logger = logging.getLogger(__name__)
@@ -42,50 +41,29 @@ class WeaviateClient:
             raise ValueError(f"Collection '{collection_name}' does not exist")
 
     def _ensure_collections_exist(self):
-        """Ensure collections exist with proper schema."""
+        """Ensure collections exist with a proper schema."""
         # Define schemas for each collection
-        # TODO: ARDA: Add properties for each collection
-        # After, schema updated automatically and u can fetch the data from the
-        # collection with the new properties
+        # After, schema updated automatically, and you can fetch the data from the collection with the new properties
         collection_schemas = {
+            CollectionNames.TEXT.value: {
+                "properties": [
+                    {"name": "text_id", "data_type": DataType.TEXT, "indexFilterable": True, "indexNullState": True},
+                    {"name": "text", "data_type": DataType.TEXT},
+                    {"name": "competency_ids", "data_type": DataType.TEXT_ARRAY, "indexFilterable": True},
+                ]
+            },
             CollectionNames.COMPETENCY.value: {
                 "properties": [
-                    {"name": "text", "dataType": "text"},
-                    {
-                        "name": "unit_id",
-                        "dataType": "text",
-                        "indexFilterable": True,
-                    },
-                    {"name": "name", "dataType": "text", "indexFilterable": True},
-                    {
-                        "name": "category",
-                        "dataType": "text",
-                        "indexFilterable": True,
-                    },
+                    {"name": "competency_id", "data_type": DataType.TEXT, "indexFilterable": True},
+                    {"name": "name", "data_type":  DataType.TEXT},
+                    {"name": "text", "data_type":  DataType.TEXT},
+                    {"name": "cluster_id", "data_type": DataType.TEXT, "indexFilterable": True},
+                    {"name": "cluster_similarity_score", "data_type": DataType.NUMBER},
                 ]
             },
-            CollectionNames.CLUSTER.value: {
+            CollectionNames.CLUSTERCENTER.value: {
                 "properties": [
-                    {"name": "name", "dataType": "text", "indexFilterable": True},
-                    {"name": "size", "dataType": "int"},
-                    {
-                        "name": "members",
-                        "dataType": "text[]",
-                        "indexFilterable": True,
-                    },
-                ]
-            },
-            CollectionNames.COURSE.value: {
-                "properties": [
-                    {"name": "title", "dataType": "text", "indexFilterable": True},
-                    {"name": "description", "dataType": "text"},
-                    {"name": "author", "dataType": "text", "indexFilterable": True},
-                    {"name": "level", "dataType": "text", "indexFilterable": True},
-                    {
-                        "name": "competencies",
-                        "dataType": "text[]",
-                        "indexFilterable": True,
-                    },
+                    {"name": "cluster_id", "data_type":  DataType.TEXT, "indexFilterable": True}
                 ]
             },
         }
@@ -105,7 +83,7 @@ class WeaviateClient:
                 for prop in schema["properties"]:
                     if prop["name"] not in existing_props:
                         # Convert string data type to DataType enum
-                        data_type_str = prop["dataType"]
+                        data_type_str = prop["data_type"]
                         if data_type_str == "text":
                             data_type = DataType.TEXT
                         elif data_type_str == "int":
@@ -357,7 +335,8 @@ class WeaviateClient:
         self._check_if_collection_exists(collection_name)
 
         collection = self.client.collections.get(collection_name)
-        collection.data.delete_all()
+        self.client.collections.delete(collection_name)
+        # collection.data.delete_many()
         logger.info(f"--- ALL DATA DELETED FROM {collection_name} ---")
 
     def delete_data_by_id(self, collection_name: str, id: str):
