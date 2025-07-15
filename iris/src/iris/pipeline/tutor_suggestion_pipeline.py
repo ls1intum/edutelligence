@@ -126,10 +126,6 @@ class TutorSuggestionPipeline(Pipeline):
             self.callback.error("Error parsing summary JSON")
             return
 
-        # self.callback.in_progress("Retrieving relevant lecture content")
-
-        # self.callback.in_progress("Retrieving relevant faq content")
-
         if is_question and number_of_answers > 0:
             self.callback.in_progress("Checking if questions is already answered")
 
