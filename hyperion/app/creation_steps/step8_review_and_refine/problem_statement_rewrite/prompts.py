@@ -1,4 +1,7 @@
-rewrite_prompt = """\
+from langchain_core.prompts import ChatPromptTemplate
+
+rewrite_prompt = ChatPromptTemplate.from_template(
+    """\
 You are an expert instructor at an Ivy League university with extensive experience in creating high-quality \
 programming exercises.
 
@@ -18,3 +21,4 @@ Please rewrite the following problem statement:
 {text}
 
 Rewritten problem statement:"""
+)
