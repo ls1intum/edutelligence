@@ -36,7 +36,7 @@ def transcribe_with_azure_whisper(audio_path: str, llm_id: str | None = None) ->
         for attempt in range(max_retries):
             with open(chunk_path, "rb") as f:
                 logger.info(
-                    "📤 Azure uploading chunk %s/%s: %s",
+                    "Azure uploading chunk %s/%s: %s",
                     i + 1,
                     len(chunk_paths),
                     chunk_path,
@@ -79,12 +79,12 @@ def transcribe_with_azure_whisper(audio_path: str, llm_id: str | None = None) ->
 
                 except requests.RequestException as e:
                     logger.error(
-                        "❌ Azure Whisper failed on chunk %s: %s", chunk_path, e
+                        "Azure Whisper failed on chunk %s: %s", chunk_path, e
                     )
 
         if not success:
             raise RuntimeError(
-                "⚠️ Azure Whisper too many retries for chunk %s" % chunk_path
+                "Azure Whisper too many retries for chunk %s" % chunk_path
             )
 
         offset += get_audio_duration(chunk_path)
@@ -110,7 +110,7 @@ def transcribe_with_openai_whisper(audio_path: str, llm_id: str | None = None) -
         for attempt in range(max_retries):
             with open(chunk_path, "rb") as f:
                 logger.info(
-                    "📤 OpenAI uploading chunk %s/%s: %s",
+                    "OpenAI uploading chunk %s/%s: %s",
                     i + 1,
                     len(chunk_paths),
                     chunk_path,
@@ -151,12 +151,12 @@ def transcribe_with_openai_whisper(audio_path: str, llm_id: str | None = None) -
 
                 except requests.RequestException as e:
                     logger.error(
-                        "❌ OpenAI Whisper failed on chunk %s: %s", chunk_path, e
+                        "OpenAI Whisper failed on chunk %s: %s", chunk_path, e
                     )
 
         if not success:
             raise RuntimeError(
-                "⚠️ OpenAI Whisper too many retries for chunk %s" % chunk_path
+                "OpenAI Whisper too many retries for chunk %s" % chunk_path
             )
 
         offset += get_audio_duration(chunk_path)
