@@ -1,5 +1,5 @@
 import React, {useContext, useEffect, useState} from 'react';
-import {View, Text, StyleSheet, ActivityIndicator, Pressable, TouchableOpacity} from 'react-native';
+import {View, Text, StyleSheet, ActivityIndicator, Pressable, TouchableOpacity, ScrollView} from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {ThemeContext} from '@/components/theme';
 import Footer from '@/components/footer';
@@ -106,6 +106,7 @@ export default function Providers() {
 
     return (
         <View style={styles.outer_container}>
+            <ScrollView>
             <Header/>
             <View style={[styles.page, theme === 'light' ? styles.light : styles.dark]}>
                 <Sidebar/>
@@ -142,6 +143,7 @@ export default function Providers() {
                     )}
                 </View>
             </View>
+        </ScrollView>
             <Footer/>
         </View>
     );
@@ -263,7 +265,11 @@ const styles = StyleSheet.create({
         fontSize: 18,
     },
     tableContainer: {
+        overflow: 'scroll',
+        overflowX: 'scroll',
+        width: '100%',
         flex: 1,
+        minWidth: 400
     },
     table: {
         borderWidth: 1,

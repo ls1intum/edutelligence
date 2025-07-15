@@ -1,5 +1,5 @@
 import React, {useContext, useEffect, useState} from 'react';
-import {View, Text, StyleSheet, ActivityIndicator} from 'react-native';
+import {View, Text, StyleSheet, ActivityIndicator, ScrollView} from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {ThemeContext} from '@/components/theme';
 import Footer from '@/components/footer';
@@ -33,6 +33,7 @@ export default function Settings() {
 
     return (
         <View style={styles.outer_container}>
+            <ScrollView>
             <Header/>
             <View style={[styles.page, theme === 'light' ? styles.light : styles.dark]}>
                 <Sidebar/>
@@ -47,7 +48,7 @@ export default function Settings() {
                     </View>
                 </View>
             </View>
-
+        </ScrollView>
             <Footer/>
         </View>
 

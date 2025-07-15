@@ -36,7 +36,6 @@ const styles = StyleSheet.create({
   footer: {
     width: '100%',
     padding: 12,
-    borderTopWidth: 1
   },
   lightFooter: {
     backgroundColor: '#f5f5f5',

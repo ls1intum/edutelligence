@@ -1,5 +1,5 @@
 import React, {useContext, useEffect, useState} from 'react';
-import { View, Text, StyleSheet, Pressable } from 'react-native';
+import {View, Text, StyleSheet, Pressable, ScrollView} from 'react-native';
 import { ThemeContext } from './theme';
 import {useRouter} from "expo-router";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -81,7 +81,7 @@ export default function Sidebar() {
 
 
   return (
-    <View style={[styles.sidebar, theme === 'light' ? styles.light : styles.dark]}>
+    <ScrollView style={[styles.sidebar, theme === 'light' ? styles.light : styles.dark]}>
       {menuItems.map((item, index) => (
         <Pressable
           key={index}
@@ -97,19 +97,19 @@ export default function Sidebar() {
           </Text>
         </Pressable>
       ))}
-    </View>
+    </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
   sidebar: {
-    width: 220,
+    width: '20%',
     paddingVertical: 24,
     paddingHorizontal: 16,
     borderRightWidth: 1,
     borderColor: '#ccc',
     height: '100%', // innerhalb von flex-Layout zwischen Header/Footer
-    justifyContent: 'flex-start'
+    maxWidth: 250,
   },
   menuItem: {
     paddingVertical: 12,
@@ -132,7 +132,6 @@ const styles = StyleSheet.create({
     fontWeight: '600'
   },
   light: {
-    backgroundColor: '#f4f4f4'
   },
   dark: {
     backgroundColor: '#1e1e1e'

@@ -687,7 +687,7 @@ class DBManager:
         Get a list of providers accessible by a given key.
         """
         sql = text("""
-            SELECT providers.id
+            SELECT DISTINCT providers.id
             FROM providers, model_api_keys, profiles, process
             WHERE process.logos_key = :logos_key
                 and process.id = profiles.process_id
@@ -702,7 +702,7 @@ class DBManager:
         Get a list of providers accessible by a given key.
         """
         sql = text("""
-            SELECT providers.id, providers.name, providers.base_url, providers.auth_name, providers.auth_format
+            SELECT DISTINCT providers.id, providers.name, providers.base_url, providers.auth_name, providers.auth_format
             FROM providers, model_api_keys, profiles, process
             WHERE process.logos_key = :logos_key
                 and process.id = profiles.process_id
@@ -725,7 +725,7 @@ class DBManager:
         Get a list of models accessible by a given key.
         """
         sql = text("""
-            SELECT models.id, models.name, models.endpoint, models.api_id, models.weight_privacy, models.weight_latency, models.weight_accuracy, models.weight_cost, models.weight_quality, models.tags, models.parallel, models.description
+            SELECT DISTINCT models.id, models.name, models.endpoint, models.api_id, models.weight_privacy, models.weight_latency, models.weight_accuracy, models.weight_cost, models.weight_quality, models.tags, models.parallel, models.description
             FROM models, profile_model_permissions, profiles, process
             WHERE process.logos_key = :logos_key
                 and process.id = profiles.process_id
@@ -751,7 +751,7 @@ class DBManager:
         Get a list of policies accessible by a given key.
         """
         sql = text("""
-            SELECT policies.id, policies.entity_id, policies.name, policies.description, policies.threshold_privacy, policies.threshold_latency, policies.threshold_accuracy, policies.threshold_cost, policies.threshold_quality, policies.priority, policies.topic
+            SELECT DISTINCT policies.id, policies.entity_id, policies.name, policies.description, policies.threshold_privacy, policies.threshold_latency, policies.threshold_accuracy, policies.threshold_cost, policies.threshold_quality, policies.priority, policies.topic
             FROM policies, process, profiles, profile_model_permissions, models
             WHERE process.logos_key = :logos_key
                 and process.id = policies.entity_id

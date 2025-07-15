@@ -2,7 +2,10 @@
 Module handling all classification tasks in Logos.
 """
 import functools
+from copy import deepcopy
 from typing import List, Tuple
+
+from sympy.codegen.numpy_nodes import minimum
 
 from logos.classification.classify_policy import PolicyClassifier
 from logos.classification.classify_token import TokenClassifier
@@ -60,20 +63,37 @@ class ClassificationManager:
             allowed = list()
         else:
             self.models = [model for model in self.models if model["id"] in allowed]
+        adjusted_policy = deepcopy(policy)
+        if adjusted_policy["threshold_latency"] == 1024:
+            adjusted_policy["threshold_latency"] = self.get_special_weight("weight_latency", allowed=allowed)
+        elif adjusted_policy["threshold_latency"] == -1024:
+            adjusted_policy["threshold_latency"] = self.get_special_weight("weight_latency", maximum=False, allowed=allowed)
+        if adjusted_policy["threshold_accuracy"] == 1024:
+            adjusted_policy["threshold_accuracy"] = self.get_special_weight("weight_accuracy", allowed=allowed)
+        elif adjusted_policy["threshold_accuracy"] == -1024:
+            adjusted_policy["threshold_accuracy"] = self.get_special_weight("weight_accuracy", maximum=False, allowed=allowed)
+        if adjusted_policy["threshold_cost"] == 1024:
+            adjusted_policy["threshold_cost"] = self.get_special_weight("weight_cost", allowed=allowed)
+        elif adjusted_policy["threshold_cost"] == -1024:
+            adjusted_policy["threshold_cost"] = self.get_special_weight("weight_cost", maximum=False, allowed=allowed)
+        if adjusted_policy["threshold_quality"] == 1024:
+            adjusted_policy["threshold_quality"] = self.get_special_weight("weight_quality", allowed=allowed)
+        elif adjusted_policy["threshold_quality"] == -1024:
+            adjusted_policy["threshold_quality"] = self.get_special_weight("weight_quality", maximum=False, allowed=allowed)
         print(f"Policy: {policy['id']}", flush=True)
         # print(f"Models: {[model['id'] for model in self.models]}", flush=True)
         print(f"Models: {allowed}", flush=True)
-        filtered = PolicyClassifier(self.models).classify(prompt, policy)
+        filtered = PolicyClassifier(self.models).classify(prompt, adjusted_policy)
         print(f"Policy-Classification: {[model['id'] for model in filtered]}", flush=True)
-        filtered = TokenClassifier(filtered).classify(prompt, policy)
+        filtered = TokenClassifier(filtered).classify(prompt, adjusted_policy)
         print(f"Token-Classification: {[model['id'] for model in filtered]}", flush=True)
         self.laura.allowed = allowed
-        filtered = AIClassifier(filtered).classify(prompt, policy, laura=self.laura)
+        filtered = AIClassifier(filtered).classify(prompt, adjusted_policy, laura=self.laura)
         print(f"AI-Classification: {[model['id'] for model in filtered]}", flush=True)
         self.laura.allowed = list()
         self.filtered = filtered
         return sorted(
-            [(i["id"], i["classification_weight"].get_weight(), policy["priority"], i["parallel"]) for i in filtered],
+            [(i["id"], i["classification_weight"].get_weight(), adjusted_policy["priority"], i["parallel"]) for i in filtered],
             key=lambda x: x[1], reverse=True)
 
     def calc_weight(self, model):
@@ -84,3 +104,14 @@ class ClassificationManager:
             self.WEIGHT_COST * model["weight_cost"] + \
             self.WEIGHT_LATENCY * model["weight_latency"] + \
             self.WEIGHT_QUALITY * model["weight_quality"]
+
+    def get_special_weight(self, category: str, maximum=True, allowed=None):
+        weight = -1e10 if maximum else 1e10
+        found = False
+        for model in self.models:
+            if (allowed is None or model["id"] in allowed) and ((model[category] > weight and maximum) or (model[category] < weight and not maximum)):
+                weight = model[category]
+                found = True
+        if not found:
+            return 0
+        return weight
