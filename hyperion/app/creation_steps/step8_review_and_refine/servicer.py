@@ -5,7 +5,6 @@ from app.grpc import hyperion_pb2_grpc
 from app.grpc.hyperion_pb2 import (
     RewriteProblemStatementResponse,
 )
-from app.settings import settings
 from app.models import get_model
 from app.settings import settings
 from langchain_core.prompts import PromptTemplate
@@ -14,17 +13,20 @@ from .prompts import rewrite_prompt
 from .consistency_check import ConsistencyCheck
 
 logger = logging.getLogger(__name__)
-consistency_checker = ConsistencyCheck(model_name=settings.MODEL_NAME, model_provider=settings.MODEL_PROVIDER)
+consistency_checker = ConsistencyCheck(
+    model_name=settings.MODEL_NAME, model_provider=settings.MODEL_PROVIDER
+)
+
 
 class ReviewAndRefineServicer(hyperion_pb2_grpc.ReviewAndRefineServicer):
 
     def CheckConsistency(self, request, context):
         logger.info("Running signature consistency check...")
         try:
-            response = consistency_checker.check_consistency(request)            
+            response = consistency_checker.check_consistency(request)
             logger.info(f"Found {len(response.issues)} consistency issues")
             return response
-            
+
         except Exception as e:
             logger.error(f"Error during consistency check: {str(e)}")
             context.set_code(grpc.StatusCode.INTERNAL)

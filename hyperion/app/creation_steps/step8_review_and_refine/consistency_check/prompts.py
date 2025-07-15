@@ -1,25 +1,28 @@
 from langchain_core.prompts import ChatPromptTemplate
 
-structural_consistency_prompt = ChatPromptTemplate.from_template("""\
+structural_consistency_prompt = ChatPromptTemplate.from_template(
+    """\
 {rendered_context}
 
 # MISSION
-You are a Structural Consistency Validator for programming exercises. Your task: detect UNINTENDED structural inconsistencies that would confuse students or prevent them from implementing the intended design. Focus on ensuring coherence between what the problem statement describes and what the template code provides.
+You are a Structural Consistency Validator for programming exercises. Your task: detect UNINTENDED structural \
+inconsistencies that would confuse students or prevent them from implementing the intended design. Focus on ensuring \
+coherence between what the problem statement describes and what the template code provides.
 
 # CORE PRINCIPLE
-**ONLY flag unintentional structural inconsistencies that create student confusion or implementation barriers.** 
+**ONLY flag unintentional structural inconsistencies that create student confusion or implementation barriers.**
 **DO NOT flag intentional pedagogical gaps (missing method bodies, incomplete implementations, etc.)**
 
 This includes:
 - **Cross-artifact inconsistencies**: Problem statement describes one structure, template implements another
-- **Inner-artifact inconsistencies**: Contradictions within the problem statement or template itself  
+- **Inner-artifact inconsistencies**: Contradictions within the problem statement or template itself
 - **Design implementation barriers**: Template structure prevents students from following the specified design
 
 # PEDAGOGICAL VS. STRUCTURAL UNDERSTANDING
 
 ## PEDAGOGICAL GAPS (DO NOT FLAG):
 - Missing method bodies in template classes (students implement these)
-- Incomplete constructor implementations 
+- Incomplete constructor implementations
 - Abstract methods without implementation (by design)
 - Missing private helper methods students should write
 - Incomplete exception handling in method stubs
@@ -28,7 +31,7 @@ This includes:
 
 ## STRUCTURAL INCONSISTENCIES (FLAG THESE):
 - **Cross-artifact conflicts**: Problem describes inheritance, template has standalone classes
-- **Design contradictions**: Problem states interface implementation, template has conflicting signatures  
+- **Design contradictions**: Problem states interface implementation, template has conflicting signatures
 - **Missing structural foundation**: Problem references classes/enums that don't exist in template
 - **Inner-artifact contradictions**: Problem statement describes same element differently in multiple places
 - **Template self-contradictions**: Template code has conflicting declarations or imports
@@ -120,8 +123,10 @@ Analysis: Problem contradicts itself about return type
   "issues": [
     {{
       "description": "Precise explanation of the inconsistency and how it affects student understanding/implementation",
-      "severity": "HIGH" | "MEDIUM" | "LOW", 
-      "category": "METHOD_SIGNATURE_MISMATCH" | "CONSTRUCTOR_SIGNATURE_MISMATCH" | "INTERFACE_IMPLEMENTATION_CONFLICT" | "TYPE_DECLARATION_CONFLICT" | "INHERITANCE_HIERARCHY_MISMATCH" | "PACKAGE_STRUCTURE_MISMATCH" | "MISSING_REQUIRED_ELEMENT",
+      "severity": "HIGH" | "MEDIUM" | "LOW",
+      "category": "METHOD_SIGNATURE_MISMATCH" | "CONSTRUCTOR_SIGNATURE_MISMATCH" | "INTERFACE_IMPLEMENTATION_CONFLICT" \
+| "TYPE_DECLARATION_CONFLICT" | "INHERITANCE_HIERARCHY_MISMATCH" | "PACKAGE_STRUCTURE_MISMATCH" | \
+"MISSING_REQUIRED_ELEMENT",
       "primary_location": {{
         "type": "PROBLEM_STATEMENT" | "TEMPLATE_REPOSITORY",
         "file_path": "exact/path/to/file.java",
@@ -130,7 +135,7 @@ Analysis: Problem contradicts itself about return type
       }},
       "related_locations": [{{
         "type": "PROBLEM_STATEMENT" | "TEMPLATE_REPOSITORY",
-        "file_path": "related/file/path.java", 
+        "file_path": "related/file/path.java",
         "start_line": 5,
         "end_line": 8
       }}],
@@ -141,5 +146,10 @@ Analysis: Problem contradicts itself about return type
 ```
 
 # EXECUTION
-Analyze the provided artifacts for structural inconsistencies that would confuse students or prevent them from implementing the intended design. Focus on cross-artifact contradictions (problem vs template) and inner-artifact contradictions (within problem statement or template). Apply the pedagogical vs. structural distinction rigorously. Return only genuine inconsistencies that are unintentional and would hinder student success.
-""", name="structural_consistency_prompt")
+Analyze the provided artifacts for structural inconsistencies that would confuse students or prevent them from \
+implementing the intended design. Focus on cross-artifact contradictions (problem vs template) and inner-artifact \
+contradictions (within problem statement or template). Apply the pedagogical vs. structural distinction rigorously. \
+Return only genuine inconsistencies that are unintentional and would hinder student success.\
+""",
+    name="structural_consistency_prompt",
+)

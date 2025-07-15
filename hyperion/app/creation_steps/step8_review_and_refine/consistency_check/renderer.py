@@ -9,33 +9,39 @@ def render_repository(
     sep: str = "/",
     show_hidden: bool = False,
     repo_name: Optional[str] = None,
-    include_tree: bool = True,
     width: int = 80,
 ) -> str:
     """Render a complete textual snapshot of a repository: first the tree,
     then the contents of every file.
 
     Args:
-        root (str): The root directory name to display at the top of the tree.
         files (List[RepositoryFile]): The repository's files (path + content pairs).
         sep (str, optional): Path separator used in the paths. Defaults to "/".
         show_hidden (bool, optional): Include dot-files if True. Defaults to False.
-        repo_name (Optional[str], optional): Optional heading to precede this repository in multi-repo dumps. Defaults to None.
+        repo_name (Optional[str], optional): Optional heading to precede this repository in multi-repo dumps.
+                                             Defaults to None.
         width (int, optional): Horizontal-rule width for `render_file_string`. Defaults to 80.
 
     Returns:
         str: A single, ready-to-print string.
-    """    
-    
-    repo_name_in_snake_case = repo_name.replace(" ", "_").lower() if repo_name else "repository"
-    
+    """
+
+    repo_name_in_snake_case = (
+        repo_name.replace(" ", "_").lower() if repo_name else "repository"
+    )
+
     # 1) tree view
     paths = [file["path"] for file in files]
-    tree_part = render_file_structure(repo_name_in_snake_case, paths, sep=sep, show_hidden=show_hidden)
+    tree_part = render_file_structure(
+        repo_name_in_snake_case, paths, sep=sep, show_hidden=show_hidden
+    )
 
     # 2) individual files (alphabetical for determinism)
     file_parts = [
-        render_file_string(repo_name_in_snake_case, file["path"], file["content"], width=width) for file in sorted(files, key=lambda x: x["path"])
+        render_file_string(
+            repo_name_in_snake_case, file["path"], file["content"], width=width
+        )
+        for file in sorted(files, key=lambda x: x["path"])
     ]
     body = "\n\n".join(file_parts)
 
@@ -45,7 +51,9 @@ def render_repository(
     return tree_part + "\n\n" + body
 
 
-def render_file_structure(root: str, paths: List[str], sep: str = "/", show_hidden: bool = False) -> str:
+def render_file_structure(
+    root: str, paths: List[str], sep: str = "/", show_hidden: bool = False
+) -> str:
     """Build a tree view string representation of a list of file paths.
 
     Args:
@@ -57,7 +65,7 @@ def render_file_structure(root: str, paths: List[str], sep: str = "/", show_hidd
     Returns:
         str: The complete tree visualization.
     """
-    
+
     tree: Dict[str, Dict] = {}
     for p in paths:
         parts = [part for part in p.split(sep) if part]
@@ -106,7 +114,7 @@ def render_file_string(
     Returns:
         str: The formatted file representation.
     """
-    
+
     hr = "-" * width
     header = f"{hr}\n{root}/{path}:\n{hr}"
 
@@ -129,7 +137,17 @@ def context_renderer(*filter_keys: List[str]) -> RunnableLambda:
         """Filter the context to only include specified keys."""
         repos: List[Tuple[str, List[Dict[str, str]]]] = []
         if "problem_statement" in filter_keys:
-            repos.append(("Problem Statement", [{ "path": "problem_statement.txt", "content": input_data["problem_statement"] }]))
+            repos.append(
+                (
+                    "Problem Statement",
+                    [
+                        {
+                            "path": "problem_statement.txt",
+                            "content": input_data["problem_statement"],
+                        }
+                    ],
+                )
+            )
         if "template_repository" in filter_keys:
             repos.append(("Template Repository", input_data["template_repository"]))
         if "solution_repository" in filter_keys:
@@ -138,7 +156,10 @@ def context_renderer(*filter_keys: List[str]) -> RunnableLambda:
             repos.append(("Test Repository", input_data["test_repository"]))
 
         return {
-            "rendered_context": "\n\n".join(render_repository(files, repo_name=repo_name) for repo_name, files in repos)
+            "rendered_context": "\n\n".join(
+                render_repository(files, repo_name=repo_name)
+                for repo_name, files in repos
+            )
         }
-    
+
     return RunnableLambda(renderer, name="context_renderer")
