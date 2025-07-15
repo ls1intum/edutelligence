@@ -13,9 +13,7 @@ from .prompts import rewrite_prompt
 from .consistency_check import ConsistencyCheck
 
 logger = logging.getLogger(__name__)
-consistency_checker = ConsistencyCheck(
-    model_name=settings.MODEL_NAME, model_provider=settings.MODEL_PROVIDER
-)
+consistency_checker = ConsistencyCheck(model_name=settings.MODEL_NAME)
 
 
 class ReviewAndRefineServicer(hyperion_pb2_grpc.ReviewAndRefineServicer):
