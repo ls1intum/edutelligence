@@ -80,7 +80,7 @@ class ClassificationManager:
             adjusted_policy["threshold_quality"] = self.get_special_weight("weight_quality", allowed=allowed)
         elif adjusted_policy["threshold_quality"] == -1024:
             adjusted_policy["threshold_quality"] = self.get_special_weight("weight_quality", maximum=False, allowed=allowed)
-        print(f"Policy: {policy['id']}", flush=True)
+        print(f"Policy: {adjusted_policy['id']}", flush=True)
         # print(f"Models: {[model['id'] for model in self.models]}", flush=True)
         print(f"Models: {allowed}", flush=True)
         filtered = PolicyClassifier(self.models).classify(prompt, adjusted_policy)
