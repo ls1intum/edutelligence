@@ -35,7 +35,6 @@ from app.creation_steps.step8_review_and_refine.servicer import (
     ReviewAndRefineServicer,
 )
 
-
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s [%(name)s]: %(message)s",
