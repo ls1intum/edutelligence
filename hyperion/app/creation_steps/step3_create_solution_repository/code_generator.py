@@ -2,15 +2,12 @@
 
 import logging
 import json
-from typing import List, Dict, Any, TYPE_CHECKING
+from typing import List, Dict, Any
 from langchain_core.language_models.chat_models import BaseLanguageModel
 
 from .models import SolutionCreationContext, SolutionPlan, FileStructure
 from .exceptions import SolutionCreatorException
 from ..workspace.file_manager import FileManager
-
-if TYPE_CHECKING:
-    from app.grpc import hyperion_pb2
 
 logger = logging.getLogger(__name__)
 

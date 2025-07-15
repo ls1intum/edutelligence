@@ -4,7 +4,7 @@ import logging
 import shutil
 import tempfile
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Dict, Any
 from contextlib import contextmanager
 
 from ..config import config

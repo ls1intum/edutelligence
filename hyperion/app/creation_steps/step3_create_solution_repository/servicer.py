@@ -1,5 +1,5 @@
 import logging
-from typing import Dict, Any, List, TYPE_CHECKING
+from typing import Dict, Any, List
 from langchain_core.language_models.chat_models import BaseLanguageModel
 
 from .models import (
@@ -12,9 +12,6 @@ from ..config import config
 from ..workspace.workspace_manager import WorkspaceManager
 
 import grpc
-
-if TYPE_CHECKING:
-    from app.grpc import hyperion_pb2_grpc, hyperion_pb2
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +54,7 @@ class CreateSolutionRepositoryServicer:
 
         try:
             # Import at runtime to avoid protobuf version issues
+            # flake8: noqa F401
             from app.grpc import hyperion_pb2
 
             solution_context: SolutionCreationContext = self._initialize_context(
