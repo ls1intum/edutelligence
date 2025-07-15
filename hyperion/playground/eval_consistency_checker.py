@@ -6,6 +6,8 @@ Stores model output to JSON.
 Usage:
     cd hyperion
     poetry run python playground/eval_consistency_checker.py --exercise "ISE22/H01E02-Object_Oriented_Programming"
+    poetry run python playground/eval_consistency_checker.py --exercise "ISE22/H01E02-Object_Oriented_Programming" \
+        --model-name "openai:gpt-4o" --output "custom_output.json"
 """
 
 import sys
@@ -17,8 +19,11 @@ from typing import Dict, Any
 # Add the project root to the path so we can import app modules
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from app.grpc import hyperion_pb2
-from app.creation_steps.step8_review_and_refine.consistency_check import (
+from app.creation_steps.models import RepositoryFile, Repository
+from app.creation_steps.step8_review_and_refine.consistency_check.models import (
+    ConsistencyCheckRequest,
+)
+from app.creation_steps.step8_review_and_refine.consistency_check.handler import (
     ConsistencyCheck,
 )
 
@@ -33,9 +38,7 @@ def load_repository_files(repo_path: Path) -> list:
                 try:
                     content = file_path.read_text(encoding="utf-8")
                     files.append(
-                        hyperion_pb2.RepositoryFile(
-                            path=str(relative_path), content=content
-                        )
+                        RepositoryFile(path=str(relative_path), content=content)
                     )
                 except UnicodeDecodeError:
                     # Skip binary files
@@ -72,35 +75,7 @@ def load_exercise_from_dataset(exercise_path: str) -> Dict[str, Any]:
     }
 
 
-def convert_issue_to_json(issue) -> Dict[str, Any]:
-    """Convert a ConsistencyIssue protobuf to JSON-serializable dict."""
-    return {
-        "description": issue.description,
-        "severity": hyperion_pb2.ConsistencyIssueSeverity.Name(issue.severity),
-        "type": hyperion_pb2.ConsistencyIssueType.Name(issue.type),
-        "category": hyperion_pb2.ConsistencyIssueCategory.Name(issue.category),
-        "primary_location": {
-            "type": hyperion_pb2.ArtifactType.Name(issue.primary_location.type),
-            "file_path": issue.primary_location.file_path,
-            "start_line": issue.primary_location.start_line,
-            "end_line": issue.primary_location.end_line,
-        },
-        "related_locations": [
-            {
-                "type": hyperion_pb2.ArtifactType.Name(loc.type),
-                "file_path": loc.file_path,
-                "start_line": loc.start_line,
-                "end_line": loc.end_line,
-            }
-            for loc in issue.related_locations
-        ],
-        "suggested_fix": issue.suggested_fix,
-    }
-
-
-def evaluate_exercise(
-    exercise_path: str, model_name: str, model_provider: str
-) -> Dict[str, Any]:
+def evaluate_exercise(exercise_path: str, model_name: str) -> Dict[str, Any]:
     """Evaluate consistency for a single exercise."""
     print(f"Evaluating: {exercise_path}")
 
@@ -108,12 +83,12 @@ def evaluate_exercise(
     exercise_data = load_exercise_from_dataset(exercise_path)
 
     # Create repositories
-    template_repo = hyperion_pb2.Repository(files=exercise_data["template_files"])
-    solution_repo = hyperion_pb2.Repository(files=exercise_data["solution_files"])
-    test_repo = hyperion_pb2.Repository(files=exercise_data["test_files"])
+    template_repo = Repository(files=exercise_data["template_files"])
+    solution_repo = Repository(files=exercise_data["solution_files"])
+    test_repo = Repository(files=exercise_data["test_files"])
 
     # Create request
-    request = hyperion_pb2.ConsistencyCheckRequest(
+    request = ConsistencyCheckRequest(
         problem_statement=exercise_data["problem_statement"],
         template_repository=template_repo,
         solution_repository=solution_repo,
@@ -121,21 +96,15 @@ def evaluate_exercise(
     )
 
     # Initialize consistency checker
-    consistency_checker = ConsistencyCheck(
-        model_name=model_name, model_provider=model_provider
-    )
+    consistency_checker = ConsistencyCheck(model_name=model_name)
 
     # Run consistency check
-    response = consistency_checker.check_consistency(request)
+    response = consistency_checker.check(request)
 
-    # Convert issues to JSON format
-    issues_json = [convert_issue_to_json(issue) for issue in response.issues]
-    trace_id = response.metadata.traceId
-
+    # Return the response directly - Pydantic models are JSON serializable
     return {
         "exercise_path": exercise_path,
-        "issues": issues_json,
-        "trace_id": trace_id,
+        "response": response.model_dump(),  # Convert Pydantic model to dict
     }
 
 
@@ -149,14 +118,8 @@ def main():
     parser.add_argument(
         "--model-name",
         "-m",
-        default="o3-mini",
+        default="openai:o3-mini",
         help="Model name to use for consistency checking",
-    )
-    parser.add_argument(
-        "--model-provider",
-        "-p",
-        default="openai",
-        help="Model provider to use for consistency checking",
     )
 
     args = parser.parse_args()
@@ -165,7 +128,6 @@ def main():
         result = evaluate_exercise(
             args.exercise,
             model_name=args.model_name,
-            model_provider=args.model_provider,
         )
 
         # Save result
@@ -176,7 +138,7 @@ def main():
         with open(output_file, "w", encoding="utf-8") as f:
             json.dump(result, f, indent=2, ensure_ascii=False)
 
-        print(f"Found {len(result['issues'])} issues")
+        print(f"Found {len(result['response']['issues'])} issues")
         print(f"Result saved to: {output_file}")
 
     except Exception as e:
