@@ -1,11 +1,94 @@
 """Pydantic models for Step 3: Create Solution Repository."""
 
-from typing import List, Optional, Dict, Any, TYPE_CHECKING
+from typing import List, Optional, Dict, Any
 from pydantic import BaseModel, Field
 from langchain_core.language_models.chat_models import BaseLanguageModel
+from enum import Enum
 
-if TYPE_CHECKING:
-    from app.grpc import hyperion_pb2
+from app.creation_steps.models import Repository, Metadata
+
+
+class ProgrammingLanguage(str, Enum):
+    """Programming language enumeration matching Artemis."""
+
+    EMPTY = ""
+    JAVA = "java"
+    PYTHON = "python"
+    C = "c"
+    HASKELL = "haskell"
+    KOTLIN = "kotlin"
+    VHDL = "vhdl"
+    ASSEMBLER = "assembler"
+    SWIFT = "swift"
+    OCAML = "ocaml"
+    JAVASCRIPT = "javascript"
+    C_SHARP = "csharp"
+    C_PLUS_PLUS = "cpp"
+    SQL = "sql"
+    R = "r"
+    TYPESCRIPT = "typescript"
+    RUST = "rust"
+    GO = "go"
+    MATLAB = "matlab"
+    BASH = "bash"
+    RUBY = "ruby"
+    POWERSHELL = "powershell"
+    ADA = "ada"
+    DART = "dart"
+    PHP = "php"
+
+
+class ProjectType(str, Enum):
+    """Project type enumeration matching Artemis."""
+
+    MAVEN_MAVEN = "maven_maven"
+    PLAIN_MAVEN = "plain_maven"
+    PLAIN = "plain"
+    XCODE = "xcode"
+    FACT = "fact"
+    GCC = "gcc"
+    PLAIN_GRADLE = "plain_gradle"
+    GRADLE_GRADLE = "gradle_gradle"
+    MAVEN_BLACKBOX = "maven_blackbox"
+
+
+class BoundaryConditions(BaseModel):
+    """Exercise boundary conditions."""
+
+    programming_language: ProgrammingLanguage = Field(
+        ..., description="Programming language for the exercise"
+    )
+    project_type: ProjectType = Field(..., description="Project type and build system")
+    difficulty: str = Field(..., description="Difficulty level")
+    points: int = Field(..., description="Points awarded for completion")
+    bonus_points: int = Field(default=0, description="Bonus points available")
+    constraints: List[str] = Field(
+        default_factory=list, description="Additional constraints"
+    )
+
+
+class ProblemStatement(BaseModel):
+    """Problem statement definition."""
+
+    title: str = Field(..., description="Exercise title")
+    short_title: str = Field(..., description="Abbreviated title")
+    description: str = Field(..., description="Detailed problem description")
+
+
+class SolutionRepositoryCreatorRequest(BaseModel):
+    """Request for creating solution repository."""
+
+    boundary_conditions: BoundaryConditions = Field(
+        ..., description="Exercise boundary conditions"
+    )
+    problem_statement: ProblemStatement = Field(..., description="Problem statement")
+
+
+class SolutionRepositoryCreatorResponse(BaseModel):
+    """Response for solution repository creation."""
+
+    repository: Repository = Field(..., description="Generated solution repository")
+    metadata: Metadata = Field(..., description="Response metadata")
 
 
 class SolutionPlan(BaseModel):
@@ -57,10 +140,10 @@ class FixAttempt(BaseModel):
 class SolutionCreationContext(BaseModel):
     """Context object passed between phases and steps."""
 
-    # Use string annotations to avoid import-time dependency on gRPC
-    boundary_conditions: "hyperion_pb2.SolutionRepositoryCreatorRequest" = Field(
-        ..., description="Exercise boundary conditions from gRPC request"
+    boundary_conditions: BoundaryConditions = Field(
+        ..., description="Exercise boundary conditions"
     )
+    problem_statement: ProblemStatement = Field(..., description="Problem statement")
     workspace_path: str = Field(..., description="Path to temporary workspace")
     model: Optional[BaseLanguageModel] = Field(
         None, description="AI language model for generation", exclude=True
@@ -71,7 +154,7 @@ class SolutionCreationContext(BaseModel):
     file_structure: Optional[FileStructure] = Field(
         None, description="Defined file structure"
     )
-    solution_repository: Optional["hyperion_pb2.Repository"] = Field(
+    solution_repository: Optional[Repository] = Field(
         None, description="Generated solution repository"
     )
     fix_attempts: List[FixAttempt] = Field(
