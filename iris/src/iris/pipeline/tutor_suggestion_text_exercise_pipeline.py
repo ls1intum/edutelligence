@@ -14,6 +14,7 @@ from iris.pipeline import Pipeline
 from iris.pipeline.prompts.tutor_suggestion.text_exercise_prompt import (
     text_exercise_prompt,
 )
+from iris.pipeline.tutor_suggestion_pipeline import ADVANCED_VARIANT, DEFAULT_VARIANT
 from iris.pipeline.tutor_suggestion_summary_pipeline import _extract_json_from_text
 
 logger = logging.getLogger(__name__)
@@ -57,9 +58,9 @@ class TutorSuggestionTextExercisePipeline(Pipeline):
         completion_args = CompletionArguments(temperature=0, max_tokens=2000)
 
         if variant == "advanced":
-            model = "deepseek-r1:8b"
+            model = ADVANCED_VARIANT
         else:
-            model = "gemma3:27b"
+            model = DEFAULT_VARIANT
 
         self.llm = IrisLangchainChatModel(
             request_handler=ModelVersionRequestHandler(version=model),

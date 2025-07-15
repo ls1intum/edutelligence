@@ -33,6 +33,9 @@ from iris.web.status.status_update import TutorSuggestionCallback
 
 logger = logging.getLogger(__name__)
 
+ADVANCED_VARIANT = "deepseek-r1:8b"
+DEFAULT_VARIANT = "gemma3:27b"
+
 
 def get_channel_type(dto: CommunicationTutorSuggestionPipelineExecutionDTO) -> str:
     """
@@ -67,9 +70,9 @@ class TutorSuggestionPipeline(Pipeline):
         completion_args = CompletionArguments(temperature=0, max_tokens=8000)
 
         if variant == "advanced":
-            model = "deepseek-r1:8b"
+            model = ADVANCED_VARIANT
         else:
-            model = "gemma3:27b"
+            model = DEFAULT_VARIANT
 
         self.llm = IrisLangchainChatModel(
             request_handler=ModelVersionRequestHandler(version=model),
