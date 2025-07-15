@@ -14,11 +14,12 @@ from iris.pipeline import Pipeline
 from iris.pipeline.prompts.tutor_suggestion.text_exercise_prompt import (
     text_exercise_prompt,
 )
-from iris.pipeline.tutor_suggestion_pipeline import ADVANCED_VARIANT, DEFAULT_VARIANT
 from iris.pipeline.tutor_suggestion_summary_pipeline import _extract_json_from_text
 
 logger = logging.getLogger(__name__)
 
+ADVANCED_VARIANT = "deepseek-r1:8b"
+DEFAULT_VARIANT = "gemma3:27b"
 
 def _extract_html_from_text(text: str):
     html_pattern = re.compile(

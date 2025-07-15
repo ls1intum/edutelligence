@@ -17,11 +17,12 @@ from iris.pipeline import Pipeline
 from iris.pipeline.prompts.tutor_suggestion.post_summary_prompt import (
     post_summary_prompt,
 )
-from iris.pipeline.tutor_suggestion_pipeline import ADVANCED_VARIANT, DEFAULT_VARIANT
 from iris.web.status.status_update import TutorSuggestionCallback
 
 logger = logging.getLogger(__name__)
 
+ADVANCED_VARIANT = "deepseek-r1:8b"
+DEFAULT_VARIANT = "gemma3:27b"
 
 def sort_post_answers(dto):
     """

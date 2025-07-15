@@ -18,7 +18,6 @@ from iris.pipeline.chat.code_feedback_pipeline import CodeFeedbackPipeline
 from iris.pipeline.prompts.tutor_suggestion.programming_exercise_prompt import (
     programming_exercise_prompt,
 )
-from iris.pipeline.tutor_suggestion_pipeline import ADVANCED_VARIANT, DEFAULT_VARIANT
 from iris.pipeline.tutor_suggestion_summary_pipeline import _extract_json_from_text
 from iris.pipeline.tutor_suggestion_text_exercise_pipeline import (
     _extract_html_from_text,
@@ -27,6 +26,8 @@ from iris.pipeline.tutor_suggestion_text_exercise_pipeline import (
 
 logger = logging.getLogger(__name__)
 
+ADVANCED_VARIANT = "deepseek-r1:8b"
+DEFAULT_VARIANT = "gemma3:27b"
 
 class TutorSuggestionProgrammingExercisePipeline(Pipeline):
     """
