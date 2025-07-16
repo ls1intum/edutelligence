@@ -1,4 +1,11 @@
+from enum import Enum
+from typing import List
 from langchain_core.prompts import ChatPromptTemplate
+from pydantic import BaseModel, Field
+
+# Models to reuse for structured output
+from .models import ConsistencyIssueSeverity
+
 
 structural_consistency_prompt = ChatPromptTemplate.from_template(
     """\
@@ -153,3 +160,94 @@ Return only genuine inconsistencies that are unintentional and would hinder stud
 """,
     name="structural_consistency_prompt",
 )
+
+
+class ArtifactType(str, Enum):
+    PROBLEM_STATEMENT = "PROBLEM_STATEMENT"
+    TEMPLATE_REPOSITORY = "TEMPLATE_REPOSITORY"
+
+
+class StructuralConsistencyIssueCategory(str, Enum):
+    # Method return type, parameters, or visibility differs between artifacts
+    METHOD_SIGNATURE_MISMATCH = "METHOD_SIGNATURE_MISMATCH"
+
+    # Constructor parameters differ between specification and template
+    CONSTRUCTOR_SIGNATURE_MISMATCH = "CONSTRUCTOR_SIGNATURE_MISMATCH"
+
+    # Required interface cannot be implemented as specified
+    INTERFACE_IMPLEMENTATION_CONFLICT = "INTERFACE_IMPLEMENTATION_CONFLICT"
+
+    # Data types inconsistent across artifacts
+    TYPE_DECLARATION_CONFLICT = "TYPE_DECLARATION_CONFLICT"
+
+    # Extends/implements relationships differ between UML and template
+    INHERITANCE_HIERARCHY_MISMATCH = "INHERITANCE_HIERARCHY_MISMATCH"
+
+    # Import/package organization prevents compilation
+    PACKAGE_STRUCTURE_MISMATCH = "PACKAGE_STRUCTURE_MISMATCH"
+
+    # Essential class/method/attribute missing from template
+    MISSING_REQUIRED_ELEMENT = "MISSING_REQUIRED_ELEMENT"
+
+
+class ArtifactLocation(BaseModel):
+    type: ArtifactType = Field(description="Type of artifact")
+    file_path: str = Field(description="Path to file, empty for problem statement")
+    start_line: int = Field(description="Start line number (1-based)")
+    end_line: int = Field(description="End line number (1-based)")
+
+
+# Do not use this directly, use subclasses instead
+class ConsistencyIssue(BaseModel):
+    description: str = Field(description="Clear explanation of the signature mismatch")
+    severity: ConsistencyIssueSeverity = Field(
+        description="Student impact severity level"
+    )
+    category: str = Field(description="Specific category of consistency issue")
+    primary_location: ArtifactLocation = Field(
+        description="Primary location where issue was detected"
+    )
+    related_locations: List[ArtifactLocation] = Field(
+        description="Related locations across artifacts"
+    )
+    suggested_fix: str = Field(
+        description="Actionable correction to resolve the mismatch"
+    )
+
+
+class StructuralConsistencyIssue(ConsistencyIssue):
+    """A signature consistency issue found between problem statement and template."""
+
+    description: str = Field(description="Clear explanation of the signature mismatch")
+    severity: ConsistencyIssueSeverity = Field(
+        description="Student impact severity level"
+    )
+    category: StructuralConsistencyIssueCategory = Field(
+        description="Specific category of structural consistency issue"
+    )
+    primary_location: ArtifactLocation = Field(
+        description="Primary location where issue was detected"
+    )
+    related_locations: List[ArtifactLocation] = Field(
+        description="Related locations across artifacts"
+    )
+    suggested_fix: str = Field(
+        description="Actionable correction to resolve the mismatch"
+    )
+
+
+# Do not use this directly, use subclasses instead
+class ConsistencyResult(BaseModel):
+    """Result of consistency issue analysis."""
+
+    issues: List[ConsistencyIssue] = Field(
+        description="List of detected consistency issues"
+    )
+
+
+class StructuralConsistencyResult(ConsistencyResult):
+    """Result of structural consistency issue analysis."""
+
+    issues: List[StructuralConsistencyIssue] = Field(
+        description="List of detected structural consistency issues"
+    )
