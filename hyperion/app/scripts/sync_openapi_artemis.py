@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Simple Proto File Synchronization Script for Artemis Integration
+Simple OpenAPI File Synchronization Script for Artemis Integration
 
-This script synchronizes the Hyperion proto file with the Artemis project.
+This script synchronizes the Hyperion OpenAPI file with the Artemis project.
 It maintains a simple configuration file to remember the Artemis path.
 """
 
@@ -12,7 +12,6 @@ import shutil
 import sys
 from pathlib import Path
 from typing import Optional
-
 
 # Configuration file name (will be gitignored)
 CONFIG_FILE = ".artemis_sync_config.json"
@@ -119,20 +118,20 @@ def get_artemis_path(config: dict, provided_path: Optional[str] = None) -> Path:
         return path
 
 
-def sync_proto_file(
+def sync_openapi_file(
     source_path: Path, target_path: Path, dry_run: bool = False
 ) -> bool:
-    """Synchronize the proto file."""
+    """Synchronize the OpenAPI file."""
 
     print(f"📂 Source: {source_path}")
     print(f"📂 Target: {target_path}")
 
     if not source_path.exists():
-        print(f"❌ Source proto file not found: {source_path}")
+        print(f"❌ Source OpenAPI file not found: {source_path}")
         return False
 
     if dry_run:
-        print(f"🔍 DRY RUN: Would copy proto file to {target_path}")
+        print(f"🔍 DRY RUN: Would copy OpenAPI file to {target_path}")
         if target_path.exists():
             print("⚠️  Target file already exists and would be overwritten")
         return True
@@ -146,24 +145,24 @@ def sync_proto_file(
 
         # Show success
         size = target_path.stat().st_size
-        print(f"✅ Proto file synchronized successfully! ({size} bytes)")
+        print(f"✅ OpenAPI file synchronized successfully! ({size} bytes)")
         return True
 
     except Exception as e:
-        print(f"❌ Error synchronizing proto file: {e}")
+        print(f"❌ Error synchronizing OpenAPI file: {e}")
         return False
 
 
 def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(
-        description="Synchronize Hyperion proto file with Artemis project",
+        description="Synchronize Hyperion OpenAPI file with Artemis project",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  poetry run sync-proto-artemis                        # Interactive mode
-  poetry run sync-proto-artemis --artemis-path /path   # Specify path
-  poetry run sync-proto-artemis --dry-run              # Preview changes
+  poetry run sync-openapi-artemis                        # Interactive mode
+  poetry run sync-openapi-artemis --artemis-path /path   # Specify path
+  poetry run sync-openapi-artemis --dry-run              # Preview changes
         """,
     )
 
@@ -177,33 +176,35 @@ Examples:
 
     args = parser.parse_args()
 
-    print("🚀 Hyperion → Artemis Proto Synchronization")
+    print("🚀 Hyperion → Artemis OpenAPI Synchronization")
     print("=" * 50)
 
     # Load configuration
     config = load_config()
 
-    # Get source proto file (we know where this is)
-    source_proto = Path(__file__).parent.parent / "protos" / "hyperion.proto"
+    # Get source openapi file (we know where this is)
+    source_openapi = Path(__file__).parent.parent / "openapi.yaml"
 
     # Get Artemis path
     artemis_path = get_artemis_path(config, args.artemis_path)
-    target_proto = (
+    target_openapi = (
         artemis_path
         / "src"
         / "main"
-        / "proto"
-        / "hyperion.proto"
+        / "resources"
+        / "static"
+        / "openapi"
+        / "hyperion.yaml"
     )
 
     # Perform synchronization
-    success = sync_proto_file(source_proto, target_proto, args.dry_run)
+    success = sync_openapi_file(source_openapi, target_openapi, args.dry_run)
 
     if success:
         if not args.dry_run:
             print()
             print("🎯 Next Steps:")
-            print("1. Run './gradlew generateProto' in Artemis to generate stubs")
+            print("1. Run './gradlew generateOpenAPI' in Artemis to generate stubs")
             print("2. Run './gradlew build' to compile everything")
             print()
             print("✅ Synchronization completed!")
