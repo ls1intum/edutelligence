@@ -28,9 +28,6 @@ def to_uuid(uuid_string: str) -> Optional[UUID]:
 
     Returns:
         UUID: The UUID object.
-
-    Raises:
-        ValueError: If the string is not a valid UUID.
     """
     if not is_valid_uuid(uuid_string):
         return None

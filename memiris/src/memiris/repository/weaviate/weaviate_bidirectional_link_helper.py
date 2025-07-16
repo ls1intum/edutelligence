@@ -142,9 +142,11 @@ class WeaviateBidirectionalLinkHelper:
             if existing_refs and property1 in existing_refs
             else []
         )
-        entities2 = [entity for entity in entities2 if entity not in existing_ref_ids]
+        new_entities2 = [
+            entity for entity in entities2 if entity not in existing_ref_ids
+        ]
 
         # Add new links
         WeaviateBidirectionalLinkHelper.add_links(
-            entity1, entities2, property1, property2, collection1, collection2
+            entity1, new_entities2, property1, property2, collection1, collection2
         )

@@ -1,5 +1,5 @@
 import json
-from typing import Dict, List
+from typing import Any, Dict, List
 from uuid import UUID
 
 from pydantic import BaseModel, Field, TypeAdapter
@@ -38,7 +38,7 @@ class MemoryDeduplicationInputDto(BaseModel):
         return TypeAdapter(List[MemoryDeduplicationInputDto])
 
     @staticmethod
-    def json_schema() -> Dict:
+    def json_schema() -> Dict[str, Any]:
         """
         Generate the JSON schema for MemoryDeduplicationInputDto.
         """

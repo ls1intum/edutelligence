@@ -1,3 +1,4 @@
+import json
 from typing import List, Optional
 from uuid import UUID
 
@@ -30,9 +31,9 @@ class MemoryConnectionDto(BaseModel):
     @classmethod
     def json_array_schema(cls) -> str:
         """Get the JSON schema for a list of MemoryConnectionDto objects."""
-        return str(cls.model_json_schema())
+        return json.dumps(cls.json_array_type().json_schema(), indent=2)
 
     @classmethod
-    def json_array_type(cls):
+    def json_array_type(cls) -> TypeAdapter:
         """Get the type adapter for a list of MemoryConnectionDto objects."""
         return TypeAdapter(List[MemoryConnectionDto])

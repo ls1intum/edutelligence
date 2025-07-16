@@ -62,7 +62,7 @@ class MemoryCreator:
         self.learning_repository = learning_repository
         self.memory_repository = memory_repository
         self.vectorizer = vectorizer
-        self.ollama_service = ollama_service or OllamaService()
+        self.ollama_service = ollama_service
 
         self.template = create_template(template, "memory_creator.md.j2")
 
@@ -82,6 +82,7 @@ class MemoryCreator:
         memory_json_schema = MemoryCreationDto.json_array_schema()
 
         messages: List[Union[Mapping[str, Any], Message]] = [
+            # The system message will be set later based on the phase
             Message(role="system", content="TODO"),
             Message(
                 role="user",

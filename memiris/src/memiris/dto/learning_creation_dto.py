@@ -1,5 +1,5 @@
 import json
-from typing import Dict, List
+from typing import Any, Dict, List
 
 from pydantic import BaseModel, Field, TypeAdapter
 
@@ -31,7 +31,7 @@ class LearningCreationDto(BaseModel):
         return TypeAdapter(List[LearningCreationDto])
 
     @staticmethod
-    def json_schema() -> Dict[str, Dict[str, str]]:
+    def json_schema() -> Dict[str, Any]:
         """
         Generate the JSON schema for LearningCreationDto.
         """

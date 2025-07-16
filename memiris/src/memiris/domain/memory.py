@@ -15,7 +15,7 @@ class Memory:
     learnings: List[
         UUID
     ]  # The learning object(s) that this memory object was created from.
-    connections: List[UUID] = []  # The memory connections this memory is part of.
+    connections: List[UUID]  # The memory connections this memory is part of.
     vectors: Dict[
         str, Sequence[float]
     ]  # The vector representations of the memory object,
@@ -53,9 +53,16 @@ class Memory:
         return f"Memory({self.id}, {self.title}, {self.content}, {repr(self.learnings)}, {repr(self.vectors)})"
 
     def __eq__(self, other) -> bool:
+        if other is None or not isinstance(other, Memory):
+            return False
+        if self.id:
+            return self.id == other.id
         return (
             self.title == other.title
             and self.content == other.content
             and self.learnings == other.learnings
             and self.connections == other.connections
+            and self.vectors == other.vectors
+            and self.slept_on == other.slept_on
+            and self.deleted == other.deleted
         )

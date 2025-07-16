@@ -30,11 +30,13 @@ class Vectorizer:
         """
         Vectorize the given query using the specified models.
         """
-        return {
-            vector_name: (
-                self.ollama_service.embed(model_name, query).embeddings[0]
-                if model_name
-                else []
-            )
-            for vector_name, model_name in self.vector_models.items()
-        }
+        result: dict[str, Sequence[float]] = {}
+        for vector_name, model_name in self.vector_models.items():
+            try:
+                embedding_response = self.ollama_service.embed(model_name, query)
+                result[vector_name] = embedding_response.embeddings[0]
+            except Exception as e:
+                # Log the error and continue with other models
+                print(f"Error generating embedding for {model_name}: {e}")
+                result[vector_name] = []
+        return result

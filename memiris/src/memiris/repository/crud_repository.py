@@ -37,7 +37,7 @@ class BaseRepository[Entity, EntityId](ABC):
         """
         Retrieve all entities for a given tenant.
         """
-        return []
+        pass
 
     @abstractmethod
     def delete(self, tenant: str, entity_id: EntityId) -> None:

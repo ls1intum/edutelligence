@@ -57,3 +57,15 @@ class MemoryConnection:
     def __repr__(self):
         memory_count = len(self.memories) if self.memories else 0
         return f"MemoryConnection({self.id}, {self.connection_type.name}, {memory_count} memories)"
+
+    def __eq__(self, other):
+        if other is None or not isinstance(other, MemoryConnection):
+            return False
+        return (
+            self.id == other.id
+            and self.connection_type == other.connection_type
+            and self.memories == other.memories
+            and self.description == other.description
+            and self.context == other.context
+            and self.weight == other.weight
+        )

@@ -1,4 +1,3 @@
-from time import sleep
 from uuid import uuid4
 
 import pytest
@@ -118,8 +117,6 @@ class TestWeaviateBidirectionalLinkHelper(WeaviateTest):
         """Test adding a bidirectional link between two entities."""
         collection1, collection2 = weaviate_collections
         entity1, entity2 = test_entities
-
-        sleep(5)
 
         # Add bidirectional link
         WeaviateBidirectionalLinkHelper.add_link(

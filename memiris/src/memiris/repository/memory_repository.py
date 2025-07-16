@@ -16,22 +16,22 @@ class MemoryRepository(BaseRepository[Memory, UUID], ABC):
         """
         Retrieve all entities for a given tenant.
         """
-        return []
+        pass
 
     @abstractmethod
     def search(
         self, tenant: str, vector_name: str, vector: Sequence[float], count: int
-    ) -> list[Memory]:
+    ) -> List[Memory]:
         pass
 
     @abstractmethod
     def search_multi(
         self, tenant: str, vectors: Mapping[str, Sequence[float]], count: int
-    ) -> list[Memory]:
+    ) -> List[Memory]:
         pass
 
     @abstractmethod
-    def find_unslept_memories(self, tenant: str) -> list[Memory]:
+    def find_unslept_memories(self, tenant: str) -> List[Memory]:
         """
         Find all unslept memories for a given tenant.
         """

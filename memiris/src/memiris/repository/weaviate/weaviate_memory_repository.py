@@ -53,24 +53,14 @@ class WeaviateMemoryRepository(MemoryRepository, _WeaviateBaseRepository):
         if not entity.id:
             entity.id = result
 
-        if entity.id:
-            WeaviateBidirectionalLinkHelper.update_links(
-                entity.id,
-                entity.learnings,
-                "learnings",
-                "memories",
-                self.memory_collection.with_tenant(tenant),
-                self.learning_collection.with_tenant(tenant),
-            )
-        else:
-            WeaviateBidirectionalLinkHelper.add_links(
-                entity.id,  # type: ignore
-                entity.learnings,
-                "learnings",
-                "memories",
-                self.memory_collection.with_tenant(tenant),
-                self.learning_collection.with_tenant(tenant),
-            )
+        WeaviateBidirectionalLinkHelper.update_links(
+            entity.id,  # type: ignore
+            entity.learnings,
+            "learnings",
+            "memories",
+            self.memory_collection.with_tenant(tenant),
+            self.learning_collection.with_tenant(tenant),
+        )
 
         return entity
 

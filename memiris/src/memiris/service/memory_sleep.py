@@ -317,6 +317,7 @@ class MemorySleeper:
 
         # Process each memory group in parallel
         deduplicated_memories: List[Memory] = []
+        created_from_connections: List[MemoryConnection] = []
         with ThreadPoolExecutor(max_workers=self.max_threads) as executor:
             futures = {
                 executor.submit(
@@ -329,9 +330,16 @@ class MemorySleeper:
 
             for future in as_completed(futures):
                 try:
-                    result = future.result()
-                    if result:
-                        deduplicated_memories.extend(result)
+                    result: Tuple[List[Memory], List[MemoryConnection]] = (
+                        future.result()
+                    )
+                    memories = result[0]
+                    connections = result[1]
+                    if memories:
+                        deduplicated_memories.extend(memories)
+                    if connections:
+                        created_from_connections.extend(connections)
+
                 except Exception as e:
                     logging.error("Error processing memory group: %s", e, exc_info=True)
 
@@ -347,17 +355,25 @@ class MemorySleeper:
 
         saved_memories = self.memory_repository.save_all(tenant, deduplicated_memories)
 
+        saved_connections = self.memory_connection_repository.save_all(
+            tenant, created_from_connections
+        )
+
         for memory in saved_memories:
             if memory.deleted:
                 self.memory_cache.pop(memory.id)  # type: ignore
             self.memory_cache[memory.id] = memory  # type: ignore
+
+        for connection in saved_connections:
+            for memory_id in connection.memories:
+                self.memory_cache[memory_id].connections.append(connection.id)  # type: ignore
 
         return saved_memories
 
     @observe(name="process-memory-group-for-deduplication")
     def _process_memory_group_for_deduplication(
         self, memory_group: List[MemoryDeduplicationInputDto], **kwargs
-    ) -> List[Memory]:
+    ) -> Tuple[List[Memory], List[MemoryConnection]]:
         """
         Process a group of memories for deduplication.
 
@@ -376,7 +392,7 @@ class MemorySleeper:
         """
         if not memory_group:
             logging.warning("Empty memory group provided for deduplication.")
-            return []
+            return [], []
 
         # Prepare the prompt for the LLM
         memory_json_schema = MemoryDeduplicationDto.json_array_schema()
@@ -419,7 +435,7 @@ class MemorySleeper:
         # Process LLM response
         if not response or not response.message or not response.message.content:
             logging.warning("No valid response from LLM for deduplication.")
-            return []
+            return [], []
 
         try:
             logging.debug("Parsing deduplicated memories from LLM response.")
@@ -513,12 +529,12 @@ class MemorySleeper:
                 self.memory_cache[memory_id].deleted = True  # type: ignore
                 deduplicated_results.append(self.memory_cache[memory_id])  # type: ignore
 
-            return deduplicated_results
+            return deduplicated_results, created_from_connections
         except Exception as e:
             logging.error(
                 "Error processing deduplicated memories: %s", e, exc_info=True
             )
-            return []
+            return [], []
 
     @observe(name="process-memory-connections-duplication")
     def _process_connection_type_duplicate(
@@ -866,7 +882,7 @@ class MemorySleeper:
                     logging.debug(
                         "Processed memory group with %s memories, resulting in %s connections.",
                         len(futures[future]),
-                        len(memories),
+                        len(connections),
                     )
                     if connections:
                         all_connections.extend(connections)
@@ -928,7 +944,11 @@ class MemorySleeper:
                 )
 
                 logging.debug(
-                    "Creating connection: %s with type %s, memories %s, description '%s', weight %s",
+                    "Creating connection with type %s, memories %s, description '%s', weight %s",
+                    connection.connection_type,
+                    connection.memories,
+                    connection.description,
+                    connection.weight,
                 )
 
                 connections.append(connection)

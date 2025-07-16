@@ -20,7 +20,7 @@ def create_tool_find_similar(
     def find_similar_memories(memory_id: str) -> List[MemoryDto]:
         """
         Find memories that are similar to the given memory.
-        Yous should call this for each memory object you want to find similar memories for.
+        You should call this for each memory object you want to find similar memories for.
         This will be your main tool to use.
 
         Args:

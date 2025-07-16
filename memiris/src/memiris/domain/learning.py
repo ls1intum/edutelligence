@@ -39,6 +39,8 @@ class Learning:
         return f"Learning({self.title}, {self.content}, {self.reference})"
 
     def __eq__(self, other):
+        if other is None or not isinstance(other, Learning):
+            return False
         if self.id:
             return self.id == other.id
         else:
@@ -46,4 +48,6 @@ class Learning:
                 self.title == other.title
                 and self.content == other.content
                 and self.reference == other.reference
+                and self.memories == other.memories
+                and self.vectors == other.vectors
             )

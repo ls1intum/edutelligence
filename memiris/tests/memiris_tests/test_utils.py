@@ -16,4 +16,4 @@ def compare_vectors(
         assert key in vectors2
         assert len(vectors1[key]) == len(vectors2[key])
         for i in range(len(vectors1[key])):
-            assert abs(vectors1[key][i] - vectors1[key][i]) < 1e-6
+            assert abs(vectors1[key][i] - vectors2[key][i]) < 1e-6

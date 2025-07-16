@@ -57,24 +57,14 @@ class WeaviateMemoryConnectionRepository(
 
         # Update bidirectional links between memories and this connection
         if entity.memories:
-            if entity.id:
-                WeaviateBidirectionalLinkHelper.update_links(
-                    entity.id,
-                    entity.memories,
-                    "connected_memories",
-                    "connections",
-                    self.memory_connection_collection.with_tenant(tenant),
-                    self.memory_collection.with_tenant(tenant),
-                )
-            else:
-                WeaviateBidirectionalLinkHelper.add_links(
-                    entity.id,  # type: ignore
-                    entity.memories,
-                    "connected_memories",
-                    "connections",
-                    self.memory_connection_collection.with_tenant(tenant),
-                    self.memory_collection.with_tenant(tenant),
-                )
+            WeaviateBidirectionalLinkHelper.update_links(
+                entity.id,  # type: ignore
+                entity.memories,
+                "connected_memories",
+                "connections",
+                self.memory_connection_collection.with_tenant(tenant),
+                self.memory_collection.with_tenant(tenant),
+            )
 
         return entity
 
@@ -84,7 +74,7 @@ class WeaviateMemoryConnectionRepository(
         try:
             result = self.collection.with_tenant(tenant).query.fetch_object_by_id(
                 uuid=entity_id,
-                return_references=QueryReference(link_on="connected_memories"),
+                return_references=[QueryReference(link_on="connected_memories")],
             )
 
             if not result:
@@ -106,7 +96,7 @@ class WeaviateMemoryConnectionRepository(
 
             result = self.collection.with_tenant(tenant).query.fetch_objects(
                 limit=10000,
-                return_references=QueryReference(link_on="connected_memories"),
+                return_references=[QueryReference(link_on="connected_memories")],
             )
 
             if not result:
@@ -151,7 +141,7 @@ class WeaviateMemoryConnectionRepository(
             # Query connections of the specified type
             result = self.collection.with_tenant(tenant).query.fetch_objects(
                 filters=Filter.by_property("connection_type").equal(connection_type),
-                return_references=QueryReference(link_on="connected_memories"),
+                return_references=[QueryReference(link_on="connected_memories")],
             )
 
             if not result:
@@ -188,8 +178,9 @@ class WeaviateMemoryConnectionRepository(
             result = self.collection.with_tenant(tenant).query.fetch_objects(
                 filters=Filter.by_id().contains_any(id_strings),
                 limit=len(ids),
-                include_vector=True,
-                return_references=QueryReference(link_on="memories"),
+                return_references=[
+                    QueryReference(link_on="connected_memories"),
+                ],
             )
 
             if not result or not result.objects:
