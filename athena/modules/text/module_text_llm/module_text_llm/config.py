@@ -14,7 +14,7 @@ ApproachConfigUnion = Union[BasicApproachConfig, ChainOfThoughtConfig, DivideAnd
 @config_schema_provider
 class Configuration(BaseModel):
     debug: bool = Field(default=False, description="Enable debug mode.")
-    approach: ApproachConfigUnion = Field(default_factory=COTPrevSubmissionConfig)  # Default to BasicApproach
+    approach: ApproachConfigUnion = Field(default_factory=BasicApproachConfig)  # Default to BasicApproach
 
     class Config:
         smart_union = True 
