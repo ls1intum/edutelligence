@@ -1,5 +1,6 @@
-from typing import List
+from typing import List, Optional
 from athena import emit_meta
+from athena.schemas import LearnerProfile
 from athena.text import Exercise, Submission, Feedback
 from athena.logger import logger
 from llm_core.utils.llm_utils import (
@@ -17,6 +18,7 @@ from module_text_llm.helpers.utils import (
     format_grading_instructions,
 )
 from module_text_llm.basic_approach.prompt_generate_suggestions import AssessmentModel
+from module_text_llm.basic_approach.prompt_submission_analysis import SubmissionAnalysis
 
 
 @register_approach("basic")
@@ -24,9 +26,32 @@ async def generate_suggestions(
     exercise: Exercise,
     submission: Submission,
     config: BasicApproachConfig,
+    *,
     debug: bool,
     is_graded: bool,
+    learner_profile: Optional[LearnerProfile],
+    latest_submission: Optional[Submission] = None,
 ) -> List[Feedback]:
+    if latest_submission is None:
+        logger.info("Latest submission is not provided.")
+
+    # Use default preferences if none provided
+    if learner_profile is None:
+        logger.info(
+            "Overriding the learner profile with the config from the playground."
+        )
+        learner_profile = config.profile
+
+    if learner_profile is None:
+        logger.info(
+            "Learner profile was not provided - continuing with the default values."
+        )
+        learner_profile = LearnerProfile(
+            feedback_alternative_standard=2,
+            feedback_followup_summary=2,
+            feedback_brief_detailed=2,
+        )
+
     prompt_input = {
         "max_points": exercise.max_points,
         "bonus_points": exercise.bonus_points,
@@ -36,11 +61,13 @@ async def generate_suggestions(
         "problem_statement": exercise.problem_statement or "No problem statement.",
         "example_solution": exercise.example_solution,
         "submission": add_sentence_numbers(submission.text),
+        "previous_submission": add_sentence_numbers(
+            latest_submission.text) if latest_submission is not None else "Previous submission is not available.",
     }
 
     chat_prompt = get_chat_prompt(
-        system_message=config.generate_suggestions_prompt.system_message,
-        human_message=config.generate_suggestions_prompt.human_message,
+        system_message=config.analyze_submission_prompt.system_message,
+        human_message=config.analyze_submission_prompt.human_message,
     )
 
     # Check if the prompt is too long and omit features if necessary (in order of importance)
@@ -68,12 +95,41 @@ async def generate_suggestions(
             )
         return []
 
-    print(f"Model: {config.model.get_model()}")
-
-    result = await predict_and_parse(
+    submission_analysis: SubmissionAnalysis = await predict_and_parse(
         model=config.model,
         chat_prompt=chat_prompt,
         prompt_input=prompt_input,
+        pydantic_object=SubmissionAnalysis,
+        tags=[
+            f"exercise-{exercise.id}",
+            f"submission-{submission.id}",
+        ],
+    )
+
+    if submission_analysis is None:
+        logger.warning("Submission analysis returned None – no feedback generated.")
+        return []
+
+    second_prompt_input = {
+        "example_solution": exercise.example_solution,
+        "max_points": exercise.max_points,
+        "problem_statement": exercise.problem_statement or "No problem statement.",
+        "grading_instructions": format_grading_instructions(exercise.grading_instructions, exercise.grading_criteria),
+        "submission": add_sentence_numbers(submission.text),
+        "feedback_preferences": learner_profile.to_feedback_style_description(),
+        "submission_analysis": submission_analysis.dict()
+
+    }
+
+    second_chat_prompt = get_chat_prompt(
+        system_message=config.generate_suggestions_prompt.system_message,
+        human_message=config.generate_suggestions_prompt.human_message,
+    )
+
+    result = await predict_and_parse(
+        model=config.model,
+        chat_prompt=second_chat_prompt,
+        prompt_input=second_prompt_input,
         pydantic_object=AssessmentModel,
         tags=[
             f"exercise-{exercise.id}",
@@ -86,8 +142,8 @@ async def generate_suggestions(
             "generate_suggestions",
             {
                 "prompt": chat_prompt.format(**prompt_input),
-                "result": result.dict() if result is not None else None,
-            },
+                "result": result.dict() if result is not None else None
+            }
         )
 
     if result is None:

@@ -1,64 +1,104 @@
-from pydantic import Field, BaseModel
-from typing import List, Optional
+from pydantic import BaseModel, Field
+from typing import Optional, List
+from enum import Enum
 
-system_message = """\
-You are an AI tutor for text assessment at a prestigious university.
 
-# Task
-Create graded feedback suggestions for a student\'s text submission that a human tutor would accept. \
-Meaning, the feedback you provide should be applicable to the submission with little to no modification.
+# === ENUMS ===
 
-# Style
-1. Constructive, 2. Specific, 3. Balanced, 4. Clear and Concise, 5. Actionable, 6. Educational, 7. Contextual
+class FeedbackType(str, Enum):
+    FULL_POINTS = "Full Points"
+    NEEDS_REVISION = "Needs Revision"
+    NOT_ATTEMPTED = "Not Attempted"
 
-# Problem statement
+
+# === FEEDBACK MODEL ===
+
+class FeedbackModel(BaseModel):
+    title: str = Field(description="Short summary of the feedback issue or praise")
+    description: str = Field(description="Student-facing explanation, respectful and constructive")
+    type: FeedbackType = Field(description="Evaluation of the student's performance")
+    suggested_action: str = Field(description="What the student should do next to improve or explore more")
+    line_start: Optional[int] = Field(default=None, description="Start line in student's answer")
+    line_end: Optional[int] = Field(default=None, description="End line in student's answer")
+    credits: float = Field(default=0.0, description="Points awarded or deducted")
+    grading_instruction_id: Optional[int] = Field(default=None, description="Linked grading instruction ID")
+
+
+class AssessmentModel(BaseModel):
+    feedbacks: List[FeedbackModel]
+
+
+# === PROMPT DEFINITIONS ===
+
+system_message = """
+You are a grading assistant. Your job is to generate high-quality, structured feedback based on the student's submission analysis.
+
+You will receive:
+- The problem statement
+- A sample solution (for internal use only)
+- Grading instructions with IDs and details
+- The student's CURRENT submission (with line numbers)
+- Student's feedback preferences
+- A detailed analysis of the submission that includes:
+    - Required competencies and how well the student demonstrated them
+    - Evidence for the evaluation
+    - A comparison to the PREVIOUS submission (if applicable), including whether a competency was added, removed, improved, or unchanged
+
+Your task:
+- For each core competency:
+    - Create **feedback** that clearly explains the student's performance
+    - Indicate whether they received full points, need revision, or didn't attempt it
+    - Assign a specific next step (action) the student should take:
+        - Example actions: “Review concept X”, “Improve explanation by doing Y”, “Explore topic Z further”
+    - Reflect changes between previous and current submission:
+        - If improved: Acknowledge progress
+        - If regressed: Highlight what was lost
+        - If unchanged and still weak: Gently prompt revision
+
+For each feedback point:
+- Include a title
+- Add a clear description
+- Specify feedback type: FULL_POINTS, NEEDS_REVISION, or NOT_ATTEMPTED
+- Suggest an action
+- Reference specific lines (line_start and line_end) if applicable
+- Assign credits (float)
+- Link to grading_instruction_id if relevant
+
+Constraints:
+- Do NOT reveal or hint at the correct solution
+- Do NOT exceed {max_points} total points
+- Avoid repeating the student's own words
+- Focus on clarity, constructiveness, and progression awareness
+- If part of the answer is missing or unchanged and still wrong, say so gently
+- Reflect the student's learning journey - acknowledge effort and improvement when it exists
+
+Inputs:
+Problem Statement:
 {problem_statement}
 
-# Example solution
+Sample Solution:
 {example_solution}
 
-# Grading instructions
+Grading Instructions:
 {grading_instructions}
-Max points: {max_points}, bonus points: {bonus_points}\
-    
-Respond in json.
+
+Detailed Submission Analysis (contains comparison between previous and current submission):
+{submission_analysis}
+
+Student's feedback preferences:
+{feedback_preferences}
 """
 
 human_message = """\
-Student\'s submission to grade (with sentence numbers <number>: <sentence>):
-
-Respond in json.
-
+Student\'s CURRENT submission to grade (with sentence numbers <number>: <sentence>):
 \"\"\"
 {submission}
 \"\"\"\
 """
 
-# Input Prompt
+# === PROMPT WRAPPER CLASS ===
+
 class GenerateSuggestionsPrompt(BaseModel):
-    """\
-Features available: **{problem_statement}**, **{example_solution}**, **{grading_instructions}**, **{max_points}**, **{bonus_points}**, **{submission}**
-
-_Note: **{problem_statement}**, **{example_solution}**, or **{grading_instructions}** might be omitted if the input is too long._\
-"""
-    system_message: str = Field(default=system_message,
-                                description="Message for priming AI behavior and instructing it what to do.")
-    human_message: str = Field(default=human_message,
-                               description="Message from a human. The input on which the AI is supposed to act.")
-# Output Object
-class FeedbackModel(BaseModel):
-    title: str = Field(description="Very short title, i.e. feedback category or similar", example="Logic Error")
-    description: str = Field(description="Feedback description")
-    line_start: Optional[int] = Field(description="Referenced line number start, or empty if unreferenced")
-    line_end: Optional[int] = Field(description="Referenced line number end, or empty if unreferenced")
-    credits: float = Field(0.0, description="Number of points received/deducted")
-    grading_instruction_id: Optional[int] = Field(
-        description="ID of the grading instruction that was used to generate this feedback, or empty if no grading instruction was used"
-    )
-
-
-class AssessmentModel(BaseModel):
-    """Collection of feedbacks making up an assessment"""
-    
-    feedbacks: List[FeedbackModel] = Field(description="Assessment feedbacks")
-    
+    """Prompt class for generating feedback from merged competency and comparison analysis."""
+    system_message: str = Field(default=system_message)
+    human_message: str = Field(default=human_message)
