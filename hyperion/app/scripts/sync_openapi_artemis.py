@@ -183,16 +183,12 @@ Examples:
     config = load_config()
 
     # Get source openapi file (we know where this is)
-    source_openapi = Path(__file__).parent.parent / "openapi.yaml"
+    source_openapi = Path(__file__).parent.parent.parent / "openapi.yaml"
 
     # Get Artemis path
     artemis_path = get_artemis_path(config, args.artemis_path)
     target_openapi = (
         artemis_path
-        / "src"
-        / "main"
-        / "resources"
-        / "static"
         / "openapi"
         / "hyperion.yaml"
     )
