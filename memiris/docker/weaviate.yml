@@ -1,0 +1,29 @@
+---
+services:
+  weaviate:
+    image: cr.weaviate.io/semitechnologies/weaviate:1.30.0
+    command:
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8001"
+      - --scheme
+      - http
+    expose:
+      - 8001
+      - 50051
+    ports:
+      - "8001:8001"
+      - "50051:50051"
+    networks:
+      - memiris-network
+    volumes:
+      - ${WEAVIATE_VOLUME_MOUNT:-./.docker-data/weaviate-data}:/var/lib/weaviate
+    restart: on-failure:3
+    env_file:
+      - ./weaviate/default.env
+
+networks:
+  memiris-network:
+    driver: "bridge"
+    name: memiris-network
