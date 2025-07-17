@@ -15,22 +15,13 @@ class Balancer:
         }
 
     def __combine_policy(self):
-        start = 0
-        for i in self.weights["policy"]:
-            start += i
-        return start
+        return sum(self.weights["policy"])
 
     def __combine_token(self):
-        start = 0
-        for i in self.weights["token"]:
-            start += i
-        return start
+        return sum(self.weights["token"])
 
     def __combine_ai(self):
-        start = 0
-        for i in self.weights["ai"]:
-            start += i
-        return start
+        return sum(self.weights["ai"])
 
     def add_weight(self, weight: float, category: str):
         self.weights[category].append(weight)

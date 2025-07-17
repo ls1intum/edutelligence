@@ -2,16 +2,14 @@
 Module handling all classification tasks in Logos.
 """
 import functools
+import logging
 from copy import deepcopy
 from typing import List, Tuple
-
-from sympy.codegen.numpy_nodes import minimum
 
 from logos.classification.classify_policy import PolicyClassifier
 from logos.classification.classify_token import TokenClassifier
 from logos.classification.classify_ai import AIClassifier
 from logos.classification.laura_embedding_classifier import LauraEmbeddingClassifier
-from logos.dbutils.dbmanager import DBManager
 
 
 def singleton(cls):
@@ -80,16 +78,15 @@ class ClassificationManager:
             adjusted_policy["threshold_quality"] = self.get_special_weight("weight_quality", allowed=allowed)
         elif adjusted_policy["threshold_quality"] == -1024:
             adjusted_policy["threshold_quality"] = self.get_special_weight("weight_quality", maximum=False, allowed=allowed)
-        print(f"Policy: {adjusted_policy['id']}", flush=True)
-        # print(f"Models: {[model['id'] for model in self.models]}", flush=True)
-        print(f"Models: {allowed}", flush=True)
+        logging.debug(f"Policy: {adjusted_policy['id']}")
+        logging.debug(f"Models: {allowed}")
         filtered = PolicyClassifier(self.models).classify(prompt, adjusted_policy)
-        print(f"Policy-Classification: {[model['id'] for model in filtered]}", flush=True)
+        logging.debug(f"Policy-Classification: {[model['id'] for model in filtered]}")
         filtered = TokenClassifier(filtered).classify(prompt, adjusted_policy)
-        print(f"Token-Classification: {[model['id'] for model in filtered]}", flush=True)
+        logging.debug(f"Token-Classification: {[model['id'] for model in filtered]}")
         self.laura.allowed = allowed
         filtered = AIClassifier(filtered).classify(prompt, adjusted_policy, laura=self.laura)
-        print(f"AI-Classification: {[model['id'] for model in filtered]}", flush=True)
+        logging.debug(f"AI-Classification: {[model['id'] for model in filtered]}")
         self.laura.allowed = list()
         self.filtered = filtered
         return sorted(

@@ -10,8 +10,9 @@ from dateutil.parser import isoparse
 import sqlalchemy.exc
 import yaml
 import json
-from sqlalchemy import Table, MetaData
+from sqlalchemy import Table, MetaData, create_engine
 from sqlalchemy import text, func
+from sqlalchemy.orm import sessionmaker
 
 from logos.classification.model_handler import ModelHandler
 from logos.dbutils.dbmodules import *
@@ -170,13 +171,13 @@ class DBManager:
         :return: Initial API-Key
         """
         # Check if database already exists
-        print(".env exists?", os.path.exists("./logos/db/.env"), flush=True)
+        logging.info(".env exists?", os.path.exists("./logos/db/.env"))
         if os.path.exists("./logos/db/.env"):
             return {"error": "Database already initialized"}
-        print("Is root initialized?", self.is_root_initialized(), flush=True)
+        logging.info("Is root initialized?", self.is_root_initialized())
         if self.is_root_initialized():
             return {"error": f"Database already initialized"}
-        print("Setting up DB", flush=True)
+        logging.info("Setting up DB")
         self.__exec_init()
         self.create_all()
         # Create user
@@ -297,11 +298,11 @@ class DBManager:
             latency.give_feedback(updated_model_id, feedback)
         elif category == "cost":
             cost.give_feedback(updated_model_id, feedback)
-        print(f"Accuracy-Models: {accuracy.get_models()}", flush=True)
-        print(f"Quality-Models: {quality.get_models()}", flush=True)
-        print(f"Latency-Models: {latency.get_models()}", flush=True)
-        print(f"Cost-Models: {cost.get_models()}", flush=True)
-        print(f"Privacy-Models: {privacy_data}", flush=True)
+        logging.debug(f"Accuracy-Models: {accuracy.get_models()}")
+        logging.debug(f"Quality-Models: {quality.get_models()}")
+        logging.debug(f"Latency-Models: {latency.get_models()}")
+        logging.debug(f"Cost-Models: {cost.get_models()}")
+        logging.debug(f"Privacy-Models: {privacy_data}")
         # Collect rebalanced model weights
         self.rebuild_model_weights(accuracy, quality, latency, cost, privacy_data)
         return {"result": f"Updated Model"}, 200
@@ -334,11 +335,11 @@ class DBManager:
         latency.remove_model(deleted_model_id)
         cost = ModelHandler(cost_data)
         cost.remove_model(deleted_model_id)
-        print(f"Accuracy-Models: {accuracy.get_models()}", flush=True)
-        print(f"Quality-Models: {quality.get_models()}", flush=True)
-        print(f"Latency-Models: {latency.get_models()}", flush=True)
-        print(f"Cost-Models: {cost.get_models()}", flush=True)
-        print(f"Privacy-Models: {privacy_data}", flush=True)
+        logging.debug(f"Accuracy-Models: {accuracy.get_models()}")
+        logging.debug(f"Quality-Models: {quality.get_models()}")
+        logging.debug(f"Latency-Models: {latency.get_models()}")
+        logging.debug(f"Cost-Models: {cost.get_models()}")
+        logging.debug(f"Privacy-Models: {privacy_data}")
         # Collect rebalanced model weights
         self.rebuild_model_weights(accuracy, quality, latency, cost, privacy_data)
         self.delete("models", deleted_model_id)
@@ -376,11 +377,11 @@ class DBManager:
         latency.add_model(worse_latency, new_model_id)
         cost = ModelHandler(cost_data)
         cost.add_model(worse_cost, new_model_id)
-        print(f"Accuracy-Models: {accuracy.get_models()}", flush=True)
-        print(f"Quality-Models: {quality.get_models()}", flush=True)
-        print(f"Latency-Models: {latency.get_models()}", flush=True)
-        print(f"Cost-Models: {cost.get_models()}", flush=True)
-        print(f"Privacy-Models: {privacy_data}", flush=True)
+        logging.debug(f"Accuracy-Models: {accuracy.get_models()}")
+        logging.debug(f"Quality-Models: {quality.get_models()}")
+        logging.debug(f"Latency-Models: {latency.get_models()}")
+        logging.debug(f"Cost-Models: {cost.get_models()}")
+        logging.debug(f"Privacy-Models: {privacy_data}")
         # Collect rebalanced model weights
         self.rebuild_model_weights(accuracy, quality, latency, cost, privacy_data)
         return {"result": f"Created Model", "model_id": new_model_id}, 200

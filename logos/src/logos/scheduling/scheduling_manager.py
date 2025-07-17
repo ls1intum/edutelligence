@@ -9,8 +9,6 @@ from typing import Union, List, Tuple
 
 from logos.scheduling.scheduler import Scheduler, Task
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-
 
 def singleton(cls):
     """
@@ -77,13 +75,12 @@ class SchedulingManager:
                         self.__has_finished = True
                         self.__finished_ticket = task.get_id()
                         self.__is_free[mid] -= 1
-                        # logging.info(f"Task {task.get_id()} scheduled for model {mid}")
-                        print(f"Task {task.get_id()} scheduled for model {mid}", flush=True)
+                        logging.info(f"Task {task.get_id()} scheduled for model {mid}")
                 else:
                     # No tasks in queue
                     time.sleep(0.1)
             except Exception as e:
-                logging.error(f"Error in scheduling loop: {e}", exc_info=True)
+                logging.error(f"Error in scheduling loop: {e}")
                 self.__has_finished = False
                 time.sleep(1)
 

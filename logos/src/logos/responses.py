@@ -1,5 +1,6 @@
 import datetime
 import json
+import logging
 import time
 from typing import Union
 
@@ -226,7 +227,7 @@ def resource_behaviour(logos_key, headers, data, models):
     end = time.time()
     if not mdls:
         return {"error": "Could not identify suitable model."}, 500
-    print(f"Model weights after classification: {[(i, j) for i, j, _, _ in mdls]}")
+    logging.info(f"Model weights after classification: {[(i, j) for i, j, _, _ in mdls]}")
     # Get IDs of classified models
     classified = {i for i, _, _, _ in mdls}
     classified = {
@@ -269,7 +270,7 @@ def resource_behaviour(logos_key, headers, data, models):
     if api_key is None:
         return {"error": f"No api_key found for task {tid} with model {model_id} and provider {provider["name"]}"}, 500
     model_name = model["name"]
-    print(f"Forwarding to model {model_name} after classification")
+    logging.info(f"Forwarding to model {model_name} after classification")
     forward_url = merge_url(provider["base_url"], model["endpoint"])
     auth_name = provider["auth_name"]
     auth_format = provider["auth_format"].format(api_key)
@@ -305,7 +306,7 @@ def request_setup(headers: dict, logos_key: str):
             return list()
         else:
             # Return ids of all available models
-            print(f"Found models {models} for classification", flush=True)
+            logging.info(f"Found models {models} for classification")
             return models
     except PermissionError as e:
         return {"error": str(e)}, 401

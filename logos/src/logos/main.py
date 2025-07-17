@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import traceback
 
@@ -19,6 +20,8 @@ from logos.scheduling.scheduling_manager import SchedulingManager
 from scripts import setup_proxy
 
 from scripts.setup_proxy import setup
+
+logger = logging.getLogger("LogosLogger")
 
 app = FastAPI(docs_url="/docs", openapi_url="/openapi.json")
 _grpc_server = None
@@ -44,19 +47,19 @@ async def start_grpc():
     await _grpc_server.start()
     DEFAULT_PROVIDER = os.getenv("PROVIDER_NAME")
     DEFAULT_BASE_URL = os.getenv("BASE_URL")
+    FORMAT = '%(levelname)-8s: %(asctime)s at module %(module)-15s %(message)s'
+    logging.basicConfig(format=FORMAT, level=logging.DEBUG)
     if DEFAULT_PROVIDER and len(DEFAULT_BASE_URL) > 5:
-        print("Creating Proxy Configuration...", flush=True)
+        logging.info("Creating Proxy Configuration...")
         with DBManager() as db:
             db.is_root_initialized()
-        print("Processing setup. Initialized: " + str(DBManager.is_initialized()), flush=True)
+        logging.info("Processing setup. Initialized: %s", str(DBManager.is_initialized()))
         if not DBManager.is_initialized():
             lk = setup(DEFAULT_BASE_URL, DEFAULT_PROVIDER)
             if "error" in lk:
-                print("Error during proxy setup: ", lk, flush=True)
+                logging.error("Error during proxy setup: %s", lk)
             else:
-                print("Created proxy configuration.", lk, flush=True)
-    # else:
-    #     print("Proxy Configuration not provided in docker compose, please setup via endpoint")
+                logging.info("Created proxy configuration: %s", lk)
 
 
 @app.on_event("startup")
@@ -104,10 +107,10 @@ async def stop_grpc():
 @app.post("/logosdb/setup")
 async def setup_db(data: LogosSetupRequest):
     try:
-        print("Receiving setup request...", flush=True)
+        logging.info("Receiving setup request...")
         with DBManager() as db:
             db.is_root_initialized()
-        print("Processing setup request. Initialized: " + str(DBManager.is_initialized()), flush=True)
+        logging.info("Processing setup request. Initialized: %s", str(DBManager.is_initialized()))
         if not DBManager.is_initialized():
             # If we run logos for the first time automatically run a basic setup skript
             lk = setup(**data.dict())
@@ -353,7 +356,7 @@ async def logos_service(path: str, request: Request):
     with DBManager() as db:
         r, c = db.get_process_id(logos_key)
         if c != 200:
-            print("Error while logging a request: ", r)
+            logging.info("Error while logging a request: %s", r)
             usage_id = None
         else:
             r, c = db.log_usage(int(r["result"]), get_client_ip(request), json_data, headers)
@@ -391,14 +394,14 @@ async def logos_service(path: str, request: Request):
     # Try multiple requesting methods. Start with streaming
     try:
         if "stream" not in json_data or json_data["stream"]:
-            print("Sending Streaming Request")
+            logging.info("Sending Streaming Request")
             json_data["stream"] = True
             return get_streaming_response(forward_url, proxy_headers, json_data, usage_id, provider_id, model_id, policy_id, classified)
     except:
         traceback.print_exc()
     # Fall back to naive request method
     try:
-        print("Falling back to Standard Request")
+        logging.info("Falling back to Standard Request")
         json_data["stream"] = False
         return await get_standard_response(forward_url, proxy_headers, json_data, usage_id, provider_id, model_id, policy_id, classified)
     except:

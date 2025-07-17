@@ -1,8 +1,7 @@
-from sqlalchemy import create_engine, Column, Integer, String, Boolean, Enum, Text, ForeignKey, JSON, TIMESTAMP, \
+from sqlalchemy import Column, Integer, String, Enum, Text, ForeignKey, JSON, TIMESTAMP, \
     Numeric, CheckConstraint
-from sqlalchemy.orm import sessionmaker, declarative_base, relationship
+from sqlalchemy.orm import relationship
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.sql import func
 import enum
 
 Base = declarative_base()
