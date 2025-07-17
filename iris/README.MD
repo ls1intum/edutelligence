@@ -299,7 +299,6 @@ Deploying Pyris using Docker ensures a consistent environment and simplifies the
    - Mounts local configuration files for easy modification.
 
 2. **Access the Application**
-
    - Application URL: [http://localhost:8000](http://localhost:8000)
    - API Docs: [http://localhost:8000/docs](http://localhost:8000/docs)
 
@@ -323,7 +322,6 @@ Deploying Pyris using Docker ensures a consistent environment and simplifies the
    - Nginx handles SSL termination and reverse proxying.
 
 3. **Access the Application**
-
    - Application URL: `https://your-domain.com`
 
 ###### **Option 2: Without Nginx**
@@ -338,7 +336,6 @@ Deploying Pyris using Docker ensures a consistent environment and simplifies the
    - Starts Pyris and Weaviate.
 
 2. **Access the Application**
-
    - Application URL: [http://localhost:8000](http://localhost:8000)
 
 ---
