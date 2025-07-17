@@ -2,6 +2,24 @@
 
 **Hyperion** is a microservice designed to bring AI-driven intelligence to Learning Management Systems (LMSs), such as [Artemis](https://github.com/ls1intum/Artemis). Inspired by the Titan of light and enlightenment, Hyperion illuminates the process of creating engaging, effective programming exercises. It assists instructors by refining problem statements, generating code stubs, and providing context-aware suggestions — all while integrating seamlessly with an LMS and CI build agents for validation.
 
+## Features
+
+Hyperion provides an 8-step workflow for creating programming exercises:
+
+1. **Define Boundary Conditions** - Establish exercise constraints and requirements
+2. **Draft Problem Statement** - Generate initial exercise descriptions
+3. **Create Solution Repository** - Generate complete solution code
+4. **Create Template Repository** - Generate starter code for students
+5. **Create Test Repository** - Generate automated test cases
+6. **Finalize Problem Statement** - Refine and polish exercise descriptions
+7. **Configure Grading** - Set up automated grading criteria
+8. **Review and Refine** - Check for inconsistencies and improve content
+
+### Available Services
+
+- **Inconsistency Checking**: Analyze exercises for conflicts between problem statements, solution code, template code, and tests
+- **Problem Statement Rewriting**: Improve and refine exercise descriptions using AI
+
 ## Setup
 
 ### Prerequisites
@@ -14,22 +32,10 @@
 
 #### Poetry
 
-Install Peotry, if you haven't already:
+Install Poetry, if you haven't already:
 
 ```bash
-pip install poetry
-```
-
-Ensure that you are using poetry version 2.0.0 or higher.
-
-```bash
-poetry --version
-```
-
-If you have poetry < 2.0.0 installed, please run
-
-```bash
-poetry self update
+brew install poetry
 ```
 
 #### Dependencies
@@ -43,93 +49,114 @@ poetry install
 
 ## Running the Service
 
-The Hyperion service runs as a gRPC server that listens for requests from clients.
+### Development
 
 ```bash
-poetry run hyperion
+poetry run fastapi dev
 ```
 
-By default, the server runs on `0.0.0.0:50051`. You can configure the host and port through environment variables.
-
-### Health Check
-
-To verify the server is running correctly, you can use the health check script:
+### Production
 
 ```bash
-poetry run health-check
+poetry run fastapi run
 ```
 
-This will test connectivity to the server and return server status information.
+### Authentication
 
-### Docker Compose
+Hyperion uses API key authentication for secure access to its endpoints. The API key should be provided in the `X-API-Key` header, if `API_KEY_HEADER` is not set in the environment.
 
-#### Production Deployment
+To set up authentication:
 
-To run the service in a production environment using Docker Compose:
+1. Set the `API_KEY` environment variable or in your `.env` file
+2. If not provided, a random API key will be generated at startup
+3. Set `DISABLE_AUTH=true` for development if you want to bypass authentication
+
+## Usage
+
+After running the application, you can access the FastAPI API documentation at `http://127.0.0.1:8000/docs` or `http://127.0.0.1:8000/redoc`.
+
+## Generate OpenAPI YAML
+
+To generate the OpenAPI YAML file, run the following command:
 
 ```bash
-cd docker
-docker compose -f compose.hyperion.yaml up -d
+poetry run openapi
 ```
 
-This uses the pre-built image from the GitHub Container Registry.
+## Synching OpenAPI Spec with Artemis
 
-#### Local Development
-
-For local development or testing, use the local compose file which builds from your local source:
+To synchronize the OpenAPI specification with Artemis, you can use the following command:
 
 ```bash
-cd docker
-docker compose -f compose.hyperion.local.yaml build
-docker compose -f compose.hyperion.local.yaml up -d
+poetry run sync-openapi-artemis
 ```
 
-The local compose file:
-- Builds the image from your local source code
-- Maps port 50051 directly to your host machine
-- Sets default environment variables with fallbacks (e.g., OpenAI API keys)
-- Includes health checks and logging configuration
+## Testing
 
-To check the logs of the running container:
+Hyperion includes a comprehensive test suite organized in a global test directory structure.
+
+### Running Tests
+
+#### Run All Tests
 
 ```bash
-docker compose -f compose.hyperion.local.yaml logs
+# Using pytest directly
+pytest tests/ -v
+
+# Using the test runner script
+python run_tests.py
 ```
 
-To check the health of a running Docker container:
+#### Run Specific Test Modules
 
 ```bash
-docker compose -f compose.hyperion.local.yaml exec hyperion poetry run health-check
+# Run step 3 integration tests
+pytest tests/creation_steps/step3_create_solution_repository/step3_integration.py -v
+
+# Run workspace tests
+pytest tests/creation_steps/workspace/ -v
+
+# Run specific test file
+pytest tests/creation_steps/workspace/test_file_manager.py -v
 ```
 
-#### Environment Variables
-
-The Docker Compose files support the following environment variables:
-
-| Variable | Description | Default in Local Compose |
-|----------|-------------|-----------------------|
-| `MODEL_NAME` | OpenAI model to use | gpt-3.5-turbo |
-| `OPENAI_API_KEY` | OpenAI API key | sk-dummy-key |
-| `OPENAI_API_VERSION` | OpenAI API version | 2023-05-15 |
-| `AZURE_OPENAI_ENDPOINT` | Azure OpenAI endpoint URL | empty |
-| `AZURE_OPENAI_API_KEY` | Azure OpenAI API key | empty |
-| `OLLAMA_BASIC_AUTH_USERNAME` | Ollama authentication username | empty |
-| `OLLAMA_BASIC_AUTH_PASSWORD` | Ollama authentication password | empty |
-| `OLLAMA_HOST` | Ollama host address | empty |
-
-You can set these environment variables in your shell before running Docker Compose, or use a `.env` file.
-
-
-
-## Generate gRPC stubs
-
-The service uses gRPC for communication. If you make changes to the proto files, you'll need to regenerate the stubs:
+#### Run Specific Test Cases
 
 ```bash
-poetry run generate-grpc
+# Run a specific test class
+pytest tests/creation_steps/step3_create_solution_repository/step3_integration.py::TestSolutionRepositoryCreatorIntegration -v
+
+# Run a specific test method
+pytest tests/creation_steps/workspace/test_file_manager.py::TestFileManager::test_write_file_success -v
 ```
 
-The generated stubs will be placed in the `app/grpc` directory.
+#### Test Options
+
+```bash
+# Run with coverage
+pytest tests/ --cov=app --cov-report=html
+
+# Run with detailed output
+pytest tests/ -v --tb=long
+
+# Run tests in parallel (if pytest-xdist is installed)
+pytest tests/ -n auto
+
+# Run only failed tests from last run
+pytest tests/ --lf
+```
+
+### Test Dependencies
+
+The tests require additional dependencies that are included in the development group:
+
+```bash
+# Install test dependencies
+poetry install --with dev
+
+# Or install specific test packages
+poetry add --group dev pytest pytest-asyncio pytest-cov
+```
 
 ## Formatting
 
@@ -138,7 +165,7 @@ The generated stubs will be placed in the `app/grpc` directory.
 To format the code, run the following command:
 
 ```bash
-poetry run black . 
+poetry run black .
 ```
 
 ### Flake8
@@ -148,3 +175,4 @@ To lint the code, run the following command:
 ```bash
 poetry run flake8 .
 ```
+
