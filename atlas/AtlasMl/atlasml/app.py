@@ -2,8 +2,6 @@ import logging
 import os
 from contextlib import asynccontextmanager
 
-from apscheduler.schedulers.background import BackgroundScheduler
-from apscheduler.triggers.interval import IntervalTrigger
 from fastapi import FastAPI
 
 from atlasml.clients.weaviate import get_weaviate_client
