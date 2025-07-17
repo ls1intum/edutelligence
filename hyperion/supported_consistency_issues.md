@@ -2,7 +2,27 @@
 
 ## Definition of Consistency Issue
 
-A **consistency issue** is an unintentional discrepancy between exercise artifacts (problem statement, template code, UML diagrams) where the same programming element is described or implemented differently, creating ambiguity about the intended design. This excludes intentional pedagogical gaps such as missing method implementations, incomplete constructors, or empty class bodies that students are expected to complete as part of the learning objective.
+A **consistency issue** is an unintentional violation of **instructional coherence** within or across exercise artifacts that creates **extraneous cognitive load** by presenting contradictory information about the same educational element. Drawing from Mayer's Coherence Principle and Biggs' Constructive Alignment theory, consistency issues occur when the **intentional pedagogical design** is disrupted by conflicting representations that force learners to engage in unnecessary cognitive reconciliation rather than focusing on the intended learning objectives.
+
+**Theoretical Foundation:**
+
+- **Coherence Principle** (Mayer): Learning is optimized when extraneous material is excluded; consistency issues introduce unintended extraneous elements
+- **Constructive Alignment** (Biggs): All instructional components should align toward learning objectives; inconsistencies break this alignment
+- **Cognitive Load Theory** (Sweller): Learners have limited working memory; contradictory information creates unnecessary cognitive burden
+
+**Distinguishing Criteria:**
+
+- **Unintentional Discrepancy**: Artifact conflicts not deliberately designed for pedagogical purposes
+- **Same Educational Element**: Multiple representations of the same conceptual entity (class, method, attribute, relationship, constraint)
+- **Contradictory Specification**: Conflicting information that cannot be simultaneously satisfied
+- **Extraneous Cognitive Demand**: Forces learners to resolve conflicts rather than engage with intended learning content
+- **Pedagogical Disruption**: Interferes with the constructive alignment between learning objectives, activities, and assessment
+
+**Excluded from Definition:**
+
+- **Intentional Scaffolding**: Deliberately incomplete implementations for student completion
+- **Progressive Disclosure**: Intentionally simplified initial representations that are later expanded
+- **Pedagogical Abstraction**: Deliberately simplified models for educational purposes
 
 **Key Criteria:**
 
