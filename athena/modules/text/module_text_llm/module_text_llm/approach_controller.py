@@ -14,6 +14,7 @@ async def generate_suggestions(
     debug: bool,
     is_graded: bool,
     learner_profile: Optional[LearnerProfile] = None,
+    latest_submission: Optional[Submission] = None,
 ) -> List[Feedback]:
     implementation_func = APPROACH_IMPLEMENTATIONS.get(config.type)
     if implementation_func is None:
@@ -31,6 +32,9 @@ async def generate_suggestions(
 
     if "learner_profile" in sig.parameters:
         kwargs["learner_profile"] = learner_profile
+
+    if "latest_submission" in sig.parameters:
+        kwargs["latest_submission"] = latest_submission
 
     return await implementation_func(
         exercise,
