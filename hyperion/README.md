@@ -1,6 +1,6 @@
 # Hyperion: AI-Driven Programming Exercise Creation Assistance
 
-**Hyperion** is a gRPC microservice for AI-driven programming exercise creation, designed to integrate with Learning Management Systems like [Artemis](https://github.com/ls1intum/Artemis).
+**Hyperion** is a microservice designed to bring AI-driven intelligence to Learning Management Systems (LMSs), such as [Artemis](https://github.com/ls1intum/Artemis). Inspired by the Titan of light and enlightenment, Hyperion illuminates the process of creating engaging, effective programming exercises. It assists instructors by refining problem statements, generating code stubs, and providing context-aware suggestions — all while integrating seamlessly with an LMS and CI build agents for validation.
 
 ## Features
 
@@ -32,7 +32,7 @@ Hyperion provides an 8-step workflow for creating programming exercises:
 
 #### Poetry
 
-Install Poetry version >=2.0.0, if you haven't already:
+Install Poetry, if you haven't already:
 
 ```bash
 brew install poetry
@@ -49,178 +49,114 @@ poetry install
 
 ## Running the Service
 
-The Hyperion service runs as a gRPC server that listens for requests from clients.
+### Development
 
 ```bash
-poetry run hyperion
+poetry run fastapi dev
 ```
 
-By default, the server runs on `0.0.0.0:50051`. You can configure the host and port through environment variables.
-
-### Health Check
-
-To verify the server is running correctly, you can use the standard gRPC health probe:
+### Production
 
 ```bash
-# Using grpc_health_probe (if installed)
-grpc_health_probe -addr=localhost:50051
-
-# Or using grpcurl
-grpcurl -plaintext localhost:50051 grpc.health.v1.Health/Check
+poetry run fastapi run
 ```
 
-The server implements the standard gRPC health checking protocol.
+### Authentication
 
-### Docker Compose
+Hyperion uses API key authentication for secure access to its endpoints. The API key should be provided in the `X-API-Key` header, if `API_KEY_HEADER` is not set in the environment.
 
-#### Production Deployment
+To set up authentication:
 
-To run the service in a production environment using Docker Compose:
+1. Set the `API_KEY` environment variable or in your `.env` file
+2. If not provided, a random API key will be generated at startup
+3. Set `DISABLE_AUTH=true` for development if you want to bypass authentication
+
+## Usage
+
+After running the application, you can access the FastAPI API documentation at `http://127.0.0.1:8000/docs` or `http://127.0.0.1:8000/redoc`.
+
+## Generate OpenAPI YAML
+
+To generate the OpenAPI YAML file, run the following command:
 
 ```bash
-docker compose -f compose.yaml up -d
+poetry run openapi
 ```
 
-This uses the pre-built image from the GitHub Container Registry and exposes the service on port **8080**.
+## Synching OpenAPI Spec with Artemis
 
-#### Local Development
-
-For local development or testing, use the local compose file which builds from your local source:
+To synchronize the OpenAPI specification with Artemis, you can use the following command:
 
 ```bash
-docker compose -f compose.local.yaml build
-docker compose -f compose.local.yaml up -d
+poetry run sync-openapi-artemis
 ```
 
-The local compose file:
+## Testing
 
-- Builds the image from your local source code
-- Maps port **50051** directly to your host machine
-- Uses environment variables from `.env` file
-- Includes health checks and logging configuration
+Hyperion includes a comprehensive test suite organized in a global test directory structure.
 
-To check the logs of the running container:
+### Running Tests
+
+#### Run All Tests
 
 ```bash
-docker compose -f compose.local.yaml logs
+# Using pytest directly
+pytest tests/ -v
+
+# Using the test runner script
+python run_tests.py
 ```
 
-To check the health of a running Docker container:
+#### Run Specific Test Modules
 
 ```bash
-# Using docker compose health check
-docker compose -f compose.local.yaml ps
+# Run step 3 integration tests
+pytest tests/creation_steps/step3_create_solution_repository/step3_integration.py -v
 
-# Or directly test the gRPC service
-grpc_health_probe -addr=localhost:50051
+# Run workspace tests
+pytest tests/creation_steps/workspace/ -v
+
+# Run specific test file
+pytest tests/creation_steps/workspace/test_file_manager.py -v
 ```
 
-#### Environment Variables
-
-The Docker Compose files support the following environment variables:
-
-| Variable                     | Description                    | Example Value            |
-| ---------------------------- | ------------------------------ | ------------------------ |
-| `MODEL_NAME`                 | OpenAI model to use            | gpt-3.5-turbo            |
-| `OPENAI_API_KEY`             | OpenAI API key                 | sk-your-key-here         |
-| `OPENAI_API_VERSION`         | OpenAI API version             | 2023-05-15               |
-| `AZURE_OPENAI_ENDPOINT`      | Azure OpenAI endpoint URL      | your.openai.azure.com   |
-| `AZURE_OPENAI_API_KEY`       | Azure OpenAI API key           | your-azure-key          |
-| `OLLAMA_BASIC_AUTH_USERNAME` | Ollama authentication username | username                 |
-| `OLLAMA_BASIC_AUTH_PASSWORD` | Ollama authentication password | password                 |
-| `OLLAMA_HOST`                | Ollama host address            | localhost:11434          |
-| `TLS_ENABLED`                | Enable TLS (production)        | true/false               |
-| `TLS_CERT_PATH`              | TLS certificate path           | /certs/server.crt        |
-| `TLS_KEY_PATH`               | TLS private key path           | /certs/server.key        |
-
-You can set these environment variables in your shell before running Docker Compose, or use a `.env` file.
-
-### TLS Configuration
-
-Enable TLS for production:
-
-#### 1. Generate Certificates
-
-For development/testing, use the provided script:
+#### Run Specific Test Cases
 
 ```bash
-./scripts/generate-certs.sh
+# Run a specific test class
+pytest tests/creation_steps/step3_create_solution_repository/step3_integration.py::TestSolutionRepositoryCreatorIntegration -v
+
+# Run a specific test method
+pytest tests/creation_steps/workspace/test_file_manager.py::TestFileManager::test_write_file_success -v
 ```
 
-For production, obtain certificates from a proper CA (Let's Encrypt, corporate CA, etc.) and place them in the `./certs/` directory.
-
-#### 2. Configure Environment
-
-Create a `.env` file from the template:
+#### Test Options
 
 ```bash
-cp .env.example .env
+# Run with coverage
+pytest tests/ --cov=app --cov-report=html
+
+# Run with detailed output
+pytest tests/ -v --tb=long
+
+# Run tests in parallel (if pytest-xdist is installed)
+pytest tests/ -n auto
+
+# Run only failed tests from last run
+pytest tests/ --lf
 ```
 
-Edit the `.env` file and set:
+### Test Dependencies
+
+The tests require additional dependencies that are included in the development group:
 
 ```bash
-TLS_ENABLED=true
-TLS_CERT_PATH=/certs/server.crt
-TLS_KEY_PATH=/certs/server.key
-TLS_CA_PATH=/certs/ca.crt  # For client certificate verification (mTLS)
+# Install test dependencies
+poetry install --with dev
+
+# Or install specific test packages
+poetry add --group dev pytest pytest-asyncio pytest-cov
 ```
-
-#### 3. Deploy with TLS
-
-```bash
-docker compose -f compose.yaml up -d
-```
-
-#### 4. Verify TLS Connection
-
-```bash
-# Check health with certificate verification
-grpcurl -cacert ./certs/ca.crt your-domain.com:50051 grpc.health.v1.Health/Check
-
-# Check specific service
-grpcurl -cacert ./certs/ca.crt your-domain.com:50051 hyperion.ReviewAndRefine/CheckInconsistencies
-
-# With client certificate (mTLS)
-grpcurl -cacert ./certs/ca.crt -cert ./certs/client.crt -key ./certs/client.key \
-        your-domain.com:8080 grpc.health.v1.Health/Check
-```
-
-## Artemis Integration
-
-Hyperion integrates with Artemis through a simple proto file synchronization approach. The proto file from Hyperion is copied to Artemis where gRPC client stubs are generated as part of the Artemis build process.
-
-### Proto File Synchronization
-
-To synchronize the Hyperion proto file with Artemis:
-
-```bash
-# Synchronize proto file to Artemis
-poetry run sync-proto-artemis
-
-# Sync to a specific path
-poetry run sync-proto-artemis --artemis-path /path/to/artemis
-
-# Dry run to see what would be copied
-poetry run sync-proto-artemis --dry-run
-```
-
-This command:
-1. Copies `app/protos/hyperion.proto` to `{artemis_path}/src/main/proto/hyperion.proto`
-2. Ensures the target directory exists
-3. Validates the proto file syntax
-4. Reports the synchronization status
-
-
-## Generate gRPC stubs
-
-The service uses gRPC for communication. If you make changes to the proto files, you'll need to regenerate the stubs:
-
-```bash
-poetry run generate-proto
-```
-
-The generated stubs will be placed in the `app/grpc` directory.
 
 ## Formatting
 
@@ -239,3 +175,4 @@ To lint the code, run the following command:
 ```bash
 poetry run flake8 .
 ```
+

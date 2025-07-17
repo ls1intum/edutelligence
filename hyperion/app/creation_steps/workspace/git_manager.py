@@ -59,7 +59,7 @@ class GitManager:
 
         except Exception as e:
             logger.error(f"Failed to initialize Git repository: {e}")
-            raise GitException(f"Failed to initialize Git repository: {str(e)}")
+            raise GitException(f"Failed to initialize Git repository: {str(e)}") from e
 
     def add_files(
         self, context: SolutionCreationContext, file_patterns: List[str]
@@ -99,7 +99,7 @@ class GitManager:
 
         except Exception as e:
             logger.error(f"Failed to add files to Git: {e}")
-            raise GitException(f"Failed to add files to Git: {str(e)}")
+            raise GitException(f"Failed to add files to Git: {str(e)}") from e
 
     def commit_changes(self, context: SolutionCreationContext, message: str) -> str:
         """Commit changes to the Git repository.
@@ -146,7 +146,7 @@ class GitManager:
 
         except Exception as e:
             logger.error(f"Failed to commit changes: {e}")
-            raise GitException(f"Failed to commit changes: {str(e)}")
+            raise GitException(f"Failed to commit changes: {str(e)}") from e
 
     def create_branch(self, context: SolutionCreationContext, branch_name: str) -> None:
         """Create a new Git branch.
@@ -184,7 +184,9 @@ class GitManager:
 
         except Exception as e:
             logger.error(f"Failed to create branch '{branch_name}': {e}")
-            raise GitException(f"Failed to create branch '{branch_name}': {str(e)}")
+            raise GitException(
+                f"Failed to create branch '{branch_name}': {str(e)}"
+            ) from e
 
     def get_status(self, context: SolutionCreationContext) -> Dict[str, List[str]]:
         """Get the Git status of the repository.
@@ -221,7 +223,7 @@ class GitManager:
 
         except Exception as e:
             logger.error(f"Failed to get Git status: {e}")
-            raise GitException(f"Failed to get Git status: {str(e)}")
+            raise GitException(f"Failed to get Git status: {str(e)}") from e
 
     def get_commit_history(
         self, context: SolutionCreationContext, limit: int = 10
@@ -267,7 +269,7 @@ class GitManager:
 
         except Exception as e:
             logger.error(f"Failed to get commit history: {e}")
-            raise GitException(f"Failed to get commit history: {str(e)}")
+            raise GitException(f"Failed to get commit history: {str(e)}") from e
 
     def create_tag(
         self,
@@ -288,14 +290,14 @@ class GitManager:
         if not tag_name or not tag_name.strip():
             raise GitException("Tag name cannot be empty")
 
+        # Validate tag name first, before other validations
+        validated_name = self._validate_tag_name(tag_name)
+
         logger.info(f"Creating Git tag: {tag_name}")
 
         try:
             self._validate_workspace(context)
             self._ensure_repository_exists(context)
-
-            # Validate tag name
-            validated_name = self._validate_tag_name(tag_name)
 
             # Check if tag already exists
             if self._tag_exists(context, validated_name):
@@ -318,7 +320,7 @@ class GitManager:
 
         except Exception as e:
             logger.error(f"Failed to create tag '{tag_name}': {e}")
-            raise GitException(f"Failed to create tag '{tag_name}': {str(e)}")
+            raise GitException(f"Failed to create tag '{tag_name}': {str(e)}") from e
 
     def is_repository_initialized(self, context: SolutionCreationContext) -> bool:
         """Check if a Git repository is initialized in the workspace.
@@ -384,7 +386,7 @@ class GitManager:
             raise GitException("Git command timed out")
         except Exception as e:
             logger.error(f"Git command execution failed: {e}")
-            raise GitException(f"Git command failed: {str(e)}")
+            raise GitException(f"Git command failed: {str(e)}") from e
 
     def _validate_workspace(self, context: SolutionCreationContext) -> None:
         """Validate that the workspace exists and is accessible.
@@ -468,8 +470,8 @@ class GitManager:
         """
         try:
             # Set user name and email from config
-            user_name = getattr(config, "git_user_name", "Solution Creator")
-            user_email = getattr(config, "git_user_email", "solution@creator.local")
+            user_name = getattr(config, "git_author_name", "Solution Creator")
+            user_email = getattr(config, "git_author_email", "solution@creator.local")
 
             self._run_git_command(context, ["config", "user.name", user_name])
             self._run_git_command(context, ["config", "user.email", user_email])

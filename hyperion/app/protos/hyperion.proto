@@ -3,234 +3,217 @@ syntax = "proto3";
 package de.tum.cit.aet.artemis.hyperion;
 
 // --- Java-specific file-level options ---
-option java_package        = "de.tum.cit.aet.artemis.hyperion.generated";
+option java_package        = "de.tum.cit.aet.artemis.hyperion.proto";
 option java_outer_classname = "HyperionServiceProto";
 option java_multiple_files = true;
 option java_generic_services = false;
 
-/***********************
- ***   Core types    ***
- ***********************/
 
-message ProgrammingExercise {
-  int32 id = 1;
-  Repository template_repository = 2;
-  Repository solution_repository = 3;
-  Repository test_repository = 4;
-  ProblemStatement problem_statement = 5;
-  BoundaryConditions boundary_conditions = 6;
-}
-
-message Repository {
-  string name = 1;
-  repeated RepositoryFile files = 2;
-}
-
+// Represents a file in a repository with content
 message RepositoryFile {
+  // File path relative to the repository root
   string path = 1;
+  
+  // File content
   string content = 2;
 }
 
-message ProblemStatement {
-  string title = 1;
-  string short_title = 2;
-  string description = 3;
-}
-
-message BoundaryConditions {
-  string language = 1;
-  string technical_environment = 2;
-  ProjectType project_type = 3;
-  ProgrammingLanguage programming_language = 4;
-  string difficulty = 5;
-  int32 points = 6;
-  int32 bonus_points = 7;
-  repeated string constraints = 8;
+// Represents a collection of files that form a repository
+message Repository {
+  // Files contained in the repository
+  repeated RepositoryFile files = 1;
 }
 
 enum ProgrammingLanguage {
   EMPTY = 0;
-  JAVA = 1;
-  PYTHON = 2;
+  ASSEMBLER = 1;
+  BASH = 2;
+  C = 3;
+  C_PLUS_PLUS = 4;
+  C_SHARP = 5;
+  DART = 6;
+  GO = 7;
+  HASKELL = 8;
+  JAVA = 9;
+  JAVASCRIPT = 10;
+  KOTLIN = 11;
+  MATLAB = 12;
+  OCAML = 13;
+  PYTHON = 14;
+  R = 15;
+  RUBY = 16;
+  RUST = 17;
+  SWIFT = 18;
+  TYPESCRIPT = 19;
+  VHDL = 20;
 }
 
 enum ProjectType {
-  PLAIN = 0;
-  MAVEN = 1;
-  GRADLE = 2;
+  MAVEN_MAVEN = 0;
+  PLAIN_MAVEN = 1;
+  MAVEN_BLACKBOX = 2;
+  PLAIN_GRADLE = 3;
+  GRADLE_GRADLE = 4;
+  PLAIN = 5;
+  XCODE = 6;
+  FACT = 7;
+  GCC = 8;
 }
 
-message PingRequest {
-  string client_id = 1;
+// Represents a programming exercise with all associated data
+message ProgrammingExercise {
+  // Unique identifier for the exercise
+  int32 id = 1;
+
+  // Title of the exercise
+  string title = 2;
+  
+  // Programming language used
+  ProgrammingLanguage programming_language = 3;
+
+  // Package name for the exercise
+  string package_name = 4;
+
+  // Type of project (e.g., Maven, Gradle)
+  ProjectType project_type = 5;
+
+  // Repository containing template files
+  Repository template_repository = 6;
+
+  // Repository containing solution files
+  Repository solution_repository = 7;
+
+  // Repository containing test files (optional)
+  Repository test_repository = 8;
+  
+  // Problem statement describing the exercise requirements
+  string problem_statement = 9;
+  
 }
 
-message PingResponse {
-  string status = 1;
-  string version = 2;
-  int64 timestamp = 3;
-}
-
-/******************************
- ***   Exercise Messages    ***
- ******************************/
 // Exercise Creation Step 1: Define Boundary Conditions
 service DefineBoundaryCondition { }
 
-message BoundaryConditionsDefinerRequest {
+// Exercise Creation Step 2: Create Draft Problem Statement
+service DraftProblemStatement {}
 
-}
+// Exercise Creation Step 3: Create Solution Repository
+service CreateSolutionRepository {}
 
-message BoundaryConditionsDefinerResponse {
-  BoundaryConditions boundary_conditions = 1;
-}
+// Exercise Creation Step 4: Create Template Repository
+service CreateTemplateRepository {}
 
-message ProblemStatementDrafterRequest {
-  BoundaryConditions boundary_conditions = 1;
-}
+// Exercise Creation Step 5: Create Test Repository
+service CreateTestRepository {}
 
-message ProblemStatementDrafterResponse {
-  BoundaryConditions boundary_conditions = 1;
-  ProblemStatement problem_statement = 2;
-}
+// Exercise Creation Step 6: Finalize Problem Statement
+service FinalizeProblemStatement {}
 
-message SolutionRepositoryCreatorRequest {
-  BoundaryConditions boundary_conditions = 1;
-  ProblemStatement problem_statement = 2;
-}
-
-message SolutionRepositoryCreatorResponse {
-  BoundaryConditions boundary_conditions = 1;
-  ProblemStatement problem_statement = 2;
-  Repository solution_repository = 3;
-}
-
-message TemplateRepositoryCreatorRequest {
-  BoundaryConditions boundary_conditions = 1;
-  ProblemStatement problem_statement = 2;
-  Repository solution_repository = 3;
-}
-
-message TemplateRepositoryCreatorResponse {
-  BoundaryConditions boundary_conditions = 1;
-  ProblemStatement problem_statement = 2;
-  Repository solution_repository = 3;
-  Repository template_repository = 4;
-}
-
-message TestRepositoryCreatorRequest {
-  BoundaryConditions boundary_conditions = 1;
-  ProblemStatement problem_statement = 2;
-  Repository solution_repository = 3;
-  Repository template_repository = 4;
-}
-
-message TestRepositoryCreatorResponse {
-  BoundaryConditions boundary_conditions = 1;
-  ProblemStatement problem_statement = 2;
-  Repository solution_repository = 3;
-  Repository template_repository = 4;
-  Repository test_repository = 5;
-}
-
-message ProblemStatementFinalizerRequest {
-  BoundaryConditions boundary_conditions = 1;
-  ProblemStatement problem_statement = 2;
-  Repository solution_repository = 3;
-  Repository template_repository = 4;
-  Repository test_repository = 5;
-}
-
-message ProblemStatementFinalizerResponse {
-  BoundaryConditions boundary_conditions = 1;
-  ProblemStatement problem_statement = 2;
-  Repository solution_repository = 3;
-  Repository template_repository = 4;
-  Repository test_repository = 5;
-}
-
-message GradingConfiguratorRequest {
-  BoundaryConditions boundary_conditions = 1;
-  ProblemStatement problem_statement = 2;
-  Repository solution_repository = 3;
-  Repository template_repository = 4;
-  Repository test_repository = 5;
-}
-
-message GradingConfiguratorResponse {
-  BoundaryConditions boundary_conditions = 1;
-  ProblemStatement problem_statement = 2;
-  Repository solution_repository = 3;
-  Repository template_repository = 4;
-  Repository test_repository = 5;
-}
+// Exercise Creation Step 7: Configure Grading
+service ConfigureGrading {}
 
 // Exercise Creation Step 8: Review and Refine
 service ReviewAndRefine {
-  rpc CheckInconsistencies(InconsistencyCheckRequest) returns (InconsistencyCheckResponse) {}
+  rpc CheckConsistency(ConsistencyCheckRequest) returns (ConsistencyCheckResponse) {}
   rpc RewriteProblemStatement(RewriteProblemStatementRequest) returns (RewriteProblemStatementResponse) {}
 }
 
-message InconsistencyCheckRequest {
-  BoundaryConditions boundary_conditions = 1;
-  ProblemStatement problem_statement = 2;
-  Repository solution_repository = 3;
-  Repository template_repository = 4;
-  Repository test_repository = 5;
+message Metadata {
+  string traceId = 1; // UUID with LLM trace ID
 }
 
-message InconsistencyCheckResponse {
-  string inconsistencies = 1;
+message ConsistencyCheckRequest {
+  string problem_statement = 1;
+  Repository solution_repository = 2;
+  Repository template_repository = 3;
+  Repository test_repository = 4;
+
+  // Optional: Specify issue categories to check
+  repeated ConsistencyIssueCategory issue_categories = 5;
 }
 
-/******************************
- ***   Service Definitions  ***
- ******************************/
-
-// TODO: The return value should be the specific solution to this function, not all prev results.
-//       => Independence between steps.
-
-service Health {
-  rpc Ping (PingRequest) returns (PingResponse) {}
+enum ArtifactType {
+  PROBLEM_STATEMENT = 0;
+  TEMPLATE_REPOSITORY = 1;
+  SOLUTION_REPOSITORY = 2;
+  TEST_REPOSITORY = 3;
 }
 
-// Step 1: Define Boundary Conditions
-service BoundaryConditionsDefiner {
-  rpc DefineBoundaryConditions(BoundaryConditionsDefinerRequest) returns (BoundaryConditionsDefinerResponse) {}
+message ArtifactLocation {
+  ArtifactType type = 1;
+  string file_path = 2;  // Path in the repository, empty for problem statement
+  int32 start_line = 3;  // Start line in the content
+  int32 end_line = 4;    // End line in the content
+  string description = 5; // Optional description of the location
 }
 
-// Step 2: Create Draft Problem Statement
-service ProblemStatementDrafter {
-  rpc DraftProblemStatement(ProblemStatementDrafterRequest) returns (ProblemStatementDrafterResponse) {}
+enum ConsistencyIssueSeverity {
+  LOW = 0;
+  MEDIUM = 1;
+  HIGH = 2;
 }
 
-// Step 3: Create Solution Repository
-service SolutionRepositoryCreator {
-  rpc CreateSolutionRepository(SolutionRepositoryCreatorRequest) returns (SolutionRepositoryCreatorResponse) {}
+enum ConsistencyIssueType {
+  STRUCTURAL = 0;      // Required interface/structure differs between artifacts, preventing technical implementation
+  SEMANTIC = 1;        // Same concept represented differently across artifacts, creating cognitive confusion  
+  ASSESSMENT = 2;      // Tests/evaluation criteria don't match instructional objectives
+  PEDAGOGICAL = 3;     // Exercise violates learning objective alignment and pedagogical design principles
 }
 
-// Step 4: Create Template Repository
-service TemplateRepositoryCreator {
-  rpc CreateTemplateRepository(TemplateRepositoryCreatorRequest) returns (TemplateRepositoryCreatorResponse) {}
+enum ConsistencyIssueCategory {
+  // === STRUCTURAL Issues (0-19) ===
+  METHOD_SIGNATURE_MISMATCH = 0;            // Method return type, parameters, or visibility differs between artifacts
+  CONSTRUCTOR_SIGNATURE_MISMATCH = 1;       // Constructor parameters differ between specification and template
+  INTERFACE_IMPLEMENTATION_CONFLICT = 2;    // Required interface cannot be implemented as specified
+  TYPE_DECLARATION_CONFLICT = 3;            // Data types inconsistent across artifacts
+  INHERITANCE_HIERARCHY_MISMATCH = 4;       // Extends/implements relationships differ between UML and template
+  PACKAGE_STRUCTURE_MISMATCH = 5;           // Import/package organization prevents compilation
+  MISSING_REQUIRED_ELEMENT = 6;             // Essential class/method/attribute missing from template
+  
+  // === SEMANTIC Issues (20-39) ===
+  NAMING_INCONSISTENCY = 20;                // Same concept has different names across artifacts
+  UML_TEXT_DEVIATION = 21;                  // UML diagram structure doesn't match textual specification
+  EXAMPLE_CONTRADICTION = 22;               // Provided examples contradict stated requirements
+  SPECIFICATION_AMBIGUITY = 23;             // Multiple valid interpretations possible from unclear wording
+  CONSTRAINT_VIOLATION = 24;                // Template violates explicit constraints from problem statement
+  REQUIREMENT_GAP = 25;                     // Specification missing from implementation guidance
+  
+  // === ASSESSMENT Issues (40-59) ===
+  TEST_OBJECTIVE_MISMATCH = 40;             // Tests measure different cognitive skills than learning objectives
+  TEST_COVERAGE_INCOMPLETE = 41;            // Missing tests for specified functionality
+  TEST_DATA_INCONSISTENT = 42;              // Test data format/values differ from problem examples
+  GRADING_CRITERIA_CONFLICT = 43;           // Assessment emphasizes different aspects than instruction
+  TEST_METHOD_NAMING_CONFLICT = 44;         // Required test method names differ between specification sources
+  
+  // === PEDAGOGICAL Issues (60-79) ===
+  COGNITIVE_LEVEL_MISMATCH = 60;            // Exercise cognitive demands don't match stated learning objectives
+  SCAFFOLDING_DISCONTINUITY = 61;           // Support provided doesn't match cognitive demands of learning objectives
+  PREREQUISITE_ASSUMPTION_VIOLATION = 62;   // Exercise assumes knowledge/skills not established in curriculum sequence
+  LEARNING_OBJECTIVE_CONTRADICTION = 63;    // Exercise requirements contradict stated pedagogical goals
+  COMPLEXITY_PROGRESSION_VIOLATION = 64;    // Difficulty level inappropriate for curriculum sequence
+  SKILL_TRANSFER_IMPEDIMENT = 65;           // Exercise design inhibits real-world application of learned skills
 }
 
-// Step 5: Create Test Repository
-service TestRepositoryCreator {
-  rpc CreateTestRepository(TestRepositoryCreatorRequest) returns (TestRepositoryCreatorResponse) {}
+message ConsistencyIssue {
+  string description = 1;
+  ConsistencyIssueSeverity severity = 2;
+  ConsistencyIssueType type = 3;
+  ConsistencyIssueCategory category = 4;
+  
+  // Primary location where issue was detected
+  ArtifactLocation primary_location = 5;
+  
+  // Related locations across artifacts
+  repeated ArtifactLocation related_locations = 6;
+  
+  // Simple suggested fix as a string
+  string suggested_fix = 7;
 }
 
-// Step 6: Finalize Problem Statement
-service ProblemStatementFinalizer {
-  rpc FinalizeProblemStatement(ProblemStatementFinalizerRequest) returns (ProblemStatementFinalizerResponse) {}
-}
+message ConsistencyCheckResponse {
+  repeated ConsistencyIssue issues = 1;
 
-// Step 7: Configure Grading
-service GradingConfigurator {
-  rpc ConfigureGrading(GradingConfiguratorRequest) returns (GradingConfiguratorResponse) {}
-}
-
-// Step 8: Verify Configuration
-service ConfigurationVerifier {
-  rpc CheckInconsistencies(InconsistencyCheckRequest) returns (InconsistencyCheckResponse) {}
+  Metadata metadata = 2;
 }
 
 message RewriteProblemStatementRequest {

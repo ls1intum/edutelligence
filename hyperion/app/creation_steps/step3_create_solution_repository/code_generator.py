@@ -6,7 +6,6 @@ from typing import List, Dict, Any
 from langchain_core.language_models.chat_models import BaseLanguageModel
 
 from .models import SolutionCreationContext, SolutionPlan, FileStructure
-from app.grpc.models import Repository, RepositoryFile
 from .exceptions import SolutionCreatorException
 from ..workspace.file_manager import FileManager
 
@@ -45,7 +44,7 @@ class CodeGenerator:
             context = self._create_solution_repository(context)
         except Exception as e:
             logger.error(f"CodeGenerator execution failed: {e}", exc_info=True)
-            raise SolutionCreatorException(f"CodeGenerator failed: {e}")
+            raise SolutionCreatorException(f"CodeGenerator failed: {e}") from e
 
         logger.info("Completed Phase 1: Solution Planning & Structure")
         return context
@@ -75,17 +74,15 @@ class CodeGenerator:
             You are an expert software engineer tasked with creating a solution plan for a programming exercise.
 
             Problem Statement:
-            Title: {context.problem_statement.title}
-            Description: {context.problem_statement.description}
+            Title: {context.boundary_conditions.title}
+            Problem Statement: {context.boundary_conditions.problem_statement}
 
             Boundary Conditions:
             - Programming Language: {context.boundary_conditions.programming_language}
             - Project Type: {context.boundary_conditions.project_type}
-            - Difficulty: {context.boundary_conditions.difficulty}
 
             Please analyze the problem and provide a detailed solution plan.
-            Consider the programming language, project type, and difficulty
-            level when making your recommendations.
+            Consider the programming language and project type when making your recommendations.
 
             Your response must be a valid JSON object with the following structure:
             {{
@@ -111,7 +108,9 @@ class CodeGenerator:
 
     def _parse_solution_plan_response(self, response: str) -> SolutionPlan:
         """Parse the response from the AI model into a SolutionPlan object."""
-        print(f"Parsing solution plan response (first 100 chars): {response[:100]}")
+        logger.debug(
+            f"Parsing solution plan response (first 100 chars): {response[:100]}"
+        )
         try:
             parsed_data: Dict[str, Any] = json.loads(response.strip())
 
@@ -124,24 +123,30 @@ class CodeGenerator:
             design_patterns: List[str] = parsed_data.get("design_patterns", [])
 
             if len(architecture_description) == 0:
-                print(
+                logger.debug(
                     "No architecture description found in response, using raw response"
                 )
                 architecture_description = response
             if len(required_classes) == 0:
-                print("Required classes is not a list in response, using empty list")
+                logger.debug(
+                    "Required classes is not a list in response, using empty list"
+                )
                 required_classes = []
             if len(required_functions) == 0:
-                print("Required functions is not a list in response, using empty list")
+                logger.debug(
+                    "Required functions is not a list in response, using empty list"
+                )
                 required_functions = []
             if len(algorithms) == 0:
-                print("Algorithms is not a list in response, using empty list")
+                logger.debug("Algorithms is not a list in response, using empty list")
                 algorithms = []
             if len(design_patterns) == 0:
-                print("Design patterns is not a list in response, using empty list")
+                logger.debug(
+                    "Design patterns is not a list in response, using empty list"
+                )
                 design_patterns = []
 
-            print("Successfully parsed solution plan from JSON response")
+            logger.debug("Successfully parsed solution plan from JSON response")
             return SolutionPlan(
                 architecture_description=architecture_description,
                 required_classes=required_classes,
@@ -151,13 +156,15 @@ class CodeGenerator:
             )
 
         except json.JSONDecodeError as e:
-            print(f"Invalid JSON in response, using fallback solution plan: {e}")
+            logger.warning(
+                f"Invalid JSON in response, using fallback solution plan: {e}"
+            )
         except (KeyError, ValueError, TypeError) as e:
-            print(f"Invalid solution plan structure, using fallback: {e}")
+            logger.warning(f"Invalid solution plan structure, using fallback: {e}")
         except Exception as e:
-            print(f"Unexpected error parsing solution plan, using fallback: {e}")
+            logger.error(f"Unexpected error parsing solution plan, using fallback: {e}")
 
-        print(
+        logger.info(
             "Using fallback solution plan with raw response as architecture description"
         )
         return SolutionPlan(
@@ -210,13 +217,12 @@ class CodeGenerator:
             structure for a programming exercise solution.
 
             Problem Statement:
-            Title: {context.problem_statement.title}
-            Description: {context.problem_statement.description}
+            Title: {context.boundary_conditions.title}
+            Problem Statement: {context.boundary_conditions.problem_statement}
 
             Boundary Conditions:
             - Programming Language: {context.boundary_conditions.programming_language}
             - Project Type: {context.boundary_conditions.project_type}
-            - Difficulty: {context.boundary_conditions.difficulty}
 
             Solution Plan:
             Architecture: {architecture_desc}
@@ -241,8 +247,8 @@ class CodeGenerator:
 
             Guidelines by Project Type:
             - **PLAIN**: Simple directory structure with source files
-            - **MAVEN**: Standard Maven directory structure (src/main/java, src/test/java, pom.xml)
-            - **GRADLE**: Standard Gradle structure (src/main/java, src/test/java, build.gradle)
+            - **PLAIN_MAVEN**: Standard Maven directory structure (src/main/java, src/test/java, pom.xml)
+            - **PLAIN_GRADLE**: Standard Gradle structure (src/main/java, src/test/java, build.gradle)
 
             Guidelines by Programming Language:
             - **JAVA**: Use package structure, .java files, appropriate build files
@@ -255,7 +261,9 @@ class CodeGenerator:
 
     def _parse_file_structure_response(self, response: str) -> FileStructure:
         """Parse the response from the AI model into a FileStructure object."""
-        print(f"Parsing file structure response (first 100 chars): {response[:100]}")
+        logger.debug(
+            f"Parsing file structure response (first 100 chars): {response[:100]}"
+        )
         try:
             parsed_data: Dict[str, Any] = json.loads(response.strip())
 
@@ -273,7 +281,7 @@ class CodeGenerator:
                 b.strip().replace("\\", "/") for b in build_files if b.strip()
             ]
 
-            print(
+            logger.debug(
                 f"Successfully parsed file structure: {len(directories)} dirs, "
                 f"{len(files)} files, {len(build_files)} build files"
             )
@@ -282,13 +290,17 @@ class CodeGenerator:
             )
 
         except json.JSONDecodeError as e:
-            print(f"Invalid JSON in file structure response, using fallback: {e}")
+            logger.warning(
+                f"Invalid JSON in file structure response, using fallback: {e}"
+            )
         except (KeyError, ValueError, TypeError) as e:
-            print(f"Invalid file structure format, using fallback: {e}")
+            logger.warning(f"Invalid file structure format, using fallback: {e}")
         except Exception as e:
-            print(f"Unexpected error parsing file structure, using fallback: {e}")
+            logger.error(
+                f"Unexpected error parsing file structure, using fallback: {e}"
+            )
 
-        print("Using empty file structure as fallback")
+        logger.info("Using empty file structure as fallback")
         return FileStructure(directories=[], files=[], build_files=[])
 
     async def _step_1_3_generate_headers(
@@ -350,13 +362,12 @@ class CodeGenerator:
             function headers for a specific file in a programming exercise solution.
 
             Problem Statement:
-            Title: {context.problem_statement.title}
-            Description: {context.problem_statement.description}
+            Title: {context.boundary_conditions.title}
+            Problem Statement: {context.boundary_conditions.problem_statement}
 
             Boundary Conditions:
             - Programming Language: {context.boundary_conditions.programming_language}
             - Project Type: {context.boundary_conditions.project_type}
-            - Difficulty: {context.boundary_conditions.difficulty}
 
             Solution Plan:
             Architecture: {architecture_desc}
@@ -398,7 +409,9 @@ class CodeGenerator:
 
     def _parse_file_headers_response(self, response: str, file_path: str) -> str:
         """Parse the response from the AI model for file headers."""
-        print(f"Parsing headers for {file_path} (first 100 chars): {response[:100]}")
+        logger.debug(
+            f"Parsing headers for {file_path} (first 100 chars): {response[:100]}"
+        )
         try:
             content = response.strip()
 
@@ -417,13 +430,13 @@ class CodeGenerator:
             if content and not content.endswith("\n"):
                 content += "\n"
 
-            print(
+            logger.debug(
                 f"Successfully parsed headers for {file_path}: {len(content)} characters"
             )
             return content
 
         except Exception as e:
-            print(f"Error parsing headers response for {file_path}: {e}")
+            logger.error(f"Error parsing headers response for {file_path}: {e}")
             return response.strip() + "\n"
 
     def _determine_file_purpose(
@@ -508,86 +521,71 @@ class CodeGenerator:
             solution_plan.required_functions if solution_plan else []
         )
         algorithms: List[str] = solution_plan.algorithms if solution_plan else []
-        design_patterns: List[str] = (
-            solution_plan.design_patterns if solution_plan else []
-        )
-
         file_purpose: str = self._determine_file_purpose(file_path, context)
-        all_files: List[str] = (
-            context.file_structure.files if context.file_structure else []
-        )
 
         other_files_context: str = self._get_other_files_context(context, file_path)
 
         prompt = f"""
-            You are an expert software engineer tasked with implementing the
-            complete solution for a programming exercise file.
+            You are an expert software engineer tasked with implementing the complete
+            logic for a specific file in a programming exercise solution.
 
             Problem Statement:
-            Title: {context.problem_statement.title}
-            Description: {context.problem_statement.description}
+            Title: {context.boundary_conditions.title}
+            Problem Statement: {context.boundary_conditions.problem_statement}
 
             Boundary Conditions:
             - Programming Language: {context.boundary_conditions.programming_language}
             - Project Type: {context.boundary_conditions.project_type}
-            - Difficulty: {context.boundary_conditions.difficulty}
 
             Solution Plan:
             Architecture: {architecture_desc}
             Required Classes: {', '.join(required_classes) if required_classes else 'None specified'}
             Required Functions: {', '.join(required_functions) if required_functions else 'None specified'}
             Algorithms: {', '.join(algorithms) if algorithms else 'None specified'}
-            Design Patterns: {', '.join(design_patterns) if design_patterns else 'None specified'}
 
-            File Structure Context:
-            All Files: {', '.join(all_files)}
+            File Context:
             Current File: {file_path}
             File Purpose: {file_purpose}
 
-            Current File Content (Headers Only):
-            ```
+            Current File Headers:
             {existing_content}
-            ```
 
             Other Files Context:
             {other_files_context}
 
-            Generate the COMPLETE implementation for the file "{file_path}". Requirements:
+            Generate the complete implementation for the file "{file_path}". Requirements:
 
-            1. **Keep All Headers**: Preserve all existing imports, class definitions,
-            function signatures, and documentation
-            2. **Implement All Functions**: Add complete implementation bodies to all functions and methods
-            3. **Follow Solution Plan**: Implement the algorithms and design patterns specified in the solution plan
-            4. **Solve the Problem**: Ensure the implementation actually solves the
-            problem described in the problem statement
-            5. **Maintain Consistency**: Ensure the implementation works cohesively with other files in the project
-            6. **Handle Edge Cases**: Include proper error handling and edge case management
-            7. **Code Quality**: Write clean, readable, and well-commented code
-            8. **Language Conventions**: Follow
+            1. **Complete Implementation**: Fill in all method bodies and function implementations
+            2. **Algorithm Implementation**: Implement the required algorithms and logic
+            3. **Error Handling**: Add appropriate error handling and validation
+            4. **Documentation**: Maintain existing documentation and add implementation comments
+            5. **Integration**: Ensure the implementation works with other files in the project
+            6. **Best Practices**: Follow
             {context.boundary_conditions.programming_language} best practices and conventions
 
-            Implementation Guidelines:
-            - Replace all "TODO" comments with actual implementation
-            - Add inline comments for complex logic
-            - Ensure proper return values and types
-            - Handle input validation where appropriate
-            - Make the code production-ready and robust
+            Important Guidelines:
+            - **Replace the entire file content** with the complete implementation
+            - **Keep existing structure** but add full implementation
+            - **Implement all methods and functions** completely
+            - **Add necessary imports** at the top of the file
+            - **Follow the solution plan** and architecture requirements
+            - **Make it functional** - the code should be executable and solve the problem
 
-            Generate ONLY the complete code content for this file. Do not include explanations or markdown formatting.
+            Generate ONLY the complete file content. Do not include explanations or markdown formatting.
         """
         return prompt.strip()
 
     def _get_other_files_context(
         self, context: SolutionCreationContext, current_file_path: str
     ) -> str:
-        """Get context from other files to maintain consistency.
+        """Get context about other files in the project.
 
         Args:
             context: The solution creation context
-            current_file_path: Path to the current file being processed
+            current_file_path: Path to the current file
 
         Returns:
-            Context string describing other files
+            String containing context about other files
         """
         if not context.file_structure or not context.file_structure.files:
             return "No other files in the project."
@@ -597,97 +595,100 @@ class CodeGenerator:
         ]
 
         if not other_files:
-            return "This is the only file in the project."
+            return "No other files in the project."
 
-        context_parts = []
-
-        for file_path in other_files[:5]:
+        context_lines = []
+        for file_path in other_files[
+            :5
+        ]:  # Limit to first 5 files to avoid token limits
             try:
                 file_content = self.file_manager.read_file(context, file_path)
-                preview = self._get_file_preview(file_content, file_path)
-                context_parts.append(f"File {file_path}:\n{preview}")
+                file_preview = self._get_file_preview(file_content, file_path)
+                context_lines.append(f"File: {file_path}\n{file_preview}")
             except Exception as e:
-                print(
-                    f"   [CodeGenerator] Could not read file {file_path} for context: {e}"
-                )
-                context_parts.append(f"File {file_path}: (Could not read content)")
+                context_lines.append(f"File: {file_path}\nError reading file: {e}")
 
-        if len(other_files) > 3:
-            context_parts.append(f"... and {len(other_files) - 3} more files")
-
-        return "\n\n".join(context_parts)
+        return "\n\n".join(context_lines)
 
     def _get_file_preview(self, content: str, file_path: str) -> str:
-        """Get a preview of file content showing key signatures.
+        """Get a preview of a file's content.
 
         Args:
-            content: Full file content
+            content: The file content
             file_path: Path to the file
 
         Returns:
-            Preview string with key signatures
+            String containing a preview of the file content
         """
+        if not content.strip():
+            return "Empty file"
+
         lines = content.split("\n")
-        preview_lines = []
+        if len(lines) <= 20:
+            return content
 
-        for i, line in enumerate(lines[:15]):
-            stripped = line.strip()
-
-            if (
-                stripped.startswith(
-                    (
-                        "import ",
-                        "from ",
-                        "class ",
-                        "def ",
-                        "public ",
-                        "private ",
-                        "protected ",
-                    )
-                )
-                or stripped.startswith("/**")
-                or stripped.startswith('"""')
-                or "(" in stripped
-                and ":" in stripped
-            ):
-                preview_lines.append(line)
-            elif stripped.startswith("//") or stripped.startswith("#"):
-                preview_lines.append(line)
-            elif not stripped:  # Empty line
-                preview_lines.append("")
-            elif "TODO" in stripped:
-                preview_lines.append(line)
-                break
-
-        preview = "\n".join(preview_lines)
-        if len(lines) > 15:
-            preview += "\n// ... (rest of file)"
-
-        return preview
+        # Show first 10 lines and last 5 lines
+        preview_lines = lines[:10] + ["... (content truncated) ..."] + lines[-5:]
+        return "\n".join(preview_lines)
 
     def _create_solution_repository(
         self, context: SolutionCreationContext
     ) -> SolutionCreationContext:
-        """Package the generated files into a Repository object."""
-        logger.info("Creating repository object from generated files.")
-        if not context.file_structure:
-            logger.warning("No file structure found, cannot create repository object.")
-            return context
+        """Create the solution repository from the generated files.
 
-        repo_files = []
-        all_files = (context.file_structure.files or []) + (
-            context.file_structure.build_files or []
-        )
-        for file_path in all_files:
-            try:
-                content = self.file_manager.read_file(context, file_path)
-                repo_files.append(RepositoryFile(path=file_path, content=content))
-                logger.debug(f"Read file '{file_path}' for repository object.")
-            except Exception as e:
-                logger.error(
-                    f"Could not read file '{file_path}' to create repository object: {e}"
-                )
+        Args:
+            context: The solution creation context
 
-        context.solution_repository = Repository(files=repo_files)
-        logger.info(f"Created repository with {len(repo_files)} files.")
+        Returns:
+            Updated context with solution repository
+        """
+        logger.info("Creating solution repository from generated files")
+
+        try:
+            # Import at runtime to avoid protobuf version issues
+            from app.grpc import hyperion_pb2
+
+            repository_files = []
+
+            if context.file_structure:
+                # Add source files
+                for file_path in context.file_structure.files:
+                    try:
+                        file_content = self.file_manager.read_file(context, file_path)
+                        repository_files.append(
+                            hyperion_pb2.RepositoryFile(
+                                path=file_path, content=file_content
+                            )
+                        )
+                        logger.debug(f"Added file to repository: {file_path}")
+                    except Exception as e:
+                        logger.warning(f"Failed to read file {file_path}: {e}")
+
+                # Add build files
+                for file_path in context.file_structure.build_files:
+                    try:
+                        file_content = self.file_manager.read_file(context, file_path)
+                        repository_files.append(
+                            hyperion_pb2.RepositoryFile(
+                                path=file_path, content=file_content
+                            )
+                        )
+                        logger.debug(f"Added build file to repository: {file_path}")
+                    except Exception as e:
+                        logger.warning(f"Failed to read build file {file_path}: {e}")
+
+            context.solution_repository = hyperion_pb2.Repository(
+                files=repository_files
+            )
+            logger.info(
+                f"Solution repository created with {len(repository_files)} files"
+            )
+
+        except Exception as e:
+            logger.error(f"Failed to create solution repository: {e}")
+            # Import at runtime to avoid protobuf version issues
+            from app.grpc import hyperion_pb2
+
+            context.solution_repository = hyperion_pb2.Repository(files=[])
+
         return context
