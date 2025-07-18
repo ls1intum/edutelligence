@@ -6,17 +6,18 @@ class LearnerProfile(BaseModel):
     """
     Model representing learner profile.
 
-    Each preference is boolean.
-    - is_brief_feedback: True if the learner prefers brief feedback, False if they prefer detailed feedback.
-    - is_formal_feedback: True if the learner prefers formal feedback, False if they prefer friendly feedback.
+    Each preference is on a scale from 1 to 3, where:
+    - 1 represents one extreme (e.g., brief or friendly)
+    - 3 represents the opposite extreme (e.g., detailed or formal)
+    - 2 represents the neutral case - no influence on the generation
     """
-    is_brief_feedback: Annotated[bool, Field(
-        strict=True,
-        description="Preference for brief vs detailed feedback."
+    feedbackDetail: Annotated[int, Field(
+        strict=True, ge=1, le=3,
+        description="Preference for brief (1) vs detailed (3) feedback.."
     )]
-    is_formal_feedback: Annotated[bool, Field(
+    feedbackFormality: Annotated[int, Field(
         strict=True,
-        description="Preference for formal vs friendly feedback."
+        description="Preference for friendly (1) vs formal (3) feedback."
     )]
     class Config:
         @staticmethod
@@ -24,35 +25,40 @@ class LearnerProfile(BaseModel):
             return ''.join([s.split('_')[0]] + [word.capitalize() for word in s.split('_')[1:]])
         allow_population_by_field_name = True
 
-    def directive_brief_detailed(self) -> str:
-        if self.is_brief_feedback:
+    def _get_feedback_detail_prompt(self) -> str:
+        if self.feedbackDetail == 1:
             return (
                 "Keep the feedback short and direct — ideally 1 to 2 sentences.\n"
                 "Example 1: Add an index on the user_id column to improve performance.\n"
                 "Example 2: Clarify your thesis statement in the introduction to strengthen your argument.\n"
             )
-        return (
-            "Give detailed feedback with multiple sentences, examples, and background reasoning where relevant.\n"
-            "Example 1: Adding an index on user_id improves query speed by allowing the database to locate relevant rows efficiently without scanning the entire table, which is crucial for scaling.\n"
-            "Example 2: Introducing your main argument clearly in the essay's opening not only frames the reader's expectations but also strengthens your persuasiveness, a technique often recommended in academic writing.\n"
-            )
+        if self.feedbackDetail == 3:
+            return (
+                "Give detailed feedback with multiple sentences, examples, and background reasoning where relevant.\n"
+                "Example 1: Adding an index on user_id improves query speed by allowing the database to locate relevant rows efficiently without scanning the entire table, which is crucial for scaling.\n"
+                "Example 2: Introducing your main argument clearly in the essay's opening not only frames the reader's expectations but also strengthens your persuasiveness, a technique often recommended in academic writing.\n"
+                )
+        return ""
 
-    def directive_formal_friendly(self) -> str:
-        if self.is_formal_feedback:
+    def _get_feedback_formality_prompt(self) -> str:
+        if self.feedbackFormality == 1:
+            return (
+                "Provide feedback in a friendly and engaging tone, like a tutor would. Use emojis to make the feedback more engaging 👍👉🙌🚀🎯✏️➡️. Motivate the learner to improve.\n"
+                "Example 1: 💪 Let's boost your query performance by adding an index on the user_id column! 🚀\n"
+                "Example 2: 👉 Introducing your main argument clearly in the essay's opening not only frames the reader's expectations but also strengthens your persuasiveness, a technique often recommended in academic writing. 📚\n"
+            )
+        if self.feedbackFormality == 3:
             return (
                 "Provide feedback in a formal and professional tone, like a teacher would, keep the neutral tone.\n"
                 "Example 1: Add an index on the user_id column to improve performance.\n"
                 "Example 2: Clarify your thesis statement in the introduction to strengthen your argument.\n"
             )
-        return (
-            "Provide feedback in a friendly and engaging tone, like a tutor would. Use emojis to make the feedback more engaging 👍👉🙌🚀🎯✏️➡️. Motivate the learner to improve.\n"
-            "Example 1: 💪 Let's boost your query performance by adding an index on the user_id column! 🚀\n"
-            "Example 2: 👉 Introducing your main argument clearly in the essay's opening not only frames the reader's expectations but also strengthens your persuasiveness, a technique often recommended in academic writing. 📚\n"
-        )
+        return ""
 
-    def to_feedback_style_description(self) -> str:
+    def get_prompt(self) -> str:
+        guideline = "Generate feedback according to the following instructions:\n" if self.feedbackDetail != 2 and self.feedbackFormality != 2 else ""
         return (
-            f"Generate feedback according to the following instructions:\n"
-            f"1. {self.directive_brief_detailed()}\n"
-            f"2. {self.directive_formal_friendly()}\n"
+            f"{guideline}"
+            f"1. {self._get_feedback_detail_prompt()}\n"
+            f"2. {self._get_feedback_formality_prompt()}\n"
         )

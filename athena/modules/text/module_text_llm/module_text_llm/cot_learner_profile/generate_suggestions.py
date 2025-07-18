@@ -45,8 +45,8 @@ async def generate_suggestions(
             "Learner profile was not provided - continuing with the default values."
         )
         learner_profile = LearnerProfile(
-            is_brief_feedback=True,
-            is_formal_feedback=True,
+            feedback_detail=2,
+            feedback_formality=2,
         )
 
     # Inject student preferences into the prompt
@@ -59,7 +59,7 @@ async def generate_suggestions(
         "problem_statement": exercise.problem_statement or "No problem statement.",
         "example_solution": exercise.example_solution,
         "submission": add_sentence_numbers(submission.text),
-        "learner_profile": learner_profile.to_feedback_style_description(),
+        "learner_profile": learner_profile.get_prompt(),
     }
 
     chat_prompt = get_chat_prompt(
@@ -110,7 +110,7 @@ async def generate_suggestions(
     second_prompt_input = {
         "answer": initial_result.dict(),
         "submission": add_sentence_numbers(submission.text),
-        "learner_profile": learner_profile.to_feedback_style_description(),
+        "learner_profile": learner_profile.get_prompt(),
     }
 
     second_chat_prompt = get_chat_prompt(
