@@ -80,6 +80,10 @@ async def generate_suggestions(
         ],
     )
 
+    if initial_result is None:
+        logger.warning("Initial assessment returned None – no feedback generated.")
+        return []
+
     second_prompt_input = {
         "example_solution": exercise.example_solution,
         "max_points": exercise.max_points,
