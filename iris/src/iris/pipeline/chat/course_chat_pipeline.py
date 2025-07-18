@@ -1,9 +1,8 @@
 import json
 import logging
 import traceback
-import typing
 from datetime import datetime
-from typing import List, Optional, Union
+from typing import Any, Callable, List, Optional
 
 import pytz
 from langchain.agents import AgentExecutor, create_tool_calling_agent
@@ -21,14 +20,21 @@ from ...common.message_converters import (
 )
 from ...common.pipeline_enum import PipelineEnum
 from ...common.pyris_message import PyrisMessage
+from ...common.tools import (
+    create_tool_faq_content_retrieval,
+    create_tool_get_competency_list,
+    create_tool_get_course_details,
+    create_tool_get_exercise_list,
+    create_tool_get_exercise_problem_statement,
+    create_tool_get_student_exercise_metrics,
+    create_tool_lecture_content_retrieval,
+)
 from ...domain import CourseChatPipelineExecutionDTO, FeatureDTO
 from ...domain.chat.interaction_suggestion_dto import (
     InteractionSuggestionPipelineExecutionDTO,
 )
 from ...domain.data.metrics.competency_jol_dto import CompetencyJolDTO
-from ...domain.retrieval.lecture.lecture_retrieval_dto import (
-    LectureRetrievalDTO,
-)
+from ...domain.data.text_message_content_dto import TextMessageContentDTO
 from ...llm import (
     CompletionArguments,
     ModelVersionRequestHandler,
@@ -36,7 +42,7 @@ from ...llm import (
 from ...llm.external.model import LanguageModel
 from ...llm.langchain import IrisLangchainChatModel
 from ...retrieval.faq_retrieval import FaqRetrieval
-from ...retrieval.faq_retrieval_utils import format_faqs, should_allow_faq_tool
+from ...retrieval.faq_retrieval_utils import should_allow_faq_tool
 from ...retrieval.lecture.lecture_retrieval import LectureRetrieval
 from ...vector_database.database import VectorDatabase
 from ...vector_database.lecture_unit_schema import LectureUnitSchema
@@ -102,8 +108,6 @@ class CourseChatPipeline(Pipeline):
     prompt: ChatPromptTemplate
     variant: str
     event: str | None
-    lecture_content: LectureRetrievalDTO = None
-    retrieved_faqs: List[dict] = None
 
     def __init__(
         self,
@@ -154,233 +158,6 @@ class CourseChatPipeline(Pipeline):
             :param dto: The pipeline execution data transfer object
             :param kwargs: The keyword arguments
         """
-
-        # Define tools
-        def get_exercise_list() -> list[dict]:
-            """
-            Get the list of exercises in the course.
-            Use this if the student asks you about an exercise.
-            Note: The exercise contains a list of submissions (timestamp and score) of this student so you
-            can provide additional context regarding their progress and tendencies over time.
-            Also, ensure to use the provided current date and time and compare it to the start date and due date etc.
-            Do not recommend that the student should work on exercises with a past due date.
-            The submissions array tells you about the status of the student in this exercise:
-            You see when the student submitted the exercise and what score they got.
-            A 100% score means the student solved the exercise correctly and completed it.
-            """
-            self.callback.in_progress("Reading exercise list ...")
-            current_time = datetime.now(tz=pytz.UTC)
-            exercises = []
-            for exercise in dto.course.exercises:
-                exercise_dict = exercise.model_dump()
-                exercise_dict["due_date_over"] = (
-                    exercise.due_date < current_time if exercise.due_date else None
-                )
-                # remove the problem statement from the exercise dict
-                exercise_dict.pop("problem_statement", None)
-                exercises.append(exercise_dict)
-            return exercises
-
-        def get_exercise_problem_statement(exercise_id: int) -> str:
-            """
-            Get the problem statement of the exercise with the given ID.
-            Use this if the student asks you about the problem statement of an exercise or if you need
-            to know more about the content of an exercise to provide more informed advice.
-            Important: You have to pass the correct exercise ID here.
-            DO IT ONLY IF YOU KNOW THE ID DEFINITELY. NEVER GUESS THE ID.
-            Note: This operation is idempotent. Repeated calls with the same ID will return the same output.
-            You can only use this if you first queried the exercise list and looked up the ID of the exercise.
-            """
-            self.callback.in_progress(
-                f"Reading exercise problem statement (id: {exercise_id}) ..."
-            )
-            exercise = next(
-                (ex for ex in dto.course.exercises if ex.id == exercise_id), None
-            )
-            if exercise:
-                return exercise.problem_statement or "No problem statement provided"
-            else:
-                return "Exercise not found"
-
-        def get_course_details() -> dict:
-            """
-            Get the following course details: course name, course description, programming language, course start date,
-            and course end date.
-            """
-            self.callback.in_progress("Reading course details ...")
-            return {
-                "course_name": (
-                    dto.course.name if dto.course else "No course provided"
-                ),
-                "course_description": (
-                    dto.course.description
-                    if dto.course and dto.course.description
-                    else "No course description provided"
-                ),
-                "programming_language": (
-                    dto.course.default_programming_language
-                    if dto.course and dto.course.default_programming_language
-                    else "No course provided"
-                ),
-                "course_start_date": (
-                    datetime_to_string(dto.course.start_time)
-                    if dto.course and dto.course.start_time
-                    else "No start date provided"
-                ),
-                "course_end_date": (
-                    datetime_to_string(dto.course.end_time)
-                    if dto.course and dto.course.end_time
-                    else "No end date provided"
-                ),
-            }
-
-        def get_student_exercise_metrics(
-            exercise_ids: typing.List[int],
-        ) -> Union[dict[int, dict], str]:
-            """
-            Get the student exercise metrics for the given exercises.
-            Important: You have to pass the correct exercise ids here. If you don't know it,
-            check out the exercise list first and look up the id of the exercise you are interested in.
-            UNDER NO CIRCUMSTANCES GUESS THE ID, such as 12345. Always use the correct ids.
-            You must pass an array of IDs. It can be more than one.
-            The following metrics are returned:
-            - global_average_score: The average score of all students in the exercise.
-            - score_of_student: The score of the student.
-            - global_average_latest_submission: The average relative time of the latest
-            submissions of all students in the exercise.
-            - latest_submission_of_student: The relative time of the latest submission of the student.
-            """
-            self.callback.in_progress("Checking your statistics ...")
-            if not dto.metrics or not dto.metrics.exercise_metrics:
-                return "No data available!! Do not requery."
-            metrics = dto.metrics.exercise_metrics
-            if metrics.average_score and any(
-                exercise_id in metrics.average_score for exercise_id in exercise_ids
-            ):
-                return {
-                    exercise_id: {
-                        "global_average_score": metrics.average_score[exercise_id],
-                        "score_of_student": metrics.score.get(exercise_id, None),
-                        "global_average_latest_submission": metrics.average_latest_submission.get(
-                            exercise_id, None
-                        ),
-                        "latest_submission_of_student": metrics.latest_submission.get(
-                            exercise_id, None
-                        ),
-                    }
-                    for exercise_id in exercise_ids
-                    if exercise_id in metrics.average_score
-                }
-            else:
-                return "No data available! Do not requery."
-
-        def get_competency_list() -> list:
-            """
-            Get the list of competencies in the course.
-            Exercises might be associated with competencies. A competency is a skill or knowledge that a student
-            should have after completing the course, and instructors may add lectures and exercises
-            to these competencies.
-            You can use this if the students asks you about a competency, or if you want to provide additional context
-            regarding their progress overall or in a specific area.
-            A competency has the following attributes: name, description, taxonomy, soft due date, optional,
-            and mastery threshold.
-            The response may include metrics for each competency, such as progress and mastery (0% - 100%).
-            These are system-generated.
-            The judgment of learning (JOL) values indicate the self-reported mastery by the student (0 - 5, 5 star).
-            The object describing it also indicates the system-computed mastery at the time when the student
-            added their JoL assessment.
-            """
-            self.callback.in_progress("Reading competency list ...")
-            if not dto.metrics or not dto.metrics.competency_metrics:
-                return dto.course.competencies
-            competency_metrics = dto.metrics.competency_metrics
-            return [
-                {
-                    "info": competency_metrics.competency_information.get(comp, None),
-                    "exercise_ids": competency_metrics.exercises.get(comp, []),
-                    "progress": competency_metrics.progress.get(comp, 0),
-                    "mastery": get_mastery(
-                        competency_metrics.progress.get(comp, 0),
-                        competency_metrics.confidence.get(comp, 0),
-                    ),
-                    "judgment_of_learning": (
-                        competency_metrics.jol_values.get[comp].json()
-                        if competency_metrics.jol_values
-                        and comp in competency_metrics.jol_values
-                        else None
-                    ),
-                }
-                for comp in competency_metrics.competency_information
-            ]
-
-        def lecture_content_retrieval() -> str:
-            """
-            Retrieve content from indexed lecture content.
-            This will run a RAG retrieval based on the chat history on the indexed lecture slides,
-            the indexed lecture transcriptions and the indexed lecture segments,
-            which are summaries of the lecture slide content and lecture transcription content from one slide a
-            nd return the most relevant paragraphs.
-            Use this if you think it can be useful to answer the student's question, or if the student explicitly asks
-            a question about the lecture content or slides.
-            Only use this once.
-            """
-            self.callback.in_progress("Retrieving lecture content ...")
-            self.lecture_content = self.lecture_retriever(
-                query=query.contents[0].text_content,
-                course_id=dto.course.id,
-                chat_history=history,
-                lecture_id=None,
-                lecture_unit_id=None,
-                base_url=dto.settings.artemis_base_url,
-            )
-
-            result = "Lecture slide content:\n"
-            for paragraph in self.lecture_content.lecture_unit_page_chunks:
-                result += (
-                    f"Lecture: {paragraph.lecture_name}, Unit: {paragraph.lecture_unit_name}, "
-                    f"Page: {paragraph.page_number}\nContent:\n---{paragraph.page_text_content}---\n\n"
-                )
-
-            result += "Lecture transcription content:\n"
-            for paragraph in self.lecture_content.lecture_transcriptions:
-                result += (
-                    f"Lecture: {paragraph.lecture_name}, Unit: {paragraph.lecture_unit_name}, "
-                    f"Page: {paragraph.page_number}\nContent:\n---{paragraph.segment_text}---\n\n"
-                )
-
-            result += "Lecture segment content:\n"
-            for paragraph in self.lecture_content.lecture_unit_segments:
-                result += (
-                    f"Lecture: {paragraph.lecture_name}, Unit: {paragraph.lecture_unit_name}, "
-                    f"Page: {paragraph.page_number}\nContent:\n---{paragraph.segment_summary}---\n\n"
-                )
-
-            return result
-
-        def faq_content_retrieval() -> str:
-            """
-            Use this tool to retrieve information from indexed FAQs.
-            It is suitable when no other tool fits, it is a common question or the question is frequently asked,
-            or the question could be effectively answered by an FAQ. Also use this if the question is explicitly
-            organizational and course-related. An organizational question about the course might be
-            "What is the course structure?" or "How do I enroll?" or exam related content like "When is the exam".
-            The tool performs a RAG retrieval based on the chat history to find the most relevant FAQs.
-            Each FAQ follows this format: FAQ ID, FAQ Question, FAQ Answer.
-            Respond to the query concisely and solely using the answer from the relevant FAQs.
-            This tool should only be used once per query.
-            """
-            self.callback.in_progress("Retrieving faq content ...")
-            self.retrieved_faqs = self.faq_retriever(
-                chat_history=history,
-                student_query=query.contents[0].text_content,
-                result_limit=10,
-                course_name=dto.course.name,
-                course_id=dto.course.id,
-                base_url=dto.settings.artemis_base_url,
-            )
-
-            result = format_faqs(self.retrieved_faqs)
-            return result
 
         # Cache results of tool allowance checks
         allow_lecture_tool = self.should_allow_lecture_tool(dto.course.id)
@@ -437,6 +214,10 @@ class CourseChatPipeline(Pipeline):
         agent_specific_primary_instruction = ""
         system_message_parts = [initial_prompt_main_block]
 
+        # Storage for shared data between tools and pipeline
+        lecture_content_storage: dict[str, Any] = {}
+        faq_storage: dict[str, Any] = {}
+
         try:
             logger.info("Running course chat pipeline...")
             history: List[PyrisMessage] = dto.chat_history[-15:] or []
@@ -450,6 +231,13 @@ class CourseChatPipeline(Pipeline):
 
             query: Optional[PyrisMessage] = (
                 dto.chat_history[-1] if dto.chat_history else None
+            )
+            query_text = (
+                query.contents[0].text_content
+                if query
+                and query.contents
+                and isinstance(query.contents[0], TextMessageContentDTO)
+                else ""
             )
 
             if self.event == "jol":
@@ -506,18 +294,43 @@ class CourseChatPipeline(Pipeline):
                     )
                 # No iris_chat_history_exists_prompt here as history is empty / not relevant for initiation
 
-            tool_list = [
-                get_course_details,
+            # Create tools using builder functions
+            tool_list: list[Callable] = [
+                create_tool_get_course_details(dto, self.callback),
             ]
             if dto.course.exercises:
-                tool_list.append(get_exercise_list)
-                tool_list.append(get_exercise_problem_statement)
+                tool_list.append(create_tool_get_exercise_list(dto, self.callback))
+                tool_list.append(
+                    create_tool_get_exercise_problem_statement(dto, self.callback)
+                )
             if dto.metrics and dto.metrics.exercise_metrics and dto.course.exercises:
-                tool_list.append(get_student_exercise_metrics)
+                tool_list.append(
+                    create_tool_get_student_exercise_metrics(dto, self.callback)
+                )
             if dto.course.competencies and len(dto.course.competencies) > 0:
-                tool_list.append(get_competency_list)
+                tool_list.append(create_tool_get_competency_list(dto, self.callback))
             if allow_lecture_tool:
-                tool_list.append(lecture_content_retrieval)
+                tool_list.append(
+                    create_tool_lecture_content_retrieval(
+                        self.lecture_retriever,
+                        dto,
+                        self.callback,
+                        query_text,
+                        history,
+                        lecture_content_storage,
+                    )
+                )
+            if allow_faq_tool:
+                tool_list.append(
+                    create_tool_faq_content_retrieval(
+                        self.faq_retriever,
+                        dto,
+                        self.callback,
+                        query_text,
+                        history,
+                        faq_storage,
+                    )
+                )
 
             system_message_parts.append(agent_specific_primary_instruction)
             system_message_parts.append(iris_begin_agent_suffix_prompt)
@@ -535,9 +348,6 @@ class CourseChatPipeline(Pipeline):
             messages_for_template.append(("placeholder", "{agent_scratchpad}"))
             self.prompt = ChatPromptTemplate.from_messages(messages_for_template)
 
-            if allow_faq_tool:
-                tool_list.append(faq_content_retrieval)
-
             tools = generate_structured_tools_from_functions(tool_list)
             agent = create_tool_calling_agent(
                 llm=self.llm, tools=tools, prompt=self.prompt
@@ -554,10 +364,10 @@ class CourseChatPipeline(Pipeline):
                 if step.get("output", None):
                     out = step["output"]
 
-            if self.lecture_content:
+            if lecture_content_storage.get("content"):
                 self.callback.in_progress("Augmenting response ...")
                 out = self.citation_pipeline(
-                    self.lecture_content,
+                    lecture_content_storage["content"],
                     out,
                     InformationType.PARAGRAPHS,
                     variant=self.variant,
@@ -565,10 +375,10 @@ class CourseChatPipeline(Pipeline):
                 )
             self.tokens.extend(self.citation_pipeline.tokens)
 
-            if self.retrieved_faqs:
+            if faq_storage.get("faqs"):
                 self.callback.in_progress("Augmenting response ...")
                 out = self.citation_pipeline(
-                    self.retrieved_faqs,
+                    faq_storage["faqs"],
                     out,
                     InformationType.FAQS,
                     variant=self.variant,
@@ -652,10 +462,3 @@ class CourseChatPipeline(Pipeline):
         return filter_variants_by_available_models(
             available_llms, variant_specs, pipeline_name="CourseChatPipeline"
         )
-
-
-def datetime_to_string(dt: Optional[datetime]) -> str:
-    if dt is None:
-        return "No date provided"
-    else:
-        return dt.strftime("%Y-%m-%d %H:%M:%S")
