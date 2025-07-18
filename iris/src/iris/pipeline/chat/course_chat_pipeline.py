@@ -13,7 +13,6 @@ from langchain_core.prompts import (
 )
 from langchain_core.runnables import Runnable
 from langsmith import traceable
-from weaviate.collections.classes.filters import Filter
 
 from ...common.message_converters import (
     convert_iris_message_to_langchain_message,
@@ -44,8 +43,8 @@ from ...llm.langchain import IrisLangchainChatModel
 from ...retrieval.faq_retrieval import FaqRetrieval
 from ...retrieval.faq_retrieval_utils import should_allow_faq_tool
 from ...retrieval.lecture.lecture_retrieval import LectureRetrieval
+from ...retrieval.lecture.lecture_retrieval_utils import should_allow_lecture_tool
 from ...vector_database.database import VectorDatabase
-from ...vector_database.lecture_unit_schema import LectureUnitSchema
 from ...web.status.status_update import (
     CourseChatStatusCallback,
 )
@@ -160,7 +159,7 @@ class CourseChatPipeline(Pipeline):
         """
 
         # Cache results of tool allowance checks
-        allow_lecture_tool = self.should_allow_lecture_tool(dto.course.id)
+        allow_lecture_tool = should_allow_lecture_tool(self.db, dto.course.id)
         allow_faq_tool = should_allow_faq_tool(self.db, dto.course.id)
 
         # Construct the base system prompt
@@ -416,27 +415,6 @@ class CourseChatPipeline(Pipeline):
                 "An error occurred while running the course chat pipeline.",
                 tokens=self.tokens,
             )
-
-    def should_allow_lecture_tool(self, course_id: int) -> bool:
-        """
-        Checks if there are indexed lectures for the given course
-
-        :param course_id: The course ID
-        :return: True if there are indexed lectures for the course, False otherwise
-        """
-        if not course_id:
-            return False
-        # Fetch the first object that matches the course ID with the language property
-        result = self.db.lecture_units.query.fetch_objects(
-            filters=Filter.by_property(LectureUnitSchema.COURSE_ID.value).equal(
-                course_id
-            ),
-            limit=1,
-            return_properties=[
-                LectureUnitSchema.COURSE_NAME.value
-            ],  # Requesting a minimal property
-        )
-        return len(result.objects) > 0
 
     @classmethod
     def get_variants(cls, available_llms: List[LanguageModel]) -> List[FeatureDTO]:

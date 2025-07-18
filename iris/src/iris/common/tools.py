@@ -13,17 +13,28 @@ from ..web.status.status_update import CourseChatStatusCallback
 
 def get_mastery(progress, confidence):
     """
-    Calculates a user's mastery level for competency given the progress.
+    Calculate mastery level for a competency.
 
-    :param progress: The user's progress
-    :param confidence: The user's confidence
-    :return: The mastery level
+    Args:
+        progress (float): The user's progress.
+        confidence (float): The user's confidence.
+
+    Returns:
+        int: Calculated mastery level (0-100).
     """
     return min(100, max(0, round(progress * confidence)))
 
 
 def datetime_to_string(dt: Optional[datetime]) -> str:
-    """Convert datetime to string format."""
+    """
+    Convert a datetime to a formatted string.
+
+    Args:
+        dt (Optional[datetime]): The datetime to convert.
+
+    Returns:
+        str: Formatted datetime or 'No date provided'.
+    """
     if dt is None:
         return "No date provided"
     else:
@@ -34,7 +45,14 @@ def create_tool_get_exercise_list(
     dto: CourseChatPipelineExecutionDTO, callback: CourseChatStatusCallback
 ) -> Callable[[], list[dict]]:
     """
-    Create a tool to get the list of exercises in the course.
+    Create a tool that retrieves the exercise list.
+
+    Args:
+        dto (CourseChatPipelineExecutionDTO): Execution DTO containing course data.
+        callback (CourseChatStatusCallback): Callback for status updates.
+
+    Returns:
+        Callable[[], list[dict]]: Function that returns the list of exercises.
     """
 
     def get_exercise_list() -> list[dict]:
@@ -48,6 +66,9 @@ def create_tool_get_exercise_list(
         The submissions array tells you about the status of the student in this exercise:
         You see when the student submitted the exercise and what score they got.
         A 100% score means the student solved the exercise correctly and completed it.
+
+        Returns:
+            list[dict]: List of exercise data without problem statements.
         """
         callback.in_progress("Reading exercise list ...")
         current_time = datetime.now(tz=pytz.UTC)
@@ -69,7 +90,14 @@ def create_tool_get_exercise_problem_statement(
     dto: CourseChatPipelineExecutionDTO, callback: CourseChatStatusCallback
 ) -> Callable[[int], str]:
     """
-    Create a tool to get the problem statement of an exercise.
+    Create a tool that retrieves an exercise problem statement.
+
+    Args:
+        dto (CourseChatPipelineExecutionDTO): Execution DTO containing course data.
+        callback (CourseChatStatusCallback): Callback for status updates.
+
+    Returns:
+        Callable[[int], str]: Function that returns the problem statement.
     """
 
     def get_exercise_problem_statement(exercise_id: int) -> str:
@@ -81,6 +109,12 @@ def create_tool_get_exercise_problem_statement(
         DO IT ONLY IF YOU KNOW THE ID DEFINITELY. NEVER GUESS THE ID.
         Note: This operation is idempotent. Repeated calls with the same ID will return the same output.
         You can only use this if you first queried the exercise list and looked up the ID of the exercise.
+
+        Args:
+            exercise_id (int): The ID of the exercise.
+
+        Returns:
+            str: The problem statement or an error message if not found.
         """
         callback.in_progress(
             f"Reading exercise problem statement (id: {exercise_id}) ..."
@@ -100,13 +134,23 @@ def create_tool_get_course_details(
     dto: CourseChatPipelineExecutionDTO, callback: CourseChatStatusCallback
 ) -> Callable[[], dict]:
     """
-    Create a tool to get course details.
+    Create a tool that retrieves course details.
+
+    Args:
+        dto (CourseChatPipelineExecutionDTO): Execution DTO containing course data.
+        callback (CourseChatStatusCallback): Callback for status updates.
+
+    Returns:
+        Callable[[], dict]: Function that returns course details.
     """
 
     def get_course_details() -> dict:
         """
         Get the following course details: course name, course description, programming language, course start date,
         and course end date.
+
+        Returns:
+            dict: Course name, description, programming language, start and end dates.
         """
         callback.in_progress("Reading course details ...")
         return {
@@ -140,7 +184,14 @@ def create_tool_get_student_exercise_metrics(
     dto: CourseChatPipelineExecutionDTO, callback: CourseChatStatusCallback
 ) -> Callable[[typing.List[int]], Union[dict[int, dict], str]]:
     """
-    Create a tool to get student exercise metrics.
+    Create a tool that retrieves student exercise metrics.
+
+    Args:
+        dto (CourseChatPipelineExecutionDTO): Execution DTO containing metrics.
+        callback (CourseChatStatusCallback): Callback for status updates.
+
+    Returns:
+        Callable[[List[int]], Union[dict[int, dict], str]]: Function to get metrics.
     """
 
     def get_student_exercise_metrics(
@@ -158,6 +209,12 @@ def create_tool_get_student_exercise_metrics(
         - global_average_latest_submission: The average relative time of the latest
         submissions of all students in the exercise.
         - latest_submission_of_student: The relative time of the latest submission of the student.
+
+        Args:
+            exercise_ids (List[int]): List of exercise IDs to fetch metrics for.
+
+        Returns:
+            Union[dict[int, dict], str]: Metrics per exercise ID or error message.
         """
         callback.in_progress("Checking your statistics ...")
         if not dto.metrics or not dto.metrics.exercise_metrics:
@@ -190,7 +247,14 @@ def create_tool_get_competency_list(
     dto: CourseChatPipelineExecutionDTO, callback: CourseChatStatusCallback
 ) -> Callable[[], list]:
     """
-    Create a tool to get the list of competencies in the course.
+    Create a tool that retrieves the competency list.
+
+    Args:
+        dto (CourseChatPipelineExecutionDTO): Execution DTO containing competencies.
+        callback (CourseChatStatusCallback): Callback for status updates.
+
+    Returns:
+        Callable[[], list]: Function that returns competencies with metrics.
     """
 
     def get_competency_list() -> list:
@@ -208,6 +272,9 @@ def create_tool_get_competency_list(
         The judgment of learning (JOL) values indicate the self-reported mastery by the student (0 - 5, 5 star).
         The object describing it also indicates the system-computed mastery at the time when the student
         added their JoL assessment.
+
+        Returns:
+            list: Competencies with info, exercise IDs, progress, mastery, and JOL.
         """
         callback.in_progress("Reading competency list ...")
         if not dto.metrics or not dto.metrics.competency_metrics:
@@ -244,7 +311,18 @@ def create_tool_lecture_content_retrieval(
     lecture_content_storage: dict,
 ) -> Callable[[], str]:
     """
-    Create a tool to retrieve lecture content.
+    Create a tool that retrieves lecture content using RAG.
+
+    Args:
+        lecture_retriever (LectureRetrieval): Lecture retrieval instance.
+        dto (CourseChatPipelineExecutionDTO): Execution DTO with course data.
+        callback (CourseChatStatusCallback): Callback for status updates.
+        query_text (str): The student's query text.
+        history (List): Chat history messages.
+        lecture_content_storage (dict): Storage for retrieved content.
+
+    Returns:
+        Callable[[], str]: Function that returns lecture content string.
     """
 
     def lecture_content_retrieval() -> str:
@@ -257,6 +335,9 @@ def create_tool_lecture_content_retrieval(
         Use this if you think it can be useful to answer the student's question, or if the student explicitly asks
         a question about the lecture content or slides.
         Only use this once.
+
+        Returns:
+            str: Concatenated lecture slide, transcription, and segment content.
         """
         callback.in_progress("Retrieving lecture content ...")
         lecture_content = lecture_retriever(
@@ -306,7 +387,18 @@ def create_tool_faq_content_retrieval(
     faq_storage: dict,
 ) -> Callable[[], str]:
     """
-    Create a tool to retrieve FAQ content.
+    Create a tool that retrieves FAQ content using RAG.
+
+    Args:
+        faq_retriever (FaqRetrieval): FAQ retrieval instance.
+        dto (CourseChatPipelineExecutionDTO): Execution DTO with course data.
+        callback (CourseChatStatusCallback): Callback for status updates.
+        query_text (str): The student's query text.
+        history (List): Chat history messages.
+        faq_storage (dict): Storage for retrieved FAQs.
+
+    Returns:
+        Callable[[], str]: Function that returns formatted FAQ content.
     """
 
     def faq_content_retrieval() -> str:
@@ -320,6 +412,9 @@ def create_tool_faq_content_retrieval(
         Each FAQ follows this format: FAQ ID, FAQ Question, FAQ Answer.
         Respond to the query concisely and solely using the answer from the relevant FAQs.
         This tool should only be used once per query.
+
+        Returns:
+            str: Formatted string containing relevant FAQ answers.
         """
         callback.in_progress("Retrieving faq content ...")
         retrieved_faqs = faq_retriever(
