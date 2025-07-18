@@ -372,7 +372,7 @@ def run_communication_tutor_suggestions_pipeline_worker(
             base_url=dto.settings.artemis_base_url,
             initial_stages=dto.initial_stages,
         )
-        pipeline = TutorSuggestionPipeline(callback=callback)
+        pipeline = TutorSuggestionPipeline(callback=callback, variant=_variant)
     except Exception as e:
         logger.error("Error preparing communication tutor suggestions pipeline: %s", e)
 

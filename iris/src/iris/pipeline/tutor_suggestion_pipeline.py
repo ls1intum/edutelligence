@@ -1,6 +1,4 @@
-import json
 import logging
-import re
 from typing import List
 
 from langchain_core.output_parsers import StrOutputParser
@@ -13,49 +11,45 @@ from iris.domain import FeatureDTO
 from iris.domain.communication.communication_tutor_suggestion_pipeline_execution_dto import (
     CommunicationTutorSuggestionPipelineExecutionDTO,
 )
+from iris.domain.data.text_exercise_dto import TextExerciseDTO
 from iris.llm import CompletionArguments, ModelVersionRequestHandler
 from iris.llm.external.model import LanguageModel
 from iris.llm.langchain import IrisLangchainChatModel
 from iris.pipeline import Pipeline
-from iris.pipeline.prompts.tutor_suggestion.post_summary_prompt import (
-    post_summary_prompt,
+from iris.pipeline.prompts.tutor_suggestion.question_answered_prompt import (
+    question_answered_prompt,
 )
 from iris.pipeline.shared.utils import filter_variants_by_available_models
+from iris.pipeline.tutor_suggestion_programming_exercise_pipeline import (
+    TutorSuggestionProgrammingExercisePipeline,
+)
+from iris.pipeline.tutor_suggestion_summary_pipeline import (
+    TutorSuggestionSummaryPipeline,
+)
+from iris.pipeline.tutor_suggestion_text_exercise_pipeline import (
+    TutorSuggestionTextExercisePipeline,
+)
 from iris.web.status.status_update import TutorSuggestionCallback
 
 logger = logging.getLogger(__name__)
 
-
-def sort_post_answers(dto):
-    """
-    Sort the answers of the post by their id
-    :param dto: execution data transfer object
-    """
-    dto.post.answers.sort(key=lambda x: x.id)
-    return dto
+ADVANCED_VARIANT = "deepseek-r1:8b"
+DEFAULT_VARIANT = "gemma3:27b"
 
 
-def _extract_json_from_text(text: str):
+def get_channel_type(dto: CommunicationTutorSuggestionPipelineExecutionDTO) -> str:
     """
-    Extracts the JSON string from the given text.
-    This function uses a regular expression to find the JSON string
-    and then attempts to parse it into a Python dictionary.
-    :param text: The input text containing the JSON string.
-    :return: A dictionary representation of the JSON string, or None if parsing fails.
-    :raises json.JSONDecodeError: If the JSON string cannot be parsed.
+    Determines the channel type based on the context of the post.
+    :return: The channel type as a string.
     """
-    json_pattern = re.compile(r"\{.*?\}", re.DOTALL | re.MULTILINE)
-    matches = json_pattern.findall(text)
-
-    if matches:
-        json_str = matches[-1]
-        try:
-            data = json.loads(json_str)
-            return data
-        except json.JSONDecodeError as e:
-            logger.error("JSON decoding failed: %s", e)
-            return None
-    return None
+    if dto.exercise is not None:
+        return "programming_exercise"
+    elif dto.text_exercise is not None:
+        return "text_exercise"
+    elif dto.lecture_id is not None:
+        return "lecture"
+    else:
+        return "general"
 
 
 class TutorSuggestionPipeline(Pipeline):
@@ -68,15 +62,23 @@ class TutorSuggestionPipeline(Pipeline):
     llm: IrisLangchainChatModel
     pipeline: Runnable
     callback: TutorSuggestionCallback
+    variant: str
 
-    def __init__(self, callback: TutorSuggestionCallback):
+    def __init__(self, callback: TutorSuggestionCallback, variant: str = "default"):
         super().__init__(implementation_id="tutor_suggestion_pipeline")
-        completion_args = CompletionArguments()
-        request_handler = ModelVersionRequestHandler(version="gemma3:27b")
+        self.variant = variant
+        completion_args = CompletionArguments(temperature=0, max_tokens=8000)
+
+        if variant == "advanced":
+            model = ADVANCED_VARIANT
+        else:
+            model = DEFAULT_VARIANT
+
         self.llm = IrisLangchainChatModel(
-            request_handler=request_handler,
+            request_handler=ModelVersionRequestHandler(version=model),
             completion_args=completion_args,
         )
+
         self.callback = callback
         self.pipeline = self.llm | StrOutputParser()
         self.tokens = []
@@ -91,49 +93,131 @@ class TutorSuggestionPipeline(Pipeline):
         :param dto: execution data transfer object
         """
         self.callback.in_progress("Summarizing post content")
-        dto = sort_post_answers(dto=dto)
-        summary = self._run_tutor_suggestion_pipeline(dto=dto)
-        self.callback.in_progress("Generated summary of post")
+        summary_pipeline = TutorSuggestionSummaryPipeline(
+            callback=self.callback, variant=self.variant
+        )
         try:
-            post_summary = summary.get("summary")
-        except AttributeError:
-            post_summary = None
+            summary = summary_pipeline(dto=dto)
+        except AttributeError as e:
+            logger.error("AttributeError in summary pipeline: %s", str(e))
+            self.callback.error("Error running summary pipeline")
+            return
+        except Exception as e:
+            logger.error("Unexpected error in summary pipeline: %s", str(e))
+            self.callback.error("Unexpected error running summary pipeline")
+            return
+
+        logger.info(summary)
+
+        if summary is None:
+            self.callback.error("No summary was generated")
+            return
+
+        try:
+            is_question_str = summary.get("is_question", "").lower()
+            is_question = is_question_str in ["yes", "true", "1"]
+            number_of_answers = summary.get("num_answers")
+            summary = summary.get("summary")
+            logger.info(
+                "is_question: %s, num_answers: %s", is_question, number_of_answers
+            )
+        except (AttributeError, TypeError) as e:
+            logger.error("Error parsing summary JSON: %s", str(e))
+            self.callback.error("Error parsing summary JSON")
+            return
+
+        if is_question and number_of_answers > 0:
+            self.callback.in_progress("Checking if questions is already answered")
+
+            prompt = ChatPromptTemplate.from_messages(
+                [("system", question_answered_prompt())]
+            )
+
+            try:
+                response = (prompt | self.pipeline).invoke({"thread_summary": summary})
+                self._append_tokens(
+                    self.llm.tokens, PipelineEnum.IRIS_TUTOR_SUGGESTION_PIPELINE
+                )
+            except Exception as e:
+                logger.error("Error checking if question is answered: %s", str(e))
+                response = "no"
+            if "yes" in response.lower():
+                self.callback.done(
+                    "The question has already been answered",
+                    artifact="The question has already been answered in the thread and should be marked as resolved.",
+                    tokens=self.tokens,
+                )
+                return
+
+        channel_type = get_channel_type(dto)
+
+        logging.info(channel_type)
+        if channel_type == "text_exercise":
+            self._run_text_exercise_pipeline(
+                text_exercise_dto=dto.text_exercise, summary=summary
+            )
+        elif channel_type == "programming_exercise":
+            self._run_programming_exercise_pipeline(dto=dto, summary=summary)
+        elif channel_type == "lecture":
+            self.callback.error("Not implemented yet")
+        else:
+            self.callback.error("Not implemented yet")
+
+    def _run_text_exercise_pipeline(
+        self, text_exercise_dto: TextExerciseDTO, summary: str
+    ):
+        """
+        Run the text exercise pipeline.
+        :param text_exercise_dto: The TextExerciseDTO object containing details about the text exercise.
+        :param summary: The summary of the post.
+        :return: The result of the text exercise pipeline.
+        """
+        self.callback.in_progress("Generating suggestions for text exercise")
+        text_exercise_pipeline = TutorSuggestionTextExercisePipeline(
+            variant=self.variant
+        )
+        try:
+            logging.info(summary)
+            text_exercise_result = text_exercise_pipeline(
+                dto=text_exercise_dto, chat_summary=summary
+            )
+        except AttributeError as e:
+            self.callback.error(f"Error running text exercise pipeline: {e}")
+            return
+
         self.callback.done(
             "Generated tutor suggestions",
-            artifact=post_summary,
+            artifact=text_exercise_result,
             tokens=self.tokens,
         )
 
-    def _run_tutor_suggestion_pipeline(self, dto):
+    def _run_programming_exercise_pipeline(
+        self, dto: CommunicationTutorSuggestionPipelineExecutionDTO, summary: str
+    ):
         """
-        Run the tutor suggestion pipeline.
-        :param dto: execution data transfer object
-        :return: the generated summary
+        Run the programming exercise pipeline.
+        :param dto: The CommunicationTutorSuggestionPipelineExecutionDTO object containing details about the
+        programming exercise.
+        :param summary: The summary of the post.
+        :return: The result of the programming exercise pipeline.
         """
-        self.prompt = ChatPromptTemplate.from_messages(
-            [
-                (
-                    "system",
-                    post_summary_prompt(dto.post),
-                ),
-            ]
+        self.callback.in_progress("Generating suggestions for programming exercise")
+        programming_exercise_pipeline = TutorSuggestionProgrammingExercisePipeline(
+            variant=self.variant
         )
-        for i in range(len(dto.post.answers)):
-            answer = dto.post.answers[i]
-            if answer is not None:
-                logger.info(answer.id)
-                logger.info(answer.content)
-        logger.info(post_summary_prompt(dto.post))
         try:
-            response = (self.prompt | self.pipeline).invoke({})
-            logger.info(response)
-            json_response = _extract_json_from_text(response)
-            self._append_tokens(
-                self.llm.tokens, PipelineEnum.IRIS_TUTOR_SUGGESTION_PIPELINE
+            programming_exercise_result = programming_exercise_pipeline(
+                dto=dto, chat_summary=summary
             )
-            return json_response
-        except Exception as e:
-            raise e
+        except AttributeError as e:
+            self.callback.error(f"Error running programming exercise pipeline: {e}")
+            return
+
+        self.callback.done(
+            "Generated tutor suggestions",
+            artifact=programming_exercise_result,
+            tokens=self.tokens,
+        )
 
     @classmethod
     def get_variants(cls, available_llms: List[LanguageModel]) -> List[FeatureDTO]:
