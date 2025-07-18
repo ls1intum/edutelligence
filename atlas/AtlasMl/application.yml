@@ -2,9 +2,9 @@ api_keys:
   - token: 'secret'
 
 weaviate:
-  host: 'localhost'
-  port: '8080'
+  host: 'host.docker.internal'
+  port: '8085'
   grpc_port: '50051'
 
 env_vars:
-  SOME: 'value'
+  test: 'Test'

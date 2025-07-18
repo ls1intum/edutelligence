@@ -27,23 +27,25 @@ def test_suggest_competencies(test_env):
     assert isinstance(response.json(), list)
 
 def test_save_competencies(test_env):
-    # Test data
+    # Test data with proper structure matching SaveCompetencyRequest model
     request_data = {
         "id": "test-id-1",
         "description": "Test competency save request",
         "competencies": [
             {
+                "id": "comp-1",  # Required field for Competency model
                 "title": "Test Competency 1",
                 "description": "Test competency description 1",
-                "taxonomy": "R"
+                "taxonomy": "R"  # Must be one of: R, U, Y, A, E, C
             },
             {
+                "id": "comp-2",  # Required field for Competency model
                 "title": "Test Competency 2",
                 "description": "Test competency description 2",
-                "taxonomy": "U"
+                "taxonomy": "U"  # Must be one of: R, U, Y, A, E, C
             }
         ],
-        "competency_relations": []
+        "competency_relations": []  # Empty list of CompetencyRelation objects
     }
     
     # Make request to save endpoint
@@ -52,3 +54,78 @@ def test_save_competencies(test_env):
     # Assert response
     assert response.status_code == 200
     assert isinstance(response.json(), list)
+
+def test_save_competencies_with_relations(test_env):
+    """Test saving competencies with relations between them."""
+    request_data = {
+        "id": "test-id-2",
+        "description": "Test competency save request with relations",
+        "competencies": [
+            {
+                "id": "comp-3",
+                "title": "Parent Competency",
+                "description": "A parent competency",
+                "taxonomy": "A"
+            },
+            {
+                "id": "comp-4",
+                "title": "Child Competency",
+                "description": "A child competency",
+                "taxonomy": "U"
+            }
+        ],
+        "competency_relations": [
+            {
+                "tail_competency_id": "comp-4",
+                "head_competency_id": "comp-3",
+                "relation_type": "SUBSET"
+            }
+        ]
+    }
+    
+    response = client.post("/api/v1/competency/save", json=request_data, headers={"Authorization": "secret-token"})
+    
+    assert response.status_code == 200
+    assert isinstance(response.json(), list)
+
+def test_save_competencies_invalid_taxonomy(test_env):
+    """Test that invalid taxonomy values are rejected."""
+    request_data = {
+        "id": "test-id-3",
+        "description": "Test with invalid taxonomy",
+        "competencies": [
+            {
+                "id": "comp-5",
+                "title": "Invalid Competency",
+                "description": "Test competency with invalid taxonomy",
+                "taxonomy": "INVALID"  # This should cause a validation error
+            }
+        ],
+        "competency_relations": []
+    }
+    
+    response = client.post("/api/v1/competency/save", json=request_data, headers={"Authorization": "secret-token"})
+    
+    # Should return 422 Unprocessable Entity for invalid taxonomy
+    assert response.status_code == 422
+
+def test_save_competencies_missing_required_fields(test_env):
+    """Test that missing required fields are rejected."""
+    request_data = {
+        "id": "test-id-4",
+        "description": "Test with missing fields",
+        "competencies": [
+            {
+                # Missing "id" field - should cause validation error
+                "title": "Missing ID Competency",
+                "description": "Test competency missing id field",
+                "taxonomy": "R"
+            }
+        ],
+        "competency_relations": []
+    }
+    
+    response = client.post("/api/v1/competency/save", json=request_data, headers={"Authorization": "secret-token"})
+    
+    # Should return 422 Unprocessable Entity for missing required fields
+    assert response.status_code == 422

@@ -26,6 +26,7 @@ def _get_api_key(request: Request) -> str:
 class TokenValidator:
     async def __call__(self, api_key: str = Depends(_get_api_key)) -> APIKeyConfig:
         for key in settings.get_api_keys():
+            logger.debug(f"Checking API key: {key}")
             if key.token == api_key:
                 return key
                 

@@ -168,3 +168,98 @@ def test_error_handling(mock_weaviate):
         ValueError, match="Collection 'invalid_collection' does not exist"
     ):
         client.add_embeddings("invalid_collection", [0.1, 0.2, 0.3])
+
+
+def test_recreate_collection_success(mock_weaviate):
+    """Test successful recreation of a collection."""
+    client = WeaviateClient()
+    collection_name = CollectionNames.COMPETENCY.value
+    
+    # Mock the collections.create method
+    mock_weaviate.collections.create = MagicMock()
+    
+    client.recreate_collection(collection_name)
+    
+    # Verify that create was called with correct parameters
+    mock_weaviate.collections.create.assert_called_once()
+    call_args = mock_weaviate.collections.create.call_args
+    
+    assert call_args[1]['name'] == collection_name
+    assert call_args[1]['vectorizer_config'] is not None
+    assert 'properties' in call_args[1]
+
+
+def test_recreate_collection_invalid_schema(mock_weaviate):
+    """Test recreation of collection with invalid schema."""
+    client = WeaviateClient()
+    invalid_collection_name = "InvalidCollection"
+    
+    # Test that attempting to recreate a collection without a defined schema raises ValueError
+    with pytest.raises(ValueError, match=f"No schema defined for collection '{invalid_collection_name}'"):
+        client.recreate_collection(invalid_collection_name)
+
+
+def test_delete_all_data_from_collection_success(mock_weaviate):
+    """Test successful deletion of all data from a collection."""
+    client = WeaviateClient()
+    collection_name = CollectionNames.COMPETENCY.value
+    
+    # Mock the recreate_collection method to verify it's called
+    with patch.object(client, 'recreate_collection') as mock_recreate:
+        client.delete_all_data_from_collection(collection_name)
+        
+        # Verify that recreate_collection was called with the correct collection name
+        mock_recreate.assert_called_once_with(collection_name)
+
+
+def test_delete_all_data_from_collection_nonexistent(mock_weaviate):
+    """Test deletion of all data from a non-existent collection."""
+    client = WeaviateClient()
+    collection_name = "NonExistentCollection"
+    
+    # Mock collections.exists to return False
+    mock_weaviate.collections.exists.return_value = False
+    
+    # Test that attempting to delete from a non-existent collection raises ValueError
+    with pytest.raises(ValueError, match=f"Collection '{collection_name}' does not exist"):
+        client.delete_all_data_from_collection(collection_name)
+
+
+def test_recreate_collection_with_different_schemas(mock_weaviate):
+    """Test recreation of different collection types with their respective schemas."""
+    client = WeaviateClient()
+    
+    # Mock the collections.create method
+    mock_weaviate.collections.create = MagicMock()
+    
+    # Test recreation of different collection types
+    test_collections = [
+        CollectionNames.COMPETENCY.value,
+        CollectionNames.CLUSTER.value,
+        CollectionNames.COURSE.value
+    ]
+    
+    for collection_name in test_collections:
+        client.recreate_collection(collection_name)
+        
+        # Verify that create was called for each collection
+        call_args = mock_weaviate.collections.create.call_args_list[-1]
+        assert call_args[1]['name'] == collection_name
+        assert 'properties' in call_args[1]
+
+
+def test_delete_all_data_from_collection_integration(mock_weaviate):
+    """Test integration of delete_all_data_from_collection with recreate_collection."""
+    client = WeaviateClient()
+    collection_name = CollectionNames.CLUSTER.value
+    
+    # Mock the collections.create method
+    mock_weaviate.collections.create = MagicMock()
+    
+    # Mock the recreate_collection method to avoid actual collection creation
+    with patch.object(client, 'recreate_collection') as mock_recreate:
+        # Call delete_all_data_from_collection which should internally call recreate_collection
+        client.delete_all_data_from_collection(collection_name)
+        
+        # Verify that recreate_collection was called with the correct collection name
+        mock_recreate.assert_called_once_with(collection_name)
