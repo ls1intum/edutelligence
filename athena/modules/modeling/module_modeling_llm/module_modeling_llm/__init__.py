@@ -1,4 +1,4 @@
 import dotenv
+from dotenv import find_dotenv
 
-# Load environment variables from .env file (for local development)
-dotenv.load_dotenv(override=True)
+dotenv.load_dotenv(find_dotenv(), override=True)

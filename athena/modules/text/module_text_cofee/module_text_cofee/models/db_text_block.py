@@ -2,7 +2,7 @@ from typing import cast
 from sqlalchemy import Column, String, Integer, Float, ForeignKey
 from sqlalchemy.orm import relationship
 
-from athena.database import Base
+from athena.base import Base
 from athena.text import Feedback
 from athena.logger import logger
 
@@ -17,8 +17,12 @@ class DBTextBlock(Base):
     position_in_cluster = Column(Integer)  # type: ignore
 
     # foreign keys
-    submission_id = Column(Integer, ForeignKey("text_submissions.id"))  # FK to athena-native table
-    cluster_id = Column(Integer, ForeignKey("cofee_text_clusters.id"))  # FK to custom table
+    submission_id = Column(
+        Integer, ForeignKey("text_submissions.id")
+    )  # FK to athena-native table
+    cluster_id = Column(
+        Integer, ForeignKey("cofee_text_clusters.id")
+    )  # FK to custom table
 
     submission = relationship("DBTextSubmission")
     cluster = relationship("DBTextCluster", back_populates="blocks")
@@ -58,9 +62,13 @@ class DBTextBlock(Base):
         distance_matrix = self.cluster.distance_matrix
         block_index = self.cluster.blocks.index(self)
         if len(distance_matrix) <= block_index:
-            logger.warning("Block %s is not in the distance matrix of cluster %s", self.id, self.cluster.id)
+            logger.warning(
+                "Block %s is not in the distance matrix of cluster %s",
+                self.id,
+                self.cluster.id,
+            )
             logger.debug("Distance matrix: %s", distance_matrix)
-            return 999 # Something went wrong, this block is not in the distance matrix
+            return 999  # Something went wrong, this block is not in the distance matrix
         distance_matrix_row = distance_matrix[block_index]
         # subtract 1 because the statement also included the distance to itself, but it shouldn't be included
         return sum(1 - distance for distance in distance_matrix_row) - 1

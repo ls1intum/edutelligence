@@ -3,13 +3,13 @@ import importlib
 
 from pydantic import BaseModel
 
-from athena.database import Base
+from athena.base import Base
 
 
 # https://stackoverflow.com/a/42450252/4306257
 def to_camel(snake_str):
-    first, *others = snake_str.split('_')
-    return ''.join([first.lower(), *map(str.title, others)])
+    first, *others = snake_str.split("_")
+    return "".join([first.lower(), *map(str.title, others)])
 
 
 class Schema(BaseModel, abc.ABC):
@@ -25,8 +25,10 @@ class Schema(BaseModel, abc.ABC):
     def to_model(self):
         model_class = type(self).get_model_class()
         if not issubclass(model_class, Base):
-            raise TypeError(f"Expected {model_class} to be a subclass of Base. Did you use the correct subclass (e.g. "
-                            f"TextExercise instead of Exercise)? My class name: {self.__class__.__name__}")
+            raise TypeError(
+                f"Expected {model_class} to be a subclass of Base. Did you use the correct subclass (e.g. "
+                f"TextExercise instead of Exercise)? My class name: {self.__class__.__name__}"
+            )
         return model_class(**self.dict())
 
     class Config:

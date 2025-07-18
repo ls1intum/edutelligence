@@ -1,47 +1,39 @@
+from contextlib import contextmanager
 import nltk
 import tiktoken
 from fastapi import FastAPI
-from athena.app import run_app
+
+from athena.app import create_app, run_app
 from athena.database import create_tables
 from .container import AppContainer
 from . import endpoints
 
 
-def create_app() -> FastAPI:
-    """Creates and configures the FastAPI application and container."""
-    container = AppContainer()
+container = AppContainer()
 
-    # Load settings from environment/files
-    settings = container.core.settings()
 
-    # Wire container to endpoint modules
+# 2. Define the module-specific startup and shutdown logic using FastAPI's modern 'lifespan' context manager.
+#    This is the "hook" into the athena framework.
+@contextmanager
+def lifespan(app: FastAPI):
+    # --- Code to run on startup ---
+    print("Module 'module_modeling_llm' is starting up...")
+
+    # Wire the DI container to the endpoints that need it.
+    app.container = container
     container.wire(modules=[endpoints])
 
-    # Create FastAPI app
-    # We can use FastAPI's lifespan here if needed, but for simple setup,
-    # doing it here is also fine.
-    app = FastAPI()
-    app.container = container
-    app.include_router(endpoints.router)
-
-    # One-time setup tasks
-    # Pre-download required data
+    # Perform one-time setup tasks for this module.
     nltk.download("punkt_tab")
     tiktoken.get_encoding("cl100k_base")
 
-    # Create database tables on startup
+    # Get database engine from the container and create tables.
+    settings = container.core.settings()
     db_engine = container.core.db_engine()
     create_tables(db_engine, settings.module.type)
 
-    return app
+    print("Startup complete.")
 
+    yield
 
-# Application instance created by our factory
-app = create_app()
-
-
-if __name__ == "__main__":
-    # The run_app function needs the settings from the container.
-    # The container is attached to the app object.
-    main_settings = app.container.core.settings()
-    run_app(app, settings=main_settings)
+    print("Module 'module_modeling_llm' is shutting down.")

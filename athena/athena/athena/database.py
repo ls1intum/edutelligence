@@ -1,6 +1,16 @@
 import importlib
+from contextlib import contextmanager
+from typing import Generator
 from sqlalchemy.engine import Engine
-from .models.model import Base
+from sqlalchemy.orm import Session
+from athena.base import Base
+from .depency import get_db_session
+
+
+@contextmanager
+def get_db() -> Generator[Session, None, None]:
+    """Context manager that provides a SQLAlchemy session."""
+    yield from get_db_session()
 
 
 def create_tables(engine: Engine, exercise_type: str):

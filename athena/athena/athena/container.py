@@ -29,3 +29,11 @@ class AthenaContainer(containers.DeclarativeContainer):
         autoflush=False,
         bind=db_engine,
     )
+
+
+_container = AthenaContainer()
+
+
+def get_container() -> AthenaContainer:
+    """Return the singleton AthenaContainer."""
+    return _container

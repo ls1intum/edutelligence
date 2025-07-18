@@ -4,7 +4,7 @@ from typing import List, cast
 from sqlalchemy import Column, Integer, LargeBinary, ForeignKey, Boolean
 from sqlalchemy.orm import relationship
 
-from athena.database import Base
+from athena.base import Base
 from athena.logger import logger
 
 
@@ -20,7 +20,7 @@ class DBTextCluster(Base):
     blocks = relationship("DBTextBlock", back_populates="cluster", order_by="DBTextBlock.position_in_cluster")  # type: ignore
 
     # Define the relationship to DBTextExercise
-    exercise_id = Column(Integer, ForeignKey('text_exercises.id'))
+    exercise_id = Column(Integer, ForeignKey("text_exercises.id"))
     exercise = relationship("DBTextExercise")
 
     @property
@@ -42,10 +42,18 @@ class DBTextCluster(Base):
         if block2_index == -1:
             raise ValueError(f"Block {block2} is not in this cluster")
         if len(self.distance_matrix) <= block1_index:
-            logger.warning("Block %s is not in the distance matrix of cluster %s", block1.id, self.id)
+            logger.warning(
+                "Block %s is not in the distance matrix of cluster %s",
+                block1.id,
+                self.id,
+            )
             return 999  # prevent the server from crashing and instead just ignore this distance
         if len(self.distance_matrix[block1_index]) <= block2_index:
-            logger.warning("Block %s is not in the distance matrix of cluster %s", block2.id, self.id)
+            logger.warning(
+                "Block %s is not in the distance matrix of cluster %s",
+                block2.id,
+                self.id,
+            )
             return 999  # prevent the server from crashing and instead just ignore this distance
         return self.distance_matrix[block1_index][block2_index]
 
@@ -53,7 +61,11 @@ class DBTextCluster(Base):
         """
         Return the number of blocks in this cluster whose submission has not been graded yet according to the given list.
         """
-        return sum(1 for block in self.blocks if block.submission_id not in ungraded_submission_ids)
+        return sum(
+            1
+            for block in self.blocks
+            if block.submission_id not in ungraded_submission_ids
+        )
 
     def __str__(self):
         return f"TextCluster{{id={self.id}, exercise_id={self.exercise_id}, probabilities={self.probabilities}, distance_matrix={self.distance_matrix}, disabled={self.disabled}}}"
