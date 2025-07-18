@@ -98,7 +98,6 @@ their programming exercises on Artemis in a pedagogically meaningful way.
 
    If you use an IDE like PyCharm, you'll want to setup your interpreter to use the Poetry environment.
    For PyCharm you can do this by following these steps:
-
    1. Open the `iris` folder as a new PyCharm project
    2. Go to `File > Settings > Project: MemIris > Python Interpreter`
    3. Click the gear icon and select `Add...`
@@ -109,7 +108,6 @@ their programming exercises on Artemis in a pedagogically meaningful way.
    You should also configure the IDE to use the correct source directories.
    Not doing this may mess up the imports your IDE automatically adds in the code.
    In PyCharm, you can do this like this:
-
    1. Right-click on the `src` folder in the project view
    2. Select `Mark Directory as > Sources Root`
    3. This will tell PyCharm to use the `src` folder as the source root
@@ -119,7 +117,6 @@ their programming exercises on Artemis in a pedagogically meaningful way.
    7. Now select `File > Invalidate Caches...` and click `Invalidate and Restart`
 
 5. **Create Configuration Files**
-
    - **Create an Application Configuration File**
 
      Create an `application.local.yml` file in the root directory. You can use the provided `application.example.yml`
@@ -188,7 +185,6 @@ their programming exercises on Artemis in a pedagogically meaningful way.
        The configuration parameters are used by Pyris's capability system to select the appropriate model for a task.
 
        **Parameter Descriptions:**
-
        - `api_key`: The API key for the model.
        - `description`: Additional information about the model.
        - `id`: Unique identifier for the model across all models.
@@ -299,7 +295,6 @@ Deploying Pyris using Docker ensures a consistent environment and simplifies the
    - Mounts local configuration files for easy modification.
 
 2. **Access the Application**
-
    - Application URL: [http://localhost:8000](http://localhost:8000)
    - API Docs: [http://localhost:8000/docs](http://localhost:8000/docs)
 
@@ -308,7 +303,6 @@ Deploying Pyris using Docker ensures a consistent environment and simplifies the
 ###### **Option 1: With Nginx**
 
 1. **Prepare SSL Certificates**
-
    - Place your SSL certificate (`fullchain.pem`) and private key (`priv_key.pem`) in the specified paths or update the
      paths in the Docker Compose file.
 
@@ -323,7 +317,6 @@ Deploying Pyris using Docker ensures a consistent environment and simplifies the
    - Nginx handles SSL termination and reverse proxying.
 
 3. **Access the Application**
-
    - Application URL: `https://your-domain.com`
 
 ###### **Option 2: Without Nginx**
@@ -338,7 +331,6 @@ Deploying Pyris using Docker ensures a consistent environment and simplifies the
    - Starts Pyris and Weaviate.
 
 2. **Access the Application**
-
    - Application URL: [http://localhost:8000](http://localhost:8000)
 
 ---
@@ -378,7 +370,6 @@ Deploying Pyris using Docker ensures a consistent environment and simplifies the
 - **Environment Variables**
 
   You can customize settings using environment variables:
-
   - `PYRIS_DOCKER_TAG`: Specifies the Pyris Docker image tag.
   - `PYRIS_APPLICATION_YML_FILE`: Path to your `application.yml` file.
   - `PYRIS_LLM_CONFIG_YML_FILE`: Path to your `llm_config.yml` file.
@@ -389,7 +380,6 @@ Deploying Pyris using Docker ensures a consistent environment and simplifies the
 - **Configuration Files**
 
   Modify configuration files as needed:
-
   - **Pyris Configuration**: Update `application.yml` and `llm_config.yml`.
   - **Weaviate Configuration**: Adjust settings in `weaviate.yml`.
   - **Nginx Configuration**: Modify Nginx settings in `nginx.yml` and related config files.

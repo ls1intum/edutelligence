@@ -8,8 +8,9 @@ from module_text_llm.basic_approach import BasicApproachConfig
 from module_text_llm.divide_and_conquer import DivideAndConquerConfig
 from module_text_llm.cot_learner_profile import COTLearnerProfileConfig
 from module_text_llm.cot_prev_submission import COTPrevSubmissionConfig
+from module_text_llm.llm_as_profiler import LLMAsProfilerConfig
 
-ApproachConfigUnion = Union[BasicApproachConfig, ChainOfThoughtConfig, DivideAndConquerConfig, SelfConsistencyConfig, COTLearnerProfileConfig, COTPrevSubmissionConfig]
+ApproachConfigUnion = Union[BasicApproachConfig, ChainOfThoughtConfig, DivideAndConquerConfig, SelfConsistencyConfig, COTLearnerProfileConfig, COTPrevSubmissionConfig, LLMAsProfilerConfig]
 
 @config_schema_provider
 class Configuration(BaseModel):
