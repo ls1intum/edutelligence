@@ -187,11 +187,7 @@ Examples:
 
     # Get Artemis path
     artemis_path = get_artemis_path(config, args.artemis_path)
-    target_openapi = (
-        artemis_path
-        / "openapi"
-        / "hyperion.yaml"
-    )
+    target_openapi = artemis_path / "openapi" / "hyperion.yaml"
 
     # Perform synchronization
     success = sync_openapi_file(source_openapi, target_openapi, args.dry_run)
