@@ -12,7 +12,7 @@ class SolutionCreatorException(CreationStepException):
 
 class CompilationException(SolutionCreatorException):
     """Exception raised for compilation errors."""
-
+    
     def __init__(
         self,
         message: str,
