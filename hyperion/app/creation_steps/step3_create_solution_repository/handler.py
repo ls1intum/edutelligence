@@ -61,7 +61,9 @@ class SolutionRepositoryCreator:
             # Validate language support
             language_str: str = request.boundary_conditions.programming_language.value
             if not language_registry.is_supported(language_str):
-                supported_languages: List[str] = language_registry.get_supported_languages()
+                supported_languages: List[str] = (
+                    language_registry.get_supported_languages()
+                )
                 raise LanguageHandlerException(
                     f"Programming language '{language_str}' is not supported",
                     language=language_str,
@@ -72,7 +74,9 @@ class SolutionRepositoryCreator:
                 prefix="solution_creation_"
             )
 
-            context: SolutionCreationContext = await self.code_generator.execute(context)
+            context: SolutionCreationContext = await self.code_generator.execute(
+                context
+            )
 
             # Clean up workspace
             if context.workspace_path and self.workspace_manager:
