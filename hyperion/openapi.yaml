@@ -319,28 +319,6 @@ components:
       - ''
       - java
       - python
-      - c
-      - haskell
-      - kotlin
-      - vhdl
-      - assembler
-      - swift
-      - ocaml
-      - javascript
-      - csharp
-      - cpp
-      - sql
-      - r
-      - typescript
-      - rust
-      - go
-      - matlab
-      - bash
-      - ruby
-      - powershell
-      - ada
-      - dart
-      - php
       title: ProgrammingLanguage
       type: string
     ProjectType:
