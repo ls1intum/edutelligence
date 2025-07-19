@@ -48,13 +48,15 @@ jobs:
           for module in modules/programming/module_programming_llm modules/text/module_text_llm modules/modeling/module_modeling_llm; do
             if [ -d "$module/.venv" ]; then
               echo "Running tests for $module..."
-              # Install pytest in the module's environment
-              $module/.venv/bin/pip install pytest pytest-asyncio
-              # Run tests using the module's environment
-              if ! $module/.venv/bin/python -m pytest tests/$module/mock --junitxml=test-results/${module//\//_}_mock.xml; then
+              # Install pytest and coverage in the module's environment
+              $module/.venv/bin/pip install pytest pytest-asyncio coverage
+              # Run tests with coverage using the module's environment
+              if ! $module/.venv/bin/python -m coverage run -m pytest tests/$module/mock --junitxml=test-results/${module//\//_}_mock.xml; then
                 echo "Tests failed for $module"
                 overall_success=false
               fi
+              # Generate coverage report for this module in Cobertura format
+              $module/.venv/bin/python -m coverage xml -o test-results/${module//\//_}_coverage.xml
             else
               echo "Virtual environment not found for $module, skipping..."
             fi
@@ -64,6 +66,17 @@ jobs:
           if [ "$overall_success" = false ]; then
             exit 1
           fi
+          
+          # Display coverage reports in CI
+          echo "📊 Coverage Reports:"
+          echo "===================="
+          for module in modules/programming/module_programming_llm modules/text/module_text_llm modules/modeling/module_modeling_llm; do
+            if [ -d "$module/.venv" ]; then
+              echo "📈 $module:"
+              $module/.venv/bin/python -m coverage report --show-missing || echo "No coverage data available"
+              echo ""
+            fi
+          done
       - name: Run linting
         run: |
           cd athena
@@ -79,6 +92,13 @@ jobs:
         with:
           name: junit-results
           path: athena/test-results/
+      
+      - name: Upload Coverage Reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-reports
+          path: athena/test-results/*_coverage.xml
   report:
     runs-on: ubuntu-latest
     if: always()
@@ -91,6 +111,23 @@ jobs:
         with:
           name: junit-results
           path: all-test-results
+      - name: Download coverage reports
+        uses: actions/download-artifact@v4
+        with:
+          name: coverage-reports
+          path: coverage-reports
+      - name: Code Coverage Summary
+        uses: irongut/CodeCoverageSummary@v1.3.0
+        with:
+          filename: coverage-reports/*_coverage.xml
+          badge: true
+          fail_below_min: false
+          format: markdown
+          hide_branch_rate: false
+          hide_complexity: true
+          indicators: true
+          output: both
+          thresholds: '50 75'
       - name: Test Report Summary
         id: test-report
         uses: mikepenz/action-junit-report@v5
@@ -100,15 +137,28 @@ jobs:
           require_tests: true
           require_passed_tests: false
           detailed_summary: true
-      - name: Comment test results on PR
+      - name: Add Test Results PR Comment
         if: github.event_name == 'pull_request'
-        uses: actions/github-script@v7
+        uses: marocchino/sticky-pull-request-comment@v2
         with:
-          script: |
-            const summary = `### Athena Test Results Summary\n\n${{ steps.test-report.outputs.summary }}\n\n#### Failing Tests Summary\n\n${{ steps.test-report.outputs.detailed_summary }}`;
-            github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.payload.pull_request.number,
-              body: summary
-            });
+          recreate: true
+          path: all-test-results
+          message: |
+            ### 🧪 Athena Test Results Summary
+            
+            ${{ steps.test-report.outputs.summary }}
+            
+            #### Failing Tests Summary
+            
+            ${{ steps.test-report.outputs.detailed_summary }}
+      
+      - name: Add Coverage PR Comment
+        if: github.event_name == 'pull_request'
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          recreate: true
+          path: code-coverage-results.md
+          message: |
+            ### 📊 Code Coverage Summary
+            
+            See the coverage report below for details on test coverage across all modules.
