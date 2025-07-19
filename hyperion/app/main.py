@@ -9,6 +9,9 @@ from app.project_meta import project_meta
 from app.creation_steps.step8_review_and_refine.router import (
     router as review_and_refine_router,
 )
+from app.creation_steps.step3_create_solution_repository.router import (
+    router as create_solution_repository_router,
+)
 
 
 app = FastAPI(
@@ -38,3 +41,4 @@ if not settings.DISABLE_AUTH:
 # Add routers
 app.include_router(create_health_router(app.version))
 app.include_router(review_and_refine_router)
+app.include_router(create_solution_repository_router)
