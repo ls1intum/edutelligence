@@ -3,6 +3,7 @@
 import logging
 from uuid import uuid4
 from langchain.chat_models import init_chat_model
+from typing import List
 
 from app.creation_steps.models import Metadata, Repository
 from app.creation_steps.step3_create_solution_repository.models import (
@@ -13,6 +14,7 @@ from app.creation_steps.step3_create_solution_repository.models import (
 from app.creation_steps.step3_create_solution_repository.code_generator import (
     CodeGenerator,
 )
+from langchain_core.language_models import BaseLanguageModel
 from app.creation_steps.step3_create_solution_repository.language_handlers import (
     registry as language_registry,
 )
@@ -29,9 +31,9 @@ class SolutionRepositoryCreator:
     """Handler for creating solution repositories."""
 
     def __init__(self, model_name: str):
-        self.model = init_chat_model(model_name)
-        self.code_generator = CodeGenerator(model=self.model)
-        self.workspace_manager = WorkspaceManager()
+        self.model: BaseLanguageModel = init_chat_model(model_name)
+        self.code_generator: CodeGenerator = CodeGenerator(model=self.model)
+        self.workspace_manager: WorkspaceManager = WorkspaceManager()
 
     async def create(
         self, request: SolutionRepositoryCreatorRequest
@@ -45,12 +47,11 @@ class SolutionRepositoryCreator:
         Returns:
             SolutionRepositoryCreatorResponse: Contains the generated solution repository
         """
-        trace_id = uuid4()
+        trace_id: str = str(uuid4())
         logger.info(f"Creating solution repository with trace_id: {trace_id}")
 
         try:
-            # Create context directly from request
-            context = SolutionCreationContext(
+            context: SolutionCreationContext = SolutionCreationContext(
                 boundary_conditions=request.boundary_conditions,
                 problem_statement=request.problem_statement,
                 workspace_path="",  # Will be set after workspace creation
@@ -58,22 +59,20 @@ class SolutionRepositoryCreator:
             )
 
             # Validate language support
-            language_str = request.boundary_conditions.programming_language.value
+            language_str: str = request.boundary_conditions.programming_language.value
             if not language_registry.is_supported(language_str):
-                supported_languages = language_registry.get_supported_languages()
+                supported_languages: List[str] = language_registry.get_supported_languages()
                 raise LanguageHandlerException(
                     f"Programming language '{language_str}' is not supported",
                     language=language_str,
                     details={"supported_languages": supported_languages},
                 )
 
-            # Create workspace
             context.workspace_path = self.workspace_manager.create_workspace(
                 prefix="solution_creation_"
             )
 
-            # Execute solution generation
-            context = await self.code_generator.execute(context)
+            context: SolutionCreationContext = await self.code_generator.execute(context)
 
             # Clean up workspace
             if context.workspace_path and self.workspace_manager:
@@ -100,4 +99,4 @@ class SolutionRepositoryCreator:
             logger.error(f"Unexpected error creating solution repository: {str(e)}")
             raise SolutionCreatorException(
                 f"Failed to create solution repository: {str(e)}"
-            )
+            ) from e
