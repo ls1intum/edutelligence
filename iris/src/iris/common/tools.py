@@ -9,20 +9,7 @@ from ..retrieval.faq_retrieval import FaqRetrieval
 from ..retrieval.faq_retrieval_utils import format_faqs
 from ..retrieval.lecture.lecture_retrieval import LectureRetrieval
 from ..web.status.status_update import CourseChatStatusCallback
-
-
-def get_mastery(progress, confidence):
-    """
-    Calculate mastery level for a competency.
-
-    Args:
-        progress (float): The user's progress.
-        confidence (float): The user's confidence.
-
-    Returns:
-        int: Calculated mastery level (0-100).
-    """
-    return min(100, max(0, round(progress * confidence)))
+from .mastery_utils import get_mastery
 
 
 def datetime_to_string(dt: Optional[datetime]) -> str:
