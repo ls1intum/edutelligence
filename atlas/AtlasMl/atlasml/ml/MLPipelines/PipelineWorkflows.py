@@ -8,7 +8,7 @@ from atlasml.ml.VectorEmbeddings.MainEmbeddingModel import generate_embeddings_o
 from atlasml.ml.SimilarityMeasurement.Cosine import compute_cosine_similarity
 from sklearn.metrics.pairwise import cosine_similarity
 from atlasml.ml.VectorEmbeddings.ModelDimension import ModelDimension
-
+from atlasml.models.competency import Competency, ExerciseWithCompetencies
 
 class PipelineWorkflows:
     def __init__(self, weaviate_client=None):
@@ -16,7 +16,7 @@ class PipelineWorkflows:
             weaviate_client = get_weaviate_client()
         self.weaviate_client = weaviate_client
 
-    def initial_texts(self, texts: list[str]):
+    def initial_texts(self, exercises: list[ExerciseWithCompetencies]):
         """Process and store initial text entries in the database.
 
         Takes a list of texts, generates embeddings for each one, and stores them
@@ -32,16 +32,18 @@ class PipelineWorkflows:
             - An empty competencyIDs list
             - Its vector embedding
         """
-        for text in texts:
-            text_id, embedding = generate_embeddings_local(str(uuid.uuid4()), text)
+        for exercise in exercises:
+            embedding = generate_embeddings_local(exercise.title)
             properties = {
-                "text_id": text_id,
-                "text": text,
-                "competency_ids": []
+                "exercise_id": exercise.id,
+                "title": exercise.title,
+                "description": exercise.description,
+                "competency_ids": [competency.id for competency in exercise.competencies]
             }
-            self.weaviate_client.add_embeddings(CollectionNames.TEXT.value, embedding, properties)
+            self.weaviate_client.add_embeddings(CollectionNames.EXERCISE.value, embedding, properties)
 
-    def initial_competencies(self, competencies):
+
+    def initial_competencies(self, competencies: list[Competency]):
         """Process and store initial competencies in the database.
 
         Takes a list of competencies, generates embeddings for each competency, and stores them in
@@ -58,16 +60,15 @@ class PipelineWorkflows:
             4. Store in Weaviate competency collection with:
                 - competency_id: Generated UUID
                 - name: Competency title
-                - text: Competency description
                 - cluster_id: Empty string
                 - vector: Competency embedding
         """
         for competency in competencies:
-            competency_id, embedding = generate_embeddings_local(str(uuid.uuid4()), competency["description"])
+            embedding = generate_embeddings_local(competency.title)
             properties = {
-                "competency_id": competency_id,
-                "name": competency["title"],
-                "text": competency["description"]
+                "competency_id": competency.id,
+                "name": competency.title,
+                "description": competency.description,
             }
             self.weaviate_client.add_embeddings(CollectionNames.COMPETENCY.value, embedding, properties)
 
@@ -107,82 +108,69 @@ class PipelineWorkflows:
             self.weaviate_client.add_embeddings(CollectionNames.COMPETENCY.value, embedding, properties)
 
 
-    def initial_cluster_pipeline(self, eps: float = 0.1, min_samples: int = 1, min_cluster_size: int = 2):
-        """Initialize and perform complete clustering of all texts in the database.
-
-        This is the main pipeline for clustering text data and establishing relationships
-        between texts and competencies through clusters.
-
-        Args:
-            eps (float, optional): Maximum distance between points for HDBSCAN clustering.
-                Defaults to 0.1.
-            min_samples (int, optional): Minimum number of samples in a neighborhood.
-                Defaults to 1.
-            min_cluster_size (int, optional): Minimum number of points to form a cluster.
-                Defaults to 1.
-
-        The pipeline performs:
-        1. Text embedding retrieval
-        2. HDBSCAN clustering of embeddings
-        3. Cluster center calculation and storage
-        4. Competency-to-cluster association
-        5. Text-to-competency linking
-
-        Note:
-            - Deletes all existing cluster centers before creating new ones
-            - Updates both COMPETENCY and TEXT collections with new associations
+    def initial_cluster_pipeline(self):
         """
+        Initialize and compute competency-centric clusters based on labeled data.
+        This version uses existing exercise → competency mappings to build clusters.
+        """
+
+        # 1. Get all texts and competencies
         texts = self.weaviate_client.get_all_embeddings(CollectionNames.TEXT.value)
-
-        # Generate embeddings for each text entry and collect UUIDs
-        embeddings_list = np.vstack([text["vector"]["default"] for text in texts])
-        embeddings_uuids = np.array([text["properties"]["text_id"] for text in texts])
-
-        # Cluster texts and get cluster medoids
-        labels, centroids, medoids = apply_hdbscan(
-            embeddings_list,
-            eps=eps,
-            min_samples=min_samples,
-            metric=SimilarityMetric.cosine.value,
-            min_cluster_size=min_cluster_size
-        )
-
-        # Expose clusters and similarity matrix as instance variables
-        for index in range(len(medoids)):
-            cluster = {
-                "cluster_id": str(index)
-                }
-            self.weaviate_client.add_embeddings(CollectionNames.CLUSTERCENTER.value, medoids[index].tolist(), cluster)
-
         competencies = self.weaviate_client.get_all_embeddings(CollectionNames.COMPETENCY.value)
-        clusters = self.weaviate_client.get_all_embeddings(CollectionNames.CLUSTERCENTER.value)
 
+        # 2. Group texts by assigned competency
+        competency_groups = {}
+        for text in texts:
+            competency_ids = text["properties"].get("competency_ids", [])
+            for cid in competency_ids:
+                if cid not in competency_groups:
+                    competency_groups[cid] = []
+                competency_groups[cid].append(text)
+
+        # 3. Compute centroid embedding for each competency
         for competency in competencies:
-            competency_id, embedding = competency["properties"]["competency_id"], competency["vector"]["default"]
-            similarity_score = np.array([compute_cosine_similarity(embedding, medoid) for medoid in medoids])
-            best_medoid_idx = int(np.argmax(similarity_score))
-            properties = {
-                "competency_id": competency_id,
-                "name" : competency["properties"]["name"],
+            cid = competency["properties"]["competency_id"]
+            related_texts = competency_groups.get(cid, [])
+            if not related_texts:
+                continue  # Skip if no texts available
+
+            embeddings = np.vstack([t["vector"]["default"] for t in related_texts])
+            centroid = np.mean(embeddings, axis=0)
+
+            # Store centroid as a cluster center
+            cluster_properties = {
+                "cluster_id": cid  # Same as competency_id
+            }
+            self.weaviate_client.add_embeddings(CollectionNames.CLUSTERCENTER.value, centroid.tolist(), cluster_properties)
+
+            # Update the competency object with cluster_id and centroid similarity = 1.0
+            competency_update = {
+                "competency_id": cid,
+                "name": competency["properties"]["name"],
                 "text": competency["properties"]["text"],
-                "cluster_id": clusters[best_medoid_idx]["properties"]["cluster_id"],
-                "cluster_similarity_score": similarity_score[best_medoid_idx]
+                "cluster_id": cid,
+                "cluster_similarity_score": 1.0
             }
-            self.weaviate_client.update_property_by_id(CollectionNames.COMPETENCY.value, competency["id"], properties)
+            self.weaviate_client.update_property_by_id(CollectionNames.COMPETENCY.value, competency["id"], competency_update)
 
-        for index in range(len(texts)):
-            text_entry = texts[index]
-            competency = self.weaviate_client.get_embeddings_by_property(CollectionNames.COMPETENCY.value, "cluster_id", str(labels[index]))
-            if not competency: continue
-            competency_id = competency[0]["properties"]["competency_id"]
-            properties = {
-                "text_id": text_entry["properties"]["text_id"],
-                "text": text_entry["properties"]["text"],
-                "competency_ids": [competency_id]
+        # 4. Update each text with the most similar competency (optional if already linked)
+        all_centroids = self.weaviate_client.get_all_embeddings(CollectionNames.CLUSTERCENTER.value)
+        for text in texts:
+            text_embedding = text["vector"]["default"]
+            similarities = [
+                (compute_cosine_similarity(text_embedding, centroid["vector"]["default"]), centroid["properties"]["cluster_id"])
+                for centroid in all_centroids
+            ]
+            similarities.sort(reverse=True)  # descending by similarity
+
+            best_similarity, best_cid = similarities[0]
+            updated_properties = {
+                "text_id": text["properties"]["text_id"],
+                "text": text["properties"]["text"],
+                "competency_ids": [best_cid],
+                "cluster_similarity_score": best_similarity
             }
-            self.weaviate_client.update_property_by_id(CollectionNames.TEXT.value, text_entry["id"], properties)
-
-        return
+            self.weaviate_client.update_property_by_id(CollectionNames.TEXT.value, text["id"], updated_properties)
 
 
     def newTextPipeline(self, text: str, uuid: str):

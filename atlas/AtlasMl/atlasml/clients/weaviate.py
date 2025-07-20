@@ -20,6 +20,7 @@ class CollectionNames(str, Enum):
 logger = logging.getLogger(__name__)
 
 
+
 class WeaviateClient:
     def __init__(
         self,
@@ -68,43 +69,14 @@ class WeaviateClient:
             },
         }
 
-
-
-class WeaviateClient:
-    def __init__(
-        self,
-        host: str = settings.weaviate.host,
-        port: int = settings.weaviate.port,
-        grpc_port: int = settings.weaviate.grpc_port,
-    ):
-        self.client = weaviate.connect_to_local(
-            host=host,
-            port=port,
-            grpc_port=grpc_port,
-        )
-
-        self._ensure_collections_exist()
-
-    def _check_if_collection_exists(self, collection_name: str):
-        """Check if a collection exists and create it if it doesn't."""
-        if not self.client.collections.exists(collection_name):
-            raise ValueError(f"Collection '{collection_name}' does not exist")
-
-    def _ensure_collections_exist(self):
-        """Ensure collections exist with proper schema."""
-        # Define schemas for each collection
-        # TODO: ARDA: Add properties for each collection
-        # After, schema updated automatically and u can fetch the data from the
-        # collection with the new properties
-      
-        for collection_name, schema in COLLECTION_SCHEMAS.items():
+        for collection_name, schema in collection_schemas.items():
             if not self.client.collections.exists(collection_name):
                 self.client.collections.create(
                     name=collection_name,
                     vectorizer_config=weaviate.classes.config.Configure.Vectorizer.none(),
                     properties=schema["properties"],
                 )
-                logger.info(f"{collection_name} ---> CREATED")
+                logger.info(f"✅ {collection_name} collection created with schema.")
             else:
                 collection = self.client.collections.get(collection_name)
                 existing_props = {prop.name for prop in collection.config.get(simple=False).properties}
@@ -136,6 +108,7 @@ class WeaviateClient:
                         )
 
         logger.info("--- All collections initialized with schemas ---")
+
 
     def is_alive(self):
         """Check if the Weaviate client is alive."""

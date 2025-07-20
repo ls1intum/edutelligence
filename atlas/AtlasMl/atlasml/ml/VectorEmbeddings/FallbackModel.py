@@ -23,11 +23,11 @@ def generate_embeddings(uuid: str, sentence: str):
     return uuid, embeddings
 
 
-def generate_embeddings_local(uuid: str, sentence: str):
+def generate_embeddings_local(sentence: str):
     model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
     embeddings = model.encode(sentence)
     if hasattr(embeddings, 'detach'):
         embeddings = embeddings.detach().cpu().numpy().tolist()
     elif hasattr(embeddings, 'tolist'):
         embeddings = embeddings.tolist()
-    return uuid, embeddings
+    return embeddings

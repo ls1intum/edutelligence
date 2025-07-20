@@ -18,6 +18,12 @@ class Competency(BaseModel):
     description: str
     taxonomy: CompetencyTaxonomy
 
+class ExerciseWithCompetencies(BaseModel):
+    id: str
+    title: str
+    description: str
+    competencies: list[Competency]
+
 
 class CompetencyRelationType(str, Enum):  # TOBE DETERMINED LATER
     SUPERSET = "SUPERSET"
