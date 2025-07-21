@@ -36,6 +36,9 @@ from iris.web.status.status_update import TutorSuggestionCallback
 
 logger = logging.getLogger(__name__)
 
+ADVANCED_VARIANT = "deepseek-r1:8b"
+DEFAULT_VARIANT = "gemma3:27b"
+
 
 def get_channel_type(dto: CommunicationTutorSuggestionPipelineExecutionDTO) -> str:
     """
@@ -70,9 +73,9 @@ class TutorSuggestionPipeline(Pipeline):
         completion_args = CompletionArguments(temperature=0, max_tokens=8000)
 
         if variant == "advanced":
-            model = "gemma3:27b"
+            model = ADVANCED_VARIANT
         else:
-            model = "deepseek-r1:8b"
+            model = DEFAULT_VARIANT
 
         self.llm = IrisLangchainChatModel(
             request_handler=ModelVersionRequestHandler(version=model),
@@ -125,10 +128,6 @@ class TutorSuggestionPipeline(Pipeline):
             logger.error("Error parsing summary JSON: %s", str(e))
             self.callback.error("Error parsing summary JSON")
             return
-
-        # self.callback.in_progress("Retrieving relevant lecture content")
-
-        # self.callback.in_progress("Retrieving relevant faq content")
 
         if is_question and number_of_answers > 0:
             self.callback.in_progress("Checking if questions is already answered")
