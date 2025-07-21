@@ -8,8 +8,9 @@ from langsmith import traceable
 
 from iris.common.pyris_message import PyrisMessage
 from iris.common.tutor_suggestion_helper import (
+    extract_json_from_text,
     get_last_artifact,
-    get_user_query, extract_json_from_text,
+    get_user_query,
 )
 from iris.domain.data.text_exercise_dto import TextExerciseDTO
 from iris.llm import CompletionArguments, ModelVersionRequestHandler
@@ -27,6 +28,13 @@ DEFAULT_VARIANT = "gemma3:27b"
 
 
 class TutorSuggestionUserQueryPipeline(Pipeline):
+    """
+    The TutorSuggestionUserQueryPipeline processes user queries in the context of a text exercise.
+    It generates answers based on the chat summary, chat history, and text exercise DTO.
+
+    When called, it uses the user query and last suggestion from the chat history to generate a response.
+    It utilizes a language model to process the input and generate a structured response.
+    """
 
     llm: IrisLangchainChatModel
     pipeline: Runnable

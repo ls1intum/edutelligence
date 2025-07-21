@@ -7,7 +7,11 @@ from langsmith import traceable
 
 from iris.common.pipeline_enum import PipelineEnum
 from iris.common.pyris_message import IrisMessageRole, PyrisMessage
-from iris.common.tutor_suggestion_helper import extract_json_from_text, has_html, extract_html_from_text
+from iris.common.tutor_suggestion_helper import (
+    extract_html_from_text,
+    extract_json_from_text,
+    has_html,
+)
 from iris.domain.communication.communication_tutor_suggestion_pipeline_execution_dto import (
     CommunicationTutorSuggestionPipelineExecutionDTO,
 )
@@ -24,6 +28,7 @@ logger = logging.getLogger(__name__)
 
 ADVANCED_VARIANT = "deepseek-r1:8b"
 DEFAULT_VARIANT = "gemma3:27b"
+
 
 class TutorSuggestionProgrammingExercisePipeline(Pipeline):
     """

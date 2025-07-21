@@ -9,7 +9,10 @@ from langsmith import traceable
 from iris.common.pipeline_enum import PipelineEnum
 from iris.common.pyris_message import PyrisMessage
 from iris.common.tutor_suggestion_helper import (
-    get_chat_history_without_user_query, has_html, extract_html_from_text, extract_json_from_text,
+    extract_html_from_text,
+    extract_json_from_text,
+    get_chat_history_without_user_query,
+    has_html,
 )
 from iris.domain.data.text_exercise_dto import TextExerciseDTO
 from iris.llm import CompletionArguments, ModelVersionRequestHandler
@@ -27,7 +30,6 @@ logger = logging.getLogger(__name__)
 
 ADVANCED_VARIANT = "deepseek-r1:8b"
 DEFAULT_VARIANT = "gemma3:27b"
-
 
 
 class TutorSuggestionTextExercisePipeline(Pipeline):

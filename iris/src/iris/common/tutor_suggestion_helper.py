@@ -4,10 +4,12 @@ import re
 from typing import List
 
 from iris.common.pyris_message import IrisMessageRole, PyrisMessage
-from iris.domain.communication.communication_tutor_suggestion_pipeline_execution_dto import \
-    CommunicationTutorSuggestionPipelineExecutionDTO
+from iris.domain.communication.communication_tutor_suggestion_pipeline_execution_dto import (
+    CommunicationTutorSuggestionPipelineExecutionDTO,
+)
 
 logger = logging.getLogger(__name__)
+
 
 def get_user_query(chat_history: List[PyrisMessage]):
     """
@@ -58,6 +60,7 @@ def get_chat_history_without_user_query(chat_history: List[PyrisMessage]) -> str
             )
     return chat_history_str
 
+
 def extract_html_from_text(text: str):
     html_pattern = re.compile(
         r"\s*(?P<html>&lt;ul&gt;.*?&lt;/ul&gt;|<ul>.*?</ul>)", re.DOTALL
@@ -69,6 +72,7 @@ def extract_html_from_text(text: str):
     else:
         return None
 
+
 def has_html(text: str):
     """
     Check if the text contains HTML tags.
@@ -77,6 +81,7 @@ def has_html(text: str):
     """
     html_pattern = re.compile(r"<[^>]+>")
     return bool(html_pattern.search(text))
+
 
 def get_channel_type(dto: CommunicationTutorSuggestionPipelineExecutionDTO) -> str:
     """
@@ -102,6 +107,7 @@ def sort_post_answers(dto):
         return dto
     dto.post.answers.sort(key=lambda x: x.id)
     return dto
+
 
 def extract_json_from_text(text: str):
     """
