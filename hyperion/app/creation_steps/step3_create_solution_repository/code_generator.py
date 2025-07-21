@@ -4,7 +4,7 @@ import logging
 import json
 from typing import List, Dict, Any
 from langchain_core.language_models.chat_models import BaseLanguageModel
-
+from app.creation_steps.models import RepositoryFile, Repository
 from .models import SolutionCreationContext, SolutionPlan, FileStructure
 from .exceptions import SolutionCreatorException
 from ..workspace.file_manager import FileManager
@@ -74,12 +74,12 @@ class CodeGenerator:
             You are an expert software engineer tasked with creating a solution plan for a programming exercise.
 
             Problem Statement:
-            Title: {context.boundary_conditions.title}
-            Problem Statement: {context.boundary_conditions.problem_statement}
+            Title: {context.problem_statement.title}
+            Problem Statement: {context.problem_statement.description}
 
             Boundary Conditions:
-            - Programming Language: {context.boundary_conditions.programming_language}
-            - Project Type: {context.boundary_conditions.project_type}
+            - Programming Language: {context.boundary_conditions.programming_language.value}
+            - Project Type: {context.boundary_conditions.project_type.value}
 
             Please analyze the problem and provide a detailed solution plan.
             Consider the programming language and project type when making your recommendations.
@@ -217,12 +217,12 @@ class CodeGenerator:
             structure for a programming exercise solution.
 
             Problem Statement:
-            Title: {context.boundary_conditions.title}
-            Problem Statement: {context.boundary_conditions.problem_statement}
+            Title: {context.problem_statement.title}
+            Problem Statement: {context.problem_statement.description}
 
             Boundary Conditions:
-            - Programming Language: {context.boundary_conditions.programming_language}
-            - Project Type: {context.boundary_conditions.project_type}
+            - Programming Language: {context.boundary_conditions.programming_language.value}
+            - Project Type: {context.boundary_conditions.project_type.value}
 
             Solution Plan:
             Architecture: {architecture_desc}
@@ -362,12 +362,12 @@ class CodeGenerator:
             function headers for a specific file in a programming exercise solution.
 
             Problem Statement:
-            Title: {context.boundary_conditions.title}
-            Problem Statement: {context.boundary_conditions.problem_statement}
+            Title: {context.problem_statement.title}
+            Problem Statement: {context.problem_statement.description}
 
             Boundary Conditions:
-            - Programming Language: {context.boundary_conditions.programming_language}
-            - Project Type: {context.boundary_conditions.project_type}
+            - Programming Language: {context.boundary_conditions.programming_language.value}
+            - Project Type: {context.boundary_conditions.project_type.value}
 
             Solution Plan:
             Architecture: {architecture_desc}
@@ -530,12 +530,12 @@ class CodeGenerator:
             logic for a specific file in a programming exercise solution.
 
             Problem Statement:
-            Title: {context.boundary_conditions.title}
-            Problem Statement: {context.boundary_conditions.problem_statement}
+            Title: {context.problem_statement.title}
+            Problem Statement: {context.problem_statement.description}
 
             Boundary Conditions:
-            - Programming Language: {context.boundary_conditions.programming_language}
-            - Project Type: {context.boundary_conditions.project_type}
+            - Programming Language: {context.boundary_conditions.programming_language.value}
+            - Project Type: {context.boundary_conditions.project_type.value}
 
             Solution Plan:
             Architecture: {architecture_desc}
@@ -645,9 +645,6 @@ class CodeGenerator:
         logger.info("Creating solution repository from generated files")
 
         try:
-            # Import at runtime to avoid protobuf version issues
-            from app.grpc import hyperion_pb2
-
             repository_files = []
 
             if context.file_structure:
@@ -656,9 +653,7 @@ class CodeGenerator:
                     try:
                         file_content = self.file_manager.read_file(context, file_path)
                         repository_files.append(
-                            hyperion_pb2.RepositoryFile(
-                                path=file_path, content=file_content
-                            )
+                            RepositoryFile(path=file_path, content=file_content)
                         )
                         logger.debug(f"Added file to repository: {file_path}")
                     except Exception as e:
@@ -669,26 +664,19 @@ class CodeGenerator:
                     try:
                         file_content = self.file_manager.read_file(context, file_path)
                         repository_files.append(
-                            hyperion_pb2.RepositoryFile(
-                                path=file_path, content=file_content
-                            )
+                            RepositoryFile(path=file_path, content=file_content)
                         )
                         logger.debug(f"Added build file to repository: {file_path}")
                     except Exception as e:
                         logger.warning(f"Failed to read build file {file_path}: {e}")
 
-            context.solution_repository = hyperion_pb2.Repository(
-                files=repository_files
-            )
+            context.solution_repository = Repository(files=repository_files)
             logger.info(
                 f"Solution repository created with {len(repository_files)} files"
             )
 
         except Exception as e:
             logger.error(f"Failed to create solution repository: {e}")
-            # Import at runtime to avoid protobuf version issues
-            from app.grpc import hyperion_pb2
-
-            context.solution_repository = hyperion_pb2.Repository(files=[])
+            context.solution_repository = Repository(files=[])
 
         return context
