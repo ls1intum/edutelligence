@@ -10,6 +10,12 @@ from iris.domain.communication.communication_tutor_suggestion_pipeline_execution
 
 logger = logging.getLogger(__name__)
 
+class ChannelType:
+    PROGRAMMING_EXERCISE = "programming_exercise"
+    TEXT_EXERCISE = "text_exercise"
+    LECTURE = "lecture"
+    GENERAL = "general"
+
 
 def get_user_query(chat_history: List[PyrisMessage]):
     """
@@ -89,13 +95,13 @@ def get_channel_type(dto: CommunicationTutorSuggestionPipelineExecutionDTO) -> s
     :return: The channel type as a string.
     """
     if dto.exercise is not None:
-        return "programming_exercise"
+        return ChannelType.PROGRAMMING_EXERCISE
     elif dto.text_exercise is not None:
-        return "text_exercise"
+        return ChannelType.TEXT_EXERCISE
     elif dto.lecture_id is not None:
-        return "lecture"
+        return ChannelType.LECTURE
     else:
-        return "general"
+        return ChannelType.GENERAL
 
 
 def sort_post_answers(dto):

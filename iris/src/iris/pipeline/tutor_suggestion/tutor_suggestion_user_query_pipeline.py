@@ -7,11 +7,13 @@ from langchain_core.runnables import Runnable
 from langsmith import traceable
 
 from iris.common.pyris_message import PyrisMessage
-from iris.common.tutor_suggestion_helper import (
+from iris.common.tutor_suggestion import (
     extract_json_from_text,
     get_last_artifact,
-    get_user_query,
+    get_user_query, ChannelType,
 )
+from iris.domain.communication.communication_tutor_suggestion_pipeline_execution_dto import \
+    CommunicationTutorSuggestionPipelineExecutionDTO
 from iris.domain.data.text_exercise_dto import TextExerciseDTO
 from iris.llm import CompletionArguments, ModelVersionRequestHandler
 from iris.llm.langchain import IrisLangchainChatModel
@@ -44,7 +46,7 @@ class TutorSuggestionUserQueryPipeline(Pipeline):
         self,
         variant: str = "default",
         callback: TutorSuggestionCallback = None,
-        chat_type: str = "text_exercise",
+        chat_type: ChannelType = ChannelType.TEXT_EXERCISE,
     ):
         super().__init__(implementation_id="tutor_suggestion_user_query_pipeline")
         completion_args = CompletionArguments(temperature=0, max_tokens=2000)
@@ -65,7 +67,7 @@ class TutorSuggestionUserQueryPipeline(Pipeline):
         self.callback = callback
 
         # Prompt template for user query
-        if chat_type == "text_exercise":
+        if chat_type == ChannelType.TEXT_EXERCISE:
             self.query_prompt_template = ChatPromptTemplate.from_messages(
                 [("system", text_exercise_query_prompt())]
             )
@@ -75,8 +77,9 @@ class TutorSuggestionUserQueryPipeline(Pipeline):
         self,
         chat_summary: str,
         chat_history: List[PyrisMessage],
-        dto: TextExerciseDTO,
         chat_history_without_user_query_str: str,
+        dto: TextExerciseDTO = None,
+        communication_dto: CommunicationTutorSuggestionPipelineExecutionDTO = None,
     ):
 
         answer = ""

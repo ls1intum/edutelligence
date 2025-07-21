@@ -6,7 +6,7 @@ from langchain_core.runnables import Runnable
 from langsmith import traceable
 
 from iris.common.pipeline_enum import PipelineEnum
-from iris.common.tutor_suggestion_helper import (
+from iris.common.tutor_suggestion import (
     extract_json_from_text,
     sort_post_answers,
 )

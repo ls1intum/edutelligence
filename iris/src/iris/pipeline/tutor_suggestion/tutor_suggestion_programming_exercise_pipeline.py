@@ -7,10 +7,10 @@ from langsmith import traceable
 
 from iris.common.pipeline_enum import PipelineEnum
 from iris.common.pyris_message import IrisMessageRole, PyrisMessage
-from iris.common.tutor_suggestion_helper import (
+from iris.common.tutor_suggestion import (
     extract_html_from_text,
     extract_json_from_text,
-    has_html,
+    has_html, get_chat_history_without_user_query,
 )
 from iris.domain.communication.communication_tutor_suggestion_pipeline_execution_dto import (
     CommunicationTutorSuggestionPipelineExecutionDTO,

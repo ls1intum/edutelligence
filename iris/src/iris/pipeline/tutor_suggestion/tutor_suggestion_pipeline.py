@@ -7,7 +7,7 @@ from langchain_core.runnables import Runnable
 from langsmith import traceable
 
 from iris.common.pipeline_enum import PipelineEnum
-from iris.common.tutor_suggestion_helper import get_channel_type
+from iris.common.tutor_suggestion import get_channel_type, ChannelType
 from iris.domain import FeatureDTO
 from iris.domain.communication.communication_tutor_suggestion_pipeline_execution_dto import (
     CommunicationTutorSuggestionPipelineExecutionDTO,
@@ -139,15 +139,15 @@ class TutorSuggestionPipeline(Pipeline):
         channel_type = get_channel_type(dto)
 
         logging.info(channel_type)
-        if channel_type == "text_exercise":
+        if channel_type == ChannelType.TEXT_EXERCISE:
             self._run_text_exercise_pipeline(
                 text_exercise_dto=dto.text_exercise,
                 summary=summary,
                 is_answered=is_answered,
             )
-        elif channel_type == "programming_exercise":
+        elif channel_type == ChannelType.PROGRAMMING_EXERCISE:
             self._run_programming_exercise_pipeline(dto=dto, summary=summary)
-        elif channel_type == "lecture":
+        elif channel_type == ChannelType.LECTURE:
             self._run_lecture_pipeline(dto=dto, summary=summary)
         else:
             self.callback.error("Not implemented yet")
