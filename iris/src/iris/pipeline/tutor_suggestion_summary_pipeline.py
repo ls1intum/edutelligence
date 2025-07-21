@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 ADVANCED_VARIANT = "deepseek-r1:8b"
 DEFAULT_VARIANT = "gemma3:27b"
 
+
 def sort_post_answers(dto):
     """
     Sort the answers of the post by their id

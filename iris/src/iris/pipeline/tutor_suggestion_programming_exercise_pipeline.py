@@ -29,6 +29,7 @@ logger = logging.getLogger(__name__)
 ADVANCED_VARIANT = "deepseek-r1:8b"
 DEFAULT_VARIANT = "gemma3:27b"
 
+
 class TutorSuggestionProgrammingExercisePipeline(Pipeline):
     """
     The TutorSuggestionProgrammingExercisePipeline creates a suggestion for a programming exercise.

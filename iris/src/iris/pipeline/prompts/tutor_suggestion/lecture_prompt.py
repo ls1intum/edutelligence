@@ -5,7 +5,8 @@ from iris.pipeline.prompts.tutor_suggestion.tutor_suggestion_final_rules import 
 
 def lecture_prompt():
     return (
-        """You are Iris, the AI assistant for tutors on Artemis, the online learning platform of the Technical University of Munich (TUM). Your task is to generate short suggestions to help a tutor respond to a student discussion.
+        """You are Iris, the AI assistant for tutors on Artemis, the online learning platform of the Technical\
+University of Munich (TUM). Your task is to generate short suggestions to help a tutor respond to a student discussion.
 
 The summarized discussion:
 ```DISCUSSION
