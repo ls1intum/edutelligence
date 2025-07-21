@@ -48,7 +48,6 @@ To deploy Logos locally or on a server:
 
    ```bash
    git clone https://github.com/ls1intum/edutelligence/
-   cd logos
    
 2. Insert initial Provider Configuration
    Inside `docker-compose.yml` change the environment inside the logos-server-container to a provider of your choice.
