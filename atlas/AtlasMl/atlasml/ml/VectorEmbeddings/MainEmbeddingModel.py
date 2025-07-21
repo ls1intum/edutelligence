@@ -4,7 +4,7 @@ load_dotenv()
 from openai import AzureOpenAI, OpenAIError
 
 
-def generate_embeddings_openai(id, description: str):
+def generate_embeddings_openai(description: str):
     client = AzureOpenAI(
         api_key=os.environ.get("OPENAI_API_KEY"),
         azure_endpoint=os.environ.get("OPENAI_API_URL"),
@@ -15,4 +15,4 @@ def generate_embeddings_openai(id, description: str):
         model="te-3-small",
         input=description,
     )
-    return id, response.data[0].embedding
+    return response.data[0].embedding

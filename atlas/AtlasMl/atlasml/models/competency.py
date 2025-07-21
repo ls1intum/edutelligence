@@ -59,7 +59,7 @@ class SuggestCompetencyRequest(BaseModel):
 
 
 class SuggestCompetencyResponse(BaseModel):
-    competencies: list[str]
+    competencies: list[Competency]
     competency_relations: list[CompetencyRelation]
 
 

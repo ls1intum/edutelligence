@@ -5,11 +5,12 @@ from matplotlib.patches import Patch
 from scipy.spatial import ConvexHull
 from scipy.spatial.qhull import QhullError
 
-from atlasml.clients.weaviate import get_weaviate_client
+from atlasml.clients.weaviate import get_weaviate_client, CollectionNames
 from atlasml.dependencies import TokenValidator
 from atlasml.ml.Clustering.HDBSCAN import apply_hdbscan
 from atlasml.ml.Clustering.TSNE import apply_tsne
 from atlasml.ml.VectorEmbeddings import FallbackModel
+from atlasml.ml.MLPipelines.PipelineWorkflows import PipelineWorkflows
 from atlasml.models.competency import (
     Competency,
     GenerateCompetencyRequest,
@@ -115,18 +116,42 @@ async def get_competency(id: str):
     plt.show()
 
 
+@router.get("/exercise/all", response_model=list[dict])
+async def get_all_exercises():
+    weaviate_client = get_weaviate_client()
+    exercises = weaviate_client.get_all_embeddings(CollectionNames.EXERCISE.value)
+    return exercises
+
+@router.get("/embedings", response_model=list[dict])
+async def get_all_competencies():
+    weaviate_client = get_weaviate_client()
+    competencies = weaviate_client.get_all_embeddings(CollectionNames.COMPETENCY.value)
+    return competencies
+
+@router.get("/clusters", response_model=list[str])
+async def get_clusters():
+    weaviate_client = get_weaviate_client()
+    clusters = weaviate_client.get_all_embeddings(CollectionNames.CLUSTERCENTER.value)
+    return [cluster['properties']['label_id'] for cluster in clusters ]
+
+@router.get("/delete_embedings/{collection_name}", response_model=list[dict])
+async def delete_embedings(collection_name: str):
+    weaviate_client = get_weaviate_client()
+    weaviate_client.delete_all_data_from_collection(CollectionNames[collection_name].value)
+    return Response(status_code=status.HTTP_200_OK, content=b"[]", media_type="application/json")
+
+
 @router.post(
     "/suggest",
     response_model=SuggestCompetencyResponse,
     dependencies=[],
 )
 async def suggest_competencies(request: SuggestCompetencyRequest):
-    # TODO: @ArdaKaraman  call required pipeline with the input and return list of competencies
-    # TODO: For test purposes you can delete TokenValidator() from dependencies
-    return Response(
-        status_code=status.HTTP_200_OK,
-        content=b"[]",
-        media_type="application/json",
+    pipeline = PipelineWorkflows()
+    competency = pipeline.newTextPipeline(request.description)
+    return SuggestCompetencyResponse(
+        competencies=[competency],
+        competency_relations=[]
     )
 
 

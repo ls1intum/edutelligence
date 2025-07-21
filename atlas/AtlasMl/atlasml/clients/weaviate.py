@@ -12,9 +12,34 @@ from atlasml.config import settings
 # If you define all the collections here all the collections will be created
 # automatically when you run the project.
 class CollectionNames(str, Enum):
-    TEXT = "Text"
+    EXERCISE = "Exercise"
     COMPETENCY = "Competency"
     CLUSTERCENTER = "ClusterCenter"
+
+COLLECTION_SCHEMAS = {
+    CollectionNames.EXERCISE.value: {
+        "properties": [
+            {"name": "exercise_id", "data_type": DataType.TEXT, "indexFilterable": True, "indexNullState": True},
+            {"name": "description", "data_type": DataType.TEXT},
+            {"name": "competency_ids", "data_type": DataType.TEXT_ARRAY, "indexFilterable": True},
+        ]
+    },
+    CollectionNames.COMPETENCY.value: {
+        "properties": [
+            {"name": "competency_id", "data_type": DataType.TEXT, "indexFilterable": True},
+            {"name": "title", "data_type":  DataType.TEXT},
+            {"name": "description", "data_type":  DataType.TEXT},
+            {"name": "cluster_id", "data_type": DataType.TEXT, "indexFilterable": True},
+            {"name": "cluster_similarity_score", "data_type": DataType.NUMBER},
+        ]
+    },
+    CollectionNames.CLUSTERCENTER.value: {
+        "properties": [     
+            {"name": "cluster_id", "data_type":  DataType.UUID, "indexFilterable": True},
+            {"name": "label_id", "data_type": DataType.TEXT, "indexFilterable": True},
+        ]
+    },
+}
 
 
 logger = logging.getLogger(__name__)
@@ -45,31 +70,7 @@ class WeaviateClient:
         """Ensure collections exist with a proper schema."""
         # Define schemas for each collection
         # After, schema updated automatically, and you can fetch the data from the collection with the new properties
-        collection_schemas = {
-            CollectionNames.TEXT.value: {
-                "properties": [
-                    {"name": "text_id", "data_type": DataType.TEXT, "indexFilterable": True, "indexNullState": True},
-                    {"name": "text", "data_type": DataType.TEXT},
-                    {"name": "competency_ids", "data_type": DataType.TEXT_ARRAY, "indexFilterable": True},
-                ]
-            },
-            CollectionNames.COMPETENCY.value: {
-                "properties": [
-                    {"name": "competency_id", "data_type": DataType.TEXT, "indexFilterable": True},
-                    {"name": "name", "data_type":  DataType.TEXT},
-                    {"name": "text", "data_type":  DataType.TEXT},
-                    {"name": "cluster_id", "data_type": DataType.TEXT, "indexFilterable": True},
-                    {"name": "cluster_similarity_score", "data_type": DataType.NUMBER},
-                ]
-            },
-            CollectionNames.CLUSTERCENTER.value: {
-                "properties": [
-                    {"name": "cluster_id", "data_type":  DataType.TEXT, "indexFilterable": True}
-                ]
-            },
-        }
-
-        for collection_name, schema in collection_schemas.items():
+        for collection_name, schema in COLLECTION_SCHEMAS.items():
             if not self.client.collections.exists(collection_name):
                 self.client.collections.create(
                     name=collection_name,
@@ -197,7 +198,8 @@ class WeaviateClient:
             results.append(
                 {
                     "id": obj.uuid,
-                    "text": obj.properties.get("text"),
+                    "title": obj.properties.get("title"),
+                    "description": obj.properties.get("description"),
                     "vector": obj.vector,
                     "properties": obj.properties,
                 }
@@ -337,6 +339,8 @@ class WeaviateClient:
         self._check_if_collection_exists(collection_name)
         logger.info(f"{collection_name} ---> ALL DATA DELETED")
 
+        self.client.collections.delete(collection_name)
+
         self.recreate_collection(collection_name)
 
     def recreate_collection(self, collection_name: str):
@@ -354,14 +358,6 @@ class WeaviateClient:
             properties=schema["properties"],
         )
         logger.info(f"{collection_name} ---> RECREATED")
-
-    def delete_data_by_id(self, collection_name: str, id: str):
-        """Delete data from a collection by ID."""
-        self._check_if_collection_exists(collection_name)
-
-        collection = self.client.collections.get(collection_name)
-        collection.data.delete(id)
-        logger.info(f"--- DATA DELETED FROM {collection_name} ---")
 
     def update_property_by_id(self, collection_name: str, id: str, properties: dict):
         """Update a property by ID."""

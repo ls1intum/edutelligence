@@ -49,7 +49,7 @@ def load_exercises(path: Path) -> dict[str, ExerciseWithCompetencies]:
     df = pd.read_csv(path)
     return {
         row.exercise_id: ExerciseWithCompetencies(
-            id=row.exercise_id,
+            id=str(row.exercise_id),
             title=row.exercise_title,
             description=row.exercise_problem_statement,
         )
@@ -85,11 +85,6 @@ def main() -> None:
     base = Path(__file__).parent / "samples"
     competencies = load_competencies(base / "competencies.csv")
     exercises = load_exercises(base / "exercises.csv")
-    attach_relations(
-        base / "relations.csv",
-        exercises,
-        competencies
-    )
 
     pipeline = PipelineWorkflows() 
 
@@ -97,9 +92,9 @@ def main() -> None:
     pipeline.initial_competencies(list(competencies.values()))
 
     print("➡️  Uploading exercises …")  
-    pipeline.initial_texts(list(exercises.values()))
+    pipeline.initial_exercises(list(exercises.values()))
 
-    print("➡️  Computing per‑competency cluster centroids …")
+    print("➡️  Computing per‑competency cluste  r centroids …")
     pipeline.initial_cluster_pipeline()
 
     print("✅ Done. "
