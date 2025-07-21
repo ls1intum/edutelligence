@@ -1092,8 +1092,8 @@ class DBManager:
         return self.session.execute(sql, {"logos_key": logos_key}).fetchone() is not None
 
     def __enter__(self):
-        conf = load_postgres_env_vars_from_compose()    # {conf['port']}
-        db_url = f"postgresql://{conf['user']}:{conf['password']}@logos-db:5432/{conf['db']}"
+        # conf = load_postgres_env_vars_from_compose()    # {conf['port']}
+        db_url = f"postgresql://postgres:root@logos-db:5432/logosdb"
         self.engine = create_engine(db_url)
         self.metadata = MetaData()
         self.metadata.reflect(bind=self.engine)
