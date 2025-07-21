@@ -26,6 +26,11 @@ logger = logging.getLogger(__name__)
 
 
 class TutorSuggestionLecturePipeline(Pipeline):
+    """
+    Tutor Suggestion Lecture Pipeline.
+    This pipeline is used to generate suggestions for tutors based on lecture content.
+    It retrieves relevant lecture content and generates a response using an LLM.
+    """
 
     llm: IrisLangchainChatModel
     pipeline: Runnable
@@ -141,7 +146,7 @@ class TutorSuggestionLecturePipeline(Pipeline):
                 lecture_id=dto.lecture_id,
             )
         except AttributeError as e:
-            return "Error retrieving lecture data"
+            return "Error retrieving lecture data: " + str(e)
 
         result = "Lecture slide content:\n"
         for paragraph in lecture_retrieval_result.lecture_unit_page_chunks:
