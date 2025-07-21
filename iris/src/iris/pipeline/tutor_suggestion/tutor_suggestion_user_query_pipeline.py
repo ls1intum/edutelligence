@@ -8,17 +8,21 @@ from langsmith import traceable
 
 from iris.common.pyris_message import PyrisMessage
 from iris.common.tutor_suggestion import (
+    ChannelType,
     extract_json_from_text,
     get_last_artifact,
-    get_user_query, ChannelType,
+    get_user_query,
 )
-from iris.domain.communication.communication_tutor_suggestion_pipeline_execution_dto import \
-    CommunicationTutorSuggestionPipelineExecutionDTO
+from iris.domain.communication.communication_tutor_suggestion_pipeline_execution_dto import (
+    CommunicationTutorSuggestionPipelineExecutionDTO,
+)
 from iris.domain.data.text_exercise_dto import TextExerciseDTO
 from iris.llm import CompletionArguments, ModelVersionRequestHandler
 from iris.llm.langchain import IrisLangchainChatModel
 from iris.pipeline import Pipeline
-from iris.pipeline.prompts.tutor_suggestion.programming_exercise_query_prompt import programming_exercise_query_prompt
+from iris.pipeline.prompts.tutor_suggestion.programming_exercise_query_prompt import (
+    programming_exercise_query_prompt,
+)
 from iris.pipeline.prompts.tutor_suggestion.text_exercise_query_prompt import (
     text_exercise_query_prompt,
 )
@@ -78,7 +82,6 @@ class TutorSuggestionUserQueryPipeline(Pipeline):
             self.query_prompt_template = ChatPromptTemplate.from_messages(
                 [("system", programming_exercise_query_prompt())]
             )
-
 
     @traceable(name="Tutor Suggestion User Query Pipeline")
     def __call__(

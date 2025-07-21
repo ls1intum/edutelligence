@@ -7,7 +7,7 @@ from langchain_core.runnables import Runnable
 from langsmith import traceable
 
 from iris.common.pipeline_enum import PipelineEnum
-from iris.common.tutor_suggestion import get_channel_type, ChannelType
+from iris.common.tutor_suggestion import ChannelType, get_channel_type
 from iris.domain import FeatureDTO
 from iris.domain.communication.communication_tutor_suggestion_pipeline_execution_dto import (
     CommunicationTutorSuggestionPipelineExecutionDTO,

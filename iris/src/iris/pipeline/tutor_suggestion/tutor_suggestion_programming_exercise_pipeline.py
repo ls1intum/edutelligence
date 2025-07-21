@@ -8,9 +8,11 @@ from langsmith import traceable
 from iris.common.pipeline_enum import PipelineEnum
 from iris.common.pyris_message import IrisMessageRole, PyrisMessage
 from iris.common.tutor_suggestion import (
+    ChannelType,
     extract_html_from_text,
     extract_json_from_text,
-    has_html, get_chat_history_without_user_query, ChannelType,
+    get_chat_history_without_user_query,
+    has_html,
 )
 from iris.domain.communication.communication_tutor_suggestion_pipeline_execution_dto import (
     CommunicationTutorSuggestionPipelineExecutionDTO,
@@ -23,7 +25,9 @@ from iris.pipeline.chat.code_feedback_pipeline import CodeFeedbackPipeline
 from iris.pipeline.prompts.tutor_suggestion.programming_exercise_prompt import (
     programming_exercise_prompt,
 )
-from iris.pipeline.tutor_suggestion.tutor_suggestion_user_query_pipeline import TutorSuggestionUserQueryPipeline
+from iris.pipeline.tutor_suggestion.tutor_suggestion_user_query_pipeline import (
+    TutorSuggestionUserQueryPipeline,
+)
 from iris.web.status.status_update import TutorSuggestionCallback
 
 logger = logging.getLogger(__name__)
@@ -42,7 +46,9 @@ class TutorSuggestionProgrammingExercisePipeline(Pipeline):
     llm: IrisLangchainChatModel
     pipeline: Runnable
 
-    def __init__(self, variant: str = "default", callback: TutorSuggestionCallback = None):
+    def __init__(
+        self, variant: str = "default", callback: TutorSuggestionCallback = None
+    ):
         super().__init__(
             implementation_id="tutor_suggestion_programming_exercise_pipeline"
         )
@@ -120,7 +126,7 @@ class TutorSuggestionProgrammingExercisePipeline(Pipeline):
             user_query_pipeline = TutorSuggestionUserQueryPipeline(
                 variant=self.variant,
                 callback=self.callback,
-                chat_type= ChannelType.PROGRAMMING_EXERCISE
+                chat_type=ChannelType.PROGRAMMING_EXERCISE,
             )
             answer, change_suggestion = user_query_pipeline(
                 communication_dto=dto,
@@ -145,9 +151,7 @@ class TutorSuggestionProgrammingExercisePipeline(Pipeline):
             )
 
             try:
-                response = (prompt | self.pipeline).invoke(
-                    prompt_input
-                )
+                response = (prompt | self.pipeline).invoke(prompt_input)
                 logger.info(response)
                 json = extract_json_from_text(response)
                 try:

@@ -7,7 +7,7 @@ from langchain_core.runnables import Runnable
 from langsmith import traceable
 
 from iris.common.pipeline_enum import PipelineEnum
-from iris.common.pyris_message import PyrisMessage, IrisMessageRole
+from iris.common.pyris_message import IrisMessageRole, PyrisMessage
 from iris.common.tutor_suggestion import (
     extract_html_from_text,
     extract_json_from_text,

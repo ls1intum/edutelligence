@@ -10,6 +10,7 @@ from iris.domain.communication.communication_tutor_suggestion_pipeline_execution
 
 logger = logging.getLogger(__name__)
 
+
 class ChannelType:
     PROGRAMMING_EXERCISE = "programming_exercise"
     TEXT_EXERCISE = "text_exercise"
