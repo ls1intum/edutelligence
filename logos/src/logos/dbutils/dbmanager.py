@@ -1013,7 +1013,7 @@ class DBManager:
                 sequence_name = f"{table_name}_id_seq"
 
                 # Max ID of Table
-                result = self.session.execute(text(f"SELECT MAX(id) FROM {table_name}"))
+                result = self.session.execute(text("SELECT MAX(id) FROM :table_name"), {"table_name": table_name})
                 max_id = result.scalar()
 
                 if max_id is not None:
