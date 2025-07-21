@@ -1,50 +1,41 @@
-# Welcome to your Expo app 👋
+# Logos – Landing Page
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+Welcome to the **Logos Landing Page**, the public-facing entry point to the **Logos Network**.
 
-## Get started
+This page presents an overview of the project, its goals, and the key advantages of the Logos platform. It is intended to provide a clear and concise introduction for developers, researchers, and decision-makers interested in modular prompt routing and LLM orchestration.
 
-1. Install dependencies
+## 🧠 What is Logos?
 
-   ```bash
-   npm install
-   ```
+**Logos** is a modular and extensible system designed to handle, classify, and route prompts to a variety of Large Language Models (LLMs) – including both commercial providers and local deployments.
 
-2. Start the app
+Key features include:
 
-   ```bash
-   npx expo start
-   ```
+- High-speed routing and classification of prompts
+- Intelligent model selection based on cost, latency, quality, and privacy
+- Support for multiple providers via unified abstraction
+- Full auditability and long-term tracking of usage
 
-In the output, you'll find options to open the app in a
+## 🌐 About this Page
 
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
+This landing page provides:
 
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
+- A high-level introduction to the Logos project
+- An overview of the available tools and system components
+- Key benefits and use cases
+- Frequently asked questions (FAQ)
 
-## Get a fresh project
+It is designed to be informative, lightweight, and easy to extend as the system evolves.
 
-When you're ready, run:
+## ⚙️ Tech Stack
 
-```bash
-npm run reset-project
-```
+- **React**
+- **Dockerized Deployment**
+- Served via **Traefik Reverse Proxy**
 
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
+## 🚀 Deployment
 
-## Learn more
+This page is deployed as a standalone container and served through the same infrastructure as the core Logos system. It is intended to be accessible via a public domain and kept up to date with the latest project developments.
 
-To learn more about developing your project with Expo, look at the following resources:
+---
 
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
-
-## Join the community
-
-Join our community of developers creating universal apps.
-
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+For more information, please visit the project website or contact the development team.
