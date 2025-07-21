@@ -171,7 +171,7 @@ def test_feedbackLoopPipeline_integration(workflows):
 
     # Optionally, check that the cluster has a new centroid (implementation dependent)
     clusters = workflows.weaviate_client.get_all_embeddings("ClusterCenter")
-    found = any(cluster["id"] == cluster_id for cluster in clusters)
+    found = any(cluster["properties"]["cluster_id"] == cluster_id for cluster in clusters)
     assert found, "Cluster should still exist"
 
 
@@ -215,6 +215,13 @@ class FakeWeaviateClient:
             obj for obj in self.collections[collection]
             if obj["properties"].get(property_key) == value
         ]
+
+    def delete_data_by_id(self, collection, obj_id):
+        for i, obj in enumerate(self.collections[collection]):
+            if obj["id"] == obj_id:
+                self.collections[collection].pop(i)
+                return
+        raise KeyError(f'id: {obj_id} deleted in {collection}')
 
     def delete_all_data_from_collection(self, collection):
         self.collections[collection] = []

@@ -264,16 +264,17 @@ class PipelineWorkflows:
         found_cluster = None
         if cluster: found_cluster = cluster[0]
 
-        new_text_competencyID = found_text["properties"]["competency_ids"]
-        new_text_competencyID.append(competency_id)
+        new_text_competencyIDs = found_text["properties"]["competency_ids"]
+        if competency_id in new_text_competencyIDs : return
+        new_text_competencyIDs.append(competency_id)
 
-        new_text = {"properties": [{
+        new_text_properties = {
             "text_id": found_text["properties"]["text_id"],
             "text": found_text["properties"]["text"],
-            "competency_ids": new_text_competencyID
-        }]}
+            "competency_ids": new_text_competencyIDs
+        }
 
-        self.weaviate_client.update_property_by_id(CollectionNames.TEXT.value, found_text["properties"]["text_id"], new_text)
+        self.weaviate_client.update_property_by_id(CollectionNames.TEXT.value, found_text["properties"]["text_id"], new_text_properties)
 
         members = self.weaviate_client.get_embeddings_by_property(CollectionNames.TEXT.value, "competency_ids",
                                                                   competency_id)
@@ -282,7 +283,9 @@ class PipelineWorkflows:
 
         newMedoid = update_cluster_centroid(cluster_vector, len(members), text_vector)
 
-        new_cluster = {"properties": [{
+        new_cluster_properties = {
             "cluster_id": found_cluster["properties"]["cluster_id"],
-        }]}
-        self.weaviate_client.add_embeddings(CollectionNames.CLUSTERCENTER.value, newMedoid.tolist(), new_cluster)
+        }
+
+        self.weaviate_client.delete_data_by_id(CollectionNames.CLUSTERCENTER.value, found_cluster["id"])
+        self.weaviate_client.add_embeddings(CollectionNames.CLUSTERCENTER.value, newMedoid.tolist(), new_cluster_properties)
