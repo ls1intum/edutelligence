@@ -13,8 +13,10 @@ from iris.llm import CompletionArguments, ModelVersionRequestHandler
 from iris.llm.langchain import IrisLangchainChatModel
 from iris.pipeline import Pipeline
 from iris.pipeline.prompts.tutor_suggestion.lecture_prompt import lecture_prompt
-from iris.pipeline.tutor_suggestion_summary_pipeline import _extract_json_from_text
-from iris.pipeline.tutor_suggestion_text_exercise_pipeline import (
+from iris.pipeline.tutor_suggestion.tutor_suggestion_summary_pipeline import (
+    _extract_json_from_text,
+)
+from iris.pipeline.tutor_suggestion.tutor_suggestion_text_exercise_pipeline import (
     _extract_html_from_text,
     _has_html,
 )

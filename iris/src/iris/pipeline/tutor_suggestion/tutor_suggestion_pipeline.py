@@ -20,16 +20,16 @@ from iris.pipeline.prompts.tutor_suggestion.question_answered_prompt import (
     question_answered_prompt,
 )
 from iris.pipeline.shared.utils import filter_variants_by_available_models
-from iris.pipeline.tutor_suggestion_lecture_pipeline import (
+from iris.pipeline.tutor_suggestion.tutor_suggestion_lecture_pipeline import (
     TutorSuggestionLecturePipeline,
 )
-from iris.pipeline.tutor_suggestion_programming_exercise_pipeline import (
+from iris.pipeline.tutor_suggestion.tutor_suggestion_programming_exercise_pipeline import (
     TutorSuggestionProgrammingExercisePipeline,
 )
-from iris.pipeline.tutor_suggestion_summary_pipeline import (
+from iris.pipeline.tutor_suggestion.tutor_suggestion_summary_pipeline import (
     TutorSuggestionSummaryPipeline,
 )
-from iris.pipeline.tutor_suggestion_text_exercise_pipeline import (
+from iris.pipeline.tutor_suggestion.tutor_suggestion_text_exercise_pipeline import (
     TutorSuggestionTextExercisePipeline,
 )
 from iris.web.status.status_update import TutorSuggestionCallback
@@ -66,6 +66,7 @@ class TutorSuggestionPipeline(Pipeline):
     pipeline: Runnable
     callback: TutorSuggestionCallback
     variant: str
+    dto: CommunicationTutorSuggestionPipelineExecutionDTO
 
     def __init__(self, callback: TutorSuggestionCallback, variant: str = "default"):
         super().__init__(implementation_id="tutor_suggestion_pipeline")
@@ -95,12 +96,13 @@ class TutorSuggestionPipeline(Pipeline):
         Run the pipeline.
         :param dto: execution data transfer object
         """
+        self.dto = dto
         self.callback.in_progress("Summarizing post content")
         summary_pipeline = TutorSuggestionSummaryPipeline(
             callback=self.callback, variant=self.variant
         )
         try:
-            summary = summary_pipeline(dto=dto)
+            summary = summary_pipeline(dto=self.dto)
         except AttributeError as e:
             logger.error("AttributeError in summary pipeline: %s", str(e))
             self.callback.error("Error running summary pipeline")
@@ -128,7 +130,7 @@ class TutorSuggestionPipeline(Pipeline):
             logger.error("Error parsing summary JSON: %s", str(e))
             self.callback.error("Error parsing summary JSON")
             return
-
+        is_answered = False
         if is_question and number_of_answers > 0:
             self.callback.in_progress("Checking if questions is already answered")
 
@@ -138,6 +140,7 @@ class TutorSuggestionPipeline(Pipeline):
 
             try:
                 response = (prompt | self.pipeline).invoke({"thread_summary": summary})
+                logger.info(response)
                 self._append_tokens(
                     self.llm.tokens, PipelineEnum.IRIS_TUTOR_SUGGESTION_PIPELINE
                 )
@@ -145,19 +148,16 @@ class TutorSuggestionPipeline(Pipeline):
                 logger.error("Error checking if question is answered: %s", str(e))
                 response = "no"
             if "yes" in response.lower():
-                self.callback.done(
-                    "The question has already been answered",
-                    artifact="The question has already been answered in the thread and should be marked as resolved.",
-                    tokens=self.tokens,
-                )
-                return
+                is_answered = True
 
         channel_type = get_channel_type(dto)
 
         logging.info(channel_type)
         if channel_type == "text_exercise":
             self._run_text_exercise_pipeline(
-                text_exercise_dto=dto.text_exercise, summary=summary
+                text_exercise_dto=dto.text_exercise,
+                summary=summary,
+                is_answered=is_answered,
             )
         elif channel_type == "programming_exercise":
             self._run_programming_exercise_pipeline(dto=dto, summary=summary)
@@ -167,7 +167,7 @@ class TutorSuggestionPipeline(Pipeline):
             self.callback.error("Not implemented yet")
 
     def _run_text_exercise_pipeline(
-        self, text_exercise_dto: TextExerciseDTO, summary: str
+        self, text_exercise_dto: TextExerciseDTO, summary: str, is_answered: bool
     ):
         """
         Run the text exercise pipeline.
@@ -177,12 +177,15 @@ class TutorSuggestionPipeline(Pipeline):
         """
         self.callback.in_progress("Generating suggestions for text exercise")
         text_exercise_pipeline = TutorSuggestionTextExercisePipeline(
-            variant=self.variant
+            variant=self.variant, callback=self.callback
         )
         try:
             logging.info(summary)
-            text_exercise_result = text_exercise_pipeline(
-                dto=text_exercise_dto, chat_summary=summary
+            text_exercise_result, tutor_answer = text_exercise_pipeline(
+                dto=text_exercise_dto,
+                chat_summary=summary,
+                chat_history=self.dto.chat_history,
+                is_answered=is_answered,
             )
         except AttributeError as e:
             self.callback.error(f"Error running text exercise pipeline: {e}")
@@ -191,11 +194,14 @@ class TutorSuggestionPipeline(Pipeline):
         self.callback.done(
             "Generated tutor suggestions",
             artifact=text_exercise_result,
+            final_result=tutor_answer,
             tokens=self.tokens,
         )
 
     def _run_programming_exercise_pipeline(
-        self, dto: CommunicationTutorSuggestionPipelineExecutionDTO, summary: str
+        self,
+        dto: CommunicationTutorSuggestionPipelineExecutionDTO,
+        summary: str,
     ):
         """
         Run the programming exercise pipeline.
@@ -223,7 +229,9 @@ class TutorSuggestionPipeline(Pipeline):
         )
 
     def _run_lecture_pipeline(
-        self, dto: CommunicationTutorSuggestionPipelineExecutionDTO, summary: str
+        self,
+        dto: CommunicationTutorSuggestionPipelineExecutionDTO,
+        summary: str,
     ):
         """
         Run the lecture pipeline.
