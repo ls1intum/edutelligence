@@ -597,7 +597,7 @@ class DBManager:
                    WHERE id = :process_id
                    """)
         self.session.execute(sql, {
-            "log": log_level,
+            "log_level": log_level,
             "process_id": int(process_id)
         })
         self.session.commit()
