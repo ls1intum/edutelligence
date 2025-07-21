@@ -6,6 +6,7 @@ from langchain_core.runnables import Runnable
 from langsmith import traceable
 
 from iris.common.pipeline_enum import PipelineEnum
+from iris.common.tutor_suggestion_helper import extract_json_from_text, has_html, extract_html_from_text
 from iris.domain.communication.communication_tutor_suggestion_pipeline_execution_dto import (
     CommunicationTutorSuggestionPipelineExecutionDTO,
 )
@@ -13,13 +14,6 @@ from iris.llm import CompletionArguments, ModelVersionRequestHandler
 from iris.llm.langchain import IrisLangchainChatModel
 from iris.pipeline import Pipeline
 from iris.pipeline.prompts.tutor_suggestion.lecture_prompt import lecture_prompt
-from iris.pipeline.tutor_suggestion.tutor_suggestion_summary_pipeline import (
-    _extract_json_from_text,
-)
-from iris.pipeline.tutor_suggestion.tutor_suggestion_text_exercise_pipeline import (
-    _extract_html_from_text,
-    _has_html,
-)
 from iris.retrieval.lecture.lecture_retrieval import LectureRetrieval
 from iris.vector_database.database import VectorDatabase
 from iris.web.status.status_update import TutorSuggestionCallback
@@ -93,14 +87,14 @@ class TutorSuggestionLecturePipeline(Pipeline):
                 }
             )
             logging.info(response)
-            json = _extract_json_from_text(response)
+            json = extract_json_from_text(response)
             try:
                 result = json.get("result")
             except AttributeError:
                 logger.error("No result found in JSON response.")
                 return None
-            if _has_html(result):
-                html_response = _extract_html_from_text(result)
+            if has_html(result):
+                html_response = extract_html_from_text(result)
                 self._append_tokens(
                     self.llm.tokens, PipelineEnum.IRIS_TUTOR_SUGGESTION_PIPELINE
                 )

@@ -1,5 +1,4 @@
 import logging
-import re
 from typing import List
 
 from langchain_core.output_parsers import StrOutputParser
@@ -10,7 +9,7 @@ from langsmith import traceable
 from iris.common.pipeline_enum import PipelineEnum
 from iris.common.pyris_message import PyrisMessage
 from iris.common.tutor_suggestion_helper import (
-    get_chat_history_without_user_query,
+    get_chat_history_without_user_query, has_html, extract_html_from_text, extract_json_from_text,
 )
 from iris.domain.data.text_exercise_dto import TextExerciseDTO
 from iris.llm import CompletionArguments, ModelVersionRequestHandler
@@ -18,9 +17,6 @@ from iris.llm.langchain import IrisLangchainChatModel
 from iris.pipeline import Pipeline
 from iris.pipeline.prompts.tutor_suggestion.text_exercise_prompt import (
     text_exercise_prompt,
-)
-from iris.pipeline.tutor_suggestion.tutor_suggestion_summary_pipeline import (
-    _extract_json_from_text,
 )
 from iris.pipeline.tutor_suggestion.tutor_suggestion_user_query_pipeline import (
     TutorSuggestionUserQueryPipeline,
@@ -32,27 +28,6 @@ logger = logging.getLogger(__name__)
 ADVANCED_VARIANT = "deepseek-r1:8b"
 DEFAULT_VARIANT = "gemma3:27b"
 
-
-def _extract_html_from_text(text: str):
-    html_pattern = re.compile(
-        r"\s*(?P<html>&lt;ul&gt;.*?&lt;/ul&gt;|<ul>.*?</ul>)", re.DOTALL
-    )
-    match = html_pattern.search(text)
-
-    if match:
-        return match.group("html").strip()
-    else:
-        return None
-
-
-def _has_html(text: str):
-    """
-    Check if the text contains HTML tags.
-    :param text: The text to check.
-    :return: True if HTML tags are found, False otherwise.
-    """
-    html_pattern = re.compile(r"<[^>]+>")
-    return bool(html_pattern.search(text))
 
 
 class TutorSuggestionTextExercisePipeline(Pipeline):
@@ -139,22 +114,22 @@ class TutorSuggestionTextExercisePipeline(Pipeline):
                     prompt_input
                 )
                 logger.info(response)
-                json = _extract_json_from_text(response)
+                json = extract_json_from_text(response)
                 try:
                     result = json.get("result")
                 except AttributeError:
                     logger.error("No result found in JSON response.")
                     return None
-                if _has_html(result):
+                if has_html(result):
                     html_response = result
-                    extracted = _extract_html_from_text(result)
+                    extracted = extract_html_from_text(result)
                     if extracted:
                         html_response = extracted
                     if is_answered:
                         is_answered_html = """<p class="generated-suggestion-text">I think that the discussion is
                         already answered before. I suggest marking it as solved. Here are still some suggestions for
                         you:</p>"""
-                        is_answered_html = _extract_html_from_text(is_answered_html)
+                        is_answered_html = extract_html_from_text(is_answered_html)
                         html_response = is_answered_html + html_response
                     self._append_tokens(
                         self.llm.tokens, PipelineEnum.IRIS_TUTOR_SUGGESTION_PIPELINE

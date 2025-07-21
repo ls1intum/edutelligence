@@ -8,9 +8,8 @@ from langsmith import traceable
 
 from iris.common.pyris_message import PyrisMessage
 from iris.common.tutor_suggestion_helper import (
-    get_chat_history_without_user_query,
     get_last_artifact,
-    get_user_query,
+    get_user_query, extract_json_from_text,
 )
 from iris.domain.data.text_exercise_dto import TextExerciseDTO
 from iris.llm import CompletionArguments, ModelVersionRequestHandler
@@ -18,9 +17,6 @@ from iris.llm.langchain import IrisLangchainChatModel
 from iris.pipeline import Pipeline
 from iris.pipeline.prompts.tutor_suggestion.text_exercise_query_prompt import (
     text_exercise_query_prompt,
-)
-from iris.pipeline.tutor_suggestion.tutor_suggestion_summary_pipeline import (
-    _extract_json_from_text,
 )
 from iris.web.status.status_update import TutorSuggestionCallback
 
@@ -97,7 +93,7 @@ class TutorSuggestionUserQueryPipeline(Pipeline):
             }
             response = (self.query_prompt_template | self.pipeline).invoke(prompt_input)
             logger.info(response)
-            json = _extract_json_from_text(response)
+            json = extract_json_from_text(response)
             try:
                 answer = json.get("reply")
                 change_suggestion = json.get("suggestion_prompt")

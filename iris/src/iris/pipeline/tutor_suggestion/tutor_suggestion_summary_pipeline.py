@@ -1,6 +1,4 @@
-import json
 import logging
-import re
 
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
@@ -8,6 +6,7 @@ from langchain_core.runnables import Runnable
 from langsmith import traceable
 
 from iris.common.pipeline_enum import PipelineEnum
+from iris.common.tutor_suggestion_helper import sort_post_answers, extract_json_from_text
 from iris.domain.communication.communication_tutor_suggestion_pipeline_execution_dto import (
     CommunicationTutorSuggestionPipelineExecutionDTO,
 )
@@ -23,39 +22,6 @@ logger = logging.getLogger(__name__)
 
 ADVANCED_VARIANT = "deepseek-r1:8b"
 DEFAULT_VARIANT = "gemma3:27b"
-
-def sort_post_answers(dto):
-    """
-    Sort the answers of the post by their id
-    :param dto: execution data transfer object
-    """
-    if dto.post is None or dto.post.answers is None:
-        return dto
-    dto.post.answers.sort(key=lambda x: x.id)
-    return dto
-
-
-def _extract_json_from_text(text: str):
-    """
-    Extracts the JSON string from the given text.
-    This function uses a regular expression to find the JSON string
-    and then attempts to parse it into a Python dictionary.
-    :param text: The input text containing the JSON string.
-    :return: A dictionary representation of the JSON string, or None if parsing fails.
-    :raises json.JSONDecodeError: If the JSON string cannot be parsed.
-    """
-    json_pattern = re.compile(r"\{.*?\}", re.DOTALL | re.MULTILINE)
-    matches = json_pattern.findall(text)
-
-    if matches:
-        json_str = matches[-1]
-        try:
-            data = json.loads(json_str)
-            return data
-        except json.JSONDecodeError as e:
-            logger.error("JSON decoding failed: %s", e)
-            return None
-    return None
 
 
 class TutorSuggestionSummaryPipeline(Pipeline):
@@ -124,7 +90,7 @@ class TutorSuggestionSummaryPipeline(Pipeline):
         try:
             response = (self.prompt | self.pipeline).invoke({})
             logging.info(response)
-            json_response = _extract_json_from_text(response)
+            json_response = extract_json_from_text(response)
             self._append_tokens(
                 self.llm.tokens, PipelineEnum.IRIS_TUTOR_SUGGESTION_PIPELINE
             )

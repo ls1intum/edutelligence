@@ -7,6 +7,7 @@ from langsmith import traceable
 
 from iris.common.pipeline_enum import PipelineEnum
 from iris.common.pyris_message import IrisMessageRole, PyrisMessage
+from iris.common.tutor_suggestion_helper import extract_json_from_text, has_html, extract_html_from_text
 from iris.domain.communication.communication_tutor_suggestion_pipeline_execution_dto import (
     CommunicationTutorSuggestionPipelineExecutionDTO,
 )
@@ -17,13 +18,6 @@ from iris.pipeline import Pipeline
 from iris.pipeline.chat.code_feedback_pipeline import CodeFeedbackPipeline
 from iris.pipeline.prompts.tutor_suggestion.programming_exercise_prompt import (
     programming_exercise_prompt,
-)
-from iris.pipeline.tutor_suggestion.tutor_suggestion_summary_pipeline import (
-    _extract_json_from_text,
-)
-from iris.pipeline.tutor_suggestion.tutor_suggestion_text_exercise_pipeline import (
-    _extract_html_from_text,
-    _has_html,
 )
 
 logger = logging.getLogger(__name__)
@@ -117,15 +111,14 @@ class TutorSuggestionProgrammingExercisePipeline(Pipeline):
                 }
             )
             logger.info(response)
-            json = _extract_json_from_text(response)
+            json = extract_json_from_text(response)
             try:
                 result = json.get("result")
             except AttributeError:
                 logger.error("No result found in JSON response.")
                 return "Error: Unable to parse response from language model"
-            html_check = _has_html(result)
-            if html_check:
-                html_response = _extract_html_from_text(result)
+            if has_html(result):
+                html_response = extract_html_from_text(result)
                 self._append_tokens(
                     self.llm.tokens, PipelineEnum.IRIS_TUTOR_SUGGESTION_PIPELINE
                 )

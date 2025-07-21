@@ -7,6 +7,7 @@ from langchain_core.runnables import Runnable
 from langsmith import traceable
 
 from iris.common.pipeline_enum import PipelineEnum
+from iris.common.tutor_suggestion_helper import get_channel_type
 from iris.domain import FeatureDTO
 from iris.domain.communication.communication_tutor_suggestion_pipeline_execution_dto import (
     CommunicationTutorSuggestionPipelineExecutionDTO,
@@ -38,21 +39,6 @@ logger = logging.getLogger(__name__)
 
 ADVANCED_VARIANT = "deepseek-r1:8b"
 DEFAULT_VARIANT = "gemma3:27b"
-
-
-def get_channel_type(dto: CommunicationTutorSuggestionPipelineExecutionDTO) -> str:
-    """
-    Determines the channel type based on the context of the post.
-    :return: The channel type as a string.
-    """
-    if dto.exercise is not None:
-        return "programming_exercise"
-    elif dto.text_exercise is not None:
-        return "text_exercise"
-    elif dto.lecture_id is not None:
-        return "lecture"
-    else:
-        return "general"
 
 
 class TutorSuggestionPipeline(Pipeline):
