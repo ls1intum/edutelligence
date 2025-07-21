@@ -198,11 +198,11 @@ class TutorSuggestionPipeline(Pipeline):
         """
         self.callback.in_progress("Generating suggestions for programming exercise")
         programming_exercise_pipeline = TutorSuggestionProgrammingExercisePipeline(
-            variant=self.variant
+            variant=self.variant, callback=self.callback
         )
         try:
-            programming_exercise_result = programming_exercise_pipeline(
-                dto=dto, chat_summary=summary
+            programming_exercise_result, tutor_answer = programming_exercise_pipeline(
+                dto=dto, chat_summary=summary, chat_history=self.dto.chat_history
             )
         except AttributeError as e:
             self.callback.error(f"Error running programming exercise pipeline: {e}")
@@ -211,6 +211,7 @@ class TutorSuggestionPipeline(Pipeline):
         self.callback.done(
             "Generated tutor suggestions",
             artifact=programming_exercise_result,
+            final_result=tutor_answer,
             tokens=self.tokens,
         )
 

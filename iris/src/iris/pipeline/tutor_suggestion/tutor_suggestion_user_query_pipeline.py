@@ -18,6 +18,7 @@ from iris.domain.data.text_exercise_dto import TextExerciseDTO
 from iris.llm import CompletionArguments, ModelVersionRequestHandler
 from iris.llm.langchain import IrisLangchainChatModel
 from iris.pipeline import Pipeline
+from iris.pipeline.prompts.tutor_suggestion.programming_exercise_query_prompt import programming_exercise_query_prompt
 from iris.pipeline.prompts.tutor_suggestion.text_exercise_query_prompt import (
     text_exercise_query_prompt,
 )
@@ -41,12 +42,13 @@ class TutorSuggestionUserQueryPipeline(Pipeline):
     llm: IrisLangchainChatModel
     pipeline: Runnable
     callback: TutorSuggestionCallback
+    chat_type: str
 
     def __init__(
         self,
         variant: str = "default",
+        chat_type: str = ChannelType.TEXT_EXERCISE,
         callback: TutorSuggestionCallback = None,
-        chat_type: ChannelType = ChannelType.TEXT_EXERCISE,
     ):
         super().__init__(implementation_id="tutor_suggestion_user_query_pipeline")
         completion_args = CompletionArguments(temperature=0, max_tokens=2000)
@@ -65,12 +67,18 @@ class TutorSuggestionUserQueryPipeline(Pipeline):
         self.pipeline = self.llm | self.output_parser
         self.tokens = []
         self.callback = callback
+        self.chat_type = chat_type
 
         # Prompt template for user query
         if chat_type == ChannelType.TEXT_EXERCISE:
             self.query_prompt_template = ChatPromptTemplate.from_messages(
                 [("system", text_exercise_query_prompt())]
             )
+        elif chat_type == ChannelType.PROGRAMMING_EXERCISE:
+            self.query_prompt_template = ChatPromptTemplate.from_messages(
+                [("system", programming_exercise_query_prompt())]
+            )
+
 
     @traceable(name="Tutor Suggestion User Query Pipeline")
     def __call__(
@@ -80,6 +88,7 @@ class TutorSuggestionUserQueryPipeline(Pipeline):
         chat_history_without_user_query_str: str,
         dto: TextExerciseDTO = None,
         communication_dto: CommunicationTutorSuggestionPipelineExecutionDTO = None,
+        code_feedback: str = None,
     ):
 
         answer = ""
@@ -90,18 +99,31 @@ class TutorSuggestionUserQueryPipeline(Pipeline):
         last_suggestion = get_last_artifact(chat_history=chat_history)
 
         base_keys = {
+            "user_query": user_query,
+            "suggestion": last_suggestion,
             "thread_summary": chat_summary,
-            "problem_statement": dto.problem_statement,
-            "example_solution": dto.example_solution,
             "chat_history": chat_history_without_user_query_str,
             "lecture_contents": "",
         }
         try:
-            prompt_input = {
-                **base_keys,
-                "user_query": user_query,
-                "suggestion": last_suggestion,
-            }
+            if self.chat_type == ChannelType.TEXT_EXERCISE:
+                prompt_input = {
+                    **base_keys,
+                    "problem_statement": dto.problem_statement,
+                    "example_solution": dto.example_solution,
+                }
+            elif self.chat_type == ChannelType.PROGRAMMING_EXERCISE:
+                prompt_input = {
+                    **base_keys,
+                    "problem_statement": communication_dto.exercise.problem_statement,
+                    "exercise_title": communication_dto.exercise.name,
+                    "programming_language": communication_dto.exercise.programming_language,
+                    "code_feedback": code_feedback,
+                }
+            else:
+                prompt_input = {
+                    **base_keys,
+                }
             response = (self.query_prompt_template | self.pipeline).invoke(prompt_input)
             logger.info(response)
             json = extract_json_from_text(response)
