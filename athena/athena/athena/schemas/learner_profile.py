@@ -11,11 +11,11 @@ class LearnerProfile(BaseModel):
     - 3 represents the opposite extreme (e.g., detailed or formal)
     - 2 represents the neutral case - no influence on the generation
     """
-    feedbackDetail: Annotated[int, Field(
+    feedback_detail: Annotated[int, Field(
         strict=True, ge=1, le=3,
         description="Preference for brief (1) vs detailed (3) feedback.."
     )]
-    feedbackFormality: Annotated[int, Field(
+    feedback_formality: Annotated[int, Field(
         strict=True,
         description="Preference for friendly (1) vs formal (3) feedback."
     )]
@@ -26,13 +26,13 @@ class LearnerProfile(BaseModel):
         allow_population_by_field_name = True
 
     def _get_feedback_detail_prompt(self) -> str:
-        if self.feedbackDetail == 1:
+        if self.feedback_detail == 1:
             return (
                 "Keep the feedback short and direct — ideally 1 to 2 sentences.\n"
                 "Example 1: Add an index on the user_id column to improve performance.\n"
                 "Example 2: Clarify your thesis statement in the introduction to strengthen your argument.\n"
             )
-        if self.feedbackDetail == 3:
+        if self.feedback_detail == 3:
             return (
                 "Give detailed feedback with multiple sentences, examples, and background reasoning where relevant.\n"
                 "Example 1: Adding an index on user_id improves query speed by allowing the database to locate relevant rows efficiently without scanning the entire table, which is crucial for scaling.\n"
@@ -41,13 +41,13 @@ class LearnerProfile(BaseModel):
         return ""
 
     def _get_feedback_formality_prompt(self) -> str:
-        if self.feedbackFormality == 1:
+        if self.feedback_formality == 1:
             return (
                 "Provide feedback in a friendly and engaging tone, like a tutor would. Use emojis to make the feedback more engaging 👍👉🙌🚀🎯✏️➡️. Motivate the learner to improve.\n"
                 "Example 1: 💪 Let's boost your query performance by adding an index on the user_id column! 🚀\n"
                 "Example 2: 👉 Introducing your main argument clearly in the essay's opening not only frames the reader's expectations but also strengthens your persuasiveness, a technique often recommended in academic writing. 📚\n"
             )
-        if self.feedbackFormality == 3:
+        if self.feedback_formality == 3:
             return (
                 "Provide feedback in a formal and professional tone, like a teacher would, keep the neutral tone.\n"
                 "Example 1: Add an index on the user_id column to improve performance.\n"
@@ -56,7 +56,7 @@ class LearnerProfile(BaseModel):
         return ""
 
     def get_prompt(self) -> str:
-        guideline = "Generate feedback according to the following instructions:\n" if self.feedbackDetail != 2 and self.feedbackFormality != 2 else ""
+        guideline = "Generate feedback according to the following instructions:\n" if self.feedback_detail != 2 and self.feedback_formality != 2 else ""
         return (
             f"{guideline}"
             f"1. {self._get_feedback_detail_prompt()}\n"
