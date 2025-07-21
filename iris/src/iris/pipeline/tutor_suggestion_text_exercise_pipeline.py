@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 ADVANCED_VARIANT = "deepseek-r1:8b"
 DEFAULT_VARIANT = "gemma3:27b"
 
+
 def _extract_html_from_text(text: str):
     html_pattern = re.compile(
         r"\s*(?P<html>&lt;ul&gt;.*?&lt;/ul&gt;|<ul>.*?</ul>)", re.DOTALL
