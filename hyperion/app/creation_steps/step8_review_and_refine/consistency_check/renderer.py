@@ -26,15 +26,18 @@ def render_repository(
         str: A single, ready-to-print string.
     """
 
+    is_problem_statement = repo_name == "Problem Statement"
+
     repo_name_in_snake_case = (
         repo_name.replace(" ", "_").lower() if repo_name else "repository"
-    )
+    ) if not is_problem_statement else None
 
     # 1) tree view
-    paths = [file["path"] for file in files]
-    tree_part = render_file_structure(
-        repo_name_in_snake_case, paths, sep=sep, show_hidden=show_hidden
-    )
+    if not is_problem_statement:
+        paths = [file["path"] for file in files]
+        tree_part = render_file_structure(
+            repo_name_in_snake_case, paths, sep=sep, show_hidden=show_hidden
+        )
 
     # 2) individual files (alphabetical for determinism)
     file_parts = [
@@ -52,12 +55,12 @@ def render_repository(
 
 
 def render_file_structure(
-    root: str, paths: List[str], sep: str = "/", show_hidden: bool = False
+    root: Optional[str], paths: List[str], sep: str = "/", show_hidden: bool = False
 ) -> str:
     """Build a tree view string representation of a list of file paths.
 
     Args:
-        root (str): The root directory name to display at the top of the tree.
+        root (Optional[str]): The root directory name to display at the top of the tree.
         paths (List[str]): List of file paths to visualize. These paths do not have to exist on disk.
         sep (str, optional): Path separator used in `paths`. Defaults to "/".
         show_hidden (bool, optional): Include hidden files (starting with a dot) if True. Defaults to False.
@@ -79,7 +82,7 @@ def render_file_structure(
         name, children = item
         return (1 if children == {} else 0, name.lower())  # dirs first
 
-    lines: List[str] = [root]
+    lines: List[str] = [root] if root else []
 
     def _collect(subtree: Dict[str, Dict], prefix: str = "") -> None:
         items = sorted(subtree.items(), key=_sort_key)
@@ -95,7 +98,7 @@ def render_file_structure(
 
 
 def render_file_string(
-    root: str,
+    root: Optional[str],
     path: str,
     content: Union[str, bytes],
     *,
@@ -105,7 +108,7 @@ def render_file_string(
     """Build a pretty, line-numbered string representation of a file.
 
     Args:
-        root (str): The root directory name to display at the top of the file.
+        root (Optional[str]): The root directory name to display at the top of the file.
         path (str): The file path to display in the header.
         content (Union[str, bytes]): The file content to display.
         line_numbers (bool, optional): Whether to show line numbers. Defaults to True.
@@ -116,7 +119,7 @@ def render_file_string(
     """
 
     hr = "-" * width
-    header = f"{hr}\n{root}/{path}:\n{hr}"
+    header = f"{hr}\n{root}/{path}:\n{hr}" if root else f"{hr}\n{path}:\n{hr}"
 
     # Binary data? — just note the size
     if isinstance(content, bytes):
