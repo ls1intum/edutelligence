@@ -27,19 +27,25 @@ class ConsistencyCheck:
 
         input_data = {
             "problem_statement": request.problem_statement,
+            "programming_language": request.programming_language,
             "template_repository": [
                 {"path": file.path, "content": file.content}
                 for file in request.template_repository.files
             ],
-            "solution_repository": [
+        }
+        
+        # Add optional repositories if they exist
+        if request.solution_repository:
+            input_data["solution_repository"] = [
                 {"path": file.path, "content": file.content}
                 for file in request.solution_repository.files
-            ],
-            "test_repository": [
+            ]
+        
+        if request.test_repository:
+            input_data["test_repository"] = [
                 {"path": file.path, "content": file.content}
                 for file in request.test_repository.files
-            ],
-        }
+            ]
 
         structural_checker = init_structural_checker(self.model)
         semantic_checker = init_semantic_checker(self.model)

@@ -1,8 +1,61 @@
 from enum import Enum
-from typing import List
+from typing import List, Dict, Optional
 from pydantic import BaseModel, Field
 
 from app.creation_steps.models import Metadata, Repository
+
+
+class ProgrammingLanguage(str, Enum):
+    """Programming language enumeration for consistency checking."""
+
+    JAVA = "java"
+    PYTHON = "python"
+    # Future extensions can add more languages
+
+
+class LanguageConfig(BaseModel):
+    """Configuration for language-specific context rendering."""
+
+    file_extensions: List[str] = Field(
+        description="File extensions to include in context rendering"
+    )
+    source_directories: List[str] = Field(
+        description="Source directories to search for files"
+    )
+    exclude_patterns: List[str] = Field(
+        default_factory=list, description="File patterns to exclude from context"
+    )
+    max_file_size_kb: int = Field(
+        default=100, description="Maximum file size in KB to include in context"
+    )
+
+
+# Language-specific configurations
+LANGUAGE_CONFIGS: Dict[ProgrammingLanguage, LanguageConfig] = {
+    ProgrammingLanguage.JAVA: LanguageConfig(
+        file_extensions=[".java"],
+        source_directories=["src"],
+        exclude_patterns=[
+            "*/target/*", 
+            "*/build/*", 
+            "*/.gradle/*",
+            "gradle/*",
+            "gradlew*",
+            "*.gradle", 
+            "*.properties",
+            "*.bat",
+            "*.sh",
+            ".gradle/*"
+        ],
+        max_file_size_kb=50,
+    ),
+    ProgrammingLanguage.PYTHON: LanguageConfig(
+        file_extensions=[".py"],
+        source_directories=["src", ".", "lib"],
+        exclude_patterns=["**/__pycache__/**", "**/*.pyc", "**/venv/**", "**/env/**"],
+        max_file_size_kb=50,
+    ),
+}
 
 
 class ArtifactType(str, Enum):
@@ -90,13 +143,47 @@ class ConsistencyCheckRequest(BaseModel):
     """Request model for consistency check"""
 
     problem_statement: str = Field(..., description="Problem statement to check")
-    solution_repository: Repository = Field(
-        ..., description="Solution repository to check"
-    )
     template_repository: Repository = Field(
         ..., description="Template repository to check"
     )
-    test_repository: Repository = Field(..., description="Test repository to check")
+    programming_language: ProgrammingLanguage = Field(
+        ..., description="Programming language for language-specific context rendering"
+    )
+    # Optional repositories - can be added in future
+    solution_repository: Optional[Repository] = Field(
+        None, description="Solution repository to check (optional)"
+    )
+    test_repository: Optional[Repository] = Field(
+        None, description="Test repository to check (optional)"
+    )
+
+
+class ContextRenderingConfig(BaseModel):
+    """Configuration for context rendering based on programming language."""
+
+    programming_language: ProgrammingLanguage = Field(
+        description="Programming language for context rendering"
+    )
+    language_config: LanguageConfig = Field(
+        description="Language-specific configuration"
+    )
+    include_file_structure: bool = Field(
+        default=True,
+        description="Whether to include file structure overview in context",
+    )
+    max_context_size_kb: int = Field(
+        default=500, description="Maximum total context size in KB"
+    )
+
+    @classmethod
+    def for_language(cls, language: ProgrammingLanguage) -> "ContextRenderingConfig":
+        """Create configuration for specific programming language."""
+        if language not in LANGUAGE_CONFIGS:
+            raise ValueError(f"Unsupported programming language: {language}")
+
+        return cls(
+            programming_language=language, language_config=LANGUAGE_CONFIGS[language]
+        )
 
 
 class ConsistencyCheckResponse(BaseModel):

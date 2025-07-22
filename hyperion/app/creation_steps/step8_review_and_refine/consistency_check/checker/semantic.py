@@ -187,7 +187,7 @@ Analysis: Same entity with different names - students cannot map requirements to
       "description": "Precise explanation of the naming inconsistency and how it affects student conceptual mapping",
       "severity": "HIGH" | "MEDIUM" | "LOW",
       "category": "IDENTIFIER_NAMING_INCONSISTENCY",
-      related_locations": [{{
+      "related_locations": [{{
         "type": "PROBLEM_STATEMENT" | "TEMPLATE_REPOSITORY",
         "file_path": "exact/path/to/file.java",
         "start_line": 1,
