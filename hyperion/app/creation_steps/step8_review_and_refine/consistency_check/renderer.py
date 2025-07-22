@@ -142,7 +142,7 @@ def context_renderer(*filter_keys: List[str]) -> RunnableLambda:
                     "Problem Statement",
                     [
                         {
-                            "path": "problem_statement.txt",
+                            "path": "problem_statement.md",
                             "content": input_data["problem_statement"],
                         }
                     ],

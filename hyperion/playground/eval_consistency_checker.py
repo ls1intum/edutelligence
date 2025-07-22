@@ -7,7 +7,7 @@ Usage:
     cd hyperion
     poetry run python playground/eval_consistency_checker.py --exercise "ISE22/H01E02-Object_Oriented_Programming"
     poetry run python playground/eval_consistency_checker.py --exercise "ISE22/H01E02-Object_Oriented_Programming" \
-        --model-name "openai:gpt-4o" --output "custom_output.json"
+        --model-name "openai:o4-mini" --output "custom_output.json"
 """
 
 import sys
@@ -118,7 +118,7 @@ def main():
     parser.add_argument(
         "--model-name",
         "-m",
-        default="openai:o3-mini",
+        default="openai:o4-mini",
         help="Model name to use for consistency checking",
     )
 

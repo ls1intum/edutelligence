@@ -1,18 +1,17 @@
+from typing import Dict, List
 from uuid import uuid4
 from langchain.chat_models import init_chat_model
+from langchain_core.runnables import RunnableParallel, RunnableLambda
 from langfuse.callback import CallbackHandler
 
-from app.creation_steps.models import Metadata
-
-from .renderer import context_renderer
 from .models import (
+    Metadata,
     ConsistencyCheckRequest,
     ConsistencyCheckResponse,
     ConsistencyIssue,
-    ArtifactLocation,
-    ConsistencyIssueType,
 )
-from .prompts import structural_consistency_prompt, StructuralConsistencyResult
+from .checker.structural import init_structural_checker
+from .checker.semantic import init_semantic_checker
 
 
 langfuse_handler = CallbackHandler()
@@ -42,56 +41,34 @@ class ConsistencyCheck:
             ],
         }
 
-        structural_consistency_chain = (
-            context_renderer("problem_statement", "template_repository")
-            | structural_consistency_prompt
-            | self.model.with_structured_output(StructuralConsistencyResult)
-        )
+        structural_checker = init_structural_checker(self.model)
+        semantic_checker = init_semantic_checker(self.model)
 
-        result: StructuralConsistencyResult = structural_consistency_chain.invoke(
-            input_data,
-            config={
+        def merge_issues(results: Dict) -> List[ConsistencyIssue]:
+            """Merge issues from from results."""
+            return [issue for result in results.values() for issue in result.issues]
+
+        merge = RunnableLambda(merge_issues, name="merge_issues")
+
+        checker = (
+            RunnableParallel(
+                {
+                    "structural": structural_checker,
+                    "semantic": semantic_checker,
+                }
+            )
+            | merge
+        ).with_config(
+            {
                 "callbacks": [langfuse_handler],
                 "run_name": "consistency_check",
                 "run_id": trace_id,
-            },
+            }
         )
 
-        # Convert StructuralConsistencyIssue to ConsistencyIssue for response
-        converted_issues = []
-        for issue in result.issues:
-            # Convert ArtifactLocation from prompts format to models format
-            primary_location = ArtifactLocation(
-                type=issue.primary_location.type,
-                file_path=issue.primary_location.file_path,
-                start_line=issue.primary_location.start_line,
-                end_line=issue.primary_location.end_line,
-                description=None,
-            )
-
-            related_locations = []
-            for loc in issue.related_locations:
-                related_location = ArtifactLocation(
-                    type=loc.type,
-                    file_path=loc.file_path,
-                    start_line=loc.start_line,
-                    end_line=loc.end_line,
-                    description=None,
-                )
-                related_locations.append(related_location)
-
-            converted_issue = ConsistencyIssue(
-                description=issue.description,
-                severity=issue.severity,
-                type=ConsistencyIssueType.STRUCTURAL,  # StructuralConsistencyIssue is always STRUCTURAL
-                category=issue.category,
-                primary_location=primary_location,
-                related_locations=related_locations,
-                suggested_fix=issue.suggested_fix,
-            )
-            converted_issues.append(converted_issue)
+        issues = checker.invoke(input_data)
 
         return ConsistencyCheckResponse(
-            issues=converted_issues,
+            issues=issues,
             metadata=Metadata(trace_id=str(trace_id)),
         )

@@ -24,16 +24,31 @@ A **consistency issue** is an unintentional violation of **instructional coheren
 - **Progressive Disclosure**: Intentionally simplified initial representations that are later expanded
 - **Pedagogical Abstraction**: Deliberately simplified models for educational purposes
 
-**Key Criteria:**
+## Consistency Issue Categories
 
-- **Unintentional**: Not a deliberate educational design choice
-- **Same Element**: References the same conceptual programming entity
-- **Different Representation**: Conflicting specifications across artifacts
-- **Ambiguous Intent**: Students cannot determine the correct implementation approach
+### **STRUCTURAL**
+
+Inconsistencies in formal structure, interfaces, or specifications where precise rules govern correctness. These issues create implementation barriers because conflicting structural elements cannot be simultaneously satisfied.
+
+### **SEMANTIC**
+
+Inconsistencies in conceptual meaning or terminology where the same knowledge is represented differently across artifacts. These issues create cognitive mapping barriers because learners cannot establish clear connections between equivalent concepts.
+
+### **ASSESSMENT**
+
+Inconsistencies between instructional content and evaluation criteria, including misaligned learning objectives, assessment methods, or performance standards. These issues create evaluation barriers where assessment does not measure what was taught or intended.
+
+### **TEMPORAL**
+
+Inconsistencies in sequencing, pacing, or prerequisite relationships across instructional materials. These issues create learning progression barriers where the order or timing of content presentation conflicts with pedagogical design or cognitive development principles.
+
+### **SCOPE**
+
+Inconsistencies in the breadth, depth, or coverage of content across artifacts. These issues create learning boundary barriers where different materials present conflicting information about what should be learned, to what level, or in what detail.
 
 | **Category** | **Sub-Category** | **Definition** | **Example** | **Student Impact** |
 |---|---|---|---|---|
-| **STRUCTURAL** |  | Programming interface specifications differ between problem statement and template code | | Student cannot implement specification using provided template |
+| **STRUCTURAL** |  | Formal interface specifications differ between problem statement and template code | | Student cannot implement specification using provided template |
 |  | METHOD_RETURN_TYPE_MISMATCH | Same method name has different return types | Problem: `int calculateTotal()` → Template: `void calculateTotal()` | Student cannot return required value from existing method |
 |  | METHOD_PARAMETER_MISMATCH | Same method name has different parameter count, types, or order | Problem: `setDimensions(int width, int height)` → Template: `setDimensions(int size)` | Student cannot call method with required parameters |
 |  | CONSTRUCTOR_PARAMETER_MISMATCH | Same class constructor has different parameter count, types, or order | Problem: `Engine(int power, Car car, int oil)` → Template: `Engine(int power, Car car)` | Student cannot instantiate object with required parameters |
