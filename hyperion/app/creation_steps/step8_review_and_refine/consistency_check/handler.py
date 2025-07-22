@@ -33,14 +33,14 @@ class ConsistencyCheck:
                 for file in request.template_repository.files
             ],
         }
-        
+
         # Add optional repositories if they exist
         if request.solution_repository:
             input_data["solution_repository"] = [
                 {"path": file.path, "content": file.content}
                 for file in request.solution_repository.files
             ]
-        
+
         if request.test_repository:
             input_data["test_repository"] = [
                 {"path": file.path, "content": file.content}

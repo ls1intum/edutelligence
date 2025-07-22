@@ -50,23 +50,25 @@ def load_repository_files(repo_path: Path) -> list:
 def detect_programming_language(template_files: list) -> ProgrammingLanguage:
     """Detect programming language based on file extensions in template repository."""
     file_extensions = set()
-    
+
     for file in template_files:
         file_path = file.path
         if "." in file_path:
             ext = "." + file_path.split(".")[-1]
             file_extensions.add(ext)
-    
+
     # Check for Java files
     if ".java" in file_extensions:
         return ProgrammingLanguage.JAVA
-    
+
     # Check for Python files
     if ".py" in file_extensions:
         return ProgrammingLanguage.PYTHON
-    
+
     # Default to Java if we can't determine
-    print(f"Warning: Could not detect programming language from extensions: {file_extensions}")
+    print(
+        f"Warning: Could not detect programming language from extensions: {file_extensions}"
+    )
     print("Defaulting to Java")
     return ProgrammingLanguage.JAVA
 
@@ -100,7 +102,11 @@ def load_exercise_from_dataset(exercise_path: str) -> Dict[str, Any]:
     }
 
 
-def evaluate_exercise(exercise_path: str, model_name: str, programming_language: ProgrammingLanguage = None) -> Dict[str, Any]:
+def evaluate_exercise(
+    exercise_path: str,
+    model_name: str,
+    programming_language: ProgrammingLanguage = None,
+) -> Dict[str, Any]:
     """Evaluate consistency for a single exercise."""
     print(f"Evaluating: {exercise_path}")
 
@@ -114,7 +120,9 @@ def evaluate_exercise(exercise_path: str, model_name: str, programming_language:
 
     # Use provided language or detect from template files
     if programming_language is None:
-        programming_language = detect_programming_language(exercise_data["template_files"])
+        programming_language = detect_programming_language(
+            exercise_data["template_files"]
+        )
         print(f"Detected programming language: {programming_language}")
     else:
         print(f"Using specified programming language: {programming_language}")

@@ -59,7 +59,7 @@ def render_repository(
             return headline + tree_part + "\n\n" + body
         else:
             return headline + body
-    
+
     if tree_part:
         return tree_part + "\n\n" + body
     else:
@@ -170,16 +170,16 @@ def filter_files_by_language(
             # Must be a .java file
             if not file_path.endswith(".java"):
                 continue
-            
+
             # Must be in src/ directory
             path_parts = file_path.split("/")
             if "src" not in path_parts:
                 continue
-                
+
             # Skip hidden files/directories
             if any(part.startswith(".") for part in path_parts):
                 continue
-                
+
         else:
             # For other languages, use the general approach
             # Skip hidden files and directories (starting with .)

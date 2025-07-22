@@ -238,7 +238,9 @@ def init_semantic_checker(model: BaseChatModel):
         RunnableSerializable: A runnable that checks for semantic consistency issues.
     """
     semantic_checker = (
-        context_renderer("problem_statement", "template_repository", "solution_repository")
+        context_renderer(
+            "problem_statement", "template_repository", "solution_repository"
+        )
         | semantic_consistency_prompt
         | model.with_structured_output(SemanticConsistencyResult)
     )

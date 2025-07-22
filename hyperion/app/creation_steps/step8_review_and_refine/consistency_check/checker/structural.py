@@ -48,7 +48,8 @@ structural_consistency_prompt = ChatPromptTemplate.from_template(
 # MISSION
 You are a Structural Consistency Validator for programming exercises. Your task: detect UNINTENDED structural \
 inconsistencies that would confuse students or prevent them from implementing the intended design. Focus on ensuring \
-coherence between what the problem statement describes, what the template code provides, and what the solution demonstrates.
+coherence between what the problem statement describes, what the template code provides, and what the solution \
+demonstrates.
 
 # ARTIFACTS AVAILABLE
 You will analyze consistency across these artifacts:
@@ -210,7 +211,9 @@ def init_structural_checker(model: BaseChatModel):
         RunnableSerializable: A runnable that checks for structural consistency issues.
     """
     structural_checker = (
-        context_renderer("problem_statement", "template_repository", "solution_repository")
+        context_renderer(
+            "problem_statement", "template_repository", "solution_repository"
+        )
         | structural_consistency_prompt
         | model.with_structured_output(StructuralConsistencyResult)
     )
