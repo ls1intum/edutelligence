@@ -51,9 +51,8 @@ class ConsistencyCheck:
         semantic_checker = init_semantic_checker(self.model)
 
         def merge_issues(results: Dict) -> List[ConsistencyIssue]:
-            """Merge issues from from results."""
+            """Merge issues from results."""
             return [issue for result in results.values() for issue in result.issues]
-
         merge = RunnableLambda(merge_issues, name="merge_issues")
 
         checker = (
