@@ -53,6 +53,7 @@ class ConsistencyCheck:
         def merge_issues(results: Dict) -> List[ConsistencyIssue]:
             """Merge issues from results."""
             return [issue for result in results.values() for issue in result.issues]
+
         merge = RunnableLambda(merge_issues, name="merge_issues")
 
         checker = (
