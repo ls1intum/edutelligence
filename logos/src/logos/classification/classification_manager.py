@@ -50,7 +50,7 @@ class ClassificationManager:
             if model["description"] is not None:
                 self.laura.register_model(model["id"], model["description"])
 
-    def classify(self, prompt: str, policy: dict, allowed=None) -> List[Tuple[int, int, int, int]]:
+    def classify(self, prompt: str, policy: dict, allowed=None, classifier=None) -> List[Tuple[int, int, int, int]]:
         """
         Classify prompts and assign them to a model.
         Returns a sorted list with the best suited model-id at the front together with
@@ -80,12 +80,17 @@ class ClassificationManager:
             adjusted_policy["threshold_quality"] = self.get_special_weight("weight_quality", maximum=False, allowed=allowed)
         logging.debug(f"Policy: {adjusted_policy['id']}")
         logging.debug(f"Models: {allowed}")
-        filtered = PolicyClassifier(self.models).classify(prompt, adjusted_policy)
+        if classifier is None or classifier == "policy":
+            filtered = PolicyClassifier(self.models).classify(prompt, adjusted_policy)
+        else:
+            filtered = [i for i in self.models]
         logging.debug(f"Policy-Classification: {[model['id'] for model in filtered]}")
-        filtered = TokenClassifier(filtered).classify(prompt, adjusted_policy)
+        if classifier is None or classifier == "token":
+            filtered = TokenClassifier(filtered).classify(prompt, adjusted_policy)
         logging.debug(f"Token-Classification: {[model['id'] for model in filtered]}")
         self.laura.allowed = allowed
-        filtered = AIClassifier(filtered).classify(prompt, adjusted_policy, laura=self.laura)
+        if classifier is None or classifier == "laura":
+            filtered = AIClassifier(filtered).classify(prompt, adjusted_policy, laura=self.laura)
         logging.debug(f"AI-Classification: {[model['id'] for model in filtered]}")
         self.laura.allowed = list()
         self.filtered = filtered
@@ -106,7 +111,7 @@ class ClassificationManager:
         weight = -1e10 if maximum else 1e10
         found = False
         for model in self.models:
-            if (allowed is None or model["id"] in allowed) and ((model[category] > weight and maximum) or (model[category] < weight and not maximum)):
+            if (not allowed or model["id"] in allowed) and ((model[category] > weight and maximum) or (model[category] < weight and not maximum)):
                 weight = model[category]
                 found = True
         if not found:
