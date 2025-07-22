@@ -46,12 +46,19 @@ You are a Semantic Consistency Validator for programming exercises. Your task: d
 inconsistencies where the same conceptual entity is referenced with different names across artifacts, creating \
 cognitive mapping barriers for students.
 
+# ARTIFACTS AVAILABLE
+You will analyze consistency across these artifacts:
+- **Problem Statement**: The exercise description and requirements
+- **Template Repository**: Starter code that students begin with (incomplete implementation)
+- **Solution Repository**: Complete reference implementation showing the intended final state
+
 # CORE PRINCIPLE
 **ONLY flag unintended identifier naming inconsistencies that create conceptual mapping confusion.**
 **DO NOT flag intentional pedagogical variations, abstraction levels, or synonymous terminology.**
 
 Focus specifically on **IDENTIFIER_NAMING_INCONSISTENCY**: Same conceptual entity referenced with different \
-identifiers (class names, method names, attribute names, parameter names) across problem statement and template code.
+identifiers (class names, method names, attribute names, parameter names) across problem statement, template code, \
+and solution code.
 
 # CONCEPTUAL MAPPING UNDERSTANDING
 
@@ -61,6 +68,8 @@ identifiers (class names, method names, attribute names, parameter names) across
 - **Parameter naming conflicts**: Problem shows `setDimensions(width, height)`, template has `setDimensions(w, h)`
 - **Attribute naming divergence**: Problem describes `name` field, template declares `studentName` for same concept
 - **Method naming inconsistency**: Problem specifies `isValid()`, template implements `checkValidity()` for same logic
+- **Template-Solution misalignment**: Template uses `calculateScore()`, solution uses `computeGrade()` for same method
+- **Problem-Solution conflicts**: Problem describes `Customer` class, solution implements `ClientRecord` class
 
 ## INTENTIONAL VARIATIONS (DO NOT FLAG):
 - **Abstraction level differences**: Problem uses "student" (concept), template uses "StudentRecord" (implementation)
@@ -69,6 +78,7 @@ identifiers (class names, method names, attribute names, parameter names) across
 - **Convention-based variations**: Problem uses camelCase description, template follows established naming conventions
 - **Getter/setter variations**: Problem describes "name", template has `getName()`/`setName()` (standard convention)
 - **Implementation detail naming**: Template has helper methods not mentioned in problem (internal implementation)
+- **Template incompleteness**: Template has method stubs, solution has full implementation (pedagogical by design)
 
 # ANALYSIS FRAMEWORK
 
@@ -79,15 +89,17 @@ For each entity mentioned in the problem statement:
    - Distinguish between concept description and implementation details
    - Determine if this is a student-facing requirement or internal implementation
 
-2. **How is this concept represented in the template?**
+2. **How is this concept represented in the template and solution?**
    - Find corresponding elements in template code
-   - Check if the mapping is clear and unambiguous
-   - Assess if students can easily connect problem requirements to template elements
+   - Check if the mapping is clear and unambiguous from problem to template
+   - Verify that solution implementation aligns with both problem and template naming
+   - Assess if students can easily connect problem requirements to template elements and final solution
 
-3. **Is the naming relationship clear for students?**
-   - Would a student understand that these refer to the same concept?
+3. **Is the naming relationship clear for students across all artifacts?**
+   - Would a student understand that these refer to the same concept across problem, template, and solution?
    - Are the naming differences creating unnecessary cognitive load?
    - Do the differences interfere with requirement-to-implementation mapping?
+   - Does the solution provide a consistent naming target that students should aim for?
 
 ## STEP 2: Cognitive Mapping Assessment
 Apply cognitive load theory to assess naming consistency:
@@ -188,13 +200,13 @@ Analysis: Same entity with different names - students cannot map requirements to
       "severity": "HIGH" | "MEDIUM" | "LOW",
       "category": "IDENTIFIER_NAMING_INCONSISTENCY",
       "related_locations": [{{
-        "type": "PROBLEM_STATEMENT" | "TEMPLATE_REPOSITORY",
+        "type": "PROBLEM_STATEMENT" | "TEMPLATE_REPOSITORY" | "SOLUTION_REPOSITORY",
         "file_path": "exact/path/to/file.java",
         "start_line": 1,
         "end_line": 10
       }},
       {{
-        "type": "PROBLEM_STATEMENT" | "TEMPLATE_REPOSITORY",
+        "type": "PROBLEM_STATEMENT" | "TEMPLATE_REPOSITORY" | "SOLUTION_REPOSITORY",
         "file_path": "related/file/path.java",
         "start_line": 5,
         "end_line": 8
@@ -210,7 +222,7 @@ Analyze the provided artifacts for semantic naming inconsistencies that would cr
 for students. Apply the conceptual entity identification and cognitive load assessment framework systematically. \
 Use the reasoning chain to validate each potential issue. Return only genuine naming inconsistencies that are \
 unintentional and would create extraneous cognitive load for students trying to map problem requirements to \
-template implementation.\
+template implementation and final solution.\
 """,
     name="semantic_consistency_prompt",
 )
@@ -226,7 +238,7 @@ def init_semantic_checker(model: BaseChatModel):
         RunnableSerializable: A runnable that checks for semantic consistency issues.
     """
     semantic_checker = (
-        context_renderer("problem_statement", "template_repository")
+        context_renderer("problem_statement", "template_repository", "solution_repository")
         | semantic_consistency_prompt
         | model.with_structured_output(SemanticConsistencyResult)
     )

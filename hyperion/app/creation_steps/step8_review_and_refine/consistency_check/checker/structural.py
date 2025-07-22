@@ -48,16 +48,23 @@ structural_consistency_prompt = ChatPromptTemplate.from_template(
 # MISSION
 You are a Structural Consistency Validator for programming exercises. Your task: detect UNINTENDED structural \
 inconsistencies that would confuse students or prevent them from implementing the intended design. Focus on ensuring \
-coherence between what the problem statement describes and what the template code provides.
+coherence between what the problem statement describes, what the template code provides, and what the solution demonstrates.
+
+# ARTIFACTS AVAILABLE
+You will analyze consistency across these artifacts:
+- **Problem Statement**: The exercise description and requirements
+- **Template Repository**: Starter code that students begin with (incomplete implementation)
+- **Solution Repository**: Complete reference implementation showing the intended final state
 
 # CORE PRINCIPLE
 **ONLY flag unintentional structural inconsistencies that create student confusion or implementation barriers.**
 **DO NOT flag intentional pedagogical gaps (missing method bodies, incomplete implementations, etc.)**
 
 This includes:
-- **Cross-artifact inconsistencies**: Problem statement describes one structure, template implements another
-- **Inner-artifact inconsistencies**: Contradictions within the problem statement or template itself
+- **Cross-artifact inconsistencies**: Problem statement describes one structure, template/solution implements another
+- **Inner-artifact inconsistencies**: Contradictions within the problem statement, template, or solution itself
 - **Design implementation barriers**: Template structure prevents students from following the specified design
+- **Template-Solution conflicts**: Template structure is incompatible with the solution structure
 
 # PEDAGOGICAL VS. STRUCTURAL UNDERSTANDING
 
@@ -77,6 +84,8 @@ This includes:
 - **Inner-artifact contradictions**: Problem statement describes same element differently in multiple places
 - **Template self-contradictions**: Template code has conflicting declarations or imports
 - **Type/signature mismatches**: Return types, parameters, or visibility that prevent intended design
+- **Template-Solution structural conflicts**: Template structure incompatible with solution design
+- **Solution contradicts specification**: Solution implements different structure than problem describes
 
 # ANALYSIS FRAMEWORK
 
@@ -84,31 +93,37 @@ This includes:
 Before identifying issues, determine:
 - What design is the problem statement trying to teach?
 - Does the template structure support this design or contradict it?
+- Does the solution structure align with both problem and template?
 - Are missing elements intentional learning gaps or structural oversights?
 - Would students be confused by conflicting information between artifacts?
 
 ## STEP 2: Consistency Validation
 Check for these specific inconsistencies:
 
-**METHOD_RETURN_TYPE_MISMATCH**: Method return type conflicts between problem description and template
+**METHOD_RETURN_TYPE_MISMATCH**: Method return type conflicts between problem description, template, and/or solution
 - Example: Problem describes `getArea()` returns `double`, template declares `int getArea()`
+- Example: Template has `int getArea()`, solution has `double getArea()`
 - Not flagged: Missing method body in template method
 
-**METHOD_PARAMETER_MISMATCH**: Method parameter conflicts between specification and template
+**METHOD_PARAMETER_MISMATCH**: Method parameter conflicts between specification, template, and/or solution
 - Example: Problem requires `setDimensions(int width, int height)`, template has `setDimensions(int size)`
+- Example: Template has `setDimensions(int size)`, solution has `setDimensions(int width, int height)`
 - Not flagged: Empty method body with correct signature
 
-**CONSTRUCTOR_PARAMETER_MISMATCH**: Constructor parameter conflicts between specification and template
+**CONSTRUCTOR_PARAMETER_MISMATCH**: Constructor parameter conflicts between specification, template, and/or solution
 - Example: Problem requires `Person(String name, int age)`, template only has `Person(String name)`
+- Example: Template has `Person(String name)`, solution has `Person(String name, int age)`
 - Not flagged: Empty constructor body with correct parameters
 
 **ATTRIBUTE_TYPE_MISMATCH**: Attribute data type inconsistencies across artifacts
 - Example: Problem states `List<String> names`, template declares `String[] names`
+- Example: Template has `String[] names`, solution has `List<String> names`
 - Example: Problem statement describes same field as both `int` and `String` in different sections
 - Not flagged: Uninitialized fields in template
 
-**VISIBILITY_MISMATCH**: Method/attribute visibility conflicts between specification and template
+**VISIBILITY_MISMATCH**: Method/attribute visibility conflicts between specification, template, and/or solution
 - Example: Problem describes `public getBalance()`, template declares `private getBalance()`
+- Example: Template has `private getBalance()`, solution has `public getBalance()`
 - Example: Problem UML shows public method, template implementation is private
 - Not flagged: Missing access modifier implementation details
 
@@ -158,13 +173,13 @@ Analysis: Problem contradicts itself about return type
       "category": "METHOD_RETURN_TYPE_MISMATCH" | "METHOD_PARAMETER_MISMATCH" | "CONSTRUCTOR_PARAMETER_MISMATCH" | \
 "ATTRIBUTE_TYPE_MISMATCH" | "VISIBILITY_MISMATCH",
       "related_locations": [{{
-        "type": "PROBLEM_STATEMENT" | "TEMPLATE_REPOSITORY",
+        "type": "PROBLEM_STATEMENT" | "TEMPLATE_REPOSITORY" | "SOLUTION_REPOSITORY",
         "file_path": "exact/path/to/file.java",
         "start_line": 1,
         "end_line": 10
       }},
       {{
-        "type": "PROBLEM_STATEMENT" | "TEMPLATE_REPOSITORY",
+        "type": "PROBLEM_STATEMENT" | "TEMPLATE_REPOSITORY" | "SOLUTION_REPOSITORY",
         "file_path": "related/file/path.java",
         "start_line": 5,
         "end_line": 8
@@ -177,9 +192,9 @@ Analysis: Problem contradicts itself about return type
 
 # EXECUTION
 Analyze the provided artifacts for structural inconsistencies that would confuse students or prevent them from \
-implementing the intended design. Focus on cross-artifact contradictions (problem vs template) and inner-artifact \
-contradictions (within problem statement or template). Apply the pedagogical vs. structural distinction rigorously. \
-Return only genuine inconsistencies that are unintentional and would hinder student success.\
+implementing the intended design. Focus on cross-artifact contradictions (problem vs template vs solution) and \
+inner-artifact contradictions (within problem statement, template, or solution). Apply the pedagogical vs. structural \
+distinction rigorously. Return only genuine inconsistencies that are unintentional and would hinder student success.\
 """,
     name="structural_consistency_prompt",
 )
@@ -195,7 +210,7 @@ def init_structural_checker(model: BaseChatModel):
         RunnableSerializable: A runnable that checks for structural consistency issues.
     """
     structural_checker = (
-        context_renderer("problem_statement", "template_repository")
+        context_renderer("problem_statement", "template_repository", "solution_repository")
         | structural_consistency_prompt
         | model.with_structured_output(StructuralConsistencyResult)
     )
