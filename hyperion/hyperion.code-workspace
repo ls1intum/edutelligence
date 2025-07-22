@@ -15,6 +15,9 @@
 		{
 			"name": "Artemis",
 			"path": "../../Artemis"
+		},
+		{
+			"path": "../../sharelatex/tandem-2025-inconsistency"
 		}
 	],
 	"settings": {
