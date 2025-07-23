@@ -1,4 +1,4 @@
 {
-  "python.pythonPath": "./.venv/bin/python",
-  "python.analysis.typeCheckingMode": "basic",
+  "python.defaultInterpreterPath": ".venv/bin/python",
+  "python.analysis.typeCheckingMode": "basic"
 }

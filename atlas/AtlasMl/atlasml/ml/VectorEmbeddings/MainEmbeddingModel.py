@@ -1,9 +1,18 @@
-from openai import OpenAI
+import os
+from dotenv import load_dotenv
+load_dotenv()
+from openai import AzureOpenAI, OpenAIError
 
-client = OpenAI()
-client.api_key = "" # Replace with OpenAI API Key
 
-response = client.embeddings.create(
-    input="Task Text",
-    model="text-embedding-3-small"
-)
+def generate_embeddings_openai(id, description: str):
+    client = AzureOpenAI(
+        api_key=os.environ.get("OPENAI_API_KEY"),
+        azure_endpoint=os.environ.get("OPENAI_API_URL"),
+        api_version="2023-05-15",
+    )
+    # Send embedding request
+    response = client.embeddings.create(
+        model="te-3-small",
+        input=description,
+    )
+    return id, response.data[0].embedding

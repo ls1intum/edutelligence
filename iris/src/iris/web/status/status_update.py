@@ -12,6 +12,9 @@ from iris.domain.chat.course_chat.course_chat_status_update_dto import (
 from iris.domain.chat.exercise_chat.exercise_chat_status_update_dto import (
     ExerciseChatStatusUpdateDTO,
 )
+from iris.domain.communication.communication_tutor_suggestion_status_update_dto import (
+    TutorSuggestionStatusUpdateDTO,
+)
 from iris.domain.status.competency_extraction_status_update_dto import (
     CompetencyExtractionStatusUpdateDTO,
 )
@@ -113,6 +116,8 @@ class StatusCallback(ABC):
         tokens: Optional[List[TokenUsageDTO]] = None,
         next_stage_message: Optional[str] = None,
         start_next_stage: bool = True,
+        inconsistencies: Optional[List[str]] = None,
+        improvement: Optional[str] = None,
     ):
         """
         Transition the current stage to DONE and update the status.
@@ -125,6 +130,11 @@ class StatusCallback(ABC):
         self.status.tokens = tokens or self.status.tokens
         if hasattr(self.status, "suggestions"):
             self.status.suggestions = suggestions
+
+        if hasattr(self.status, "inconsistencies"):
+            self.status.inconsistencies = inconsistencies
+        if hasattr(self.status, "improvement"):
+            self.status.improvement = improvement
         next_stage = self.get_next_stage()
         if next_stage is not None:
             self.stage = next_stage
@@ -136,6 +146,8 @@ class StatusCallback(ABC):
         self.status.result = None
         if hasattr(self.status, "suggestions"):
             self.status.suggestions = None
+        if hasattr(self.status, "inconsistencies"):
+            self.status.inconsistencies = None
 
     def error(
         self,
@@ -225,7 +237,9 @@ class ExerciseChatStatusCallback(StatusCallback):
     def __init__(
         self, run_id: str, base_url: str, initial_stages: List[StageDTO] = None
     ):
-        url = f"{base_url}/{self.api_url}/tutor-chat/runs/{run_id}/status"
+        url = (
+            f"{base_url}/{self.api_url}/programming-exercise-chat/runs/{run_id}/status"
+        )
         current_stage_index = len(initial_stages) if initial_stages else 0
         stages = initial_stages or []
         stages += [
@@ -235,9 +249,7 @@ class ExerciseChatStatusCallback(StatusCallback):
                 name="Checking available information",
             ),
             StageDTO(
-                weight=10,
-                state=StageStateEnum.NOT_STARTED,
-                name="Creating suggestions",
+                weight=10, state=StageStateEnum.NOT_STARTED, name="Creating suggestions"
             ),
         ]
         status = ExerciseChatStatusUpdateDTO(stages=stages)
@@ -251,7 +263,9 @@ class ChatGPTWrapperStatusCallback(StatusCallback):
     def __init__(
         self, run_id: str, base_url: str, initial_stages: List[StageDTO] = None
     ):
-        url = f"{base_url}/{self.api_url}/tutor-chat/runs/{run_id}/status"
+        url = (
+            f"{base_url}/{self.api_url}/programming-exercise-chat/runs/{run_id}/status"
+        )
         current_stage_index = len(initial_stages) if initial_stages else 0
         stages = initial_stages or []
         stages += [
@@ -394,3 +408,44 @@ class LectureChatCallback(StatusCallback):
             stages[stage],
             stage,
         )
+
+
+class TutorSuggestionCallback(StatusCallback):
+    """Status callback for tutor suggestion pipelines."""
+
+    def __init__(
+        self,
+        run_id: str,
+        base_url: str,
+        initial_stages: List[StageDTO],
+    ):
+        url = f"{base_url}/{self.api_url}/tutor-suggestion/runs/{run_id}/status"
+        stages = initial_stages or []
+        stage = len(stages)
+        stages += [
+            StageDTO(
+                weight=30,
+                state=StageStateEnum.NOT_STARTED,
+                name="Thinking",
+            ),
+        ]
+        super().__init__(
+            url,
+            run_id,
+            TutorSuggestionStatusUpdateDTO(stages=stages),
+            stages[stage],
+            stage,
+        )
+
+    def done(
+        self,
+        message: Optional[str] = None,
+        final_result: Optional[str] = None,
+        suggestions: Optional[List[str]] = None,
+        tokens: Optional[List[TokenUsageDTO]] = None,
+        next_stage_message: Optional[str] = None,
+        start_next_stage: bool = True,
+        artifact: Optional[str] = None,
+    ):
+        self.status.artifact = artifact
+        super().done(message=message, final_result=final_result, tokens=tokens)

@@ -98,7 +98,6 @@ their programming exercises on Artemis in a pedagogically meaningful way.
 
    If you use an IDE like PyCharm, you'll want to setup your interpreter to use the Poetry environment.
    For PyCharm you can do this by following these steps:
-
    1. Open the `iris` folder as a new PyCharm project
    2. Go to `File > Settings > Project: MemIris > Python Interpreter`
    3. Click the gear icon and select `Add...`
@@ -109,7 +108,6 @@ their programming exercises on Artemis in a pedagogically meaningful way.
    You should also configure the IDE to use the correct source directories.
    Not doing this may mess up the imports your IDE automatically adds in the code.
    In PyCharm, you can do this like this:
-
    1. Right-click on the `src` folder in the project view
    2. Select `Mark Directory as > Sources Root`
    3. This will tell PyCharm to use the `src` folder as the source root
@@ -119,7 +117,6 @@ their programming exercises on Artemis in a pedagogically meaningful way.
    7. Now select `File > Invalidate Caches...` and click `Invalidate and Restart`
 
 5. **Create Configuration Files**
-
    - **Create an Application Configuration File**
 
      Create an `application.local.yml` file in the root directory. You can use the provided `application.example.yml`
@@ -143,103 +140,66 @@ their programming exercises on Artemis in a pedagogically meaningful way.
      env_vars:
      ```
 
-   - **Create an LLM Config File**
+     - **Create an LLM Config File**
 
-     Create an `llm_config.local.yml` file in the root directory. You can use the provided `llm_config.example.yml` as
-     a base.
+       Create an `llm_config.local.yml` file in the root directory. You can use the provided `llm_config.example.yml` as
+       a base.
 
-     ```bash
-     cp llm_config.example.yml llm_config.local.yml
-     ```
+       ```bash
+       cp llm_config.example.yml llm_config.local.yml
+       ```
 
-     **Example OpenAI Configuration:**
+       **Example OpenAI Configuration:**
 
-     ```yaml
-     - id: "oai-gpt-35-turbo"
-       name: "GPT 3.5 Turbo"
-       description: "GPT 3.5 16k"
-       type: "openai_chat"
-       model: "gpt-3.5-turbo"
-       api_key: "<your_openai_api_key>"
-       tools: []
-       capabilities:
-         input_cost: 0.5
-         output_cost: 1.5
-         gpt_version_equivalent: 3.5
-         context_length: 16385
-         vendor: "OpenAI"
-         privacy_compliance: false
-         self_hosted: false
-         image_recognition: false
-         json_mode: true
-     ```
+       ```yaml
+       - id: "oai-gpt-41-mini"
+         name: "GPT 4.1 Mini"
+         description: "GPT 4.1 Mini on OpenAI"
+         type: "openai_chat"
+         model: "gpt-4.1-mini"
+         api_key: "<your_openai_api_key>"
+         tools: []
+         cost_per_million_input_token: 0.4
+         cost_per_million_output_token: 1.6
+       ```
 
-     **Example Azure OpenAI Configuration:**
+       **Example Azure OpenAI Configuration:**
 
-     ```yaml
-     - id: "azure-gpt-4-omni"
-       name: "GPT 4 Omni"
-       description: "GPT 4 Omni on Azure"
-       type: "azure_chat"
-       endpoint: "<your_azure_model_endpoint>"
-       api_version: "2024-02-15-preview"
-       azure_deployment: "gpt4o"
-       model: "gpt4o"
-       api_key: "<your_azure_api_key>"
-       tools: []
-       capabilities:
-         input_cost: 6
-         output_cost: 16
-         gpt_version_equivalent: 4.5 # Equivalent GPT version of the model
-         context_length: 128000
-         vendor: "OpenAI"
-         privacy_compliance: true
-         self_hosted: false
-         image_recognition: true
-         json_mode: true
-     ```
+       ```yaml
+       - id: "azure-gpt-4-omni"
+         name: "GPT 4 Omni"
+         description: "GPT 4 Omni on Azure"
+         type: "azure_chat"
+         endpoint: "<your_azure_model_endpoint>"
+         api_version: "2024-02-15-preview"
+         azure_deployment: "gpt4o"
+         model: "gpt4o"
+         api_key: "<your_azure_api_key>"
+         tools: []
+         cost_per_million_input_token: 0.4
+         cost_per_million_output_token: 1.6
+       ```
 
-     **Explanation of Configuration Parameters**
+       **Explanation of Configuration Parameters**
 
-     The configuration parameters are used by Pyris's capability system to select the appropriate model for a task.
+       The configuration parameters are used by Pyris's capability system to select the appropriate model for a task.
 
-     **Parameter Descriptions:**
+       **Parameter Descriptions:**
+       - `api_key`: The API key for the model.
+       - `description`: Additional information about the model.
+       - `id`: Unique identifier for the model across all models.
+       - `model`: The official name of the model as used by the vendor, also used by ModelVersionRequestHandler for model selection (e.g., "gpt-4.1", "gpt-4.1-mini").
+       - `name`: A custom, human-readable name for the model.
+       - `type`: The model type, used to select the appropriate client (e.g., `openai_chat`, `azure_chat`, `ollama`).
+       - `endpoint`: The URL to connect to the model.
+       - `api_version`: The API version to use with the model.
+       - `azure_deployment`: The deployment name of the model on Azure.
+       - `tools`: The tools supported by the model.
+       - `cost_per_million_input_token`: The cost per million input tokens for the model.
+       - `cost_per_million_output_token`: The cost per million output tokens for the model.
 
-     - `api_key`: The API key for the model.
-     - `capabilities`: The capabilities of the model.
-
-       - `context_length`: The maximum number of tokens the model can process in a single request.
-       - `gpt_version_equivalent`: The equivalent GPT version of the model in terms of overall capabilities.
-       - `image_recognition`: Whether the model supports image recognition (for multimodal models).
-       - `input_cost`: The cost of input tokens for the model.
-       - `output_cost`: The cost of output tokens for the model.
-       - `json_mode`: Whether the model supports structured JSON output mode.
-       - `privacy_compliance`: Whether the model complies with privacy regulations.
-       - `self_hosted`: Whether the model is self-hosted.
-       - `vendor`: The provider of the model (e.g., OpenAI).
-       - `speed`: The model's processing speed.
-
-     - `description`: Additional information about the model.
-     - `id`: Unique identifier for the model across all models.
-     - `model`: The official name of the model as used by the vendor.
-     - `name`: A custom, human-readable name for the model.
-     - `type`: The model type, used to select the appropriate client (e.g., `openai_chat`, `azure_chat`, `ollama`).
-     - `endpoint`: The URL to connect to the model.
-     - `api_version`: The API version to use with the model.
-     - `azure_deployment`: The deployment name of the model on Azure.
-     - `tools`: The tools supported by the model.
-
-     > **Notes on `gpt_version_equivalent`:** The `gpt_version_equivalent` field is subjective and used to compare
-     > capabilities of different models using GPT models as a reference. For example:
-     >
-     > - GPT-4 Omni equivalent: 4.5
-     > - GPT-4 Omni Mini equivalent: 4.25
-     > - GPT-4 equivalent: 4
-     > - GPT-3.5 Turbo equivalent: 3.5
-
-     > **Warning:** Most existing pipelines in Pyris require a model with a `gpt_version_equivalent` of **4.5 or higher
-     > **. It is advised to define models in the `llm_config.local.yml` file with a `gpt_version_equivalent` of 4.5 or
-     > higher.
+     > **Note:** Most existing pipelines in Pyris currently require the full GPT-4.1 model family to be configured.
+     > Some features require special models. Watch the logs for any warnings regarding missing models.
 
 6. **Run the Server**
 
@@ -335,7 +295,6 @@ Deploying Pyris using Docker ensures a consistent environment and simplifies the
    - Mounts local configuration files for easy modification.
 
 2. **Access the Application**
-
    - Application URL: [http://localhost:8000](http://localhost:8000)
    - API Docs: [http://localhost:8000/docs](http://localhost:8000/docs)
 
@@ -344,7 +303,6 @@ Deploying Pyris using Docker ensures a consistent environment and simplifies the
 ###### **Option 1: With Nginx**
 
 1. **Prepare SSL Certificates**
-
    - Place your SSL certificate (`fullchain.pem`) and private key (`priv_key.pem`) in the specified paths or update the
      paths in the Docker Compose file.
 
@@ -359,7 +317,6 @@ Deploying Pyris using Docker ensures a consistent environment and simplifies the
    - Nginx handles SSL termination and reverse proxying.
 
 3. **Access the Application**
-
    - Application URL: `https://your-domain.com`
 
 ###### **Option 2: Without Nginx**
@@ -374,7 +331,6 @@ Deploying Pyris using Docker ensures a consistent environment and simplifies the
    - Starts Pyris and Weaviate.
 
 2. **Access the Application**
-
    - Application URL: [http://localhost:8000](http://localhost:8000)
 
 ---
@@ -414,7 +370,6 @@ Deploying Pyris using Docker ensures a consistent environment and simplifies the
 - **Environment Variables**
 
   You can customize settings using environment variables:
-
   - `PYRIS_DOCKER_TAG`: Specifies the Pyris Docker image tag.
   - `PYRIS_APPLICATION_YML_FILE`: Path to your `application.yml` file.
   - `PYRIS_LLM_CONFIG_YML_FILE`: Path to your `llm_config.yml` file.
@@ -425,7 +380,6 @@ Deploying Pyris using Docker ensures a consistent environment and simplifies the
 - **Configuration Files**
 
   Modify configuration files as needed:
-
   - **Pyris Configuration**: Update `application.yml` and `llm_config.yml`.
   - **Weaviate Configuration**: Adjust settings in `weaviate.yml`.
   - **Nginx Configuration**: Modify Nginx settings in `nginx.yml` and related config files.

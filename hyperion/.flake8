@@ -8,3 +8,4 @@ exclude =
 
 per-file-ignores =
     app/openapi.py: E402
+    ./playground/**.py: E402
