@@ -53,5 +53,12 @@ def test_env():
 
 @pytest.fixture(autouse=True)
 def mock_generate_embeddings_openai():
-    with patch("atlasml.ml.VectorEmbeddings.MainEmbeddingModel.generate_embeddings_openai", return_value=[0.1, 0.2, 0.3]):
+    with patch("atlasml.ml.VectorEmbeddings.MainEmbeddingModel.generate_embeddings_openai", return_value=[0.1, 0.2, 0.3]), \
+         patch("atlasml.ml.VectorEmbeddings.MainEmbeddingModel.AzureOpenAI") as mock_mainembedding_azure_openai, \
+         patch("openai.AzureOpenAI") as mock_openai_azure_openai:
+        # Mock the embeddings.create method to return a fake embedding
+        mock_instance = mock_mainembedding_azure_openai.return_value
+        mock_instance.embeddings.create.return_value = type('obj', (object,), {"data": [type('obj', (object,), {"embedding": [0.1, 0.2, 0.3]})()]})()
+        mock_instance2 = mock_openai_azure_openai.return_value
+        mock_instance2.embeddings.create.return_value = type('obj', (object,), {"data": [type('obj', (object,), {"embedding": [0.1, 0.2, 0.3]})()]})()
         yield

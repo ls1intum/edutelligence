@@ -16,18 +16,16 @@ def test_authentication_no_secret(test_env):
 
 def test_suggest_competencies(test_env, mock_generate_embeddings_openai):
     mock_weaviate = MagicMock()
-    # Use a realistic embedding size (e.g., 1536 for OpenAI te-3-small)
-    fake_vector = list(np.random.rand(1536))
-    # Mock get_all_embeddings for clusters
+    fake_vector = [0.1, 0.2, 0.3]  # or use list(np.random.rand(1536)) if you want to simulate real size
+
+    # Make sure clusters and competencies both have vectors of the same length
     mock_weaviate.get_all_embeddings.side_effect = [
         [{"id": "cid1", "vector": {"default": fake_vector}, "properties": {"cluster_id": "cid1"}}],  # clusters
         [{"id": "comp1", "properties": {"competency_id": "comp1", "title": "t", "description": "d", "cluster_id": "cid1"}, "vector": {"default": fake_vector}}]  # competencies
     ]
-    # Mock get_embeddings_by_property
     mock_weaviate.get_embeddings_by_property.return_value = [
         {"properties": {"competency_id": "comp1", "title": "t", "description": "d", "cluster_id": "cid1"}, "vector": {"default": fake_vector}}
     ]
-    from unittest.mock import patch
     with patch("atlasml.ml.MLPipelines.PipelineWorkflows.get_weaviate_client", return_value=mock_weaviate):
         response = client.post("/api/v1/competency/suggest", json={"description": "Test"}, headers={"Authorization": "secret-token"})
         assert response.status_code == 200
