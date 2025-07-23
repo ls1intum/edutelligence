@@ -7,13 +7,13 @@ Usage:
     cd hyperion
     # Evaluate base exercise
     poetry run python playground/eval_consistency_checker.py --exercise "ITP2425/H01E01-Lectures"
-    
+
     # Evaluate specific variant
     poetry run python playground/eval_consistency_checker.py --exercise "ITP2425/H01E01-Lectures" --variant "001"
-    
+
     # Evaluate all variants of an exercise
     poetry run python playground/eval_consistency_checker.py --exercise "ITP2425/H01E01-Lectures" --all-variants
-    
+
     # Custom model and output settings
     poetry run python playground/eval_consistency_checker.py --exercise "ITP2425/H01E01-Lectures" \
         --model-name "openai:o4-mini" --variant "001"
@@ -36,6 +36,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 # Import LangSmith client for trace export
 try:
     from langsmith import Client as LangSmithClient
+
     LANGSMITH_AVAILABLE = True
 except ImportError:
     LANGSMITH_AVAILABLE = False
@@ -48,7 +49,7 @@ from app.creation_steps.models import RepositoryFile, Repository
 def get_git_commit_id() -> Optional[str]:
     """
     Get the current git commit ID (SHA).
-    
+
     Returns:
         The current git commit ID as a string, or None if not available
     """
@@ -58,14 +59,18 @@ def get_git_commit_id() -> Optional[str]:
             capture_output=True,
             text=True,
             timeout=5,
-            cwd=Path(__file__).parent.parent  # Run from hyperion root directory
+            cwd=Path(__file__).parent.parent,  # Run from hyperion root directory
         )
         if result.returncode == 0:
             return result.stdout.strip()
         else:
             print(f"Warning: Could not get git commit ID: {result.stderr.strip()}")
             return None
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError) as e:
+    except (
+        subprocess.CalledProcessError,
+        subprocess.TimeoutExpired,
+        FileNotFoundError,
+    ) as e:
         print(f"Warning: Could not get git commit ID: {e}")
         return None
 
@@ -91,8 +96,10 @@ def load_repository_files(repo_path: Path) -> list:
 def detect_programming_language(template_files: list):
     """Detect programming language based on file extensions in template repository."""
     # Import here to avoid issues with tracing setup
-    from app.creation_steps.step8_review_and_refine.consistency_check.models import ProgrammingLanguage
-    
+    from app.creation_steps.step8_review_and_refine.consistency_check.models import (
+        ProgrammingLanguage,
+    )
+
     file_extensions = set()
 
     for file in template_files:
@@ -118,46 +125,49 @@ def detect_programming_language(template_files: list):
 
 
 def export_langsmith_traces(
-    trace_id: str, 
-    project_name: Optional[str] = None
+    trace_id: str, project_name: Optional[str] = None
 ) -> List[Dict[str, Any]]:
     """
     Export LangSmith traces for the given trace ID.
-    
+
     Args:
         trace_id: The LangSmith trace ID to export
         project_name: Optional project name (defaults to environment or "hyperion-consistency-check")
-        
+
     Returns:
         List of serialized trace run dictionaries
     """
     if not LANGSMITH_AVAILABLE:
         print("LangSmith not available - skipping trace export")
         return []
-    
+
     if not trace_id:
         print("No trace ID provided - skipping trace export")
         return []
-    
+
     try:
         client = LangSmithClient()
-        
+
         # Use project name from environment or default
         if project_name is None:
-            project_name = os.environ.get("LANGCHAIN_PROJECT", "hyperion-consistency-check")
-        
+            project_name = os.environ.get(
+                "LANGCHAIN_PROJECT", "hyperion-consistency-check"
+            )
+
         print(f"Exporting traces from project: {project_name}")
         print(f"Looking for trace ID: {trace_id}")
-        
+
         # Query runs from LangSmith using the specific trace ID
-        runs = list(client.list_runs(
-            project_name=project_name,
-            trace_id=trace_id,
-            limit=100  # Should be enough for one trace
-        ))
-        
+        runs = list(
+            client.list_runs(
+                project_name=project_name,
+                trace_id=trace_id,
+                limit=100,  # Should be enough for one trace
+            )
+        )
+
         print(f"Found {len(runs)} LangSmith runs for trace {trace_id}")
-        
+
         # Convert runs to serializable format
         traces = []
         for run in runs:
@@ -167,43 +177,51 @@ def export_langsmith_traces(
                     "id": str(run.id),
                     "name": run.name,
                     "run_type": run.run_type,
-                    "start_time": run.start_time.isoformat() if run.start_time else None,
+                    "start_time": (
+                        run.start_time.isoformat() if run.start_time else None
+                    ),
                     "end_time": run.end_time.isoformat() if run.end_time else None,
                     "status": run.status,
                     "inputs": run.inputs,
                     "outputs": run.outputs,
                     "tags": run.tags,
-                    "parent_run_id": str(run.parent_run_id) if run.parent_run_id else None,
+                    "parent_run_id": (
+                        str(run.parent_run_id) if run.parent_run_id else None
+                    ),
                     "trace_id": str(run.trace_id) if run.trace_id else None,
                     "dotted_order": run.dotted_order,
                     "session_id": str(run.session_id) if run.session_id else None,
                 }
-                
+
                 # Include extra data if available
-                for attr in ['extra', 'error', 'events']:
+                for attr in ["extra", "error", "events"]:
                     if hasattr(run, attr) and getattr(run, attr):
                         run_dict[attr] = getattr(run, attr)
-                    
+
                 traces.append(run_dict)
             except Exception as e:
                 print(f"Warning: Could not serialize run {run.id}: {e}")
                 # Add minimal info for failed runs
-                traces.append({
-                    "id": str(run.id),
-                    "name": getattr(run, 'name', 'Unknown'),
-                    "error": f"Serialization failed: {str(e)}"
-                })
-        
+                traces.append(
+                    {
+                        "id": str(run.id),
+                        "name": getattr(run, "name", "Unknown"),
+                        "error": f"Serialization failed: {str(e)}",
+                    }
+                )
+
         print(f"Successfully exported {len(traces)} traces")
-        
+
         # Print debug info about what we found
         if traces:
             print("Trace runs found:")
             for trace in traces:
-                print(f"  - {trace.get('name', 'No name')} ({trace.get('run_type', 'unknown')})")
-        
+                print(
+                    f"  - {trace.get('name', 'No name')} ({trace.get('run_type', 'unknown')})"
+                )
+
         return traces
-        
+
     except Exception as e:
         print(f"Error exporting LangSmith traces: {e}")
         if os.environ.get("DEBUG"):
@@ -212,34 +230,31 @@ def export_langsmith_traces(
 
 
 def create_output_files(
-    result: Dict[str, Any], 
-    traces: List[Dict[str, Any]], 
-    output_dir: Path, 
-    run_id: str
+    result: Dict[str, Any], traces: List[Dict[str, Any]], output_dir: Path, run_id: str
 ) -> tuple[Path, Path]:
     """Create timestamped output files for results and traces."""
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    
+
     # Create output directory
     output_dir.mkdir(parents=True, exist_ok=True)
-    
+
     # Create result file
     result_file = output_dir / f"{timestamp}_{run_id}_result.json"
     with open(result_file, "w", encoding="utf-8") as f:
         json.dump(result, f, indent=2, ensure_ascii=False)
-    
+
     # Create trace file
     trace_data = {
         "run_id": run_id,
         "timestamp": timestamp,
         "commit_id": result.get("commit_id"),  # Include commit ID in trace metadata
         "trace_count": len(traces),
-        "traces": traces
+        "traces": traces,
     }
     trace_file = output_dir / f"{timestamp}_{run_id}_trace.json"
     with open(trace_file, "w", encoding="utf-8") as f:
         json.dump(trace_data, f, indent=2, ensure_ascii=False)
-    
+
     return result_file, trace_file
 
 
@@ -280,39 +295,40 @@ def evaluate_exercise(
 ) -> tuple[Dict[str, Any], List[Dict[str, Any]], str]:
     """
     Evaluate consistency for a single exercise.
-    
+
     Args:
         exercise_path: Path to the exercise to evaluate
         model_name: Name of the model to use for consistency checking
         programming_language: Programming language (auto-detected if None)
         export_traces: Whether to export LangSmith traces
-        
+
     Returns:
         tuple of (result_dict, traces_list, run_id)
     """
     print(f"Evaluating: {exercise_path}")
-    
+
     # Generate unique run ID
     run_id = str(uuid.uuid4())[:8]
     start_time = datetime.now()
-    
+
     # Set up LangChain tracing environment
     os.environ["LANGCHAIN_RUN_ID"] = run_id
     os.environ["LANGCHAIN_TRACING_V2"] = "true"
     if "LANGCHAIN_PROJECT" not in os.environ:
         os.environ["LANGCHAIN_PROJECT"] = "hyperion-consistency-check"
-    
-    print(f"Tracing setup - Run ID: {run_id}, Project: {os.environ.get('LANGCHAIN_PROJECT')}")
-    
+
+    print(
+        f"Tracing setup - Run ID: {run_id}, Project: {os.environ.get('LANGCHAIN_PROJECT')}"
+    )
+
     # Import consistency check classes after setting up tracing
     from app.creation_steps.step8_review_and_refine.consistency_check.models import (
         ConsistencyCheckRequest,
-        ProgrammingLanguage,
     )
     from app.creation_steps.step8_review_and_refine.consistency_check.handler import (
         ConsistencyCheck,
     )
-    
+
     # Load exercise data
     exercise_data = load_exercise_from_dataset(exercise_path)
 
@@ -323,7 +339,9 @@ def evaluate_exercise(
 
     # Use provided language or detect from template files
     if programming_language is None:
-        programming_language = detect_programming_language(exercise_data["template_files"])
+        programming_language = detect_programming_language(
+            exercise_data["template_files"]
+        )
         print(f"Detected programming language: {programming_language}")
     else:
         print(f"Using specified programming language: {programming_language}")
@@ -363,7 +381,7 @@ def evaluate_exercise(
         "commit_id": commit_id,  # Include git commit ID
         "response": response.model_dump(),
     }
-    
+
     # Export traces if requested
     traces = []
     if export_traces:
@@ -377,15 +395,15 @@ def get_all_variants(exercise_path: str) -> List[str]:
     """Get all variant IDs for an exercise."""
     base_path = Path(__file__).parent.parent / "data" / exercise_path
     variants_dir = base_path / "variants"
-    
+
     if not variants_dir.exists():
         return []
-    
+
     variants = []
     for variant_dir in variants_dir.iterdir():
         if variant_dir.is_dir() and variant_dir.name.isdigit():
             variants.append(variant_dir.name)
-    
+
     return sorted(variants)
 
 
@@ -397,36 +415,34 @@ def evaluate_variant(
 ) -> tuple[Path, Path]:
     """
     Evaluate a specific variant and save outputs to timestamped files.
-    
+
     Args:
         exercise_path: Base exercise path (e.g., "ITP2425/H01E01-Lectures")
         variant_id: Variant identifier (e.g., "001")
         model_name: Model name to use for consistency checking
         programming_language: Programming language (auto-detected if None)
-        
+
     Returns:
         tuple of (result_file_path, trace_file_path)
     """
     variant_exercise_path = f"{exercise_path}/variants/{variant_id}"
-    
+
     # Run evaluation
     result, traces, run_id = evaluate_exercise(
-        variant_exercise_path, 
-        model_name, 
-        programming_language
+        variant_exercise_path, model_name, programming_language
     )
-    
+
     # Create output directory for variant
     base_path = Path(__file__).parent.parent / "data" / exercise_path
     output_dir = base_path / "variants" / variant_id / "outputs"
-    
+
     # Save files
     result_file, trace_file = create_output_files(result, traces, output_dir, run_id)
-    
+
     print(f"Variant {variant_id} results saved:")
     print(f"  Result: {result_file}")
     print(f"  Traces: {trace_file} ({len(traces)} traces)")
-    
+
     return result_file, trace_file
 
 
@@ -437,18 +453,18 @@ def main():
     )
     parser.add_argument("--exercise", "-e", required=True, help="Exercise to evaluate")
     parser.add_argument(
-        "--variant", 
-        "-v", 
-        help="Specific variant ID to evaluate (e.g., '001')"
+        "--variant", "-v", help="Specific variant ID to evaluate (e.g., '001')"
     )
     parser.add_argument(
         "--all-variants",
         action="store_true",
-        help="Evaluate all variants of the exercise"
+        help="Evaluate all variants of the exercise",
     )
     parser.add_argument(
-        "--output", "-o", default="consistency_output.json", 
-        help="Output file name (for base exercise only)"
+        "--output",
+        "-o",
+        default="consistency_output.json",
+        help="Output file name (for base exercise only)",
     )
     parser.add_argument(
         "--model-name",
@@ -465,7 +481,7 @@ def main():
     parser.add_argument(
         "--no-traces",
         action="store_true",
-        help="Disable trace export to improve performance"
+        help="Disable trace export to improve performance",
     )
 
     args = parser.parse_args()
@@ -474,7 +490,10 @@ def main():
     programming_language = None
     if args.language:
         # Import here to avoid import issues
-        from app.creation_steps.step8_review_and_refine.consistency_check.models import ProgrammingLanguage
+        from app.creation_steps.step8_review_and_refine.consistency_check.models import (
+            ProgrammingLanguage,
+        )
+
         programming_language = ProgrammingLanguage(args.language)
 
     try:
@@ -482,38 +501,32 @@ def main():
             # Evaluate all variants
             print(f"Evaluating all variants for exercise: {args.exercise}")
             variants = get_all_variants(args.exercise)
-            
+
             if not variants:
                 print(f"No variants found for exercise: {args.exercise}")
                 return 0
-            
+
             print(f"Found {len(variants)} variants: {', '.join(variants)}")
-            
+
             for variant_id in variants:
                 print(f"\n--- Evaluating variant {variant_id} ---")
                 try:
                     evaluate_variant(
-                        args.exercise, 
-                        variant_id, 
-                        args.model_name, 
-                        programming_language
+                        args.exercise, variant_id, args.model_name, programming_language
                     )
                 except Exception as e:
                     print(f"Error evaluating variant {variant_id}: {e}")
                     continue
-            
+
             print(f"\nCompleted evaluation of {len(variants)} variants")
-            
+
         elif args.variant:
             # Evaluate specific variant
             print(f"Evaluating variant {args.variant} for exercise: {args.exercise}")
             evaluate_variant(
-                args.exercise, 
-                args.variant, 
-                args.model_name, 
-                programming_language
+                args.exercise, args.variant, args.model_name, programming_language
             )
-            
+
         else:
             # Evaluate base exercise (backward compatibility)
             print(f"Evaluating base exercise: {args.exercise}")
@@ -540,7 +553,7 @@ def main():
                     "timestamp": datetime.now().strftime("%Y%m%d_%H%M%S"),
                     "commit_id": result.get("commit_id"),  # Include commit ID
                     "trace_count": len(traces),
-                    "traces": traces
+                    "traces": traces,
                 }
                 with open(trace_file, "w", encoding="utf-8") as f:
                     json.dump(trace_data, f, indent=2, ensure_ascii=False)

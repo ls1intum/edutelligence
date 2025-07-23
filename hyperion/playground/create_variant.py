@@ -270,8 +270,10 @@ class VariantManager:
                     result_files = list(outputs_dir.glob("*_result.json"))
                     if result_files:
                         # Get the most recent result file
-                        latest_result_file = max(result_files, key=lambda f: f.stat().st_mtime)
-                        
+                        latest_result_file = max(
+                            result_files, key=lambda f: f.stat().st_mtime
+                        )
+
                         with open(latest_result_file, "r", encoding="utf-8") as f:
                             eval_data = json.load(f)
 
@@ -301,7 +303,9 @@ class VariantManager:
                     else:
                         raise RuntimeError("No result files found in outputs directory")
                 else:
-                    raise RuntimeError("Outputs directory not found - evaluation may have failed")
+                    raise RuntimeError(
+                        "Outputs directory not found - evaluation may have failed"
+                    )
             else:
                 raise RuntimeError(f"Consistency checker failed: {result.stderr}")
 
