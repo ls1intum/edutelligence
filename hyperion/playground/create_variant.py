@@ -242,17 +242,18 @@ class VariantManager:
 
         print(f"🔍 Generating annotation for variant {variant_id}...")
 
-        # Run consistency checker
+        # Run consistency checker for the specific variant
         print("1️⃣ Running consistency checker...")
         try:
             eval_script = Path(__file__).parent / "eval_consistency_checker.py"
-            variant_exercise_path = f"{self.exercise_path}/variants/{variant_id}"
 
             cmd = [
                 sys.executable,
                 str(eval_script),
                 "--exercise",
-                variant_exercise_path,
+                self.exercise_path,
+                "--variant",
+                variant_id,
             ]
 
             result = subprocess.run(
@@ -262,39 +263,49 @@ class VariantManager:
             if result.returncode == 0:
                 print("  ✓ Consistency checker completed")
 
-                # Load the results
-                results_dir = Path(__file__).parent / "consistency_results"
-                output_file = results_dir / "consistency_output.json"
-
-                if output_file.exists():
-                    with open(output_file, "r", encoding="utf-8") as f:
-                        eval_data = json.load(f)
-
-                    # Create clean annotation file - mirror the consistency checker output
-                    json_file = variant_path / f"{variant_id}.json"
-                    clean_annotation = {
-                        "exercise_path": eval_data["exercise_path"],
-                        "programming_language": eval_data["programming_language"],
-                        "issues": eval_data["response"]["issues"],
-                    }
-
-                    with open(json_file, "w", encoding="utf-8") as f:
-                        json.dump(clean_annotation, f, indent=2, ensure_ascii=False)
-
-                    print(
-                        f"  ✓ Generated annotation with {len(clean_annotation['issues'])} detected issues"
-                    )
-
-                    # Show what was detected
-                    for issue in clean_annotation["issues"]:
-                        print(
-                            f"    - {issue['category']} ({issue['severity']}): {issue['description'][:80]}..."
+                # The new script directly saves results to the variant's outputs directory
+                # Find the most recent result file
+                outputs_dir = variant_path / "outputs"
+                if outputs_dir.exists():
+                    result_files = list(outputs_dir.glob("*_result.json"))
+                    if result_files:
+                        # Get the most recent result file
+                        latest_result_file = max(
+                            result_files, key=lambda f: f.stat().st_mtime
                         )
 
-                    print(f"✅ Annotation generated: {json_file}")
-                    return json_file
+                        with open(latest_result_file, "r", encoding="utf-8") as f:
+                            eval_data = json.load(f)
+
+                        # Create clean annotation file - mirror the consistency checker output
+                        json_file = variant_path / f"{variant_id}.json"
+                        clean_annotation = {
+                            "exercise_path": eval_data["exercise_path"],
+                            "programming_language": eval_data["programming_language"],
+                            "issues": eval_data["response"]["issues"],
+                        }
+
+                        with open(json_file, "w", encoding="utf-8") as f:
+                            json.dump(clean_annotation, f, indent=2, ensure_ascii=False)
+
+                        print(
+                            f"  ✓ Generated annotation with {len(clean_annotation['issues'])} detected issues"
+                        )
+
+                        # Show what was detected
+                        for issue in clean_annotation["issues"]:
+                            print(
+                                f"    - {issue['category']} ({issue['severity']}): {issue['description'][:80]}..."
+                            )
+
+                        print(f"✅ Annotation generated: {json_file}")
+                        return json_file
+                    else:
+                        raise RuntimeError("No result files found in outputs directory")
                 else:
-                    raise RuntimeError("Consistency checker output file not found")
+                    raise RuntimeError(
+                        "Outputs directory not found - evaluation may have failed"
+                    )
             else:
                 raise RuntimeError(f"Consistency checker failed: {result.stderr}")
 
