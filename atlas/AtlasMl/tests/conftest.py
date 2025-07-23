@@ -50,3 +50,8 @@ def test_env():
     # Cleanup after tests
     os.environ.pop("TESTING", None)
     
+
+@pytest.fixture(autouse=True)
+def mock_generate_embeddings_openai():
+    with patch("atlasml.ml.VectorEmbeddings.MainEmbeddingModel.generate_embeddings_openai", return_value=[0.1, 0.2, 0.3]):
+        yield

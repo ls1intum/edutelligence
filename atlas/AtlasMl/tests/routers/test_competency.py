@@ -1,6 +1,8 @@
 import pytest
 from fastapi.testclient import TestClient
 from atlasml.app import app
+from unittest.mock import patch, MagicMock
+import numpy as np
 
 client = TestClient(app)
 
@@ -12,19 +14,23 @@ def test_authentication_no_secret(test_env):
     response = client.post("/api/v1/competency/suggest", json={}, headers={"Authorization": ""})
     assert response.status_code == 401
 
-def test_suggest_competencies(test_env):
-    # Test data
-    request_data = {
-        "id": "test-id-1",
-        "description": "Test competency suggestion",
-    }
-    
-    # Make request to suggest endpoint
-    response = client.post("/api/v1/competency/suggest", json=request_data, headers={"Authorization": "secret-token"})
-    
-    # Assert response
-    assert response.status_code == 200
-    assert isinstance(response.json(), list)
+def test_suggest_competencies(test_env, mock_generate_embeddings_openai):
+    mock_weaviate = MagicMock()
+    # Use a realistic embedding size (e.g., 1536 for OpenAI te-3-small)
+    fake_vector = list(np.random.rand(1536))
+    # Mock get_all_embeddings for clusters
+    mock_weaviate.get_all_embeddings.side_effect = [
+        [{"id": "cid1", "vector": {"default": fake_vector}, "properties": {"cluster_id": "cid1"}}],  # clusters
+        [{"id": "comp1", "properties": {"competency_id": "comp1", "title": "t", "description": "d", "cluster_id": "cid1"}, "vector": {"default": fake_vector}}]  # competencies
+    ]
+    # Mock get_embeddings_by_property
+    mock_weaviate.get_embeddings_by_property.return_value = [
+        {"properties": {"competency_id": "comp1", "title": "t", "description": "d", "cluster_id": "cid1"}, "vector": {"default": fake_vector}}
+    ]
+    from unittest.mock import patch
+    with patch("atlasml.ml.MLPipelines.PipelineWorkflows.get_weaviate_client", return_value=mock_weaviate):
+        response = client.post("/api/v1/competency/suggest", json={"description": "Test"}, headers={"Authorization": "secret-token"})
+        assert response.status_code == 200
 
 def test_save_competencies(test_env):
     # Test data with proper structure matching SaveCompetencyRequest model

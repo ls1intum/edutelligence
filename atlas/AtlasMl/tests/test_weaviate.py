@@ -97,8 +97,9 @@ def test_get_all_embeddings(mock_weaviate):
     results = client.get_all_embeddings(collection_name)
 
     assert len(results) == 2
+    print(results)
     assert results[0]["id"] == "test-uuid-1"
-    assert results[0]["text"] == "test text"
+    assert results[0]['properties']["name"] == "test name"
     assert results[0]["vector"] == [0.1, 0.2, 0.3]
     mock_weaviate.collections.get.assert_called_with(collection_name)
 
@@ -235,8 +236,8 @@ def test_recreate_collection_with_different_schemas(mock_weaviate):
     # Test recreation of different collection types
     test_collections = [
         CollectionNames.COMPETENCY.value,
-        CollectionNames.CLUSTER.value,
-        CollectionNames.COURSE.value
+        CollectionNames.CLUSTERCENTER.value,
+        CollectionNames.EXERCISE.value
     ]
     
     for collection_name in test_collections:
@@ -251,7 +252,7 @@ def test_recreate_collection_with_different_schemas(mock_weaviate):
 def test_delete_all_data_from_collection_integration(mock_weaviate):
     """Test integration of delete_all_data_from_collection with recreate_collection."""
     client = WeaviateClient()
-    collection_name = CollectionNames.CLUSTER.value
+    collection_name = CollectionNames.CLUSTERCENTER.value
     
     # Mock the collections.create method
     mock_weaviate.collections.create = MagicMock()

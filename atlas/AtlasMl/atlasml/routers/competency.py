@@ -144,7 +144,7 @@ async def delete_embedings(collection_name: str):
 @router.post(
     "/suggest",
     response_model=SuggestCompetencyResponse,
-    dependencies=[],
+    dependencies=[Depends(TokenValidator())],
 )
 async def suggest_competencies(request: SuggestCompetencyRequest):
     pipeline = PipelineWorkflows()
