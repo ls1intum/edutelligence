@@ -37,6 +37,9 @@ jobs:
         run: poetry install
 
       - name: Run tests
+        run: poetry run pytest
+
+      - name: Run tests with coverage
         run: poetry run pytest --cov=atlasml --cov-report=term --cov-report=xml > coverage.txt
 
       - name: Extract coverage percentage
