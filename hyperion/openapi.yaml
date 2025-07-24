@@ -13,35 +13,26 @@ components:
     ArtifactLocation:
       description: Location information for artifacts.
       properties:
-        description:
-          anyOf:
-          - type: string
-          - type: 'null'
-          description: Optional description of the location
-          title: Description
         end_line:
-          anyOf:
-          - type: integer
-          - type: 'null'
-          description: End line in the content
+          description: End line number (1-based)
           title: End Line
+          type: integer
         file_path:
-          anyOf:
-          - type: string
-          - type: 'null'
-          description: Path in the repository, empty for problem statement
+          description: Path to file, empty or problem_statement.md for problem statement
           title: File Path
+          type: string
         start_line:
-          anyOf:
-          - type: integer
-          - type: 'null'
-          description: Start line in the content
+          description: Start line number (1-based)
           title: Start Line
+          type: integer
         type:
           $ref: '#/components/schemas/ArtifactType'
           description: Type of artifact
       required:
       - type
+      - file_path
+      - start_line
+      - end_line
       title: ArtifactLocation
       type: object
     ArtifactType:
@@ -50,7 +41,6 @@ components:
       - PROBLEM_STATEMENT
       - TEMPLATE_REPOSITORY
       - SOLUTION_REPOSITORY
-      - TEST_REPOSITORY
       title: ArtifactType
       type: string
     BoundaryConditions:
@@ -76,7 +66,7 @@ components:
           title: Points
           type: integer
         programming_language:
-          $ref: '#/components/schemas/ProgrammingLanguage'
+          $ref: '#/components/schemas/app__creation_steps__step3_create_solution_repository__models__ProgrammingLanguage'
           description: Programming language for the exercise
         project_type:
           $ref: '#/components/schemas/ProjectType'
@@ -100,32 +90,30 @@ components:
     ConsistencyCheckRequest:
       description: Request model for consistency check
       properties:
-        issue_categories:
-          anyOf:
-          - items:
-              $ref: '#/components/schemas/ConsistencyIssueCategory'
-            type: array
-          - type: 'null'
-          description: Specify issue categories to check (leave empty for all)
-          title: Issue Categories
         problem_statement:
           description: Problem statement to check
           title: Problem Statement
           type: string
+        programming_language:
+          $ref: '#/components/schemas/app__creation_steps__step8_review_and_refine__consistency_check__models__ProgrammingLanguage'
+          description: Programming language for language-specific context rendering
         solution_repository:
-          $ref: '#/components/schemas/Repository'
-          description: Solution repository to check
+          anyOf:
+          - $ref: '#/components/schemas/Repository'
+          - type: 'null'
+          description: Solution repository to check (optional)
         template_repository:
           $ref: '#/components/schemas/Repository'
           description: Template repository to check
         test_repository:
-          $ref: '#/components/schemas/Repository'
-          description: Test repository to check
+          anyOf:
+          - $ref: '#/components/schemas/Repository'
+          - type: 'null'
+          description: Test repository to check (optional)
       required:
       - problem_statement
-      - solution_repository
       - template_repository
-      - test_repository
+      - programming_language
       title: ConsistencyCheckRequest
       type: object
     ConsistencyCheckResponse:
@@ -146,18 +134,17 @@ components:
       title: ConsistencyCheckResponse
       type: object
     ConsistencyIssue:
-      description: Represents a consistency issue found during review.
+      description: Base class for consistency issues. Do not use directly, use subclasses
+        instead.
       properties:
         category:
-          $ref: '#/components/schemas/ConsistencyIssueCategory'
-          description: Specific category of the issue
+          description: Specific category of consistency issue
+          title: Category
+          type: string
         description:
-          description: Description of the consistency issue
+          description: Clear explanation of the consistency issue
           title: Description
           type: string
-        primary_location:
-          $ref: '#/components/schemas/ArtifactLocation'
-          description: Primary location where issue was detected
         related_locations:
           description: Related locations across artifacts
           items:
@@ -166,53 +153,19 @@ components:
           type: array
         severity:
           $ref: '#/components/schemas/ConsistencyIssueSeverity'
-          description: Severity level of the issue
+          description: Student impact severity level
         suggested_fix:
-          anyOf:
-          - type: string
-          - type: 'null'
-          description: Simple suggested fix as a string
+          description: Actionable correction to resolve the issue
           title: Suggested Fix
-        type:
-          $ref: '#/components/schemas/ConsistencyIssueType'
-          description: Type category of the issue
+          type: string
       required:
       - description
       - severity
-      - type
       - category
-      - primary_location
+      - related_locations
+      - suggested_fix
       title: ConsistencyIssue
       type: object
-    ConsistencyIssueCategory:
-      description: Specific categories for consistency issues.
-      enum:
-      - METHOD_SIGNATURE_MISMATCH
-      - CONSTRUCTOR_SIGNATURE_MISMATCH
-      - INTERFACE_IMPLEMENTATION_CONFLICT
-      - TYPE_DECLARATION_CONFLICT
-      - INHERITANCE_HIERARCHY_MISMATCH
-      - PACKAGE_STRUCTURE_MISMATCH
-      - MISSING_REQUIRED_ELEMENT
-      - NAMING_INCONSISTENCY
-      - UML_TEXT_DEVIATION
-      - EXAMPLE_CONTRADICTION
-      - SPECIFICATION_AMBIGUITY
-      - CONSTRAINT_VIOLATION
-      - REQUIREMENT_GAP
-      - TEST_OBJECTIVE_MISMATCH
-      - TEST_COVERAGE_INCOMPLETE
-      - TEST_DATA_INCONSISTENT
-      - GRADING_CRITERIA_CONFLICT
-      - TEST_METHOD_NAMING_CONFLICT
-      - COGNITIVE_LEVEL_MISMATCH
-      - SCAFFOLDING_DISCONTINUITY
-      - PREREQUISITE_ASSUMPTION_VIOLATION
-      - LEARNING_OBJECTIVE_CONTRADICTION
-      - COMPLEXITY_PROGRESSION_VIOLATION
-      - SKILL_TRANSFER_IMPEDIMENT
-      title: ConsistencyIssueCategory
-      type: string
     ConsistencyIssueSeverity:
       description: Severity levels for consistency issues.
       enum:
@@ -220,15 +173,6 @@ components:
       - MEDIUM
       - HIGH
       title: ConsistencyIssueSeverity
-      type: string
-    ConsistencyIssueType:
-      description: Type categories for consistency issues.
-      enum:
-      - STRUCTURAL
-      - SEMANTIC
-      - ASSESSMENT
-      - PEDAGOGICAL
-      title: ConsistencyIssueType
       type: string
     HTTPValidationError:
       properties:
@@ -313,14 +257,6 @@ components:
       - description
       title: ProblemStatement
       type: object
-    ProgrammingLanguage:
-      description: Programming language enumeration matching Artemis.
-      enum:
-      - ''
-      - java
-      - python
-      title: ProgrammingLanguage
-      type: string
     ProjectType:
       description: Project type enumeration matching Artemis.
       enum:
@@ -435,6 +371,21 @@ components:
       - type
       title: ValidationError
       type: object
+    app__creation_steps__step3_create_solution_repository__models__ProgrammingLanguage:
+      description: Programming language enumeration matching Artemis.
+      enum:
+      - ''
+      - java
+      - python
+      title: ProgrammingLanguage
+      type: string
+    app__creation_steps__step8_review_and_refine__consistency_check__models__ProgrammingLanguage:
+      description: Programming language enumeration for consistency checking.
+      enum:
+      - java
+      - python
+      title: ProgrammingLanguage
+      type: string
   securitySchemes:
     ApiKeyAuth:
       description: API key authentication
