@@ -1,0 +1,12 @@
+provider: azure
+
+forward_url: "{base_url}/{deployment_name}/{path}?api-version={api_version}"
+
+required_headers:
+  - deployment_name
+  - api_version
+  - api_key
+
+auth:
+  header: api-key
+  format: "{api_key}"

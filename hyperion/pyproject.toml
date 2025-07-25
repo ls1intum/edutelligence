@@ -11,6 +11,8 @@ requires-python = ">=3.13,<4.0.0"
 
 [tool.poetry.dependencies]
 python = ">=3.13,<4.0.0"
+fastapi = {extras = ["standard"], version = "0.115.9"}
+shared = { path = "../shared", develop = true }
 pydantic-settings = "2.8.1"
 langchain = "0.3.25"
 langchain-core = "0.3.59"
@@ -18,9 +20,7 @@ langchain-openai = "0.3.16"
 langchain-ollama = "0.3.2"
 langsmith = "0.3.42"
 langfuse = "2.60.5"
-shared = { path = "../shared", develop = true }
-grpcio-tools = "1.71.0"
-grpcio = "1.71.0"
+httpx = "0.28.1"
 
 [tool.poetry]
 packages = [
@@ -29,13 +29,15 @@ packages = [
 ]
 
 [tool.poetry.scripts]
-hyperion = "app.main:serve"
-health-check = "playground.check_health:main"
-generate-grpc = "app.grpc.run_generate_stubs:main"
+openapi = "app.openapi:export"
+sync-openapi-artemis = "app.scripts.sync_openapi_artemis:main"
 
 [tool.poetry.group.dev.dependencies]
 black = "25.1.0"
 flake8 = "7.1.2"
+mypy = "1.16.1"
+pytest = "^8.4.1"
+pytest-asyncio = "^1.0.0"
 
 [virtualenvs]
 create = true

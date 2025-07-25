@@ -2,6 +2,7 @@ import os
 from dotenv import load_dotenv
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from app.logger import logger
 
 load_dotenv(override=True)
 
@@ -9,10 +10,9 @@ load_dotenv(override=True)
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="allow")
 
-    # gRPC server settings
-    GRPC_HOST: str = "0.0.0.0"
-    GRPC_PORT: int = 50051
-    GRPC_MAX_WORKERS: int = 10
+    # API Security
+    API_KEY: str = ""
+    DISABLE_AUTH: bool = False
 
     # Model to use prefixed by provider, i.e. "openai:gpt-4o"
     MODEL_NAME: str = ""
@@ -34,6 +34,9 @@ class Settings(BaseSettings):
     LANGFUSE_SECRET_KEY: str = ""
     LANGFUSE_HOST: str = ""
 
+    # Add a flag for OpenAPI generation mode
+    IS_GENERATING_OPENAPI: bool = False
+
     @property
     def langfuse_enabled(self):
         return bool(
@@ -52,3 +55,8 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+if settings.DISABLE_AUTH:
+    logger.warning(
+        "API authentication is disabled. This is not recommended for production."
+    )

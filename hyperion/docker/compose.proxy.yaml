@@ -95,7 +95,7 @@ configs:
     content: |
       <!DOCTYPE html>
       <html lang="en">
-      <title>Hephaestus Maintenance</title>
+      <title>Hyperion Maintenance</title>
       <meta http-equiv="refresh" content="5"/>
       <style>
           html, body { padding: 0; margin: 0; width: 100%; height: 100%; }
