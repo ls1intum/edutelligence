@@ -4,6 +4,8 @@ from langchain.chat_models import init_chat_model
 from langchain_core.runnables import RunnableParallel, RunnableLambda
 from langfuse.callback import CallbackHandler
 
+from app.models.openrouter import ChatOpenRouter
+
 from .models import (
     Metadata,
     ConsistencyCheckRequest,
@@ -20,7 +22,12 @@ langfuse_handler = CallbackHandler()
 class ConsistencyCheck:
 
     def __init__(self, model_name: str):
-        self.model = init_chat_model(model_name)
+        if model_name.startswith("openrouter:"):
+            self.model = ChatOpenRouter(
+                model_name=model_name.replace("openrouter:", ""),
+            )
+        else:
+            self.model = init_chat_model(model_name)
 
     def check(self, request: ConsistencyCheckRequest) -> ConsistencyCheckResponse:
         trace_id = uuid4()

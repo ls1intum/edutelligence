@@ -30,6 +30,9 @@ class Settings(BaseSettings):
     OLLAMA_BASIC_AUTH_PASSWORD: str = ""
     OLLAMA_HOST: str = ""
 
+    # OpenRouter
+    OPENROUTER_API_KEY: str = ""
+
     LANGFUSE_PUBLIC_KEY: str = ""
     LANGFUSE_SECRET_KEY: str = ""
     LANGFUSE_HOST: str = ""
