@@ -13,10 +13,16 @@ class CompetencyTaxonomy(str, Enum):
 
 
 class Competency(BaseModel):
-    # id
+    id: str
     title: str
     description: str
     taxonomy: CompetencyTaxonomy
+
+class ExerciseWithCompetencies(BaseModel):
+    id: str
+    title: str
+    description: str
+    competencies: list[Competency]
 
 
 class CompetencyRelationType(str, Enum):  # TOBE DETERMINED LATER
@@ -49,7 +55,6 @@ class GenerateEmbeddingsResponse(BaseModel):
 
 
 class SuggestCompetencyRequest(BaseModel):
-    id: str
     description: str
 
 
@@ -64,7 +69,3 @@ class SaveCompetencyRequest(BaseModel):
     competencies: list[Competency]
     competency_relations: list[CompetencyRelation]
 
-
-class SaveCompetencyResponse(BaseModel):
-    competencies: list[Competency]
-    competency_relations: list[CompetencyRelation]

@@ -6,12 +6,12 @@ services:
       - --host
       - 0.0.0.0
       - --port
-      - '8080'
+      - '8085'
       - --scheme
       - http
     image: cr.weaviate.io/semitechnologies/weaviate:1.30.0
     ports:
-      - 8080:8080
+      - 8085:8085
       - 50051:50051
     volumes:
       - weaviate_data:/var/lib/weaviate
@@ -26,6 +26,8 @@ services:
       CLUSTER_HOSTNAME: 'node1'
   multi2vec-clip:
     image: cr.weaviate.io/semitechnologies/multi2vec-clip:sentence-transformers-clip-ViT-B-32-multilingual-v1
+    ports:
+      - 8081:8080
     environment:
       ENABLE_CUDA: '0'
 volumes:

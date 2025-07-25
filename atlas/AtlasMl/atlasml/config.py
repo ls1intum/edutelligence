@@ -26,7 +26,10 @@ class Settings(BaseModel):
     @classmethod
     def get_settings(cls):
         """Get the settings from the configuration file."""
+        # previously line 29: combined get() with fallback (too long, makes later check unreachable)
         file_path_env = os.environ.get("APPLICATION_YML_PATH")
+        if not file_path_env:
+            file_path_env = str(Path(__file__).parent.parent / "application.yml")
         logger.info(f"Loading settings from: {file_path_env}")
         
         if not file_path_env:
@@ -54,6 +57,7 @@ class Settings(BaseModel):
         
     @classmethod
     def get_api_keys(cls):
+        logger.debug(f"Getting API keys: {cls.get_settings().api_keys}")
         return cls.get_settings().api_keys
 
 settings = Settings.get_settings()
