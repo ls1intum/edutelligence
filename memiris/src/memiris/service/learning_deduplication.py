@@ -4,13 +4,13 @@ from jinja2 import Template
 from langfuse import observe
 from ollama import Message
 
+from memiris.dlo.learning_creation_dlo import LearningCreationDLO
 from memiris.domain.learning import Learning
-from memiris.dto.learning_creation_dto import LearningCreationDto
 from memiris.service.ollama_wrapper import OllamaService
 from memiris.util.jinja_util import create_template
 from memiris.util.learning_util import (
-    creation_dto_to_learning,
-    learning_to_creation_dto,
+    creation_dlo_to_learning,
+    learning_to_creation_dlo,
 )
 
 
@@ -49,8 +49,8 @@ class LearningDeduplicator:
         if not learnings:
             return []
 
-        learning_json_schema = LearningCreationDto.json_array_schema()
-        learning_array_type_adapter = LearningCreationDto.json_array_type()
+        learning_json_schema = LearningCreationDLO.json_array_schema()
+        learning_array_type_adapter = LearningCreationDLO.json_array_type()
 
         system_message = self.template.render(
             learning_json_schema=learning_json_schema,
@@ -63,7 +63,7 @@ class LearningDeduplicator:
                 role="user",
                 content=str(
                     learning_array_type_adapter.dump_json(
-                        [learning_to_creation_dto(learning) for learning in learnings]
+                        [learning_to_creation_dlo(learning) for learning in learnings]
                     )
                 ),
             ),
@@ -72,18 +72,18 @@ class LearningDeduplicator:
         response = self.ollama_service.chat(
             model=self.llm,
             messages=messages,
-            response_format=LearningCreationDto.json_array_type().json_schema(),
+            response_format=LearningCreationDLO.json_array_type().json_schema(),
             options={"temperature": 0.05},
         )
 
         if response and response.message and response.message.content:
             try:
-                learning_dtos = LearningCreationDto.json_array_type().validate_json(
+                learning_dlos = LearningCreationDLO.json_array_type().validate_json(
                     response.message.content
                 )
                 return [
-                    creation_dto_to_learning(learning_dto, reference=None)
-                    for learning_dto in learning_dtos
+                    creation_dlo_to_learning(learning_dlo, reference=None)
+                    for learning_dlo in learning_dlos
                 ]
             except Exception as e:
                 print(f"Error parsing response: {e}")

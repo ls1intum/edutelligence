@@ -68,6 +68,9 @@ class WeaviateMemoryRepository(MemoryRepository, _WeaviateBaseRepository):
     def find(self, tenant: str, entity_id: UUID) -> Optional[Memory]:
         """Find a Memory by its ID."""
         try:
+            if not self.collection.tenants.exists(tenant):
+                return None
+
             result = self.collection.with_tenant(tenant).query.fetch_object_by_id(
                 uuid=entity_id,
                 include_vector=True,
@@ -89,7 +92,7 @@ class WeaviateMemoryRepository(MemoryRepository, _WeaviateBaseRepository):
     def all(self, tenant: str, include_deleted: bool = False) -> list[Memory]:
         """Get all Memory objects."""
         try:
-            if not self.collection.with_tenant(tenant).exists():
+            if not self.collection.tenants.exists(tenant):
                 return []
 
             result = self.collection.with_tenant(tenant).query.fetch_objects(
@@ -117,7 +120,8 @@ class WeaviateMemoryRepository(MemoryRepository, _WeaviateBaseRepository):
     def delete(self, tenant: str, entity_id: UUID) -> None:
         """Delete a Memory by its ID."""
         try:
-            self.collection.with_tenant(tenant).data.delete_by_id(entity_id)
+            if self.collection.tenants.exists(tenant):
+                self.collection.with_tenant(tenant).data.delete_by_id(entity_id)
         except Exception as e:
             raise ValueError(f"Error deleting Memory with id {entity_id}") from e
 
@@ -126,6 +130,9 @@ class WeaviateMemoryRepository(MemoryRepository, _WeaviateBaseRepository):
         self, tenant: str, vector_name: str, vector: Sequence[float], count: int
     ) -> list[Memory]:
         try:
+            if not self.collection.tenants.exists(tenant):
+                return []
+
             # Use hybrid search to combine vector search with filter for non-deleted memories
             result = self.collection.with_tenant(tenant).query.hybrid(
                 query=None,
@@ -152,6 +159,9 @@ class WeaviateMemoryRepository(MemoryRepository, _WeaviateBaseRepository):
         self, tenant: str, vectors: Mapping[str, Sequence[float]], count: int
     ) -> list[Memory]:
         try:
+            if not self.collection.tenants.exists(tenant):
+                return []
+
             vectors = {
                 vector_name: vector for vector_name, vector in vectors.items() if vector
             }
@@ -180,6 +190,9 @@ class WeaviateMemoryRepository(MemoryRepository, _WeaviateBaseRepository):
     @observe(name="weaviate.memory_repository.find_unslept_memories")
     def find_unslept_memories(self, tenant: str) -> list[Memory]:
         try:
+            if not self.collection.tenants.exists(tenant):
+                return []
+
             # Combine filters for both unslept AND not deleted memories
             result = self.collection.with_tenant(tenant).query.fetch_objects(
                 filters=Filter.by_property("slept_on").equal(False)
@@ -215,6 +228,9 @@ class WeaviateMemoryRepository(MemoryRepository, _WeaviateBaseRepository):
             return []
 
         try:
+            if not self.collection.tenants.exists(tenant):
+                return []
+
             # Convert UUIDs to strings for the filter
             id_strings = [str(uid) for uid in ids]
 

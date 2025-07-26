@@ -150,7 +150,7 @@ class MemirisWrapper:
             memories = self.create_memories(text)
             result_storage.extend(memories)
 
-        thread = Thread(target=_create_memories, args=(text,))
+        thread = Thread(name="MemirisMemoryCreationThread", target=_create_memories)
         thread.start()
         return thread
 

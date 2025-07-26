@@ -5,49 +5,49 @@ from uuid import UUID
 from pydantic import BaseModel, Field, TypeAdapter
 
 
-class LearningInfoDto(BaseModel):
-    """DTO for basic learning information used in memory deduplication"""
+class LearningInfoDLO(BaseModel):
+    """DLO for basic learning information used in memory deduplication"""
 
     id: UUID = Field(description="The ID of the learning")
     title: str = Field(description="The title of the learning")
     content: str = Field(description="The content of the learning")
 
 
-class MemoryDeduplicationInputDto(BaseModel):
-    """DTO for sending memory information to the LLM for deduplication"""
+class MemoryDeduplicationInputDLO(BaseModel):
+    """DLO for sending memory information to the LLM for deduplication"""
 
     id: UUID = Field(description="The ID of the memory")
     title: str = Field(description="The title of the memory object")
     content: str = Field(description="The content of the memory object")
-    learnings: List[LearningInfoDto] = Field(
+    learnings: List[LearningInfoDLO] = Field(
         description="Basic information about the learnings associated with this memory"
     )
 
     @staticmethod
     def json_type() -> TypeAdapter:
         """
-        Generate the TypeAdapter for MemoryDeduplicationInputDto.
+        Generate the TypeAdapter for MemoryDeduplicationInputDLO.
         """
-        return TypeAdapter(MemoryDeduplicationInputDto)
+        return TypeAdapter(MemoryDeduplicationInputDLO)
 
     @staticmethod
     def json_array_type() -> TypeAdapter:
         """
-        Generate the TypeAdapter for an array of MemoryDeduplicationInputDto objects.
+        Generate the TypeAdapter for an array of MemoryDeduplicationInputDLO objects.
         """
-        return TypeAdapter(List[MemoryDeduplicationInputDto])
+        return TypeAdapter(List[MemoryDeduplicationInputDLO])
 
     @staticmethod
     def json_schema() -> Dict[str, Any]:
         """
-        Generate the JSON schema for MemoryDeduplicationInputDto.
+        Generate the JSON schema for MemoryDeduplicationInputDLO.
         """
-        return MemoryDeduplicationInputDto.json_type().json_schema()
+        return MemoryDeduplicationInputDLO.json_type().json_schema()
 
     @staticmethod
     def json_array_schema() -> str:
         """
-        Generate the JSON schema for an array of MemoryDeduplicationInputDto objects.
+        Generate the JSON schema for an array of MemoryDeduplicationInputDLO objects.
         """
-        json_dict = MemoryDeduplicationInputDto.json_array_type().json_schema()
+        json_dict = MemoryDeduplicationInputDLO.json_array_type().json_schema()
         return json.dumps(json_dict, indent=2)

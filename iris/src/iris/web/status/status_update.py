@@ -4,6 +4,7 @@ from typing import List, Optional
 
 import requests
 from memiris import Memory
+from memiris.api.memory_dto import MemoryDTO
 from sentry_sdk import capture_exception, capture_message
 
 from iris.common.token_usage_dto import TokenUsageDTO
@@ -138,9 +139,17 @@ class StatusCallback(ABC):
         if hasattr(self.status, "improvement"):
             self.status.improvement = improvement
         if hasattr(self.status, "accessed_memories"):
-            self.status.accessed_memories = accessed_memories
+            self.status.accessed_memories = (
+                [MemoryDTO.from_memory(memory) for memory in accessed_memories]
+                if accessed_memories
+                else []
+            )
         if hasattr(self.status, "created_memories"):
-            self.status.created_memories = created_memories
+            self.status.created_memories = (
+                [MemoryDTO.from_memory(memory) for memory in created_memories]
+                if created_memories
+                else []
+            )
 
         next_stage = self.get_next_stage()
 

@@ -7,8 +7,8 @@ from pydantic import BaseModel, Field, TypeAdapter
 from memiris.domain.memory_connection import ConnectionType
 
 
-class MemoryConnectionDto(BaseModel):
-    """DTO for representing a connection between memories identified by LLM."""
+class MemoryConnectionDLO(BaseModel):
+    """DLO for representing a connection between memories identified by LLM."""
 
     connection_type: ConnectionType = Field(
         ...,
@@ -30,10 +30,10 @@ class MemoryConnectionDto(BaseModel):
 
     @classmethod
     def json_array_schema(cls) -> str:
-        """Get the JSON schema for a list of MemoryConnectionDto objects."""
+        """Get the JSON schema for a list of MemoryConnectionDLO objects."""
         return json.dumps(cls.json_array_type().json_schema(), indent=2)
 
     @classmethod
     def json_array_type(cls) -> TypeAdapter:
-        """Get the type adapter for a list of MemoryConnectionDto objects."""
-        return TypeAdapter(List[MemoryConnectionDto])
+        """Get the type adapter for a list of MemoryConnectionDLO objects."""
+        return TypeAdapter(List[MemoryConnectionDLO])

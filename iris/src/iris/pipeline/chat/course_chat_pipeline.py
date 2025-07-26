@@ -2,7 +2,6 @@ import json
 import logging
 import traceback
 from datetime import datetime
-from threading import Thread
 from typing import Any, Callable, List, Optional
 
 import pytz
@@ -570,6 +569,7 @@ class CourseChatPipeline(Pipeline):
         lecture_content_storage: dict[str, Any] = {}
         faq_storage: dict[str, Any] = {}
         accessed_memory_storage: list[Memory] = []
+        memory_creation_storage: list[Memory] = []
 
         try:
             logger.info("Running course chat pipeline...")
@@ -585,12 +585,12 @@ class CourseChatPipeline(Pipeline):
             )
 
             # Start memory creation in a separate thread
-            memory_creation_storage: list[Memory] = []
-            memory_creation_thread: Thread = (
-                self.memiris_wrapper.create_memories_in_separate_thread(
-                    query_text, memory_creation_storage
+            if dto.user.memiris_enabled:
+                memory_creation_thread = (
+                    self.memiris_wrapper.create_memories_in_separate_thread(
+                        query_text, memory_creation_storage
+                    )
                 )
-            )
 
             # Handle event-specific logic
             params, agent_specific_primary_instruction, system_message_additions = (
@@ -641,13 +641,24 @@ class CourseChatPipeline(Pipeline):
                 accessed_memories=accessed_memory_storage,
             )
 
-            # Generate suggestions
-            self._generate_suggestions(output, dto)
+            # Generate suggestions (this is currently skipped)
+            # self._generate_suggestions(output, dto)
 
             # Wait for memory creation to finish
-            memory_creation_thread.join()
-            self.callback.done(created_memories=memory_creation_storage)
+            if dto.user.memiris_enabled:
+                self.callback.in_progress("Waiting for memory creation to finish ...")
+                # noinspection PyUnboundLocalVariable
+                memory_creation_thread.join()
+                self.callback.done(
+                    "Memory creation finished.",
+                    created_memories=memory_creation_storage,
+                )
+            else:
+                self.callback.skip(
+                    "Memory creation is disabled.",
+                )
         except Exception as e:
+            memory_creation_thread.join(0.0000001)
             logger.error(
                 "An error occurred while running the course chat pipeline",
                 exc_info=e,
