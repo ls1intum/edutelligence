@@ -3,15 +3,23 @@ branch = True
 source = 
     athena
     llm_core
-    modules/programming/module_programming_llm/module_programming_llm
-    modules/text/module_text_llm/module_text_llm
-    modules/modeling/module_modeling_llm/module_modeling_llm
+    modules
 omit = 
-    # Only exclude test-related files and directories
+    # Exclude ALL test-related files and directories
     */tests/*
     */test_*.py
     */mock_*.py
     */conftest.py
+    tests/*
+    test_*
+    mock_*
+    conftest.py
+    # Exclude cache and temporary files
+    */__pycache__/*
+    */.venv/*
+    */.pytest_cache/*
+    */coverage/*
+    */test-results/*
 
 [report]
 exclude_lines =
