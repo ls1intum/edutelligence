@@ -1,37 +1,17 @@
 [run]
 branch = True
 source = 
-    athena/athena
-    athena/llm_core
-    athena/modules/programming/module_programming_llm/module_programming_llm
-    athena/modules/text/module_text_llm/module_text_llm
-    athena/modules/modeling/module_modeling_llm/module_modeling_llm
+    athena
+    llm_core
+    modules/programming/module_programming_llm/module_programming_llm
+    modules/text/module_text_llm/module_text_llm
+    modules/modeling/module_modeling_llm/module_modeling_llm
 omit = 
     # Only exclude test-related files and directories
     */tests/*
     */test_*.py
     */mock_*.py
     */conftest.py
-    
-    # Cache and temporary files
-    */__pycache__/*
-    */.venv/*
-    */.pytest_cache/*
-    */coverage/*
-    */test-results/*
-    
-    # Documentation and scripts (not source code)
-    */docs/*
-    */scripts/*
-    */evaluation/*
-    */playground/*
-    */data/*
-    */docker/*
-    */env_example/*
-    */logos/*
-    */shared/*
-    */assessment_module_manager/*
-    */log_viewer/*
 
 [report]
 exclude_lines =
