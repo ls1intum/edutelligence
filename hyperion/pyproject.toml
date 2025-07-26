@@ -14,11 +14,11 @@ python = ">=3.13,<4.0.0"
 fastapi = {extras = ["standard"], version = "0.115.9"}
 shared = { path = "../shared", develop = true }
 pydantic-settings = "2.8.1"
-langchain = "0.3.25"
-langchain-core = "0.3.59"
-langchain-openai = "0.3.16"
-langchain-ollama = "0.3.2"
-langsmith = "0.3.42"
+langchain = "0.3.27"
+langchain-core = "0.3.72"
+langchain-openai = "0.3.28"
+langchain-ollama = "0.3.6"
+langsmith = "0.4.8"
 langfuse = "2.60.5"
 httpx = "0.28.1"
 
