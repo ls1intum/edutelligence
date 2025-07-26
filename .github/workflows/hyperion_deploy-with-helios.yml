@@ -20,11 +20,11 @@ on:
         type: string
 
 jobs:  
-  deploy-app:
+  deploy-hyperion:
     uses: ls1intum/.github/.github/workflows/deploy-docker-compose.yml@main
     with:
       environment: ${{ inputs.environment_name }}
-      docker-compose-file: "./hyperion/compose.yaml"
+      docker-compose-file: "./hyperion/docker/compose.hyperion.yaml"
       main-image-name: ls1intum/edutelligence/hyperion
       image-tag: ${{ inputs.commit_sha }}
       deployment-base-path: "/opt/hyperion"

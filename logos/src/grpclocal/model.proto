@@ -1,0 +1,21 @@
+syntax = "proto3";
+package logos.grpc;
+
+// One gRPC service for every incoming client
+service Logos {
+  // Streams back chunks of the LLM response
+  rpc Generate (GenerateRequest) returns (stream GenerateResponse);
+}
+
+// The client sends arbitrary JSON as a string payload,
+// plus any metadata (headers) in the metadata map.
+message GenerateRequest {
+    string path                     = 1;
+    map<string,string> metadata     = 2;
+    string payload                  = 3;
+}
+
+// We stream back raw bytes (UTF-8 chunks)
+message GenerateResponse {
+  bytes chunk = 1;
+}
