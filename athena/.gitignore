@@ -12,3 +12,5 @@ data/*
 **/.env
 **/data/*
 test-results/*
+.coverage*
+**/.coverage*

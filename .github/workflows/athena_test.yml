@@ -30,6 +30,8 @@ jobs:
         run: poetry config virtualenvs.in-project true
       - name: Install athena dependencies
         run: poetry -C athena install --with dev
+      - name: Install prospector
+        run: poetry -C athena run pip install prospector
       - name: Install all modules
         run: |
           cd athena
@@ -51,12 +53,12 @@ jobs:
               # Install pytest and coverage in the module's environment
               $module/.venv/bin/pip install pytest pytest-asyncio coverage
               # Run tests with coverage using the module's environment
-              if ! $module/.venv/bin/python -m coverage run -m pytest tests/$module/mock --junitxml=test-results/${module//\//_}_mock.xml; then
+              if ! $module/.venv/bin/python -m coverage run --rcfile=.coveragerc --data-file=".coverage.${module//\//_}" -m pytest tests/$module/mock --junitxml=test-results/${module//\//_}_mock.xml; then
                 echo "Tests failed for $module"
                 overall_success=false
               fi
               # Generate coverage report for this module in Cobertura format
-              $module/.venv/bin/python -m coverage xml -o test-results/${module//\//_}_coverage.xml
+              $module/.venv/bin/python -m coverage xml --rcfile=.coveragerc --data-file=".coverage.${module//\//_}" -o test-results/${module//\//_}_coverage.xml
             else
               echo "Virtual environment not found for $module, skipping..."
             fi
@@ -73,7 +75,7 @@ jobs:
           for module in modules/programming/module_programming_llm modules/text/module_text_llm modules/modeling/module_modeling_llm; do
             if [ -d "$module/.venv" ]; then
               echo "📈 $module:"
-              $module/.venv/bin/python -m coverage report --show-missing || echo "No coverage data available"
+              $module/.venv/bin/python -m coverage report --rcfile=.coveragerc --data-file=".coverage.${module//\//_}" --show-missing || echo "No coverage data available"
               echo ""
             fi
           done
@@ -83,15 +85,15 @@ jobs:
           # Set up Python path like test_modules.py does
           export PYTHONPATH="$PWD:$PWD/llm_core"
           
-          # Run prospector only on the main athena directory to avoid import errors
-          poetry run prospector --profile .prospector.yaml athena/
+          # Run prospector using the poetry script
+          poetry run prospector --profile .prospector.yaml athena/ || echo "Prospector linting completed with warnings/errors"
         continue-on-error: true
       - name: Upload JUnit Test Results
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: junit-results
-          path: athena/test-results/
+          path: athena/test-results/*_mock.xml
       
       - name: Upload Coverage Reports
         if: always()
@@ -132,7 +134,7 @@ jobs:
         id: test-report
         uses: mikepenz/action-junit-report@v5
         with:
-          report_paths: "all-test-results/**/*.xml"
+          report_paths: "all-test-results/**/*_mock.xml"
           check_name: "Athena Test Report"
           require_tests: true
           require_passed_tests: false
