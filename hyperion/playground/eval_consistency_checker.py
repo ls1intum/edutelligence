@@ -169,47 +169,7 @@ def export_langsmith_traces(
         print(f"Found {len(runs)} LangSmith runs for trace {trace_id}")
 
         # Convert runs to serializable format
-        traces = []
-        for run in runs:
-            try:
-                # Convert run to dict and handle serialization
-                run_dict = {
-                    "id": str(run.id),
-                    "name": run.name,
-                    "run_type": run.run_type,
-                    "start_time": (
-                        run.start_time.isoformat() if run.start_time else None
-                    ),
-                    "end_time": run.end_time.isoformat() if run.end_time else None,
-                    "status": run.status,
-                    "inputs": run.inputs,
-                    "outputs": run.outputs,
-                    "tags": run.tags,
-                    "parent_run_id": (
-                        str(run.parent_run_id) if run.parent_run_id else None
-                    ),
-                    "trace_id": str(run.trace_id) if run.trace_id else None,
-                    "dotted_order": run.dotted_order,
-                    "session_id": str(run.session_id) if run.session_id else None,
-                }
-
-                # Include extra data if available
-                for attr in ["extra", "error", "events"]:
-                    if hasattr(run, attr) and getattr(run, attr):
-                        run_dict[attr] = getattr(run, attr)
-
-                traces.append(run_dict)
-            except Exception as e:
-                print(f"Warning: Could not serialize run {run.id}: {e}")
-                # Add minimal info for failed runs
-                traces.append(
-                    {
-                        "id": str(run.id),
-                        "name": getattr(run, "name", "Unknown"),
-                        "error": f"Serialization failed: {str(e)}",
-                    }
-                )
-
+        traces = [json.loads(run.json()) for run in runs]
         print(f"Successfully exported {len(traces)} traces")
 
         # Print debug info about what we found
