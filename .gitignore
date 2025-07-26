@@ -104,3 +104,5 @@ Desktop.ini
 # Test Results
 ######################
 athena/test-results/
+.coverage
+**/.coverage
