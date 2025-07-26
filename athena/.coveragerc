@@ -7,25 +7,20 @@ source =
     athena/modules/text/module_text_llm/module_text_llm
     athena/modules/modeling/module_modeling_llm/module_modeling_llm
 omit = 
-    # Exclude ALL test-related files and directories
+    # Only exclude test-related files and directories
     */tests/*
-    */test_*
-    */mock/*
-    */conftest.py
     */test_*.py
     */mock_*.py
-    tests/*
-    test_*
-    mock/*
+    */conftest.py
     
-    # Exclude all cache and temporary files
+    # Cache and temporary files
     */__pycache__/*
     */.venv/*
     */.pytest_cache/*
     */coverage/*
     */test-results/*
     
-    # Exclude all non-source directories
+    # Documentation and scripts (not source code)
     */docs/*
     */scripts/*
     */evaluation/*
@@ -37,18 +32,6 @@ omit =
     */shared/*
     */assessment_module_manager/*
     */log_viewer/*
-    
-    # Exclude specific test directories
-    */athena/tests/*
-    */athena/test-results/*
-    */modules/*/test-results/*
-    */modules/*/coverage/*
-    
-    # Exclude any file with test or mock in the path
-    **/tests/**
-    **/test_*.py
-    **/mock_*.py
-    **/conftest.py
 
 [report]
 exclude_lines =
