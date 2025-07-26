@@ -1,4 +1,4 @@
-from typing import Optional, Sequence, overload
+from typing import Mapping, Optional, Sequence, overload
 from uuid import UUID
 
 from weaviate.client import WeaviateClient
@@ -124,3 +124,8 @@ class MemoryService:
             raise ValueError("Memory object must have an ID.")
 
         return self._memory_repository.save(tenant, memory)
+
+    def semantic_search(
+        self, tenant: str, vectors: Mapping[str, Sequence[float]], limit: int = 10
+    ) -> Sequence[Memory]:
+        return self._memory_repository.search_multi(tenant, vectors, limit)

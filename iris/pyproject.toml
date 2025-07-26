@@ -11,7 +11,7 @@ include = ["src/iris/py.typed"]
 python = ">=3.12,<4.0.0"
 fastapi = "0.115.5"
 langchain = "0.3.8"
-ollama = "0.3.3"
+ollama = "^0.5.1"
 openai = "1.60.2"
 psutil = "6.1.0"
 pydantic = "2.9.2"
@@ -22,7 +22,7 @@ requests = "2.32.3"
 sentry-sdk = {version = "2.13.0", extras = ["starlette", "fastapi", "openai"]}
 unstructured = "0.16.24"
 uvicorn = "0.32.0"
-weaviate-client = "4.9.3"
+weaviate-client = "^4.15.4"
 langchain-core="^0.3.17"
 starlette="^0.41.2"
 langsmith="^0.1.142"
@@ -33,6 +33,7 @@ cohere = "5.9.0"
 types-pyyaml = "^6.0.12.20241230"
 types-pytz = "^2025.1.0.20250204"
 httpx = { version = "^0.27.0", extras = ["http2"] }
+memiris = {path = "../memiris", develop = true}
 
 [tool.poetry.group.dev.dependencies]
 mypy = "^1.10.0"
