@@ -52,13 +52,18 @@ jobs:
               echo "Running tests for $module..."
               # Install pytest and coverage in the module's environment
               $module/.venv/bin/pip install pytest pytest-asyncio coverage
+              
+              # Extract module name for coverage data file
+              module_name=$(echo $module | sed 's|modules/||' | sed 's|/|_|g')
+              
               # Run tests with coverage using the module's environment
-              if ! $module/.venv/bin/python -m coverage run --rcfile=.coveragerc --data-file=".coverage.${module//\//_}" -m pytest tests/$module/mock --junitxml=test-results/${module//\//_}_mock.xml; then
+              # Coverage will only measure the actual module source code, not test files
+              if ! $module/.venv/bin/python -m coverage run --rcfile=.coveragerc --data-file=".coverage.${module_name}" -m pytest tests/$module/mock --junitxml=test-results/${module_name}_mock.xml; then
                 echo "Tests failed for $module"
                 overall_success=false
               fi
               # Generate coverage report for this module in Cobertura format
-              $module/.venv/bin/python -m coverage xml --rcfile=.coveragerc --data-file=".coverage.${module//\//_}" -o test-results/${module//\//_}_coverage.xml
+              $module/.venv/bin/python -m coverage xml --rcfile=.coveragerc --data-file=".coverage.${module_name}" -o test-results/${module_name}_coverage.xml
             else
               echo "Virtual environment not found for $module, skipping..."
             fi
@@ -74,8 +79,9 @@ jobs:
           echo "===================="
           for module in modules/programming/module_programming_llm modules/text/module_text_llm modules/modeling/module_modeling_llm; do
             if [ -d "$module/.venv" ]; then
+              module_name=$(echo $module | sed 's|modules/||' | sed 's|/|_|g')
               echo "📈 $module:"
-              $module/.venv/bin/python -m coverage report --rcfile=.coveragerc --data-file=".coverage.${module//\//_}" --show-missing || echo "No coverage data available"
+              $module/.venv/bin/python -m coverage report --rcfile=.coveragerc --data-file=".coverage.${module_name}" --show-missing || echo "No coverage data available"
               echo ""
             fi
           done
