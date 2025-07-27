@@ -74,9 +74,20 @@ jobs:
             exit 1
           fi
           
-          # Display coverage reports in CI
-          echo "📊 Coverage Reports:"
-          echo "===================="
+          # Combine coverage data to avoid duplicates
+          echo "📊 Combining Coverage Data..."
+          echo "============================"
+          python3 combine_coverage.py test-results/combined_coverage.xml test-results/programming_module_programming_llm_coverage.xml test-results/text_module_text_llm_coverage.xml test-results/modeling_module_modeling_llm_coverage.xml
+          
+          # Display combined coverage report in CI
+          echo "📊 Combined Coverage Report:"
+          echo "============================"
+          poetry run pip install coverage
+          python3 combine_coverage.py --summary test-results/combined_coverage.xml test-results/programming_module_programming_llm_coverage.xml test-results/text_module_text_llm_coverage.xml test-results/modeling_module_modeling_llm_coverage.xml
+          
+          # Display individual coverage reports in CI
+          echo "📊 Individual Coverage Reports:"
+          echo "=============================="
           for module in modules/programming/module_programming_llm modules/text/module_text_llm modules/modeling/module_modeling_llm; do
             if [ -d "$module/.venv" ]; then
               module_name=$(echo $module | sed 's|modules/||' | sed 's|/|_|g')
@@ -91,8 +102,8 @@ jobs:
           # Set up Python path like test_modules.py does
           export PYTHONPATH="$PWD:$PWD/llm_core"
           
-          # Run prospector using the poetry script
-          poetry run prospector --profile .prospector.yaml athena/ || echo "Prospector linting completed with warnings/errors"
+          # Run lint_all script which handles prospector installation and execution
+          poetry run lint_all || echo "Linting completed with warnings/errors"
         continue-on-error: true
       - name: Upload JUnit Test Results
         if: always()
@@ -106,7 +117,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: coverage-reports
-          path: athena/test-results/*_coverage.xml
+          path: |
+            athena/test-results/*_coverage.xml
+            athena/test-results/combined_coverage.xml
   report:
     runs-on: ubuntu-latest
     if: always()
@@ -127,7 +140,7 @@ jobs:
       - name: Code Coverage Summary
         uses: irongut/CodeCoverageSummary@v1.3.0
         with:
-          filename: coverage-reports/*_coverage.xml
+          filename: coverage-reports/combined_coverage.xml
           badge: true
           fail_below_min: false
           format: markdown
