@@ -28,22 +28,29 @@ def main():
             os.environ["PATH"] = os.path.join(path, "bin") + os.pathsep + path_env
 
             # Install prospector in the module's poetry environment
+            print(f"Installing prospector in {module}...")
             install_result = subprocess.run(["poetry", "run", "pip", "install", "prospector"], cwd=module, capture_output=True)
             if install_result.returncode != 0:
-                print(f"Failed to install prospector in {module}: {install_result.stderr.decode()}")
-                success = False
-                continue
+                print(f"Warning: Failed to install prospector in {module}: {install_result.stderr.decode()}")
+                print(f"Continuing anyway - prospector might already be available...")
+                # Don't fail the entire script for installation issues
 
+            print(f"Running prospector in {module}...")
             result = subprocess.run(["poetry", "run", "prospector", "--profile",
                                      os.path.abspath(os.path.join(os.path.dirname(__file__), "../.prospector.yaml"))],
-                                    cwd=module)
+                                    cwd=module, capture_output=True)
             if result.returncode != 0:
+                print(f"❌ Prospector failed in {module}: {result.stderr.decode()}")
                 success = False
+            else:
+                print(f"✅ Prospector completed successfully in {module}")
 
     if success:
+        print("🎉 All modules linted successfully!")
         sys.exit(0)
     else:
-        sys.exit(-1)
+        print("❌ Some modules failed linting. Check the output above for details.")
+        sys.exit(1)
 
 
 if __name__ == "__main__":
