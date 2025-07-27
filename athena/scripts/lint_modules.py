@@ -29,11 +29,22 @@ def main():
 
             # Install prospector in the module's poetry environment
             print(f"Installing prospector in {module}...")
+            
+            # First try to install prospector via pip
             install_result = subprocess.run(["poetry", "run", "pip", "install", "prospector"], cwd=module, capture_output=True)
             if install_result.returncode != 0:
-                print(f"Warning: Failed to install prospector in {module}: {install_result.stderr.decode()}")
-                print(f"Continuing anyway - prospector might already be available...")
-                # Don't fail the entire script for installation issues
+                print(f"Warning: Failed to install prospector via pip in {module}: {install_result.stderr.decode()}")
+                print(f"Trying to install via poetry...")
+                
+                # Try installing via poetry install (which will install dev dependencies)
+                poetry_install_result = subprocess.run(["poetry", "install"], cwd=module, capture_output=True)
+                if poetry_install_result.returncode != 0:
+                    print(f"Warning: Failed to install dependencies in {module}: {poetry_install_result.stderr.decode()}")
+                    print(f"Continuing anyway - prospector might already be available...")
+                else:
+                    print(f"✅ Successfully installed dependencies in {module}")
+            
+            # Don't fail the entire script for installation issues
 
             print(f"Running prospector in {module}...")
             result = subprocess.run(["poetry", "run", "prospector", "--profile",
