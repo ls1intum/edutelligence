@@ -106,7 +106,7 @@ jobs:
           poetry install
           
           # Run lint_all script which handles prospector installation and execution
-          poetry run lint_all || echo "Linting completed with warnings/errors"
+          poetry run lint_all
         continue-on-error: true
       - name: Upload JUnit Test Results
         if: always()

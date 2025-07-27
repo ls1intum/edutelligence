@@ -28,9 +28,9 @@ def main():
             os.environ["PATH"] = os.path.join(path, "bin") + os.pathsep + path_env
 
             # Install prospector in the module's poetry environment
-            install_result = subprocess.run(["poetry", "run", "pip", "install", "prospector"], cwd=module)
+            install_result = subprocess.run(["poetry", "run", "pip", "install", "prospector"], cwd=module, capture_output=True)
             if install_result.returncode != 0:
-                print(f"Failed to install prospector in {module}")
+                print(f"Failed to install prospector in {module}: {install_result.stderr.decode()}")
                 success = False
                 continue
 

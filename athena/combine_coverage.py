@@ -8,6 +8,7 @@ import xml.etree.ElementTree as ET
 from collections import defaultdict
 import sys
 import os
+import time
 
 def parse_coverage_xml(xml_file):
     """Parse a coverage XML file and return package data."""
@@ -36,12 +37,28 @@ def parse_coverage_xml(xml_file):
             class_branch_rate = float(cls.get('branch-rate', 0))
             class_complexity = float(cls.get('complexity', 0))
             
+            # Extract detailed line information
+            lines = []
+            for line_elem in cls.findall('.//line'):
+                line_number = int(line_elem.get('number', 0))
+                hits = int(line_elem.get('hits', 0))
+                lines.append({'number': line_number, 'hits': hits})
+            
+            # Extract detailed branch information
+            branches = []
+            for branch_elem in cls.findall('.//branch'):
+                line_number = int(branch_elem.get('number', 0))
+                hits = int(branch_elem.get('hits', 0))
+                branches.append({'number': line_number, 'hits': hits})
+            
             packages[name]['classes'].append({
                 'name': class_name,
                 'filename': class_filename,
                 'line_rate': class_line_rate,
                 'branch_rate': class_branch_rate,
-                'complexity': class_complexity
+                'complexity': class_complexity,
+                'lines': lines,
+                'branches': branches
             })
     
     return packages
@@ -87,17 +104,45 @@ def combine_packages(all_packages):
 
 def create_combined_xml(combined_packages, output_file):
     """Create a new XML file with combined coverage data."""
+    # Calculate totals for root attributes
+    total_lines_valid = 0
+    total_lines_covered = 0
+    total_branches_valid = 0
+    total_branches_covered = 0
+    total_complexity = 0
+    
+    # Collect all classes to calculate totals
+    all_classes = []
+    for package_data in combined_packages.values():
+        all_classes.extend(package_data['classes'])
+    
+    # Calculate totals from all classes
+    for cls in all_classes:
+        # Extract line and branch info from class data
+        # Assuming class data has line and branch information
+        if 'lines' in cls:
+            total_lines_valid += len(cls['lines'])
+            total_lines_covered += sum(1 for line in cls['lines'] if line.get('hits', 0) > 0)
+        if 'branches' in cls:
+            total_branches_valid += len(cls['branches'])
+            total_branches_covered += sum(1 for branch in cls['branches'] if branch.get('hits', 0) > 0)
+        total_complexity += cls.get('complexity', 0)
+    
+    # Calculate rates
+    line_rate = total_lines_covered / total_lines_valid if total_lines_valid > 0 else 0
+    branch_rate = total_branches_covered / total_branches_valid if total_branches_valid > 0 else 0
+    
     # Create the XML structure
     root = ET.Element('coverage')
     root.set('version', '1')
-    root.set('timestamp', '0')
-    root.set('lines-valid', '0')
-    root.set('lines-covered', '0')
-    root.set('line-rate', '0')
-    root.set('branches-covered', '0')
-    root.set('branches-valid', '0')
-    root.set('branch-rate', '0')
-    root.set('complexity', '0')
+    root.set('timestamp', str(int(time.time())))
+    root.set('lines-valid', str(total_lines_valid))
+    root.set('lines-covered', str(total_lines_covered))
+    root.set('line-rate', str(line_rate))
+    root.set('branches-covered', str(total_branches_covered))
+    root.set('branches-valid', str(total_branches_valid))
+    root.set('branch-rate', str(branch_rate))
+    root.set('complexity', str(total_complexity))
     
     packages_elem = ET.SubElement(root, 'packages')
     
@@ -117,6 +162,24 @@ def create_combined_xml(combined_packages, output_file):
             class_elem.set('line-rate', str(cls['line_rate']))
             class_elem.set('branch-rate', str(cls['branch_rate']))
             class_elem.set('complexity', str(cls['complexity']))
+            
+            # Add methods element (required by Cobertura format)
+            methods_elem = ET.SubElement(class_elem, 'methods')
+            
+            # Add lines element with detailed line information
+            lines_elem = ET.SubElement(class_elem, 'lines')
+            for line in cls.get('lines', []):
+                line_elem = ET.SubElement(lines_elem, 'line')
+                line_elem.set('number', str(line['number']))
+                line_elem.set('hits', str(line['hits']))
+            
+            # Add branches element with detailed branch information
+            if cls.get('branches'):
+                branches_elem = ET.SubElement(class_elem, 'branches')
+                for branch in cls['branches']:
+                    branch_elem = ET.SubElement(branches_elem, 'branch')
+                    branch_elem.set('number', str(branch['number']))
+                    branch_elem.set('hits', str(branch['hits']))
     
     # Write the XML file
     tree = ET.ElementTree(root)
