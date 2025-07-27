@@ -314,6 +314,7 @@ def evaluate_exercise(
     model_name: str,
     programming_language=None,
     export_traces: bool = True,
+    reasoning_effort: str = "medium",
 ) -> tuple[Dict[str, Any], List[Dict[str, Any]], str]:
     """
     Evaluate consistency for a single exercise.
@@ -323,6 +324,7 @@ def evaluate_exercise(
         model_name: Name of the model to use for consistency checking
         programming_language: Programming language (auto-detected if None)
         export_traces: Whether to export LangSmith traces
+        reasoning_effort: Reasoning effort level for the model (default: "medium")
 
     Returns:
         tuple of (result_dict, traces_list, run_id)
@@ -378,7 +380,7 @@ def evaluate_exercise(
     )
 
     # Initialize consistency checker
-    consistency_checker = ConsistencyCheck(model_name=model_name)
+    consistency_checker = ConsistencyCheck(model=model_name, reasoning_effort=reasoning_effort)
 
     # Run consistency check
     response = consistency_checker.check(request)
@@ -399,6 +401,7 @@ def evaluate_exercise(
         "run_id": run_id,
         "timestamp": start_time.isoformat(),
         "model_name": model_name,
+        "reasoning_effort": reasoning_effort,
         "langsmith_trace_id": langsmith_trace_id,
         "commit_id": commit_id,  # Include git commit ID
         "response": response.model_dump(),
@@ -434,6 +437,7 @@ def evaluate_variant(
     variant_id: str,
     model_name: str,
     programming_language=None,
+    reasoning_effort: str = "medium",
 ) -> tuple[Path, Path]:
     """
     Evaluate a specific variant and save outputs to timestamped files.
@@ -443,6 +447,7 @@ def evaluate_variant(
         variant_id: Variant identifier (e.g., "001")
         model_name: Model name to use for consistency checking
         programming_language: Programming language (auto-detected if None)
+        reasoning_effort: Reasoning effort level for the model (default: "medium")
 
     Returns:
         tuple of (result_file_path, trace_file_path)
@@ -451,7 +456,7 @@ def evaluate_variant(
 
     # Run evaluation
     result, traces, run_id = evaluate_exercise(
-        variant_exercise_path, model_name, programming_language
+        variant_exercise_path, model_name, programming_language, reasoning_effort=reasoning_effort
     )
 
     # Create output directory for variant
@@ -514,6 +519,12 @@ def main():
         default=1,
         help="Number of times to run each evaluation (default: 1)",
     )
+    parser.add_argument(
+        "--reasoning-effort",
+        default="medium",
+        choices=["low", "medium", "high"],
+        help="Reasoning effort level for the model (default: medium)",
+    )
 
     args = parser.parse_args()
 
@@ -547,7 +558,7 @@ def main():
                         print(f"  Run {run_num + 1}/{args.runs}")
                     try:
                         evaluate_variant(
-                            args.exercise, variant_id, args.model_name, programming_language
+                            args.exercise, variant_id, args.model_name, programming_language, reasoning_effort=args.reasoning_effort
                         )
                     except Exception as e:
                         print(f"Error evaluating variant {variant_id} (run {run_num + 1}): {e}")
@@ -564,7 +575,7 @@ def main():
                 if args.runs > 1:
                     print(f"\n--- Run {run_num + 1}/{args.runs} ---")
                 evaluate_variant(
-                    args.exercise, args.variant, args.model_name, programming_language
+                    args.exercise, args.variant, args.model_name, programming_language, reasoning_effort=args.reasoning_effort
                 )
 
         else:
@@ -581,6 +592,7 @@ def main():
                     model_name=args.model_name,
                     programming_language=programming_language,
                     export_traces=not args.no_traces,
+                    reasoning_effort=args.reasoning_effort,
                 )
 
                 # Save result (legacy format for compatibility)
@@ -623,8 +635,8 @@ def main():
 
     except Exception as e:
         print(f"Error: {e}")
-        if os.environ.get("DEBUG"):
-            traceback.print_exc()
+        traceback.print_exc()
+        # if os.environ.get("DEBUG"):
         return 1
 
     return 0

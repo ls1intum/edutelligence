@@ -21,9 +21,7 @@ langfuse_handler = CallbackHandler()
 
 class ConsistencyCheck:
 
-    def __init__(self, model: str):
-        reasoning_effort="medium"
-    
+    def __init__(self, model: str, reasoning_effort: str = "medium"):
         if model.startswith("openrouter:"):
             self.model = ChatOpenRouter(
                 model=model.replace("openrouter:", ""),
