@@ -102,6 +102,9 @@ jobs:
           # Set up Python path like test_modules.py does
           export PYTHONPATH="$PWD:$PWD/llm_core"
           
+          # Install poetry dependencies to avoid warnings
+          poetry install
+          
           # Run lint_all script which handles prospector installation and execution
           poetry run lint_all || echo "Linting completed with warnings/errors"
         continue-on-error: true

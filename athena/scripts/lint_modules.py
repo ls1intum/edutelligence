@@ -27,6 +27,13 @@ def main():
             os.environ["VIRTUAL_ENV"] = path
             os.environ["PATH"] = os.path.join(path, "bin") + os.pathsep + path_env
 
+            # Install prospector in the module's poetry environment
+            install_result = subprocess.run(["poetry", "run", "pip", "install", "prospector"], cwd=module)
+            if install_result.returncode != 0:
+                print(f"Failed to install prospector in {module}")
+                success = False
+                continue
+
             result = subprocess.run(["poetry", "run", "prospector", "--profile",
                                      os.path.abspath(os.path.join(os.path.dirname(__file__), "../.prospector.yaml"))],
                                     cwd=module)
