@@ -98,7 +98,8 @@ jobs:
             if [ -d "$module/.venv" ]; then
               module_name=$(echo $module | sed 's|modules/||' | sed 's|/|_|g')
               echo "📈 $module:"
-              $module/.venv/bin/python -m coverage report --rcfile=.coveragerc --data-file=".coverage.${module_name}" --show-missing || echo "No coverage data available"
+              # Use the global coverage command to read the module-specific data file
+              poetry run coverage report --rcfile=.coveragerc --data-file=".coverage.${module_name}" --show-missing || echo "No coverage data available"
               echo ""
             fi
           done
@@ -159,12 +160,12 @@ jobs:
           require_tests: true
           require_passed_tests: false
           detailed_summary: true
-      - name: Add Test Results PR Comment
+      - name: Comment test results on PR
         if: github.event_name == 'pull_request'
         uses: actions/github-script@v7
         with:
           script: |
-            const summary = `### 🧪 Athena Test Results Summary\n\n${{ steps.test-report.outputs.summary }}\n\n#### Failing Tests Summary\n\n${{ steps.test-report.outputs.detailed_summary }}`;
+            const summary = `### Athena Test Results Summary\n\n${{ steps.test-report.outputs.summary }}\n\n#### Failing Tests Summary\n\n${{ steps.test-report.outputs.detailed_summary }}`;
             github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -181,6 +182,8 @@ jobs:
             ### 📊 Code Coverage Summary
             
             ${{ steps.code-coverage-summary.outputs.summary }}
+            
+            **Note:** Coverage thresholds: ✔ (≥70%), ❌ (<70%)
             
             📁 **HTML Coverage Reports Available:**
             - Download the `coverage-reports` artifact to view interactive HTML coverage reports

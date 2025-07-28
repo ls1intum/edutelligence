@@ -27,51 +27,16 @@ def main():
             os.environ["VIRTUAL_ENV"] = path
             os.environ["PATH"] = os.path.join(path, "bin") + os.pathsep + path_env
 
-            # Install prospector in the module's poetry environment
-            print(f"Installing prospector in {module}...")
-            
-            # Check if prospector is already available
-            check_result = subprocess.run(["poetry", "run", "which", "prospector"], cwd=module, capture_output=True)
-            if check_result.returncode == 0:
-                print(f"✅ Prospector already available in {module}")
-            else:
-                print(f"Prospector not found in {module}, installing...")
-                
-                # First try to install prospector via pip
-                install_result = subprocess.run(["poetry", "run", "pip", "install", "prospector"], cwd=module, capture_output=True)
-                if install_result.returncode != 0:
-                    print(f"Warning: Failed to install prospector via pip in {module}: {install_result.stderr.decode()}")
-                    print(f"Trying to install via poetry...")
-                    
-                    # Try installing via poetry install (which will install dev dependencies)
-                    poetry_install_result = subprocess.run(["poetry", "install"], cwd=module, capture_output=True)
-                    if poetry_install_result.returncode != 0:
-                        print(f"Warning: Failed to install dependencies in {module}: {poetry_install_result.stderr.decode()}")
-                        print(f"Continuing anyway - prospector might already be available...")
-                    else:
-                        print(f"✅ Successfully installed dependencies in {module}")
-            
-            # Don't fail the entire script for installation issues
-
-            print(f"Running prospector in {module}...")
             result = subprocess.run(["poetry", "run", "prospector", "--profile",
                                      os.path.abspath(os.path.join(os.path.dirname(__file__), "../.prospector.yaml"))],
-                                    cwd=module, capture_output=True)
+                                    cwd=module)
             if result.returncode != 0:
-                print(f"❌ Prospector failed in {module}: {result.stderr.decode()}")
-                print(f"Debug: Command was: poetry run prospector --profile {os.path.abspath(os.path.join(os.path.dirname(__file__), '../.prospector.yaml'))}")
-                print(f"Debug: Working directory: {os.getcwd()}")
-                print(f"Debug: Module directory: {module}")
                 success = False
-            else:
-                print(f"✅ Prospector completed successfully in {module}")
 
     if success:
-        print("🎉 All modules linted successfully!")
         sys.exit(0)
     else:
-        print("❌ Some modules failed linting. Check the output above for details.")
-        sys.exit(1)
+        sys.exit(-1)
 
 
 if __name__ == "__main__":
