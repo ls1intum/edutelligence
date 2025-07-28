@@ -138,6 +138,7 @@ jobs:
           name: coverage-reports
           path: coverage-reports
       - name: Code Coverage Summary
+        id: code-coverage-summary
         uses: irongut/CodeCoverageSummary@v1.3.0
         with:
           filename: coverage-reports/combined_coverage.xml
@@ -160,17 +161,16 @@ jobs:
           detailed_summary: true
       - name: Add Test Results PR Comment
         if: github.event_name == 'pull_request'
-        uses: marocchino/sticky-pull-request-comment@v2
+        uses: actions/github-script@v7
         with:
-          recreate: true
-          message: |
-            ### 🧪 Athena Test Results Summary
-            
-            ${{ steps.test-report.outputs.summary }}
-            
-            #### Failing Tests Summary
-            
-            ${{ steps.test-report.outputs.detailed_summary }}
+          script: |
+            const summary = `### 🧪 Athena Test Results Summary\n\n${{ steps.test-report.outputs.summary }}\n\n#### Failing Tests Summary\n\n${{ steps.test-report.outputs.detailed_summary }}`;
+            github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+              body: summary
+            });
       
       - name: Add Coverage PR Comment
         if: github.event_name == 'pull_request'
@@ -180,7 +180,7 @@ jobs:
           message: |
             ### 📊 Code Coverage Summary
             
-            See the coverage report below for details on test coverage across all modules.
+            ${{ steps.code-coverage-summary.outputs.summary }}
             
             📁 **HTML Coverage Reports Available:**
             - Download the `coverage-reports` artifact to view interactive HTML coverage reports
