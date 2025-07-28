@@ -82,7 +82,9 @@ jobs:
           echo "📊 Generating Combined HTML Coverage Report..."
           echo "============================================="
           poetry run pip install coverage
-          poetry run coverage html --rcfile=.coveragerc --data-file="test-results/combined_coverage.xml" -d test-results/combined_html
+          # Create a combined coverage database from individual .coverage files
+          poetry run coverage combine .coverage.programming_module_programming_llm .coverage.text_module_text_llm .coverage.modeling_module_modeling_llm
+          poetry run coverage html --rcfile=.coveragerc -d test-results/combined_html
           
           # Display combined coverage report in CI
           echo "📊 Combined Coverage Report:"
