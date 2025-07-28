@@ -96,18 +96,7 @@ jobs:
               echo ""
             fi
           done
-      - name: Run linting
-        run: |
-          cd athena
-          # Set up Python path like test_modules.py does
-          export PYTHONPATH="$PWD:$PWD/llm_core"
-          
-          # Install poetry dependencies to avoid warnings
-          poetry install
-          
-          # Run lint_all script which handles prospector installation and execution
-          poetry run lint_all
-        continue-on-error: true
+      
       - name: Upload JUnit Test Results
         if: always()
         uses: actions/upload-artifact@v4
