@@ -4,13 +4,17 @@ from typing import List
 
 class FaqDTO(BaseModel):
     faq_id: int = Field(alias="faqId")
-    course_id: int = Field(alias="courseId")
     question_title: str = Field(alias="questionTitle")
     question_answer: str = Field(alias="questionAnswer")
-    course_name: str = Field(default="", alias="courseName")
-    course_description: str = Field(default="", alias="courseDescription")
-
 
 class FaqRewritingRequest(BaseModel):
-    faqs: List[FaqDTO]
+    user_id: int = Field(alias="userId")
+    course_id: int = Field(alias="courseId")
+    course_name: str = Field(alias="courseName")
     to_be_rewritten: str = Field(alias="toBeRewritten")
+    faqs: List[FaqDTO]
+
+class FaqRewritingResponse(BaseModel):
+    rewritten_text: str = Field(alias="rewrittenText")
+    user_id: int = Field(alias="userId")
+    course_id: int = Field(alias="courseId")
