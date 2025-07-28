@@ -30,8 +30,114 @@ Intersection‑over‑Union (IoU) metric.
 
 import json
 import os
+import re
 from collections import defaultdict, Counter
 from typing import Dict, List, Tuple, Set
+
+
+def analyze_patch_file(patch_path: str) -> Dict:
+    """Analyze a patch file to extract injection location information.
+    
+    Returns information about where changes were made including:
+    - Repository types (solution/template/tests)
+    - File paths and types
+    - Line numbers of changes
+    - Types of changes (additions, deletions, modifications)
+    """
+    if not os.path.isfile(patch_path):
+        return {}
+    
+    try:
+        with open(patch_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+    except Exception:
+        return {}
+    
+    changes = {
+        'repositories': set(),
+        'file_types': Counter(),
+        'changed_files': [],
+        'total_additions': 0,
+        'total_deletions': 0,
+        'total_modifications': 0,
+        'line_ranges': []
+    }
+    
+    # Parse diff sections
+    current_file = None
+    in_hunk = False
+    
+    for line in content.split('\n'):
+        # File header: diff -ruN a/path b/path
+        if line.startswith('diff -ruN'):
+            parts = line.split()
+            if len(parts) >= 4:
+                old_path = parts[2][2:]  # Remove 'a/' prefix
+                new_path = parts[3][2:]  # Remove 'b/' prefix
+                current_file = new_path
+                
+                # Determine repository type
+                if current_file.startswith('solution/'):
+                    changes['repositories'].add('solution')
+                elif current_file.startswith('template/'):
+                    changes['repositories'].add('template')
+                elif current_file.startswith('tests/'):
+                    changes['repositories'].add('tests')
+                elif current_file == 'problem-statement.md' or 'problem-statement' in current_file:
+                    changes['repositories'].add('problem_statement')
+                
+                # Determine file type
+                if current_file.endswith('.java'):
+                    changes['file_types']['java'] += 1
+                elif current_file.endswith('.py'):
+                    changes['file_types']['python'] += 1
+                elif current_file.endswith('.md'):
+                    changes['file_types']['markdown'] += 1
+                else:
+                    changes['file_types']['other'] += 1
+                
+                changes['changed_files'].append(current_file)
+        
+        # Hunk header: @@ -oldstart,oldcount +newstart,newcount @@
+        elif line.startswith('@@'):
+            match = re.match(r'@@ -(\d+),?(\d*) \+(\d+),?(\d*) @@', line)
+            if match:
+                old_start = int(match.group(1))
+                old_count = int(match.group(2)) if match.group(2) else 1
+                new_start = int(match.group(3))
+                new_count = int(match.group(4)) if match.group(4) else 1
+                
+                changes['line_ranges'].append({
+                    'file': current_file,
+                    'old_start': old_start,
+                    'old_count': old_count,
+                    'new_start': new_start,
+                    'new_count': new_count
+                })
+                in_hunk = True
+        
+        # Count additions and deletions within hunks
+        elif in_hunk and line:
+            if line.startswith('+') and not line.startswith('+++'):
+                changes['total_additions'] += 1
+            elif line.startswith('-') and not line.startswith('---'):
+                changes['total_deletions'] += 1
+            elif line.startswith(' '):
+                # Context line, no change
+                pass
+        
+        # End of hunk
+        elif not line.strip():
+            in_hunk = False
+    
+    # Calculate modifications (lines that were changed, not just added/deleted)
+    changes['total_modifications'] = min(changes['total_additions'], changes['total_deletions'])
+    
+    # Convert sets to lists for JSON serialization
+    changes['repositories'] = list(changes['repositories'])
+    changes['file_types'] = dict(changes['file_types'])
+    
+    return changes
 
 
 def unify_model_name(model_name: str) -> str:
@@ -289,11 +395,25 @@ def summarise_dataset(data_dir: str, included_exercises: set = None) -> Dict:
     total number of gold issues, how many issues fall into each category,
     and how many issues involve each artifact type. Issues may reference
     multiple artifacts, so artifact counts are not mutually exclusive.
+    
+    Also analyzes patch files to understand injection locations and patterns.
     """
     course_counts: Dict[str, Dict[str, int]] = {}
     ex_counts: Dict[str, int] = {}
     cat_counts: Counter = Counter()
     artefact_counts: Counter = Counter()
+    
+    # Patch analysis counters
+    injection_repos: Counter = Counter()
+    injection_file_types: Counter = Counter()
+    injection_patterns: Counter = Counter()
+    total_patch_changes = {
+        'additions': 0,
+        'deletions': 0, 
+        'modifications': 0,
+        'files_changed': 0
+    }
+    
     total_variants = 0
     total_issues = 0
     
@@ -317,11 +437,14 @@ def summarise_dataset(data_dir: str, included_exercises: set = None) -> Dict:
             
             for v in os.listdir(var_dir):
                 gt = os.path.join(var_dir, v, f'{v}.json')
+                patch_file = os.path.join(var_dir, v, f'{v}.patch')
+                
                 if os.path.isfile(gt):
                     total_variants += 1
                     ex_counts[ex_key] = ex_counts.get(ex_key, 0) + 1
                     course_counts[course][ex] = course_counts[course].get(ex, 0) + 1
                     
+                    # Analyze gold standard issues
                     data = json.load(open(gt, 'r'))
                     issues = data.get('issues', [])
                     total_issues += len(issues)
@@ -330,6 +453,59 @@ def summarise_dataset(data_dir: str, included_exercises: set = None) -> Dict:
                         types = {loc['type'] for loc in issue.get('related_locations', [])}
                         for t in types:
                             artefact_counts[t] += 1
+                    
+                    # Analyze patch file for injection patterns
+                    if os.path.isfile(patch_file):
+                        patch_analysis = analyze_patch_file(patch_file)
+                        
+                        # Count repository types where injections occurred
+                        for repo in patch_analysis.get('repositories', []):
+                            injection_repos[repo] += 1
+                        
+                        # Count file types affected
+                        for file_type, count in patch_analysis.get('file_types', {}).items():
+                            injection_file_types[file_type] += count
+                        
+                        # Aggregate change statistics
+                        total_patch_changes['additions'] += patch_analysis.get('total_additions', 0)
+                        total_patch_changes['deletions'] += patch_analysis.get('total_deletions', 0)
+                        total_patch_changes['modifications'] += patch_analysis.get('total_modifications', 0)
+                        total_patch_changes['files_changed'] += len(patch_analysis.get('changed_files', []))
+                        
+                        # Classify injection patterns
+                        repos = set(patch_analysis.get('repositories', []))
+                        
+                        if len(repos) == 1:
+                            if 'solution' in repos:
+                                injection_patterns['solution_only'] += 1
+                            elif 'template' in repos:
+                                injection_patterns['template_only'] += 1
+                            elif 'tests' in repos:
+                                injection_patterns['tests_only'] += 1
+                            elif 'problem_statement' in repos:
+                                injection_patterns['problem_statement_only'] += 1
+                        elif len(repos) == 2:
+                            if 'solution' in repos and 'template' in repos:
+                                injection_patterns['solution_template'] += 1
+                            elif 'solution' in repos and 'tests' in repos:
+                                injection_patterns['solution_tests'] += 1
+                            elif 'template' in repos and 'tests' in repos:
+                                injection_patterns['template_tests'] += 1
+                            elif 'solution' in repos and 'problem_statement' in repos:
+                                injection_patterns['solution_problem_statement'] += 1
+                            elif 'template' in repos and 'problem_statement' in repos:
+                                injection_patterns['template_problem_statement'] += 1
+                            elif 'tests' in repos and 'problem_statement' in repos:
+                                injection_patterns['tests_problem_statement'] += 1
+                        elif len(repos) == 3:
+                            if 'problem_statement' in repos:
+                                injection_patterns['multiple_with_problem_statement'] += 1
+                            else:
+                                injection_patterns['solution_template_tests'] += 1
+                        elif len(repos) >= 4:
+                            injection_patterns['all_artifacts'] += 1
+                        else:
+                            injection_patterns['unknown'] += 1
                             
     return {
         'variants_per_course': course_counts,
@@ -337,7 +513,19 @@ def summarise_dataset(data_dir: str, included_exercises: set = None) -> Dict:
         'total_annotated_variants': total_variants,
         'total_issues': total_issues,
         'issues_per_category': dict(cat_counts),
-        'issues_per_artifact': {k: v for k, v in artefact_counts.items()}
+        'issues_per_artifact': {k: v for k, v in artefact_counts.items()},
+        'injection_analysis': {
+            'repositories_affected': dict(injection_repos),
+            'file_types_affected': dict(injection_file_types),
+            'injection_patterns': dict(injection_patterns),
+            'total_changes': total_patch_changes,
+            'avg_changes_per_variant': {
+                'additions': total_patch_changes['additions'] / total_variants if total_variants > 0 else 0,
+                'deletions': total_patch_changes['deletions'] / total_variants if total_variants > 0 else 0,
+                'modifications': total_patch_changes['modifications'] / total_variants if total_variants > 0 else 0,
+                'files_per_variant': total_patch_changes['files_changed'] / total_variants if total_variants > 0 else 0
+            }
+        }
     }
 
 
@@ -437,6 +625,32 @@ def main():
     # print human‑readable summary
     print("\nDataset summary:")
     print(json.dumps(ds_summary, indent=2))
+    
+    # Print injection analysis summary
+    injection_stats = ds_summary.get('injection_analysis', {})
+    if injection_stats:
+        print("\n" + "="*60)
+        print("INJECTION ANALYSIS SUMMARY")
+        print("="*60)
+        
+        print(f"\nTotal variants analyzed: {ds_summary['total_annotated_variants']}")
+        print(f"Total code changes: {injection_stats['total_changes']['additions'] + injection_stats['total_changes']['deletions']}")
+        print(f"Average changes per variant: {injection_stats['avg_changes_per_variant']['additions'] + injection_stats['avg_changes_per_variant']['deletions']:.1f}")
+        
+        print(f"\nRepositories affected:")
+        for repo, count in injection_stats.get('repositories_affected', {}).items():
+            percentage = (count / ds_summary['total_annotated_variants']) * 100
+            print(f"  {repo}: {count} variants ({percentage:.1f}%)")
+        
+        print(f"\nFile types modified:")
+        for file_type, count in injection_stats.get('file_types_affected', {}).items():
+            print(f"  {file_type}: {count} files")
+        
+        print(f"\nInjection patterns:")
+        for pattern, count in injection_stats.get('injection_patterns', {}).items():
+            percentage = (count / ds_summary['total_annotated_variants']) * 100
+            print(f"  {pattern.replace('_', ' ')}: {count} variants ({percentage:.1f}%)")
+    
     print("\nOverall model results:")
     print("Model\tTP\tFP\tFN\tPrec\tRec\tF1\tSpanF1\tIoU\tRuns\tAvgTime(s)\tAvgCost")
     for model_key, res in sorted(results.items()):
