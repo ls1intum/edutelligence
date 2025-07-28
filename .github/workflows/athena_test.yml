@@ -163,7 +163,6 @@ jobs:
         uses: marocchino/sticky-pull-request-comment@v2
         with:
           recreate: true
-          path: all-test-results
           message: |
             ### 🧪 Athena Test Results Summary
             
@@ -178,7 +177,6 @@ jobs:
         uses: marocchino/sticky-pull-request-comment@v2
         with:
           recreate: true
-          path: code-coverage-results.md
           message: |
             ### 📊 Code Coverage Summary
             
