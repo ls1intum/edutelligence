@@ -60,8 +60,9 @@ jobs:
                 echo "Tests failed for $module"
                 overall_success=false
               fi
-              # Generate coverage report for this module in Cobertura format
+              # Generate coverage reports for this module (XML for CI + HTML for viewing)
               $module/.venv/bin/python -m coverage xml --rcfile=.coveragerc --data-file=".coverage.${module_name}" -o test-results/${module_name}_coverage.xml
+              $module/.venv/bin/python -m coverage html --rcfile=.coveragerc --data-file=".coverage.${module_name}" -d test-results/${module_name}_html
             else
               echo "Virtual environment not found for $module, skipping..."
             fi
@@ -77,10 +78,15 @@ jobs:
           echo "============================"
           python3 combine_coverage.py test-results/combined_coverage.xml test-results/programming_module_programming_llm_coverage.xml test-results/text_module_text_llm_coverage.xml test-results/modeling_module_modeling_llm_coverage.xml
           
+          # Generate combined HTML coverage report
+          echo "📊 Generating Combined HTML Coverage Report..."
+          echo "============================================="
+          poetry run pip install coverage
+          poetry run coverage html --rcfile=.coveragerc --data-file="test-results/combined_coverage.xml" -d test-results/combined_html
+          
           # Display combined coverage report in CI
           echo "📊 Combined Coverage Report:"
           echo "============================"
-          poetry run pip install coverage
           python3 combine_coverage.py --summary test-results/combined_coverage.xml test-results/programming_module_programming_llm_coverage.xml test-results/text_module_text_llm_coverage.xml test-results/modeling_module_modeling_llm_coverage.xml
           
           # Display individual coverage reports in CI
@@ -110,6 +116,8 @@ jobs:
           path: |
             athena/test-results/*_coverage.xml
             athena/test-results/combined_coverage.xml
+            athena/test-results/*_html/
+            athena/test-results/combined_html/
   report:
     runs-on: ubuntu-latest
     if: always()
@@ -173,3 +181,8 @@ jobs:
             ### 📊 Code Coverage Summary
             
             See the coverage report below for details on test coverage across all modules.
+            
+            📁 **HTML Coverage Reports Available:**
+            - Download the `coverage-reports` artifact to view interactive HTML coverage reports
+            - Open `combined_html/index.html` in your browser for the complete coverage overview
+            - Individual module reports available in `*_html/index.html` folders
