@@ -168,9 +168,13 @@ def export_langsmith_traces(
         )
         while not runs or not len(runs) == 13:
             if not runs:
-                print(f"No runs found for trace ID {trace_id} in project {project_name}")
+                print(
+                    f"No runs found for trace ID {trace_id} in project {project_name}"
+                )
             else:
-                print(f"Found {len(runs)} runs for trace ID {trace_id} in project {project_name} expected 13")
+                print(
+                    f"Found {len(runs)} runs for trace ID {trace_id} in project {project_name} expected 13"
+                )
             print("Retrying in 1 second...")
             time.sleep(1)
             runs = list(
@@ -180,7 +184,6 @@ def export_langsmith_traces(
                     limit=100,  # Retry with the same limit
                 )
             )
-            
 
         print(f"Found {len(runs)} LangSmith runs for trace {trace_id}")
 
@@ -240,10 +243,10 @@ def create_output_files(
             if trace.get("name") == "consistency_check":
                 consistency_check_run = trace
                 break
-        
+
         if consistency_check_run:
             from dateutil.parser import parse as parse_datetime
-            
+
             def calculate_duration(start_time: str, end_time: str) -> float:
                 try:
                     start = parse_datetime(start_time)
@@ -251,12 +254,12 @@ def create_output_files(
                     return (end - start).total_seconds()
                 except Exception:
                     return 0.0
-            
+
             # Extract statistics
             start_time = consistency_check_run.get("start_time", "")
             end_time = consistency_check_run.get("end_time", "")
             duration = calculate_duration(start_time, end_time)
-            
+
             stats = {
                 "run_id": run_id,
                 "timestamp": result.get("timestamp", timestamp),
@@ -270,9 +273,11 @@ def create_output_files(
                 "total_tokens": consistency_check_run.get("total_tokens", 0),
                 "total_cost": round(consistency_check_run.get("total_cost", 0.0), 6),
                 "prompt_cost": round(consistency_check_run.get("prompt_cost", 0.0), 6),
-                "completion_cost": round(consistency_check_run.get("completion_cost", 0.0), 6),
+                "completion_cost": round(
+                    consistency_check_run.get("completion_cost", 0.0), 6
+                ),
             }
-            
+
             stats_file = output_dir / f"{timestamp}_{run_id}_stats.json"
             with open(stats_file, "w", encoding="utf-8") as f:
                 json.dump(stats, f, indent=2, ensure_ascii=False)
@@ -380,7 +385,9 @@ def evaluate_exercise(
     )
 
     # Initialize consistency checker
-    consistency_checker = ConsistencyCheck(model=model_name, reasoning_effort=reasoning_effort)
+    consistency_checker = ConsistencyCheck(
+        model=model_name, reasoning_effort=reasoning_effort
+    )
 
     # Run consistency check
     response = consistency_checker.check(request)
@@ -456,7 +463,10 @@ def evaluate_variant(
 
     # Run evaluation
     result, traces, run_id = evaluate_exercise(
-        variant_exercise_path, model_name, programming_language, reasoning_effort=reasoning_effort
+        variant_exercise_path,
+        model_name,
+        programming_language,
+        reasoning_effort=reasoning_effort,
     )
 
     # Create output directory for variant
@@ -464,7 +474,9 @@ def evaluate_variant(
     output_dir = base_path / "variants" / variant_id / "outputs"
 
     # Save files
-    result_file, trace_file, stats_file = create_output_files(result, traces, output_dir, run_id)
+    result_file, trace_file, stats_file = create_output_files(
+        result, traces, output_dir, run_id
+    )
 
     print(f"Variant {variant_id} results saved:")
     print(f"  Result: {result_file}")
@@ -558,35 +570,47 @@ def main():
                         print(f"  Run {run_num + 1}/{args.runs}")
                     try:
                         evaluate_variant(
-                            args.exercise, variant_id, args.model_name, programming_language, reasoning_effort=args.reasoning_effort
+                            args.exercise,
+                            variant_id,
+                            args.model_name,
+                            programming_language,
+                            reasoning_effort=args.reasoning_effort,
                         )
                     except Exception as e:
-                        print(f"Error evaluating variant {variant_id} (run {run_num + 1}): {e}")
+                        print(
+                            f"Error evaluating variant {variant_id} (run {run_num + 1}): {e}"
+                        )
                         continue
 
-            print(f"\nCompleted evaluation of {len(variants)} variants with {args.runs} run(s) each")
+            print(
+                f"\nCompleted evaluation of {len(variants)} variants with {args.runs} run(s) each"
+            )
 
         elif args.variant:
             # Evaluate specific variant
             print(f"Evaluating variant {args.variant} for exercise: {args.exercise}")
             print(f"Running {args.runs} time(s)")
-            
+
             for run_num in range(args.runs):
                 if args.runs > 1:
                     print(f"\n--- Run {run_num + 1}/{args.runs} ---")
                 evaluate_variant(
-                    args.exercise, args.variant, args.model_name, programming_language, reasoning_effort=args.reasoning_effort
+                    args.exercise,
+                    args.variant,
+                    args.model_name,
+                    programming_language,
+                    reasoning_effort=args.reasoning_effort,
                 )
 
         else:
             # Evaluate base exercise (backward compatibility)
             print(f"Evaluating base exercise: {args.exercise}")
             print(f"Running {args.runs} time(s)")
-            
+
             for run_num in range(args.runs):
                 if args.runs > 1:
                     print(f"\n--- Run {run_num + 1}/{args.runs} ---")
-                    
+
                 result, traces, run_id = evaluate_exercise(
                     args.exercise,
                     model_name=args.model_name,
@@ -598,7 +622,7 @@ def main():
                 # Save result (legacy format for compatibility)
                 output_dir = Path(__file__).parent / "consistency_results"
                 output_dir.mkdir(exist_ok=True)
-                
+
                 # Include run number in filename for multiple runs
                 if args.runs > 1:
                     base_name = Path(args.output).stem
@@ -613,10 +637,13 @@ def main():
                 # Save traces if available
                 if traces and not args.no_traces:
                     if args.runs > 1:
-                        trace_file = output_dir / f"consistency_traces_{run_id}_run{run_num + 1:02d}.json"
+                        trace_file = (
+                            output_dir
+                            / f"consistency_traces_{run_id}_run{run_num + 1:02d}.json"
+                        )
                     else:
                         trace_file = output_dir / f"consistency_traces_{run_id}.json"
-                        
+
                     trace_data = {
                         "run_id": run_id,
                         "run_number": run_num + 1,

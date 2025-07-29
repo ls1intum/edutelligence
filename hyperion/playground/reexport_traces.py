@@ -6,7 +6,7 @@ Usage:
     cd hyperion
     # Re-export traces for all variants of an exercise
     python playground/reexport_traces.py --exercise "ITP2425/H05E01-Space_Seal_Farm"
-    
+
     # Re-export traces for a specific variant
     python playground/reexport_traces.py --exercise "ITP2425/H05E01-Space_Seal_Farm" --variant "001"
 """
@@ -22,6 +22,7 @@ from typing import Dict, Any, List, Optional
 # Import LangSmith client for trace export
 try:
     from langsmith import Client as LangSmithClient
+
     LANGSMITH_AVAILABLE = True
 except ImportError:
     LANGSMITH_AVAILABLE = False
@@ -63,14 +64,14 @@ def export_langsmith_traces(
 
         # Query runs from LangSmith using the specific trace ID with timeout
         import signal
-        
+
         def timeout_handler(signum, frame):
             raise TimeoutError("LangSmith query timed out")
-        
+
         # Set a 30-second timeout
         signal.signal(signal.SIGALRM, timeout_handler)
         signal.alarm(30)
-        
+
         try:
             runs = list(
                 client.list_runs(
@@ -106,6 +107,7 @@ def export_langsmith_traces(
         print(f"Error exporting LangSmith traces: {e}")
         if os.environ.get("DEBUG"):
             import traceback
+
             traceback.print_exc()
         return []
 
@@ -125,11 +127,11 @@ def create_trace_file(
         # Fallback - just replace "result" with "trace"
         trace_filename = result_filename.replace("_result", "_trace") + ".json"
         stats_filename = result_filename.replace("_result", "_stats") + ".json"
-    
+
     output_dir = result_file_path.parent
     trace_file = output_dir / trace_filename
     stats_file = output_dir / stats_filename
-    
+
     # Create trace file
     run_id = result_data.get("run_id", "unknown")
     trace_data = {
@@ -139,7 +141,7 @@ def create_trace_file(
         "trace_count": len(traces),
         "traces": traces,
     }
-    
+
     with open(trace_file, "w", encoding="utf-8") as f:
         json.dump(trace_data, f, indent=2, ensure_ascii=False)
 
@@ -152,11 +154,11 @@ def create_trace_file(
             if trace.get("name") == "consistency_check":
                 consistency_check_run = trace
                 break
-        
+
         if consistency_check_run:
             try:
                 from dateutil.parser import parse as parse_datetime
-                
+
                 def calculate_duration(start_time: str, end_time: str) -> float:
                     try:
                         start = parse_datetime(start_time)
@@ -164,12 +166,12 @@ def create_trace_file(
                         return (end - start).total_seconds()
                     except Exception:
                         return 0.0
-                
+
                 # Extract statistics
                 start_time = consistency_check_run.get("start_time", "")
                 end_time = consistency_check_run.get("end_time", "")
                 duration = calculate_duration(start_time, end_time)
-                
+
                 stats = {
                     "run_id": run_id,
                     "timestamp": result_data.get("timestamp", ""),
@@ -179,18 +181,26 @@ def create_trace_file(
                     "end_time": end_time,
                     "duration": round(duration, 3),
                     "prompt_tokens": consistency_check_run.get("prompt_tokens", 0),
-                    "completion_tokens": consistency_check_run.get("completion_tokens", 0),
+                    "completion_tokens": consistency_check_run.get(
+                        "completion_tokens", 0
+                    ),
                     "total_tokens": consistency_check_run.get("total_tokens", 0),
-                    "total_cost": round(consistency_check_run.get("total_cost", 0.0), 6),
-                    "prompt_cost": round(consistency_check_run.get("prompt_cost", 0.0), 6),
-                    "completion_cost": round(consistency_check_run.get("completion_cost", 0.0), 6),
+                    "total_cost": round(
+                        consistency_check_run.get("total_cost", 0.0), 6
+                    ),
+                    "prompt_cost": round(
+                        consistency_check_run.get("prompt_cost", 0.0), 6
+                    ),
+                    "completion_cost": round(
+                        consistency_check_run.get("completion_cost", 0.0), 6
+                    ),
                 }
-                
+
                 with open(stats_file, "w", encoding="utf-8") as f:
                     json.dump(stats, f, indent=2, ensure_ascii=False)
-                
+
                 stats_file_created = stats_file
-                
+
             except ImportError:
                 print("Warning: dateutil not available, skipping stats file creation")
             except Exception as e:
@@ -202,50 +212,54 @@ def create_trace_file(
 def process_result_file(result_file_path: Path) -> bool:
     """
     Process a single result file and re-export its traces.
-    
+
     Returns:
         True if successful, False otherwise
     """
     try:
         print(f"\nProcessing: {result_file_path}")
-        
+
         # Load result file
         with open(result_file_path, "r", encoding="utf-8") as f:
             result_data = json.load(f)
-        
+
         # Extract trace ID
         trace_id = result_data.get("langsmith_trace_id")
         if not trace_id:
             print(f"  No trace ID found in {result_file_path}")
             return False
-        
+
         print(f"  Found trace ID: {trace_id}")
-        
+
         # Export traces
         traces = export_langsmith_traces(trace_id)
-        
+
         if not traces:
             print(f"  No traces exported for {trace_id}")
             return False
-        
+
         # Create new trace file
-        trace_file, stats_file = create_trace_file(result_data, traces, result_file_path)
-        
+        trace_file, stats_file = create_trace_file(
+            result_data, traces, result_file_path
+        )
+
         print(f"  ✓ Exported {len(traces)} traces to: {trace_file}")
         if stats_file:
             print(f"  ✓ Created stats file: {stats_file}")
         return True
-        
+
     except Exception as e:
         print(f"  ✗ Error processing {result_file_path}: {e}")
         return False
 
 
-def find_result_files(exercise_path: str, variant_id: Optional[str] = None) -> List[Path]:
+def find_result_files(
+    exercise_path: str, variant_id: Optional[str] = None
+) -> List[Path]:
     """Find all result files for the given exercise and optionally specific variant."""
     base_path = Path(__file__).parent.parent / "data" / exercise_path
     result_files = []
-    
+
     if variant_id:
         # Process specific variant
         variant_dir = base_path / "variants" / variant_id / "outputs"
@@ -258,7 +272,7 @@ def find_result_files(exercise_path: str, variant_id: Optional[str] = None) -> L
         if variants_dir.exists():
             pattern = "*/outputs/*_result.json"
             result_files.extend(variants_dir.glob(pattern))
-    
+
     return sorted(result_files)
 
 
@@ -271,39 +285,42 @@ def main():
     parser.add_argument(
         "--variant", "-v", help="Specific variant ID to process (e.g., '001')"
     )
-    
+
     args = parser.parse_args()
-    
+
     try:
         # Find result files
         result_files = find_result_files(args.exercise, args.variant)
-        
+
         if not result_files:
             print(f"No result files found for exercise: {args.exercise}")
             if args.variant:
                 print(f"Variant: {args.variant}")
             return 1
-        
+
         print(f"Found {len(result_files)} result files to process")
-        
+
         # Process each result file
         success_count = 0
         for result_file in result_files:
             if process_result_file(result_file):
                 success_count += 1
-        
-        print(f"\n✓ Successfully re-exported traces for {success_count}/{len(result_files)} files")
-        
+
+        print(
+            f"\n✓ Successfully re-exported traces for {success_count}/{len(result_files)} files"
+        )
+
         if success_count < len(result_files):
             print(f"✗ Failed to process {len(result_files) - success_count} files")
             return 1
-        
+
         return 0
-        
+
     except Exception as e:
         print(f"Error: {e}")
         if os.environ.get("DEBUG"):
             import traceback
+
             traceback.print_exc()
         return 1
 
