@@ -86,13 +86,10 @@ jobs:
           poetry run coverage combine .coverage.programming_module_programming_llm .coverage.text_module_text_llm .coverage.modeling_module_modeling_llm
           poetry run coverage html --rcfile=.coveragerc -d test-results/combined_html
           
-          # Display combined coverage report in CI
+          # Display combined coverage report in CI and capture for PR comment
           echo "📊 Combined Coverage Report:"
           echo "============================"
-          python3 combine_coverage.py --summary test-results/combined_coverage.xml test-results/programming_module_programming_llm_coverage.xml test-results/text_module_text_llm_coverage.xml test-results/modeling_module_modeling_llm_coverage.xml
-          
-          # Capture the combined coverage table for PR comment
-          python3 combine_coverage.py --summary test-results/combined_coverage.xml test-results/programming_module_programming_llm_coverage.xml test-results/text_module_text_llm_coverage.xml test-results/modeling_module_modeling_llm_coverage.xml > test-results/coverage_table.txt
+          python3 combine_coverage.py --summary test-results/combined_coverage.xml test-results/programming_module_programming_llm_coverage.xml test-results/text_module_text_llm_coverage.xml test-results/modeling_module_modeling_llm_coverage.xml | tee test-results/coverage_table.txt
       
       - name: Upload JUnit Test Results
         if: always()
