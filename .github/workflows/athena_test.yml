@@ -164,23 +164,6 @@ jobs:
               body: summary
             });
       
-      - name: Add Coverage PR Comment
-        if: github.event_name == 'pull_request'
-        uses: marocchino/sticky-pull-request-comment@v2
-        with:
-          recreate: true
-          message: |
-            ### 📊 Code Coverage Summary
-            
-            ${{ steps.code-coverage-summary.outputs.summary }}
-            
-            **Note:** Coverage thresholds: ✅ (≥70%), ❌ (<70%)
-            
-            📁 **HTML Coverage Reports Available:**
-            - Download the `coverage-reports` artifact to view interactive HTML coverage reports
-            - Open `combined_html/index.html` in your browser for the complete coverage overview
-            - Individual module reports available in `*_html/index.html` folders
-      
       - name: Comment Coverage Table on PR
         if: github.event_name == 'pull_request'
         uses: actions/github-script@v7
@@ -190,7 +173,8 @@ jobs:
             const path = require('path');
             
             try {
-              const coverageTablePath = path.join(process.env.GITHUB_WORKSPACE, 'athena', 'test-results', 'coverage_table.txt');
+              // Read from the downloaded artifacts
+              const coverageTablePath = path.join(process.env.GITHUB_WORKSPACE, 'coverage-reports', 'coverage_table.txt');
               
               if (fs.existsSync(coverageTablePath)) {
                 const coverageTable = fs.readFileSync(coverageTablePath, 'utf8');
@@ -215,7 +199,15 @@ jobs:
                   body: comment
                 });
               } else {
-                console.log('Coverage table file not found');
+                console.log('Coverage table file not found at:', coverageTablePath);
+                // List files in the coverage-reports directory for debugging
+                const coverageReportsDir = path.join(process.env.GITHUB_WORKSPACE, 'coverage-reports');
+                if (fs.existsSync(coverageReportsDir)) {
+                  const files = fs.readdirSync(coverageReportsDir);
+                  console.log('Files in coverage-reports:', files);
+                } else {
+                  console.log('coverage-reports directory not found');
+                }
               }
             } catch (error) {
               console.log('Error reading coverage table:', error.message);
