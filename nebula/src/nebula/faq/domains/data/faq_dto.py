@@ -1,16 +1,25 @@
-from pydantic import BaseModel, Field
-from typing import List
+from enum import Enum
 
+from pydantic import BaseModel, Field
+from typing import List, Set
+
+
+class FaqState(Enum):
+    ACCEPTED = "ACCEPTED"
+    REJECTED = "REJECTED"
+    PROPOSED = "PROPOSED"
 
 class FaqDTO(BaseModel):
-    faq_id: int = Field(alias="faqId")
+    faq_id: int = Field(alias="id")
     question_title: str = Field(alias="questionTitle")
     question_answer: str = Field(alias="questionAnswer")
+    categories: Set[str] = Field(default_factory=set)
+    faq_state: FaqState = Field(alias="faqState")
 
-class FaqRewritingRequest(BaseModel):
+
+class FaqRewritingDTO(BaseModel):
     user_id: int = Field(alias="userId")
     course_id: int = Field(alias="courseId")
-    course_name: str = Field(alias="courseName")
     to_be_rewritten: str = Field(alias="toBeRewritten")
     faqs: List[FaqDTO]
 
