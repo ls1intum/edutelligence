@@ -230,7 +230,9 @@ def main():
     # Show summary if requested
     if show_summary:
         print("\n📊 Combined Coverage Summary:")
-        print("=" * 50)
+        print("=" * 80)
+        print(f"{'Package':<60} {'Line Rate':<10} {'Branch Rate':<12} {'Status'}")
+        print("=" * 80)
         total_lines = 0
         total_covered = 0
         total_branches = 0
@@ -240,17 +242,15 @@ def main():
             line_rate = data['line_rate']
             branch_rate = data['branch_rate']
             
-            # Calculate health indicator
-            if line_rate >= 0.8 and branch_rate >= 0.8:
-                health = "✓"
-            elif line_rate >= 0.5 and branch_rate >= 0.5:
-                health = "-"
+            # Calculate health indicator - only two emojis as requested
+            if line_rate >= 0.7 and branch_rate >= 0.7:
+                health = "✅"
             else:
-                health = "✗"
+                health = "❌"
             
-            print(f"{name:<50} {line_rate:>6.1%} {branch_rate:>6.1%} {health}")
+            print(f"{name:<60} {line_rate:>8.1%} {branch_rate:>10.1%} {health}")
         
-        print("=" * 50)
+        print("=" * 80)
         print(f"Total packages: {len(combined)}")
 
 if __name__ == "__main__":

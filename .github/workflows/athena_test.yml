@@ -91,18 +91,8 @@ jobs:
           echo "============================"
           python3 combine_coverage.py --summary test-results/combined_coverage.xml test-results/programming_module_programming_llm_coverage.xml test-results/text_module_text_llm_coverage.xml test-results/modeling_module_modeling_llm_coverage.xml
           
-          # Display individual coverage reports in CI
-          echo "📊 Individual Coverage Reports:"
-          echo "=============================="
-          for module in modules/programming/module_programming_llm modules/text/module_text_llm modules/modeling/module_modeling_llm; do
-            if [ -d "$module/.venv" ]; then
-              module_name=$(echo $module | sed 's|modules/||' | sed 's|/|_|g')
-              echo "📈 $module:"
-              # Use the global coverage command to read the module-specific data file
-              poetry run coverage report --rcfile=.coveragerc --data-file=".coverage.${module_name}" --show-missing || echo "No coverage data available"
-              echo ""
-            fi
-          done
+          # Capture the combined coverage table for PR comment
+          python3 combine_coverage.py --summary test-results/combined_coverage.xml test-results/programming_module_programming_llm_coverage.xml test-results/text_module_text_llm_coverage.xml test-results/modeling_module_modeling_llm_coverage.xml > test-results/coverage_table.txt
       
       - name: Upload JUnit Test Results
         if: always()
@@ -119,6 +109,7 @@ jobs:
           path: |
             athena/test-results/*_coverage.xml
             athena/test-results/combined_coverage.xml
+            athena/test-results/coverage_table.txt
             athena/test-results/*_html/
             athena/test-results/combined_html/
   report:
@@ -183,9 +174,49 @@ jobs:
             
             ${{ steps.code-coverage-summary.outputs.summary }}
             
-            **Note:** Coverage thresholds: ✔ (≥70%), ❌ (<70%)
+            **Note:** Coverage thresholds: ✅ (≥70%), ❌ (<70%)
             
             📁 **HTML Coverage Reports Available:**
             - Download the `coverage-reports` artifact to view interactive HTML coverage reports
             - Open `combined_html/index.html` in your browser for the complete coverage overview
             - Individual module reports available in `*_html/index.html` folders
+      
+      - name: Comment Coverage Table on PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            
+            try {
+              const coverageTablePath = path.join(process.env.GITHUB_WORKSPACE, 'athena', 'test-results', 'coverage_table.txt');
+              
+              if (fs.existsSync(coverageTablePath)) {
+                const coverageTable = fs.readFileSync(coverageTablePath, 'utf8');
+                
+                const comment = `### 📊 Detailed Coverage Table
+            
+            **Note:** Coverage thresholds: ✅ (≥70%), ❌ (<70%)
+            
+            \`\`\`
+            ${coverageTable}
+            \`\`\`
+            
+            📁 **HTML Coverage Reports Available:**
+            - Download the \`coverage-reports\` artifact to view interactive HTML coverage reports
+            - Open \`combined_html/index.html\` in your browser for the complete coverage overview
+            - Individual module reports available in \`*_html/index.html\` folders`;
+                
+                github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: context.payload.pull_request.number,
+                  body: comment
+                });
+              } else {
+                console.log('Coverage table file not found');
+              }
+            } catch (error) {
+              console.log('Error reading coverage table:', error.message);
+            }
