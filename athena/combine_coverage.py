@@ -230,13 +230,9 @@ def main():
     # Show summary if requested
     if show_summary:
         print("\n📊 Combined Coverage Summary:")
-        print("=" * 80)
-        print(f"{'Package':<60} {'Line Rate':<10} {'Branch Rate':<12} {'Status'}")
-        print("=" * 80)
-        total_lines = 0
-        total_covered = 0
-        total_branches = 0
-        total_branch_covered = 0
+        print()
+        print("| Package | Line Rate | Branch Rate | Status |")
+        print("|---------|-----------|-------------|--------|")
         
         for name, data in sorted(combined.items()):
             line_rate = data['line_rate']
@@ -248,10 +244,16 @@ def main():
             else:
                 health = "❌"
             
-            print(f"{name:<60} {line_rate:>8.1%} {branch_rate:>10.1%} {health}")
+            # Format percentages for markdown table
+            line_pct = f"{line_rate:.1%}"
+            branch_pct = f"{branch_rate:.1%}"
+            
+            print(f"| {name} | {line_pct} | {branch_pct} | {health} |")
         
-        print("=" * 80)
-        print(f"Total packages: {len(combined)}")
+        print()
+        print(f"**Total packages:** {len(combined)}")
+        print()
+        print("**Note:** Coverage thresholds: ✅ (≥70%), ❌ (<70%)")
 
 if __name__ == "__main__":
     main() 
