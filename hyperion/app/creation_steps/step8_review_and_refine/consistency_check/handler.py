@@ -21,13 +21,18 @@ langfuse_handler = CallbackHandler()
 
 class ConsistencyCheck:
 
-    def __init__(self, model_name: str):
-        if model_name.startswith("openrouter:"):
+    def __init__(self, model: str, reasoning_effort: str = "medium"):
+        if model.startswith("openrouter:"):
             self.model = ChatOpenRouter(
-                model_name=model_name.replace("openrouter:", ""),
+                model=model.replace("openrouter:", ""),
+                temperature=0,
+                reasoning_effort=reasoning_effort,
             )
         else:
-            self.model = init_chat_model(model_name)
+            self.model = init_chat_model(
+                model,
+                reasoning_effort=reasoning_effort,
+            )
 
     def check(self, request: ConsistencyCheckRequest) -> ConsistencyCheckResponse:
         trace_id = uuid4()
