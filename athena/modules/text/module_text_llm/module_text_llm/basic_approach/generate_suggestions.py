@@ -120,7 +120,7 @@ async def generate_suggestions(
         "problem_statement": exercise.problem_statement or "No problem statement.",
         "grading_instructions": format_grading_instructions(exercise.grading_instructions, exercise.grading_criteria),
         "submission": add_sentence_numbers(submission.text),
-        "feedback_preferences": learner_profile.to_feedback_style_description(),
+        "feedback_preferences": learner_profile.get_prompt(),
         "submission_analysis": submission_analysis.dict()
 
     }
