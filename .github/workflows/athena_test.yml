@@ -13,7 +13,7 @@ on:
       - "athena/**"
       - ".github/workflows/athena_test.yml"
 jobs:
-  test-and-lint:
+  test:
     runs-on: ubuntu-latest
     steps:
       - name: Check out code
@@ -48,13 +48,21 @@ jobs:
           for module in modules/programming/module_programming_llm modules/text/module_text_llm modules/modeling/module_modeling_llm; do
             if [ -d "$module/.venv" ]; then
               echo "Running tests for $module..."
-              # Install pytest in the module's environment
-              $module/.venv/bin/pip install pytest pytest-asyncio
-              # Run tests using the module's environment
-              if ! $module/.venv/bin/python -m pytest tests/$module/mock --junitxml=test-results/${module//\//_}_mock.xml; then
+              # Install pytest and coverage in the module's environment
+              $module/.venv/bin/pip install pytest pytest-asyncio coverage
+              
+              # Extract module name for coverage data file
+              module_name=$(echo $module | sed 's|modules/||' | sed 's|/|_|g')
+              
+              # Run tests with coverage using the module's environment
+              # Coverage will only measure the actual module source code, not test files
+              if ! $module/.venv/bin/python -m coverage run --rcfile=.coveragerc --data-file=".coverage.${module_name}" -m pytest tests/$module/mock --junitxml=test-results/${module_name}_mock.xml; then
                 echo "Tests failed for $module"
                 overall_success=false
               fi
+              # Generate coverage reports for this module (XML for CI + HTML for viewing)
+              $module/.venv/bin/python -m coverage xml --rcfile=.coveragerc --data-file=".coverage.${module_name}" -o test-results/${module_name}_coverage.xml
+              $module/.venv/bin/python -m coverage html --rcfile=.coveragerc --data-file=".coverage.${module_name}" -d test-results/${module_name}_html
             else
               echo "Virtual environment not found for $module, skipping..."
             fi
@@ -64,25 +72,47 @@ jobs:
           if [ "$overall_success" = false ]; then
             exit 1
           fi
-      - name: Run linting
-        run: |
-          cd athena
-          # Set up Python path like test_modules.py does
-          export PYTHONPATH="$PWD:$PWD/llm_core"
           
-          # Run prospector only on the main athena directory to avoid import errors
-          poetry run prospector --profile .prospector.yaml athena/
-        continue-on-error: true
+          # Combine coverage data to avoid duplicates
+          echo "📊 Combining Coverage Data..."
+          echo "============================"
+          python3 combine_coverage.py test-results/combined_coverage.xml test-results/programming_module_programming_llm_coverage.xml test-results/text_module_text_llm_coverage.xml test-results/modeling_module_modeling_llm_coverage.xml
+          
+          # Generate combined HTML coverage report
+          echo "📊 Generating Combined HTML Coverage Report..."
+          echo "============================================="
+          poetry run pip install coverage
+          # Create a combined coverage database from individual .coverage files
+          poetry run coverage combine .coverage.programming_module_programming_llm .coverage.text_module_text_llm .coverage.modeling_module_modeling_llm
+          poetry run coverage html --rcfile=.coveragerc -d test-results/combined_html
+          
+          # Display combined coverage report in CI and capture for PR comment
+          echo "📊 Combined Coverage Report:"
+          echo "============================"
+          python3 combine_coverage.py --summary test-results/combined_coverage.xml test-results/programming_module_programming_llm_coverage.xml test-results/text_module_text_llm_coverage.xml test-results/modeling_module_modeling_llm_coverage.xml | tee test-results/coverage_table.txt
+      
       - name: Upload JUnit Test Results
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: junit-results
-          path: athena/test-results/
+          path: athena/test-results/*_mock.xml
+      
+      - name: Upload Coverage Reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-reports
+          path: |
+            athena/test-results/*_coverage.xml
+            athena/test-results/combined_coverage.xml
+            athena/test-results/coverage_table.txt
+            athena/test-results/*_html/
+            athena/test-results/combined_html/
   report:
     runs-on: ubuntu-latest
     if: always()
-    needs: [test-and-lint]
+    needs: [test]
     steps:
       - name: Check out code
         uses: actions/checkout@v4
@@ -91,11 +121,16 @@ jobs:
         with:
           name: junit-results
           path: all-test-results
+      - name: Download coverage reports
+        uses: actions/download-artifact@v4
+        with:
+          name: coverage-reports
+          path: coverage-reports
       - name: Test Report Summary
         id: test-report
         uses: mikepenz/action-junit-report@v5
         with:
-          report_paths: "all-test-results/**/*.xml"
+          report_paths: "all-test-results/**/*_mock.xml"
           check_name: "Athena Test Report"
           require_tests: true
           require_passed_tests: false
@@ -112,3 +147,43 @@ jobs:
               issue_number: context.payload.pull_request.number,
               body: summary
             });
+      
+      - name: Comment Coverage Table on PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            
+            try {
+              // Read from the downloaded artifacts
+              const coverageTablePath = path.join(process.env.GITHUB_WORKSPACE, 'coverage-reports', 'coverage_table.txt');
+              
+              if (fs.existsSync(coverageTablePath)) {
+                const coverageTable = fs.readFileSync(coverageTablePath, 'utf8');
+                
+                const comment = `### 📊 Detailed Coverage Table
+            
+            ${coverageTable}`;
+                
+                github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: context.payload.pull_request.number,
+                  body: comment
+                });
+              } else {
+                console.log('Coverage table file not found at:', coverageTablePath);
+                // List files in the coverage-reports directory for debugging
+                const coverageReportsDir = path.join(process.env.GITHUB_WORKSPACE, 'coverage-reports');
+                if (fs.existsSync(coverageReportsDir)) {
+                  const files = fs.readdirSync(coverageReportsDir);
+                  console.log('Files in coverage-reports:', files);
+                } else {
+                  console.log('coverage-reports directory not found');
+                }
+              }
+            } catch (error) {
+              console.log('Error reading coverage table:', error.message);
+            }
