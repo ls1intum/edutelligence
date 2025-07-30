@@ -1,10 +1,11 @@
-from module_text_llm.self_consistency import SelfConsistencyConfig
-from pydantic import BaseModel, Field
 from typing import Union
+from pydantic import BaseModel, Field
+
 from athena import config_schema_provider
 
 from module_text_llm.basic_approach import BasicApproachConfig
 from module_text_llm.divide_and_conquer import DivideAndConquerConfig
+from module_text_llm.self_consistency import SelfConsistencyConfig
 
 ApproachConfigUnion = Union[BasicApproachConfig, DivideAndConquerConfig, SelfConsistencyConfig]
 
