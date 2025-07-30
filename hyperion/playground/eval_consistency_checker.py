@@ -19,6 +19,7 @@ Usage:
         --model-name "openai:o4-mini" --variant "001"
 """
 
+import time
 import sys
 import json
 import argparse
@@ -165,51 +166,29 @@ def export_langsmith_traces(
                 limit=100,  # Should be enough for one trace
             )
         )
+        while not runs or not len(runs) == 13:
+            if not runs:
+                print(
+                    f"No runs found for trace ID {trace_id} in project {project_name}"
+                )
+            else:
+                print(
+                    f"Found {len(runs)} runs for trace ID {trace_id} in project {project_name} expected 13"
+                )
+            print("Retrying in 1 second...")
+            time.sleep(1)
+            runs = list(
+                client.list_runs(
+                    project_name=project_name,
+                    trace_id=trace_id,
+                    limit=100,  # Retry with the same limit
+                )
+            )
 
         print(f"Found {len(runs)} LangSmith runs for trace {trace_id}")
 
         # Convert runs to serializable format
-        traces = []
-        for run in runs:
-            try:
-                # Convert run to dict and handle serialization
-                run_dict = {
-                    "id": str(run.id),
-                    "name": run.name,
-                    "run_type": run.run_type,
-                    "start_time": (
-                        run.start_time.isoformat() if run.start_time else None
-                    ),
-                    "end_time": run.end_time.isoformat() if run.end_time else None,
-                    "status": run.status,
-                    "inputs": run.inputs,
-                    "outputs": run.outputs,
-                    "tags": run.tags,
-                    "parent_run_id": (
-                        str(run.parent_run_id) if run.parent_run_id else None
-                    ),
-                    "trace_id": str(run.trace_id) if run.trace_id else None,
-                    "dotted_order": run.dotted_order,
-                    "session_id": str(run.session_id) if run.session_id else None,
-                }
-
-                # Include extra data if available
-                for attr in ["extra", "error", "events"]:
-                    if hasattr(run, attr) and getattr(run, attr):
-                        run_dict[attr] = getattr(run, attr)
-
-                traces.append(run_dict)
-            except Exception as e:
-                print(f"Warning: Could not serialize run {run.id}: {e}")
-                # Add minimal info for failed runs
-                traces.append(
-                    {
-                        "id": str(run.id),
-                        "name": getattr(run, "name", "Unknown"),
-                        "error": f"Serialization failed: {str(e)}",
-                    }
-                )
-
+        traces = [json.loads(run.json()) for run in runs]
         print(f"Successfully exported {len(traces)} traces")
 
         # Print debug info about what we found
@@ -231,8 +210,8 @@ def export_langsmith_traces(
 
 def create_output_files(
     result: Dict[str, Any], traces: List[Dict[str, Any]], output_dir: Path, run_id: str
-) -> tuple[Path, Path]:
-    """Create timestamped output files for results and traces."""
+) -> tuple[Path, Path, Path]:
+    """Create timestamped output files for results, traces, and stats."""
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
     # Create output directory
@@ -255,7 +234,55 @@ def create_output_files(
     with open(trace_file, "w", encoding="utf-8") as f:
         json.dump(trace_data, f, indent=2, ensure_ascii=False)
 
-    return result_file, trace_file
+    # Create stats file from traces
+    stats_file = None
+    if traces:
+        # Find the main consistency_check run
+        consistency_check_run = None
+        for trace in traces:
+            if trace.get("name") == "consistency_check":
+                consistency_check_run = trace
+                break
+
+        if consistency_check_run:
+            from dateutil.parser import parse as parse_datetime
+
+            def calculate_duration(start_time: str, end_time: str) -> float:
+                try:
+                    start = parse_datetime(start_time)
+                    end = parse_datetime(end_time)
+                    return (end - start).total_seconds()
+                except Exception:
+                    return 0.0
+
+            # Extract statistics
+            start_time = consistency_check_run.get("start_time", "")
+            end_time = consistency_check_run.get("end_time", "")
+            duration = calculate_duration(start_time, end_time)
+
+            stats = {
+                "run_id": run_id,
+                "timestamp": result.get("timestamp", timestamp),
+                "commit_id": result.get("commit_id"),
+                "trace_id": consistency_check_run.get("trace_id", ""),
+                "start_time": start_time,
+                "end_time": end_time,
+                "duration": round(duration, 3),
+                "prompt_tokens": consistency_check_run.get("prompt_tokens", 0),
+                "completion_tokens": consistency_check_run.get("completion_tokens", 0),
+                "total_tokens": consistency_check_run.get("total_tokens", 0),
+                "total_cost": round(consistency_check_run.get("total_cost", 0.0), 6),
+                "prompt_cost": round(consistency_check_run.get("prompt_cost", 0.0), 6),
+                "completion_cost": round(
+                    consistency_check_run.get("completion_cost", 0.0), 6
+                ),
+            }
+
+            stats_file = output_dir / f"{timestamp}_{run_id}_stats.json"
+            with open(stats_file, "w", encoding="utf-8") as f:
+                json.dump(stats, f, indent=2, ensure_ascii=False)
+
+    return result_file, trace_file, stats_file
 
 
 def load_exercise_from_dataset(exercise_path: str) -> Dict[str, Any]:
@@ -292,6 +319,7 @@ def evaluate_exercise(
     model_name: str,
     programming_language=None,
     export_traces: bool = True,
+    reasoning_effort: str = "medium",
 ) -> tuple[Dict[str, Any], List[Dict[str, Any]], str]:
     """
     Evaluate consistency for a single exercise.
@@ -301,6 +329,7 @@ def evaluate_exercise(
         model_name: Name of the model to use for consistency checking
         programming_language: Programming language (auto-detected if None)
         export_traces: Whether to export LangSmith traces
+        reasoning_effort: Reasoning effort level for the model (default: "medium")
 
     Returns:
         tuple of (result_dict, traces_list, run_id)
@@ -356,7 +385,9 @@ def evaluate_exercise(
     )
 
     # Initialize consistency checker
-    consistency_checker = ConsistencyCheck(model_name=model_name)
+    consistency_checker = ConsistencyCheck(
+        model=model_name, reasoning_effort=reasoning_effort
+    )
 
     # Run consistency check
     response = consistency_checker.check(request)
@@ -377,6 +408,7 @@ def evaluate_exercise(
         "run_id": run_id,
         "timestamp": start_time.isoformat(),
         "model_name": model_name,
+        "reasoning_effort": reasoning_effort,
         "langsmith_trace_id": langsmith_trace_id,
         "commit_id": commit_id,  # Include git commit ID
         "response": response.model_dump(),
@@ -412,6 +444,7 @@ def evaluate_variant(
     variant_id: str,
     model_name: str,
     programming_language=None,
+    reasoning_effort: str = "medium",
 ) -> tuple[Path, Path]:
     """
     Evaluate a specific variant and save outputs to timestamped files.
@@ -421,6 +454,7 @@ def evaluate_variant(
         variant_id: Variant identifier (e.g., "001")
         model_name: Model name to use for consistency checking
         programming_language: Programming language (auto-detected if None)
+        reasoning_effort: Reasoning effort level for the model (default: "medium")
 
     Returns:
         tuple of (result_file_path, trace_file_path)
@@ -429,7 +463,10 @@ def evaluate_variant(
 
     # Run evaluation
     result, traces, run_id = evaluate_exercise(
-        variant_exercise_path, model_name, programming_language
+        variant_exercise_path,
+        model_name,
+        programming_language,
+        reasoning_effort=reasoning_effort,
     )
 
     # Create output directory for variant
@@ -437,11 +474,15 @@ def evaluate_variant(
     output_dir = base_path / "variants" / variant_id / "outputs"
 
     # Save files
-    result_file, trace_file = create_output_files(result, traces, output_dir, run_id)
+    result_file, trace_file, stats_file = create_output_files(
+        result, traces, output_dir, run_id
+    )
 
     print(f"Variant {variant_id} results saved:")
     print(f"  Result: {result_file}")
     print(f"  Traces: {trace_file} ({len(traces)} traces)")
+    if stats_file:
+        print(f"  Stats: {stats_file}")
 
     return result_file, trace_file
 
@@ -483,6 +524,19 @@ def main():
         action="store_true",
         help="Disable trace export to improve performance",
     )
+    parser.add_argument(
+        "--runs",
+        "-r",
+        type=int,
+        default=1,
+        help="Number of times to run each evaluation (default: 1)",
+    )
+    parser.add_argument(
+        "--reasoning-effort",
+        default="medium",
+        choices=["low", "medium", "high"],
+        help="Reasoning effort level for the model (default: medium)",
+    )
 
     args = parser.parse_args()
 
@@ -507,65 +561,109 @@ def main():
                 return 0
 
             print(f"Found {len(variants)} variants: {', '.join(variants)}")
+            print(f"Running {args.runs} time(s) for each variant")
 
             for variant_id in variants:
                 print(f"\n--- Evaluating variant {variant_id} ---")
-                try:
-                    evaluate_variant(
-                        args.exercise, variant_id, args.model_name, programming_language
-                    )
-                except Exception as e:
-                    print(f"Error evaluating variant {variant_id}: {e}")
-                    continue
+                for run_num in range(args.runs):
+                    if args.runs > 1:
+                        print(f"  Run {run_num + 1}/{args.runs}")
+                    try:
+                        evaluate_variant(
+                            args.exercise,
+                            variant_id,
+                            args.model_name,
+                            programming_language,
+                            reasoning_effort=args.reasoning_effort,
+                        )
+                    except Exception as e:
+                        print(
+                            f"Error evaluating variant {variant_id} (run {run_num + 1}): {e}"
+                        )
+                        continue
 
-            print(f"\nCompleted evaluation of {len(variants)} variants")
+            print(
+                f"\nCompleted evaluation of {len(variants)} variants with {args.runs} run(s) each"
+            )
 
         elif args.variant:
             # Evaluate specific variant
             print(f"Evaluating variant {args.variant} for exercise: {args.exercise}")
-            evaluate_variant(
-                args.exercise, args.variant, args.model_name, programming_language
-            )
+            print(f"Running {args.runs} time(s)")
+
+            for run_num in range(args.runs):
+                if args.runs > 1:
+                    print(f"\n--- Run {run_num + 1}/{args.runs} ---")
+                evaluate_variant(
+                    args.exercise,
+                    args.variant,
+                    args.model_name,
+                    programming_language,
+                    reasoning_effort=args.reasoning_effort,
+                )
 
         else:
             # Evaluate base exercise (backward compatibility)
             print(f"Evaluating base exercise: {args.exercise}")
-            result, traces, run_id = evaluate_exercise(
-                args.exercise,
-                model_name=args.model_name,
-                programming_language=programming_language,
-                export_traces=not args.no_traces,
-            )
+            print(f"Running {args.runs} time(s)")
 
-            # Save result (legacy format for compatibility)
-            output_dir = Path(__file__).parent / "consistency_results"
-            output_dir.mkdir(exist_ok=True)
-            output_file = output_dir / args.output
+            for run_num in range(args.runs):
+                if args.runs > 1:
+                    print(f"\n--- Run {run_num + 1}/{args.runs} ---")
 
-            with open(output_file, "w", encoding="utf-8") as f:
-                json.dump(result, f, indent=2, ensure_ascii=False)
+                result, traces, run_id = evaluate_exercise(
+                    args.exercise,
+                    model_name=args.model_name,
+                    programming_language=programming_language,
+                    export_traces=not args.no_traces,
+                    reasoning_effort=args.reasoning_effort,
+                )
 
-            # Save traces if available
-            if traces and not args.no_traces:
-                trace_file = output_dir / f"consistency_traces_{run_id}.json"
-                trace_data = {
-                    "run_id": run_id,
-                    "timestamp": datetime.now().strftime("%Y%m%d_%H%M%S"),
-                    "commit_id": result.get("commit_id"),  # Include commit ID
-                    "trace_count": len(traces),
-                    "traces": traces,
-                }
-                with open(trace_file, "w", encoding="utf-8") as f:
-                    json.dump(trace_data, f, indent=2, ensure_ascii=False)
-                print(f"Traces saved to: {trace_file}")
+                # Save result (legacy format for compatibility)
+                output_dir = Path(__file__).parent / "consistency_results"
+                output_dir.mkdir(exist_ok=True)
 
-            print(f"Found {len(result['response']['issues'])} issues")
-            print(f"Result saved to: {output_file}")
+                # Include run number in filename for multiple runs
+                if args.runs > 1:
+                    base_name = Path(args.output).stem
+                    ext = Path(args.output).suffix
+                    output_file = output_dir / f"{base_name}_run{run_num + 1:02d}{ext}"
+                else:
+                    output_file = output_dir / args.output
+
+                with open(output_file, "w", encoding="utf-8") as f:
+                    json.dump(result, f, indent=2, ensure_ascii=False)
+
+                # Save traces if available
+                if traces and not args.no_traces:
+                    if args.runs > 1:
+                        trace_file = (
+                            output_dir
+                            / f"consistency_traces_{run_id}_run{run_num + 1:02d}.json"
+                        )
+                    else:
+                        trace_file = output_dir / f"consistency_traces_{run_id}.json"
+
+                    trace_data = {
+                        "run_id": run_id,
+                        "run_number": run_num + 1,
+                        "total_runs": args.runs,
+                        "timestamp": datetime.now().strftime("%Y%m%d_%H%M%S"),
+                        "commit_id": result.get("commit_id"),  # Include commit ID
+                        "trace_count": len(traces),
+                        "traces": traces,
+                    }
+                    with open(trace_file, "w", encoding="utf-8") as f:
+                        json.dump(trace_data, f, indent=2, ensure_ascii=False)
+                    print(f"Traces saved to: {trace_file}")
+
+                print(f"Found {len(result['response']['issues'])} issues")
+                print(f"Result saved to: {output_file}")
 
     except Exception as e:
         print(f"Error: {e}")
-        if os.environ.get("DEBUG"):
-            traceback.print_exc()
+        traceback.print_exc()
+        # if os.environ.get("DEBUG"):
         return 1
 
     return 0
