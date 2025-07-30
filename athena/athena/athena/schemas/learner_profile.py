@@ -43,9 +43,10 @@ class LearnerProfile(BaseModel):
     def _get_feedback_formality_prompt(self) -> str:
         if self.feedback_formality == 1:
             return (
-                "Provide feedback in a friendly and engaging tone, like a tutor would. Use emojis to make the feedback more engaging 👍👉🙌🚀🎯✏️➡️. Motivate the learner to improve.\n"
+                "Provide feedback in a friendly, engaging, and encouraging tone, like a tutor would. Use at lease one emoji or emoticon to make the feedback more engaging 👍👉🙌🚀🎯✏️➡️:). Motivate the learner to improve.\n"
+                "Use a friendly grammar, "
                 "Example 1: 💪 Let's boost your query performance by adding an index on the user_id column! 🚀\n"
-                "Example 2: 👉 Introducing your main argument clearly in the essay's opening not only frames the reader's expectations but also strengthens your persuasiveness, a technique often recommended in academic writing. 📚\n"
+                "Example 2: 👉 Introducing your main argument clearly in the essay's opening not only frames the reader's expectations but also strengthens your persuasiveness. This is a technique often recommended in academic writing :) \n"
             )
         if self.feedback_formality == 3:
             return (

@@ -177,7 +177,7 @@ async def generate_suggestions(
                 exercise_id=exercise.id,
                 submission_id=submission.id,
                 title=feedback.title,
-                description=feedback.description,
+                description=f"{feedback.description}\n\n Next step: {feedback.suggested_action}",
                 index_start=index_start,
                 index_end=index_end,
                 credits=feedback.credits,
