@@ -375,9 +375,9 @@ def feedback_provider(func: Union[
         filtered_kwargs = {k: v for k, v in kwargs.items() if k in accepted_params}
 
         # Log warning for any extra provided (not supported by the module)
-        for k in all_possible_kwargs.keys():
-            if k not in accepted_params and all_possible_kwargs[k] is not None:
-                logger.warning(f"{func.__name__}: Received unexpected argument '{k}' (value: {all_possible_kwargs[k]}), but this module does not support it. Ignoring.")
+        for k, v in all_possible_kwargs.items():
+            if k not in accepted_params and v is not None:
+                logger.warning("%s: Received unexpected argument '%s' (value: %s), but this module does not support it. Ignoring.", func.__name__, k, v)
 
         # Call the actual provider
         if inspect.iscoroutinefunction(func):

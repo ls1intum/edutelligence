@@ -71,7 +71,7 @@ async def suggest_feedback(
     return await generate_suggestions(
         exercise,
         submission,
-        module_config.approach,
+        config=module_config.approach,
         debug=module_config.debug,
         is_graded=is_graded,
         learner_profile=learner_profile,
