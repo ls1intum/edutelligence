@@ -89,7 +89,7 @@ cp .env.example .env
 **OpenAI:**
 
 ```env
-MODEL_NAME=gpt-4o-mini
+MODEL_NAME=openai:o4-mini
 OPENAI_API_KEY=your_openai_api_key_here
 ```
 
@@ -105,14 +105,14 @@ OPENAI_API_VERSION=2024-02-15-preview
 **Ollama (Local):**
 
 ```env
-MODEL_NAME=ollama:llama3.1:8b
+MODEL_NAME=ollama:deekseek-r1:70b
 OLLAMA_HOST=http://localhost:11434
 ```
 
 **OpenRouter:**
 
 ```env
-MODEL_NAME=openrouter:meta-llama/llama-3.1-8b-instruct
+MODEL_NAME=openrouter:google/gemini-2.5-flash
 OPENROUTER_API_KEY=sk-or-v1-your_api_key_here
 ```
 
