@@ -20,11 +20,11 @@ class ChatOpenWebUI(ChatOpenAI):
         openai_api_key = openai_api_key or settings.OPENWEBUI_API_KEY
         base_url = settings.OPENWEBUI_BASE_URL
         if base_url:
-            if not base_url.endswith('/'):
-                base_url += '/'
-            if not base_url.endswith('v1/'):
-                base_url += 'v1/'
-        
+            if not base_url.endswith("/"):
+                base_url += "/"
+            if not base_url.endswith("v1/"):
+                base_url += "v1/"
+
         super().__init__(
             base_url=base_url or "http://localhost:8080/ollama/v1/",
             openai_api_key=openai_api_key,
