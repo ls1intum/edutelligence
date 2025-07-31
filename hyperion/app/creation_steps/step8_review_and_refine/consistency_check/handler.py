@@ -1,10 +1,9 @@
 from typing import Dict, List
 from uuid import uuid4
-from langchain.chat_models import init_chat_model
 from langchain_core.runnables import RunnableParallel, RunnableLambda
 from langfuse.callback import CallbackHandler
 
-from app.models.openrouter import ChatOpenRouter
+from app.models import init_hyperion_chat_model
 
 from .models import (
     Metadata,
@@ -22,17 +21,10 @@ langfuse_handler = CallbackHandler()
 class ConsistencyCheck:
 
     def __init__(self, model: str, reasoning_effort: str = "medium"):
-        if model.startswith("openrouter:"):
-            self.model = ChatOpenRouter(
-                model=model.replace("openrouter:", ""),
-                temperature=0,
-                reasoning_effort=reasoning_effort,
-            )
-        else:
-            self.model = init_chat_model(
-                model,
-                reasoning_effort=reasoning_effort,
-            )
+        self.model = init_hyperion_chat_model(
+            model,
+            reasoning_effort=reasoning_effort,
+        )
 
     def check(self, request: ConsistencyCheckRequest) -> ConsistencyCheckResponse:
         trace_id = uuid4()

@@ -14,47 +14,18 @@ class Settings(BaseSettings):
     API_KEY: str = ""
     DISABLE_AUTH: bool = False
 
-    # Model to use prefixed by provider, i.e. "openai:gpt-4o"
+    # Model to use prefixed by provider, i.e. "openai:o4-mini"
     MODEL_NAME: str = ""
-
-    # Non-Azure OpenAI
-    OPENAI_API_KEY: str = ""
-
-    # Azure OpenAI
-    OPENAI_API_VERSION: str = ""
-    AZURE_OPENAI_ENDPOINT: str = ""
-    AZURE_OPENAI_API_KEY: str = ""
-
-    # Ollama settings
-    OLLAMA_BASIC_AUTH_USERNAME: str = ""
-    OLLAMA_BASIC_AUTH_PASSWORD: str = ""
-    OLLAMA_HOST: str = ""
 
     # OpenRouter
     OPENROUTER_API_KEY: str = ""
 
-    LANGFUSE_PUBLIC_KEY: str = ""
-    LANGFUSE_SECRET_KEY: str = ""
-    LANGFUSE_HOST: str = ""
+    # OpenWebUI
+    OPENWEBUI_API_KEY: str = ""
+    OPENWEBUI_BASE_URL: str = ""
 
     # Add a flag for OpenAPI generation mode
     IS_GENERATING_OPENAPI: bool = False
-
-    @property
-    def langfuse_enabled(self):
-        return bool(
-            self.LANGFUSE_PUBLIC_KEY
-            and self.LANGFUSE_SECRET_KEY
-            and self.LANGFUSE_HOST
-            and not self.IS_GENERATING_OPENAPI
-        )
-
-    @field_validator("MODEL_NAME", mode="before")
-    @classmethod
-    def override_model_name(cls, value):
-        if os.getenv("GITHUB_ACTIONS", "").lower() == "true":
-            return "fake:model"
-        return value
 
 
 settings = Settings()

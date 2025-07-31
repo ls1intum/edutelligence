@@ -30,11 +30,8 @@ Hyperion provides an 8-step workflow for creating programming exercises:
 
 ### Installation
 
-#### Poetry
-
-Install Poetry, if you haven't already:
-
 ```bash
+# Install Poetry
 brew install poetry
 ```
 
@@ -49,7 +46,25 @@ poetry install
 
 ## Running the Service
 
-### Development
+### Development with Docker (Recommended)
+
+For hot reloading and the best development experience:
+
+```bash
+# Navigate to docker directory
+cd docker
+
+# Start Hyperion in development mode (omit -d to keep terminal attached)
+docker compose -f compose.local.yaml up -d
+
+# View logs
+docker compose -f compose.local.yaml logs -f hyperion-dev
+
+# Stop the service
+docker compose -f compose.local.yaml down
+```
+
+### Direct Development
 
 ```bash
 poetry run fastapi dev
@@ -61,31 +76,74 @@ poetry run fastapi dev
 poetry run fastapi run
 ```
 
-### Authentication
+## Configuration
 
-Hyperion uses API key authentication for secure access to its endpoints. The API key should be provided in the `X-API-Key` header, if `API_KEY_HEADER` is not set in the environment.
+Copy `.env.example` to `.env` and configure your AI provider:
 
-To set up authentication:
+```bash
+cp .env.example .env
+```
 
-1. Set the `API_KEY` environment variable or in your `.env` file
-2. If not provided, a random API key will be generated at startup
-3. Set `DISABLE_AUTH=true` for development if you want to bypass authentication
+### Supported Providers
+
+**OpenAI:**
+
+```env
+MODEL_NAME=gpt-4o-mini
+OPENAI_API_KEY=your_openai_api_key_here
+```
+
+**Azure OpenAI:**
+
+```env
+MODEL_NAME=azure_openai:your-deployment-name
+AZURE_OPENAI_ENDPOINT=https://your-resource.openai.azure.com/
+AZURE_OPENAI_API_KEY=your_azure_api_key_here
+OPENAI_API_VERSION=2024-02-15-preview
+```
+
+**Ollama (Local):**
+
+```env
+MODEL_NAME=ollama:llama3.1:8b
+OLLAMA_HOST=http://localhost:11434
+```
+
+**OpenRouter:**
+
+```env
+MODEL_NAME=openrouter:meta-llama/llama-3.1-8b-instruct
+OPENROUTER_API_KEY=sk-or-v1-your_api_key_here
+```
+
+**OpenWebUI:**
+
+```env
+MODEL_NAME=openwebui:deepseek-r1:70b
+OPENWEBUI_BASE_URL=https://gpu.aet.cit.tum.de/ollama/
+OPENWEBUI_API_KEY=sk-your-api-key-here
+```
+
+**Development Settings:**
+
+```env
+DISABLE_AUTH=true  # For development only
+API_KEY=your-api-key  # For production
+```
 
 ## Usage
 
 After running the application, you can access the FastAPI API documentation at `http://127.0.0.1:8000/docs` or `http://127.0.0.1:8000/redoc`.
 
-## Generate OpenAPI YAML
+## Development
 
-To generate the OpenAPI YAML file, run the following command:
+### Generate OpenAPI YAML
 
 ```bash
 poetry run openapi
 ```
 
-## Synching OpenAPI Spec with Artemis
-
-To synchronize the OpenAPI specification with Artemis, you can use the following command:
+### Sync OpenAPI Spec with Artemis
 
 ```bash
 poetry run sync-openapi-artemis

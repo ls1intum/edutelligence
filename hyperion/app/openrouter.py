@@ -1,8 +1,8 @@
 from typing import Optional
-
+from pydantic import Field, SecretStr
 from langchain_core.utils.utils import secret_from_env
 from langchain_openai import ChatOpenAI
-from pydantic import Field, SecretStr
+
 from app.settings import settings
 
 
