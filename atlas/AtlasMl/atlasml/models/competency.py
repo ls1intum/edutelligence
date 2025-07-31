@@ -16,24 +16,12 @@ class Competency(BaseModel):
     id: str
     title: str
     description: str
-    taxonomy: CompetencyTaxonomy
 
 class ExerciseWithCompetencies(BaseModel):
     id: str
     title: str
     description: str
-    competencies: list[Competency]
-
-
-class CompetencyRelationType(str, Enum):  # TOBE DETERMINED LATER
-    SUPERSET = "SUPERSET"
-    SUBSET = "SUBSET"
-
-
-class CompetencyRelation(BaseModel):
-    tail_competency_id: str
-    head_competency_id: str
-    relation_type: CompetencyRelationType
+    competencies: list[str]
 
 
 class GenerateCompetencyRequest(BaseModel):
@@ -47,7 +35,6 @@ class GenerateCompetencyRequestBatch(BaseModel):
 
 class GenerateCompetencyResponse(BaseModel):
     competencies: list[Competency]
-    competency_relations: list[CompetencyRelation]
 
 
 class GenerateEmbeddingsResponse(BaseModel):
@@ -60,12 +47,10 @@ class SuggestCompetencyRequest(BaseModel):
 
 class SuggestCompetencyResponse(BaseModel):
     competencies: list[Competency]
-    competency_relations: list[CompetencyRelation]
-
+    
 
 class SaveCompetencyRequest(BaseModel):
-    id: str
-    description: str
-    competencies: list[Competency]
-    competency_relations: list[CompetencyRelation]
+    competency: Competency | None
+    exercise: ExerciseWithCompetencies | None
+
 

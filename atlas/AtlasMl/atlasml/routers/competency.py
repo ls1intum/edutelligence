@@ -144,7 +144,7 @@ async def delete_embedings(collection_name: str):
 @router.post(
     "/suggest",
     response_model=SuggestCompetencyResponse,
-    dependencies=[Depends(TokenValidator())],
+    dependencies=[],
 )
 async def suggest_competencies(request: SuggestCompetencyRequest):
     pipeline = PipelineWorkflows()
@@ -156,13 +156,16 @@ async def suggest_competencies(request: SuggestCompetencyRequest):
 
 
 @router.post(
-    "/save", response_model=dict, dependencies=[Depends(TokenValidator())]
+    "/save", response_model=dict, dependencies=[]
 )
 async def save_competencies(request: SaveCompetencyRequest):
-    # TODO: @ArdaKaraman call required pipeline with the input you do not need to return anything
-    # TODO: For test purposes you can delete TokenValidator() from dependencies
+    if request.competency:
+        pipeline = PipelineWorkflows()
+        pipeline.save_competency(request.competency)
+    if request.exercise:
+        pipeline = PipelineWorkflows()
+        pipeline.save_exercise(request.exercise)
     return Response(
         status_code=status.HTTP_200_OK,
-        content=b"[]",
         media_type="application/json",
     )

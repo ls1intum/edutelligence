@@ -6,6 +6,10 @@ from atlasml.ml.Clustering.HDBSCAN import apply_hdbscan, SimilarityMetric
 from atlasml.ml.VectorEmbeddings.MainEmbeddingModel import generate_embeddings_openai
 from atlasml.ml.SimilarityMeasurement.Cosine import compute_cosine_similarity
 from atlasml.models.competency import ExerciseWithCompetencies, Competency, CompetencyTaxonomy
+import logging
+
+logger = logging.getLogger(__name__)
+
 
 class PipelineWorkflows:
     def __init__(self, weaviate_client=None):
@@ -13,6 +17,25 @@ class PipelineWorkflows:
             weaviate_client = get_weaviate_client()
         self.weaviate_client = weaviate_client
         self.weaviate_client._ensure_collections_exist()
+
+
+    def save_competency_to_weaviate(self, competency: Competency):
+        embedding = generate_embeddings_openai(competency.description)
+        properties = {
+            "competency_id": competency.id,
+            "title": competency.title,
+            "description": competency.description
+        }
+        self.weaviate_client.add_embeddings(CollectionNames.COMPETENCY.value, embedding, properties)
+
+    def save_exercise_to_weaviate(self, exercise: ExerciseWithCompetencies):
+        embedding = generate_embeddings_openai(exercise.description)
+        properties = {
+            "exercise_id": exercise.id,
+            "description": exercise.description,
+            "competency_ids": exercise.competencies
+        }
+        self.weaviate_client.add_embeddings(CollectionNames.EXERCISE.value, embedding, properties)
 
     def initial_exercises(self, exercises: list[ExerciseWithCompetencies]):
         """Process and store initial text entries in the database.
@@ -31,13 +54,7 @@ class PipelineWorkflows:
             - Its vector embedding
         """
         for exercise in exercises:
-            embedding = generate_embeddings_openai(exercise.description)
-            properties = {
-                "exercise_id": exercise.id,
-                "description": exercise.description,
-                "competency_ids": []
-            }
-            self.weaviate_client.add_embeddings(CollectionNames.EXERCISE.value, embedding, properties)
+            self.save_exercise_to_weaviate(exercise)
 
     def initial_competencies(self, competencies: list[Competency]):
         """Process and store initial competencies in the database.
@@ -61,13 +78,7 @@ class PipelineWorkflows:
                 - vector: Competency embedding
         """
         for competency in competencies:
-            embedding = generate_embeddings_openai(competency.description)
-            properties = {
-                "competency_id": competency.id,
-                "title": competency.title,
-                "description": competency.description
-            }
-            self.weaviate_client.add_embeddings(CollectionNames.COMPETENCY.value, embedding, properties)
+            self.save_competency_to_weaviate(competency)
 
 
     def initial_cluster_to_competency_pipeline(self):
@@ -227,3 +238,43 @@ class PipelineWorkflows:
             taxonomy=CompetencyTaxonomy.UNDERSTAND
         )
         return best_competency
+    
+
+    def save_competency(self, competency: Competency):
+        existing_competency = self.weaviate_client.get_embeddings_by_property(CollectionNames.COMPETENCY.value, "competency_id", competency.id)
+        if existing_competency:
+            assert len(existing_competency) == 1, "Multiple competencies found for the same ID" # TODO: Throw error 
+            competency_to_update = existing_competency[0]
+            embedings = generate_embeddings_openai(competency.description)
+            properties = {
+                "competency_id": competency.id,
+                "title": competency.title,
+                "description": competency.description
+            }
+            self.weaviate_client.update_property_by_id(CollectionNames.COMPETENCY.value, competency_to_update["id"], properties, embedings)
+        else:
+            self.save_competency_to_weaviate(competency)
+
+        
+        self.weaviate_client.delete_all_data_from_collection(CollectionNames.CLUSTERCENTER.value)
+        self.initial_cluster_pipeline()
+        self.initial_cluster_to_competency_pipeline()
+    
+    def save_exercise(self, exercise: ExerciseWithCompetencies):
+        existing_exercise = self.weaviate_client.get_embeddings_by_property(CollectionNames.EXERCISE.value, "exercise_id", exercise.id)
+        if existing_exercise:
+            assert len(existing_exercise) == 1, "Multiple exercises found for the same ID" # TODO: Throw error 
+            exercise_to_update = existing_exercise[0]
+            embedings = generate_embeddings_openai(exercise.description)
+            properties = {
+                "exercise_id": exercise.id,
+                "description": exercise.description,
+                "competency_ids": exercise.competencies
+            }
+            self.weaviate_client.update_property_by_id(CollectionNames.EXERCISE.value, exercise_to_update["id"], properties, embedings)
+        else:
+            self.save_exercise_to_weaviate(exercise)
+
+        self.weaviate_client.delete_all_data_from_collection(CollectionNames.CLUSTERCENTER.value)
+        self.initial_cluster_pipeline()
+        self.initial_cluster_to_competency_pipeline()

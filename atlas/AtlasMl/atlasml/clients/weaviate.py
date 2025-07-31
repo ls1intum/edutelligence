@@ -359,7 +359,7 @@ class WeaviateClient:
         )
         logger.info(f"{collection_name} ---> RECREATED")
 
-    def update_property_by_id(self, collection_name: str, id: str, properties: dict):
+    def update_property_by_id(self, collection_name: str, id: str, properties: dict, vector: list[float] = None):
         """Update a property by ID."""
         self._check_if_collection_exists(collection_name)
         collection = self.client.collections.get(collection_name)
@@ -368,6 +368,7 @@ class WeaviateClient:
             properties={
                 **properties,
             },
+            vector=vector,
         )
         logger.info(f"--- PROPERTY UPDATED IN {collection_name} ---")
 
