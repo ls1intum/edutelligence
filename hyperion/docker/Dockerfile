@@ -34,7 +34,13 @@ COPY hyperion/pyproject.toml hyperion/poetry.lock /app/hyperion/
 WORKDIR /app/hyperion
 
 # Install dependencies (no dev dependencies for production)
-RUN poetry install --only=main --no-root && rm -rf $POETRY_CACHE_DIR
+RUN poetry install --only=main --no-root
+
+# Move the virtual environment to the expected location for easier copying
+RUN mv /opt/poetry_cache/virtualenvs/hyperion-* /app/hyperion/.venv
+
+# Clean up cache now
+RUN rm -rf /opt/poetry_cache
 
 # Production stage
 FROM python:3.13-alpine AS production

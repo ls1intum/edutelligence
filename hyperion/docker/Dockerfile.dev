@@ -39,9 +39,8 @@ COPY hyperion/pyproject.toml hyperion/poetry.lock /app/hyperion/
 # Change to hyperion directory for Poetry install
 WORKDIR /app/hyperion
 
-# Install dependencies globally (simpler for development)
-RUN poetry install --no-root --only=main && \
-    poetry run pip install uvicorn[standard]
+# Install dependencies including dev extras for hot-reload and testing
+RUN poetry install --no-root
 
 # Set Python path
 ENV PYTHONPATH=/app/hyperion:/app \
