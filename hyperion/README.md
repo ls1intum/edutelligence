@@ -4,21 +4,26 @@
 
 ## Features
 
-Hyperion provides an 8-step workflow for creating programming exercises:
+Hyperion is designed to support an 8-step workflow for creating programming exercises, with AI-powered assistance currently available for the final review and refinement stage.
+
+### Currently Available Services
+
+#### Step 8: Review and Refine
+
+- **Consistency Checking**: Analyzes programming exercises for conflicts between problem statements, solution code, and template code to ensure instructional coherence
+- **Problem Statement Rewriting**: Improves and refines exercise descriptions using AI to enhance clarity and pedagogical value
+
+### Future Development
+
+The remaining workflow steps (1-7) are planned for future releases, which will provide comprehensive AI assistance throughout the entire exercise creation process:
 
 1. **Define Boundary Conditions** - Establish exercise constraints and requirements
-2. **Draft Problem Statement** - Generate initial exercise descriptions
+2. **Draft Problem Statement** - Generate initial exercise descriptions  
 3. **Create Solution Repository** - Generate complete solution code
 4. **Create Template Repository** - Generate starter code for students
 5. **Create Test Repository** - Generate automated test cases
 6. **Finalize Problem Statement** - Refine and polish exercise descriptions
 7. **Configure Grading** - Set up automated grading criteria
-8. **Review and Refine** - Check for inconsistencies and improve content
-
-### Available Services
-
-- **Inconsistency Checking**: Analyze exercises for conflicts between problem statements, solution code, template code, and tests
-- **Problem Statement Rewriting**: Improve and refine exercise descriptions using AI
 
 ## Setup
 
