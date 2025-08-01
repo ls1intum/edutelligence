@@ -128,11 +128,8 @@ class TutorSuggestionLecturePipeline(Pipeline):
         Retrieve content from indexed lecture content.
         This will run a RAG retrieval based on the chat history on the indexed lecture slides,
         the indexed lecture transcriptions and the indexed lecture segments,
-        which are summaries of the lecture slide content and lecture transcription content from one slide a
-        nd return the most relevant paragraphs.
-        Use this if you think it can be useful to answer the student's question, or if the student explicitly asks
-        a question about the lecture content or slides.
-        Only use this once.
+        which are summaries of the lecture slide content and lecture transcription content from one slide
+        and return the most relevant paragraphs.
         """
 
         query = f"Return all lecture information about this discussion post {summary}"

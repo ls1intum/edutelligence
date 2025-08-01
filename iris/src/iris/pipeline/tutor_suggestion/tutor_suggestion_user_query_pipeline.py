@@ -93,6 +93,17 @@ class TutorSuggestionUserQueryPipeline(Pipeline):
         communication_dto: CommunicationTutorSuggestionPipelineExecutionDTO = None,
         code_feedback: str = None,
     ):
+        """
+        Run the pipeline to generate an answer for the user query.
+        :param chat_summary: Summary of the chat.
+        :param chat_history: List of messages in the chat history.
+        :param chat_history_without_user_query_str: Chat history without the user query.
+        :param dto: TextExerciseDTO containing problem statement and example solution.
+        :param communication_dto: Communication data transfer object for programming exercises.
+        :param code_feedback: Feedback on the code for programming exercises.
+        :return: A tuple containing the generated answer and a suggestion for changes.
+        :raises: Exception if the answer generation fails.
+        """
 
         answer = ""
         change_suggestion = ""
