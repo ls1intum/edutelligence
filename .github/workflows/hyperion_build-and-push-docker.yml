@@ -19,7 +19,7 @@ jobs:
       matrix:
         include:
           - name: Hyperion
-            dockerfile: ./hyperion/Dockerfile
+            dockerfile: ./hyperion/docker/Dockerfile
             image: ghcr.io/ls1intum/edutelligence/hyperion
             context: .
     uses: ls1intum/.github/.github/workflows/build-and-push-docker-image.yml@feat/minor-build-improvements
