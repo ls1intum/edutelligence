@@ -118,6 +118,9 @@ class TutorSuggestionProgrammingExercisePipeline(Pipeline):
             logger.info(response)
             json = _extract_json_from_text(response)
             try:
+                if json is None:
+                    logger.error("No JSON found in response.")
+                    return "Error: Unable to parse response from language model"
                 result = json.get("result")
             except AttributeError:
                 logger.error("No result found in JSON response.")
