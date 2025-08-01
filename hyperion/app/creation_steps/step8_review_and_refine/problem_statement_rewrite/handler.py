@@ -1,6 +1,6 @@
-from langchain.chat_models import init_chat_model
 from langfuse.callback import CallbackHandler
 
+from app.models import init_hyperion_chat_model
 from .models import RewriteProblemStatementRequest, RewriteProblemStatementResponse
 from .prompts import rewrite_prompt
 
@@ -10,7 +10,7 @@ langfuse_handler = CallbackHandler()
 class ProblemStatementRewrite:
 
     def __init__(self, model_name: str):
-        self.model = init_chat_model(model_name)
+        self.model = init_hyperion_chat_model(model_name)
 
     def rewrite(
         self, request: RewriteProblemStatementRequest
