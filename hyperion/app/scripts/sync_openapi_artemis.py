@@ -119,33 +119,33 @@ def get_artemis_path(config: dict, provided_path: Optional[str] = None) -> Path:
 
 def generate_openapi_spec(dry_run: bool = False) -> bool:
     """Generate the OpenAPI specification from the Hyperion service."""
-    
+
     if dry_run:
         print("🔍 DRY RUN: Would generate OpenAPI specification")
         return True
-    
+
     print("📝 Generating OpenAPI specification...")
-    
+
     try:
         # Get the directory where this script is located (hyperion root)
         hyperion_root = Path(__file__).parent.parent.parent
-        
+
         result = subprocess.run(
             ["poetry", "run", "openapi"],
             cwd=hyperion_root,
             capture_output=True,
             text=True,
-            timeout=30
+            timeout=30,
         )
-        
+
         if result.returncode != 0:
-            print(f"❌ Failed to generate OpenAPI spec")
+            print("❌ Failed to generate OpenAPI spec")
             print(f"Error output: {result.stderr}")
             return False
         else:
-            print(f"✅ OpenAPI specification generated successfully")
+            print("✅ OpenAPI specification generated successfully")
             return True
-        
+
     except subprocess.TimeoutExpired:
         print("❌ OpenAPI generation timed out")
         return False
@@ -156,18 +156,18 @@ def generate_openapi_spec(dry_run: bool = False) -> bool:
 
 def run_gradle_tasks(artemis_path: Path, dry_run: bool = False) -> bool:
     """Run the necessary Gradle tasks in Artemis to generate the client."""
-    
+
     if dry_run:
         print("🔍 DRY RUN: Would run Gradle tasks in Artemis")
         return True
-    
+
     print("🔄 Running Gradle tasks in Artemis...")
-    
+
     try:
         # Generate the Hyperion Java client from the OpenAPI spec
         # The generated code will be compiled automatically when Artemis runs
         tasks = ["generateHyperionJavaClient"]
-        
+
         for task in tasks:
             print(f"   Running: ./gradlew {task}")
             result = subprocess.run(
@@ -175,18 +175,18 @@ def run_gradle_tasks(artemis_path: Path, dry_run: bool = False) -> bool:
                 cwd=artemis_path,
                 capture_output=True,
                 text=True,
-                timeout=60  # 1 minute should be enough for generation
+                timeout=60,  # 1 minute should be enough for generation
             )
-            
+
             if result.returncode != 0:
                 print(f"❌ Failed to run ./gradlew {task}")
                 print(f"Error output: {result.stderr}")
                 return False
             else:
                 print(f"✅ Completed: ./gradlew {task}")
-        
+
         return True
-        
+
     except subprocess.TimeoutExpired:
         print("❌ Gradle task timed out")
         return False
@@ -252,16 +252,16 @@ Examples:
         action="store_true",
         help="Show what would be done without making changes",
     )
-    
+
     parser.add_argument(
         "--no-build",
         action="store_true",
         help="Skip running Gradle tasks (only sync the OpenAPI file)",
     )
-    
+
     parser.add_argument(
         "--no-generate",
-        action="store_true", 
+        action="store_true",
         help="Skip OpenAPI generation and use existing spec file",
     )
 
@@ -303,11 +303,13 @@ Examples:
             else:
                 print()
                 print("🎯 Next Steps:")
-                print("1. Run './gradlew generateHyperionJavaClient' in Artemis to generate client")
+                print(
+                    "1. Run './gradlew generateHyperionJavaClient' in Artemis to generate client"
+                )
                 print("2. Start/restart Artemis to use the updated client")
                 print()
                 print("💡 Tip: Remove --no-build flag to generate client automatically")
-            
+
             print()
             print("✅ Synchronization completed!")
         sys.exit(0)
