@@ -13,12 +13,12 @@ from athena import (
 )
 from athena.text import Exercise, Submission, Feedback
 from athena.logger import logger
+from athena.schemas import LearnerProfile
 
 from module_text_llm.config import Configuration
 from module_text_llm.evaluation import get_feedback_statistics, get_llm_statistics
 from module_text_llm.generate_evaluation import generate_evaluation
 from module_text_llm.approach_controller import generate_suggestions
-from athena.schemas.learner_profile import LearnerProfile
 
 
 @submissions_consumer
@@ -56,9 +56,11 @@ def process_incoming_feedback(
 async def suggest_feedback(
     exercise: Exercise,
     submission: Submission,
-    is_graded: bool,
     module_config: Configuration,
+    *,
+    is_graded: bool,
     learner_profile: Optional[LearnerProfile] = None,
+    latest_submission: Optional[Submission] = None,
 ) -> List[Feedback]:
     logger.info(
         "suggest_feedback: %s suggestions for submission %d of exercise %d were requested, with approach: %s",
@@ -68,12 +70,13 @@ async def suggest_feedback(
         module_config.approach.__class__.__name__,
     )
     return await generate_suggestions(
-        exercise,
-        submission,
-        module_config.approach,
+        exercise=exercise,
+        submission=submission,
+        config=module_config.approach,
         debug=module_config.debug,
         is_graded=is_graded,
         learner_profile=learner_profile,
+        latest_submission=latest_submission,
     )
 
 

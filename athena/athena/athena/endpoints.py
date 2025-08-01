@@ -275,6 +275,8 @@ def feedback_provider(func: Union[
     Callable[[E, S, G, C], Coroutine[Any, Any, List[F]]],
     Callable[[E, S, G, C, LearnerProfile], List[F]],
     Callable[[E, S, G, C, LearnerProfile], Coroutine[Any, Any, List[F]]],
+    Callable[[E, S, G, C, S], List[F]],
+    Callable[[E, S, G, C, S], Coroutine[Any, Any, List[F]]],
 ]):
     """
     Provide feedback to the Assessment Module Manager.
@@ -311,12 +313,22 @@ def feedback_provider(func: Union[
         >>> @feedback_provider
         ... async def async_suggest_feedback_with_profile(exercise: Exercise, submission: Submission, module_config: Optional[dict], learner_profile: Optional[LearnerProfile]):
         ...     # suggest feedback here using module_config and learner_profile and return it as a list
+
+        With previous submission (both synchronous and asynchronous forms):
+        >>> @feedback_provider
+        ... def sync_suggest_feedback_with_config(exercise: Exercise, submission: Submission, module_config: Optional[dict], latest_submission: Optional[Submission]):
+        ...     # suggest feedback here using module_config and return it as a list
+
+        >>> @feedback_provider
+        ... async def async_suggest_feedback_with_config(exercise: Exercise, submission: Submission, module_config: Optional[dict], latest_submission: Optional[Submission]):
+        ...     # suggest feedback here using module_config and return it as a list
     """
     exercise_type = inspect.signature(func).parameters["exercise"].annotation
     submission_type = inspect.signature(func).parameters["submission"].annotation
     module_config_type = inspect.signature(func).parameters["module_config"].annotation if "module_config" in inspect.signature(func).parameters else None
     is_graded_type = inspect.signature(func).parameters["is_graded"].annotation if "is_graded" in inspect.signature(func).parameters else None
     learner_profile_type = inspect.signature(func).parameters["learner_profile"].annotation if "learner_profile" in inspect.signature(func).parameters else None
+    latest_submission_type = inspect.signature(func).parameters["latest_submission"].annotation if "latest_submission" in inspect.signature(func).parameters else None
 
     @app.post("/feedback_suggestions", responses=module_responses)
     @authenticated
@@ -326,6 +338,7 @@ def feedback_provider(func: Union[
             submission: submission_type,
             isGraded: is_graded_type = Body(True, alias="isGraded"),
             learner_profile: learner_profile_type = Body(None, alias="learnerProfile"),
+            latest_submission: latest_submission_type = Body(None, alias="latestSubmission"),
             module_config: module_config_type = Depends(get_dynamic_module_config_factory(module_config_type))):
 
         # Retrieve existing metadata for the exercise, submission and feedback
@@ -335,6 +348,7 @@ def feedback_provider(func: Union[
         store_exercise(exercise)
         store_submissions([submission])
 
+        # Build kwargs for the function
         kwargs = {}
         if "module_config" in inspect.signature(func).parameters:
             kwargs["module_config"] = module_config
@@ -345,11 +359,31 @@ def feedback_provider(func: Union[
         if "learner_profile" in inspect.signature(func).parameters:
             kwargs["learner_profile"] = learner_profile
 
+        if "latest_submission" in inspect.signature(func).parameters:
+            kwargs["latest_submission"] = latest_submission
+
+        # Filter out unexpected kwargs and log warnings
+        accepted_params = set(inspect.signature(func).parameters.keys())
+        all_possible_kwargs = {
+            "module_config": module_config,
+            "is_graded": isGraded,
+            "learner_profile": learner_profile,
+            "latest_submission": latest_submission,
+        }
+
+        # Only pass accepted kwargs
+        filtered_kwargs = {k: v for k, v in kwargs.items() if k in accepted_params}
+
+        # Log warning for any extra provided (not supported by the module)
+        for k, v in all_possible_kwargs.items():
+            if k not in accepted_params and v is not None:
+                logger.warning("%s: Received unexpected argument '%s' (value: %s), but this module does not support it. Ignoring.", func.__name__, k, v)
+
         # Call the actual provider
         if inspect.iscoroutinefunction(func):
-            feedbacks = await func(exercise, submission, **kwargs)
+            feedbacks = await func(exercise, submission, **filtered_kwargs)
         else:
-            feedbacks = func(exercise, submission, **kwargs)
+            feedbacks = func(exercise, submission, **filtered_kwargs)
 
         # Store feedback suggestions and assign internal IDs
         feedbacks = store_feedback_suggestions(feedbacks)
