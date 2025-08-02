@@ -6,7 +6,7 @@ from weaviate.classes.query import Filter
 from weaviate.classes.config import Property
 from weaviate.collections.classes.config import DataType
 
-from atlasml.config import settings
+from atlasml.config import WeaviateSettings, get_settings
 
 
 # If you define all the collections here all the collections will be created
@@ -47,16 +47,14 @@ logger = logging.getLogger(__name__)
 
 
 class WeaviateClient:
-    def __init__(
-        self,
-        host: str = settings.weaviate.host,
-        port: int = settings.weaviate.port,
-        grpc_port: int = settings.weaviate.grpc_port,
-    ):
+    def __init__(self, weaviate_settings: WeaviateSettings = None):
+        if weaviate_settings is None:
+            weaviate_settings = get_settings().weaviate
+            
         self.client = weaviate.connect_to_local(
-            host=host,
-            port=port,
-            grpc_port=grpc_port,
+            host=weaviate_settings.host,
+            port=weaviate_settings.port,
+            grpc_port=weaviate_settings.grpc_port,
         )
 
         self._ensure_collections_exist()
@@ -374,15 +372,35 @@ class WeaviateClient:
 
 class WeaviateClientSingleton:
     _instance = None
+    _settings = None
 
     @classmethod
-    def get_instance(cls) -> WeaviateClient:
+    def get_instance(cls, weaviate_settings: WeaviateSettings = None) -> WeaviateClient:
         """Get a Weaviate client instance using singleton pattern."""
-        if cls._instance is None:
-            cls._instance = WeaviateClient()
+        if weaviate_settings is None:
+            weaviate_settings = get_settings().weaviate
+            
+        # Recreate instance if settings changed
+        if cls._instance is None or cls._settings != weaviate_settings:
+            if cls._instance is not None:
+                cls._instance.close()
+            cls._instance = WeaviateClient(weaviate_settings)
+            cls._settings = weaviate_settings
         return cls._instance
 
 
-def get_weaviate_client() -> WeaviateClient:
+def get_weaviate_settings() -> WeaviateSettings:
+    """Dependency to get Weaviate settings."""
+    return get_settings().weaviate
+
+
+def get_weaviate_client(weaviate_settings: WeaviateSettings = None) -> WeaviateClient:
     """Get a Weaviate client instance using singleton pattern."""
-    return WeaviateClientSingleton.get_instance()
+    return WeaviateClientSingleton.get_instance(weaviate_settings)
+
+
+def create_weaviate_client(weaviate_settings: WeaviateSettings = None) -> WeaviateClient:
+    """Dependency to create a Weaviate client instance."""
+    if weaviate_settings is None:
+        weaviate_settings = get_settings().weaviate
+    return get_weaviate_client(weaviate_settings)
