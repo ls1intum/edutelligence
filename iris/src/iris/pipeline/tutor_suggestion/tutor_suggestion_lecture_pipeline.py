@@ -65,17 +65,8 @@ class TutorSuggestionLecturePipeline(Pipeline):
         Run the pipeline.
         :param dto: execution data transfer object
         """
-        logger.info("Running Tutor Suggestion Lecture Pipeline")
 
-        return self._run_lecture_pipeline(dto, chat_summary)
-
-    def _run_lecture_pipeline(self, dto, summary: str):
-        """
-        Run the pipeline.
-        :param dto: execution data transfer object
-        """
-
-        lecture_content = self.lecture_content_retrieval(dto, summary)
+        lecture_content = self.lecture_content_retrieval(dto, chat_summary)
 
         self.callback.in_progress("Generating suggestions for lecture")
 
@@ -92,7 +83,7 @@ class TutorSuggestionLecturePipeline(Pipeline):
             response = (self.prompt | self.pipeline).invoke(
                 {
                     "lecture_content": lecture_content,
-                    "thread_summary": summary,
+                    "thread_summary": chat_summary,
                 }
             )
             logging.info(response)
