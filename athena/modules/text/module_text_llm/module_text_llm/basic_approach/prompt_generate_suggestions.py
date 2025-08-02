@@ -47,9 +47,9 @@ You will receive:
 Your task:
 - For each core competency create **feedback** of type FeedbackModel that clearly explains the student's performance
     - title: short informative heading
-    - description: student-facing explanation, respectful and constructive. Do not reveal the solution
+    - description: student-facing explanation, respectful and constructive. Do not reveal the solution. {writing_style}
     - type: whether they received full points, need revision, or didn't attempt it. Do not reveal the solution
-    - suggested_action: a specific next step (action) the student should take:
+    - suggested_action: a specific next step (action) the student should take. {writing_style}:
         - Example actions: “Review concept X”, “Improve explanation by doing Y”, “Explore topic Z further”, "Revisit lecture material A"
     - line_start: start line in student's answer, optional if a specific part of the submission is relevant
     - line_end: end line in student's answer, optional if a specific part of the submission is relevant

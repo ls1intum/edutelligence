@@ -121,8 +121,8 @@ async def generate_suggestions(
         "grading_instructions": format_grading_instructions(exercise.grading_instructions, exercise.grading_criteria),
         "submission": add_sentence_numbers(submission.text),
         "feedback_preferences": learner_profile.get_prompt(),
-        "submission_analysis": submission_analysis.dict()
-
+        "submission_analysis": submission_analysis.dict(),
+        "writing_style": learner_profile.get_writing_style_prompt()
     }
 
     second_chat_prompt = get_chat_prompt(
