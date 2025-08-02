@@ -45,7 +45,7 @@ class TutorSuggestionPipeline(Pipeline):
     """
     The TutorSuggestionPipeline creates a tutor suggestion
 
-    when called it uses the post received as an argument to create a suggestion based on the conversation
+    when called, it uses the post received as an argument to create a suggestion based on the conversation
     """
 
     llm: IrisLangchainChatModel
@@ -108,7 +108,7 @@ class TutorSuggestionPipeline(Pipeline):
             is_question_str = summary.get("is_question", "").lower()
             is_question = is_question_str in ["yes", "true", "1"]
             number_of_answers = summary.get("num_answers")
-            summary = summary.get("summary")
+            summary_text = summary.get("summary")
             logger.info(
                 "is_question: %s, num_answers: %s", is_question, number_of_answers
             )
@@ -118,27 +118,10 @@ class TutorSuggestionPipeline(Pipeline):
             return
         is_answered = False
         if is_question and number_of_answers > 0:
-            self.callback.in_progress("Checking if questions is already answered")
-
-            prompt = ChatPromptTemplate.from_messages(
-                [("system", question_answered_prompt())]
-            )
-
-            try:
-                response = (prompt | self.pipeline).invoke({"thread_summary": summary})
-                logger.info(response)
-                self._append_tokens(
-                    self.llm.tokens, PipelineEnum.IRIS_TUTOR_SUGGESTION_PIPELINE
-                )
-            except Exception as e:
-                logger.error("Error checking if question is answered: %s", str(e))
-                response = "no"
-            if "yes" in response.lower():
-                is_answered = True
+            is_answered = self._check_if_answered(summary_text)
 
         channel_type = get_channel_type(dto)
 
-        logging.info(channel_type)
         if channel_type == ChannelType.TEXT_EXERCISE:
             self._run_text_exercise_pipeline(
                 text_exercise_dto=dto.text_exercise,
@@ -150,100 +133,88 @@ class TutorSuggestionPipeline(Pipeline):
         elif channel_type == ChannelType.LECTURE:
             self._run_lecture_pipeline(dto=dto, summary=summary)
         else:
-            self.callback.error("Not implemented yet")
+            # If it's a general or other type of channel, we use the lecture pipeline to handle it as it relies on the
+            # lecture contents.
+            self._run_lecture_pipeline(dto=dto, summary=summary)
 
     def _run_text_exercise_pipeline(
         self, text_exercise_dto: TextExerciseDTO, summary: str, is_answered: bool
     ):
         """
         Run the text exercise pipeline.
-        :param text_exercise_dto: The TextExerciseDTO object containing details about the text exercise.
+        :param text_exercise_dto: The TextExerciseDTO object contains details about the text exercise.
         :param summary: The summary of the post.
         :return: The result of the text exercise pipeline.
         """
-        self.callback.in_progress("Generating suggestions for text exercise")
-        text_exercise_pipeline = TutorSuggestionTextExercisePipeline(
-            variant=self.variant, callback=self.callback
-        )
-        try:
-            logging.info(summary)
-            text_exercise_result, tutor_answer = text_exercise_pipeline(
-                dto=text_exercise_dto,
-                chat_summary=summary,
-                chat_history=self.dto.chat_history,
-                is_answered=is_answered,
-            )
-        except AttributeError as e:
-            self.callback.error(f"Error running text exercise pipeline: {e}")
-            return
-
-        self.callback.done(
-            "Generated tutor suggestions",
-            artifact=text_exercise_result,
-            final_result=tutor_answer,
-            tokens=self.tokens,
+        self._run_pipeline(
+            label="text exercise",
+            pipeline_class=TutorSuggestionTextExercisePipeline,
+            dto=text_exercise_dto,
+            chat_summary=summary,
+            chat_history=self.dto.chat_history,
+            is_answered=is_answered,
         )
 
     def _run_programming_exercise_pipeline(
-        self,
-        dto: CommunicationTutorSuggestionPipelineExecutionDTO,
-        summary: str,
+            self,
+            dto: CommunicationTutorSuggestionPipelineExecutionDTO,
+            summary: str,
     ):
-        """
-        Run the programming exercise pipeline.
-        :param dto: The CommunicationTutorSuggestionPipelineExecutionDTO object containing details about the
-        programming exercise.
-        :param summary: The summary of the post.
-        :return: The result of the programming exercise pipeline.
-        """
-        self.callback.in_progress("Generating suggestions for programming exercise")
-        programming_exercise_pipeline = TutorSuggestionProgrammingExercisePipeline(
-            variant=self.variant, callback=self.callback
-        )
-        try:
-            programming_exercise_result, tutor_answer = programming_exercise_pipeline(
-                dto=dto, chat_summary=summary, chat_history=self.dto.chat_history
-            )
-        except AttributeError as e:
-            self.callback.error(f"Error running programming exercise pipeline: {e}")
-            return
-
-        self.callback.done(
-            "Generated tutor suggestions",
-            artifact=programming_exercise_result,
-            final_result=tutor_answer,
-            tokens=self.tokens,
+        self._run_pipeline(
+            label="programming exercise",
+            pipeline_class=TutorSuggestionProgrammingExercisePipeline,
+            dto=dto,
+            chat_summary=summary,
+            chat_history=self.dto.chat_history,
         )
 
     def _run_lecture_pipeline(
-        self,
-        dto: CommunicationTutorSuggestionPipelineExecutionDTO,
-        summary: str,
+            self,
+            dto: CommunicationTutorSuggestionPipelineExecutionDTO,
+            summary: str,
     ):
-        """
-        Run the lecture pipeline.
-        :param dto: The CommunicationTutorSuggestionPipelineExecutionDTO object containing details about the lecture.
-        :param summary: The summary of the post.
-        :return: The result of the lecture pipeline.
-        """
-        self.callback.in_progress("Generating suggestions for lecture")
-
-        lecture_pipeline = TutorSuggestionLecturePipeline(
-            callback=self.callback, variant=self.variant
+        self._run_pipeline(
+            label="lecture",
+            pipeline_class=TutorSuggestionLecturePipeline,
+            dto=dto,
+            chat_summary=summary,
         )
 
+    def _run_pipeline(self, label: str, pipeline_class, *pipeline_args, **pipeline_kwargs):
+        """
+        Helper method to run a specific pipeline and handle errors.
+        :param label: Label for the pipeline being run.
+        :param pipeline_class: The pipeline class to instantiate and run.
+        :param pipeline_args: Positional arguments for the pipeline.
+        :param pipeline_kwargs: Keyword arguments for the pipeline.
+        """
+        self.callback.in_progress(f"Generating suggestions for {label}")
+        pipeline_instance = pipeline_class(variant=self.variant, callback=self.callback)
         try:
-            lecture_result, tutor_answer = lecture_pipeline(dto=dto, chat_summary=summary)
+            result, tutor_answer = pipeline_instance(*pipeline_args, **pipeline_kwargs)
+            for tokens in getattr(pipeline_instance, "tokens", []):
+                self._append_tokens(tokens, PipelineEnum.IRIS_TUTOR_SUGGESTION_PIPELINE)
         except AttributeError as e:
-            self.callback.error(f"Error running lecture pipeline: {e}")
+            self.callback.error(f"Error running {label} pipeline: {e}")
             return
-
         self.callback.done(
-            "Generated tutor suggestions",
-            artifact=lecture_result,
-            final_result=tutor_answer,
-            tokens=self.tokens,
-        )
+                "Generated tutor suggestions",
+                artifact=result,
+                final_result=tutor_answer,
+                tokens=self.tokens,
+            )
+
+    def _check_if_answered(self, summary: str) -> bool:
+        self.callback.in_progress("Checking if question is already answered")
+        prompt = ChatPromptTemplate.from_messages([("system", question_answered_prompt())])
+        try:
+            response = (prompt | self.pipeline).invoke({"thread_summary": summary})
+            logger.info(response)
+            self._append_tokens(self.llm.tokens, PipelineEnum.IRIS_TUTOR_SUGGESTION_PIPELINE)
+            return "yes" in response.lower()
+        except Exception as e:
+            logger.error("Error checking if question is answered: %s", str(e))
+            return False
 
     @classmethod
     def get_variants(cls, available_llms: List[LanguageModel]) -> List[FeatureDTO]:

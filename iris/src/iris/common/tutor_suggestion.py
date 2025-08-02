@@ -70,10 +70,10 @@ def get_chat_history_without_user_query(chat_history: List[PyrisMessage]) -> str
 
 def extract_html_from_text(text: str):
     html_pattern = re.compile(
-        r"\s*(?P<html>&lt;ul&gt;.*?&lt;/ul&gt;|<ul>.*?</ul>)", re.DOTALL
+        r"(?P<html>(<[^>]+>.*?</[^>]+>)|(&lt;[^&]+&gt;.*?&lt;/[^&]+&gt;))",
+        re.DOTALL
     )
     match = html_pattern.search(text)
-
     if match:
         return match.group("html").strip()
     else:

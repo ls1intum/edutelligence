@@ -126,8 +126,8 @@ class TutorSuggestionTextExercisePipeline(Pipeline):
                     if extracted:
                         html_response = extracted
                     if is_answered:
-                        is_answered_html = """<p class="generated-suggestion-text">I think that the discussion is
-                        already answered before. I suggest marking it as solved. Here are still some suggestions for
+                        is_answered_html = """<p class="generated-suggestion-text">I think that the discussion is \
+                        already answered before. I suggest marking it as solved. Here are still some suggestions for\
                         you:</p>"""
                         is_answered_html = extract_html_from_text(is_answered_html)
                         html_response = is_answered_html + html_response
