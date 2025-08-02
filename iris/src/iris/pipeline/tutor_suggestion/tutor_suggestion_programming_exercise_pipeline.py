@@ -11,7 +11,6 @@ from iris.common.tutor_suggestion import (
     ChannelType,
     extract_html_from_text,
     extract_json_from_text,
-    get_chat_history_without_user_query,
     has_html,
 )
 from iris.domain.communication.communication_tutor_suggestion_pipeline_execution_dto import (
@@ -118,10 +117,6 @@ class TutorSuggestionProgrammingExercisePipeline(Pipeline):
                 ),
             )
 
-        chat_history_str = get_chat_history_without_user_query(
-            chat_history=chat_history,
-        )
-
         if chat_history and chat_history[-1].sender == IrisMessageRole.USER:
             user_query_pipeline = TutorSuggestionUserQueryPipeline(
                 variant=self.variant,
@@ -132,7 +127,6 @@ class TutorSuggestionProgrammingExercisePipeline(Pipeline):
                 communication_dto=dto,
                 chat_summary=chat_summary,
                 chat_history=chat_history,
-                chat_history_without_user_query_str=chat_history_str,
                 code_feedback=code_feedback_response,
             )
 

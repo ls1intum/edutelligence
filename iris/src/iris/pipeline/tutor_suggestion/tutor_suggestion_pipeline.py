@@ -233,7 +233,7 @@ class TutorSuggestionPipeline(Pipeline):
         )
 
         try:
-            lecture_result = lecture_pipeline(dto=dto, chat_summary=summary)
+            lecture_result, tutor_answer = lecture_pipeline(dto=dto, chat_summary=summary)
         except AttributeError as e:
             self.callback.error(f"Error running lecture pipeline: {e}")
             return
@@ -241,6 +241,7 @@ class TutorSuggestionPipeline(Pipeline):
         self.callback.done(
             "Generated tutor suggestions",
             artifact=lecture_result,
+            final_result=tutor_answer,
             tokens=self.tokens,
         )
 

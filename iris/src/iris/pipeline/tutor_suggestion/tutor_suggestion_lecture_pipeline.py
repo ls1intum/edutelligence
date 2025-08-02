@@ -1,4 +1,5 @@
 import logging
+from typing import List
 
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
@@ -6,10 +7,11 @@ from langchain_core.runnables import Runnable
 from langsmith import traceable
 
 from iris.common.pipeline_enum import PipelineEnum
+from iris.common.pyris_message import PyrisMessage, IrisMessageRole
 from iris.common.tutor_suggestion import (
     extract_html_from_text,
     extract_json_from_text,
-    has_html,
+    has_html, ChannelType,
 )
 from iris.domain.communication.communication_tutor_suggestion_pipeline_execution_dto import (
     CommunicationTutorSuggestionPipelineExecutionDTO,
@@ -18,6 +20,7 @@ from iris.llm import CompletionArguments, ModelVersionRequestHandler
 from iris.llm.langchain import IrisLangchainChatModel
 from iris.pipeline import Pipeline
 from iris.pipeline.prompts.tutor_suggestion.lecture_prompt import lecture_prompt
+from iris.pipeline.tutor_suggestion.tutor_suggestion_user_query_pipeline import TutorSuggestionUserQueryPipeline
 from iris.retrieval.lecture.lecture_retrieval import LectureRetrieval
 from iris.vector_database.database import VectorDatabase
 from iris.web.status.status_update import TutorSuggestionCallback
@@ -40,6 +43,7 @@ class TutorSuggestionLecturePipeline(Pipeline):
 
     def __init__(self, callback: TutorSuggestionCallback, variant: str = "default"):
         super().__init__(implementation_id="tutor_suggestion_lecture_pipeline")
+        self.variant = variant
 
         completion_args = CompletionArguments(temperature=0, max_tokens=2000)
 
@@ -62,57 +66,77 @@ class TutorSuggestionLecturePipeline(Pipeline):
         return f"{self.__class__.__name__}(llm={self.llm})"
 
     @traceable(name="Tutor Suggestion Lecture Pipeline")
-    def __call__(self, dto, chat_summary: str):
+    def __call__(
+        self,
+        dto: CommunicationTutorSuggestionPipelineExecutionDTO,
+        chat_summary: str,
+        chat_history: List[PyrisMessage],
+    ):
         """
         Run the pipeline.
         :param dto: execution data transfer object
         """
+        answer = ""
+        change_suggestion = ""
 
         lecture_content = self.lecture_content_retrieval(dto, chat_summary)
 
-        self.callback.in_progress("Generating suggestions for lecture")
 
-        self.prompt = ChatPromptTemplate.from_messages(
-            [
-                (
-                    "system",
-                    lecture_prompt(),
-                ),
-            ]
-        )
-
-        try:
-            response = (self.prompt | self.pipeline).invoke(
-                {
-                    "lecture_content": lecture_content,
-                    "thread_summary": chat_summary,
-                }
+        if chat_history and chat_history[-1].sender == IrisMessageRole.USER:
+            user_query_pipeline = TutorSuggestionUserQueryPipeline(
+                variant=self.variant, callback=self.callback, chat_type=ChannelType.LECTURE
             )
-            logging.info(response)
-            json = extract_json_from_text(response)
+            answer, change_suggestion = user_query_pipeline(
+                communication_dto=dto,
+                chat_summary=chat_summary,
+                chat_history=chat_history,
+            )
+
+        if "NO" not in change_suggestion:
+            self.callback.in_progress("Generating suggestions for lecture")
+
+            self.prompt = ChatPromptTemplate.from_messages(
+                [
+                    (
+                        "system",
+                        lecture_prompt(),
+                    ),
+                ]
+            )
+
             try:
-                result = json.get("result")
-            except AttributeError:
-                logger.error("No result found in JSON response.")
-                return None
-            if has_html(result):
-                html_response = extract_html_from_text(result)
-                self._append_tokens(
-                    self.llm.tokens, PipelineEnum.IRIS_TUTOR_SUGGESTION_PIPELINE
+                response = (self.prompt | self.pipeline).invoke(
+                    {
+                        "lecture_content": lecture_content,
+                        "thread_summary": chat_summary,
+                    }
                 )
-            else:
-                html_response = (
-                    "<p>I was not able to answer this question based on the lecture.</p><br>"
-                    "<p>It seems that the question is too general or not related to this lecture."
-                    "</p>"
-                )
-                self._append_tokens(
-                    self.llm.tokens, PipelineEnum.IRIS_TUTOR_SUGGESTION_PIPELINE
-                )
-            return html_response
-        except Exception as e:
-            logger.error("Error in Tutor Suggestion Lecture Pipeline: %s", e)
-            return "Error generation suggestions for lecture"
+                logging.info(response)
+                json = extract_json_from_text(response)
+                try:
+                    result = json.get("result")
+                except AttributeError:
+                    logger.error("No result found in JSON response.")
+                    return None
+                if has_html(result):
+                    html_response = extract_html_from_text(result)
+                    self._append_tokens(
+                        self.llm.tokens, PipelineEnum.IRIS_TUTOR_SUGGESTION_PIPELINE
+                    )
+                else:
+                    html_response = (
+                        "<p>I was not able to answer this question based on the lecture.</p><br>"
+                        "<p>It seems that the question is too general or not related to this lecture."
+                        "</p>"
+                    )
+                    self._append_tokens(
+                        self.llm.tokens, PipelineEnum.IRIS_TUTOR_SUGGESTION_PIPELINE
+                    )
+                return html_response, answer
+            except Exception as e:
+                logger.error("Error in Tutor Suggestion Lecture Pipeline: %s", e)
+                return "Error generation suggestions for lecture"
+        return None, answer
 
     def lecture_content_retrieval(
         self, dto: CommunicationTutorSuggestionPipelineExecutionDTO, summary: str

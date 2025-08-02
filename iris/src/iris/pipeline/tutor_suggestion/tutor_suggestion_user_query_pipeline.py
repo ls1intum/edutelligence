@@ -11,7 +11,7 @@ from iris.common.tutor_suggestion import (
     ChannelType,
     extract_json_from_text,
     get_last_artifact,
-    get_user_query,
+    get_user_query, get_chat_history_without_user_query,
 )
 from iris.domain.communication.communication_tutor_suggestion_pipeline_execution_dto import (
     CommunicationTutorSuggestionPipelineExecutionDTO,
@@ -20,6 +20,7 @@ from iris.domain.data.text_exercise_dto import TextExerciseDTO
 from iris.llm import CompletionArguments, ModelVersionRequestHandler
 from iris.llm.langchain import IrisLangchainChatModel
 from iris.pipeline import Pipeline
+from iris.pipeline.prompts.tutor_suggestion.lecture_query_prompt import lecture_query_prompt
 from iris.pipeline.prompts.tutor_suggestion.programming_exercise_query_prompt import (
     programming_exercise_query_prompt,
 )
@@ -82,22 +83,26 @@ class TutorSuggestionUserQueryPipeline(Pipeline):
             self.query_prompt_template = ChatPromptTemplate.from_messages(
                 [("system", programming_exercise_query_prompt())]
             )
+        elif chat_type == ChannelType.LECTURE:
+            self.query_prompt_template = ChatPromptTemplate.from_messages(
+                [("system", lecture_query_prompt())]
+            )
+
 
     @traceable(name="Tutor Suggestion User Query Pipeline")
     def __call__(
         self,
         chat_summary: str,
         chat_history: List[PyrisMessage],
-        chat_history_without_user_query_str: str,
         dto: TextExerciseDTO = None,
         communication_dto: CommunicationTutorSuggestionPipelineExecutionDTO = None,
         code_feedback: str = None,
+        lecture_contents: str = "None"
     ):
         """
         Run the pipeline to generate an answer for the user query.
         :param chat_summary: Summary of the chat.
         :param chat_history: List of messages in the chat history.
-        :param chat_history_without_user_query_str: Chat history without the user query.
         :param dto: TextExerciseDTO containing problem statement and example solution.
         :param communication_dto: Communication data transfer object for programming exercises.
         :param code_feedback: Feedback on the code for programming exercises.
@@ -112,12 +117,16 @@ class TutorSuggestionUserQueryPipeline(Pipeline):
         user_query = get_user_query(chat_history=chat_history)
         last_suggestion = get_last_artifact(chat_history=chat_history)
 
+        chat_history_str = get_chat_history_without_user_query(
+            chat_history=chat_history
+        )
+
         base_keys = {
             "user_query": user_query,
             "suggestion": last_suggestion,
             "thread_summary": chat_summary,
-            "chat_history": chat_history_without_user_query_str,
-            "lecture_contents": "",
+            "chat_history": chat_history_str,
+            "lecture_contents": lecture_contents,
         }
         try:
             if self.chat_type == ChannelType.TEXT_EXERCISE:

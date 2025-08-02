@@ -11,8 +11,7 @@ from iris.common.pyris_message import IrisMessageRole, PyrisMessage
 from iris.common.tutor_suggestion import (
     extract_html_from_text,
     extract_json_from_text,
-    get_chat_history_without_user_query,
-    has_html,
+    has_html, get_chat_history_without_user_query,
 )
 from iris.domain.data.text_exercise_dto import TextExerciseDTO
 from iris.llm import CompletionArguments, ModelVersionRequestHandler
@@ -96,7 +95,6 @@ class TutorSuggestionTextExercisePipeline(Pipeline):
                 dto=dto,
                 chat_summary=chat_summary,
                 chat_history=chat_history,
-                chat_history_without_user_query_str=chat_history_str,
             )
 
         if "NO" not in change_suggestion:
