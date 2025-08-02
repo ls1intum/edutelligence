@@ -69,8 +69,7 @@ class TutorSuggestionLecturePipeline(Pipeline):
     def __call__(
         self,
         dto: CommunicationTutorSuggestionPipelineExecutionDTO,
-        chat_summary: str,
-        chat_history: List[PyrisMessage],
+        chat_summary: str
     ):
         """
         Run the pipeline.
@@ -82,14 +81,14 @@ class TutorSuggestionLecturePipeline(Pipeline):
         lecture_content = self.lecture_content_retrieval(dto, chat_summary)
 
 
-        if chat_history and chat_history[-1].sender == IrisMessageRole.USER:
+        if dto.chat_history and dto.chat_history[-1].sender == IrisMessageRole.USER:
             user_query_pipeline = TutorSuggestionUserQueryPipeline(
                 variant=self.variant, callback=self.callback, chat_type=ChannelType.LECTURE
             )
             answer, change_suggestion = user_query_pipeline(
                 communication_dto=dto,
                 chat_summary=chat_summary,
-                chat_history=chat_history,
+                chat_history=dto.chat_history,
             )
 
         if "NO" not in change_suggestion:
@@ -148,6 +147,7 @@ class TutorSuggestionLecturePipeline(Pipeline):
         which are summaries of the lecture slide content and lecture transcription content from one slide
         and return the most relevant paragraphs.
         """
+        self.callback.in_progress("Running lecture content retrieval")
 
         query = (f"I want to understand the following summarized discussion better: {summary}\n. What are the relevant"
                  f" lecture slides, transcriptions and segments that I can use to answer the question?")

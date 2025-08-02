@@ -258,12 +258,20 @@ class TutorSuggestionPipeline(Pipeline):
         """
         variant_specs = [
             (
-                ["gemma3:27b"],
+                [DEFAULT_VARIANT],
                 FeatureDTO(
                     id="default",
                     name="Default",
                     description="Default tutor suggestion variant using Gemma 3 model.",
-                ),
+                )
+            ),
+            (
+                [ADVANCED_VARIANT],
+                FeatureDTO(
+                    id="advanced",
+                    name="Advanced",
+                    description="Advanced tutor suggestion variant using DeepSeek R1 model.",
+                )
             )
         ]
 
