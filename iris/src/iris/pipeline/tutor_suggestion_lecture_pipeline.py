@@ -128,7 +128,8 @@ class TutorSuggestionLecturePipeline(Pipeline):
         Only use this once.
         """
 
-        query = f"Return all lecture information about this discussion post {summary}"
+        query = (f"I want to understand the following summarized discussion better: {summary}\n. What are the relevant"
+                 f" lecture slides, transcriptions and segments that I can use to answer the question?")
         lecture_retrieval = LectureRetrieval(self.db.client)
 
         try:
