@@ -19,8 +19,8 @@ def workflows():
 def test_initial_texts_calls_add_embeddings(workflows):
     # Arrange
     texts = [
-        ExerciseWithCompetencies(id=str(uuid.uuid4()), title="A", description="A", competencies=[]),
-        ExerciseWithCompetencies(id=str(uuid.uuid4()), title="B", description="B", competencies=[])
+        ExerciseWithCompetencies(id=str(uuid.uuid4()), title="A", description="A", competencies=[], course_id="course-1"),
+        ExerciseWithCompetencies(id=str(uuid.uuid4()), title="B", description="B", competencies=[], course_id="course-1")
     ]
     workflows.weaviate_client.add_embeddings = MagicMock()
     with patch("atlasml.ml.pipeline_workflows.generate_embeddings_openai") as mock_embed:
@@ -36,8 +36,8 @@ def test_initial_texts_calls_add_embeddings(workflows):
 
 def test_initial_competencies_calls_add_embeddings(workflows):
     competencies = [
-        Competency(id=str(uuid.uuid4()), title="T1", description="Desc1"),
-        Competency(id=str(uuid.uuid4()), title="T2", description="Desc2"),
+        Competency(id=str(uuid.uuid4()), title="T1", description="Desc1", course_id="course-1"),
+        Competency(id=str(uuid.uuid4()), title="T2", description="Desc2", course_id="course-1"),
     ]
     workflows.weaviate_client.add_embeddings = MagicMock()
     with patch("atlasml.ml.pipeline_workflows.generate_embeddings_openai") as mock_embed:
@@ -101,7 +101,7 @@ def test_newTextPipeline(workflows):
         {"vector": {"default": [0.0, 1.0]}, "properties": {"cluster_id": "1", "label_id": "1",}},
     ])
     workflows.weaviate_client.get_embeddings_by_property = MagicMock(return_value=[
-        {"properties": {"title" : "K0", "description" : "description", "competency_id": "K0", "cluster_id": "K0"}}
+        {"properties": {"title" : "K0", "description" : "description", "competency_id": "K0", "cluster_id": "K0", "course_id": "course-1"}}
     ])
     workflows.weaviate_client.add_embeddings = MagicMock()
     with patch("atlasml.ml.embeddings.generate_embeddings_openai") as mock_embed, \

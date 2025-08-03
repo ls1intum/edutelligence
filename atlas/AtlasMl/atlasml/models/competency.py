@@ -12,6 +12,7 @@ class Competency(BaseModel):
     id: str
     title: str
     description: str
+    course_id: str
 
 
 class ExerciseWithCompetencies(BaseModel):
@@ -19,6 +20,7 @@ class ExerciseWithCompetencies(BaseModel):
     title: str
     description: str
     competencies: list[str]
+    course_id: str
 
 
 class GenerateCompetencyRequest(BaseModel):
@@ -40,6 +42,7 @@ class GenerateEmbeddingsResponse(BaseModel):
 
 class SuggestCompetencyRequest(BaseModel):
     description: str
+    course_id: str
 
 
 class SuggestCompetencyResponse(BaseModel):

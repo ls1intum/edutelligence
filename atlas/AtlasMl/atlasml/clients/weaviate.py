@@ -24,6 +24,7 @@ COLLECTION_SCHEMAS = {
             {"name": "exercise_id", "data_type": DataType.TEXT, "indexFilterable": True, "indexNullState": True},
             {"name": "description", "data_type": DataType.TEXT},
             {"name": "competency_ids", "data_type": DataType.TEXT_ARRAY, "indexFilterable": True},
+            {"name": "course_id", "data_type": DataType.TEXT, "indexFilterable": True},
         ]
     },
     CollectionNames.COMPETENCY.value: {
@@ -33,6 +34,7 @@ COLLECTION_SCHEMAS = {
             {"name": "description", "data_type":  DataType.TEXT},
             {"name": "cluster_id", "data_type": DataType.TEXT, "indexFilterable": True},
             {"name": "cluster_similarity_score", "data_type": DataType.NUMBER},
+            {"name": "course_id", "data_type": DataType.TEXT, "indexFilterable": True},
         ]
     },
     CollectionNames.CLUSTERCENTER.value: {

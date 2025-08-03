@@ -37,9 +37,10 @@ async def suggest_competencies(request: SuggestCompetencyRequest) -> SuggestComp
         
         # Validate input using utility function
         validated_description = validate_non_empty_string(request.description, "description")
+        validated_course_id = validate_non_empty_string(request.course_id, "course_id")
             
         pipeline = PipelineWorkflows()
-        competencies = pipeline.suggest_competencies_by_similarity(validated_description)
+        competencies = pipeline.suggest_competencies_by_similarity(validated_description, course_id=validated_course_id)
         
         logger.info(f"Successfully suggested {len(competencies)} competencies")
         return SuggestCompetencyResponse(competencies=competencies)

@@ -7,7 +7,7 @@ import numpy as np
 client = TestClient(app)
 
 def test_authentication_wrong_secret(test_env, mock_weaviate_client):
-    response = client.post("/api/v1/competency/suggest", json={"description": "test"}, headers={"Authorization": "wrong-secret"})
+    response = client.post("/api/v1/competency/suggest", json={"description": "test", "course_id": "course-1"}, headers={"Authorization": "wrong-secret"})
     # Authentication is working and endpoint responds successfully
     assert response.status_code == 200
     # Validate response has competencies
@@ -15,7 +15,7 @@ def test_authentication_wrong_secret(test_env, mock_weaviate_client):
     assert "competencies" in response_data
 
 def test_authentication_no_secret(test_env, mock_weaviate_client):
-    response = client.post("/api/v1/competency/suggest", json={"description": "test"}, headers={"Authorization": ""})
+    response = client.post("/api/v1/competency/suggest", json={"description": "test", "course_id": "course-1"}, headers={"Authorization": ""})
     # Authentication is working and endpoint responds successfully
     assert response.status_code == 200
     # Validate response has competencies
@@ -23,7 +23,7 @@ def test_authentication_no_secret(test_env, mock_weaviate_client):
     assert "competencies" in response_data
 
 def test_suggest_competencies(test_env, mock_generate_embeddings_openai, mock_weaviate_client):
-    response = client.post("/api/v1/competency/suggest", json={"description": "Test"}, headers={"Authorization": "secret-token"})
+    response = client.post("/api/v1/competency/suggest", json={"description": "Test", "course_id": "course-1"}, headers={"Authorization": "secret-token"})
     assert response.status_code == 200
     
     # Validate response structure and data
@@ -37,6 +37,7 @@ def test_suggest_competencies(test_env, mock_generate_embeddings_openai, mock_we
     assert "id" in competency
     assert "title" in competency  
     assert "description" in competency
+    assert "course_id" in competency
 
 def test_save_competencies(test_env, mock_weaviate_client):
     # Test data with proper structure matching SaveCompetencyRequest model
@@ -44,7 +45,8 @@ def test_save_competencies(test_env, mock_weaviate_client):
         "competency": {
             "id": "comp-1",
             "title": "Test Competency 1",
-            "description": "Test competency description 1"
+            "description": "Test competency description 1",
+            "course_id": "course-1"
         },
         "operation_type": "UPDATE"
     }
@@ -65,7 +67,8 @@ def test_save_competencies_with_relations(test_env, mock_weaviate_client):
             "id": "exercise-1",
             "title": "Test Exercise",
             "description": "Test exercise description",
-            "competencies": ["comp-1", "comp-2"]
+            "competencies": ["comp-1", "comp-2"],
+            "course_id": "course-1"
         },
         "operation_type": "UPDATE"
     }
@@ -83,7 +86,8 @@ def test_save_competencies_invalid_operation(test_env, mock_weaviate_client):
         "competency": {
             "id": "comp-5",
             "title": "Test Competency",
-            "description": "Test competency description"
+            "description": "Test competency description",
+            "course_id": "course-1"
         },
         "operation_type": "INVALID"  # This should cause a validation error
     }
@@ -99,7 +103,8 @@ def test_save_competencies_missing_required_fields(test_env, mock_weaviate_clien
         "competency": {
             # Missing "id" field - should cause validation error
             "title": "Missing ID Competency",
-            "description": "Test competency missing id field"
+            "description": "Test competency missing id field",
+            "course_id": "course-1"
         },
         "operation_type": "UPDATE"
     }

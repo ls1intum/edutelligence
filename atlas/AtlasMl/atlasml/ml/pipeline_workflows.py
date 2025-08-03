@@ -24,7 +24,8 @@ class PipelineWorkflows:
         properties = {
             "competency_id": competency.id,
             "title": competency.title,
-            "description": competency.description
+            "description": competency.description,
+            "course_id": competency.course_id
         }
         self.weaviate_client.add_embeddings(CollectionNames.COMPETENCY.value, embedding, properties)
 
@@ -33,7 +34,8 @@ class PipelineWorkflows:
         properties = {
             "exercise_id": exercise.id,
             "description": exercise.description,
-            "competency_ids": exercise.competencies
+            "competency_ids": exercise.competencies,
+            "course_id": exercise.course_id
         }
         self.weaviate_client.add_embeddings(CollectionNames.EXERCISE.value, embedding, properties)
 
@@ -235,6 +237,7 @@ class PipelineWorkflows:
             id=competency[0]["properties"]["competency_id"],
             title=competency[0]["properties"]["title"],
             description=competency[0]["properties"]["description"],
+            course_id=competency[0]["properties"].get("course_id", "unknown")
         )
         return best_competency
     
@@ -251,7 +254,8 @@ class PipelineWorkflows:
                 properties = {
                     "competency_id": competency.id,
                     "title": competency.title,
-                    "description": competency.description
+                    "description": competency.description,
+                    "course_id": competency.course_id
                 }
                 self.weaviate_client.update_property_by_id(CollectionNames.COMPETENCY.value, competency_to_update["id"], properties, embedings)
             else:
@@ -278,11 +282,12 @@ class PipelineWorkflows:
         else:
             logger.warning(f"Competency with id {competency.id} not found for deletion")
     
-    def suggest_competencies_by_similarity(self, exercise_description: str, top_k: int = 5) -> list[Competency]:
+    def suggest_competencies_by_similarity(self, exercise_description: str, course_id: str, top_k: int = 5) -> list[Competency]:
         """Suggest competencies based on embedding similarity without re-clustering.
         
         Args:
             exercise_description: Description of the exercise to find similar competencies for
+            course_id: Course ID to filter competencies by
             top_k: Number of top similar competencies to return (default: 5)
             
         Returns:
@@ -290,7 +295,7 @@ class PipelineWorkflows:
         """
         exercise_embedding = generate_embeddings_openai(exercise_description)
 
-        all_competencies = self.weaviate_client.get_all_embeddings(CollectionNames.COMPETENCY.value)
+        all_competencies = self.weaviate_client.get_embeddings_by_property(CollectionNames.COMPETENCY.value, "course_id", course_id)
         
         if not all_competencies:
             logger.warning("No competencies found in database")
@@ -304,7 +309,8 @@ class PipelineWorkflows:
             competency = Competency(
                 id=competency_data["properties"]["competency_id"],
                 title=competency_data["properties"]["title"],
-                description=competency_data["properties"]["description"]
+                description=competency_data["properties"]["description"],
+                course_id=competency_data["properties"]["course_id"]
             )
             similarities.append((competency, similarity_score))
         
@@ -326,7 +332,8 @@ class PipelineWorkflows:
                 properties = {
                     "exercise_id": exercise.id,
                     "description": exercise.description,
-                    "competency_ids": exercise.competencies
+                    "competency_ids": exercise.competencies,
+                    "course_id": exercise.course_id
                 }
                 self.weaviate_client.update_property_by_id(CollectionNames.EXERCISE.value, exercise_to_update["id"], properties, embedings)
             else:
