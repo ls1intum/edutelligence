@@ -5,7 +5,7 @@ from atlasml.clients.weaviate import get_weaviate_client, CollectionNames
 from atlasml.ml.Clustering.HDBSCAN import apply_hdbscan, SimilarityMetric
 from atlasml.ml.VectorEmbeddings.MainEmbeddingModel import generate_embeddings_openai
 from atlasml.ml.SimilarityMeasurement.Cosine import compute_cosine_similarity
-from atlasml.models.competency import ExerciseWithCompetencies, Competency, CompetencyTaxonomy
+from atlasml.models.competency import ExerciseWithCompetencies, Competency, OperationType
 import logging
 
 logger = logging.getLogger(__name__)
@@ -235,46 +235,119 @@ class PipelineWorkflows:
             id=competency[0]["properties"]["competency_id"],
             title=competency[0]["properties"]["title"],
             description=competency[0]["properties"]["description"],
-            taxonomy=CompetencyTaxonomy.UNDERSTAND
         )
         return best_competency
     
 
-    def save_competency(self, competency: Competency):
+    def save_competency(self, competency: Competency, operation_type: OperationType = OperationType.UPDATE):
+        if operation_type == OperationType.DELETE:
+            self.delete_competency(competency)
+        else:  # UPDATE operation
+            existing_competency = self.weaviate_client.get_embeddings_by_property(CollectionNames.COMPETENCY.value, "competency_id", competency.id)
+            if existing_competency:
+                assert len(existing_competency) == 1, "Multiple competencies found for the same ID" # TODO: Throw error 
+                competency_to_update = existing_competency[0]
+                embedings = generate_embeddings_openai(competency.description)
+                properties = {
+                    "competency_id": competency.id,
+                    "title": competency.title,
+                    "description": competency.description
+                }
+                self.weaviate_client.update_property_by_id(CollectionNames.COMPETENCY.value, competency_to_update["id"], properties, embedings)
+            else:
+                self.save_competency_to_weaviate(competency)
+
+
+            # Re-cluster after updating competency
+            # self.weaviate_client.delete_all_data_from_collection(CollectionNames.CLUSTERCENTER.value)
+            # self.initial_cluster_pipeline()
+            # self.initial_cluster_to_competency_pipeline()
+
+    def delete_competency(self, competency: Competency):
+        """Delete a competency from Weaviate and trigger re-clustering."""
         existing_competency = self.weaviate_client.get_embeddings_by_property(CollectionNames.COMPETENCY.value, "competency_id", competency.id)
         if existing_competency:
-            assert len(existing_competency) == 1, "Multiple competencies found for the same ID" # TODO: Throw error 
-            competency_to_update = existing_competency[0]
-            embedings = generate_embeddings_openai(competency.description)
-            properties = {
-                "competency_id": competency.id,
-                "title": competency.title,
-                "description": competency.description
-            }
-            self.weaviate_client.update_property_by_id(CollectionNames.COMPETENCY.value, competency_to_update["id"], properties, embedings)
+            assert len(existing_competency) == 1, "Multiple competencies found for the same ID"
+            competency_to_delete = existing_competency[0]
+            self.weaviate_client.delete_by_id(CollectionNames.COMPETENCY.value, competency_to_delete["id"])
+            
+            # Re-cluster after deletion
+            self.weaviate_client.delete_all_data_from_collection(CollectionNames.CLUSTERCENTER.value)
+            self.initial_cluster_pipeline()
+            self.initial_cluster_to_competency_pipeline()
         else:
-            self.save_competency_to_weaviate(competency)
-
-        
-        self.weaviate_client.delete_all_data_from_collection(CollectionNames.CLUSTERCENTER.value)
-        self.initial_cluster_pipeline()
-        self.initial_cluster_to_competency_pipeline()
+            logger.warning(f"Competency with id {competency.id} not found for deletion")
     
-    def save_exercise(self, exercise: ExerciseWithCompetencies):
+    def suggest_competencies_by_similarity(self, exercise_description: str, top_k: int = 5) -> list[Competency]:
+        """Suggest competencies based on embedding similarity without re-clustering.
+        
+        Args:
+            exercise_description: Description of the exercise to find similar competencies for
+            top_k: Number of top similar competencies to return (default: 5)
+            
+        Returns:
+            List of most similar competencies ordered by similarity score
+        """
+        exercise_embedding = generate_embeddings_openai(exercise_description)
+
+        all_competencies = self.weaviate_client.get_all_embeddings(CollectionNames.COMPETENCY.value)
+        
+        if not all_competencies:
+            logger.warning("No competencies found in database")
+            return []
+        
+        similarities = []
+        for competency_data in all_competencies:
+            competency_embedding = competency_data["vector"]["default"]
+            similarity_score = compute_cosine_similarity(exercise_embedding, competency_embedding)
+            
+            competency = Competency(
+                id=competency_data["properties"]["competency_id"],
+                title=competency_data["properties"]["title"],
+                description=competency_data["properties"]["description"]
+            )
+            similarities.append((competency, similarity_score))
+        
+        similarities.sort(key=lambda x: x[1], reverse=True)
+        top_competencies = [comp for comp, _ in similarities[:top_k]]
+        
+        logger.info(f"Found {len(top_competencies)} similar competencies for exercise description")
+        return top_competencies
+
+    def save_exercise(self, exercise: ExerciseWithCompetencies, operation_type: OperationType = OperationType.UPDATE):
+        if operation_type == OperationType.DELETE:
+            self.delete_exercise(exercise)
+        else:  # UPDATE operation
+            existing_exercise = self.weaviate_client.get_embeddings_by_property(CollectionNames.EXERCISE.value, "exercise_id", exercise.id)
+            if existing_exercise:
+                assert len(existing_exercise) == 1, "Multiple exercises found for the same ID" # TODO: Throw error 
+                exercise_to_update = existing_exercise[0]
+                embedings = generate_embeddings_openai(exercise.description)
+                properties = {
+                    "exercise_id": exercise.id,
+                    "description": exercise.description,
+                    "competency_ids": exercise.competencies
+                }
+                self.weaviate_client.update_property_by_id(CollectionNames.EXERCISE.value, exercise_to_update["id"], properties, embedings)
+            else:
+                self.save_exercise_to_weaviate(exercise)
+
+            # Re-cluster after updating exercise
+            # self.weaviate_client.delete_all_data_from_collection(CollectionNames.CLUSTERCENTER.value)
+            # self.initial_cluster_pipeline()
+            # self.initial_cluster_to_competency_pipeline()
+
+    def delete_exercise(self, exercise: ExerciseWithCompetencies):
+        """Delete an exercise from Weaviate and trigger re-clustering."""
         existing_exercise = self.weaviate_client.get_embeddings_by_property(CollectionNames.EXERCISE.value, "exercise_id", exercise.id)
         if existing_exercise:
-            assert len(existing_exercise) == 1, "Multiple exercises found for the same ID" # TODO: Throw error 
-            exercise_to_update = existing_exercise[0]
-            embedings = generate_embeddings_openai(exercise.description)
-            properties = {
-                "exercise_id": exercise.id,
-                "description": exercise.description,
-                "competency_ids": exercise.competencies
-            }
-            self.weaviate_client.update_property_by_id(CollectionNames.EXERCISE.value, exercise_to_update["id"], properties, embedings)
+            assert len(existing_exercise) == 1, "Multiple exercises found for the same ID"
+            exercise_to_delete = existing_exercise[0]
+            self.weaviate_client.delete_by_id(CollectionNames.EXERCISE.value, exercise_to_delete["id"])
+            
+            # Re-cluster after deletion
+            # self.weaviate_client.delete_all_data_from_collection(CollectionNames.CLUSTERCENTER.value)
+            # self.initial_cluster_pipeline()
+            # self.initial_cluster_to_competency_pipeline()
         else:
-            self.save_exercise_to_weaviate(exercise)
-
-        self.weaviate_client.delete_all_data_from_collection(CollectionNames.CLUSTERCENTER.value)
-        self.initial_cluster_pipeline()
-        self.initial_cluster_to_competency_pipeline()
+            logger.warning(f"Exercise with id {exercise.id} not found for deletion")

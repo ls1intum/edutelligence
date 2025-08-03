@@ -148,10 +148,9 @@ async def delete_embedings(collection_name: str):
 )
 async def suggest_competencies(request: SuggestCompetencyRequest):
     pipeline = PipelineWorkflows()
-    competency = pipeline.newTextPipeline(request.description)
+    competencies = pipeline.suggest_competencies_by_similarity(request.description)
     return SuggestCompetencyResponse(
-        competencies=[competency],
-        competency_relations=[]
+        competencies=competencies
     )
 
 
@@ -159,12 +158,11 @@ async def suggest_competencies(request: SuggestCompetencyRequest):
     "/save", response_model=dict, dependencies=[]
 )
 async def save_competencies(request: SaveCompetencyRequest):
+    pipeline = PipelineWorkflows()
     if request.competency:
-        pipeline = PipelineWorkflows()
-        pipeline.save_competency(request.competency)
+        pipeline.save_competency(request.competency, request.operation_type)
     if request.exercise:
-        pipeline = PipelineWorkflows()
-        pipeline.save_exercise(request.exercise)
+        pipeline.save_exercise(request.exercise, request.operation_type)
     return Response(
         status_code=status.HTTP_200_OK,
         media_type="application/json",

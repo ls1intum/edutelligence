@@ -1,7 +1,7 @@
 import os
 import pytest
 from unittest.mock import patch
-from atlasml.config import Settings, APIKeyConfig, WeaviateSettings
+from atlasml.config import Settings, APIKeyConfig, WeaviateSettings, get_settings, reset_settings
 
 
 class TestSettings:
@@ -188,6 +188,83 @@ class TestSettings:
             assert api_keys[0].token == "key1"
             assert api_keys[1].token == "key2"
             assert all(isinstance(key, APIKeyConfig) for key in api_keys)
+
+    def test_default_settings(self):
+        """Test that default settings work for testing."""
+        with patch.dict(os.environ, {}, clear=True):
+            settings = Settings.get_settings(use_defaults=True)
+            
+            assert len(settings.api_keys) == 1
+            assert settings.api_keys[0].token == "default-test-token"
+            assert settings.weaviate.host == "localhost"
+            assert settings.weaviate.port == 8080
+            assert settings.weaviate.grpc_port == 50051
+
+    def test_auto_detect_test_environment(self):
+        """Test that test environment is auto-detected."""
+        test_env_vars = {
+            "PYTEST_CURRENT_TEST": "true"
+        }
+        
+        with patch.dict(os.environ, test_env_vars, clear=True):
+            settings = Settings.get_settings()
+            
+            # Should use defaults because test environment is detected
+            assert len(settings.api_keys) == 1
+            assert settings.api_keys[0].token == "default-test-token"
+
+    def test_global_settings_function(self):
+        """Test the global get_settings function."""
+        # Reset any cached settings
+        reset_settings()
+        
+        env_vars = {
+            "ATLAS_API_KEYS": "global-test-key",
+            "WEAVIATE_HOST": "test-host",
+            "WEAVIATE_PORT": "9090",
+            "WEAVIATE_GRPC_PORT": "60051"
+        }
+        
+        with patch.dict(os.environ, env_vars, clear=True):
+            settings = get_settings()
+            
+            assert len(settings.api_keys) == 1
+            assert settings.api_keys[0].token == "global-test-key"
+            assert settings.weaviate.host == "test-host"
+            assert settings.weaviate.port == 9090
+            
+            # Test that it returns the same instance (caching)
+            settings2 = get_settings()
+            assert settings is settings2
+
+    def test_reset_settings(self):
+        """Test the reset_settings function."""
+        # Reset settings before test
+        reset_settings()
+        
+        # First, get settings
+        env_vars = {
+            "ATLAS_API_KEYS": "test-reset-key",
+            "WEAVIATE_HOST": "localhost",
+            "WEAVIATE_PORT": "8080",
+            "WEAVIATE_GRPC_PORT": "50051"
+        }
+        
+        with patch.dict(os.environ, env_vars, clear=True):
+            settings1 = get_settings()
+            
+            # Verify first settings
+            assert settings1.api_keys[0].token == "test-reset-key"
+            
+            # Reset settings
+            reset_settings()
+            
+            # Get settings again - should be a new instance with same values
+            settings2 = get_settings()
+            
+            # They should have the same values
+            assert settings1.api_keys[0].token == settings2.api_keys[0].token
+            assert settings1.weaviate.host == settings2.weaviate.host
 
 
 class TestAPIKeyConfig:

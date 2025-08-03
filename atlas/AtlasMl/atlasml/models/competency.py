@@ -1,21 +1,18 @@
+from pydantic import BaseModel
+from typing import Optional
 from enum import Enum
 
-from pydantic import BaseModel
 
-
-class CompetencyTaxonomy(str, Enum):
-    REMEMBER = "R"
-    UNDERSTAND = "U"
-    APPLY = "Y"
-    ANALYZE = "A"
-    EVALUATE = "E"
-    CREATE = "C"
+class OperationType(str, Enum):
+    UPDATE = "UPDATE"
+    DELETE = "DELETE"
 
 
 class Competency(BaseModel):
     id: str
     title: str
     description: str
+
 
 class ExerciseWithCompetencies(BaseModel):
     id: str
@@ -47,10 +44,10 @@ class SuggestCompetencyRequest(BaseModel):
 
 class SuggestCompetencyResponse(BaseModel):
     competencies: list[Competency]
-    
 
 class SaveCompetencyRequest(BaseModel):
-    competency: Competency | None
-    exercise: ExerciseWithCompetencies | None
+    competency: Optional[Competency] = None
+    exercise: Optional[ExerciseWithCompetencies] = None
+    operation_type: OperationType
 
 
