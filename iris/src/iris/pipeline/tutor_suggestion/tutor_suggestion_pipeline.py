@@ -125,13 +125,13 @@ class TutorSuggestionPipeline(Pipeline):
         if channel_type == ChannelType.TEXT_EXERCISE:
             self._run_text_exercise_pipeline(
                 text_exercise_dto=dto.text_exercise,
-                summary=summary,
+                summary=summary_text,
                 is_answered=is_answered,
             )
         elif channel_type == ChannelType.PROGRAMMING_EXERCISE:
-            self._run_programming_exercise_pipeline(dto=dto, summary=summary)
+            self._run_programming_exercise_pipeline(dto=dto, summary=summary_text)
         elif channel_type == ChannelType.LECTURE:
-            self._run_lecture_pipeline(dto=dto, summary=summary)
+            self._run_lecture_pipeline(dto=dto, summary=summary_text)
         else:
             # If it's a general or other type of channel, we use the lecture pipeline to handle it as it relies on the
             # lecture contents.

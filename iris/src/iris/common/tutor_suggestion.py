@@ -7,6 +7,9 @@ from iris.common.pyris_message import IrisMessageRole, PyrisMessage
 from iris.domain.communication.communication_tutor_suggestion_pipeline_execution_dto import (
     CommunicationTutorSuggestionPipelineExecutionDTO,
 )
+from iris.retrieval.lecture.lecture_retrieval import LectureRetrieval
+from iris.vector_database.database import VectorDatabase
+from iris.web.status.status_update import TutorSuggestionCallback
 
 logger = logging.getLogger(__name__)
 
@@ -137,3 +140,57 @@ def extract_json_from_text(text: str):
             logger.error("JSON decoding failed: %s", e)
             return None
     return None
+
+def lecture_content_retrieval(
+        dto: CommunicationTutorSuggestionPipelineExecutionDTO,
+        chat_summary: str,
+        db: VectorDatabase,
+        callback: TutorSuggestionCallback
+) -> str:
+    """
+    Retrieve content from indexed lecture content.
+    This will run a RAG retrieval based on the chat history on the indexed lecture slides,
+    the indexed lecture transcriptions and the indexed lecture segments,
+    which are summaries of the lecture slide content and lecture transcription content from one slide
+    and return the most relevant paragraphs.
+    """
+    callback.in_progress("Retrieving lecture content")
+
+    query = (f"I want to understand the following summarized discussion better: {chat_summary}\n. What are the relevant"
+             f" lecture slides, transcriptions and segments that I can use to answer the question?")
+    lecture_retrieval = LectureRetrieval(db.client)
+
+    try:
+        lecture_retrieval_result = lecture_retrieval(
+            query=query,
+            course_id=dto.course.id,
+            chat_history=[],
+            lecture_id=dto.lecture_id,
+        )
+    except AttributeError as e:
+        return "Error retrieving lecture data: " + str(e)
+
+    result = "Lecture slide content:\n"
+    for paragraph in lecture_retrieval_result.lecture_unit_page_chunks:
+        lct = (
+            f"Lecture: {paragraph.lecture_name}, Unit: {paragraph.lecture_unit_name}, "
+            f"Page: {paragraph.page_number}\nContent:\n---{paragraph.page_text_content}---\n\n"
+        )
+        result += lct
+
+    result += "Lecture transcription content:\n"
+    for paragraph in lecture_retrieval_result.lecture_transcriptions:
+        transcription = (
+            f"Lecture: {paragraph.lecture_name}, Unit: {paragraph.lecture_unit_name}, "
+            f"Page: {paragraph.page_number}\nContent:\n---{paragraph.segment_text}---\n\n"
+        )
+        result += transcription
+
+    result += "Lecture segment content:\n"
+    for paragraph in lecture_retrieval_result.lecture_unit_segments:
+        segment = (
+            f"Lecture: {paragraph.lecture_name}, Unit: {paragraph.lecture_unit_name}, "
+            f"Page: {paragraph.page_number}\nContent:\n---{paragraph.segment_summary}---\n\n"
+        )
+        result += segment
+    return result

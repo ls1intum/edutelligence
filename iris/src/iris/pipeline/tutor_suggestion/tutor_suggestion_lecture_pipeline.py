@@ -11,7 +11,7 @@ from iris.common.pyris_message import PyrisMessage, IrisMessageRole
 from iris.common.tutor_suggestion import (
     extract_html_from_text,
     extract_json_from_text,
-    has_html, ChannelType,
+    has_html, ChannelType, lecture_content_retrieval,
 )
 from iris.domain.communication.communication_tutor_suggestion_pipeline_execution_dto import (
     CommunicationTutorSuggestionPipelineExecutionDTO,
@@ -78,7 +78,7 @@ class TutorSuggestionLecturePipeline(Pipeline):
         answer = ""
         change_suggestion = ""
 
-        lecture_content = self.lecture_content_retrieval(dto, chat_summary)
+        lecture_content = lecture_content_retrieval(dto, chat_summary, self.db, self.callback)
 
 
         if dto.chat_history and dto.chat_history[-1].sender == IrisMessageRole.USER:
@@ -89,6 +89,7 @@ class TutorSuggestionLecturePipeline(Pipeline):
                 communication_dto=dto,
                 chat_summary=chat_summary,
                 chat_history=dto.chat_history,
+                lecture_contents=lecture_content,
             )
 
         if "NO" not in change_suggestion:
@@ -136,54 +137,3 @@ class TutorSuggestionLecturePipeline(Pipeline):
                 logger.error("Error in Tutor Suggestion Lecture Pipeline: %s", e)
                 return "Error generation suggestions for lecture"
         return None, answer
-
-    def lecture_content_retrieval(
-        self, dto: CommunicationTutorSuggestionPipelineExecutionDTO, summary: str
-    ) -> str:
-        """
-        Retrieve content from indexed lecture content.
-        This will run a RAG retrieval based on the chat history on the indexed lecture slides,
-        the indexed lecture transcriptions and the indexed lecture segments,
-        which are summaries of the lecture slide content and lecture transcription content from one slide
-        and return the most relevant paragraphs.
-        """
-        self.callback.in_progress("Running lecture content retrieval")
-
-        query = (f"I want to understand the following summarized discussion better: {summary}\n. What are the relevant"
-                 f" lecture slides, transcriptions and segments that I can use to answer the question?")
-        lecture_retrieval = LectureRetrieval(self.db.client)
-
-        try:
-            lecture_retrieval_result = lecture_retrieval(
-                query=query,
-                course_id=dto.course.id,
-                chat_history=[],
-                lecture_id=dto.lecture_id,
-            )
-        except AttributeError as e:
-            return "Error retrieving lecture data: " + str(e)
-
-        result = "Lecture slide content:\n"
-        for paragraph in lecture_retrieval_result.lecture_unit_page_chunks:
-            lct = (
-                f"Lecture: {paragraph.lecture_name}, Unit: {paragraph.lecture_unit_name}, "
-                f"Page: {paragraph.page_number}\nContent:\n---{paragraph.page_text_content}---\n\n"
-            )
-            result += lct
-
-        result += "Lecture transcription content:\n"
-        for paragraph in lecture_retrieval_result.lecture_transcriptions:
-            transcription = (
-                f"Lecture: {paragraph.lecture_name}, Unit: {paragraph.lecture_unit_name}, "
-                f"Page: {paragraph.page_number}\nContent:\n---{paragraph.segment_text}---\n\n"
-            )
-            result += transcription
-
-        result += "Lecture segment content:\n"
-        for paragraph in lecture_retrieval_result.lecture_unit_segments:
-            segment = (
-                f"Lecture: {paragraph.lecture_name}, Unit: {paragraph.lecture_unit_name}, "
-                f"Page: {paragraph.page_number}\nContent:\n---{paragraph.segment_summary}---\n\n"
-            )
-            result += segment
-        return result
