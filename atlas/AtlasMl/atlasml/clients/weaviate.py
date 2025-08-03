@@ -1,10 +1,12 @@
 import logging
 from enum import Enum
+from typing import Optional, Dict, List, Any
 
 import weaviate
 from weaviate.classes.query import Filter
 from weaviate.classes.config import Property
 from weaviate.collections.classes.config import DataType
+from weaviate.exceptions import WeaviateConnectionError, WeaviateQueryError
 
 from atlasml.config import WeaviateSettings, get_settings
 
@@ -46,18 +48,41 @@ logger = logging.getLogger(__name__)
 
 
 
+class WeaviateConnectionError(Exception):
+    """Custom exception for Weaviate connection errors."""
+    pass
+
+
+class WeaviateOperationError(Exception):
+    """Custom exception for Weaviate operation errors."""
+    pass
+
+
 class WeaviateClient:
     def __init__(self, weaviate_settings: WeaviateSettings = None):
         if weaviate_settings is None:
             weaviate_settings = get_settings().weaviate
             
-        self.client = weaviate.connect_to_local(
-            host=weaviate_settings.host,
-            port=weaviate_settings.port,
-            grpc_port=weaviate_settings.grpc_port,
-        )
+        try:
+            self.client = weaviate.connect_to_local(
+                host=weaviate_settings.host,
+                port=weaviate_settings.port,
+                grpc_port=weaviate_settings.grpc_port,
+            )
+            logger.info(f"✅ Connected to Weaviate at {weaviate_settings.host}:{weaviate_settings.port}")
+        except WeaviateConnectionError as e:
+            logger.error(f"❌ Failed to connect to Weaviate: {e}")
+            raise WeaviateConnectionError(f"Could not connect to Weaviate server: {e}")
+        except Exception as e:
+            logger.error(f"❌ Unexpected error connecting to Weaviate: {e}")
+            raise WeaviateConnectionError(f"Unexpected connection error: {e}")
 
-        self._ensure_collections_exist()
+        try:
+            self._ensure_collections_exist()
+        except Exception as e:
+            logger.error(f"❌ Failed to initialize collections: {e}")
+            self.client.close()
+            raise WeaviateOperationError(f"Failed to initialize collections: {e}")
 
     def _check_if_collection_exists(self, collection_name: str):
         """Check if a collection exists and create it if it doesn't."""
@@ -66,47 +91,59 @@ class WeaviateClient:
 
     def _ensure_collections_exist(self):
         """Ensure collections exist with a proper schema."""
-        # Define schemas for each collection
-        # After, schema updated automatically, and you can fetch the data from the collection with the new properties
-        for collection_name, schema in COLLECTION_SCHEMAS.items():
-            if not self.client.collections.exists(collection_name):
-                self.client.collections.create(
-                    name=collection_name,
-                    vectorizer_config=weaviate.classes.config.Configure.Vectorizer.none(),
-                    properties=schema["properties"],
-                )
-                logger.info(f"✅ {collection_name} collection created with schema.")
-            else:
-                collection = self.client.collections.get(collection_name)
-                existing_props = {prop.name for prop in collection.config.get(simple=False).properties}
-
-                for prop in schema["properties"]:
-                    if prop["name"] not in existing_props:
-                        # Convert string data type to DataType enum
-                        data_type_str = prop["data_type"]
-                        if data_type_str == "text":
-                            data_type = DataType.TEXT
-                        elif data_type_str == "int":
-                            data_type = DataType.INT
-                        elif data_type_str == "text[]":
-                            data_type = DataType.TEXT_ARRAY
-                        elif data_type_str == "number":
-                            data_type = DataType.NUMBER
-                        else:
-                            data_type = DataType.TEXT  # Default to TEXT for unknown types
-
-                        collection.config.add_property(
-                            Property(
-                                name=prop["name"],
-                                data_type=data_type,
-                                index_searchable=prop.get("indexFilterable", False),
-                            )
+        try:
+            # Define schemas for each collection
+            # After, schema updated automatically, and you can fetch the data from the collection with the new properties
+            for collection_name, schema in COLLECTION_SCHEMAS.items():
+                try:
+                    if not self.client.collections.exists(collection_name):
+                        self.client.collections.create(
+                            name=collection_name,
+                            vectorizer_config=weaviate.classes.config.Configure.Vectorizer.none(),
+                            properties=schema["properties"],
                         )
-                        logger.info(
-                            f"✅ Added property {prop['name']} to {collection_name}."
-                        )
+                        logger.info(f"✅ {collection_name} collection created with schema.")
+                    else:
+                        collection = self.client.collections.get(collection_name)
+                        existing_props = {prop.name for prop in collection.config.get(simple=False).properties}
 
-        logger.info("--- All collections initialized with schemas ---")
+                        for prop in schema["properties"]:
+                            if prop["name"] not in existing_props:
+                                try:
+                                    # Convert string data type to DataType enum
+                                    data_type_str = prop["data_type"]
+                                    if data_type_str == "text":
+                                        data_type = DataType.TEXT
+                                    elif data_type_str == "int":
+                                        data_type = DataType.INT
+                                    elif data_type_str == "text[]":
+                                        data_type = DataType.TEXT_ARRAY
+                                    elif data_type_str == "number":
+                                        data_type = DataType.NUMBER
+                                    else:
+                                        data_type = DataType.TEXT  # Default to TEXT for unknown types
+
+                                    collection.config.add_property(
+                                        Property(
+                                            name=prop["name"],
+                                            data_type=data_type,
+                                            index_searchable=prop.get("indexFilterable", False),
+                                        )
+                                    )
+                                    logger.info(
+                                        f"✅ Added property {prop['name']} to {collection_name}."
+                                    )
+                                except Exception as e:
+                                    logger.error(f"❌ Failed to add property {prop['name']} to {collection_name}: {e}")
+                                    # Continue with other properties
+                except Exception as e:
+                    logger.error(f"❌ Failed to create/update collection {collection_name}: {e}")
+                    raise WeaviateOperationError(f"Failed to initialize collection {collection_name}: {e}")
+
+            logger.info("--- All collections initialized with schemas ---")
+        except Exception as e:
+            logger.error(f"❌ Failed to ensure collections exist: {e}")
+            raise
 
 
     def is_alive(self):
@@ -126,37 +163,53 @@ class WeaviateClient:
         collection_name: str,
         embeddings: list[float],
         properties: dict | None = None,
-    ):
+    ) -> str:
         """
         Add an embedding with a custom ID, description, 
         and additional properties to the specified collection.
 
         Args:
             collection_name: Name of the collection to add embeddings to.
-            id: Unique identifier for the embedding.
-            description: Text description associated with the embedding.
             embeddings: Vector representation of the data.
             properties: Additional properties to store with the embedding (optional).
 
         Returns:
             UUID of the inserted object.
+            
+        Raises:
+            WeaviateOperationError: If the operation fails.
+            ValueError: If collection doesn't exist or parameters are invalid.
         """
-        logger.info(
-            f"--- ADDING EMBEDDING TO WEAVIATE COLLECTION '{collection_name}' ---"
-        )
-        self._check_if_collection_exists(collection_name)
-        collection = self.client.collections.get(collection_name)
+        try:
+            logger.info(
+                f"--- ADDING EMBEDDING TO WEAVIATE COLLECTION '{collection_name}' ---"
+            )
+            
+            if not embeddings or not isinstance(embeddings, list):
+                raise ValueError("Embeddings must be a non-empty list of floats")
+            
+            self._check_if_collection_exists(collection_name)
+            collection = self.client.collections.get(collection_name)
 
-        data_properties = {}
+            data_properties = {}
+            if properties and isinstance(properties, dict):
+                data_properties.update(properties)
 
-        if properties and isinstance(properties, dict):
-            data_properties.update(properties)
+            uuid = collection.data.insert(properties=data_properties, vector=embeddings)
 
-        uuid = collection.data.insert(properties=data_properties, vector=embeddings)
-
-        logger.info("--- EMBEDDING ADDED TO WEAVIATE ---")
-        logger.info(f"UUID: {uuid}")
-        return uuid
+            logger.info("--- EMBEDDING ADDED TO WEAVIATE ---")
+            logger.info(f"UUID: {uuid}")
+            return uuid
+            
+        except ValueError:
+            # Re-raise validation errors
+            raise
+        except WeaviateQueryError as e:
+            logger.error(f"❌ Weaviate query error adding embedding: {e}")
+            raise WeaviateOperationError(f"Failed to add embedding to {collection_name}: {e}")
+        except Exception as e:
+            logger.error(f"❌ Unexpected error adding embedding: {e}")
+            raise WeaviateOperationError(f"Unexpected error adding embedding: {e}")
 
     def get_embeddings(self, collection_name: str, id: str):
         """Get embeddings for a given ID from the specified collection."""
@@ -173,7 +226,7 @@ class WeaviateClient:
 
     def get_all_embeddings(
         self, collection_name: str = CollectionNames.COMPETENCY.value
-    ):
+    ) -> List[Dict[str, Any]]:
         """
         Fetch all objects and their vectors from the specified collection using REST
 
@@ -183,31 +236,47 @@ class WeaviateClient:
 
         Returns:
             List of dictionaries containing id, text, and vector for each object.
+            
+        Raises:
+            WeaviateOperationError: If the operation fails.
+            ValueError: If collection doesn't exist.
         """
-        self._check_if_collection_exists(collection_name)
+        try:
+            self._check_if_collection_exists(collection_name)
 
-        results = []
-        collection = self.client.collections.get(collection_name)
-        response = collection.iterator(
-            include_vector=True,
-        )
-
-        for obj in response:
-            results.append(
-                {
-                    "id": obj.uuid,
-                    "title": obj.properties.get("title"),
-                    "description": obj.properties.get("description"),
-                    "vector": obj.vector,
-                    "properties": obj.properties,
-                }
+            results = []
+            collection = self.client.collections.get(collection_name)
+            response = collection.iterator(
+                include_vector=True,
             )
 
-        return results
+            for obj in response:
+                results.append(
+                    {
+                        "id": obj.uuid,
+                        "title": obj.properties.get("title"),
+                        "description": obj.properties.get("description"),
+                        "vector": obj.vector,
+                        "properties": obj.properties,
+                    }
+                )
+
+            logger.info(f"Retrieved {len(results)} embeddings from {collection_name}")
+            return results
+            
+        except ValueError:
+            # Re-raise validation errors
+            raise
+        except WeaviateQueryError as e:
+            logger.error(f"❌ Weaviate query error getting embeddings: {e}")
+            raise WeaviateOperationError(f"Failed to get embeddings from {collection_name}: {e}")
+        except Exception as e:
+            logger.error(f"❌ Unexpected error getting embeddings: {e}")
+            raise WeaviateOperationError(f"Unexpected error getting embeddings: {e}")
 
     def get_embeddings_by_property(
         self, collection_name: str, property_name: str, property_value: str
-    ):
+    ) -> List[Dict[str, Any]]:
         """
         Fetch objects and their vectors from the collection that match a property value.
 
@@ -219,31 +288,50 @@ class WeaviateClient:
         Returns:
             List of dictionaries containing id, properties, and vector for each matching
             object.
+            
+        Raises:
+            WeaviateOperationError: If the operation fails.
+            ValueError: If collection doesn't exist or parameters are invalid.
         """
-        logger.info(
-            f"--- GETTING EMBEDDINGS BY PROPERTY FROM WEAVIATE "
-            f"COLLECTION '{collection_name}' ---"
-        )
-        self._check_if_collection_exists(collection_name)
+        try:
+            logger.info(
+                f"--- GETTING EMBEDDINGS BY PROPERTY FROM WEAVIATE "
+                f"COLLECTION '{collection_name}' ---"
+            )
+            
+            if not property_name or not property_value:
+                raise ValueError("Property name and value must be provided")
+            
+            self._check_if_collection_exists(collection_name)
 
-        collection = self.client.collections.get(collection_name)
+            collection = self.client.collections.get(collection_name)
 
-        response = collection.query.fetch_objects(
-            filters=Filter.by_property(property_name).equal(property_value),
-            include_vector=True,
-        )
-
-        results = []
-        for obj in response.objects:
-            results.append(
-                {"id": obj.uuid, "properties": obj.properties, "vector": obj.vector}
+            response = collection.query.fetch_objects(
+                filters=Filter.by_property(property_name).equal(property_value),
+                include_vector=True,
             )
 
-        logger.info(
-            f"--- FOUND {len(results)} EMBEDDINGS MATCHING "
-            f"{property_name}={property_value} ---"
-        )
-        return results
+            results = []
+            for obj in response.objects:
+                results.append(
+                    {"id": obj.uuid, "properties": obj.properties, "vector": obj.vector}
+                )
+
+            logger.info(
+                f"--- FOUND {len(results)} EMBEDDINGS MATCHING "
+                f"{property_name}={property_value} ---"
+            )
+            return results
+            
+        except ValueError:
+            # Re-raise validation errors
+            raise
+        except WeaviateQueryError as e:
+            logger.error(f"❌ Weaviate query error getting embeddings by property: {e}")
+            raise WeaviateOperationError(f"Failed to get embeddings by property: {e}")
+        except Exception as e:
+            logger.error(f"❌ Unexpected error getting embeddings by property: {e}")
+            raise WeaviateOperationError(f"Unexpected error getting embeddings by property: {e}")
 
     def search_by_multiple_properties(
         self, collection_name: str, property_filters: dict
@@ -357,18 +445,50 @@ class WeaviateClient:
         )
         logger.info(f"{collection_name} ---> RECREATED")
 
-    def update_property_by_id(self, collection_name: str, id: str, properties: dict, vector: list[float] = None):
-        """Update a property by ID."""
-        self._check_if_collection_exists(collection_name)
-        collection = self.client.collections.get(collection_name)
-        collection.data.update(
-            id,
-            properties={
-                **properties,
-            },
-            vector=vector,
-        )
-        logger.info(f"--- PROPERTY UPDATED IN {collection_name} ---")
+    def update_property_by_id(
+        self, collection_name: str, id: str, properties: dict, vector: Optional[List[float]] = None
+    ) -> bool:
+        """
+        Update a property by ID.
+        
+        Args:
+            collection_name: Name of the collection.
+            id: UUID of the object to update.
+            properties: Properties to update.
+            vector: Optional new vector.
+            
+        Returns:
+            True if successful.
+            
+        Raises:
+            WeaviateOperationError: If the operation fails.
+            ValueError: If collection doesn't exist or parameters are invalid.
+        """
+        try:
+            if not id or not properties:
+                raise ValueError("ID and properties must be provided")
+                
+            self._check_if_collection_exists(collection_name)
+            collection = self.client.collections.get(collection_name)
+            collection.data.update(
+                id,
+                properties={
+                    **properties,
+                },
+                vector=vector,
+            )
+            logger.info(f"--- PROPERTY UPDATED IN {collection_name} ---")
+            return True
+            
+        except ValueError:
+            # Re-raise validation errors
+            raise
+        except WeaviateQueryError as e:
+            logger.error(f"❌ Weaviate query error updating property: {e}")
+            raise WeaviateOperationError(f"Failed to update property in {collection_name}: {e}")
+        except Exception as e:
+            logger.error(f"❌ Unexpected error updating property: {e}")
+            raise WeaviateOperationError(f"Unexpected error updating property: {e}")
 
 class WeaviateClientSingleton:
     _instance = None

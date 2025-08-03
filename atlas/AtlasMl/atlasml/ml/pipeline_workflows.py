@@ -1,15 +1,15 @@
 import uuid
 import numpy as np
 import uuid
+
 from atlasml.clients.weaviate import get_weaviate_client, CollectionNames
-from atlasml.ml.Clustering.HDBSCAN import apply_hdbscan, SimilarityMetric
-from atlasml.ml.VectorEmbeddings.MainEmbeddingModel import generate_embeddings_openai
-from atlasml.ml.SimilarityMeasurement.Cosine import compute_cosine_similarity
+from atlasml.ml.clustering import apply_hdbscan, SimilarityMetric
+from atlasml.ml.embeddings import generate_embeddings_openai
+from atlasml.ml.similarity_measures import compute_cosine_similarity
 from atlasml.models.competency import ExerciseWithCompetencies, Competency, OperationType
 import logging
 
 logger = logging.getLogger(__name__)
-
 
 class PipelineWorkflows:
     def __init__(self, weaviate_client=None):

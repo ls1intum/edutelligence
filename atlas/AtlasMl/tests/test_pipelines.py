@@ -1,7 +1,7 @@
 import pytest
 import uuid
-from atlasml.ml.MLPipelines.PipelineWorkflows import PipelineWorkflows
-from atlasml.models.competency import ExerciseWithCompetencies, Competency, CompetencyTaxonomy
+from atlasml.ml.pipeline_workflows import PipelineWorkflows
+from atlasml.models.competency import ExerciseWithCompetencies, Competency
 from unittest.mock import patch
 import numpy as np
 
@@ -27,7 +27,7 @@ def test_initial_texts_integration(workflows):
 
 def test_initial_competencies_integration(workflows):
     competencies = [
-        Competency(id=str(uuid.uuid4()), title="Integration Competency", description="Description", taxonomy=CompetencyTaxonomy.ANALYZE)
+        Competency(id=str(uuid.uuid4()), title="Integration Competency", description="Description")
         for i in range(2)
     ]
 
@@ -46,7 +46,7 @@ def fake_hdbscan(embeddings_list, *args, **kwargs):
     return labels, centroids, medoids
 
 def test_initial_cluster_pipeline_integration(workflows):
-    with patch("atlasml.ml.MLPipelines.PipelineWorkflows.apply_hdbscan", side_effect=fake_hdbscan):
+    with patch("atlasml.ml.pipeline_workflows.apply_hdbscan", side_effect=fake_hdbscan):
         titles = ["Lists", "Arrays", "Variables", "Dictionaries", "Functions", "Loops", "Tuples", "Sets", "Classes", "Recursion"]
         texts = [ExerciseWithCompetencies(id=str(uuid.uuid4()),
                                           title=title,
@@ -55,9 +55,9 @@ def test_initial_cluster_pipeline_integration(workflows):
         workflows.initial_exercises(texts)
 
         competencies = [
-            Competency(id=str(uuid.uuid4()), title="Data Structures Mastery", description="Ability to understand and efficiently use core data structures such as lists, arrays, dictionaries, tuples, and sets. This includes selecting the appropriate structure for a task and applying common operations like searching, sorting, and modifying data.", taxonomy=CompetencyTaxonomy.ANALYZE),
-            Competency(id=str(uuid.uuid4()), title="Programming Fundamentals", description="Proficiency in core programming concepts, including variables, loops, and functions. Capable of writing, reading, and debugging code that uses these basic elements to implement algorithms and solve problems.", taxonomy=CompetencyTaxonomy.ANALYZE),
-            Competency(id=str(uuid.uuid4()), title="Object-Oriented and Algorithmic Thinking", description="Understanding of object-oriented programming concepts such as classes and recursion, and their role in organizing code and solving complex problems. Can design class hierarchies, use recursion effectively, and apply these patterns to real-world scenarios.", taxonomy=CompetencyTaxonomy.ANALYZE)
+            Competency(id=str(uuid.uuid4()), title="Data Structures Mastery", description="Ability to understand and efficiently use core data structures such as lists, arrays, dictionaries, tuples, and sets. This includes selecting the appropriate structure for a task and applying common operations like searching, sorting, and modifying data."),
+            Competency(id=str(uuid.uuid4()), title="Programming Fundamentals", description="Proficiency in core programming concepts, including variables, loops, and functions. Capable of writing, reading, and debugging code that uses these basic elements to implement algorithms and solve problems."),
+            Competency(id=str(uuid.uuid4()), title="Object-Oriented and Algorithmic Thinking", description="Understanding of object-oriented programming concepts such as classes and recursion, and their role in organizing code and solving complex problems. Can design class hierarchies, use recursion effectively, and apply these patterns to real-world scenarios.")
         ]
 
         workflows.initial_competencies(competencies)
@@ -73,7 +73,7 @@ def test_initial_cluster_pipeline_integration(workflows):
         assert clusters, "Clusters were not created!"
 
 def test_initial_cluster_to_competencyPipeline_integration(workflows):
-    with patch("atlasml.ml.MLPipelines.PipelineWorkflows.apply_hdbscan", side_effect=fake_hdbscan):
+    with patch("atlasml.ml.pipeline_workflows.apply_hdbscan", side_effect=fake_hdbscan):
         titles = ["Lists", "Arrays", "Variables", "Dictionaries", "Functions", "Loops", "Tuples", "Sets", "Classes", "Recursion"]
         texts = [ExerciseWithCompetencies(id=str(uuid.uuid4()),
                                       title=title,
@@ -82,9 +82,9 @@ def test_initial_cluster_to_competencyPipeline_integration(workflows):
         workflows.initial_exercises(texts)
 
         competencies = [
-            Competency(id=str(uuid.uuid4()), title="Data Structures Mastery", description="Ability to understand and efficiently use core data structures such as lists, arrays, dictionaries, tuples, and sets. This includes selecting the appropriate structure for a task and applying common operations like searching, sorting, and modifying data.", taxonomy=CompetencyTaxonomy.ANALYZE),
-            Competency(id=str(uuid.uuid4()), title="Programming Fundamentals", description="Proficiency in core programming concepts, including variables, loops, and functions. Capable of writing, reading, and debugging code that uses these basic elements to implement algorithms and solve problems.", taxonomy=CompetencyTaxonomy.ANALYZE),
-            Competency(id=str(uuid.uuid4()), title="Object-Oriented and Algorithmic Thinking", description="Understanding of object-oriented programming concepts such as classes and recursion, and their role in organizing code and solving complex problems. Can design class hierarchies, use recursion effectively, and apply these patterns to real-world scenarios.", taxonomy=CompetencyTaxonomy.ANALYZE)
+            Competency(id=str(uuid.uuid4()), title="Data Structures Mastery", description="Ability to understand and efficiently use core data structures such as lists, arrays, dictionaries, tuples, and sets. This includes selecting the appropriate structure for a task and applying common operations like searching, sorting, and modifying data."),
+            Competency(id=str(uuid.uuid4()), title="Programming Fundamentals", description="Proficiency in core programming concepts, including variables, loops, and functions. Capable of writing, reading, and debugging code that uses these basic elements to implement algorithms and solve problems."),
+            Competency(id=str(uuid.uuid4()), title="Object-Oriented and Algorithmic Thinking", description="Understanding of object-oriented programming concepts such as classes and recursion, and their role in organizing code and solving complex problems. Can design class hierarchies, use recursion effectively, and apply these patterns to real-world scenarios.")
         ]
 
         workflows.initial_competencies(competencies)
@@ -103,11 +103,11 @@ def test_initial_cluster_to_competencyPipeline_integration(workflows):
         assert competencies, "Competencies missing!"
 
 def test_newTextPipeline_integration(workflows):
-    with patch("atlasml.ml.MLPipelines.PipelineWorkflows.apply_hdbscan", side_effect=fake_hdbscan):
+    with patch("atlasml.ml.pipeline_workflows.apply_hdbscan", side_effect=fake_hdbscan):
         competencies = [
-            Competency(id=str(uuid.uuid4()), title="Data Structures Mastery", description="Ability to understand and efficiently use core data structures such as lists, arrays, dictionaries, tuples, and sets. This includes selecting the appropriate structure for a task and applying common operations like searching, sorting, and modifying data.", taxonomy=CompetencyTaxonomy.ANALYZE),
-            Competency(id=str(uuid.uuid4()), title="Programming Fundamentals", description="Proficiency in core programming concepts, including variables, loops, and functions. Capable of writing, reading, and debugging code that uses these basic elements to implement algorithms and solve problems.", taxonomy=CompetencyTaxonomy.ANALYZE),
-            Competency(id=str(uuid.uuid4()), title="Object-Oriented and Algorithmic Thinking", description="Understanding of object-oriented programming concepts such as classes and recursion, and their role in organizing code and solving complex problems. Can design class hierarchies, use recursion effectively, and apply these patterns to real-world scenarios.", taxonomy=CompetencyTaxonomy.ANALYZE)
+            Competency(id=str(uuid.uuid4()), title="Data Structures Mastery", description="Ability to understand and efficiently use core data structures such as lists, arrays, dictionaries, tuples, and sets. This includes selecting the appropriate structure for a task and applying common operations like searching, sorting, and modifying data."),
+            Competency(id=str(uuid.uuid4()), title="Programming Fundamentals", description="Proficiency in core programming concepts, including variables, loops, and functions. Capable of writing, reading, and debugging code that uses these basic elements to implement algorithms and solve problems."),
+            Competency(id=str(uuid.uuid4()), title="Object-Oriented and Algorithmic Thinking", description="Understanding of object-oriented programming concepts such as classes and recursion, and their role in organizing code and solving complex problems. Can design class hierarchies, use recursion effectively, and apply these patterns to real-world scenarios.")
         ]
         workflows.initial_competencies(competencies)
         titles = ["Lists", "Arrays", "Variables", "Dictionaries", "Functions", "Loops", "Tuples", "Sets", "Classes", "Recursion"]

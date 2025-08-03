@@ -1,8 +1,7 @@
 import numpy as np
 import pytest
 
-from atlasml.ml.Clustering.HDBSCAN import apply_hdbscan
-from atlasml.ml.Clustering.TSNE import apply_tsne
+from atlasml.ml.clustering import apply_hdbscan, apply_tsne
 
 
 def test_tsne_output_shape_default():
