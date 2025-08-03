@@ -2,7 +2,13 @@ name: AtlasML - Build and Push Docker Image natively
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened]
     branches: [main]
+    paths:
+      - 'atlas/AtlasMl/**'
+      - '.github/workflows/atlasml_test-and-build.yml'
+
+  workflow_call:
     inputs:
         image-name:
           type: string
