@@ -2,6 +2,7 @@ import pytest
 import nltk
 import asyncio
 from module_text_llm.basic_approach import BasicApproachConfig
+from module_text_llm.chain_of_thought_approach import ChainOfThoughtConfig
 from llm_core.models.providers.azure_model_config import AzureModelConfig
 
 
@@ -27,6 +28,32 @@ def real_config():
         max_input_tokens=5000,
         model=AzureModelConfig(
             model_name="azure_openai_gpt-4o",
+            get_model=lambda: None,  # This will be set by the module
+        ),
+        type="basic",
+    )
+
+
+@pytest.fixture
+def chain_of_thought_config():
+    """Create a chain of thought configuration for testing."""
+    return ChainOfThoughtConfig(
+        max_input_tokens=5000,
+        model=AzureModelConfig(
+            model_name="azure_openai_gpt-4o",
+            get_model=lambda: None,  # This will be set by the module
+        ),
+        type="chain_of_thought",
+    )
+
+
+@pytest.fixture
+def gpt35_config():
+    """Create a basic configuration for testing with GPT-3.5-turbo."""
+    return BasicApproachConfig(
+        max_input_tokens=5000,
+        model=AzureModelConfig(
+            model_name="azure_openai_gpt-35-turbo",
             get_model=lambda: None,  # This will be set by the module
         ),
         type="basic",
