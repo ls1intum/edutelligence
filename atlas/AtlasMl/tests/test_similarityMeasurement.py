@@ -3,7 +3,11 @@ from enum import Enum
 import pytest
 from scipy.spatial.distance import cosine, euclidean, jaccard
 
-from atlasml.ml.similarity_measures import compute_cosine_similarity, compute_euclidean_distance, compute_jaccard_similarity
+from atlasml.ml.similarity_measures import (
+    compute_cosine_similarity,
+    compute_euclidean_distance,
+    compute_jaccard_similarity,
+)
 
 
 class MockModelDimension(Enum):
@@ -126,6 +130,7 @@ def test_jaccard_similarity_partial_overlap():
     expected_similarity = 1.0 - jaccard(vector1, vector2)
     similarity = compute_jaccard_similarity(vector1, vector2)
     assert similarity == pytest.approx(expected_similarity, rel=1e-6)
+
 
 def test_jaccard_similarity_mismatched_dimensions():
     """Test if a function raises ValueError when vectors have different dimensions."""

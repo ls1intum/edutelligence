@@ -13,11 +13,11 @@ class SimilarityMetric(Enum):
 
 
 def apply_hdbscan(
-    matrix: np.ndarray, 
-    eps: float = 0.5, 
-    min_samples: int = 5, 
-    metric: str = "euclidean", 
-    min_cluster_size: int = 10
+    matrix: np.ndarray,
+    eps: float = 0.5,
+    min_samples: int = 5,
+    metric: str = "euclidean",
+    min_cluster_size: int = 10,
 ) -> Tuple[np.ndarray, Optional[np.ndarray], Optional[np.ndarray]]:
     """
     Applies HDBSCAN clustering algorithm to a given nxn matrix.
@@ -35,7 +35,7 @@ def apply_hdbscan(
     clusterer = HDBSCAN(
         min_samples=min_samples,
         metric=metric,
-        store_centers='both',
+        store_centers="both",
         cluster_selection_epsilon=eps,
         min_cluster_size=min_cluster_size,
     )
@@ -44,10 +44,10 @@ def apply_hdbscan(
 
 
 def apply_tsne(
-    matrix: np.ndarray, 
-    n_components: int = 2, 
-    perplexity: float = 5.0, 
-    random_state: int = 42
+    matrix: np.ndarray,
+    n_components: int = 2,
+    perplexity: float = 5.0,
+    random_state: int = 42,
 ) -> np.ndarray:
     """
     Applies t-SNE to a given nxn matrix.
@@ -62,9 +62,7 @@ def apply_tsne(
         numpy.ndarray: The matrix after TSNE dimensionality reduction.
     """
     tsne = TSNE(
-        n_components=n_components, 
-        perplexity=perplexity, 
-        random_state=random_state
+        n_components=n_components, perplexity=perplexity, random_state=random_state
     )
     transformed = tsne.fit_transform(matrix)
     return transformed

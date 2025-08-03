@@ -38,12 +38,15 @@ class TokenValidator:
             logger.debug(f"Checking API key: {key}")
             if key.token == api_key:
                 return key
-                
+
         raise PermissionDeniedException
 
 
 # For backward compatibility, create a dependency function
-def validate_token(api_key: str = Depends(_get_api_key), api_keys: List[APIKeyConfig] = Depends(get_api_keys)) -> APIKeyConfig:
+def validate_token(
+    api_key: str = Depends(_get_api_key),
+    api_keys: List[APIKeyConfig] = Depends(get_api_keys),
+) -> APIKeyConfig:
     """Dependency function to validate API tokens."""
     for key in api_keys:
         logger.debug(f"Checking API key: {key}")

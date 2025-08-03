@@ -48,9 +48,8 @@ class SuggestCompetencyRequest(BaseModel):
 class SuggestCompetencyResponse(BaseModel):
     competencies: list[Competency]
 
+
 class SaveCompetencyRequest(BaseModel):
     competency: Optional[Competency] = None
     exercise: Optional[ExerciseWithCompetencies] = None
     operation_type: OperationType
-
-

@@ -4,8 +4,8 @@ from typing import Union, List
 
 
 def compute_jaccard_similarity(
-    embedding_vector: Union[List[float], np.ndarray], 
-    comparison_vector: Union[List[float], np.ndarray]
+    embedding_vector: Union[List[float], np.ndarray],
+    comparison_vector: Union[List[float], np.ndarray],
 ) -> float:
     """
     Computes the Jaccard similarity between two vectors.
@@ -16,7 +16,7 @@ def compute_jaccard_similarity(
 
     Returns:
         The Jaccard similarity between the two vectors (0.0 to 1.0).
-        
+
     Raises:
         ValueError: If vectors have different dimensions.
     """
@@ -24,17 +24,15 @@ def compute_jaccard_similarity(
     vec2 = np.asarray(comparison_vector)
 
     if vec1.shape != vec2.shape:
-        raise ValueError(
-            f"Vector dimensions must match: {vec1.shape} vs {vec2.shape}"
-        )
+        raise ValueError(f"Vector dimensions must match: {vec1.shape} vs {vec2.shape}")
 
     jaccard_distance = jaccard(vec1, vec2)
     return 1.0 - jaccard_distance
 
 
 def compute_euclidean_distance(
-    embedding_vector: Union[List[float], np.ndarray], 
-    comparison_vector: Union[List[float], np.ndarray]
+    embedding_vector: Union[List[float], np.ndarray],
+    comparison_vector: Union[List[float], np.ndarray],
 ) -> float:
     """
     Computes the Euclidean distance between two embedding vectors.
@@ -45,7 +43,7 @@ def compute_euclidean_distance(
 
     Returns:
         The Euclidean distance between the two vectors.
-        
+
     Raises:
         ValueError: If vectors have different dimensions.
     """
@@ -53,16 +51,14 @@ def compute_euclidean_distance(
     vec2 = np.asarray(comparison_vector)
 
     if vec1.shape != vec2.shape:
-        raise ValueError(
-            f"Vector dimensions must match: {vec1.shape} vs {vec2.shape}"
-        )
+        raise ValueError(f"Vector dimensions must match: {vec1.shape} vs {vec2.shape}")
 
     return euclidean(vec1, vec2)
 
 
 def compute_euclidean_similarity(
-    embedding_vector: Union[List[float], np.ndarray], 
-    comparison_vector: Union[List[float], np.ndarray]
+    embedding_vector: Union[List[float], np.ndarray],
+    comparison_vector: Union[List[float], np.ndarray],
 ) -> float:
     """
     Computes the Euclidean similarity between two embedding vectors.
@@ -74,7 +70,7 @@ def compute_euclidean_similarity(
 
     Returns:
         The Euclidean similarity between the two vectors (0.0 to 1.0).
-        
+
     Raises:
         ValueError: If vectors have different dimensions.
     """
@@ -83,8 +79,8 @@ def compute_euclidean_similarity(
 
 
 def compute_cosine_similarity(
-    embedding_vector: Union[List[float], np.ndarray], 
-    comparison_vector: Union[List[float], np.ndarray]
+    embedding_vector: Union[List[float], np.ndarray],
+    comparison_vector: Union[List[float], np.ndarray],
 ) -> float:
     """
     Computes the cosine similarity between two embedding vectors.
@@ -95,7 +91,7 @@ def compute_cosine_similarity(
 
     Returns:
         The cosine similarity between the two vectors (-1.0 to 1.0).
-        
+
     Raises:
         ValueError: If vectors have different dimensions.
     """
@@ -103,9 +99,7 @@ def compute_cosine_similarity(
     vec2 = np.asarray(comparison_vector)
 
     if vec1.shape != vec2.shape:
-        raise ValueError(
-            f"Vector dimensions must match: {vec1.shape} vs {vec2.shape}"
-        )
+        raise ValueError(f"Vector dimensions must match: {vec1.shape} vs {vec2.shape}")
 
     cosine_distance = cosine(vec1, vec2)
     return 1.0 - cosine_distance

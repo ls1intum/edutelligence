@@ -37,23 +37,19 @@ __all__ = [
     "SimilarityMetric",
     "apply_hdbscan",
     "apply_tsne",
-    
     # Embeddings
-    "EmbeddingGenerator", 
+    "EmbeddingGenerator",
     "ModelDimension",
     "generate_embeddings_openai",
     "generate_embeddings_local",
     "generate_embeddings",
-    
     # Similarity measures
     "compute_jaccard_similarity",
-    "compute_euclidean_distance", 
+    "compute_euclidean_distance",
     "compute_euclidean_similarity",
     "compute_cosine_similarity",
-    
     # Centroid similarity
     "generate_competency_relationship",
-    
     # Pipeline workflows
     "PipelineWorkflows",
 ]
