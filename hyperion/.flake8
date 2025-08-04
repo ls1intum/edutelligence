@@ -5,6 +5,7 @@ exclude =
     __pycache__,
     .idea
     .venv
+ignore = E203, W503
 
 per-file-ignores =
     app/openapi.py: E402

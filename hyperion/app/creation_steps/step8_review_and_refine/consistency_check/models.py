@@ -1,8 +1,61 @@
 from enum import Enum
-from typing import List, Optional
+from typing import List, Dict, Optional
 from pydantic import BaseModel, Field
 
 from app.creation_steps.models import Metadata, Repository
+
+
+class ProgrammingLanguage(str, Enum):
+    """Programming language enumeration for consistency checking."""
+
+    JAVA = "java"
+    PYTHON = "python"
+    # Future extensions can add more languages
+
+
+class LanguageConfig(BaseModel):
+    """Configuration for language-specific context rendering."""
+
+    file_extensions: List[str] = Field(
+        description="File extensions to include in context rendering"
+    )
+    source_directories: List[str] = Field(
+        description="Source directories to search for files"
+    )
+    exclude_patterns: List[str] = Field(
+        default_factory=list, description="File patterns to exclude from context"
+    )
+    max_file_size_kb: int = Field(
+        default=100, description="Maximum file size in KB to include in context"
+    )
+
+
+# Language-specific configurations
+LANGUAGE_CONFIGS: Dict[ProgrammingLanguage, LanguageConfig] = {
+    ProgrammingLanguage.JAVA: LanguageConfig(
+        file_extensions=[".java"],
+        source_directories=["src"],
+        exclude_patterns=[
+            "*/target/*",
+            "*/build/*",
+            "*/.gradle/*",
+            "gradle/*",
+            "gradlew*",
+            "*.gradle",
+            "*.properties",
+            "*.bat",
+            "*.sh",
+            ".gradle/*",
+        ],
+        max_file_size_kb=50,
+    ),
+    ProgrammingLanguage.PYTHON: LanguageConfig(
+        file_extensions=[".py"],
+        source_directories=["src", ".", "lib"],
+        exclude_patterns=["**/__pycache__/**", "**/*.pyc", "**/venv/**", "**/env/**"],
+        max_file_size_kb=50,
+    ),
+}
 
 
 class ArtifactType(str, Enum):
@@ -11,21 +64,20 @@ class ArtifactType(str, Enum):
     PROBLEM_STATEMENT = "PROBLEM_STATEMENT"
     TEMPLATE_REPOSITORY = "TEMPLATE_REPOSITORY"
     SOLUTION_REPOSITORY = "SOLUTION_REPOSITORY"
-    TEST_REPOSITORY = "TEST_REPOSITORY"
+
+    # Ignored for now
+    # TEST_REPOSITORY = "TEST_REPOSITORY"
 
 
 class ArtifactLocation(BaseModel):
     """Location information for artifacts."""
 
     type: ArtifactType = Field(..., description="Type of artifact")
-    file_path: Optional[str] = Field(
-        None, description="Path in the repository, empty for problem statement"
+    file_path: str = Field(
+        description="Path to file, empty or problem_statement.md for problem statement"
     )
-    start_line: Optional[int] = Field(None, description="Start line in the content")
-    end_line: Optional[int] = Field(None, description="End line in the content")
-    description: Optional[str] = Field(
-        None, description="Optional description of the location"
-    )
+    start_line: int = Field(description="Start line number (1-based)")
+    end_line: int = Field(description="End line number (1-based)")
 
 
 class ConsistencyIssueSeverity(str, Enum):
@@ -36,87 +88,102 @@ class ConsistencyIssueSeverity(str, Enum):
     HIGH = "HIGH"
 
 
-class ConsistencyIssueType(str, Enum):
-    """Type categories for consistency issues."""
-
-    STRUCTURAL = "STRUCTURAL"
-    SEMANTIC = "SEMANTIC"
-    ASSESSMENT = "ASSESSMENT"
-    PEDAGOGICAL = "PEDAGOGICAL"
-
-
-class ConsistencyIssueCategory(str, Enum):
-    """Specific categories for consistency issues."""
-
-    # STRUCTURAL Issues
-    METHOD_SIGNATURE_MISMATCH = "METHOD_SIGNATURE_MISMATCH"
-    CONSTRUCTOR_SIGNATURE_MISMATCH = "CONSTRUCTOR_SIGNATURE_MISMATCH"
-    INTERFACE_IMPLEMENTATION_CONFLICT = "INTERFACE_IMPLEMENTATION_CONFLICT"
-    TYPE_DECLARATION_CONFLICT = "TYPE_DECLARATION_CONFLICT"
-    INHERITANCE_HIERARCHY_MISMATCH = "INHERITANCE_HIERARCHY_MISMATCH"
-    PACKAGE_STRUCTURE_MISMATCH = "PACKAGE_STRUCTURE_MISMATCH"
-    MISSING_REQUIRED_ELEMENT = "MISSING_REQUIRED_ELEMENT"
-
-    # SEMANTIC Issues
-    NAMING_INCONSISTENCY = "NAMING_INCONSISTENCY"
-    UML_TEXT_DEVIATION = "UML_TEXT_DEVIATION"
-    EXAMPLE_CONTRADICTION = "EXAMPLE_CONTRADICTION"
-    SPECIFICATION_AMBIGUITY = "SPECIFICATION_AMBIGUITY"
-    CONSTRAINT_VIOLATION = "CONSTRAINT_VIOLATION"
-    REQUIREMENT_GAP = "REQUIREMENT_GAP"
-
-    # ASSESSMENT Issues
-    TEST_OBJECTIVE_MISMATCH = "TEST_OBJECTIVE_MISMATCH"
-    TEST_COVERAGE_INCOMPLETE = "TEST_COVERAGE_INCOMPLETE"
-    TEST_DATA_INCONSISTENT = "TEST_DATA_INCONSISTENT"
-    GRADING_CRITERIA_CONFLICT = "GRADING_CRITERIA_CONFLICT"
-    TEST_METHOD_NAMING_CONFLICT = "TEST_METHOD_NAMING_CONFLICT"
-
-    # PEDAGOGICAL Issues
-    COGNITIVE_LEVEL_MISMATCH = "COGNITIVE_LEVEL_MISMATCH"
-    SCAFFOLDING_DISCONTINUITY = "SCAFFOLDING_DISCONTINUITY"
-    PREREQUISITE_ASSUMPTION_VIOLATION = "PREREQUISITE_ASSUMPTION_VIOLATION"
-    LEARNING_OBJECTIVE_CONTRADICTION = "LEARNING_OBJECTIVE_CONTRADICTION"
-    COMPLEXITY_PROGRESSION_VIOLATION = "COMPLEXITY_PROGRESSION_VIOLATION"
-    SKILL_TRANSFER_IMPEDIMENT = "SKILL_TRANSFER_IMPEDIMENT"
-
-
+# Base classes for consistency issues and results
 class ConsistencyIssue(BaseModel):
-    """Represents a consistency issue found during review."""
+    """Base class for consistency issues. Do not use directly, use subclasses instead."""
 
-    description: str = Field(..., description="Description of the consistency issue")
+    description: str = Field(description="Clear explanation of the consistency issue")
     severity: ConsistencyIssueSeverity = Field(
-        ..., description="Severity level of the issue"
+        description="Student impact severity level"
     )
-    type: ConsistencyIssueType = Field(..., description="Type category of the issue")
-    category: ConsistencyIssueCategory = Field(
-        ..., description="Specific category of the issue"
-    )
-    primary_location: ArtifactLocation = Field(
-        ..., description="Primary location where issue was detected"
-    )
+    category: str = Field(description="Specific category of consistency issue")
     related_locations: List[ArtifactLocation] = Field(
-        default_factory=list, description="Related locations across artifacts"
+        description="Related locations across artifacts"
     )
-    suggested_fix: Optional[str] = Field(
-        None, description="Simple suggested fix as a string"
+    suggested_fix: str = Field(description="Actionable correction to resolve the issue")
+
+
+class ConsistencyResult(BaseModel):
+    """Base class for consistency check results. Do not use directly, use subclasses instead."""
+
+    issues: List[ConsistencyIssue] = Field(
+        description="List of consistency issues found"
     )
+
+
+# Supported structural consistency sub-categories
+class StructuralConsistencyIssueCategory(str, Enum):
+    """Structural consistency issue sub-categories"""
+
+    # Method return type, parameters, or visibility differs between artifacts
+    METHOD_RETURN_TYPE_MISMATCH = "METHOD_RETURN_TYPE_MISMATCH"
+
+    # Method parameters differ between specification and template
+    METHOD_PARAMETER_MISMATCH = "METHOD_PARAMETER_MISMATCH"
+
+    # Constructor parameters differ between specification and template
+    CONSTRUCTOR_PARAMETER_MISMATCH = "CONSTRUCTOR_PARAMETER_MISMATCH"
+
+    # Attribute data types inconsistent across artifacts
+    ATTRIBUTE_TYPE_MISMATCH = "ATTRIBUTE_TYPE_MISMATCH"
+
+    # Method/attribute visibility differs between specification and template
+    VISIBILITY_MISMATCH = "VISIBILITY_MISMATCH"
+
+
+# Supported semantic consistency sub-categories
+class SemanticConsistencyIssueCategory(str, Enum):
+    """Semantic consistency issue sub-categories"""
+
+    # Same conceptual entity has different names across artifacts
+    IDENTIFIER_NAMING_INCONSISTENCY = "IDENTIFIER_NAMING_INCONSISTENCY"
 
 
 class ConsistencyCheckRequest(BaseModel):
     """Request model for consistency check"""
 
     problem_statement: str = Field(..., description="Problem statement to check")
-    solution_repository: Repository = Field(
-        ..., description="Solution repository to check"
-    )
     template_repository: Repository = Field(
         ..., description="Template repository to check"
     )
-    test_repository: Repository = Field(..., description="Test repository to check")
-    issue_categories: Optional[List[ConsistencyIssueCategory]] = Field(
-        None, description="Specify issue categories to check (leave empty for all)"
+    programming_language: ProgrammingLanguage = Field(
+        ..., description="Programming language for language-specific context rendering"
     )
+    # Optional repositories - can be added in future
+    solution_repository: Optional[Repository] = Field(
+        None, description="Solution repository to check (optional)"
+    )
+    test_repository: Optional[Repository] = Field(
+        None, description="Test repository to check (optional)"
+    )
+
+
+class ContextRenderingConfig(BaseModel):
+    """Configuration for context rendering based on programming language."""
+
+    programming_language: ProgrammingLanguage = Field(
+        description="Programming language for context rendering"
+    )
+    language_config: LanguageConfig = Field(
+        description="Language-specific configuration"
+    )
+    include_file_structure: bool = Field(
+        default=True,
+        description="Whether to include file structure overview in context",
+    )
+    max_context_size_kb: int = Field(
+        default=500, description="Maximum total context size in KB"
+    )
+
+    @classmethod
+    def for_language(cls, language: ProgrammingLanguage) -> "ContextRenderingConfig":
+        """Create configuration for specific programming language."""
+        if language not in LANGUAGE_CONFIGS:
+            raise ValueError(f"Unsupported programming language: {language}")
+
+        return cls(
+            programming_language=language, language_config=LANGUAGE_CONFIGS[language]
+        )
 
 
 class ConsistencyCheckResponse(BaseModel):

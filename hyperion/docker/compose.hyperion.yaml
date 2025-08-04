@@ -1,18 +1,17 @@
 services:
   hyperion:
     image: "ghcr.io/ls1intum/edutelligence/hyperion:${IMAGE_TAG}"
+    env_file:
+      - .env  # Load environment variables from .env file
     environment:
+      # Production defaults (can be overridden by .env file)
       API_KEY_HEADER: ${API_KEY_HEADER:-X-API-Key}
       API_KEY: ${API_KEY}
       DISABLE_AUTH: ${DISABLE_AUTH:-false}
       MODEL_NAME: ${MODEL_NAME}
-      OPENAI_API_KEY: ${OPENAI_API_KEY}
-      OPENAI_API_VERSION: ${OPENAI_API_VERSION}
-      AZURE_OPENAI_ENDPOINT: ${AZURE_OPENAI_ENDPOINT}
-      AZURE_OPENAI_API_KEY: ${AZURE_OPENAI_API_KEY}
-      OLLAMA_BASIC_AUTH_USERNAME: ${OLLAMA_BASIC_AUTH_USERNAME}
-      OLLAMA_BASIC_AUTH_PASSWORD: ${OLLAMA_BASIC_AUTH_PASSWORD}
-      OLLAMA_HOST: ${OLLAMA_HOST}
+      
+      # Note: All other environment variables (AI providers, tracing, etc.)
+      # are loaded from .env file via the env_file directive above
     restart: unless-stopped
     ports:
       - '8000'
