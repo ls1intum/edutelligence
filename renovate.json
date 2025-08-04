@@ -2,5 +2,47 @@
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
     "config:recommended"
+  ],
+  "packageRules": [
+    {
+      "groupName": "athena",
+      "matchPaths": ["athena/**"],
+      "prTitlePrefix": "`Athena`: "
+    },
+    {
+      "groupName": "atlas",
+      "matchPaths": ["atlas/**"],
+      "prTitlePrefix": "`Atlas`: "
+    },
+    {
+      "groupName": "hyperion",
+      "matchPaths": ["hyperion/**"],
+      "prTitlePrefix": "`Hyperion`: "
+    },
+    {
+      "groupName": "iris",
+      "matchPaths": ["iris/**"],
+      "prTitlePrefix": "`Iris`: "
+    },
+    {
+      "groupName": "logos",
+      "matchPaths": ["logos/**"],
+      "prTitlePrefix": "`Logos`: "
+    },
+    {
+      "groupName": "memiris",
+      "matchPaths": ["memiris/**"],
+      "prTitlePrefix": "`Memiris`: "
+    },
+    {
+      "groupName": "nebula",
+      "matchPaths": ["nebula/**"],
+      "prTitlePrefix": "`Nebula`: "
+    },
+    {
+      "groupName": "shared",
+      "matchPaths": ["shared/**"],
+      "prTitlePrefix": "`Shared`: "
+    }
   ]
 }
