@@ -105,10 +105,6 @@ async def generate_suggestions(
         ],
     )
 
-    print("---------------------------")
-    print(submission_analysis.dict())
-    print("---------------------------")
-
     if submission_analysis is None:
         logger.warning("Submission analysis returned None – no feedback generated.")
         return []
@@ -139,9 +135,6 @@ async def generate_suggestions(
             f"submission-{submission.id}",
         ],
     )
-    print("---------------------------")
-    print(result.dict())
-    print("---------------------------")
 
     if debug:
         emit_meta(
