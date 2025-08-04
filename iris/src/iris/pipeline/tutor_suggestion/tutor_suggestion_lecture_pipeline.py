@@ -7,11 +7,11 @@ from langchain_core.runnables import Runnable
 from langsmith import traceable
 
 from iris.common.pipeline_enum import PipelineEnum
-from iris.common.pyris_message import PyrisMessage, IrisMessageRole
+from iris.common.pyris_message import IrisMessageRole
 from iris.common.tutor_suggestion import (
     extract_html_from_text,
     extract_json_from_text,
-    has_html, ChannelType, lecture_content_retrieval,
+    has_html, ChannelType
 )
 from iris.domain.communication.communication_tutor_suggestion_pipeline_execution_dto import (
     CommunicationTutorSuggestionPipelineExecutionDTO,
@@ -21,8 +21,6 @@ from iris.llm.langchain import IrisLangchainChatModel
 from iris.pipeline import Pipeline
 from iris.pipeline.prompts.tutor_suggestion.lecture_prompt import lecture_prompt
 from iris.pipeline.tutor_suggestion.tutor_suggestion_user_query_pipeline import TutorSuggestionUserQueryPipeline
-from iris.retrieval.lecture.lecture_retrieval import LectureRetrieval
-from iris.vector_database.database import VectorDatabase
 from iris.web.status.status_update import TutorSuggestionCallback
 
 logger = logging.getLogger(__name__)
@@ -60,7 +58,6 @@ class TutorSuggestionLecturePipeline(Pipeline):
         self.pipeline = self.llm | StrOutputParser()
         self.tokens = []
         self.callback = callback
-        self.db = VectorDatabase()
 
     def __str__(self):
         return f"{self.__class__.__name__}(llm={self.llm})"
@@ -68,8 +65,10 @@ class TutorSuggestionLecturePipeline(Pipeline):
     @traceable(name="Tutor Suggestion Lecture Pipeline")
     def __call__(
         self,
+        lecture_content: str,
+        faq_content: str,
         dto: CommunicationTutorSuggestionPipelineExecutionDTO,
-        chat_summary: str
+        chat_summary: str,
     ):
         """
         Run the pipeline.
@@ -77,8 +76,6 @@ class TutorSuggestionLecturePipeline(Pipeline):
         """
         answer = ""
         change_suggestion = ""
-
-        lecture_content = lecture_content_retrieval(dto, chat_summary, self.db, self.callback)
 
 
         if dto.chat_history and dto.chat_history[-1].sender == IrisMessageRole.USER:

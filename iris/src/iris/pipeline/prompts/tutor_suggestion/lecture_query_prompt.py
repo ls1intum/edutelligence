@@ -46,16 +46,8 @@ Explanation:
 - CHAT HISTORY: The chat history with the tutor, which may provide additional context.
 
 Instructions:
-1. If the tutor asks for a new or updated suggestion (e.g., “Can you regenerate this?”, “I don’t like it”, "Rewrite the\
-the suggestion to be more precise"), respond\
-with:
-   - "Sure, I will generate a new suggestion for you."
-   - "Sure, I will regenerate the suggestion for you."
-   - "Sure, I will change the suggestion for you."
-And then provide a suggestion_prompt for another model to generate a new suggestion based on the lecture contents and\
- discussion.
 
-1a. If the tutor says something like "Provide me an answer I can copy" or "Give me a response I can paste", reply with\
+1. If the tutor says something like "Provide me an answer I can copy" or "Give me a response I can paste", reply with\
 a markdown-formatted answer they can use directly for the student. Only use context from the provided materials.
 
 2. If the question is unrelated (e.g., “What is the capital of France?” or “Tell me a joke”), respond with:

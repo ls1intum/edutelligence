@@ -7,7 +7,7 @@ from langchain_core.runnables import Runnable
 from langsmith import traceable
 
 from iris.common.pipeline_enum import PipelineEnum
-from iris.common.tutor_suggestion import ChannelType, get_channel_type
+from iris.common.tutor_suggestion import ChannelType, get_channel_type, lecture_content_retrieval, faq_content_retrieval
 from iris.domain import FeatureDTO
 from iris.domain.communication.communication_tutor_suggestion_pipeline_execution_dto import (
     CommunicationTutorSuggestionPipelineExecutionDTO,
@@ -33,6 +33,7 @@ from iris.pipeline.tutor_suggestion.tutor_suggestion_summary_pipeline import (
 from iris.pipeline.tutor_suggestion.tutor_suggestion_text_exercise_pipeline import (
     TutorSuggestionTextExercisePipeline,
 )
+from iris.vector_database.database import VectorDatabase
 from iris.web.status.status_update import TutorSuggestionCallback
 
 logger = logging.getLogger(__name__)
@@ -72,6 +73,7 @@ class TutorSuggestionPipeline(Pipeline):
         self.callback = callback
         self.pipeline = self.llm | StrOutputParser()
         self.tokens = []
+        self.db = VectorDatabase()
 
     def __str__(self):
         return f"{self.__class__.__name__}(llm={self.llm})"
@@ -98,8 +100,6 @@ class TutorSuggestionPipeline(Pipeline):
             self.callback.error("Unexpected error running summary pipeline")
             return
 
-        logger.info(summary)
-
         if summary is None:
             self.callback.error("No summary was generated")
             return
@@ -109,9 +109,6 @@ class TutorSuggestionPipeline(Pipeline):
             is_question = is_question_str in ["yes", "true", "1"]
             number_of_answers = summary.get("num_answers")
             summary_text = summary.get("summary")
-            logger.info(
-                "is_question: %s, num_answers: %s", is_question, number_of_answers
-            )
         except (AttributeError, TypeError) as e:
             logger.error("Error parsing summary JSON: %s", str(e))
             self.callback.error("Error parsing summary JSON")
@@ -122,65 +119,56 @@ class TutorSuggestionPipeline(Pipeline):
 
         channel_type = get_channel_type(dto)
 
+        self.lecture_content = self._get_relevant_lecture_content(dto, chat_summary=summary_text)
+        logger.info(f"Lecture content: {self.lecture_content}")
+
+        self.callback.in_progress("Retrieving faq content")
+        self.faq_content = faq_content_retrieval(self.db, summary_text, dto)
+        logger.info(f"Faq content: {self.faq_content}")
+
+
+
         if channel_type == ChannelType.TEXT_EXERCISE:
-            self._run_text_exercise_pipeline(
-                text_exercise_dto=dto.text_exercise,
-                summary=summary_text,
+            self._run_pipeline(
+                label="text exercise",
+                pipeline_class=TutorSuggestionTextExercisePipeline,
+                dto=dto.text_exercise,
+                chat_summary=summary,
+                chat_history=self.dto.chat_history,
                 is_answered=is_answered,
             )
         elif channel_type == ChannelType.PROGRAMMING_EXERCISE:
-            self._run_programming_exercise_pipeline(dto=dto, summary=summary_text)
+            self._run_pipeline(
+                label="programming exercise",
+                pipeline_class=TutorSuggestionProgrammingExercisePipeline,
+                dto=dto,
+                chat_summary=summary,
+                chat_history=self.dto.chat_history,
+            )
         elif channel_type == ChannelType.LECTURE:
-            self._run_lecture_pipeline(dto=dto, summary=summary_text)
+            self._run_pipeline(
+                label="lecture",
+                pipeline_class=TutorSuggestionLecturePipeline,
+                dto=dto,
+                chat_summary=summary,
+            )
         else:
             # If it's a general or other type of channel, we use the lecture pipeline to handle it as it relies on the
             # lecture contents.
-            self._run_lecture_pipeline(dto=dto, summary=summary)
+            self._run_pipeline(
+                label="lecture",
+                pipeline_class=TutorSuggestionLecturePipeline,
+                dto=dto,
+                chat_summary=summary,
+            )
 
-    def _run_text_exercise_pipeline(
-        self, text_exercise_dto: TextExerciseDTO, summary: str, is_answered: bool
-    ):
-        """
-        Run the text exercise pipeline.
-        :param text_exercise_dto: The TextExerciseDTO object contains details about the text exercise.
-        :param summary: The summary of the post.
-        :return: The result of the text exercise pipeline.
-        """
-        self._run_pipeline(
-            label="text exercise",
-            pipeline_class=TutorSuggestionTextExercisePipeline,
-            dto=text_exercise_dto,
-            chat_summary=summary,
-            chat_history=self.dto.chat_history,
-            is_answered=is_answered,
-        )
-
-    def _run_programming_exercise_pipeline(
+    def _run_pipeline(
             self,
-            dto: CommunicationTutorSuggestionPipelineExecutionDTO,
-            summary: str,
+            label: str,
+            pipeline_class,
+            *pipeline_args,
+            **pipeline_kwargs
     ):
-        self._run_pipeline(
-            label="programming exercise",
-            pipeline_class=TutorSuggestionProgrammingExercisePipeline,
-            dto=dto,
-            chat_summary=summary,
-            chat_history=self.dto.chat_history,
-        )
-
-    def _run_lecture_pipeline(
-            self,
-            dto: CommunicationTutorSuggestionPipelineExecutionDTO,
-            summary: str,
-    ):
-        self._run_pipeline(
-            label="lecture",
-            pipeline_class=TutorSuggestionLecturePipeline,
-            dto=dto,
-            chat_summary=summary,
-        )
-
-    def _run_pipeline(self, label: str, pipeline_class, *pipeline_args, **pipeline_kwargs):
         """
         Helper method to run a specific pipeline and handle errors.
         :param label: Label for the pipeline being run.
@@ -191,7 +179,11 @@ class TutorSuggestionPipeline(Pipeline):
         self.callback.in_progress(f"Generating suggestions for {label}")
         pipeline_instance = pipeline_class(variant=self.variant, callback=self.callback)
         try:
-            result, tutor_answer = pipeline_instance(*pipeline_args, **pipeline_kwargs)
+            result, tutor_answer = pipeline_instance(
+                self.lecture_content,
+                self.faq_content,
+                *pipeline_args,
+                **pipeline_kwargs)
             for tokens in getattr(pipeline_instance, "tokens", []):
                 self._append_tokens(tokens, PipelineEnum.IRIS_TUTOR_SUGGESTION_PIPELINE)
         except AttributeError as e:
@@ -249,3 +241,34 @@ class TutorSuggestionPipeline(Pipeline):
         return filter_variants_by_available_models(
             available_llms, variant_specs, pipeline_name="TutorSuggestionPipeline"
         )
+
+    def _get_relevant_lecture_content(
+            self,
+            dto: CommunicationTutorSuggestionPipelineExecutionDTO,
+            chat_summary: str
+    ) -> str:
+        """
+        Retrieves relevant lecture content based on the current DTO and summary.
+        :return: Relevant lecture content as a string.
+        """
+        self.callback.in_progress("Retrieving lecture content from database")
+        lecture_content = lecture_content_retrieval(dto, chat_summary, self.db)
+        self.callback.in_progress("Summarizing lecture content")
+        query = (f"Based on the provided lecture transcriptions, summarize the key points relevant to the following"
+                  f" discussion. Clearly identify essential concepts, explanations, examples, and instructions "
+                  f"mentioned in the lecture content. Maintain clarity and conciseness. "
+                  f"```LECTURE CONTENT"
+                  f"{lecture_content}"
+                  f"```"
+                  f"```DISCUSSION SUMMARY:"
+                  f"{chat_summary}"
+                  f"```")
+        prompt = ChatPromptTemplate.from_messages([("system", query)])
+        try:
+            response = (prompt | self.pipeline).invoke(input={})
+            logger.info(f"Relevant lecture content: {response}")
+            self._append_tokens(self.llm.tokens, PipelineEnum.IRIS_TUTOR_SUGGESTION_PIPELINE)
+            return response
+        except Exception as e:
+            logger.error(f"Error retrieving relevant lecture content: {e}")
+            return "Error retrieving relevant lecture content"

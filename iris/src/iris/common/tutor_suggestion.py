@@ -7,9 +7,10 @@ from iris.common.pyris_message import IrisMessageRole, PyrisMessage
 from iris.domain.communication.communication_tutor_suggestion_pipeline_execution_dto import (
     CommunicationTutorSuggestionPipelineExecutionDTO,
 )
+from iris.retrieval.faq_retrieval import FaqRetrieval
+from iris.retrieval.faq_retrieval_utils import format_faqs
 from iris.retrieval.lecture.lecture_retrieval import LectureRetrieval
 from iris.vector_database.database import VectorDatabase
-from iris.web.status.status_update import TutorSuggestionCallback
 
 logger = logging.getLogger(__name__)
 
@@ -144,8 +145,7 @@ def extract_json_from_text(text: str):
 def lecture_content_retrieval(
         dto: CommunicationTutorSuggestionPipelineExecutionDTO,
         chat_summary: str,
-        db: VectorDatabase,
-        callback: TutorSuggestionCallback
+        db: VectorDatabase
 ) -> str:
     """
     Retrieve content from indexed lecture content.
@@ -154,7 +154,6 @@ def lecture_content_retrieval(
     which are summaries of the lecture slide content and lecture transcription content from one slide
     and return the most relevant paragraphs.
     """
-    callback.in_progress("Retrieving lecture content")
 
     query = (f"I want to understand the following summarized discussion better: {chat_summary}\n. What are the relevant"
              f" lecture slides, transcriptions and segments that I can use to answer the question?")
@@ -165,7 +164,7 @@ def lecture_content_retrieval(
             query=query,
             course_id=dto.course.id,
             chat_history=[],
-            lecture_id=dto.lecture_id,
+            lecture_id=dto.lecture_id if dto.lecture_id else None,
         )
     except AttributeError as e:
         return "Error retrieving lecture data: " + str(e)
@@ -194,3 +193,45 @@ def lecture_content_retrieval(
         )
         result += segment
     return result
+
+
+def faq_content_retrieval(
+        db: VectorDatabase,
+        chat_summary: str,
+        dto: CommunicationTutorSuggestionPipelineExecutionDTO,
+) -> str:
+    """
+    Retrieve content from indexed FAQs.
+    This will run a RAG retrieval based on the chat history and the user query on the indexed FAQs,
+    which are stored in the database, and return the most relevant FAQs.
+    :param db: The vector database client.
+    :param history: The chat history containing messages.
+    :param query: The user query to search for relevant FAQs.
+    :param dto: The data transfer object containing course information and settings.
+    :return: A formatted string containing the relevant FAQs.
+    """
+    query = (f"I want to understand the following summarized discussion better: {chat_summary}\n. Could you provide me"
+             f" some additional information?")
+    faq_retriever = FaqRetrieval(db.client)
+    chat_history = _filter_artifact_messages(dto.chat_history)
+    retrieved_faqs = faq_retriever(
+        chat_history=chat_history,
+        student_query=query,
+        result_limit=10,
+        course_name=dto.course.name,
+        course_id=dto.course.id,
+        base_url=dto.settings.artemis_base_url,
+    )
+
+    result = format_faqs(retrieved_faqs)
+    return result
+
+def _filter_artifact_messages(chat_history: List[PyrisMessage]) -> List[PyrisMessage]:
+    """
+    Filter out artifact messages from the chat history.
+    :param chat_history: List of messages in the chat history.
+    :return: Filtered list of messages without artifact messages.
+    """
+    return [
+        message for message in chat_history if message.sender != IrisMessageRole.ARTIFACT
+    ]

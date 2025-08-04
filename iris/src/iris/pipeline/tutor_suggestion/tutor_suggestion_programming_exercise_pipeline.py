@@ -74,6 +74,8 @@ class TutorSuggestionProgrammingExercisePipeline(Pipeline):
     @traceable(name="Tutor Suggestion Programming Exercise Pipeline")
     def __call__(
         self,
+        lecture_content: str,
+        faq_content: str,
         dto: CommunicationTutorSuggestionPipelineExecutionDTO,
         chat_summary: str,
         chat_history: list[PyrisMessage],
