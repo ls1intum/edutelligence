@@ -2,8 +2,9 @@
 
 import logging
 from uuid import uuid4
-from langchain.chat_models import init_chat_model
 from typing import List
+
+from app.models import init_hyperion_chat_model
 
 from app.creation_steps.models import Metadata, Repository
 from app.creation_steps.step3_create_solution_repository.models import (
@@ -14,7 +15,6 @@ from app.creation_steps.step3_create_solution_repository.models import (
 from app.creation_steps.step3_create_solution_repository.code_generator import (
     CodeGenerator,
 )
-from langchain_core.language_models import BaseLanguageModel
 from app.creation_steps.step3_create_solution_repository.language_handlers import (
     registry as language_registry,
 )
@@ -31,7 +31,7 @@ class SolutionRepositoryCreator:
     """Handler for creating solution repositories."""
 
     def __init__(self, model_name: str):
-        self.model: BaseLanguageModel = init_chat_model(model_name)
+        self.model = init_hyperion_chat_model(model_name)
         self.code_generator: CodeGenerator = CodeGenerator(model=self.model)
         self.workspace_manager: WorkspaceManager = WorkspaceManager()
 
