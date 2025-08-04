@@ -47,9 +47,8 @@ async def generate_suggestions(
             "Learner profile was not provided - continuing with the default values."
         )
         learner_profile = LearnerProfile(
-            feedback_alternative_standard=2,
-            feedback_followup_summary=2,
-            feedback_brief_detailed=2,
+            feedback_detail=2,
+            feedback_formality=2
         )
 
     prompt_input = {
