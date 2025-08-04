@@ -2,7 +2,7 @@ from typing import List, Optional
 
 from pydantic import BaseModel, Field
 
-from memiris import Memory
+from memiris.domain.memory import Memory
 
 
 class MemoryDTO(BaseModel):
