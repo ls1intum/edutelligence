@@ -18,6 +18,16 @@ This discussion likely relates to the following lecture content:
 ```LECTURE CONTENT
 {lecture_content}
 ```
+The tutor has asked a follow-up question:
+```USER QUERY
+{user_query}
+```
+
+Chat history with the tutor:
+```CHAT HISTORY
+{chat_history}
+```
+
 The lecture content consists of excerpts from university lecture slides. Each excerpt includes metadata like lecture\
  week, unit, and page, followed by a slide's text content. These slides present concepts, course instructions, tools\
  used, or assessment details relevant to the course. The content is extracted from a slide viewer and might repeat or\

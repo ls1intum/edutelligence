@@ -74,8 +74,7 @@ def get_chat_history_without_user_query(chat_history: List[PyrisMessage]) -> str
 
 def extract_html_from_text(text: str):
     html_pattern = re.compile(
-        r"(?P<html>(<[^>]+>.*?</[^>]+>)|(&lt;[^&]+&gt;.*?&lt;/[^&]+&gt;))",
-        re.DOTALL
+        r"(?P<html>(<[^>]+>.*?</[^>]+>)|(&lt;[^&]+&gt;.*?&lt;/[^&]+&gt;))", re.DOTALL
     )
     match = html_pattern.search(text)
     if match:
@@ -142,10 +141,11 @@ def extract_json_from_text(text: str):
             return None
     return None
 
+
 def lecture_content_retrieval(
-        dto: CommunicationTutorSuggestionPipelineExecutionDTO,
-        chat_summary: str,
-        db: VectorDatabase
+    dto: CommunicationTutorSuggestionPipelineExecutionDTO,
+    chat_summary: str,
+    db: VectorDatabase,
 ) -> str:
     """
     Retrieve content from indexed lecture content.
@@ -155,8 +155,10 @@ def lecture_content_retrieval(
     and return the most relevant paragraphs.
     """
 
-    query = (f"I want to understand the following summarized discussion better: {chat_summary}\n. What are the relevant"
-             f" lecture slides, transcriptions and segments that I can use to answer the question?")
+    query = (
+        f"I want to understand the following summarized discussion better: {chat_summary}\n. What are the relevant"
+        f" lecture slides, transcriptions and segments that I can use to answer the question?"
+    )
     lecture_retrieval = LectureRetrieval(db.client)
 
     try:
@@ -196,9 +198,9 @@ def lecture_content_retrieval(
 
 
 def faq_content_retrieval(
-        db: VectorDatabase,
-        chat_summary: str,
-        dto: CommunicationTutorSuggestionPipelineExecutionDTO,
+    db: VectorDatabase,
+    chat_summary: str,
+    dto: CommunicationTutorSuggestionPipelineExecutionDTO,
 ) -> str:
     """
     Retrieve content from indexed FAQs.
@@ -210,8 +212,10 @@ def faq_content_retrieval(
     :param dto: The data transfer object containing course information and settings.
     :return: A formatted string containing the relevant FAQs.
     """
-    query = (f"I want to understand the following summarized discussion better: {chat_summary}\n. Could you provide me"
-             f" some additional information?")
+    query = (
+        f"I want to understand the following summarized discussion better: {chat_summary}\n. Could you provide me"
+        f" some additional information?"
+    )
     faq_retriever = FaqRetrieval(db.client)
     chat_history = _filter_artifact_messages(dto.chat_history)
     retrieved_faqs = faq_retriever(
@@ -226,6 +230,7 @@ def faq_content_retrieval(
     result = format_faqs(retrieved_faqs)
     return result
 
+
 def _filter_artifact_messages(chat_history: List[PyrisMessage]) -> List[PyrisMessage]:
     """
     Filter out artifact messages from the chat history.
@@ -233,5 +238,7 @@ def _filter_artifact_messages(chat_history: List[PyrisMessage]) -> List[PyrisMes
     :return: Filtered list of messages without artifact messages.
     """
     return [
-        message for message in chat_history if message.sender != IrisMessageRole.ARTIFACT
+        message
+        for message in chat_history
+        if message.sender != IrisMessageRole.ARTIFACT
     ]

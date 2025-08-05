@@ -10,8 +10,9 @@ from iris.common.pyris_message import PyrisMessage
 from iris.common.tutor_suggestion import (
     ChannelType,
     extract_json_from_text,
+    get_chat_history_without_user_query,
     get_last_artifact,
-    get_user_query, get_chat_history_without_user_query,
+    get_user_query,
 )
 from iris.domain.communication.communication_tutor_suggestion_pipeline_execution_dto import (
     CommunicationTutorSuggestionPipelineExecutionDTO,
@@ -20,7 +21,9 @@ from iris.domain.data.text_exercise_dto import TextExerciseDTO
 from iris.llm import CompletionArguments, ModelVersionRequestHandler
 from iris.llm.langchain import IrisLangchainChatModel
 from iris.pipeline import Pipeline
-from iris.pipeline.prompts.tutor_suggestion.lecture_query_prompt import lecture_query_prompt
+from iris.pipeline.prompts.tutor_suggestion.lecture_query_prompt import (
+    lecture_query_prompt,
+)
 from iris.pipeline.prompts.tutor_suggestion.programming_exercise_query_prompt import (
     programming_exercise_query_prompt,
 )
@@ -51,8 +54,8 @@ class TutorSuggestionUserQueryPipeline(Pipeline):
 
     def __init__(
         self,
+        chat_type: str,
         variant: str = "default",
-        chat_type: str = ChannelType.TEXT_EXERCISE,
         callback: TutorSuggestionCallback = None,
     ):
         super().__init__(implementation_id="tutor_suggestion_user_query_pipeline")
@@ -88,7 +91,6 @@ class TutorSuggestionUserQueryPipeline(Pipeline):
                 [("system", lecture_query_prompt())]
             )
 
-
     @traceable(name="Tutor Suggestion User Query Pipeline")
     def __call__(
         self,
@@ -97,7 +99,7 @@ class TutorSuggestionUserQueryPipeline(Pipeline):
         dto: TextExerciseDTO = None,
         communication_dto: CommunicationTutorSuggestionPipelineExecutionDTO = None,
         code_feedback: str = None,
-        lecture_contents: str = "None"
+        lecture_contents: str = "None",
     ):
         """
         Run the pipeline to generate an answer for the user query.
