@@ -1,6 +1,6 @@
 import platform
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, Any, Optional, Callable, List, Union, Awaitable
 
 from fastapi import APIRouter, status
@@ -29,7 +29,7 @@ class HealthCheck(BaseModel):
     version: str = Field(..., description="Application version")
     uptime_seconds: int = Field(..., description="Application uptime in seconds")
     timestamp: datetime = Field(
-        default_factory=datetime.now, description="Time when health check was performed"
+        default_factory=lambda: datetime.now(timezone.utc), description="Time when health check was performed"
     )
     components: Dict[str, ComponentHealth] = Field(
         default_factory=dict, description="Status of individual components"
@@ -41,7 +41,7 @@ class HealthCheck(BaseModel):
                 "status": "OK",
                 "version": "1.0.0",
                 "uptime_seconds": 3600,
-                "timestamp": "2025-03-06T12:00:00",
+                "timestamp": "2025-08-01T14:40:51.244812Z",
                 "components": {
                     "system": {
                         "status": "OK",
