@@ -5,6 +5,7 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import Runnable
 from langsmith import traceable
+import threading
 
 from iris.common.pipeline_enum import PipelineEnum
 from iris.common.tutor_suggestion import (
@@ -123,10 +124,27 @@ class TutorSuggestionPipeline(Pipeline):
 
         channel_type = get_channel_type(dto)
 
-        self.lecture_content = self._get_relevant_lecture_content(dto)
+        lecture_content_result = {}
+        faq_content_result = {}
 
-        self.callback.in_progress("Retrieving faq content")
-        self.faq_content = faq_content_retrieval(self.db, self.summary_text, dto)
+        def get_lecture_content():
+            lecture_content_result["data"] = self._get_relevant_lecture_content(dto)
+
+        def get_faq_content():
+            faq_content_result["data"] = faq_content_retrieval(self.db, self.summary_text, dto)
+
+        lecture_thread = threading.Thread(target=get_lecture_content)
+        faq_thread = threading.Thread(target=get_faq_content)
+
+        lecture_thread.start()
+        faq_thread.start()
+        self.callback.in_progress("Retrieving lecture and FAQ content")
+
+        lecture_thread.join()
+        faq_thread.join()
+
+        self.lecture_content = lecture_content_result["data"]
+        self.faq_content = faq_content_result["data"]
 
         if channel_type == ChannelType.TEXT_EXERCISE:
             self._run_pipeline(
@@ -246,9 +264,7 @@ class TutorSuggestionPipeline(Pipeline):
         Retrieves relevant lecture content based on the current DTO and summary.
         :return: Relevant lecture content as a string.
         """
-        self.callback.in_progress("Retrieving lecture content from database")
         lecture_content = lecture_content_retrieval(dto, self.summary_text, self.db)
-        self.callback.in_progress("Summarizing lecture content")
         query = (
             f"Based on the provided lecture transcriptions, summarize the key points relevant to the following"
             f" discussion. Clearly identify essential concepts, explanations, examples, and instructions "

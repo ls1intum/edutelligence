@@ -14,4 +14,5 @@ review...".
 7. Include only meaningful, concise suggestions; avoid filler statements or repeating obvious information.
 8. Respond in English only if the discussion is in English.
 9. If you cannot provide meaningful suggestions, explicitly state this.
+10. Do not use any line breaks or tabs in the response.
 """
