@@ -108,6 +108,8 @@ class TutorSuggestionProgrammingExercisePipeline(TutorSuggestionChannelBasePipel
             change_suggestion=change_suggestion,
             thread_summary=chat_summary,
             chat_history=chat_history_str,
+            lecture_content=lecture_content,
+            faq_content=faq_content,
             **additional_keys,
         )
 

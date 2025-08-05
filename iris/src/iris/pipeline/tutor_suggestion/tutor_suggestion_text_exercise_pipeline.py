@@ -72,6 +72,8 @@ class TutorSuggestionTextExercisePipeline(TutorSuggestionChannelBasePipeline):
             change_suggestion=change_suggestion,
             thread_summary=chat_summary,
             chat_history=chat_history_str,
+            faq_content=faq_content,
+            lecture_content=lecture_content,
             **additional_keys,
         )
         return html_response, answer

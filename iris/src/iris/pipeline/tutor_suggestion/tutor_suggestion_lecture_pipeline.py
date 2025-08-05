@@ -1,5 +1,7 @@
 import logging
+
 from langsmith import traceable
+
 from iris.common.tutor_suggestion import (
     ChannelType,
     get_chat_history_without_user_query,
@@ -65,6 +67,7 @@ class TutorSuggestionLecturePipeline(TutorSuggestionChannelBasePipeline):
             thread_summary=chat_summary,
             chat_history=chat_history_str,
             lecture_content=lecture_content,
+            faq_content=faq_content,
         )
 
         return html_response, answer

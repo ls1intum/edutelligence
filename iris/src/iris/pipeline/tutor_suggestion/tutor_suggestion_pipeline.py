@@ -252,7 +252,8 @@ class TutorSuggestionPipeline(Pipeline):
         query = (
             f"Based on the provided lecture transcriptions, summarize the key points relevant to the following"
             f" discussion. Clearly identify essential concepts, explanations, examples, and instructions "
-            f"mentioned in the lecture content. Maintain clarity and conciseness. "
+            f"mentioned in the lecture content. Maintain clarity and conciseness. If the lecture content is not"
+            f"related to the discussion, state that explicitly.\n\n"
             f"```LECTURE CONTENT"
             f"{lecture_content}"
             f"```"
@@ -266,6 +267,7 @@ class TutorSuggestionPipeline(Pipeline):
             self._append_tokens(
                 self.llm.tokens, PipelineEnum.IRIS_TUTOR_SUGGESTION_PIPELINE
             )
+            logger.info(response)
             return response
         except Exception as e:
             logger.error(f"Error retrieving relevant lecture content: {e}")

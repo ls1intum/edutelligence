@@ -82,6 +82,12 @@ def extract_html_from_text(text: str):
     else:
         return None
 
+def extract_list_html_from_text(text: str):
+    html_pattern = re.compile(
+        r"(?P<html><ul>.*?</ul>|&lt;ul&gt;.*?&lt;/ul&gt;)", re.DOTALL
+    )
+    match = html_pattern.search(text)
+    return match.group("html").strip() if match else None
 
 def has_html(text: str):
     """

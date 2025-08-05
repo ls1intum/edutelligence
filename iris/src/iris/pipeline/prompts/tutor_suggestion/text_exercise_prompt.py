@@ -18,7 +18,7 @@ The discussion likely relates to the following text exercise:
 {problem_statement}
 ```
 
-Example solution:
+Example solution that is only provided for the tutor, the student does not see it:
 ```EXAMPLE SOLUTION
 {example_solution}
 ```
@@ -28,13 +28,24 @@ The tutor has asked a follow-up question:
 {user_query}
 ```
 
+Use those lecture contents for further context:
+```LECTURE CONTENT
+{lecture_content}
+```
+
+This FAQ content might also be relevant:
+```FAQ CONTENT
+{faq_content}
+```
+
 Chat history with the tutor:
 ```CHAT HISTORY
 {chat_history}
 ```
 
 Only use information from the problem statement and example solution. You may use the user query and chat history to\
- understand what the tutor needs. Never add any external knowledge.
+ understand what the tutor needs. Never add any external knowledge. The provided lecture and FAQ content can also\
+be used for context.
 
 Your task is to generate short, helpful suggestions that guide the tutor to support the student—without giving away\
  any answers or solution steps.

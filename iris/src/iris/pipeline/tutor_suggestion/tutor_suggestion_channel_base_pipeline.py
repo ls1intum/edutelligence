@@ -9,6 +9,7 @@ from iris.common.pyris_message import IrisMessageRole, PyrisMessage
 from iris.common.tutor_suggestion import (
     extract_html_from_text,
     extract_json_from_text,
+    extract_list_html_from_text,
     has_html,
 )
 from iris.domain.communication.communication_tutor_suggestion_pipeline_execution_dto import (
@@ -102,6 +103,7 @@ class TutorSuggestionChannelBasePipeline(Pipeline):
         thread_summary: str,
         chat_history: str,
         lecture_content: str,
+        faq_content: str,
         **additional_keys,
     ):
         if "NO" not in change_suggestion:
@@ -112,6 +114,7 @@ class TutorSuggestionChannelBasePipeline(Pipeline):
                 "chat_history": chat_history,
                 "user_query": change_suggestion,
                 "lecture_content": lecture_content,
+                "faq_content": faq_content,
             }
             prompt_input = {
                 **base_keys,
@@ -119,6 +122,7 @@ class TutorSuggestionChannelBasePipeline(Pipeline):
             }
             try:
                 response = (self.prompt | self.pipeline).invoke(prompt_input)
+                logger.info(response)
                 html_response = self._handle_suggestion_response(response, is_answered)
 
                 self._append_tokens(
@@ -140,7 +144,7 @@ class TutorSuggestionChannelBasePipeline(Pipeline):
             return ""
         if has_html(result):
             html_response = result
-            extracted = extract_html_from_text(result)
+            extracted = extract_list_html_from_text(result)
             if extracted:
                 html_response = extracted
             if is_answered:
