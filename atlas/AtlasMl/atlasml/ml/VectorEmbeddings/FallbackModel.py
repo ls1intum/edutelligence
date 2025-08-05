@@ -1,7 +1,5 @@
 from sentence_transformers import SentenceTransformer
-
 from atlasml.clients.weaviate import get_weaviate_client, CollectionNames
-
 
 def generate_embeddings(uuid: str, sentence: str):
     weaviate_client = get_weaviate_client()
