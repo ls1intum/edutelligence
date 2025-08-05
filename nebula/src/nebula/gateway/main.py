@@ -26,9 +26,6 @@ EXCLUDE_PATHS = ["/transcribe"]
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("🚀 Lifespan startup starting...")
-    grpc_thread = threading.Thread(target=grpc_server.serve, daemon=True)
-    grpc_thread.start()
-    logger.info("✅ gRPC server thread started.")
     yield
     logger.info("🛑 Lifespan shutting down.")
     grpc_server.stop()
@@ -47,4 +44,3 @@ app.add_middleware(
 add_security_schema_to_app(app, header_name=HEADER_NAME, exclude_paths=EXCLUDE_PATHS)
 
 app.include_router(transcribe.router, prefix="/transcribe", tags=["Transcription"])
-logging.info("Started gateway service")

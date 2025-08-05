@@ -34,5 +34,5 @@ class FaqConsistencyDTO(BaseDTO):
 class FaqConsistencyResponse(BaseDTO):
     consistent: bool = Field(alias="consistent")
     inconsistencies: List[str] = Field(default_factory=list)
-    suggestions: List[str] = Field(default_factory=list)
     improvement: str = Field(alias="improvement")
+    faqIds: List[int] = Field(alias="faqIds", default_factory=list)

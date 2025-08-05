@@ -28,13 +28,13 @@ Generate the following response dictionary:
 "type": "consistent" or "inconsistent"
 The following four entries are optional and should only be set if inconsistencies are detected.
 
-"faqs" must be a JSON array of objects. Each entry must be a JSON dictionary with exactly the following fields:
-"faq_id" (string or number)
-"faq_question_title" (string)
-"faq_question_answer" (string)
-Do not return strings like "faq_id: 1, faq_question_title: ..., ..." — return actual JSON objects.
-Assume that existing FAQs are correct, so the new final_result is inconsistent.
-Include only FAQs that contradict the final_result. Do not include FAQs that are consistent with the final_result.
+"inconsistencies": a list of strings. Each entry must clearly describe why the final_result is inconsistent and \n
+explicitly reference the relevant existing FAQ via its faq_id. 
+When mentioning the faqId, use a phrase like "This is inconsistent with the FAQ 3 " with the actual faq_id from the FAQs.
+If there are no inconsistencies this entry should be an empty list.
+
+"faqIds": a list of numbers.  Each entry(faq_id) for which inconsistencies were detected.
+There must be one ID per inconsistency, matching the FAQ referenced in the "inconsistencies" list.
 
 "message": "The provided text was rephrased, however it contains inconsistent information with existing FAQs."
 
@@ -50,7 +50,11 @@ Make sure to not include any additional FAQs that are consistent with the final_
 - Highlight how you can improve the rewritten text to be consistent with the existing FAQs.
 Both should have the same amount of entries.
 
--"improved version": This entry should be a string that represents the improved version of the final result.
+-"improvement": This entry should be a string that represents the improved version of the final result.
+Make sure to not include any additional information in the improved version. If you find inconsistencies, make sure to 
+improve the final result to be consistent with the existing FAQs. 
+You must always return an improved version, if there is a inconsistency.
+
 
 Do NOT provide any explanations or additional text.
 """

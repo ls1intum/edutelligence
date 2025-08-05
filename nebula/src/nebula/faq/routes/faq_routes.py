@@ -27,10 +27,5 @@ def consistency_check_faq(request: FaqConsistencyDTO):
         faqs=request.faqs,
         to_be_checked=request.to_be_checked
     )
-
-    return FaqConsistencyResponse.model_construct(
-        consistent=result["consistent"],
-        inconsistencies=result["inconsistencies"],
-        suggestions=result["suggestions"],
-        improvement=result["improvement"],
-    )
+    logging.info("Consistency check result: %s", result)
+    return result
