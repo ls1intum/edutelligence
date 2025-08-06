@@ -9,7 +9,7 @@ from iris.common.tutor_suggestion import (
     get_chat_history_without_user_query,
 )
 from iris.domain.data.text_exercise_dto import TextExerciseDTO
-from iris.pipeline.prompts.tutor_suggestion.text_exercise_prompt import (
+from iris.pipeline.prompts.tutor_suggestion.suggestion_prompts import (
     text_exercise_prompt,
 )
 from iris.pipeline.tutor_suggestion.tutor_suggestion_channel_base_pipeline import (

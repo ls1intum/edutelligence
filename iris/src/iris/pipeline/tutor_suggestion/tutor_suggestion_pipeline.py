@@ -132,6 +132,7 @@ class TutorSuggestionPipeline(Pipeline):
 
         def get_faq_content():
             faq_content_result["data"] = faq_content_retrieval(self.db, self.summary_text, dto)
+            self.callback.in_progress("Retrieved relevant FAQ content")
 
         lecture_thread = threading.Thread(target=get_lecture_content)
         faq_thread = threading.Thread(target=get_faq_content)
@@ -294,7 +295,7 @@ class TutorSuggestionPipeline(Pipeline):
             self._append_tokens(
                 llm.tokens, PipelineEnum.IRIS_TUTOR_SUGGESTION_PIPELINE
             )
-            logger.info(response)
+            self.callback.in_progress("Retrieved relevant lecture content")
             return response
         except Exception as e:
             logger.error(f"Error retrieving relevant lecture content: {e}")

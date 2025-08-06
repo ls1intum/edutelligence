@@ -21,13 +21,9 @@ from iris.domain.data.text_exercise_dto import TextExerciseDTO
 from iris.llm import CompletionArguments, ModelVersionRequestHandler
 from iris.llm.langchain import IrisLangchainChatModel
 from iris.pipeline import Pipeline
-from iris.pipeline.prompts.tutor_suggestion.lecture_query_prompt import (
+from iris.pipeline.prompts.tutor_suggestion.tutor_query_prompts import (
     lecture_query_prompt,
-)
-from iris.pipeline.prompts.tutor_suggestion.programming_exercise_query_prompt import (
     programming_exercise_query_prompt,
-)
-from iris.pipeline.prompts.tutor_suggestion.text_exercise_query_prompt import (
     text_exercise_query_prompt,
 )
 from iris.web.status.status_update import TutorSuggestionCallback

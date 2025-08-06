@@ -12,7 +12,7 @@ from iris.domain.communication.communication_tutor_suggestion_pipeline_execution
 )
 from iris.domain.data.text_message_content_dto import TextMessageContentDTO
 from iris.pipeline.chat.code_feedback_pipeline import CodeFeedbackPipeline
-from iris.pipeline.prompts.tutor_suggestion.programming_exercise_prompt import (
+from iris.pipeline.prompts.tutor_suggestion.suggestion_prompts import (
     programming_exercise_prompt,
 )
 from iris.pipeline.tutor_suggestion.tutor_suggestion_channel_base_pipeline import (

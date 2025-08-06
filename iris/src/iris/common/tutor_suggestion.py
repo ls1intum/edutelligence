@@ -146,7 +146,6 @@ def extract_json_from_text(input_string):
     try:
         json_str = extract_json_substring(input_string)
         json_str = escape_json_control_chars(json_str)
-        logger.info("Cleaned JSON string: %s", json_str)
         return json.loads(json_str)
     except (json.JSONDecodeError, ValueError) as e:
         logger.error("Error parsing JSON: %s | Raw string: %r", e, input_string)

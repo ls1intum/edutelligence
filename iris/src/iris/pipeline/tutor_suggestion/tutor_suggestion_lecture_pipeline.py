@@ -9,7 +9,7 @@ from iris.common.tutor_suggestion import (
 from iris.domain.communication.communication_tutor_suggestion_pipeline_execution_dto import (
     CommunicationTutorSuggestionPipelineExecutionDTO,
 )
-from iris.pipeline.prompts.tutor_suggestion.lecture_prompt import lecture_prompt
+from iris.pipeline.prompts.tutor_suggestion.suggestion_prompts import lecture_prompt
 from iris.pipeline.tutor_suggestion.tutor_suggestion_channel_base_pipeline import (
     TutorSuggestionChannelBasePipeline,
 )
