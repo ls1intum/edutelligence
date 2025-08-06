@@ -84,6 +84,8 @@ Respond in JSON with two fields:
 - `"reply"`: the direct response to the tutor.
 - `"suggestion_prompt"`: set to the new suggestion prompt if needed, otherwise `"NO"`.
 
+IMPORTANT: Always respond to the tutors, if you provide a suggestion_prompt, still respond to the tutor in some way.
+
 Example format:
 {{"reply": "<reply>", "suggestion_prompt": "<prompt or NO>"}}
 """

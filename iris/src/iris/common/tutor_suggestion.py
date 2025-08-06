@@ -125,27 +125,32 @@ def sort_post_answers(dto):
     return dto
 
 
-def extract_json_from_text(text: str):
-    """
-    Extracts the JSON string from the given text.
-    This function uses a regular expression to find the JSON string
-    and then attempts to parse it into a Python dictionary.
-    :param text: The input text containing the JSON string.
-    :return: A dictionary representation of the JSON string, or None if parsing fails.
-    :raises json.JSONDecodeError: If the JSON string cannot be parsed.
-    """
-    json_pattern = re.compile(r"\{.*?\}", re.DOTALL | re.MULTILINE)
-    matches = json_pattern.findall(text)
 
-    if matches:
-        json_str = matches[-1]
-        try:
-            data = json.loads(json_str)
-            return data
-        except json.JSONDecodeError as e:
-            logger.error("JSON decoding failed: %s", e)
-            return None
-    return None
+
+def extract_json_substring(input_string):
+    start = input_string.find('{')
+    end = input_string.rfind('}')
+    if start == -1 or end == -1 or start > end:
+        raise ValueError("No valid JSON object found in the input string.")
+    json_substring = input_string[start:end + 1]
+    return json_substring
+
+def escape_json_control_chars(json_str: str) -> str:
+    def replace_inside_quotes(match):
+        content = match.group(0)
+        content = content.replace('\n', '\\n').replace('\t', '\\t')
+        return content
+    return re.sub(r'"(.*?)"', replace_inside_quotes, json_str, flags=re.DOTALL)
+
+def extract_json_from_text(input_string):
+    try:
+        json_str = extract_json_substring(input_string)
+        json_str = escape_json_control_chars(json_str)
+        logger.info("Cleaned JSON string: %s", json_str)
+        return json.loads(json_str)
+    except (json.JSONDecodeError, ValueError) as e:
+        logger.error("Error parsing JSON: %s | Raw string: %r", e, input_string)
+        return None
 
 
 def lecture_content_retrieval(

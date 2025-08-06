@@ -143,7 +143,7 @@ class TutorSuggestionChannelBasePipeline(Pipeline):
             result = json.get("result")
         except AttributeError:
             logger.error("No result found in JSON response.")
-            return ""
+            return self.callback.error("Error in Tutor Suggestion Pipeline")
         if has_html(result):
             html_response = result
             extracted = extract_list_html_from_text(result)
