@@ -23,6 +23,10 @@ Context:
 {lecture_contents}
 ```
 
+```FAQ CONTENTS
+{faq_contents}
+```
+
 ```CHAT HISTORY
 {chat_history}
 ```

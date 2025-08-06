@@ -26,6 +26,10 @@ Context:
 {lecture_contents}
 ```
 
+```FAQ CONTENTS
+{faq_contents}
+```
+
 Title of the exercise: {exercise_title}
 Programming language: {programming_language}
 

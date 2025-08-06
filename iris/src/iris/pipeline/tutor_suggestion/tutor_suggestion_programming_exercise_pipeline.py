@@ -90,6 +90,8 @@ class TutorSuggestionProgrammingExercisePipeline(TutorSuggestionChannelBasePipel
             dto.chat_history,
             chat_type=ChannelType.PROGRAMMING_EXERCISE,
             dto=dto,
+            lecture_content=lecture_content,
+            faq_content=faq_content,
         )
 
         chat_history_str = get_chat_history_without_user_query(

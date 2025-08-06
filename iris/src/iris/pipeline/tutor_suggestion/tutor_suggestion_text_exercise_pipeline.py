@@ -60,6 +60,8 @@ class TutorSuggestionTextExercisePipeline(TutorSuggestionChannelBasePipeline):
             chat_history,
             text_exercise_dto=dto,
             chat_type=ChannelType.TEXT_EXERCISE,
+            lecture_content=lecture_content,
+            faq_content=faq_content,
         )
 
         additional_keys = {

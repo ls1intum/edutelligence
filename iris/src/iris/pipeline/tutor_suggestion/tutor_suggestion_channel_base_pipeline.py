@@ -79,6 +79,7 @@ class TutorSuggestionChannelBasePipeline(Pipeline):
         dto: CommunicationTutorSuggestionPipelineExecutionDTO = None,
         text_exercise_dto: TextExerciseDTO = None,
         lecture_content: str = None,
+        faq_content: str = None,
     ):
         answer = ""
         change_suggestion = ""
@@ -93,6 +94,7 @@ class TutorSuggestionChannelBasePipeline(Pipeline):
                 chat_history=chat_history,
                 communication_dto=dto,
                 lecture_contents=lecture_content,
+                faq_contents=faq_content,
             )
         return answer, change_suggestion
 

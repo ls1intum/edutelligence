@@ -26,6 +26,10 @@ Context:
 {lecture_contents}
 ```
 
+```FAQ CONTENTS
+{faq_contents}
+```
+
 ```EXAMPLE SOLUTION
 {example_solution}
 ```

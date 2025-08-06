@@ -279,9 +279,20 @@ class TutorSuggestionPipeline(Pipeline):
         )
         prompt = ChatPromptTemplate.from_messages([("system", query)])
         try:
-            response = (prompt | self.pipeline).invoke(input={})
+            completion_args = CompletionArguments(temperature=0, max_tokens=8000)
+            if self.variant == "advanced":
+                model = "gpt-4.1"
+            else:
+                model = "gpt-4.1-mini"
+
+            llm = IrisLangchainChatModel(
+                request_handler=ModelVersionRequestHandler(version=model),
+                completion_args=completion_args,
+            )
+            pipeline = llm | StrOutputParser()
+            response = (prompt | pipeline).invoke(input={})
             self._append_tokens(
-                self.llm.tokens, PipelineEnum.IRIS_TUTOR_SUGGESTION_PIPELINE
+                llm.tokens, PipelineEnum.IRIS_TUTOR_SUGGESTION_PIPELINE
             )
             logger.info(response)
             return response

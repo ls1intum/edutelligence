@@ -100,6 +100,7 @@ class TutorSuggestionUserQueryPipeline(Pipeline):
         communication_dto: CommunicationTutorSuggestionPipelineExecutionDTO = None,
         code_feedback: str = None,
         lecture_contents: str = "None",
+        faq_contents: str = "None",
     ):
         """
         Run the pipeline to generate an answer for the user query.
@@ -129,6 +130,7 @@ class TutorSuggestionUserQueryPipeline(Pipeline):
             "thread_summary": chat_summary,
             "chat_history": chat_history_str,
             "lecture_contents": lecture_contents,
+            "faq_contents": faq_contents,
         }
         try:
             if self.chat_type == ChannelType.TEXT_EXERCISE:

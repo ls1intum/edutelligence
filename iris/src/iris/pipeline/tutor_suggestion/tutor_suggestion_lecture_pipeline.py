@@ -55,6 +55,7 @@ class TutorSuggestionLecturePipeline(TutorSuggestionChannelBasePipeline):
             chat_type=ChannelType.LECTURE,
             dto=dto,
             lecture_content=lecture_content,
+            faq_content=faq_content,
         )
 
         chat_history_str = get_chat_history_without_user_query(
