@@ -33,6 +33,7 @@ or no!
 
     return summary_prompt
 
+
 def question_answered_prompt():
     return """You are a discussion classification assistant. Your task is to verify whether a question asked in the
 following summarized discussion has already been answered correctly. Only perform this verification task—nothing else.

@@ -1,5 +1,6 @@
 def text_exercise_query_prompt():
-    return """You are Iris, the AI assistant for tutors on Artemis, the online learning platform of the Technical \
+    return (
+        """You are Iris, the AI assistant for tutors on Artemis, the online learning platform of the Technical \
         University of Munich (TUM). You support tutors by answering their follow-up questions about student discussions\
          or previous suggestions you provided.
 Only use the information given in the provided materials. Do not rely on external knowledge or make assumptions.
@@ -13,11 +14,17 @@ Context:
 {example_solution}
 ```
 
-""" + shared_input_blocks() + shared_user_task() +shared_instructions() + final_query_rules()
+"""
+        + shared_input_blocks()
+        + shared_user_task()
+        + shared_instructions()
+        + final_query_rules()
+    )
 
 
 def programming_exercise_query_prompt():
-    return """You are Iris, the AI assistant for tutors on Artemis, the online learning platform of the Technical \
+    return (
+        """You are Iris, the AI assistant for tutors on Artemis, the online learning platform of the Technical \
         University of Munich (TUM). You support tutors by answering their follow-up questions about student discussions\
          or previous suggestions you provided.
 Only use the information given in the provided materials. Do not rely on external knowledge or make assumptions.
@@ -35,17 +42,26 @@ An external expert provided feedback on the student’s code:
 {code_feedback}
 ```
 
-""" + shared_input_blocks() + shared_user_task() + shared_instructions() + final_query_rules()
+"""
+        + shared_input_blocks()
+        + shared_user_task()
+        + shared_instructions()
+        + final_query_rules()
+    )
 
 
 def lecture_query_prompt():
-    return """You are Iris, the AI assistant for tutors on Artemis, the online learning platform of the Technical \
+    return (
+        """You are Iris, the AI assistant for tutors on Artemis, the online learning platform of the Technical \
  University of Munich (TUM). You support tutors by answering their follow-up questions about student discussions\
 or previous suggestions you provided. You will either answer the user query directly or generate a new suggestion\
 based on the provided context.
 Only use the information given in the provided materials. Do not rely on external knowledge or make assumptions.
 
-""" + shared_input_blocks() + shared_user_task() + """
+"""
+        + shared_input_blocks()
+        + shared_user_task()
+        + """
 
 Explanation:
 - USER QUERY: The tutor's follow-up question or request which is the main focus of your task.
@@ -54,7 +70,10 @@ Explanation:
 - LECTURE CONTENTS: Relevant lecture content that may help answer the tutor's question retrieved by another model.
 - CHAT HISTORY: The chat history with the tutor, which may provide additional context.
 
-""" + shared_instructions() + final_query_rules()
+"""
+        + shared_instructions()
+        + final_query_rules()
+    )
 
 
 def final_query_rules():
@@ -104,6 +123,7 @@ Context:
 ```
 """
 
+
 def shared_user_task():
     return """
 Your task:
@@ -117,6 +137,7 @@ Your task:
 - Always speak directly to the tutor.
 - Be helpful and friendly. End each response by encouraging the tutor to ask if they have more questions.
 """
+
 
 def shared_instructions():
     return """

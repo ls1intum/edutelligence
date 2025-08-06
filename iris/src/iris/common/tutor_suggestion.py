@@ -82,12 +82,14 @@ def extract_html_from_text(text: str):
     else:
         return None
 
+
 def extract_list_html_from_text(text: str):
     html_pattern = re.compile(
         r"(?P<html><ul>.*?</ul>|&lt;ul&gt;.*?&lt;/ul&gt;)", re.DOTALL
     )
     match = html_pattern.search(text)
     return match.group("html").strip() if match else None
+
 
 def has_html(text: str):
     """
@@ -125,22 +127,24 @@ def sort_post_answers(dto):
     return dto
 
 
-
-
 def extract_json_substring(input_string):
-    start = input_string.find('{')
-    end = input_string.rfind('}')
+    start = input_string.find("{")
+    end = input_string.rfind("}")
     if start == -1 or end == -1 or start > end:
         raise ValueError("No valid JSON object found in the input string.")
-    json_substring = input_string[start:end + 1]
+    json_substring = input_string[start : end + 1]
     return json_substring
+
 
 def escape_json_control_chars(json_str: str) -> str:
     def replace_inside_quotes(match):
         content = match.group(0)
-        content = content.replace('\n', '\\n').replace('\t', '\\t')
+        content = content.replace('"', '"')
+        content = content.replace("\n", "\\n").replace("\t", "\\t")
         return content
+
     return re.sub(r'"(.*?)"', replace_inside_quotes, json_str, flags=re.DOTALL)
+
 
 def extract_json_from_text(input_string):
     try:

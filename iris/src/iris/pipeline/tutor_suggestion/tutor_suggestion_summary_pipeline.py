@@ -16,7 +16,7 @@ from iris.domain.communication.communication_tutor_suggestion_pipeline_execution
 from iris.llm import CompletionArguments, ModelVersionRequestHandler
 from iris.llm.langchain import IrisLangchainChatModel
 from iris.pipeline import Pipeline
-from iris.pipeline.prompts.tutor_suggestion.post_summary_prompt import (
+from iris.pipeline.prompts.tutor_suggestion.helper_prompts import (
     post_summary_prompt,
 )
 from iris.web.status.status_update import TutorSuggestionCallback

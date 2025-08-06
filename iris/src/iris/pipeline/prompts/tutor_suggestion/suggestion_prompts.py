@@ -3,7 +3,9 @@ def text_exercise_prompt():
         """You are Iris, the AI assistant for tutors on Artemis, the online learning platform of the Technical\
 University of Munich (TUM). Your task is to generate short suggestions to help a tutor respond to a student discussion.
 
- """ + shared_input_blocks() + """
+ """
+        + shared_input_blocks()
+        + """
 
 The discussion likely relates to the following text exercise:
 ```PROBLEM STATEMENT
@@ -32,7 +34,9 @@ def programming_exercise_prompt():
         """You are Iris, the AI assistant for tutors on Artemis, the online learning platform of the Technical
 University of Munich (TUM). Your task is to generate short suggestions to help a tutor respond to a student discussion.
 
- """ + shared_input_blocks() + """
+ """
+        + shared_input_blocks()
+        + """
 
 This discussion likely relates to the following programming exercise:
 ```PROBLEM STATEMENT
@@ -59,18 +63,21 @@ Your task is to generate short, helpful suggestions that guide the tutor to supp
 
 def lecture_prompt():
     return (
-            """You are Iris, the AI assistant for tutors on Artemis, the online learning platform of the Technical\
+        """You are Iris, the AI assistant for tutors on Artemis, the online learning platform of the Technical\
     University of Munich (TUM). Your task is to read through the provided lecture and faq content and generate suggestions\
      for tutors on how to answer a discussion based on the slides.
     
-    """ + shared_input_blocks() + """
+    """
+        + shared_input_blocks()
+        + """
     
     Only refer to information from the lecture or faq content. Do not add any external knowledge or context.
     
     If the discussion is unrelated to the lecture content, you should mention that.
     """
-            + tutor_suggestion_final_rules()
+        + tutor_suggestion_final_rules()
     )
+
 
 def tutor_suggestion_final_rules():
     return """
@@ -90,6 +97,7 @@ review...".
 9. If you cannot provide meaningful suggestions, explicitly state this.
 10. Do not use any line breaks or tabs in the response.
 """
+
 
 def shared_input_blocks():
     return """

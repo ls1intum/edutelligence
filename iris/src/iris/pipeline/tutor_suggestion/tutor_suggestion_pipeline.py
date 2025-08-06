@@ -1,11 +1,11 @@
 import logging
+import threading
 from typing import List
 
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import Runnable
 from langsmith import traceable
-import threading
 
 from iris.common.pipeline_enum import PipelineEnum
 from iris.common.tutor_suggestion import (
@@ -22,23 +22,16 @@ from iris.llm import CompletionArguments, ModelVersionRequestHandler
 from iris.llm.external.model import LanguageModel
 from iris.llm.langchain import IrisLangchainChatModel
 from iris.pipeline import Pipeline
-from iris.pipeline.prompts.tutor_suggestion.question_answered_prompt import (
+from iris.pipeline.prompts.tutor_suggestion.helper_prompts import (
+    lecture_summary_prompt,
     question_answered_prompt,
 )
-
-from iris.pipeline.prompts.tutor_suggestion.helper_prompts import lecture_summary_prompt
 from iris.pipeline.shared.utils import filter_variants_by_available_models
-from iris.pipeline.tutor_suggestion.tutor_suggestion_lecture_pipeline import (
-    TutorSuggestionLecturePipeline,
-)
-from iris.pipeline.tutor_suggestion.tutor_suggestion_programming_exercise_pipeline import (
-    TutorSuggestionProgrammingExercisePipeline,
+from iris.pipeline.tutor_suggestion.tutor_suggestion_channel_base_pipeline import (
+    TutorSuggestionChannelBasePipeline,
 )
 from iris.pipeline.tutor_suggestion.tutor_suggestion_summary_pipeline import (
     TutorSuggestionSummaryPipeline,
-)
-from iris.pipeline.tutor_suggestion.tutor_suggestion_text_exercise_pipeline import (
-    TutorSuggestionTextExercisePipeline,
 )
 from iris.vector_database.database import VectorDatabase
 from iris.web.status.status_update import TutorSuggestionCallback
@@ -133,7 +126,9 @@ class TutorSuggestionPipeline(Pipeline):
             lecture_content_result["data"] = self._get_relevant_lecture_content(dto)
 
         def get_faq_content():
-            faq_content_result["data"] = faq_content_retrieval(self.db, self.summary_text, dto)
+            faq_content_result["data"] = faq_content_retrieval(
+                self.db, self.summary_text, dto
+            )
             self.callback.in_progress("Retrieved relevant FAQ content")
 
         lecture_thread = threading.Thread(target=get_lecture_content)
@@ -151,54 +146,57 @@ class TutorSuggestionPipeline(Pipeline):
 
         if channel_type == ChannelType.TEXT_EXERCISE:
             self._run_pipeline(
+                channel_type=ChannelType.TEXT_EXERCISE,
                 label="text exercise",
-                pipeline_class=TutorSuggestionTextExercisePipeline,
-                dto=dto.text_exercise,
-                chat_history=self.dto.chat_history,
+                dto=dto,
             )
         elif channel_type == ChannelType.PROGRAMMING_EXERCISE:
             self._run_pipeline(
+                channel_type=ChannelType.PROGRAMMING_EXERCISE,
                 label="programming exercise",
-                pipeline_class=TutorSuggestionProgrammingExercisePipeline,
                 dto=dto,
             )
         elif channel_type == ChannelType.LECTURE:
             self._run_pipeline(
+                channel_type=ChannelType.LECTURE,
                 label="lecture",
-                pipeline_class=TutorSuggestionLecturePipeline,
                 dto=dto,
             )
         else:
             # If it's a general or other type of channel, we use the lecture pipeline to handle it as it relies on the
             # lecture contents.
             self._run_pipeline(
+                channel_type=ChannelType.LECTURE,
                 label="lecture",
-                pipeline_class=TutorSuggestionLecturePipeline,
                 dto=dto,
             )
 
     def _run_pipeline(
-        self, label: str, pipeline_class, *pipeline_args, **pipeline_kwargs
+        self,
+        label: str,
+        channel_type: str,
+        dto: CommunicationTutorSuggestionPipelineExecutionDTO,
     ):
         """
         Helper method to run a specific pipeline and handle errors.
         :param label: Label for the pipeline being run.
-        :param pipeline_class: The pipeline class to instantiate and run.
-        :param pipeline_args: Positional arguments for the pipeline.
-        :param pipeline_kwargs: Keyword arguments for the pipeline.
+        :param channel_type: Type of the channel (e.g., TEXT_EXERCISE, PROGRAMMING_EXERCISE, LECTURE).
+        :param dto: Data transfer object containing the execution data.
         """
         self.callback.in_progress(f"Generating suggestions for {label}")
-        pipeline_instance = pipeline_class(variant=self.variant, callback=self.callback)
+        pipeline = TutorSuggestionChannelBasePipeline(
+            variant=self.variant, callback=self.callback
+        )
         try:
-            result, tutor_answer = pipeline_instance(
+            result, tutor_answer = pipeline(
+                channel_type,
                 self.lecture_content,
                 self.faq_content,
                 self.summary_text,
                 self.is_answered,
-                *pipeline_args,
-                **pipeline_kwargs,
+                dto,
             )
-            for tokens in getattr(pipeline_instance, "tokens", []):
+            for tokens in getattr(pipeline, "tokens", []):
                 self._append_tokens(tokens, PipelineEnum.IRIS_TUTOR_SUGGESTION_PIPELINE)
         except AttributeError as e:
             self.callback.error(f"Error running {label} pipeline: {e}")
@@ -268,7 +266,9 @@ class TutorSuggestionPipeline(Pipeline):
         :return: Relevant lecture content as a string.
         """
         lecture_content = lecture_content_retrieval(dto, self.summary_text, self.db)
-        prompt = ChatPromptTemplate.from_messages([("system", lecture_summary_prompt())])
+        prompt = ChatPromptTemplate.from_messages(
+            [("system", lecture_summary_prompt())]
+        )
         try:
             completion_args = CompletionArguments(temperature=0, max_tokens=8000)
             if self.variant == "advanced":
@@ -281,13 +281,13 @@ class TutorSuggestionPipeline(Pipeline):
                 completion_args=completion_args,
             )
             pipeline = llm | StrOutputParser()
-            response = (prompt | pipeline).invoke(input={
-                "lecture_content": lecture_content,
-                "summary_text": self.summary_text,
-            })
-            self._append_tokens(
-                llm.tokens, PipelineEnum.IRIS_TUTOR_SUGGESTION_PIPELINE
+            response = (prompt | pipeline).invoke(
+                input={
+                    "lecture_content": lecture_content,
+                    "summary_text": self.summary_text,
+                }
             )
+            self._append_tokens(llm.tokens, PipelineEnum.IRIS_TUTOR_SUGGESTION_PIPELINE)
             self.callback.in_progress("Retrieved relevant lecture content")
             return response
         except Exception as e:

@@ -3,22 +3,32 @@ import logging
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import Runnable
+from langsmith import traceable
 
 from iris.common.pipeline_enum import PipelineEnum
 from iris.common.pyris_message import IrisMessageRole, PyrisMessage
 from iris.common.tutor_suggestion import (
+    ChannelType,
     extract_html_from_text,
     extract_json_from_text,
     extract_list_html_from_text,
+    get_chat_history_without_user_query,
     has_html,
 )
 from iris.domain.communication.communication_tutor_suggestion_pipeline_execution_dto import (
     CommunicationTutorSuggestionPipelineExecutionDTO,
 )
 from iris.domain.data.text_exercise_dto import TextExerciseDTO
+from iris.domain.data.text_message_content_dto import TextMessageContentDTO
 from iris.llm import CompletionArguments, ModelVersionRequestHandler
 from iris.llm.langchain import IrisLangchainChatModel
 from iris.pipeline import Pipeline
+from iris.pipeline.chat.code_feedback_pipeline import CodeFeedbackPipeline
+from iris.pipeline.prompts.tutor_suggestion.suggestion_prompts import (
+    lecture_prompt,
+    programming_exercise_prompt,
+    text_exercise_prompt,
+)
 from iris.pipeline.tutor_suggestion.tutor_suggestion_user_query_pipeline import (
     TutorSuggestionUserQueryPipeline,
 )
@@ -41,12 +51,10 @@ class TutorSuggestionChannelBasePipeline(Pipeline):
 
     def __init__(
         self,
-        prompt: str,
-        implementation_id: str,
         variant: str = "default",
         callback: TutorSuggestionCallback = None,
     ):
-        super().__init__(implementation_id=implementation_id)
+        super().__init__(implementation_id="tutor_suggestion_pipeline")
         self.variant = variant
         completion_args = CompletionArguments(temperature=0, max_tokens=8000)
 
@@ -63,13 +71,100 @@ class TutorSuggestionChannelBasePipeline(Pipeline):
         self.pipeline = self.llm | StrOutputParser()
         self.tokens = []
         self.callback = callback
-        self.prompt = ChatPromptTemplate.from_messages([("system", prompt)])
 
     def __str__(self):
         return f"{self.__class__.__name__}(llm={self.llm})"
 
-    def __call__(self):
-        raise NotImplementedError("This method should be implemented in subclasses.")
+    @traceable(name="Tutor Suggestion Pipeline")
+    def __call__(
+        self,
+        channel_type: str,
+        lecture_content: str,
+        faq_content: str,
+        chat_summary: str,
+        is_answered: bool,
+        dto: CommunicationTutorSuggestionPipelineExecutionDTO,
+    ):
+        additional_keys = {}
+        if channel_type == ChannelType.TEXT_EXERCISE:
+            self.prompt = ChatPromptTemplate.from_messages(
+                [("system", text_exercise_prompt())]
+            )
+            if dto.text_exercise is None:
+                raise ValueError("Text exercise DTO cannot be None")
+            additional_keys = {
+                "problem_statement": dto.text_exercise.problem_statement,
+                "example_solution": dto.text_exercise.example_solution,
+            }
+        elif channel_type == ChannelType.PROGRAMMING_EXERCISE:
+            self.prompt = ChatPromptTemplate.from_messages(
+                [("system", programming_exercise_prompt())]
+            )
+            problem_statement = dto.exercise.problem_statement
+            exercise_title = dto.exercise.name
+            programming_language = dto.exercise.programming_language
+
+            code_feedback_response = "!NONE!"
+
+            if dto.submission:
+                code_feedback = CodeFeedbackPipeline(variant="default")
+                query = PyrisMessage(
+                    sender=IrisMessageRole.USER,
+                    contents=[
+                        TextMessageContentDTO(
+                            textContent=chat_summary,
+                        )
+                    ],
+                )
+                code_feedback_response = code_feedback(
+                    chat_history=[],
+                    question=query,
+                    repository=dto.submission.repository,
+                    problem_statement=dto.exercise.problem_statement,
+                    build_failed=dto.submission.build_failed,
+                    build_logs=dto.submission.build_log_entries,
+                    feedbacks=(
+                        dto.submission.latest_result.feedbacks
+                        if dto.submission and dto.submission.latest_result
+                        else []
+                    ),
+                )
+            additional_keys = {
+                "exercise_title": exercise_title,
+                "programming_language": programming_language,
+                "problem_statement": problem_statement,
+                "code_feedback": code_feedback_response,
+            }
+
+        elif channel_type == ChannelType.LECTURE:
+            self.prompt = ChatPromptTemplate.from_messages(
+                [("system", lecture_prompt())]
+            )
+
+        answer, change_suggestion = self._handle_user_query(
+            chat_summary=chat_summary,
+            chat_history=dto.chat_history,
+            chat_type=channel_type,
+            dto=dto,
+            lecture_content=lecture_content,
+            faq_content=faq_content,
+        )
+
+        chat_history_str = get_chat_history_without_user_query(
+            chat_history=dto.chat_history
+        )
+
+        html_response = self._create_tutor_suggestion(
+            is_answered=is_answered,
+            change_suggestion=change_suggestion,
+            thread_summary=chat_summary,
+            chat_history=chat_history_str,
+            lecture_content=lecture_content,
+            faq_content=faq_content,
+            **additional_keys,
+        )
+
+        return html_response, answer
 
     def _handle_user_query(
         self,
@@ -77,7 +172,6 @@ class TutorSuggestionChannelBasePipeline(Pipeline):
         chat_history: list[PyrisMessage],
         chat_type: str,
         dto: CommunicationTutorSuggestionPipelineExecutionDTO = None,
-        text_exercise_dto: TextExerciseDTO = None,
         lecture_content: str = None,
         faq_content: str = None,
     ):
@@ -89,7 +183,7 @@ class TutorSuggestionChannelBasePipeline(Pipeline):
             )
 
             answer, change_suggestion = user_query_pipeline(
-                dto=text_exercise_dto,
+                dto=dto.text_exercise,
                 chat_summary=chat_summary,
                 chat_history=chat_history,
                 communication_dto=dto,
