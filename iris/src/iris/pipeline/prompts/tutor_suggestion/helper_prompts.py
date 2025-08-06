@@ -32,3 +32,34 @@ or no!
 """
 
     return summary_prompt
+
+def question_answered_prompt():
+    return """You are a discussion classification assistant. Your task is to verify whether a question asked in the
+following summarized discussion has already been answered correctly. Only perform this verification task—nothing else.
+
+Discussion:
+{thread_summary}
+
+Instructions:
+- If the question has been answered correctly in the discussion, respond with: yes
+- If the question is not answered or answered incorrectly, respond with: no
+"""
+
+
+def lecture_summary_prompt():
+    return """You are an expert in lecture content summaries. You are very good in getting the relevant information
+for a discussion out of the provided lecture content. Based on the provided lecture transcriptions, summarize the\
+ key points relevant to the following discussion. Clearly identify essential concepts, explanations, examples, and\
+ instructions mentioned in the lecture content. Maintain clarity and conciseness. If the lecture content is not related\
+ to the discussion, state that explicitly.
+ 
+```LECTURE CONTENT
+{lecture_content}
+```
+
+```DISCUSSION SUMMARY:
+{summary_text}
+```
+
+For all relevant information get the relevant pages or time stamps, they are very important!
+"""

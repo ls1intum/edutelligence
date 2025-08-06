@@ -25,6 +25,8 @@ from iris.pipeline import Pipeline
 from iris.pipeline.prompts.tutor_suggestion.question_answered_prompt import (
     question_answered_prompt,
 )
+
+from iris.pipeline.prompts.tutor_suggestion.helper_prompts import lecture_summary_prompt
 from iris.pipeline.shared.utils import filter_variants_by_available_models
 from iris.pipeline.tutor_suggestion.tutor_suggestion_lecture_pipeline import (
     TutorSuggestionLecturePipeline,
@@ -266,19 +268,7 @@ class TutorSuggestionPipeline(Pipeline):
         :return: Relevant lecture content as a string.
         """
         lecture_content = lecture_content_retrieval(dto, self.summary_text, self.db)
-        query = (
-            f"Based on the provided lecture transcriptions, summarize the key points relevant to the following"
-            f" discussion. Clearly identify essential concepts, explanations, examples, and instructions "
-            f"mentioned in the lecture content. Maintain clarity and conciseness. If the lecture content is not"
-            f"related to the discussion, state that explicitly.\n\n"
-            f"```LECTURE CONTENT"
-            f"{lecture_content}"
-            f"```"
-            f"```DISCUSSION SUMMARY:"
-            f"{self.summary_text}"
-            f"```"
-        )
-        prompt = ChatPromptTemplate.from_messages([("system", query)])
+        prompt = ChatPromptTemplate.from_messages([("system", lecture_summary_prompt())])
         try:
             completion_args = CompletionArguments(temperature=0, max_tokens=8000)
             if self.variant == "advanced":
@@ -291,7 +281,10 @@ class TutorSuggestionPipeline(Pipeline):
                 completion_args=completion_args,
             )
             pipeline = llm | StrOutputParser()
-            response = (prompt | pipeline).invoke(input={})
+            response = (prompt | pipeline).invoke(input={
+                "lecture_content": lecture_content,
+                "summary_text": self.summary_text,
+            })
             self._append_tokens(
                 llm.tokens, PipelineEnum.IRIS_TUTOR_SUGGESTION_PIPELINE
             )
