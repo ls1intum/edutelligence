@@ -18,4 +18,6 @@ class CommunicationTutorSuggestionPipelineExecutionDTO(ChatPipelineExecutionDTO)
         default=None, alias="textExerciseDTO"
     )
     submission: Optional[ProgrammingSubmissionDTO] = None
-    exercise: Optional[ProgrammingExerciseDTO] = None
+    exercise: Optional[ProgrammingExerciseDTO] = Field(
+        default=None, alias="programmingExerciseDTO"
+    )
