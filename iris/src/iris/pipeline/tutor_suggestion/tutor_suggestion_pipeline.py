@@ -290,5 +290,5 @@ class TutorSuggestionPipeline(Pipeline):
             self.callback.in_progress("Retrieved relevant lecture content")
             return response
         except Exception as e:
-            logger.error(f"Error retrieving relevant lecture content: {e}")
+            logger.error(f"Error retrieving relevant lecture content: %s", str(e))
             return "Error retrieving relevant lecture content"
