@@ -1,8 +1,7 @@
 import numpy as np
 import pytest
 
-from atlasml.ml.Clustering.HDBSCAN import apply_hdbscan
-from atlasml.ml.Clustering.TSNE import apply_tsne
+from atlasml.ml.clustering import apply_hdbscan, apply_tsne
 
 
 def test_tsne_output_shape_default():
@@ -53,7 +52,7 @@ def test_hdbscan_invalid_input_type():
 def test_hdbscan_metric_cosine():
     # Ensure the function works with a different metric.
     matrix = np.random.rand(100, 5)
-    labels, centroids, medoids = apply_hdbscan(matrix, metric='cosine')
+    labels, centroids, medoids = apply_hdbscan(matrix, metric="cosine")
     # Verify output shape remains consistent.
     assert isinstance(labels, np.ndarray)
     assert labels.shape[0] == 100
@@ -69,7 +68,9 @@ def test_hdbscan_noise_detection():
 
     # Run HDBSCAN with parameters tuned to detect noise.
     # Adjust parameters by using 'min_cluster_size' instead of 'eps' to better isolate the noise points.
-    labels, centroids, medoids = apply_hdbscan(matrix, min_samples=3, min_cluster_size=15)
+    labels, centroids, medoids = apply_hdbscan(
+        matrix, min_samples=3, min_cluster_size=15
+    )
 
     # HDBSCAN typically marks noise points as -1.
     # Check that some points have been labeled as noise and provide a debug message if not.

@@ -9,7 +9,8 @@ EduTelligence maintains compatibility with different versions of [Artemis](https
 | Artemis Version | EduTelligence Version | Status    |
 | --------------- | --------------------- | --------- |
 | 8.0.x           | 1.0.x                 | ✅ Stable |
-| 8.1.x           | 1.1.x                 | ✅ Stable |
+| 8.1.0 - 8.2.4   | 1.1.x                 | ✅ Stable |
+| 8.3.x           | 1.3.x                 | ✅ Stable |
 
 > **Note:** Always ensure you're using compatible versions for optimal integration and functionality.
 

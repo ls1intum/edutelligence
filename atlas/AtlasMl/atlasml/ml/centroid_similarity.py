@@ -6,7 +6,7 @@ from transformers import pipeline
 def generate_competency_relationship(medoids_emb, descriptions):
     """
     Generates relationships between competencies based on their embeddings and descriptions.
-    
+
     Uses cosine similarity between embeddings and natural language inference to determine
     relationships between competency pairs: MATCH, REQUIRE,
     EXTEND, or NONE.
@@ -18,20 +18,20 @@ def generate_competency_relationship(medoids_emb, descriptions):
     Returns:
         np.ndarray: k x k matrix of relationships, with values "MATCH", "REQUIRE", "EXTEND", or "NONE" for each competency pair
     """
-    
+
     # --- constants ---
-    COS_NONE  = 0.35
+    COS_NONE = 0.35
     COS_MATCH = 0.75
-    P_ENTAIL  = 0.80
+    P_ENTAIL = 0.80
 
     # --- text classification pipeline ---
-    nli = pipeline("zero-shot-classification",
-                   model="facebook/bart-large-mnli",
-                   device=0)
+    nli = pipeline(
+        "zero-shot-classification", model="facebook/bart-large-mnli", device=0
+    )
 
     def entail_prob(p, h):
         logits = nli(f"{p}", candidate_labels=[f"{h}"])
-        score = logits['scores'][0]
+        score = logits["scores"][0]
         return score
 
     S = cosine_similarity(medoids_emb)
@@ -45,7 +45,7 @@ def generate_competency_relationship(medoids_emb, descriptions):
                 continue
             if S[i, j] < COS_NONE:
                 continue  # NONE
-    
+
             # MATCH
             if S[i, j] >= COS_MATCH:
                 p_ij = entail_prob(descriptions[i], descriptions[j])
@@ -53,11 +53,11 @@ def generate_competency_relationship(medoids_emb, descriptions):
                 if p_ij >= P_ENTAIL and p_ji >= P_ENTAIL:
                     relation[i, j] = "MATCH"
                     continue
-    
+
             # directional test
             p_ij = entail_prob(descriptions[i], descriptions[j])
             p_ji = entail_prob(descriptions[j], descriptions[i])
-    
+
             if p_ij >= P_ENTAIL and p_ji < P_ENTAIL:
                 relation[i, j] = "REQUIRE"
             elif p_ji >= P_ENTAIL and p_ij < P_ENTAIL:
