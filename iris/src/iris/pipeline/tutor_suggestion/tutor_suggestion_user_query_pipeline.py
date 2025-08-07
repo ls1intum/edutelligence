@@ -17,7 +17,6 @@ from iris.common.tutor_suggestion import (
 from iris.domain.communication.communication_tutor_suggestion_pipeline_execution_dto import (
     CommunicationTutorSuggestionPipelineExecutionDTO,
 )
-from iris.domain.data.text_exercise_dto import TextExerciseDTO
 from iris.llm import CompletionArguments, ModelVersionRequestHandler
 from iris.llm.langchain import IrisLangchainChatModel
 from iris.pipeline import Pipeline
@@ -130,7 +129,7 @@ class TutorSuggestionUserQueryPipeline(Pipeline):
         try:
             if self.chat_type == ChannelType.TEXT_EXERCISE:
                 if dto.text_exercise is None:
-                    raise Exception("No text exercise provided.")
+                    raise AttributeError("No text exercise provided.")
 
                 prompt_input = {
                     **base_keys,
@@ -139,7 +138,7 @@ class TutorSuggestionUserQueryPipeline(Pipeline):
                 }
             elif self.chat_type == ChannelType.PROGRAMMING_EXERCISE:
                 if dto.programming_exercise is None:
-                    raise Exception("No programming exercise provided.")
+                    raise AttributeError("No programming exercise provided.")
                 prompt_input = {
                     **base_keys,
                     "problem_statement": dto.programming_exercise.problem_statement,

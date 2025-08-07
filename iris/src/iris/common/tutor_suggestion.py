@@ -67,7 +67,7 @@ def get_chat_history_without_user_query(chat_history: List[PyrisMessage]) -> str
         ]
         chat_history_str = "\n".join(
             [
-                f"{message.sender.name}: {message.contents[0].text_content if message.contents else 'No content'}"
+                f"{message.sender.name}: {message.contents[0].text_content if message.contents else "No content"}"
                 for message in chat_history
             ]
         )
@@ -134,7 +134,7 @@ def extract_json_substring(input_string):
     end = input_string.rfind("}")
     if start == -1 or end == -1 or start > end:
         raise ValueError("No valid JSON object found in the input string.")
-    json_substring = input_string[start : end + 1]
+    json_substring = input_string[start: end + 1]
     return json_substring
 
 
