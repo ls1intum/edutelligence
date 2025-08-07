@@ -6,19 +6,15 @@ from langchain_core.runnables import Runnable
 from langsmith import traceable
 
 from iris.common.pipeline_enum import PipelineEnum
-from iris.common.tutor_suggestion import (
-    extract_json_from_text,
-    sort_post_answers,
-)
-from iris.domain.communication.communication_tutor_suggestion_pipeline_execution_dto import (
-    CommunicationTutorSuggestionPipelineExecutionDTO,
-)
+from iris.common.tutor_suggestion import (extract_json_from_text,
+                                          sort_post_answers)
+from iris.domain.communication.communication_tutor_suggestion_pipeline_execution_dto import \
+    CommunicationTutorSuggestionPipelineExecutionDTO
 from iris.llm import CompletionArguments, ModelVersionRequestHandler
 from iris.llm.langchain import IrisLangchainChatModel
 from iris.pipeline import Pipeline
-from iris.pipeline.prompts.tutor_suggestion.helper_prompts import (
-    post_summary_prompt,
-)
+from iris.pipeline.prompts.tutor_suggestion.helper_prompts import \
+    post_summary_prompt
 from iris.web.status.status_update import TutorSuggestionCallback
 
 logger = logging.getLogger(__name__)

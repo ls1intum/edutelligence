@@ -7,25 +7,18 @@ from langchain_core.runnables import Runnable
 from langsmith import traceable
 
 from iris.common.pyris_message import PyrisMessage
-from iris.common.tutor_suggestion import (
-    ChannelType,
-    extract_json_from_text,
-    get_chat_history_without_user_query,
-    get_last_artifact,
-    get_user_query,
-)
-from iris.domain.communication.communication_tutor_suggestion_pipeline_execution_dto import (
-    CommunicationTutorSuggestionPipelineExecutionDTO,
-)
+from iris.common.tutor_suggestion import (ChannelType, extract_json_from_text,
+                                          get_chat_history_without_user_query,
+                                          get_last_artifact, get_user_query)
+from iris.domain.communication.communication_tutor_suggestion_pipeline_execution_dto import \
+    CommunicationTutorSuggestionPipelineExecutionDTO
 from iris.domain.data.text_exercise_dto import TextExerciseDTO
 from iris.llm import CompletionArguments, ModelVersionRequestHandler
 from iris.llm.langchain import IrisLangchainChatModel
 from iris.pipeline import Pipeline
 from iris.pipeline.prompts.tutor_suggestion.tutor_query_prompts import (
-    lecture_query_prompt,
-    programming_exercise_query_prompt,
-    text_exercise_query_prompt,
-)
+    lecture_query_prompt, programming_exercise_query_prompt,
+    text_exercise_query_prompt)
 from iris.web.status.status_update import TutorSuggestionCallback
 
 logger = logging.getLogger(__name__)

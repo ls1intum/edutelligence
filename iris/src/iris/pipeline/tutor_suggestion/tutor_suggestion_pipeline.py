@@ -8,31 +8,23 @@ from langchain_core.runnables import Runnable
 from langsmith import traceable
 
 from iris.common.pipeline_enum import PipelineEnum
-from iris.common.tutor_suggestion import (
-    ChannelType,
-    faq_content_retrieval,
-    get_channel_type,
-    lecture_content_retrieval,
-)
+from iris.common.tutor_suggestion import (ChannelType, faq_content_retrieval,
+                                          get_channel_type,
+                                          lecture_content_retrieval)
 from iris.domain import FeatureDTO
-from iris.domain.communication.communication_tutor_suggestion_pipeline_execution_dto import (
-    CommunicationTutorSuggestionPipelineExecutionDTO,
-)
+from iris.domain.communication.communication_tutor_suggestion_pipeline_execution_dto import \
+    CommunicationTutorSuggestionPipelineExecutionDTO
 from iris.llm import CompletionArguments, ModelVersionRequestHandler
 from iris.llm.external.model import LanguageModel
 from iris.llm.langchain import IrisLangchainChatModel
 from iris.pipeline import Pipeline
 from iris.pipeline.prompts.tutor_suggestion.helper_prompts import (
-    lecture_summary_prompt,
-    question_answered_prompt,
-)
+    lecture_summary_prompt, question_answered_prompt)
 from iris.pipeline.shared.utils import filter_variants_by_available_models
-from iris.pipeline.tutor_suggestion.tutor_suggestion_channel_base_pipeline import (
-    TutorSuggestionChannelBasePipeline,
-)
-from iris.pipeline.tutor_suggestion.tutor_suggestion_summary_pipeline import (
-    TutorSuggestionSummaryPipeline,
-)
+from iris.pipeline.tutor_suggestion.tutor_suggestion_channel_base_pipeline import \
+    TutorSuggestionChannelBasePipeline
+from iris.pipeline.tutor_suggestion.tutor_suggestion_summary_pipeline import \
+    TutorSuggestionSummaryPipeline
 from iris.vector_database.database import VectorDatabase
 from iris.web.status.status_update import TutorSuggestionCallback
 

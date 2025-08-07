@@ -4,9 +4,8 @@ import re
 from typing import List
 
 from iris.common.pyris_message import IrisMessageRole, PyrisMessage
-from iris.domain.communication.communication_tutor_suggestion_pipeline_execution_dto import (
-    CommunicationTutorSuggestionPipelineExecutionDTO,
-)
+from iris.domain.communication.communication_tutor_suggestion_pipeline_execution_dto import \
+    CommunicationTutorSuggestionPipelineExecutionDTO
 from iris.retrieval.faq_retrieval import FaqRetrieval
 from iris.retrieval.faq_retrieval_utils import format_faqs
 from iris.retrieval.lecture.lecture_retrieval import LectureRetrieval
@@ -132,7 +131,7 @@ def extract_json_substring(input_string):
     end = input_string.rfind("}")
     if start == -1 or end == -1 or start > end:
         raise ValueError("No valid JSON object found in the input string.")
-    json_substring = input_string[start:end + 1]
+    json_substring = input_string[start : end + 1]
     return json_substring
 
 

@@ -53,7 +53,7 @@ for a discussion out of the provided lecture content. Based on the provided lect
  key points relevant to the following discussion. Clearly identify essential concepts, explanations, examples, and\
  instructions mentioned in the lecture content. Maintain clarity and conciseness. If the lecture content is not related\
  to the discussion, state that explicitly.
- 
+
 ```LECTURE CONTENT
 {lecture_content}
 ```
