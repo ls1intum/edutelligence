@@ -134,7 +134,7 @@ def extract_json_substring(input_string):
     end = input_string.rfind("}")
     if start == -1 or end == -1 or start > end:
         raise ValueError("No valid JSON object found in the input string.")
-    json_substring = input_string[start: end + 1]
+    json_substring = input_string[start : end + 1]
     return json_substring
 
 
