@@ -18,7 +18,6 @@ from iris.common.tutor_suggestion import (
 from iris.domain.communication.communication_tutor_suggestion_pipeline_execution_dto import (
     CommunicationTutorSuggestionPipelineExecutionDTO,
 )
-from iris.domain.data.text_exercise_dto import TextExerciseDTO
 from iris.domain.data.text_message_content_dto import TextMessageContentDTO
 from iris.llm import CompletionArguments, ModelVersionRequestHandler
 from iris.llm.langchain import IrisLangchainChatModel
@@ -100,9 +99,9 @@ class TutorSuggestionChannelBasePipeline(Pipeline):
             self.prompt = ChatPromptTemplate.from_messages(
                 [("system", programming_exercise_prompt())]
             )
-            problem_statement = dto.exercise.problem_statement
-            exercise_title = dto.exercise.name
-            programming_language = dto.exercise.programming_language
+            problem_statement = dto.programming_exercise.problem_statement
+            exercise_title = dto.programming_exercise.name
+            programming_language = dto.programming_exercise.programming_language
 
             code_feedback_response = "!NONE!"
 
@@ -120,7 +119,7 @@ class TutorSuggestionChannelBasePipeline(Pipeline):
                     chat_history=[],
                     question=query,
                     repository=dto.submission.repository,
-                    problem_statement=dto.exercise.problem_statement,
+                    problem_statement=dto.programming_exercise.problem_statement,
                     build_failed=dto.submission.build_failed,
                     build_logs=dto.submission.build_log_entries,
                     feedbacks=(
@@ -218,7 +217,6 @@ class TutorSuggestionChannelBasePipeline(Pipeline):
             }
             try:
                 response = (self.prompt | self.pipeline).invoke(prompt_input)
-                logger.info(response)
                 html_response = self._handle_suggestion_response(response, is_answered)
 
                 self._append_tokens(

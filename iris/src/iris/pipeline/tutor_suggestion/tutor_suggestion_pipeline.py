@@ -215,7 +215,6 @@ class TutorSuggestionPipeline(Pipeline):
         )
         try:
             response = (prompt | self.pipeline).invoke({"thread_summary": summary})
-            logger.info(response)
             self._append_tokens(
                 self.llm.tokens, PipelineEnum.IRIS_TUTOR_SUGGESTION_PIPELINE
             )
