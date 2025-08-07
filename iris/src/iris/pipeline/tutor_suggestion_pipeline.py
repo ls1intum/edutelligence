@@ -37,7 +37,7 @@ ADVANCED_VARIANT = "deepseek-r1:8b"
 DEFAULT_VARIANT = "gemma3:27b"
 
 
-def get_channel_type(dto: CommunicationTutorSuggestionPipelineExecutionDTO) -> str:
+def _get_channel_type(dto: CommunicationTutorSuggestionPipelineExecutionDTO) -> str:
     """
     Determines the channel type based on the context of the post.
     :return: The channel type as a string.
@@ -107,8 +107,6 @@ class TutorSuggestionPipeline(Pipeline):
             self.callback.error("Unexpected error running summary pipeline")
             return
 
-        logger.info(summary)
-
         if summary is None:
             self.callback.error("No summary was generated")
             return
@@ -118,9 +116,6 @@ class TutorSuggestionPipeline(Pipeline):
             is_question = is_question_str in ["yes", "true", "1"]
             number_of_answers = summary.get("num_answers")
             summary = summary.get("summary")
-            logger.info(
-                "is_question: %s, num_answers: %s", is_question, number_of_answers
-            )
         except (AttributeError, TypeError) as e:
             logger.error("Error parsing summary JSON: %s", str(e))
             self.callback.error("Error parsing summary JSON")
@@ -149,7 +144,7 @@ class TutorSuggestionPipeline(Pipeline):
                 )
                 return
 
-        channel_type = get_channel_type(dto)
+        channel_type = _get_channel_type(dto)
 
         logging.info(channel_type)
         if channel_type == "text_exercise":
@@ -159,8 +154,6 @@ class TutorSuggestionPipeline(Pipeline):
         elif channel_type == "programming_exercise":
             self._run_programming_exercise_pipeline(dto=dto, summary=summary)
         elif channel_type == "lecture":
-            self.callback.error("Not implemented yet")
-        else:
             self.callback.error("Not implemented yet")
 
     def _run_text_exercise_pipeline(

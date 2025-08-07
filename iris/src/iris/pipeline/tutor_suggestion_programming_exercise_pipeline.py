@@ -75,9 +75,9 @@ class TutorSuggestionProgrammingExercisePipeline(Pipeline):
         prompt = ChatPromptTemplate.from_messages(
             [("system", programming_exercise_prompt())]
         )
-        problem_statement = dto.exercise.problem_statement
-        exercise_title = dto.exercise.name
-        programming_language = dto.exercise.programming_language
+        problem_statement = dto.programming_exercise.problem_statement
+        exercise_title = dto.programming_exercise.name
+        programming_language = dto.programming_exercise.programming_language
 
         code_feedback_response = "!NONE!"
 
@@ -95,7 +95,7 @@ class TutorSuggestionProgrammingExercisePipeline(Pipeline):
                 chat_history=[],
                 question=query,
                 repository=dto.submission.repository,
-                problem_statement=dto.exercise.problem_statement,
+                problem_statement=dto.programming_exercise.problem_statement,
                 build_failed=dto.submission.build_failed,
                 build_logs=dto.submission.build_log_entries,
                 feedbacks=(
