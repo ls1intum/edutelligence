@@ -7,18 +7,25 @@ from langchain_core.runnables import Runnable
 from langsmith import traceable
 
 from iris.common.pyris_message import PyrisMessage
-from iris.common.tutor_suggestion import (ChannelType, extract_json_from_text,
-                                          get_chat_history_without_user_query,
-                                          get_last_artifact, get_user_query)
-from iris.domain.communication.communication_tutor_suggestion_pipeline_execution_dto import \
-    CommunicationTutorSuggestionPipelineExecutionDTO
+from iris.common.tutor_suggestion import (
+    ChannelType,
+    extract_json_from_text,
+    get_chat_history_without_user_query,
+    get_last_artifact,
+    get_user_query,
+)
+from iris.domain.communication.communication_tutor_suggestion_pipeline_execution_dto import (
+    CommunicationTutorSuggestionPipelineExecutionDTO,
+)
 from iris.domain.data.text_exercise_dto import TextExerciseDTO
 from iris.llm import CompletionArguments, ModelVersionRequestHandler
 from iris.llm.langchain import IrisLangchainChatModel
 from iris.pipeline import Pipeline
 from iris.pipeline.prompts.tutor_suggestion.tutor_query_prompts import (
-    lecture_query_prompt, programming_exercise_query_prompt,
-    text_exercise_query_prompt)
+    lecture_query_prompt,
+    programming_exercise_query_prompt,
+    text_exercise_query_prompt,
+)
 from iris.web.status.status_update import TutorSuggestionCallback
 
 logger = logging.getLogger(__name__)
@@ -29,11 +36,11 @@ DEFAULT_VARIANT = "gemma3:27b"
 
 class TutorSuggestionUserQueryPipeline(Pipeline):
     """
-    The TutorSuggestionUserQueryPipeline processes user queries in the context of a text exercise.
-    It generates answers based on the chat summary, chat history, and text exercise DTO.
-
+    The TutorSuggestionUserQueryPipeline processes user queries in various educational contexts.
+    It generates answers based on the chat summary, chat history, and relevant DTOs (text exercise, programming
+    exercise, or lecture).
     When called, it uses the user query and last suggestion from the chat history to generate a response.
-    It utilizes a language model to process the input and generate a structured response.
+    It utilizes a language model to process the input and generate a structured response
     """
 
     llm: IrisLangchainChatModel
@@ -85,8 +92,7 @@ class TutorSuggestionUserQueryPipeline(Pipeline):
         self,
         chat_summary: str,
         chat_history: List[PyrisMessage],
-        dto: TextExerciseDTO = None,
-        communication_dto: CommunicationTutorSuggestionPipelineExecutionDTO = None,
+        dto: CommunicationTutorSuggestionPipelineExecutionDTO = None,
         code_feedback: str = None,
         lecture_contents: str = "None",
         faq_contents: str = "None",
@@ -123,17 +129,22 @@ class TutorSuggestionUserQueryPipeline(Pipeline):
         }
         try:
             if self.chat_type == ChannelType.TEXT_EXERCISE:
+                if dto.text_exercise is None:
+                    raise Exception("No text exercise provided.")
+
                 prompt_input = {
                     **base_keys,
-                    "problem_statement": dto.problem_statement,
-                    "example_solution": dto.example_solution,
+                    "problem_statement": dto.text_exercise.problem_statement,
+                    "example_solution": dto.text_exercise.example_solution,
                 }
             elif self.chat_type == ChannelType.PROGRAMMING_EXERCISE:
+                if dto.programming_exercise is None:
+                    raise Exception("No programming exercise provided.")
                 prompt_input = {
                     **base_keys,
-                    "problem_statement": communication_dto.exercise.problem_statement,
-                    "exercise_title": communication_dto.exercise.name,
-                    "programming_language": communication_dto.exercise.programming_language,
+                    "problem_statement": dto.programming_exercise.problem_statement,
+                    "exercise_title": dto.programming_exercise.name,
+                    "programming_language": dto.programming_exercise.programming_language,
                     "code_feedback": code_feedback,
                 }
             else:
@@ -150,5 +161,5 @@ class TutorSuggestionUserQueryPipeline(Pipeline):
                 logger.error("No answer found in JSON response.")
         except Exception as e:
             logger.error("Failed to generate answer for user query: %s", e)
-            return "Error generating answer for user query"
+            return "Error generating answer for user query", ""
         return answer, change_suggestion

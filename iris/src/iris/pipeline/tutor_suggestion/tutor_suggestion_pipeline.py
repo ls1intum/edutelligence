@@ -8,23 +8,31 @@ from langchain_core.runnables import Runnable
 from langsmith import traceable
 
 from iris.common.pipeline_enum import PipelineEnum
-from iris.common.tutor_suggestion import (ChannelType, faq_content_retrieval,
-                                          get_channel_type,
-                                          lecture_content_retrieval)
+from iris.common.tutor_suggestion import (
+    ChannelType,
+    faq_content_retrieval,
+    get_channel_type,
+    lecture_content_retrieval,
+)
 from iris.domain import FeatureDTO
-from iris.domain.communication.communication_tutor_suggestion_pipeline_execution_dto import \
-    CommunicationTutorSuggestionPipelineExecutionDTO
+from iris.domain.communication.communication_tutor_suggestion_pipeline_execution_dto import (
+    CommunicationTutorSuggestionPipelineExecutionDTO,
+)
 from iris.llm import CompletionArguments, ModelVersionRequestHandler
 from iris.llm.external.model import LanguageModel
 from iris.llm.langchain import IrisLangchainChatModel
 from iris.pipeline import Pipeline
 from iris.pipeline.prompts.tutor_suggestion.helper_prompts import (
-    lecture_summary_prompt, question_answered_prompt)
+    lecture_summary_prompt,
+    question_answered_prompt,
+)
 from iris.pipeline.shared.utils import filter_variants_by_available_models
-from iris.pipeline.tutor_suggestion.tutor_suggestion_channel_base_pipeline import \
-    TutorSuggestionChannelBasePipeline
-from iris.pipeline.tutor_suggestion.tutor_suggestion_summary_pipeline import \
-    TutorSuggestionSummaryPipeline
+from iris.pipeline.tutor_suggestion.tutor_suggestion_channel_base_pipeline import (
+    TutorSuggestionChannelBasePipeline,
+)
+from iris.pipeline.tutor_suggestion.tutor_suggestion_summary_pipeline import (
+    TutorSuggestionSummaryPipeline,
+)
 from iris.vector_database.database import VectorDatabase
 from iris.web.status.status_update import TutorSuggestionCallback
 
@@ -32,6 +40,8 @@ logger = logging.getLogger(__name__)
 
 ADVANCED_VARIANT = "deepseek-r1:8b"
 DEFAULT_VARIANT = "gemma3:27b"
+GPT_ADVANCED_MODEL = "gpt-4.1"
+GPT_DEFAULT_MODEL = "gpt-4.1-mini"
 
 
 class TutorSuggestionPipeline(Pipeline):
@@ -53,10 +63,7 @@ class TutorSuggestionPipeline(Pipeline):
         self.variant = variant
         completion_args = CompletionArguments(temperature=0, max_tokens=8000)
 
-        if variant == "advanced":
-            model = ADVANCED_VARIANT
-        else:
-            model = DEFAULT_VARIANT
+        model = ADVANCED_VARIANT if self.variant == "advanced" else DEFAULT_VARIANT
 
         self.llm = IrisLangchainChatModel(
             request_handler=ModelVersionRequestHandler(version=model),
@@ -262,10 +269,9 @@ class TutorSuggestionPipeline(Pipeline):
         )
         try:
             completion_args = CompletionArguments(temperature=0, max_tokens=8000)
-            if self.variant == "advanced":
-                model = "gpt-4.1"
-            else:
-                model = "gpt-4.1-mini"
+            model = (
+                GPT_ADVANCED_MODEL if self.variant == "advanced" else GPT_DEFAULT_MODEL
+            )
 
             llm = IrisLangchainChatModel(
                 request_handler=ModelVersionRequestHandler(version=model),
@@ -282,5 +288,5 @@ class TutorSuggestionPipeline(Pipeline):
             self.callback.in_progress("Retrieved relevant lecture content")
             return response
         except Exception as e:
-            logger.error(f"Error retrieving relevant lecture content: %s", str(e))
+            logger.error("Error retrieving relevant lecture content: %s", str(e))
             return "Error retrieving relevant lecture content"

@@ -1,21 +1,17 @@
-from iris.domain.data.post_dto import PostDTO
+def post_summary_prompt():
 
-
-def post_summary_prompt(post: PostDTO):
-
-    summary_prompt: str = f"""
+    summary_prompt: str = """
 Summarize and rewrite the post and the answers, NEVER answer any question or give any suggestion. Also check if the post
 is a question.
-The initial post is: {post.content} by user {post.user_id}. Leave the user id out of the summary, but use it if
+The initial post is: {post_content} by user {post_user_id}. Leave the user id out of the summary, but use it if
 there are answers to identify the user in the thread as he might add context or additional information to his post.
-In the thread of this post there are already {len(post.answers)} answers.
+In the thread of this post there are already {num_answers} answers.
 The answers are:
-"""
-    for i in range(len(post.answers)):
-        answer = post.answers[i]
-        if answer is not None:
-            summary_prompt += f"{answer.content} by {answer.user_id}\n"
-    summary_prompt += """
+
+```ANSWERS
+{answers_content}
+```
+
 Important rules you must follow:
 1. Summarize and rewrite the post and the answers, NEVER answer any question or give any suggestion.
 2. Do NOT add any information that is not mentioned in the post, if the post is a question DON'T ANSWER IT!

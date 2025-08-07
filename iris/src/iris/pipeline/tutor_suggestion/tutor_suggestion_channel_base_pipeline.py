@@ -7,22 +7,30 @@ from langsmith import traceable
 
 from iris.common.pipeline_enum import PipelineEnum
 from iris.common.pyris_message import IrisMessageRole, PyrisMessage
-from iris.common.tutor_suggestion import (ChannelType, extract_html_from_text,
-                                          extract_json_from_text,
-                                          extract_list_html_from_text,
-                                          get_chat_history_without_user_query,
-                                          has_html)
-from iris.domain.communication.communication_tutor_suggestion_pipeline_execution_dto import \
-    CommunicationTutorSuggestionPipelineExecutionDTO
+from iris.common.tutor_suggestion import (
+    ChannelType,
+    extract_html_from_text,
+    extract_json_from_text,
+    extract_list_html_from_text,
+    get_chat_history_without_user_query,
+    has_html,
+)
+from iris.domain.communication.communication_tutor_suggestion_pipeline_execution_dto import (
+    CommunicationTutorSuggestionPipelineExecutionDTO,
+)
 from iris.domain.data.text_message_content_dto import TextMessageContentDTO
 from iris.llm import CompletionArguments, ModelVersionRequestHandler
 from iris.llm.langchain import IrisLangchainChatModel
 from iris.pipeline import Pipeline
 from iris.pipeline.chat.code_feedback_pipeline import CodeFeedbackPipeline
 from iris.pipeline.prompts.tutor_suggestion.suggestion_prompts import (
-    lecture_prompt, programming_exercise_prompt, text_exercise_prompt)
-from iris.pipeline.tutor_suggestion.tutor_suggestion_user_query_pipeline import \
-    TutorSuggestionUserQueryPipeline
+    lecture_prompt,
+    programming_exercise_prompt,
+    text_exercise_prompt,
+)
+from iris.pipeline.tutor_suggestion.tutor_suggestion_user_query_pipeline import (
+    TutorSuggestionUserQueryPipeline,
+)
 from iris.web.status.status_update import TutorSuggestionCallback
 
 ADVANCED_VARIANT = "deepseek-r1:8b"
@@ -91,6 +99,8 @@ class TutorSuggestionChannelBasePipeline(Pipeline):
             self.prompt = ChatPromptTemplate.from_messages(
                 [("system", programming_exercise_prompt())]
             )
+            if dto.programming_exercise is None:
+                raise ValueError("Programming exercise cannot be None")
             problem_statement = dto.programming_exercise.problem_statement
             exercise_title = dto.programming_exercise.name
             programming_language = dto.programming_exercise.programming_language
@@ -174,10 +184,9 @@ class TutorSuggestionChannelBasePipeline(Pipeline):
             )
 
             answer, change_suggestion = user_query_pipeline(
-                dto=dto.text_exercise,
+                dto=dto,
                 chat_summary=chat_summary,
                 chat_history=chat_history,
-                communication_dto=dto,
                 lecture_contents=lecture_content,
                 faq_contents=faq_content,
             )

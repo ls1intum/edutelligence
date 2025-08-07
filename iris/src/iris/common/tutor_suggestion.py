@@ -4,8 +4,9 @@ import re
 from typing import List
 
 from iris.common.pyris_message import IrisMessageRole, PyrisMessage
-from iris.domain.communication.communication_tutor_suggestion_pipeline_execution_dto import \
-    CommunicationTutorSuggestionPipelineExecutionDTO
+from iris.domain.communication.communication_tutor_suggestion_pipeline_execution_dto import (
+    CommunicationTutorSuggestionPipelineExecutionDTO,
+)
 from iris.retrieval.faq_retrieval import FaqRetrieval
 from iris.retrieval.faq_retrieval_utils import format_faqs
 from iris.retrieval.lecture.lecture_retrieval import LectureRetrieval
@@ -27,9 +28,10 @@ def get_user_query(chat_history: List[PyrisMessage]):
     :param chat_history: List of messages in the chat history.
     :return: The user query as a string.
     """
-    if chat_history:
-        if chat_history[-1].sender == IrisMessageRole.USER:
+    if chat_history and chat_history[-1].sender == IrisMessageRole.USER:
+        if chat_history[-1].contents:
             return chat_history[-1].contents[0].text_content
+        return "User message has no content."
     return "No user query found in chat history."
 
 
@@ -42,7 +44,9 @@ def get_last_artifact(chat_history: List[PyrisMessage]):
     if chat_history:
         for message in reversed(chat_history):
             if message.sender == IrisMessageRole.ARTIFACT:
-                return message.contents[0].text_content
+                if message.contents:
+                    return message.contents[0].text_content
+                return "Artifact message has no content."
     return "No artifact found in chat history."
 
 
@@ -53,21 +57,20 @@ def get_chat_history_without_user_query(chat_history: List[PyrisMessage]) -> str
     :return: The chat history as a string.
     """
     chat_history_str = "No chat history found."
-    if chat_history:
-        if chat_history[-1].sender == IrisMessageRole.USER:
-            chat_history = chat_history[:-1]
-            # remove all TUT_SUG messages because they are not relevant for the prompt
-            chat_history = [
-                message
+    if chat_history and chat_history[-1].sender == IrisMessageRole.USER:
+        chat_history = chat_history[:-1]
+        # remove all TUT_SUG messages because they are not relevant for the prompt
+        chat_history = [
+            message
+            for message in chat_history
+            if message.sender != IrisMessageRole.ARTIFACT
+        ]
+        chat_history_str = "\n".join(
+            [
+                f"{message.sender.name}: {message.contents[0].text_content if message.contents else 'No content'}"
                 for message in chat_history
-                if message.sender != IrisMessageRole.ARTIFACT
             ]
-            chat_history_str = "\n".join(
-                [
-                    f"{message.sender.name}: {message.contents[0].text_content}"
-                    for message in chat_history
-                ]
-            )
+        )
     return chat_history_str
 
 
@@ -105,7 +108,7 @@ def get_channel_type(dto: CommunicationTutorSuggestionPipelineExecutionDTO) -> s
     Determines the channel type based on the context of the post.
     :return: The channel type as a string.
     """
-    if dto.exercise is not None:
+    if dto.programming_exercise is not None:
         return ChannelType.PROGRAMMING_EXERCISE
     elif dto.text_exercise is not None:
         return ChannelType.TEXT_EXERCISE
@@ -220,8 +223,7 @@ def faq_content_retrieval(
     This will run a RAG retrieval based on the chat history and the user query on the indexed FAQs,
     which are stored in the database, and return the most relevant FAQs.
     :param db: The vector database client.
-    :param history: The chat history containing messages.
-    :param query: The user query to search for relevant FAQs.
+    :param chat_summary: The summarized discussion that needs further clarification.
     :param dto: The data transfer object containing course information and settings.
     :return: A formatted string containing the relevant FAQs.
     """
