@@ -10,6 +10,7 @@ from memiris.api.memory_creation_pipeline import (
     MemoryCreationPipeline,
     MemoryCreationPipelineBuilder,
 )
+from memiris.api.memory_dto import MemoryDTO
 from memiris.api.memory_service import MemoryService
 from memiris.api.memory_sleep_pipeline import (
     MemorySleepPipeline,
@@ -31,6 +32,7 @@ finally:
 __all__ = [
     # Domain Models
     "Memory",
+    "MemoryDTO",
     "Learning",
     "MemoryConnection",
     # API services

@@ -1,0 +1,35 @@
+[run]
+branch = True
+source = 
+    athena
+    llm_core
+    modules
+omit = 
+    # Exclude ALL test-related files and directories
+    */tests/*
+    */test_*.py
+    */mock_*.py
+    */conftest.py
+    tests/*
+    test_*
+    mock_*
+    conftest.py
+    # Exclude cache and temporary files
+    */__pycache__/*
+    */.venv/*
+    */.pytest_cache/*
+    */coverage/*
+    */test-results/*
+
+[report]
+exclude_lines =
+    pragma: no cover
+    def __repr__
+    if self.debug:
+    if settings.DEBUG
+    raise AssertionError
+    raise NotImplementedError
+    if 0:
+    if __name__ == .__main__.:
+    class .*\bProtocol\):
+    @(abc\.)?abstractmethod 
