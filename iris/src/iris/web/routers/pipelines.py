@@ -431,27 +431,45 @@ def get_pipeline(feature: str) -> List[FeatureDTO]:
                 ExerciseChatAgentPipeline.get_variants(), available_llms
             )
         case "TEXT_EXERCISE_CHAT":
-            return TextExerciseChatPipeline.get_variants(available_llms)
+            return get_available_variants(
+                TextExerciseChatPipeline.get_variants(), available_llms
+            )
         case "COURSE_CHAT":
             return get_available_variants(
                 CourseChatPipeline.get_variants(), available_llms
             )
         case "COMPETENCY_GENERATION":
-            return CompetencyExtractionPipeline.get_variants(available_llms)
+            return get_available_variants(
+                CompetencyExtractionPipeline.get_variants(), available_llms
+            )
         case "LECTURE_CHAT":
-            return LectureChatPipeline.get_variants(available_llms)
+            return get_available_variants(
+                LectureChatPipeline.get_variants(), available_llms
+            )
         case "INCONSISTENCY_CHECK":
-            return InconsistencyCheckPipeline.get_variants(available_llms)
+            return get_available_variants(
+                InconsistencyCheckPipeline.get_variants(), available_llms
+            )
         case "REWRITING":
-            return RewritingPipeline.get_variants(available_llms)
+            return get_available_variants(
+                RewritingPipeline.get_variants(), available_llms
+            )
         case "CHAT_GPT_WRAPPER":
-            return ChatGPTWrapperPipeline.get_variants(available_llms)
+            return get_available_variants(
+                ChatGPTWrapperPipeline.get_variants(), available_llms
+            )
         case "LECTURE_INGESTION":
-            return LectureUnitPageIngestionPipeline.get_variants(available_llms)
+            return get_available_variants(
+                LectureUnitPageIngestionPipeline.get_variants(), available_llms
+            )
         case "FAQ_INGESTION":
-            return FaqIngestionPipeline.get_variants(available_llms)
+            return get_available_variants(
+                FaqIngestionPipeline.get_variants(), available_llms
+            )
         case "TUTOR_SUGGESTION":
-            return TutorSuggestionPipeline.get_variants(available_llms)
+            return get_available_variants(
+                TutorSuggestionPipeline.get_variants(), available_llms
+            )
         case _:
             return Response(status_code=status.HTTP_400_BAD_REQUEST)
 

@@ -15,6 +15,7 @@ from weaviate.classes.query import Filter
 
 from iris.common.pipeline_enum import PipelineEnum
 from iris.domain import FeatureDTO
+from iris.domain.variant.lecture_unit_page_ingestion_variant import LectureUnitPageIngestionVariant
 from iris.domain.ingestion.ingestion_pipeline_execution_dto import (
     IngestionPipelineExecutionDto,
 )
@@ -91,7 +92,7 @@ def create_page_data(
     ]
 
 
-class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
+class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline[LectureUnitPageIngestionVariant]):
     """LectureUnitPageIngestionPipeline ingests lecture unit pages into the database by chunking lecture PDFs,
     processing the content, and updating the vector database."""
 
@@ -117,22 +118,28 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         self.course_language = None
 
     @classmethod
-    def get_variants(cls, available_llms: List[LanguageModel]) -> List[FeatureDTO]:
+    def get_variants(cls) -> List[LectureUnitPageIngestionVariant]:
         """
-        Returns available variants for the LectureUnitPageIngestionPipeline based on available LLMs.
-
-        Args:
-            _available_llms: List of available language models
+        Returns available variants for the LectureUnitPageIngestionPipeline.
 
         Returns:
-            List of FeatureDTO objects representing available variants
+            List of LectureUnitPageIngestionVariant objects representing available variants
         """
         return [
-            FeatureDTO(
+            LectureUnitPageIngestionVariant(
                 id="default",
-                name="Default Variant",
-                description="Default lecture ingestion variant.",
-            )
+                name="Default",
+                description="Default lecture ingestion variant using efficient models for text processing and embeddings.",
+                chat_model="gpt-4.1-mini",
+                embedding_model="text-embedding-3-small",
+            ),
+            LectureUnitPageIngestionVariant(
+                id="advanced",
+                name="Advanced",
+                description="Advanced lecture ingestion variant using higher-quality models for improved accuracy.",
+                chat_model="gpt-4.1",
+                embedding_model="text-embedding-3-large",
+            ),
         ]
 
     def __call__(self) -> (str, []):

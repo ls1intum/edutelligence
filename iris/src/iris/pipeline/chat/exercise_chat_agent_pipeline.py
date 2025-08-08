@@ -26,7 +26,7 @@ from ...domain.chat.interaction_suggestion_dto import (
 from ...domain.retrieval.lecture.lecture_retrieval_dto import (
     LectureRetrievalDTO,
 )
-from ...domain.variant.course_chat_variant import CourseChatVariant
+from ...domain.variant.exercise_chat_variant import ExerciseChatVariant
 from ...llm import (
     CompletionArguments,
     ModelVersionRequestHandler,
@@ -53,7 +53,7 @@ logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
 
-class ExerciseChatAgentPipeline(Pipeline):
+class ExerciseChatAgentPipeline(Pipeline[ExerciseChatVariant]):
     """Exercise chat agent pipeline that answers exercises related questions from students."""
 
     llm: IrisLangchainChatModel
@@ -125,16 +125,16 @@ class ExerciseChatAgentPipeline(Pipeline):
         return f"{self.__class__.__name__}(llm={self.llm}, llm_small={self.llm_small})"
 
     @classmethod
-    def get_variants(cls) -> List[CourseChatVariant]:
+    def get_variants(cls) -> List[ExerciseChatVariant]:
         return [
-            CourseChatVariant(
+            ExerciseChatVariant(
                 id="default",
                 name="Default",
                 description="Uses a smaller model for faster and cost-efficient responses.",
                 agent_model="gpt-4.1-mini",
                 citation_model="gpt-4.1-mini",
             ),
-            CourseChatVariant(
+            ExerciseChatVariant(
                 id="advanced",
                 name="Advanced",
                 description="Uses a larger chat model, balancing speed and quality.",

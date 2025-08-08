@@ -92,31 +92,6 @@ class CodeFeedbackPipeline(SubPipeline):
         # Create the pipeline
         self.pipeline = self.llm | self.output_parser
 
-    @classmethod
-    def get_variants(cls, available_llms: List[LanguageModel]) -> List[FeatureDTO]:
-        variant_specs = [
-            (
-                ["gpt-4.1-mini"],
-                FeatureDTO(
-                    id="default",
-                    name="Default",
-                    description="Uses a smaller model for faster and cost-efficient responses.",
-                ),
-            ),
-            (
-                ["gpt-4.1"],
-                FeatureDTO(
-                    id="advanced",
-                    name="Advanced",
-                    description="Uses a larger chat model, balancing speed and quality.",
-                ),
-            ),
-        ]
-
-        return filter_variants_by_available_models(
-            available_llms, variant_specs, pipeline_name="CodeFeedbackPipeline"
-        )
-
     @traceable(name="Code Feedback Pipeline")
     def __call__(
         self,

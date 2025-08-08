@@ -17,6 +17,7 @@ from iris.common.tutor_suggestion import (
     lecture_content_retrieval,
 )
 from iris.domain import FeatureDTO
+from iris.domain.variant.tutor_suggestion_variant import TutorSuggestionVariant
 from iris.domain.communication.communication_tutor_suggestion_pipeline_execution_dto import (
     CommunicationTutorSuggestionPipelineExecutionDTO,
 )
@@ -40,7 +41,7 @@ from iris.web.status.status_update import TutorSuggestionCallback
 logger = logging.getLogger(__name__)
 
 
-class TutorSuggestionPipeline(Pipeline):
+class TutorSuggestionPipeline(Pipeline[TutorSuggestionVariant]):
     """
     The TutorSuggestionPipeline creates a tutor suggestion
 
@@ -221,35 +222,24 @@ class TutorSuggestionPipeline(Pipeline):
             return False
 
     @classmethod
-    def get_variants(cls, available_llms: List[LanguageModel]) -> List[FeatureDTO]:
+    def get_variants(cls) -> List[TutorSuggestionVariant]:
         """
-        Returns available variants for the TutorSuggestionPipeline based on available LLMs.
-
-        Args:
-            available_llms: List of available language models
+        Returns available variants for the TutorSuggestionPipeline.
 
         Returns:
-            List of FeatureDTO objects representing available variants
+            List of TutorSuggestionVariant objects representing available variants
         """
-        variant_specs = [
-            (
-                [DEFAULT_VARIANT],
-                FeatureDTO(
-                    id="default",
-                    name="Default",
-                    description="Default tutor suggestion variant using Gemma 3 model.",
-                ),
+        return [
+            TutorSuggestionVariant(
+                id="default",
+                name="Default",
+                description="Default tutor suggestion variant using Gemma 3 model.",
+                agent_model=DEFAULT_VARIANT,
             ),
-            (
-                [ADVANCED_VARIANT],
-                FeatureDTO(
-                    id="advanced",
-                    name="Advanced",
-                    description="Advanced tutor suggestion variant using DeepSeek R1 model.",
-                ),
+            TutorSuggestionVariant(
+                id="advanced",
+                name="Advanced",
+                description="Advanced tutor suggestion variant using DeepSeek R1 model.",
+                agent_model=ADVANCED_VARIANT,
             ),
         ]
-
-        return filter_variants_by_available_models(
-            available_llms, variant_specs, pipeline_name="TutorSuggestionPipeline"
-        )

@@ -8,9 +8,10 @@ from langchain_core.prompts import (
 
 from iris.common.pipeline_enum import PipelineEnum
 from iris.common.pyris_message import IrisMessageRole, PyrisMessage
-from iris.domain import CompetencyExtractionPipelineExecutionDTO, FeatureDTO
+from iris.domain import CompetencyExtractionPipelineExecutionDTO
 from iris.domain.data.competency_dto import Competency
 from iris.domain.data.text_message_content_dto import TextMessageContentDTO
+from iris.domain.variant.competency_extraction_variant import CompetencyExtractionVariant
 from iris.llm import (
     CompletionArguments,
     ModelVersionRequestHandler,
@@ -18,13 +19,12 @@ from iris.llm import (
 from iris.llm.external.model import LanguageModel
 from iris.pipeline import Pipeline
 from iris.pipeline.prompts.competency_extraction import system_prompt
-from iris.pipeline.shared.utils import filter_variants_by_available_models
 from iris.web.status.status_update import CompetencyExtractionCallback
 
 logger = logging.getLogger(__name__)
 
 
-class CompetencyExtractionPipeline(Pipeline):
+class CompetencyExtractionPipeline(Pipeline[CompetencyExtractionVariant]):
     """CompetencyExtractionPipeline extracts and processes competencies from course content.
 
     It leverages a language model to generate competency JSON, parses the output using a Pydantic output parser,
@@ -109,27 +109,18 @@ class CompetencyExtractionPipeline(Pipeline):
         self.callback.done(final_result=generated_competencies, tokens=self.tokens)
 
     @classmethod
-    def get_variants(cls, available_llms: List[LanguageModel]) -> List[FeatureDTO]:
+    def get_variants(cls) -> List[CompetencyExtractionVariant]:
         """
-        Returns available variants for the CompetencyExtractionPipeline based on available LLMs.
-
-        Args:
-            available_llms: List of available language models
+        Returns available variants for the CompetencyExtractionPipeline.
 
         Returns:
-            List of FeatureDTO objects representing available variants
+            List of CompetencyExtractionVariant objects representing available variants
         """
-        variant_specs = [
-            (
-                ["gpt-4.1"],
-                FeatureDTO(
-                    id="default",
-                    name="Default",
-                    description="Default competency extraction variant using GPT-4.1",
-                ),
+        return [
+            CompetencyExtractionVariant(
+                id="default",
+                name="Default",
+                description="Default competency extraction variant using GPT-4.1",
+                agent_model="gpt-4.1",
             )
         ]
-
-        return filter_variants_by_available_models(
-            available_llms, variant_specs, pipeline_name="CompetencyExtractionPipeline"
-        )

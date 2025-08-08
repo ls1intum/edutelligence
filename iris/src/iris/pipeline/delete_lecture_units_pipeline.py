@@ -5,6 +5,7 @@ from weaviate import WeaviateClient
 from weaviate.classes.query import Filter
 
 from iris.domain.data.lecture_unit_page_dto import LectureUnitPageDTO
+from iris.domain.variant.lecture_unit_deletion_variant import LectureUnitDeletionVariant
 from iris.pipeline import Pipeline
 from iris.vector_database.lecture_transcription_schema import (
     LectureTranscriptionSchema,
@@ -27,7 +28,7 @@ from iris.web.status.lecture_deletion_status_callback import (
 )
 
 
-class LectureUnitDeletionPipeline(Pipeline):
+class LectureUnitDeletionPipeline(Pipeline[LectureUnitDeletionVariant]):
     """LectureUnitDeletionPipeline deletes weaviate entries from page chunks,
     transcriptions and lecture unit segments."""
 
@@ -140,3 +141,13 @@ class LectureUnitDeletionPipeline(Pipeline):
             lecture_unit,
             "Lecture units",
         )
+
+    @classmethod
+    def get_variants(cls) -> List[LectureUnitDeletionVariant]:
+        return [
+            LectureUnitDeletionVariant(
+                id="default",
+                name="Default",
+                description="Standard lecture unit deletion with no model requirements.",
+            ),
+        ]

@@ -14,28 +14,24 @@ from ...common.message_converters import (
 )
 from ...common.pipeline_enum import PipelineEnum
 from ...common.pyris_message import PyrisMessage
-from ...domain import FeatureDTO
 from ...domain.chat.lecture_chat.lecture_chat_pipeline_execution_dto import (
     LectureChatPipelineExecutionDTO,
 )
 from ...domain.retrieval.lecture.lecture_retrieval_dto import (
     LectureRetrievalDTO,
 )
+from ...domain.variant.lecture_chat_variant import LectureChatVariant
 from ...llm import (
     CompletionArguments,
     ModelVersionRequestHandler,
 )
-from ...llm.external.model import LanguageModel
 from ...llm.langchain import IrisLangchainChatModel
 from ...retrieval.lecture.lecture_retrieval import LectureRetrieval
 from ...vector_database.database import VectorDatabase
 from ...web.status.status_update import LectureChatCallback
 from ..pipeline import Pipeline
 from ..shared.citation_pipeline import CitationPipeline
-from ..shared.utils import (
-    filter_variants_by_available_models,
-    format_custom_instructions,
-)
+from ..shared.utils import format_custom_instructions
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +63,7 @@ def lecture_initial_prompt():
      """
 
 
-class LectureChatPipeline(Pipeline):
+class LectureChatPipeline(Pipeline[LectureChatVariant]):
     """LectureChatPipeline orchestrates the interaction for lecture-based chat queries.
 
     It uses an IrisLangchainChatModel to generate responses based on a student's question, incorporates chat history and
@@ -112,29 +108,23 @@ class LectureChatPipeline(Pipeline):
         self.tokens = []
 
     @classmethod
-    def get_variants(cls, available_llms: List[LanguageModel]) -> List[FeatureDTO]:
-        variant_specs = [
-            (
-                ["gpt-4.1-mini"],
-                FeatureDTO(
-                    id="default",
-                    name="Default",
-                    description="Uses a smaller model for faster and cost-efficient responses.",
-                ),
+    def get_variants(cls) -> List[LectureChatVariant]:
+        return [
+            LectureChatVariant(
+                id="default",
+                name="Default",
+                description="Uses a smaller model for faster and cost-efficient responses.",
+                agent_model="gpt-4.1-mini",
+                citation_model="gpt-4.1-nano",
             ),
-            (
-                ["gpt-4.1"],
-                FeatureDTO(
-                    id="advanced",
-                    name="Advanced",
-                    description="Uses a larger chat model, balancing speed and quality.",
-                ),
+            LectureChatVariant(
+                id="advanced",
+                name="Advanced",
+                description="Uses a larger chat model, balancing speed and quality.",
+                agent_model="gpt-4.1",
+                citation_model="gpt-4.1-mini",
             ),
         ]
-
-        return filter_variants_by_available_models(
-            available_llms, variant_specs, pipeline_name="LectureChatPipeline"
-        )
 
     def __repr__(self):
         return f"{self.__class__.__name__}(llm={self.llm})"
