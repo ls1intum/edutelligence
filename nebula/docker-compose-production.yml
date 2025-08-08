@@ -30,6 +30,7 @@ services:
     image: envoyproxy/envoy:v1.30-latest
     container_name: envoy
     environment:
+      - NEBULA_SECRET_TOKEN=${NEBULA_SECRET_TOKEN}
       - LLM_CONFIG_PATH=/app/llm_config.nebula.yml
     volumes:
       - ./envoy.yaml:/etc/envoy/envoy.yaml:ro
