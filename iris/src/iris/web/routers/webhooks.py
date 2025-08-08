@@ -80,34 +80,6 @@ def run_lecture_deletion_pipeline_worker(dto: LecturesDeletionExecutionDto):
         logger.error(traceback.format_exc())
 
 
-def run_transcription_ingestion_pipeline_worker(
-    dto: TranscriptionIngestionPipelineExecutionDto,
-):
-    """
-    Run the transcription ingestion pipeline in a separate thread
-    """
-    with semaphore:
-        try:
-            callback = TranscriptionIngestionStatus(
-                run_id=dto.settings.authentication_token,
-                base_url=dto.settings.artemis_base_url,
-                initial_stages=dto.initial_stages,
-                lecture_unit_id=dto.lecture_unit_id,
-            )
-            db = VectorDatabase()
-            client = db.get_client()
-            pipeline = TranscriptionIngestionPipeline(
-                client=client, dto=dto, callback=callback
-            )
-            pipeline()
-        except Exception as e:
-            logger.error("Error while deleting lectures: %s", e)
-            logger.error(traceback.format_exc())
-            capture_exception(e)
-        finally:
-            semaphore.release()
-
-
 def run_faq_update_pipeline_worker(dto: FaqIngestionPipelineExecutionDto):
     """
     Run the exercise chat pipeline in a separate thread
@@ -147,7 +119,6 @@ def run_faq_delete_pipeline_worker(dto: FaqDeletionExecutionDto):
             )
             db = VectorDatabase()
             client = db.get_client()
-            # Hier würd dann die Methode zum entfernen aus der Datenbank kommen
             pipeline = FaqIngestionPipeline(client=client, dto=None, callback=callback)
             pipeline.delete_faq(dto.faq.faq_id, dto.faq.course_id)
 
@@ -168,7 +139,7 @@ def lecture_ingestion_webhook(dto: IngestionPipelineExecutionDto):
     """
     Webhook endpoint to trigger the exercise chat pipeline
     """
-    validate_pipeline_variant(dto.settings, LectureUnitPageIngestionPipeline)
+    validate_pipeline_variant(dto.settings, LectureIngestionUpdatePipeline)
 
     process = Process(target=run_lecture_update_pipeline_worker, args=(dto,))
     ingestion_job_handler.add_job(
@@ -188,29 +159,10 @@ def lecture_deletion_webhook(dto: LecturesDeletionExecutionDto):
     """
     Webhook endpoint to trigger the lecture deletion
     """
-    validate_pipeline_variant(dto.settings, LectureUnitPageIngestionPipeline)
+    validate_pipeline_variant(dto.settings, LectureUnitDeletionPipeline)
 
     thread = Thread(target=run_lecture_deletion_pipeline_worker, args=(dto,))
     thread.start()
-
-
-@router.post(
-    "/transcriptions/ingest",
-    status_code=status.HTTP_202_ACCEPTED,
-    dependencies=[Depends(TokenValidator())],
-)
-def transcription_ingestion_webhook(
-    dto: TranscriptionIngestionPipelineExecutionDto,
-):
-    """
-    Webhook endpoint to trigger the lecture transcription ingestion pipeline
-    """
-    validate_pipeline_variant(dto.settings, TranscriptionIngestionPipeline)
-
-    logger.info("transcription ingestion got DTO %s", dto)
-    thread = Thread(target=run_transcription_ingestion_pipeline_worker, args=(dto,))
-    thread.start()
-
 
 @router.post(
     "/faqs/ingest",

@@ -36,7 +36,7 @@ from iris.web.status.ingestion_status_callback import IngestionStatusCallback
 CHUNK_SEPARATOR_CHAR = "\31"
 
 
-class TranscriptionIngestionPipeline(Pipeline):
+class TranscriptionIngestionPipeline(SubPipeline):
     """TranscriptionIngestionPipeline orchestrates the process of ingesting lecture transcription data.
 
     It deletes existing transcription data, chunks and summarizes the transcription,
