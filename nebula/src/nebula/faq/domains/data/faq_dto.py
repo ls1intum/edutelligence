@@ -23,13 +23,13 @@ class FaqDTO(BaseDTO):
 
 class FaqRewritingDTO(BaseDTO):
     to_be_rewritten: str = Field(alias="toBeRewritten")
-    faqs: Optional[List[FaqDTO]] = Field(default = None, default_factory=list)
+    faqs: Optional[List[FaqDTO]] = Field( default_factory=list)
 
 class FaqRewritingResponse(BaseDTO):
     rewritten_text: str = Field(alias="rewrittenText")
 
 class FaqConsistencyDTO(BaseDTO):
-    faqs: Optional[List[FaqDTO]] = Field(default = None, alias="faqs")
+    faqs: Optional[List[FaqDTO]] = Field( default_factory=list, alias="faqs")
     to_be_checked: str = Field(alias="toBeChecked")
 
 class FaqConsistencyResponse(BaseDTO):
