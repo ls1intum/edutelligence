@@ -9,6 +9,8 @@ from langsmith import traceable
 
 from iris.common.pipeline_enum import PipelineEnum
 from iris.common.tutor_suggestion import (
+    ADVANCED_VARIANT,
+    DEFAULT_VARIANT,
     ChannelType,
     faq_content_retrieval,
     get_channel_type,
@@ -36,9 +38,6 @@ from iris.vector_database.database import VectorDatabase
 from iris.web.status.status_update import TutorSuggestionCallback
 
 logger = logging.getLogger(__name__)
-
-ADVANCED_VARIANT = "deepseek-r1:8b"
-DEFAULT_VARIANT = "gemma3:27b"
 
 
 class TutorSuggestionPipeline(Pipeline):

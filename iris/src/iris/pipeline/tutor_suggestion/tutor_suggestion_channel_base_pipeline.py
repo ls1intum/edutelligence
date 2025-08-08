@@ -8,6 +8,8 @@ from langsmith import traceable
 from iris.common.pipeline_enum import PipelineEnum
 from iris.common.pyris_message import IrisMessageRole, PyrisMessage
 from iris.common.tutor_suggestion import (
+    ADVANCED_VARIANT,
+    DEFAULT_VARIANT,
     ChannelType,
     extract_html_from_text,
     extract_json_from_text,
@@ -33,9 +35,6 @@ from iris.pipeline.tutor_suggestion.tutor_suggestion_user_query_pipeline import 
 )
 from iris.web.status.status_update import TutorSuggestionCallback
 
-ADVANCED_VARIANT = "deepseek-r1:8b"
-DEFAULT_VARIANT = "gemma3:27b"
-
 logger = logging.getLogger(__name__)
 
 
@@ -57,10 +56,7 @@ class TutorSuggestionChannelBasePipeline(Pipeline):
         self.variant = variant
         completion_args = CompletionArguments(temperature=0, max_tokens=8000)
 
-        if variant == "advanced":
-            model = ADVANCED_VARIANT
-        else:
-            model = DEFAULT_VARIANT
+        model = ADVANCED_VARIANT if self.variant == "advanced" else DEFAULT_VARIANT
 
         self.llm = IrisLangchainChatModel(
             request_handler=ModelVersionRequestHandler(version=model),

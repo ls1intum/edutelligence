@@ -14,6 +14,9 @@ from iris.vector_database.database import VectorDatabase
 
 logger = logging.getLogger(__name__)
 
+ADVANCED_VARIANT = "gpt-oss:120b"
+DEFAULT_VARIANT = "gpt-oss:20b"
+
 
 class ChannelType:
     PROGRAMMING_EXERCISE = "programming_exercise"
