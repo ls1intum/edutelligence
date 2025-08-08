@@ -34,7 +34,7 @@ services:
     volumes:
       - ./envoy.yaml:/etc/envoy/envoy.yaml:ro
     ports:
-      - "8000:8000"
+      - "80:8000"
       - "9901:9901"
     depends_on:
       - transcriber
