@@ -8,7 +8,7 @@ from athena.text import Exercise, Submission, Feedback
 from athena.schemas.exercise_type import ExerciseType
 from athena.schemas.text_submission import TextLanguageEnum
 from module_text_llm.basic_approach.generate_suggestions import generate_suggestions
-from module_text_llm.basic_approach import BasicApproachConfig
+
 
 
 class PlaygroundExerciseLoader:

@@ -91,6 +91,34 @@ jobs:
           echo "============================"
           python3 combine_coverage.py --summary test-results/combined_coverage.xml test-results/programming_module_programming_llm_coverage.xml test-results/text_module_text_llm_coverage.xml test-results/modeling_module_modeling_llm_coverage.xml | tee test-results/coverage_table.txt
       
+      - name: Run Quality Drift Analysis
+        run: |
+          cd athena
+          echo "🧪 Running Quality Drift Analysis..."
+          echo "=================================="
+          
+          # Check if the text module virtual environment exists
+          if [ -d "modules/text/module_text_llm/.venv" ]; then
+            echo "Running quality drift analysis for text module..."
+            
+            # Install additional dependencies for quality drift analysis
+            modules/text/module_text_llm/.venv/bin/pip install bert-score torch transformers numpy
+            
+            # Change to the module directory and run the analysis
+            cd modules/text/module_text_llm
+            if ! .venv/bin/python ../../../tests/modules/text/module_text_llm/real/run_quality_drift_analysis.py; then
+              echo "Quality drift analysis failed"
+              exit 1
+            fi
+            
+            # Copy the report to test-results for artifact upload
+            cp ../../../tests/modules/text/module_text_llm/real/quality_drift_report.json ../../../test-results/quality_drift_report.json
+            
+            echo "✅ Quality drift analysis completed successfully"
+          else
+            echo "Virtual environment not found for text module, skipping quality drift analysis..."
+          fi
+      
       - name: Upload JUnit Test Results
         if: always()
         uses: actions/upload-artifact@v4
@@ -109,6 +137,7 @@ jobs:
             athena/test-results/coverage_table.txt
             athena/test-results/*_html/
             athena/test-results/combined_html/
+            athena/test-results/quality_drift_report.json
   report:
     runs-on: ubuntu-latest
     if: always()
@@ -186,4 +215,40 @@ jobs:
               }
             } catch (error) {
               console.log('Error reading coverage table:', error.message);
+            }
+      
+      - name: Comment Quality Drift Results on PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            
+            try {
+              // Read from the downloaded artifacts
+              const qualityDriftPath = path.join(process.env.GITHUB_WORKSPACE, 'coverage-reports', 'quality_drift_report.json');
+              
+              if (fs.existsSync(qualityDriftPath)) {
+                const qualityDriftData = JSON.parse(fs.readFileSync(qualityDriftPath, 'utf8'));
+                
+                // Format the quality drift results
+                let modelResults = '';
+                for (const [model, results] of Object.entries(qualityDriftData.model_results)) {
+                  modelResults += `- **${model}**: BERTScore F1=${results.avg_bertscore_f1}, Credit Drift=${results.avg_credit_drift}\n`;
+                }
+                
+                const comment = `### 🧪 Quality Drift Analysis Results\n\n**Analysis completed at:** ${qualityDriftData.timestamp}\n**Baseline model:** ${qualityDriftData.baseline.model}\n**Baseline generated:** ${qualityDriftData.baseline.generated_at}\n\n**Model Comparison Results:**\n${modelResults}`;
+                
+                github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: context.payload.pull_request.number,
+                  body: comment
+                });
+              } else {
+                console.log('Quality drift report not found at:', qualityDriftPath);
+              }
+            } catch (error) {
+              console.log('Error reading quality drift report:', error.message);
             }

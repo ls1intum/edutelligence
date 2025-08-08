@@ -1,6 +1,7 @@
 import pytest
 import nltk
 import asyncio
+from typing import List, Dict, Any
 from module_text_llm.basic_approach import BasicApproachConfig
 from module_text_llm.chain_of_thought_approach import ChainOfThoughtConfig
 from llm_core.models.providers.azure_model_config import AzureModelConfig
@@ -8,7 +9,6 @@ from llm_core.models.providers.azure_model_config import AzureModelConfig
 
 @pytest.fixture(scope="session", autouse=True)
 def setup_environment():
-
     nltk.download("punkt", quiet=True)
     nltk.download("punkt_tab", quiet=True)
 
@@ -21,14 +21,57 @@ def event_loop():
     loop.close()
 
 
+# ============================================================================
+# MODEL CONFIGURATIONS
+# ============================================================================
+
 @pytest.fixture
 def real_config():
-    """Create a real configuration for testing with Azure OpenAI."""
+    """Create a real configuration for testing with Azure OpenAI GPT-4o."""
     return BasicApproachConfig(
         max_input_tokens=5000,
         model=AzureModelConfig(
             model_name="azure_openai_gpt-4o",
             get_model=lambda: None,  # This will be set by the module
+        ),
+        type="basic",
+    )
+
+
+@pytest.fixture
+def gpt4o_config():
+    """Create a basic configuration for testing with GPT-4o."""
+    return BasicApproachConfig(
+        max_input_tokens=5000,
+        model=AzureModelConfig(
+            model_name="azure_openai_gpt-4o",
+            get_model=lambda: None,
+        ),
+        type="basic",
+    )
+
+
+@pytest.fixture
+def gpt4_turbo_config():
+    """Create a basic configuration for testing with GPT-4-turbo."""
+    return BasicApproachConfig(
+        max_input_tokens=5000,
+        model=AzureModelConfig(
+            model_name="azure_openai_gpt-4-turbo",
+            get_model=lambda: None,
+        ),
+        type="basic",
+    )
+
+
+@pytest.fixture
+def gpt35_turbo_config():
+    """Create a basic configuration for testing with GPT-3.5-turbo."""
+    return BasicApproachConfig(
+        max_input_tokens=5000,
+        model=AzureModelConfig(
+            model_name="azure_openai_gpt-35-turbo",
+            get_model=lambda: None,
         ),
         type="basic",
     )
@@ -47,14 +90,61 @@ def chain_of_thought_config():
     )
 
 
+# ============================================================================
+# QUALITY DRIFT ANALYSIS CONFIGURATIONS
+# ============================================================================
+
+def get_model_configs() -> List[Dict[str, Any]]:
+    """Get list of all model configurations for quality drift analysis."""
+    return [
+        {
+            "name": "gpt-4o",
+            "config": BasicApproachConfig(
+                max_input_tokens=5000,
+                model=AzureModelConfig(
+                    model_name="azure_openai_gpt-4o",
+                    get_model=lambda: None,
+                ),
+                type="basic",
+            )
+        },
+        {
+            "name": "gpt-4-turbo", 
+            "config": BasicApproachConfig(
+                max_input_tokens=5000,
+                model=AzureModelConfig(
+                    model_name="azure_openai_gpt-4-turbo",
+                    get_model=lambda: None,
+                ),
+                type="basic",
+            )
+        },
+        {
+            "name": "gpt-35-turbo",
+            "config": BasicApproachConfig(
+                max_input_tokens=5000,
+                model=AzureModelConfig(
+                    model_name="azure_openai_gpt-35-turbo",
+                    get_model=lambda: None,
+                ),
+                type="basic",
+            )
+        }
+    ]
+
+
+# ============================================================================
+# BASELINE GENERATION CONFIGURATION
+# ============================================================================
+
 @pytest.fixture
-def gpt35_config():
-    """Create a basic configuration for testing with GPT-3.5-turbo."""
+def baseline_config():
+    """Create a configuration for baseline generation using GPT-4o."""
     return BasicApproachConfig(
         max_input_tokens=5000,
         model=AzureModelConfig(
-            model_name="azure_openai_gpt-35-turbo",
-            get_model=lambda: None,  # This will be set by the module
+            model_name="azure_openai_gpt-4o",
+            get_model=lambda: None,
         ),
         type="basic",
     )
