@@ -1,6 +1,7 @@
 from enum import Enum
 from pydantic import BaseModel, Field
-from typing import List, Set
+from typing import List, Set, Optional
+
 
 class FaqState(Enum):
     ACCEPTED = "ACCEPTED"
@@ -16,13 +17,13 @@ class FaqDTO(BaseDTO):
     faq_id: int = Field(alias="id")
     question_title: str = Field(alias="questionTitle")
     question_answer: str = Field(alias="questionAnswer")
-    categories: Set[str] = Field(default_factory=set)
+    categories: Optional[Set[str]] = Field(default_factory=set)
     faq_state: FaqState = Field(alias="faqState")
 
 
 class FaqRewritingDTO(BaseDTO):
     to_be_rewritten: str = Field(alias="toBeRewritten")
-    faqs: List[FaqDTO]
+    faqs: Optional[List[FaqDTO]] = Field(default_factory=list)
 
 class FaqRewritingResponse(BaseDTO):
     rewritten_text: str = Field(alias="rewrittenText")
