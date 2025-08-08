@@ -166,7 +166,7 @@ class AbstractAgentPipeline(ABC, Generic[DTO]):
         Subclasses customize behavior by implementing create_llm, build_prompt,
         get_tools and get_agent_params, and using on_agent_step/post_agent_hook hooks.
         """
-        
+
         params = self.get_agent_params(state)
 
         # Create and run agent
@@ -179,9 +179,7 @@ class AbstractAgentPipeline(ABC, Generic[DTO]):
         return output or ""
 
     def assemble_prompt_with_history(
-        self,
-        state: "AgentPipelineExecutionState[DTO, VARIANT]",
-        system_prompt: str
+        self, state: "AgentPipelineExecutionState[DTO, VARIANT]", system_prompt: str
     ) -> ChatPromptTemplate:
         """
         Combine the prefix prompt with converted chat history and add the agent scratchpad.
@@ -190,7 +188,8 @@ class AbstractAgentPipeline(ABC, Generic[DTO]):
         """
         prefix_messages = [("system", system_prompt)]
         history_lc_messages = [
-            convert_iris_message_to_langchain_message(message) for message in state.message_history
+            convert_iris_message_to_langchain_message(message)
+            for message in state.message_history
         ]
         combined = (
             prefix_messages
@@ -285,12 +284,11 @@ class AbstractAgentPipeline(ABC, Generic[DTO]):
             state.db.client, self.get_memiris_tenant(state.dto)
         )
 
-
         # 1. Prepare message history, user query, LLM, prompt and tools
         state.message_history = self.get_recent_history_from_DTO(state)
         user_query = self.get_text_of_latest_user_message(state)
 
-        state.llm = self.create_llm(state) # TODO: Move up? Variantensystem
+        state.llm = self.create_llm(state)  # TODO: Move up? Variantensystem
         system_message = self.build_system_message(state)
         state.prompt = self.assemble_prompt_with_history(
             state=state, system_prompt=system_message
