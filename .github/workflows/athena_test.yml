@@ -104,6 +104,9 @@ jobs:
             # Install additional dependencies for quality drift analysis
             modules/text/module_text_llm/.venv/bin/pip install bert-score torch transformers numpy
             
+            # Download required NLTK data
+            modules/text/module_text_llm/.venv/bin/python -c "import nltk; nltk.download('punkt')"
+            
             # Change to the module directory and run the analysis
             cd modules/text/module_text_llm
             if ! .venv/bin/python ../../../tests/modules/text/module_text_llm/real/run_quality_drift_analysis.py; then
