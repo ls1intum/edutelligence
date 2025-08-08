@@ -8,7 +8,6 @@ RUN pip install poetry && poetry install --only main --no-root
 
 # Copy source code and config
 COPY src/nebula ./nebula
-COPY application_local.nebula.yml .
 COPY llm_config.nebula.yml .
 
 # Set PYTHONPATH for relative imports

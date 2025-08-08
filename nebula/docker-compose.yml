@@ -5,14 +5,12 @@ services:
     build:
       context: .
       dockerfile: docker/transcriber/Dockerfile
-    container_name: nebula-transcriber
+    container_name: transcriber-service
     expose:
-      - "5000" # interne Kommunikation mit Envoy
+      - "5000"
     environment:
-      - APPLICATION_YML_PATH=/app/application_local.nebula.yml
       - LLM_CONFIG_PATH=/app/llm_config.nebula.yml
     volumes:
-      - ./application_local.nebula.yml:/app/application_local.nebula.yml:ro
       - ./llm_config.nebula.yml:/app/llm_config.nebula.yml:ro
       - ./temp:/app/temp
     restart: unless-stopped
@@ -21,15 +19,12 @@ services:
     build:
       context: .
       dockerfile: docker/faq/Dockerfile
-    container_name: ${FAQ_SERVICE_NAME}
+    container_name: faq-service
     expose:
-      - "${FAQ_SERVICE_PORT}"
+      - "5001"
     environment:
-      - APPLICATION_YML_PATH=/app/application_local.nebula.yml
       - LLM_CONFIG_PATH=/app/llm_config.nebula.yml
-      - FAQ_SERVICE_PORT=${FAQ_SERVICE_PORT}
     volumes:
-      - ./application_local.nebula.yml:/app/application_local.nebula.yml:ro
       - ./llm_config.nebula.yml:/app/llm_config.nebula.yml:ro
     restart: unless-stopped
 
@@ -40,8 +35,9 @@ services:
       - ./envoy.yaml:/etc/envoy/envoy.yaml:ro
     ports:
       - "8000:8000" # HTTP for FastAPI
-      - "50051:50051" # gRPC
       - "9901:9901" # Admin interface
     depends_on:
       - transcriber
       - faq
+    environment:
+      - NEBULA_SECRET_TOKEN=${NEBULA_SECRET_TOKEN}
