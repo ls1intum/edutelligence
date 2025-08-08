@@ -1,6 +1,6 @@
 from typing import List, Optional
 from athena import emit_meta
-from athena.schemas import LearnerProfile
+from athena.schemas import LearnerProfile, Competency
 from athena.text import Exercise, Submission, Feedback
 from athena.logger import logger
 from llm_core.utils.llm_utils import (
@@ -31,9 +31,15 @@ async def generate_suggestions(
     is_graded: bool,
     learner_profile: Optional[LearnerProfile],
     latest_submission: Optional[Submission] = None,
+    competencies: Optional[List[Competency]] = None,
 ) -> List[Feedback]:
     if latest_submission is None:
         logger.info("Latest submission is not provided.")
+
+    if competencies is None:
+        logger.info("Competencies are not provided.")
+    else:
+        logger.info(f"Competencies are provided: {competencies}")
 
     # Use default preferences if none provided
     if learner_profile is None:
@@ -62,6 +68,7 @@ async def generate_suggestions(
         "submission": add_sentence_numbers(submission.text),
         "previous_submission": add_sentence_numbers(
             latest_submission.text) if latest_submission is not None else "Previous submission is not available.",
+        "competencies": competencies,
     }
 
     chat_prompt = get_chat_prompt(

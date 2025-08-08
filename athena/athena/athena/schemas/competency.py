@@ -9,8 +9,8 @@ from .competency_taxonomy import CompetencyTaxonomy
 class Competency(Schema, ABC):
     """A competency that is required by the lecturer to be mastered by the student, enhanced with module-specific metadata."""
     id: int = Field(example=1)
-    title: str = Field("", description="The title of the competency.",
-                       example="Competency 1")
+    title: str = Field("", description="The title of the competency.", example="Competency 1")
+    description: str = Field("", description="The description of the competency.", example="Competency 1 description")
     taxonomy: CompetencyTaxonomy = Field(None, description="The taxonomy of the competency.")
 
     meta: dict = Field({}, example={"internal_id": "5"})
