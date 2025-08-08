@@ -5,7 +5,7 @@ from uuid import UUID
 from pydantic import BaseModel, Field, TypeAdapter
 
 
-class LearningDto(BaseModel):
+class LearningDLO(BaseModel):
     """
     Data transfer object for representing a learning.
     Contains the complete representation of a learning object including its identifier.
@@ -21,29 +21,29 @@ class LearningDto(BaseModel):
     @staticmethod
     def json_type() -> TypeAdapter:
         """
-        Generate the TypeAdapter for LearningDto.
+        Generate the TypeAdapter for LearningDLO.
         """
-        return TypeAdapter(LearningDto)
+        return TypeAdapter(LearningDLO)
 
     @staticmethod
     def json_array_type() -> TypeAdapter:
         """
-        Generate the TypeAdapter for an array of LearningDto objects.
+        Generate the TypeAdapter for an array of LearningDLO objects.
         """
-        return TypeAdapter(List[LearningDto])
+        return TypeAdapter(List[LearningDLO])
 
     @staticmethod
     def json_schema() -> Dict[str, Any]:
         """
-        Generate the JSON schema for LearningDto.
+        Generate the JSON schema for LearningDLO.
         """
-        return LearningDto.json_type().json_schema()
+        return LearningDLO.json_type().json_schema()
 
     @staticmethod
     def json_array_schema() -> str:
         """
-        Generate the JSON schema for an array of LearningDto objects.
+        Generate the JSON schema for an array of LearningDLO objects.
         """
-        learning_json_dict = LearningDto.json_array_type().json_schema()
+        learning_json_dict = LearningDLO.json_array_type().json_schema()
 
         return json.dumps(learning_json_dict, indent=2)

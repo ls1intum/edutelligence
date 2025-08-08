@@ -3,6 +3,8 @@ from abc import ABC
 from typing import List, Optional
 
 import requests
+from memiris import Memory
+from memiris.api.memory_dto import MemoryDTO
 from sentry_sdk import capture_exception, capture_message
 
 from iris.common.token_usage_dto import TokenUsageDTO
@@ -118,6 +120,8 @@ class StatusCallback(ABC):
         start_next_stage: bool = True,
         inconsistencies: Optional[List[str]] = None,
         improvement: Optional[str] = None,
+        accessed_memories: Optional[List[Memory]] = None,
+        created_memories: Optional[List[Memory]] = None,
     ):
         """
         Transition the current stage to DONE and update the status.
@@ -126,28 +130,47 @@ class StatusCallback(ABC):
         """
         self.stage.state = StageStateEnum.DONE
         self.stage.message = message
-        self.status.result = final_result
         self.status.tokens = tokens or self.status.tokens
+        self.status.result = final_result
         if hasattr(self.status, "suggestions"):
             self.status.suggestions = suggestions
-
         if hasattr(self.status, "inconsistencies"):
             self.status.inconsistencies = inconsistencies
         if hasattr(self.status, "improvement"):
             self.status.improvement = improvement
+        if hasattr(self.status, "accessed_memories"):
+            self.status.accessed_memories = (
+                [MemoryDTO.from_memory(memory) for memory in accessed_memories]
+                if accessed_memories
+                else []
+            )
+        if hasattr(self.status, "created_memories"):
+            self.status.created_memories = (
+                [MemoryDTO.from_memory(memory) for memory in created_memories]
+                if created_memories
+                else []
+            )
+
         next_stage = self.get_next_stage()
+
         if next_stage is not None:
             self.stage = next_stage
             if next_stage_message:
                 self.stage.message = next_stage_message
             if start_next_stage:
                 self.stage.state = StageStateEnum.IN_PROGRESS
+
         self.on_status_update()
+
         self.status.result = None
         if hasattr(self.status, "suggestions"):
             self.status.suggestions = None
         if hasattr(self.status, "inconsistencies"):
             self.status.inconsistencies = None
+        if hasattr(self.status, "accessed_memories"):
+            self.status.accessed_memories = None
+        if hasattr(self.status, "created_memories"):
+            self.status.created_memories = None
 
     def error(
         self,
@@ -225,6 +248,11 @@ class CourseChatStatusCallback(StatusCallback):
             # StageDTO(
             #     weight=10, state=StageStateEnum.NOT_STARTED, name="Creating suggestions"
             # ),
+            StageDTO(
+                weight=10,
+                state=StageStateEnum.NOT_STARTED,
+                name="Extracting memories",
+            ),
         ]
         status = CourseChatStatusUpdateDTO(stages=stages)
         stage = stages[current_stage_index]

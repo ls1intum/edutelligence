@@ -7,6 +7,8 @@ WORKDIR /app
 # Copy the dependencies file to the working directory
 COPY iris/pyproject.toml iris/poetry.lock ./
 
+COPY memiris ../memiris
+
 # Install poetry
 RUN pip install poetry
 
