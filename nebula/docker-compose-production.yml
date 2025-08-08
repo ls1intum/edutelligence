@@ -7,11 +7,11 @@ services:
     expose:
       - "5000"
     env_file:
-      - /opt/.env
+      - ../.env
     environment:
       - LLM_CONFIG_PATH=/app/llm_config.nebula.yml
     volumes:
-      - /opt/llm_config.nebula.yml:/app/llm_config.nebula.yml:ro
+      - ../llm_config.nebula.yml:/app/llm_config.nebula.yml:ro
       - ./temp:/app/temp
     restart: unless-stopped
 
