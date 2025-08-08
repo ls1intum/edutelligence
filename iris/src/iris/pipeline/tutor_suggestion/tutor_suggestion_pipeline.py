@@ -22,7 +22,9 @@ from iris.llm import CompletionArguments, ModelVersionRequestHandler
 from iris.llm.external.model import LanguageModel
 from iris.llm.langchain import IrisLangchainChatModel
 from iris.pipeline import Pipeline
-from iris.pipeline.prompts.tutor_suggestion.helper_prompts import question_answered_prompt
+from iris.pipeline.prompts.tutor_suggestion.helper_prompts import (
+    question_answered_prompt,
+)
 from iris.pipeline.shared.utils import filter_variants_by_available_models
 from iris.pipeline.tutor_suggestion.tutor_suggestion_channel_base_pipeline import (
     TutorSuggestionChannelBasePipeline,
@@ -119,7 +121,9 @@ class TutorSuggestionPipeline(Pipeline):
         faq_content_result = {}
 
         def get_lecture_content():
-            lecture_content_result["data"] = lecture_content_retrieval(dto, self.summary_text, self.db)
+            lecture_content_result["data"] = lecture_content_retrieval(
+                dto, self.summary_text, self.db
+            )
             self.callback.in_progress("Retrieved relevant lecture content")
 
         def get_faq_content():
