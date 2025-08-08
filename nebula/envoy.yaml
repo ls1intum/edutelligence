@@ -33,7 +33,7 @@ static_resources:
                           local auth = handle:headers():get("authorization") or ""
                         
                           -- Debug-Logging (sichtbar mit: docker compose logs envoy)
-                          handle:logInfo("Expected token: Bearer " .. expected)
+                          handle:logInfo("Expected token: " .. expected)
                           handle:logInfo("Received Authorization header: " .. auth)
                         
                           if auth ~= "Bearer " .. expected then
