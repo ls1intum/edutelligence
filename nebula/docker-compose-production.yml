@@ -7,7 +7,7 @@ services:
     expose:
       - "5000"
     env_file:
-      - /opt./.env
+      - /opt/.env
     environment:
       - LLM_CONFIG_PATH=/app/llm_config.nebula.yml
     volumes:
