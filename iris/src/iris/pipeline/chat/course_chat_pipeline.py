@@ -1,17 +1,17 @@
 import json
 import logging
+import os
 import traceback
 from datetime import datetime
 from typing import Any, Callable, List, Optional
 
 import pytz
+from jinja2 import Environment, FileSystemLoader
 from langchain.agents import AgentExecutor, create_tool_calling_agent
 from langchain_core.messages import SystemMessage
-from langchain_core.output_parsers import JsonOutputParser
 from langchain_core.prompts import (
     ChatPromptTemplate,
 )
-from langchain_core.runnables import Runnable
 from langsmith import traceable
 from memiris.domain.memory import Memory
 
@@ -35,7 +35,6 @@ from ...domain import CourseChatPipelineExecutionDTO
 from ...domain.chat.interaction_suggestion_dto import (
     InteractionSuggestionPipelineExecutionDTO,
 )
-from ...domain.data.metrics.competency_jol_dto import CompetencyJolDTO
 from ...domain.data.text_message_content_dto import TextMessageContentDTO
 from ...domain.variant.course_chat_variant import CourseChatVariant
 from ...llm import (
@@ -53,28 +52,6 @@ from ...web.status.status_update import (
     CourseChatStatusCallback,
 )
 from ..pipeline import Pipeline
-from ..prompts.iris_course_chat_prompts import (
-    iris_base_system_prompt,
-    iris_begin_agent_jol_prompt,
-    iris_begin_agent_suffix_prompt,
-    iris_chat_history_exists_begin_agent_prompt,
-    iris_chat_history_exists_prompt,
-    iris_competency_block,
-    iris_course_meta_block,
-    iris_examples_general_block,
-    iris_examples_metrics_block,
-    iris_exercise_block,
-    iris_faq_block,
-    iris_lecture_block,
-    iris_memiris_block,
-    iris_no_chat_history_prompt_no_metrics_begin_agent_prompt,
-    iris_no_chat_history_prompt_with_metrics_begin_agent_prompt,
-    iris_no_competency_block_prompt,
-    iris_no_exercise_block_prompt,
-    iris_no_faq_block_prompt,
-    iris_no_lecture_block_prompt,
-    iris_no_memiris_block_prompt,
-)
 from ..shared.citation_pipeline import CitationPipeline, InformationType
 from ..shared.utils import (
     filter_variants_by_available_models,
@@ -84,7 +61,6 @@ from ..shared.utils import (
 from .interaction_suggestion_pipeline import (
     InteractionSuggestionPipeline,
 )
-from .lecture_chat_pipeline import LectureChatPipeline
 
 logger = logging.getLogger(__name__)
 
@@ -93,9 +69,6 @@ class CourseChatPipeline(Pipeline[CourseChatVariant]):
     """Course chat pipeline that answers course related questions from students."""
 
     llm: IrisLangchainChatModel
-    llm_small: IrisLangchainChatModel
-    pipeline: Runnable
-    lecture_pipeline: LectureChatPipeline
     suggestion_pipeline: InteractionSuggestionPipeline
     citation_pipeline: CitationPipeline
     callback: CourseChatStatusCallback
@@ -135,8 +108,15 @@ class CourseChatPipeline(Pipeline[CourseChatVariant]):
         self.suggestion_pipeline = InteractionSuggestionPipeline(variant="course")
         self.citation_pipeline = CitationPipeline()
 
-        # Create the pipeline
-        self.pipeline = self.llm | JsonOutputParser()
+        # Setup Jinja2 template environment
+        template_dir = os.path.join(
+            os.path.dirname(__file__), "..", "prompts", "templates"
+        )
+        self.jinja_env = Environment(loader=FileSystemLoader(template_dir))
+        self.system_prompt_template = self.jinja_env.get_template(
+            "course_chat_system_prompt.j2"
+        )
+
         self.tokens = []
 
     def __repr__(self):
@@ -151,66 +131,75 @@ class CourseChatPipeline(Pipeline[CourseChatVariant]):
         allow_lecture_tool: bool = True,
         allow_faq_tool: bool = True,
         allow_memiris_tool: bool = True,
-    ) -> tuple[list[str], bool]:
+        has_chat_history: bool = False,
+        custom_instructions: str = "",
+    ) -> tuple[str, bool]:
         """
-        Build the system prompt parts based on course data availability.
+        Build the complete system prompt using Jinja2 template.
 
         Args:
             dto (CourseChatPipelineExecutionDTO): The pipeline execution DTO.
             allow_lecture_tool (bool): Whether lecture tool is available.
             allow_faq_tool (bool): Whether FAQ tool is available.
+            allow_memiris_tool (bool): Whether Memiris tool is available.
+            has_chat_history (bool): Whether there is chat history.
+            custom_instructions (str): Custom instructions to append.
 
         Returns:
-            tuple[list[str], bool]: (system_prompt_parts, metrics_enabled)
+            tuple[str, bool]: (complete_system_prompt, metrics_enabled)
         """
-        # Construct the base system prompt
-        system_prompt_parts = [
-            iris_base_system_prompt.replace(
-                "{current_date}",
-                datetime.now(tz=pytz.UTC).strftime("%Y-%m-%d %H:%M:%S"),
-            )
-        ]
-
-        # Conditionally add modular blocks based on data availability
-        system_prompt_parts.append(iris_course_meta_block)
-
-        if dto.course.competencies:
-            system_prompt_parts.append(iris_competency_block)
-        else:
-            system_prompt_parts.append(iris_no_competency_block_prompt)
-
-        if dto.course.exercises:
-            system_prompt_parts.append(iris_exercise_block)
-        else:
-            system_prompt_parts.append(iris_no_exercise_block_prompt)
-
-        if allow_lecture_tool:
-            system_prompt_parts.append(iris_lecture_block)
-        else:
-            system_prompt_parts.append(iris_no_lecture_block_prompt)
-
-        if allow_faq_tool:
-            system_prompt_parts.append(iris_faq_block)
-        else:
-            system_prompt_parts.append(iris_no_faq_block_prompt)
-
-        if allow_memiris_tool:
-            system_prompt_parts.append(iris_memiris_block)
-        else:
-            system_prompt_parts.append(iris_no_memiris_block_prompt)
-
-        # Conditionally add example blocks
+        # Determine metrics availability
         metrics_enabled = (
             dto.metrics
             and dto.course.competencies
             and dto.course.student_analytics_dashboard_enabled
         )
-        if metrics_enabled:
-            system_prompt_parts.append(iris_examples_metrics_block)
-        else:
-            system_prompt_parts.append(iris_examples_general_block)
 
-        return system_prompt_parts, metrics_enabled
+        # Prepare template context
+        template_context = {
+            "current_date": datetime.now(tz=pytz.UTC).strftime("%Y-%m-%d %H:%M:%S"),
+            "has_competencies": bool(dto.course.competencies),
+            "has_exercises": bool(dto.course.exercises),
+            "allow_lecture_tool": allow_lecture_tool,
+            "allow_faq_tool": allow_faq_tool,
+            "allow_memiris_tool": allow_memiris_tool,
+            "metrics_enabled": metrics_enabled,
+            "has_chat_history": has_chat_history,
+            "event": self.event,
+            "custom_instructions": custom_instructions,
+            "course_name": (
+                dto.course.name if dto.course and dto.course.name else "the course"
+            ),
+        }
+
+        # Handle JOL event specific data
+        if self.event == "jol" and dto.event_payload:
+            from ...domain.data.metrics.competency_jol_dto import CompetencyJolDTO
+
+            event_payload = CompetencyJolDTO.model_validate(dto.event_payload.event)
+            comp = next(
+                (
+                    c
+                    for c in dto.course.competencies
+                    if c.id == event_payload.competency_id
+                ),
+                None,
+            )
+            template_context["jol"] = json.dumps(
+                {
+                    "value": event_payload.jol_value,
+                    "competency_mastery": get_mastery(
+                        event_payload.competency_progress,
+                        event_payload.competency_confidence,
+                    ),
+                }
+            )
+            template_context["competency"] = comp.model_dump_json() if comp else "{}"
+
+        # Render the complete system prompt
+        complete_system_prompt = self.system_prompt_template.render(template_context)
+
+        return complete_system_prompt, metrics_enabled
 
     def _prepare_chat_context(
         self, dto: CourseChatPipelineExecutionDTO
@@ -244,83 +233,6 @@ class CourseChatPipeline(Pipeline[CourseChatVariant]):
         )
 
         return history, chat_history_lc_messages, query, query_text
-
-    def _handle_event_logic(
-        self,
-        dto: CourseChatPipelineExecutionDTO,
-        history: List[PyrisMessage],
-        query: Optional[PyrisMessage],
-        metrics_enabled: bool,
-    ) -> tuple[dict, str, list[str]]:
-        """
-        Handle event-specific logic (JOL, chat, initial interaction).
-
-        Args:
-            dto (CourseChatPipelineExecutionDTO): The pipeline execution DTO.
-            history (List[PyrisMessage]): Chat history messages.
-            query (Optional[PyrisMessage]): The current query message.
-            metrics_enabled (bool): Whether metrics are enabled.
-
-        Returns:
-            tuple: (params, agent_specific_primary_instruction, system_message_additions)
-        """
-        params: dict = {}
-        agent_specific_primary_instruction = ""
-        system_message_additions = []
-
-        if self.event == "jol":
-            event_payload = CompetencyJolDTO.model_validate(dto.event_payload.event)
-            comp = next(
-                (
-                    c
-                    for c in dto.course.competencies
-                    if c.id == event_payload.competency_id
-                ),
-                None,
-            )
-            params["jol"] = json.dumps(
-                {
-                    "value": event_payload.jol_value,
-                    "competency_mastery": get_mastery(
-                        event_payload.competency_progress,
-                        event_payload.competency_confidence,
-                    ),
-                }
-            )
-            params["competency"] = comp.model_dump_json() if comp else "{}"
-            params["course_name"] = (
-                dto.course.name if dto.course and dto.course.name else "the course"
-            )
-
-            agent_specific_primary_instruction = iris_begin_agent_jol_prompt
-            if history:  # JOL can happen with or without prior history in this session
-                system_message_additions.append(iris_chat_history_exists_prompt)
-
-        elif query is not None:  # Chat history exists and it's student's turn
-            params["course_name"] = (
-                dto.course.name if dto.course and dto.course.name else "the course"
-            )
-            agent_specific_primary_instruction = (
-                iris_chat_history_exists_begin_agent_prompt
-            )
-            # iris_chat_history_exists_prompt is vital here
-            system_message_additions.append(iris_chat_history_exists_prompt)
-
-        else:  # No query, no JOL -> initial interaction from Iris
-            params["course_name"] = (
-                dto.course.name if dto.course and dto.course.name else "the course"
-            )
-            if metrics_enabled:
-                agent_specific_primary_instruction = (
-                    iris_no_chat_history_prompt_with_metrics_begin_agent_prompt
-                )
-            else:
-                agent_specific_primary_instruction = (
-                    iris_no_chat_history_prompt_no_metrics_begin_agent_prompt
-                )
-            # No iris_chat_history_exists_prompt here as history is empty / not relevant for initiation
-
-        return params, agent_specific_primary_instruction, system_message_additions
 
     def _create_tools(
         self,
@@ -406,10 +318,7 @@ class CourseChatPipeline(Pipeline[CourseChatVariant]):
 
     def _build_prompt_and_agent(
         self,
-        system_prompt_parts: list[str],
-        agent_specific_primary_instruction: str,
-        system_message_additions: list[str],
-        custom_instructions_formatted: str,
+        complete_system_prompt: str,
         chat_history_lc_messages: list,
         tool_list: list[Callable],
     ) -> tuple[AgentExecutor, ChatPromptTemplate]:
@@ -417,29 +326,15 @@ class CourseChatPipeline(Pipeline[CourseChatVariant]):
         Build the prompt template and create the agent executor.
 
         Args:
-            system_prompt_parts (list[str]): Base system prompt parts.
-            agent_specific_primary_instruction (str): Agent-specific instruction.
-            system_message_additions (list[str]): Additional system message parts.
-            custom_instructions_formatted (str): Formatted custom instructions.
+            complete_system_prompt (str): Complete system prompt from Jinja2.
             chat_history_lc_messages (list): LangChain chat history messages.
             tool_list (list[Callable]): List of available tools.
 
         Returns:
             tuple: (agent_executor, prompt)
         """
-        initial_prompt_main_block = "\n".join(system_prompt_parts)
-        system_message_parts = [initial_prompt_main_block] + system_message_additions
-        system_message_parts.append(agent_specific_primary_instruction)
-        system_message_parts.append(iris_begin_agent_suffix_prompt)
-
-        if custom_instructions_formatted:
-            system_message_parts.append(custom_instructions_formatted)
-
-        final_system_content = "\n".join(
-            filter(None, system_message_parts)
-        )  # filter(None,...) to remove potential empty strings if a part is empty
-
-        messages_for_template = [SystemMessage(content=final_system_content)]
+        # Create a single system message with the complete prompt
+        messages_for_template = [SystemMessage(content=complete_system_prompt)]
 
         if chat_history_lc_messages:  # Only add history if it exists
             messages_for_template.extend(chat_history_lc_messages)
@@ -453,22 +348,19 @@ class CourseChatPipeline(Pipeline[CourseChatVariant]):
 
         return agent_executor, prompt
 
-    def _execute_agent(
-        self, agent_executor: AgentExecutor, params: dict
-    ) -> Optional[str]:
+    def _execute_agent(self, agent_executor: AgentExecutor) -> Optional[str]:
         """
         Execute the agent and collect the output.
 
         Args:
             agent_executor (AgentExecutor): The configured agent executor.
-            params (dict): Parameters for agent execution.
 
         Returns:
             Optional[str]: The agent's output.
         """
         out = None
         self.callback.in_progress()
-        for step in agent_executor.iter(params):
+        for step in agent_executor.iter({}):
             logger.debug("STEP: %s", step)
             self._append_tokens(self.llm.tokens, PipelineEnum.IRIS_CHAT_COURSE_MESSAGE)
             if step.get("output", None):
@@ -528,7 +420,7 @@ class CourseChatPipeline(Pipeline[CourseChatVariant]):
             dto (CourseChatPipelineExecutionDTO): The pipeline execution DTO.
         """
         try:
-            self.callback.skip("Skipping suggestion generation.")
+            self.callback.in_progress("Generating interaction suggestions...")
             if output:
                 suggestion_dto = InteractionSuggestionPipelineExecutionDTO()
                 suggestion_dto.chat_history = dto.chat_history
@@ -575,14 +467,24 @@ class CourseChatPipeline(Pipeline[CourseChatVariant]):
         try:
             logger.info("Running course chat pipeline...")
 
-            # Build system prompt
-            system_prompt_parts, metrics_enabled = self._build_system_prompt(
-                dto, allow_lecture_tool, allow_faq_tool, allow_memiris_tool
-            )
-
             # Prepare chat context
             history, chat_history_lc_messages, query, query_text = (
                 self._prepare_chat_context(dto)
+            )
+
+            # Format custom instructions
+            custom_instructions_formatted = format_custom_instructions(
+                dto.custom_instructions
+            )
+
+            # Build complete system prompt using Jinja2
+            complete_system_prompt, _ = self._build_system_prompt(
+                dto,
+                allow_lecture_tool,
+                allow_faq_tool,
+                allow_memiris_tool,
+                has_chat_history=bool(history),
+                custom_instructions=custom_instructions_formatted,
             )
 
             # Start memory creation in a separate thread
@@ -592,11 +494,6 @@ class CourseChatPipeline(Pipeline[CourseChatVariant]):
                         query_text, memory_creation_storage
                     )
                 )
-
-            # Handle event-specific logic
-            params, agent_specific_primary_instruction, system_message_additions = (
-                self._handle_event_logic(dto, history, query, metrics_enabled)
-            )
 
             # Create tools
             tool_list = self._create_tools(
@@ -611,23 +508,15 @@ class CourseChatPipeline(Pipeline[CourseChatVariant]):
                 accessed_memory_storage,
             )
 
-            # Format custom instructions
-            custom_instructions_formatted = format_custom_instructions(
-                dto.custom_instructions
-            )
-
             # Build prompt and agent
             agent_executor, self.prompt = self._build_prompt_and_agent(
-                system_prompt_parts,
-                agent_specific_primary_instruction,
-                system_message_additions,
-                custom_instructions_formatted,
+                complete_system_prompt,
                 chat_history_lc_messages,
                 tool_list,
             )
 
             # Execute agent
-            output = self._execute_agent(agent_executor, params)
+            output = self._execute_agent(agent_executor)
 
             # Process citations
             output = self._process_citations(
@@ -642,8 +531,8 @@ class CourseChatPipeline(Pipeline[CourseChatVariant]):
                 accessed_memories=accessed_memory_storage,
             )
 
-            # Generate suggestions (this is currently skipped)
-            # self._generate_suggestions(output, dto)
+            # Generate suggestions
+            self._generate_suggestions(output, dto)
 
             # Wait for memory creation to finish
             if dto.user.memiris_enabled:
@@ -659,7 +548,9 @@ class CourseChatPipeline(Pipeline[CourseChatVariant]):
                     "Memory creation is disabled.",
                 )
         except Exception as e:
-            memory_creation_thread.join(0.0000001)
+            # Only try to join the thread if it was created
+            if "memory_creation_thread" in locals():
+                memory_creation_thread.join(0.0000001)
             logger.error(
                 "An error occurred while running the course chat pipeline",
                 exc_info=e,

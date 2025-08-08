@@ -10,6 +10,7 @@ include = ["src/iris/py.typed"]
 [tool.poetry.dependencies]
 python = ">=3.12,<4.0.0"
 fastapi = "0.115.5"
+jinja2 = "^3.1.2"
 langchain = "0.3.8"
 ollama = "^0.5.1"
 openai = "1.60.2"
