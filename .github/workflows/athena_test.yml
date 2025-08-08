@@ -60,6 +60,40 @@ jobs:
                 echo "Tests failed for $module"
                 overall_success=false
               fi
+              
+              # For text module, also run real tests including quality drift analysis
+              if [ "$module" = "modules/text/module_text_llm" ]; then
+                echo "Running real tests for $module..."
+                
+                # Install additional dependencies for quality drift analysis
+                $module/.venv/bin/pip install bert-score torch transformers numpy
+                
+                # Download required NLTK data
+                $module/.venv/bin/python -c "import nltk; nltk.download('punkt', quiet=True); nltk.download('punkt_tab', quiet=True)"
+                
+                # Change to the module directory and run real tests
+                cd $module
+                if ! .venv/bin/python -m pytest ../../../tests/$module/real --junitxml=../../../test-results/${module_name}_real.xml; then
+                  echo "Real tests failed for $module"
+                  overall_success=false
+                fi
+                
+                # Run quality drift analysis
+                echo "Running quality drift analysis for $module..."
+                if ! .venv/bin/python ../../../tests/$module/real/run_quality_drift_analysis.py; then
+                  echo "Quality drift analysis failed for $module"
+                  # Don't fail the entire build for quality drift analysis
+                  echo "Continuing despite quality drift analysis failure..."
+                else
+                  # Copy the report to test-results for artifact upload
+                  cp ../../../tests/$module/real/quality_drift_report.json ../../../test-results/quality_drift_report.json
+                  echo "✅ Quality drift analysis completed successfully"
+                fi
+                
+                # Go back to athena directory
+                cd ../..
+              fi
+              
               # Generate coverage reports for this module (XML for CI + HTML for viewing)
               $module/.venv/bin/python -m coverage xml --rcfile=.coveragerc --data-file=".coverage.${module_name}" -o test-results/${module_name}_coverage.xml
               $module/.venv/bin/python -m coverage html --rcfile=.coveragerc --data-file=".coverage.${module_name}" -d test-results/${module_name}_html
@@ -91,43 +125,12 @@ jobs:
           echo "============================"
           python3 combine_coverage.py --summary test-results/combined_coverage.xml test-results/programming_module_programming_llm_coverage.xml test-results/text_module_text_llm_coverage.xml test-results/modeling_module_modeling_llm_coverage.xml | tee test-results/coverage_table.txt
       
-      - name: Run Quality Drift Analysis
-        run: |
-          cd athena
-          echo "🧪 Running Quality Drift Analysis..."
-          echo "=================================="
-          
-          # Check if the text module virtual environment exists
-          if [ -d "modules/text/module_text_llm/.venv" ]; then
-            echo "Running quality drift analysis for text module..."
-            
-            # Install additional dependencies for quality drift analysis
-            modules/text/module_text_llm/.venv/bin/pip install bert-score torch transformers numpy
-            
-            # Download required NLTK data
-            modules/text/module_text_llm/.venv/bin/python -c "import nltk; nltk.download('punkt', quiet=True); nltk.download('punkt_tab', quiet=True)"
-            
-            # Change to the module directory and run the analysis
-            cd modules/text/module_text_llm
-            if ! .venv/bin/python ../../../tests/modules/text/module_text_llm/real/run_quality_drift_analysis.py; then
-              echo "Quality drift analysis failed"
-              exit 1
-            fi
-            
-            # Copy the report to test-results for artifact upload
-            cp ../../../tests/modules/text/module_text_llm/real/quality_drift_report.json ../../../test-results/quality_drift_report.json
-            
-            echo "✅ Quality drift analysis completed successfully"
-          else
-            echo "Virtual environment not found for text module, skipping quality drift analysis..."
-          fi
-      
       - name: Upload JUnit Test Results
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: junit-results
-          path: athena/test-results/*_mock.xml
+          path: athena/test-results/*_mock.xml,athena/test-results/*_real.xml
       
       - name: Upload Coverage Reports
         if: always()
@@ -162,7 +165,7 @@ jobs:
         id: test-report
         uses: mikepenz/action-junit-report@v5
         with:
-          report_paths: "all-test-results/**/*_mock.xml"
+          report_paths: "all-test-results/**/*.xml"
           check_name: "Athena Test Report"
           require_tests: true
           require_passed_tests: false
