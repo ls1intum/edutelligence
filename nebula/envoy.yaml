@@ -31,12 +31,8 @@ static_resources:
                         function envoy_on_request(handle)
                           local expected = os.getenv("NEBULA_SECRET_TOKEN") or ""
                           local auth = handle:headers():get("authorization") or ""
-                        
-                          -- Debug-Logging (sichtbar mit: docker compose logs envoy)
-                          handle:logInfo("Expected token: " .. expected)
-                          handle:logInfo("Received Authorization header: " .. auth)
-                        
-                          if auth ~= "Bearer " .. expected then
+                      
+                          if auth ~= expected then
                             handle:respond(
                               {[":status"] = "403"},
                               "Forbidden: Invalid or missing token"

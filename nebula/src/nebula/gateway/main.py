@@ -1,12 +1,11 @@
 import logging
 import os
-import threading
 from contextlib import asynccontextmanager
 
 import yaml
 from fastapi import FastAPI
 
-from nebula.gateway import grpc_server  # ⬅️ dein gRPC-Server
+from nebula.gateway import grpc_server  # ⬅dein gRPC-Server
 from nebula.gateway.routes import transcribe
 from nebula.gateway.security import AuthMiddleware, add_security_schema_to_app
 
@@ -25,9 +24,9 @@ EXCLUDE_PATHS = ["/transcribe"]
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("🚀 Lifespan startup starting...")
+    logger.info("Lifespan startup starting...")
     yield
-    logger.info("🛑 Lifespan shutting down.")
+    logger.info("Lifespan shutting down.")
     grpc_server.stop()
 
 

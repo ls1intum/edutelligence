@@ -1,0 +1,47 @@
+services:
+  transcriber:
+    build:
+      context: .
+      dockerfile: docker/transcriber/dockerfile_prod
+    container_name: transcriber-service
+    expose:
+      - "5000"
+    env_file:
+      - ../.env
+    environment:
+      - LLM_CONFIG_PATH=/app/llm_config.nebula.yml
+    volumes:
+      - ../llm_config.nebula.yml:/app/llm_config.nebula.yml:ro
+      - ./temp:/app/temp
+    restart: unless-stopped
+
+  faq:
+    build:
+      context: .
+      dockerfile: docker/faq/dockerfile_prod
+    container_name: faq-service
+    expose:
+      - "5001"
+    env_file:
+      - ../.env
+    environment:
+      - LLM_CONFIG_PATH=/app/llm_config.nebula.yml
+    volumes:
+      - ../llm_config.nebula.yml:/app/llm_config.nebula.yml:ro
+    restart: unless-stopped
+
+  envoy:
+    image: envoyproxy/envoy:v1.30-latest
+    container_name: envoy
+    env_file:
+      - ../.env          # relativ zur Compose-Datei
+    environment:
+      - LLM_CONFIG_PATH=/app/llm_config.nebula.yml
+    volumes:
+      - ./envoy.yaml:/etc/envoy/envoy.yaml:ro
+    ports:
+      - "8000:8000"
+      - "9901:9901"
+    depends_on:
+      - transcriber
+      - faq
