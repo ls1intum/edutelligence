@@ -11,6 +11,7 @@ from iris.common.message_converters import convert_iris_message_to_langchain_mes
 from iris.common.pyris_message import IrisMessageRole, PyrisMessage
 from iris.domain.data.text_message_content_dto import TextMessageContentDTO
 from iris.domain.variant.abstract_variant import AbstractAgentVariant
+from iris.pipeline import Pipeline
 from iris.pipeline.shared.utils import generate_structured_tools_from_functions
 from iris.vector_database.database import VectorDatabase
 from iris.web.status.status_update import StatusCallback
@@ -39,7 +40,7 @@ class AgentPipelineExecutionState(Generic[DTO, VARIANT]):
     prompt: ChatPromptTemplate | None
 
 
-class AbstractAgentPipeline(ABC, Generic[DTO]):
+class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO]):
     """
     Abstract base class for agent pipelines.
 
@@ -53,6 +54,7 @@ class AbstractAgentPipeline(ABC, Generic[DTO]):
         """
         Initialize the agent pipeline.
         """
+        super().__init__(*args, **kwargs)
         pass
 
     # ========================================
