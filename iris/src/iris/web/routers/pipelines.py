@@ -421,9 +421,13 @@ def get_pipeline(feature: str) -> List[FeatureDTO]:
 
     match feature:
         case "CHAT":
-            return ChatGPTWrapperPipeline.get_variants(available_llms)
+            return get_available_variants(
+                ExerciseChatAgentPipeline.get_variants(), available_llms
+            )
         case "PROGRAMMING_EXERCISE_CHAT":
-            return ExerciseChatAgentPipeline.get_variants(available_llms)
+            return get_available_variants(
+                ExerciseChatAgentPipeline.get_variants(), available_llms
+            )
         case "TEXT_EXERCISE_CHAT":
             return TextExerciseChatPipeline.get_variants(available_llms)
         case "COURSE_CHAT":

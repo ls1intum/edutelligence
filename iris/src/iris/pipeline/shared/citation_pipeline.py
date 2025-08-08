@@ -16,6 +16,7 @@ from iris.llm import (
 )
 from iris.llm.langchain import IrisLangchainChatModel
 from iris.pipeline import Pipeline
+from iris.pipeline.sub_pipeline import SubPipeline
 from iris.vector_database.faq_schema import FaqSchema
 
 
@@ -24,7 +25,7 @@ class InformationType(str, Enum):
     FAQS = "FAQS"
 
 
-class CitationPipeline(Pipeline):
+class CitationPipeline(SubPipeline):
     """A generic reranker pipeline that can be used to rerank a list of documents based on a question"""
 
     llms: dict

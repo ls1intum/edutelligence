@@ -19,6 +19,7 @@ from iris.llm.request_handler.rerank_request_handler import (
     RerankRequestHandler,
 )
 from iris.pipeline import Pipeline
+from iris.pipeline.sub_pipeline import SubPipeline
 from iris.vector_database.lecture_unit_schema import (
     LectureUnitSchema,
     init_lecture_unit_schema,
@@ -29,7 +30,7 @@ from iris.vector_database.lecture_unit_segment_schema import (
 )
 
 
-class LectureUnitSegmentRetrieval(Pipeline):
+class LectureUnitSegmentRetrieval(SubPipeline):
     """LectureUnitSegmentRetrieval retrieves lecture unit segments based on search queries and returns the matching
     results."""
 

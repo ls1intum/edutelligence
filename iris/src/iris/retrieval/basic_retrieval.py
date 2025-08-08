@@ -25,6 +25,7 @@ from ..common.message_converters import (
 from ..common.pyris_message import PyrisMessage
 from ..llm.langchain import IrisLangchainChatModel
 from ..pipeline import Pipeline
+from ..pipeline.sub_pipeline import SubPipeline
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +69,7 @@ def _add_last_four_messages_to_prompt(
     return prompt
 
 
-class BaseRetrieval(Pipeline, ABC):
+class BaseRetrieval(SubPipeline, ABC):
     """
     Base class for retrieval pipelines.
     """

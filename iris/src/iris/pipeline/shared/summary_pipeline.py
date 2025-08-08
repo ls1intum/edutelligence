@@ -8,6 +8,7 @@ from langchain_core.prompts import (
 )
 from langchain_core.runnables import Runnable
 
+from ..sub_pipeline import SubPipeline
 from ...llm import ModelVersionRequestHandler
 from ...llm.langchain import IrisLangchainCompletionModel
 from ...pipeline import Pipeline
@@ -15,7 +16,7 @@ from ...pipeline import Pipeline
 logger = logging.getLogger(__name__)
 
 
-class SummaryPipeline(Pipeline):
+class SummaryPipeline(SubPipeline):
     """A generic summary pipeline that can be used to summarize any text"""
 
     llm: IrisLangchainCompletionModel

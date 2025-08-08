@@ -1,23 +1,21 @@
 import logging
+import os
 import traceback
 from datetime import datetime
 from operator import attrgetter
 from typing import List
 
 import pytz
+from jinja2 import Environment, FileSystemLoader
 from langchain.agents import AgentExecutor, create_tool_calling_agent
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_core.output_parsers import JsonOutputParser, StrOutputParser
-from langchain_core.prompts import (
-    ChatPromptTemplate,
-    SystemMessagePromptTemplate,
-)
-from langchain_core.runnables import Runnable
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.prompts import ChatPromptTemplate
 from langsmith import traceable
 from weaviate.collections.classes.filters import Filter
 
 from ...common.message_converters import (
-    convert_iris_message_to_langchain_human_message,
+    convert_iris_message_to_langchain_message,
 )
 from ...common.pipeline_enum import PipelineEnum
 from ...common.pyris_message import IrisMessageRole, PyrisMessage
@@ -28,6 +26,7 @@ from ...domain.chat.interaction_suggestion_dto import (
 from ...domain.retrieval.lecture.lecture_retrieval_dto import (
     LectureRetrievalDTO,
 )
+from ...domain.variant.course_chat_variant import CourseChatVariant
 from ...llm import (
     CompletionArguments,
     ModelVersionRequestHandler,
@@ -41,16 +40,6 @@ from ...vector_database.database import VectorDatabase
 from ...vector_database.lecture_unit_schema import LectureUnitSchema
 from ...web.status.status_update import ExerciseChatStatusCallback
 from ..pipeline import Pipeline
-from ..prompts.iris_exercise_chat_agent_prompts import (
-    guide_system_prompt,
-    tell_begin_agent_prompt,
-    tell_build_failed_system_prompt,
-    tell_chat_history_exists_prompt,
-    tell_format_reminder_prompt,
-    tell_iris_initial_system_prompt,
-    tell_no_chat_history_prompt,
-    tell_progress_stalled_system_prompt,
-)
 from ..shared.citation_pipeline import CitationPipeline, InformationType
 from ..shared.utils import (
     filter_variants_by_available_models,
@@ -64,54 +53,11 @@ logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
 
-def add_exercise_context_to_prompt(
-    exercise_title, problem_statement, programming_language
-) -> str:
-    """Adds the exercise context to the prompt
-    :param exercise_title: The exercise title
-    :param problem_statement: The problem statement
-    :param programming_language: The programming language
-    """
-    return f"""
-    ## Exercise Context
-    - **Exercise Title:** {exercise_title.replace("{", "{{").replace("}", "}}")}
-    - **Problem Statement:** {problem_statement.replace("{", "{{").replace("}", "}}")}
-    - **Programming Language:** {programming_language}
-    """
-
-
-def convert_chat_history_to_str(chat_history: List[PyrisMessage]) -> str:
-    """
-    Converts the chat history to a string
-    :param chat_history: The chat history
-    :return: The chat history as a string
-    """
-
-    def map_message_role(role: IrisMessageRole) -> str:
-        if role == IrisMessageRole.SYSTEM:
-            return "System"
-        elif role == IrisMessageRole.ASSISTANT:
-            return "AI Tutor"
-        elif role == IrisMessageRole.USER:
-            return "Student"
-        else:
-            return "Unknown"
-
-    return "\n\n".join(
-        [
-            f"{map_message_role(message.sender)} {"" if not message.sent_at else f"at {message.sent_at.strftime(
-                "%Y-%m-%d %H:%M:%S")}"}: {message.contents[0].text_content}"
-            for message in chat_history
-        ]
-    )
-
-
 class ExerciseChatAgentPipeline(Pipeline):
     """Exercise chat agent pipeline that answers exercises related questions from students."""
 
     llm: IrisLangchainChatModel
     llm_small: IrisLangchainChatModel
-    pipeline: Runnable
     callback: ExerciseChatStatusCallback
     suggestion_pipeline: InteractionSuggestionPipeline
     code_feedback_pipeline: CodeFeedbackPipeline
@@ -157,9 +103,20 @@ class ExerciseChatAgentPipeline(Pipeline):
         self.lecture_retriever = LectureRetrieval(self.db.client)
         self.faq_retriever = FaqRetrieval(self.db.client)
         self.code_feedback_pipeline = CodeFeedbackPipeline()
-        self.pipeline = self.llm | JsonOutputParser()
         self.citation_pipeline = CitationPipeline()
         self.tokens = []
+
+        # Setup Jinja2 template environment
+        template_dir = os.path.join(
+            os.path.dirname(__file__), "..", "prompts", "templates"
+        )
+        self.jinja_env = Environment(loader=FileSystemLoader(template_dir))
+        self.system_prompt_template = self.jinja_env.get_template(
+            "exercise_chat_system_prompt.j2"
+        )
+        self.guide_prompt_template = self.jinja_env.get_template(
+            "exercise_chat_guide_prompt.j2"
+        )
 
     def __repr__(self):
         return f"{self.__class__.__name__}(llm={self.llm}, llm_small={self.llm_small})"
@@ -168,29 +125,23 @@ class ExerciseChatAgentPipeline(Pipeline):
         return f"{self.__class__.__name__}(llm={self.llm}, llm_small={self.llm_small})"
 
     @classmethod
-    def get_variants(cls, available_llms: List[LanguageModel]) -> List[FeatureDTO]:
-        variant_specs = [
-            (
-                ["gpt-4.1-mini", "gpt-4.1-nano"],
-                FeatureDTO(
-                    id="default",
-                    name="Default",
-                    description="Uses a smaller model for faster and cost-efficient responses.",
-                ),
+    def get_variants(cls) -> List[CourseChatVariant]:
+        return [
+            CourseChatVariant(
+                id="default",
+                name="Default",
+                description="Uses a smaller model for faster and cost-efficient responses.",
+                agent_model="gpt-4.1-mini",
+                citation_model="gpt-4.1-mini",
             ),
-            (
-                ["gpt-4.1", "gpt-4.1-mini"],
-                FeatureDTO(
-                    id="advanced",
-                    name="Advanced",
-                    description="Uses a larger chat model, balancing speed and quality.",
-                ),
+            CourseChatVariant(
+                id="advanced",
+                name="Advanced",
+                description="Uses a larger chat model, balancing speed and quality.",
+                agent_model="gpt-4.1",
+                citation_model="gpt-4.1-mini",
             ),
         ]
-
-        return filter_variants_by_available_models(
-            available_llms, variant_specs, pipeline_name="ExerciseChatAgentPipeline"
-        )
 
     @traceable(name="Exercise Chat Agent Pipeline")
     def __call__(self, dto: ExerciseChatPipelineExecutionDTO):
@@ -480,11 +431,6 @@ class ExerciseChatAgentPipeline(Pipeline):
             result = format_faqs(self.retrieved_faqs)
             return result
 
-        iris_initial_system_prompt = tell_iris_initial_system_prompt
-        chat_history_exists_prompt = tell_chat_history_exists_prompt
-        no_chat_history_prompt = tell_no_chat_history_prompt
-        format_reminder_prompt = tell_format_reminder_prompt
-
         try:
             logger.info("Running exercise chat pipeline...")
             query = dto.chat_history[-1] if dto.chat_history else None
@@ -494,29 +440,9 @@ class ExerciseChatAgentPipeline(Pipeline):
 
             # if the query is None, get the last 5 messages from the chat history, including the latest message.
             # otherwise exclude the latest message from the chat history.
-
             chat_history = (
                 dto.chat_history[-5:] if query is None else dto.chat_history[-6:-1]
             )
-
-            # Set up the initial prompt
-            initial_prompt_with_date = iris_initial_system_prompt.replace(
-                "{current_date}",
-                datetime.now(tz=pytz.UTC).strftime("%Y-%m-%d %H:%M:%S"),
-            )
-            # Determine the agent prompt based on the event.
-            # An event parameter might indicates that a
-            # specific event is triggered, such as a build failure or stalled progress.
-            if self.event == "build_failed":
-                agent_prompt = tell_build_failed_system_prompt
-            elif self.event == "progress_stalled":
-                agent_prompt = tell_progress_stalled_system_prompt
-            else:
-                agent_prompt = (
-                    tell_begin_agent_prompt
-                    if query is not None
-                    else no_chat_history_prompt
-                )
 
             problem_statement: str = dto.exercise.problem_statement
             exercise_title: str = dto.exercise.name
@@ -526,80 +452,39 @@ class ExerciseChatAgentPipeline(Pipeline):
                 custom_instructions=dto.custom_instructions
             )
 
-            params = {}
+            # Build system prompt using Jinja2 template
+            template_context = {
+                "current_date": datetime.now(tz=pytz.UTC).strftime("%Y-%m-%d %H:%M:%S"),
+                "exercise_title": exercise_title,
+                "problem_statement": problem_statement,
+                "programming_language": programming_language,
+                "event": self.event,
+                "has_query": query is not None,
+                "has_chat_history": len(chat_history) > 0,
+                "custom_instructions": custom_instructions,
+            }
 
-            if len(chat_history) > 0 and query is not None and self.event is None:
-                # Add the conversation to the prompt
-                chat_history_messages = convert_chat_history_to_str(chat_history)
-                self.prompt = ChatPromptTemplate.from_messages(
-                    [
-                        SystemMessage(
-                            initial_prompt_with_date
-                            + "\n"
-                            + add_exercise_context_to_prompt(
-                                exercise_title,
-                                problem_statement,
-                                programming_language,
-                            )
-                            + "\n"
-                            + agent_prompt
-                            + "\n"
-                            + custom_instructions
-                            + "\n"
-                            + format_reminder_prompt,
-                        ),
-                        HumanMessage(chat_history_exists_prompt),
-                        HumanMessage(chat_history_messages),
-                        HumanMessage("Consider the student's newest and latest input:"),
-                        convert_iris_message_to_langchain_human_message(query),
-                        ("placeholder", "{agent_scratchpad}"),
-                    ]
+            complete_system_prompt = self.system_prompt_template.render(template_context)
+
+            # Build the prompt template with the complete system prompt
+            messages_for_template = [SystemMessage(content=complete_system_prompt)]
+
+            # Add the actual chat history messages if they exist
+            if len(chat_history) > 0:
+                chat_history_lc_messages = [
+                    convert_iris_message_to_langchain_message(message)
+                    for message in chat_history
+                ]
+                messages_for_template.extend(chat_history_lc_messages)
+
+            # Add the current query if it exists
+            if query is not None:
+                messages_for_template.append(
+                    convert_iris_message_to_langchain_message(query)
                 )
-            else:
-                if query is not None and self.event is None:
-                    self.prompt = ChatPromptTemplate.from_messages(
-                        [
-                            SystemMessage(
-                                initial_prompt_with_date
-                                + "\n"
-                                + add_exercise_context_to_prompt(
-                                    exercise_title,
-                                    problem_statement,
-                                    programming_language,
-                                )
-                                + agent_prompt
-                                + "\n"
-                                + custom_instructions
-                                + "\n"
-                                + format_reminder_prompt,
-                            ),
-                            HumanMessage(
-                                "Consider the student's newest and latest input:"
-                            ),
-                            convert_iris_message_to_langchain_human_message(query),
-                            ("placeholder", "{agent_scratchpad}"),
-                        ]
-                    )
-                else:
-                    self.prompt = ChatPromptTemplate.from_messages(
-                        [
-                            SystemMessage(
-                                initial_prompt_with_date
-                                + "\n"
-                                + add_exercise_context_to_prompt(
-                                    exercise_title,
-                                    problem_statement,
-                                    programming_language,
-                                )
-                                + agent_prompt
-                                + "\n"
-                                + custom_instructions
-                                + "\n"
-                                + format_reminder_prompt,
-                            ),
-                            ("placeholder", "{agent_scratchpad}"),
-                        ]
-                    )
+
+            messages_for_template.append(("placeholder", "{agent_scratchpad}"))
+            self.prompt = ChatPromptTemplate.from_messages(messages_for_template)
             tool_list = [
                 get_submission_details,
                 get_additional_exercise_details,
@@ -621,7 +506,7 @@ class ExerciseChatAgentPipeline(Pipeline):
             agent_executor = AgentExecutor(agent=agent, tools=tools, verbose=False)
             self.callback.in_progress("Thinking ...")
             out = None
-            for step in agent_executor.iter(params):
+            for step in agent_executor.iter({}):
                 self._append_tokens(
                     self.llm.tokens,
                     PipelineEnum.IRIS_CHAT_EXERCISE_AGENT_MESSAGE,
@@ -631,20 +516,19 @@ class ExerciseChatAgentPipeline(Pipeline):
 
             try:
                 self.callback.in_progress("Refining response ...")
+                guide_prompt_rendered = self.guide_prompt_template.render(
+                    {"problem_statement": problem_statement}
+                )
                 self.prompt = ChatPromptTemplate.from_messages(
                     [
-                        SystemMessagePromptTemplate.from_template(guide_system_prompt),
+                        SystemMessage(content=guide_prompt_rendered),
                         HumanMessage(out),
                     ]
                 )
 
                 guide_response = (
                     self.prompt | self.llm_small | StrOutputParser()
-                ).invoke(
-                    {
-                        "problem": problem_statement,
-                    }
-                )
+                ).invoke({})
                 self._append_tokens(
                     self.llm.tokens,
                     PipelineEnum.IRIS_CHAT_EXERCISE_AGENT_MESSAGE,

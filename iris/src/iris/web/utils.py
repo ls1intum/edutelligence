@@ -25,12 +25,8 @@ def validate_pipeline_variant(
     """
     variant = settings.variant
 
-    # Get available LLMs from LlmManager
-    llm_manager = LlmManager()
-    available_llms = llm_manager.entries
-
     # Get available variants for the pipeline
-    available_variants = [v.id for v in pipeline_class.get_variants(available_llms)]
+    available_variants = [v.id for v in pipeline_class.get_variants()]
 
     # Validate variant
     if variant not in available_variants:

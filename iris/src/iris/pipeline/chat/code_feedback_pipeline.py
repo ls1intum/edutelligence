@@ -10,6 +10,7 @@ from pydantic import BaseModel
 
 from iris.common.pipeline_enum import PipelineEnum
 from iris.common.token_usage_dto import TokenUsageDTO
+from ..sub_pipeline import SubPipeline
 
 from ...common.pyris_message import PyrisMessage
 from ...domain import FeatureDTO
@@ -40,7 +41,7 @@ class FileSelectionDTO(BaseModel):
         )
 
 
-class CodeFeedbackPipeline(Pipeline):
+class CodeFeedbackPipeline(SubPipeline):
     """Code feedback pipeline that produces issues from student code."""
 
     llm: IrisLangchainChatModel

@@ -17,6 +17,7 @@ from iris.pipeline import Pipeline
 from iris.pipeline.prompts.lecture_unit_segment_summary_prompt import (
     lecture_unit_segment_summary_prompt,
 )
+from iris.pipeline.sub_pipeline import SubPipeline
 from iris.vector_database.lecture_transcription_schema import (
     LectureTranscriptionSchema,
     init_lecture_transcription_schema,
@@ -31,7 +32,7 @@ from iris.vector_database.lecture_unit_segment_schema import (
 )
 
 
-class LectureUnitSegmentSummaryPipeline(Pipeline):
+class LectureUnitSegmentSummaryPipeline(SubPipeline):
     """LectureUnitSegmentSummaryPipeline processes lecture unit segments by summarizing the transcription and slide
      content.
 
