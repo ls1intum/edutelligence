@@ -1,0 +1,644 @@
+{
+  "id": 7,
+  "course_id": 1,
+  "title": "Explain the SOLID Principles",
+  "type": "text",
+  "max_points": 20,
+  "bonus_points": 5,
+  "grading_instructions": "Evaluate the student's understanding of SOLID principles. Award points for: 1) Correct identification of each principle (2 points each), 2) Clear explanation with examples (1 point each), 3) Understanding of benefits (1 point each). Bonus points for practical application examples. Deduct points for incorrect explanations or missing principles.",
+  "problem_statement": "Explain the five SOLID principles of object-oriented design. For each principle, provide a brief explanation and a simple example of how it should be applied in software development.",
+  "example_solution": "SOLID principles are five design principles that help create maintainable and scalable software:\n\n1. Single Responsibility Principle (SRP): A class should have only one reason to change. Example: A User class should only handle user data, not email sending or database operations.\n\n2. Open/Closed Principle (OCP): Software entities should be open for extension but closed for modification. Example: Using interfaces to add new payment methods without changing existing code.\n\n3. Liskov Substitution Principle (LSP): Subtypes must be substitutable for their base types. Example: Any subclass of Animal should be able to replace Animal without breaking the program.\n\n4. Interface Segregation Principle (ISP): Clients should not be forced to depend on interfaces they don't use. Example: Creating specific interfaces like Printable and Scannable instead of one large Printer interface.\n\n5. Dependency Inversion Principle (DIP): High-level modules should not depend on low-level modules; both should depend on abstractions. Example: Using dependency injection to pass database connections rather than creating them inside classes.\n\nThese principles help create code that is easier to maintain, test, and extend.",
+  "meta": {},
+  "submissions": [
+    {
+      "id": 701,
+      "text": "SOLID principles are important for good software design:\n\n1. Single Responsibility: Each class should do one thing well\n2. Open/Closed: Code should be open for extension, closed for modification\n3. Liskov Substitution: Subclasses should work like their parent classes\n4. Interface Segregation: Don't force clients to use methods they don't need\n5. Dependency Inversion: Depend on abstractions, not concrete classes\n\nThese help make code more maintainable and flexible.",
+      "meta": {},
+      "feedbacks": [
+        {
+          "id": 70101,
+          "description": "You correctly identified all five SOLID principles, which demonstrates a foundational understanding of object-oriented design. This is a great start!",
+          "title": "Principle Identification",
+          "index_start": 58,
+          "index_end": 414,
+          "credits": 10.0,
+          "meta": {}
+        },
+        {
+          "id": 70102,
+          "description": "Your explanations are brief and touch on the core idea of each principle. However, they could benefit from more detailed explanations that include why these principles are important and how they influence software design.",
+          "title": "Explanation Quality",
+          "index_start": 61,
+          "index_end": 414,
+          "credits": 3.0,
+          "meta": {}
+        },
+        {
+          "id": 70103,
+          "description": "You did not provide examples to illustrate how each principle can be applied in software development. Including examples will enhance your submission by demonstrating practical application and supporting your explanations.",
+          "title": "Examples Missing",
+          "index_start": 61,
+          "index_end": 414,
+          "credits": -5.0,
+          "meta": {}
+        },
+        {
+          "id": 70104,
+          "description": "You briefly mentioned the benefits of SOLID principles in sentence 13. Expanding on how each principle specifically contributes to making code more maintainable and flexible would strengthen your submission.",
+          "title": "Benefits Explanation",
+          "index_start": 416,
+          "index_end": 468,
+          "credits": 1.0,
+          "meta": {}
+        }
+      ]
+    },
+    {
+      "id": 702,
+      "text": "SOLID principles:\n\n1. Single Responsibility - one class, one job\n2. Open/Closed - extend without changing existing code\n3. Liskov - subclasses must work like parent classes\n4. Interface Segregation - small, focused interfaces\n5. Dependency Inversion - use abstractions\n\nExample: A UserService class should only handle user operations, not send emails or connect to databases.",
+      "meta": {},
+      "feedbacks": [
+        {
+          "id": 70201,
+          "description": "You correctly identified each of the five SOLID principles. Each principle is labeled appropriately, showing an understanding of the basic concept.",
+          "title": "Identification of Principles",
+          "index_start": 229,
+          "index_end": 268,
+          "credits": 10.0,
+          "meta": {}
+        },
+        {
+          "id": 70202,
+          "description": "The explanations provided for each principle are concise. However, they lack detailed examples and benefits of applying each principle in software development. Consider expanding your explanations to include these aspects.",
+          "title": "Explanation of Principles",
+          "index_start": 19,
+          "index_end": 268,
+          "credits": 2.0,
+          "meta": {}
+        },
+        {
+          "id": 70203,
+          "description": "The example for Single Responsibility Principle is clear and relevant. It illustrates how a UserService class should focus solely on user operations, avoiding unrelated responsibilities like email sending or database connections.",
+          "title": "Example of Single Responsibility Principle",
+          "index_start": 270,
+          "index_end": 375,
+          "credits": 1.0,
+          "meta": {}
+        },
+        {
+          "id": 70204,
+          "description": "You provided an example for the Single Responsibility Principle, but examples for the other four principles are missing. Including detailed examples for each principle would enhance your submission and demonstrate your understanding of their practical application.",
+          "title": "Missing Examples for Other Principles",
+          "index_start": 68,
+          "index_end": 268,
+          "credits": 0.0,
+          "meta": {}
+        },
+        {
+          "id": 70205,
+          "description": "You have not explicitly described the benefits of applying SOLID principles in your submission. Discussing these benefits would provide a clearer understanding of why these principles are important in software development.",
+          "title": "Understanding of Benefits",
+          "index_start": 270,
+          "index_end": 375,
+          "credits": 0.0,
+          "meta": {}
+        }
+      ]
+    },
+    {
+      "id": 703,
+      "text": "SOLID is about good object-oriented design:\n\n1. Single Responsibility: Classes should have one job\n2. Open/Closed: Extend without modifying\n3. Liskov: Subtypes replace base types\n4. Interface Segregation: Small interfaces\n5. Dependency Inversion: Use abstractions",
+      "meta": {},
+      "feedbacks": [
+        {
+          "id": 70301,
+          "description": "The submission identifies the SOLID principles but lacks detailed explanations and examples for each. Providing more context and examples would enhance understanding.",
+          "title": "Incomplete Explanation",
+          "index_start": 225,
+          "index_end": 263,
+          "credits": -5.0,
+          "meta": {}
+        },
+        {
+          "id": 70302,
+          "description": "You've correctly identified the Single Responsibility Principle. To improve, include an example, such as a class dedicated solely to user authentication, without mixing other functionalities.",
+          "title": "Single Responsibility Principle",
+          "index_start": 45,
+          "index_end": 98,
+          "credits": 2.0,
+          "meta": {}
+        },
+        {
+          "id": 70303,
+          "description": "The Open/Closed Principle is noted correctly. Consider adding an example, like using inheritance to extend functionality without altering existing code.",
+          "title": "Open/Closed Principle",
+          "index_start": 99,
+          "index_end": 139,
+          "credits": 2.0,
+          "meta": {}
+        },
+        {
+          "id": 70304,
+          "description": "Your identification of the Liskov Substitution Principle is correct. Enhance it by explaining with an example, such as a derived class of a Bird that can be used in place of a Bird class without errors.",
+          "title": "Liskov Substitution Principle",
+          "index_start": 140,
+          "index_end": 178,
+          "credits": 2.0,
+          "meta": {}
+        },
+        {
+          "id": 70305,
+          "description": "The principle is correctly identified. Improve your submission by providing an example, like separating a large interface into smaller, more focused interfaces.",
+          "title": "Interface Segregation Principle",
+          "index_start": 179,
+          "index_end": 221,
+          "credits": 2.0,
+          "meta": {}
+        },
+        {
+          "id": 70306,
+          "description": "You've correctly identified Dependency Inversion. Adding an example, such as using dependency injection, would strengthen your explanation.",
+          "title": "Dependency Inversion Principle",
+          "index_start": 222,
+          "index_end": 263,
+          "credits": 2.0,
+          "meta": {}
+        }
+      ]
+    },
+    {
+      "id": 704,
+      "text": "SOLID principles help with software design:\n\n1. Single Responsibility - each class has one purpose\n2. Open/Closed - add features without changing existing code\n3. Liskov Substitution - child classes can replace parent classes\n4. Interface Segregation - create specific interfaces instead of large ones\n5. Dependency Inversion - depend on interfaces, not concrete classes\n\nExample: Instead of one large Printer interface, create separate Printable and Scannable interfaces.",
+      "meta": {},
+      "feedbacks": [
+        {
+          "id": 70401,
+          "description": "You correctly identified all five SOLID principles, which is a great start. Each principle is named accurately.",
+          "title": "Principle Identification",
+          "index_start": 45,
+          "index_end": 370,
+          "credits": 10.0,
+          "meta": {}
+        },
+        {
+          "id": 70402,
+          "description": "While you have provided brief explanations for each principle, some explanations could be more detailed to improve understanding. For example, the Single Responsibility Principle could include why having one purpose per class enhances maintainability.",
+          "title": "Explanation Clarity",
+          "index_start": 48,
+          "index_end": 370,
+          "credits": 2.0,
+          "meta": {}
+        },
+        {
+          "id": 70403,
+          "description": "The provided example for Interface Segregation is relevant and correctly demonstrates the principle. However, including examples for each principle would strengthen your submission.",
+          "title": "Example Quality",
+          "index_start": 372,
+          "index_end": 472,
+          "credits": 1.0,
+          "meta": {}
+        },
+        {
+          "id": 70404,
+          "description": "You have not explicitly discussed the benefits of applying SOLID principles. For full credits, make sure to explain how these principles contribute to software maintainability, scalability, and testability.",
+          "title": "Understanding Benefits",
+          "index_start": 43,
+          "index_end": 43,
+          "credits": 0.0,
+          "meta": {}
+        },
+        {
+          "id": 70405,
+          "description": "To improve your submission, add examples for each SOLID principle and discuss the benefits of applying them in software design. This will provide a more comprehensive understanding of SOLID principles.",
+          "title": "Actionable Improvements",
+          "index_start": 372,
+          "index_end": 472,
+          "credits": 0.0,
+          "meta": {}
+        }
+      ]
+    },
+    {
+      "id": 705,
+      "text": "SOLID principles are design guidelines:\n\n1. Single Responsibility: One class, one job\n2. Open/Closed: Extend functionality without changing existing code\n3. Liskov Substitution: Subclasses should work like parent classes\n4. Interface Segregation: Don't force clients to use unused methods\n5. Dependency Inversion: Use abstractions, not concrete implementations\n\nBenefits: More maintainable, testable, and flexible code.",
+      "meta": {},
+      "feedbacks": [
+        {
+          "id": 70501,
+          "description": "The student correctly identified all five SOLID principles. This shows a good understanding of the high-level concepts of object-oriented design principles.",
+          "title": "Identification of Principles",
+          "index_start": 41,
+          "index_end": 360,
+          "credits": 10.0,
+          "meta": {}
+        },
+        {
+          "id": 70502,
+          "description": "The explanations provided for each principle are concise but lack depth and specific examples. For full credit, more detailed explanations and examples demonstrating practical application in software development are needed.",
+          "title": "Explanation of Principles",
+          "index_start": 44,
+          "index_end": 360,
+          "credits": 2.5,
+          "meta": {}
+        },
+        {
+          "id": 70503,
+          "description": "The student correctly mentioned the benefits of SOLID principles, such as maintainability, testability, and flexibility. However, it would be beneficial to elaborate more on how each principle contributes to these benefits.",
+          "title": "Understanding of Benefits",
+          "index_start": 362,
+          "index_end": 419,
+          "credits": 0.5,
+          "meta": {}
+        }
+      ]
+    },
+    {
+      "id": 706,
+      "text": "SOLID principles:\n\n1. Single Responsibility - each class has one reason to change\n2. Open/Closed - software should be open for extension, closed for modification\n3. Liskov - derived classes must be substitutable for their base classes\n4. Interface Segregation - many client-specific interfaces are better than one general-purpose interface\n5. Dependency Inversion - depend on abstractions, not concretions",
+      "meta": {},
+      "feedbacks": [
+        {
+          "id": 70601,
+          "description": "You correctly identified all five SOLID principles, which demonstrates a solid understanding of their fundamental concepts.",
+          "title": "Correct Identification",
+          "index_start": 19,
+          "index_end": 405,
+          "credits": 10.0,
+          "meta": {}
+        },
+        {
+          "id": 70602,
+          "description": "While you have provided brief explanations for each principle, enhancing them with more detail and examples would improve clarity. Consider adding examples for each principle to illustrate their application in software development.",
+          "title": "Explanation Improvement",
+          "index_start": 19,
+          "index_end": 405,
+          "credits": 0.0,
+          "meta": {}
+        },
+        {
+          "id": 70603,
+          "description": "The submission could be improved by including explanations of the benefits of applying these principles, such as improved maintainability, testability, and scalability of software.",
+          "title": "Benefits Explanation",
+          "index_start": 17,
+          "index_end": 17,
+          "credits": 0.0,
+          "meta": {}
+        },
+        {
+          "id": 70604,
+          "description": "Consider adding practical examples, such as code snippets or real-world scenarios, to demonstrate how each principle can be applied effectively in software development.",
+          "title": "Practical Application",
+          "index_start": 19,
+          "index_end": 405,
+          "credits": 0.0,
+          "meta": {}
+        }
+      ]
+    },
+    {
+      "id": 707,
+      "text": "SOLID is about good design:\n\n1. Single Responsibility: One class, one job\n2. Open/Closed: Extend without changing\n3. Liskov: Subtypes work like base types\n4. Interface Segregation: Small interfaces\n5. Dependency Inversion: Use abstractions",
+      "meta": {},
+      "feedbacks": [
+        {
+          "id": 70701,
+          "description": "The explanation of the Single Responsibility Principle (SRP) is correct in stating 'One class, one job.' However, you could enhance your explanation by providing a concrete example, such as a User class that should only handle user-related data and operations, without including functionalities like email handling or database access.",
+          "title": "Single Responsibility Principle Explanation",
+          "index_start": 32,
+          "index_end": 73,
+          "credits": 2.0,
+          "meta": {}
+        },
+        {
+          "id": 70702,
+          "description": "The Open/Closed principle is correctly summarized as 'Extend without changing.' To improve, provide an example, such as using interfaces or abstract classes to add new features without modifying existing code. This demonstrates a practical application of the principle.",
+          "title": "Open/Closed Principle Explanation",
+          "index_start": 77,
+          "index_end": 113,
+          "credits": 2.0,
+          "meta": {}
+        },
+        {
+          "id": 70703,
+          "description": "The Liskov Substitution Principle is accurately described as 'Subtypes work like base types.' Consider including an example, such as ensuring that a subclass of an Animal class can be used in place of the Animal class without altering the desired functionality of the program.",
+          "title": "Liskov Substitution Principle Explanation",
+          "index_start": 117,
+          "index_end": 154,
+          "credits": 2.0,
+          "meta": {}
+        },
+        {
+          "id": 70704,
+          "description": "The explanation 'Small interfaces' captures the essence of the Interface Segregation Principle. To make it more actionable, include an example, such as creating separate interfaces for distinct functionalities like Printable and Scannable instead of a single large Printer interface.",
+          "title": "Interface Segregation Principle Explanation",
+          "index_start": 158,
+          "index_end": 197,
+          "credits": 2.0,
+          "meta": {}
+        },
+        {
+          "id": 70705,
+          "description": "The Dependency Inversion Principle is correctly noted as 'Use abstractions.' Enhance your explanation with an example, such as applying dependency injection to allow high-level modules to depend on abstractions rather than low-level modules directly.",
+          "title": "Dependency Inversion Principle Explanation",
+          "index_start": 201,
+          "index_end": 239,
+          "credits": 2.0,
+          "meta": {}
+        },
+        {
+          "id": 70706,
+          "description": "You have correctly identified all five SOLID principles. To achieve higher marks, include a brief discussion on how these principles contribute to creating maintainable and scalable software, highlighting their benefits.",
+          "title": "General Understanding of SOLID Principles",
+          "index_start": 0,
+          "index_end": 27,
+          "credits": 1.0,
+          "meta": {}
+        }
+      ]
+    },
+    {
+      "id": 708,
+      "text": "SOLID principles help create better software:\n\n1. Single Responsibility - each class should have only one reason to change\n2. Open/Closed - software entities should be open for extension but closed for modification\n3. Liskov Substitution - subtypes must be substitutable for their base types\n4. Interface Segregation - clients should not be forced to depend on interfaces they don't use\n5. Dependency Inversion - high-level modules should not depend on low-level modules\n\nExample: A Logger class should only handle logging, not database operations or email sending.",
+      "meta": {},
+      "feedbacks": [
+        {
+          "id": 70801,
+          "description": "The student correctly identified all five SOLID principles, which demonstrates an understanding of the basic concepts.",
+          "title": "Identification of Principles",
+          "index_start": 47,
+          "index_end": 470,
+          "credits": 10.0,
+          "meta": {}
+        },
+        {
+          "id": 70802,
+          "description": "The explanations of each principle are concise but lack depth and examples. Providing more detailed explanations and examples for each principle would improve clarity and understanding.",
+          "title": "Explanation Clarity",
+          "index_start": 50,
+          "index_end": 470,
+          "credits": 2.0,
+          "meta": {}
+        },
+        {
+          "id": 70803,
+          "description": "An example was provided for Single Responsibility Principle, but similar examples are needed for the other four principles to illustrate their application in software development.",
+          "title": "Example Usage",
+          "index_start": 472,
+          "index_end": 565,
+          "credits": 1.0,
+          "meta": {}
+        },
+        {
+          "id": 70804,
+          "description": "The student briefly mentions that SOLID principles help create better software, but does not expand on the specific benefits of each principle, such as maintainability, scalability, and ease of testing.",
+          "title": "Understanding of Benefits",
+          "index_start": 0,
+          "index_end": 45,
+          "credits": 0.0,
+          "meta": {}
+        }
+      ]
+    },
+    {
+      "id": 709,
+      "text": "SOLID principles are design guidelines for object-oriented programming:\n\n1. Single Responsibility: A class should have only one reason to change\n2. Open/Closed: Software should be open for extension but closed for modification\n3. Liskov Substitution: Derived classes must be substitutable for their base classes\n4. Interface Segregation: Many client-specific interfaces are better than one general-purpose interface\n5. Dependency Inversion: Depend on abstractions, not concretions\n\nThese principles help create code that is easier to maintain, test, and extend.",
+      "meta": {},
+      "feedbacks": [
+        {
+          "id": 70901,
+          "description": "The student correctly identified all five SOLID principles: Single Responsibility, Open/Closed, Liskov Substitution, Interface Segregation, and Dependency Inversion.",
+          "title": "Correct Identification of Principles",
+          "index_start": 73,
+          "index_end": 480,
+          "credits": 10.0,
+          "meta": {}
+        },
+        {
+          "id": 70902,
+          "description": "While the student provided brief explanations for each principle, these explanations lack depth and specific examples that illustrate how the principles should be applied in software development.",
+          "title": "Explanation Clarity",
+          "index_start": 73,
+          "index_end": 480,
+          "credits": -5.0,
+          "meta": {}
+        },
+        {
+          "id": 70903,
+          "description": "The student correctly noted that SOLID principles help create code that is easier to maintain, test, and extend, demonstrating an understanding of the benefits of these principles.",
+          "title": "Understanding of Benefits",
+          "index_start": 482,
+          "index_end": 561,
+          "credits": 1.0,
+          "meta": {}
+        },
+        {
+          "id": 70904,
+          "description": "The submission lacks practical examples for each principle. Including examples would strengthen the explanation and demonstrate a deeper understanding of the principles.",
+          "title": "Practical Application Examples",
+          "index_start": 73,
+          "index_end": 480,
+          "credits": 0.0,
+          "meta": {}
+        }
+      ]
+    },
+    {
+      "id": 710,
+      "text": "SOLID principles:\n\n1. Single Responsibility - one class, one job\n2. Open/Closed - extend without modifying\n3. Liskov - subclasses replace parent classes\n4. Interface Segregation - small interfaces\n5. Dependency Inversion - use abstractions\n\nExample: PaymentProcessor interface instead of one large Payment class.",
+      "meta": {},
+      "feedbacks": [
+        {
+          "id": 71001,
+          "description": "Good identification of the Single Responsibility Principle, but the explanation could be expanded. Consider adding an example to illustrate how a class that handles multiple responsibilities can be refactored to adhere to SRP.",
+          "title": "Single Responsibility Principle",
+          "index_start": 22,
+          "index_end": 64,
+          "credits": 2.0,
+          "meta": {}
+        },
+        {
+          "id": 71002,
+          "description": "Correct identification of the Open/Closed Principle. However, the explanation lacks depth. Provide an example to demonstrate how this principle can be applied, such as using inheritance or interfaces to add new features without modifying existing code.",
+          "title": "Open/Closed Principle",
+          "index_start": 68,
+          "index_end": 106,
+          "credits": 2.0,
+          "meta": {}
+        },
+        {
+          "id": 71003,
+          "description": "Correct identification of the Liskov Substitution Principle, but the explanation is very brief. Expand your explanation with an example, showing how a subclass can replace a parent class without altering the correct functioning of the program.",
+          "title": "Liskov Substitution Principle",
+          "index_start": 110,
+          "index_end": 152,
+          "credits": 2.0,
+          "meta": {}
+        },
+        {
+          "id": 71004,
+          "description": "Good identification of Interface Segregation Principle. The explanation is concise, yet an example would strengthen your understanding, such as demonstrating how creating smaller interfaces can reduce the dependency of client classes on methods they don't use.",
+          "title": "Interface Segregation Principle",
+          "index_start": 156,
+          "index_end": 196,
+          "credits": 2.0,
+          "meta": {}
+        },
+        {
+          "id": 71005,
+          "description": "Correct identification of the Dependency Inversion Principle. The explanation is brief; consider adding an example to show how high-level modules can depend on abstractions rather than concrete implementations.",
+          "title": "Dependency Inversion Principle",
+          "index_start": 200,
+          "index_end": 239,
+          "credits": 2.0,
+          "meta": {}
+        },
+        {
+          "id": 71006,
+          "description": "The example of the PaymentProcessor interface is relevant to the Interface Segregation Principle, but it could be expanded to show how it also demonstrates other SOLID principles, such as Dependency Inversion.",
+          "title": "Example Clarity",
+          "index_start": 241,
+          "index_end": 312,
+          "credits": 1.0,
+          "meta": {}
+        },
+        {
+          "id": 71007,
+          "description": "There is no explicit mention of the benefits of applying SOLID principles. It would be beneficial to discuss how these principles contribute to maintainable and scalable software.",
+          "title": "Understanding of Benefits",
+          "index_start": 0,
+          "index_end": 17,
+          "credits": 0.0,
+          "meta": {}
+        }
+      ]
+    },
+    {
+      "id": 711,
+      "text": "SOLID principles are important for good code:\n\n1. Single Responsibility: Each class should do one thing\n2. Open/Closed: Code should be open for extension\n3. Liskov: Subclasses should work like parent classes\n4. Interface Segregation: Don't force unused methods\n5. Dependency Inversion: Use interfaces not concrete classes",
+      "meta": {},
+      "feedbacks": [
+        {
+          "id": 71101,
+          "description": "The student correctly identifies the Single Responsibility Principle. However, the explanation 'Each class should do one thing' is somewhat vague. A more comprehensive explanation would mention that a class should have only one reason to change, focusing solely on its specific responsibility.",
+          "title": "Understanding of Single Responsibility Principle",
+          "index_start": 50,
+          "index_end": 103,
+          "credits": 1.0,
+          "meta": {}
+        },
+        {
+          "id": 71102,
+          "description": "The student correctly identifies the Open/Closed Principle. However, the explanation 'Code should be open for extension' could be expanded to include 'but closed for modification' to fully capture the essence of the principle. Providing an example would strengthen the explanation.",
+          "title": "Understanding of Open/Closed Principle",
+          "index_start": 107,
+          "index_end": 153,
+          "credits": 1.0,
+          "meta": {}
+        },
+        {
+          "id": 71103,
+          "description": "The student correctly identifies the Liskov Substitution Principle. The explanation 'Subclasses should work like parent classes' is correct but could be more detailed, mentioning that objects of a superclass should be replaceable with objects of a subclass without affecting the program's correctness.",
+          "title": "Understanding of Liskov Substitution Principle",
+          "index_start": 157,
+          "index_end": 207,
+          "credits": 1.0,
+          "meta": {}
+        },
+        {
+          "id": 71104,
+          "description": "The student correctly identifies the Interface Segregation Principle. The explanation 'Don't force unused methods' is concise and captures the idea that clients should not be forced to depend on interfaces they do not use. An example here could further illustrate the point.",
+          "title": "Understanding of Interface Segregation Principle",
+          "index_start": 211,
+          "index_end": 260,
+          "credits": 1.0,
+          "meta": {}
+        },
+        {
+          "id": 71105,
+          "description": "The student correctly identifies the Dependency Inversion Principle. The explanation 'Use interfaces not concrete classes' is a good start but could be expanded to mention that high-level modules should depend on abstractions rather than low-level modules. An example would be beneficial.",
+          "title": "Understanding of Dependency Inversion Principle",
+          "index_start": 264,
+          "index_end": 321,
+          "credits": 1.0,
+          "meta": {}
+        },
+        {
+          "id": 71106,
+          "description": "The submission lacks examples for each SOLID principle. Providing simple examples would help demonstrate how these principles can be applied in software development, making the explanations more tangible.",
+          "title": "Missing Examples",
+          "index_start": 47,
+          "index_end": 321,
+          "credits": -5.0,
+          "meta": {}
+        },
+        {
+          "id": 71107,
+          "description": "The submission does not discuss the benefits of applying SOLID principles, such as improving code maintainability, scalability, and testability. Including these benefits would enhance the educational value of the explanations.",
+          "title": "Benefits of SOLID Principles",
+          "index_start": 0,
+          "index_end": 45,
+          "credits": -1.0,
+          "meta": {}
+        }
+      ]
+    },
+    {
+      "id": 712,
+      "text": "SOLID principles help with software design:\n\n1. Single Responsibility - each class has one purpose\n2. Open/Closed - add features without changing existing code\n3. Liskov Substitution - child classes can replace parent classes\n4. Interface Segregation - create specific interfaces instead of large ones\n5. Dependency Inversion - depend on interfaces, not concrete classes\n\nBenefits: More maintainable, testable, and flexible code that's easier to extend.",
+      "meta": {},
+      "feedbacks": [
+        {
+          "id": 71201,
+          "description": "You have correctly identified each of the five SOLID principles. This demonstrates a good understanding of the foundational concepts of object-oriented design.",
+          "title": "SOLID Principles Identification",
+          "index_start": 48,
+          "index_end": 370,
+          "credits": 10.0,
+          "meta": {}
+        },
+        {
+          "id": 71202,
+          "description": "Your explanations of each SOLID principle are brief and somewhat accurate. However, they could benefit from more detailed descriptions and examples to enhance understanding.",
+          "title": "Explanation of Principles",
+          "index_start": 48,
+          "index_end": 370,
+          "credits": 3.0,
+          "meta": {}
+        },
+        {
+          "id": 71203,
+          "description": "You did not provide specific examples of how each principle is applied in software development. Including simple examples would make your submission more practical and educational.",
+          "title": "Examples of Application",
+          "index_start": 48,
+          "index_end": 370,
+          "credits": 0.0,
+          "meta": {}
+        },
+        {
+          "id": 71204,
+          "description": "You have correctly stated the benefits of applying SOLID principles, indicating a clear understanding of how they improve software design.",
+          "title": "Understanding Benefits",
+          "index_start": 372,
+          "index_end": 453,
+          "credits": 1.0,
+          "meta": {}
+        },
+        {
+          "id": 71205,
+          "description": "To improve your submission, consider providing specific examples for each SOLID principle, such as a class or interface design that illustrates the principle in action.",
+          "title": "Actionable Improvement",
+          "index_start": 48,
+          "index_end": 370,
+          "credits": 0.0,
+          "meta": {}
+        }
+      ]
+    }
+  ],
+  "baseline_info": {
+    "model": "azure_openai_gpt-4o",
+    "approach": "basic",
+    "generated_at": "2025-08-08T14:49:07.282605",
+    "description": "Baseline feedbacks generated by GPT-4o using basic approach"
+  }
+}

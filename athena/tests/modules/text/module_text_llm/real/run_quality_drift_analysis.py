@@ -174,8 +174,8 @@ class QualityDriftAnalysisRunner:
         # Get the directory where this script is located
         script_dir = Path(__file__).parent
         self.results_dir = script_dir
-        # Path from athena/modules/text/module_text_llm to exercise-7.json
-        self.exercise_data_path = Path("../../../playground/data/example/exercise-7.json")
+        # Path to exercise-7.json in the data folder
+        self.exercise_data_path = script_dir / "data" / "exercise-7.json"
         
     async def check_and_generate_baseline(self) -> bool:
         """Check if baseline exists, generate if needed."""

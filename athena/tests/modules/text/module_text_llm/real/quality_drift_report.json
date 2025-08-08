@@ -1,21 +1,21 @@
 {
-  "timestamp": "2025-08-08 15:25:15",
+  "timestamp": "2025-08-08 15:36:34",
   "baseline": {
     "model": "azure_openai_gpt-4o",
     "generated_at": "2025-08-08T14:49:07.282605"
   },
   "model_results": {
     "gpt-4o": {
-      "avg_bertscore_f1": 0.883,
-      "avg_credit_drift": 3.58
+      "avg_bertscore_f1": 0.89,
+      "avg_credit_drift": 2.17
     },
     "gpt-4-turbo": {
-      "avg_bertscore_f1": 0.879,
-      "avg_credit_drift": 3.44
+      "avg_bertscore_f1": 0.875,
+      "avg_credit_drift": 2.46
     },
     "gpt-35-turbo": {
-      "avg_bertscore_f1": 0.874,
-      "avg_credit_drift": 1.8
+      "avg_bertscore_f1": 0.869,
+      "avg_credit_drift": 2.23
     }
   }
 }
