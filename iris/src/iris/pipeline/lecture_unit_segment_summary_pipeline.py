@@ -80,7 +80,7 @@ class LectureUnitSegmentSummaryPipeline(Pipeline):
             summary = self._create_summary(transcriptions, slides)
             summaries.append(summary)
             self._upsert_lecture_object(slide_index, summary)
-        return summaries
+        return summaries, self.tokens
 
     def _get_transcriptions(self, slide_number: int):
         transcription_filter = self._get_lecture_transcription_filter()
