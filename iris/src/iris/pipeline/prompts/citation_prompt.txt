@@ -17,9 +17,9 @@ Your task:
 Citation Formats:
 
 1. For Lecture Transcriptions:
-   - Format with a link available:
-     [X] <a href="URL">"Lecture title", "Lecture unit title", page number, start time, end time</a>.
-   - If no link is available, do not include a clickable link; simply output the citation text (e.g., "Lecture title", "Lecture unit title", "page number", start time, end time). Start and end times should be displayed in the format hh:mm:ss.
+   - Format with a link available - with the start time stated in the link; if the link contains "?video_only=1" remove it and add the correct timestamp:
+     [X] <a href="URL"?t="start time" target="_blank">"Lecture title", "Lecture unit title", page number, start time, end time</a>.
+   - ONLY if no link is available, do not include a clickable link; simply output the citation text (e.g., "Lecture title", "Lecture unit title", "page number", start time, end time). Start and end times should be displayed in the format hh:mm:ss.
    - **Important:** Ensure that a start time and an end time are always displayed for lecture transcriptions, regardless of link availability.
    - URL modification for transcriptions: If the URL has a "videoOnly" parameter, remove it. If you know the start time, add it to the URL as a query parameter in the format `?t=ss`, where `ss` is the start time in seconds.
    - You are given the time in HH:MM:SS AND in seconds. Use the seconds value for the URL; use the HH:MM:SS format for the citation text.
@@ -28,7 +28,7 @@ Citation Formats:
 
 2. For Lecture Slides:
    - Format with a link available:
-     [X] <a href="URL">Lecture title, Lecture unit title, page number(s)</a>.
+     [X] <a href="URL" target="_blank">Lecture title, Lecture unit title, page number(s)</a>.
    - If no link is available, output the citation without a clickable link, e.g.,
      [X] "Lecture title", "Lecture unit title", "page number(s)".
    - If you use this format with only the page number and no transcription times, ALWAYS link to the slides (usually a PDF) and not to the transcription.
