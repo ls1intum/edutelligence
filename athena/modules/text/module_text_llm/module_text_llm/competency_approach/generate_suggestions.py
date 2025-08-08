@@ -9,7 +9,7 @@ from llm_core.utils.llm_utils import (
     num_tokens_from_prompt,
 )
 from llm_core.core.predict_and_parse import predict_and_parse
-from module_text_llm.basic_approach import BasicApproachConfig
+from module_text_llm.competency_approach import CompetencyApproachConfig
 from module_text_llm.registry import register_approach
 
 from module_text_llm.helpers.utils import (
@@ -17,15 +17,15 @@ from module_text_llm.helpers.utils import (
     get_index_range_from_line_range,
     format_grading_instructions,
 )
-from module_text_llm.basic_approach.prompt_generate_suggestions import AssessmentModel
-from module_text_llm.basic_approach.prompt_submission_analysis import SubmissionAnalysis
+from module_text_llm.competency_approach.prompt_generate_suggestions import AssessmentModel
+from module_text_llm.competency_approach.prompt_submission_analysis import SubmissionAnalysis
 
 
-@register_approach("basic")
+@register_approach("competency")
 async def generate_suggestions(
     exercise: Exercise,
     submission: Submission,
-    config: BasicApproachConfig,
+    config: CompetencyApproachConfig,
     *,
     debug: bool,
     is_graded: bool,
