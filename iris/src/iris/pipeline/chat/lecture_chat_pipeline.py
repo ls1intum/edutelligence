@@ -168,6 +168,7 @@ class LectureChatPipeline(Pipeline):
             lecture_unit_id=dto.lecture_unit_id,
             base_url=dto.settings.artemis_base_url,
         )
+
         self._add_lecture_content_to_prompt(self.lecture_content)
         custom_instructions = format_custom_instructions(
             custom_instructions=dto.custom_instructions

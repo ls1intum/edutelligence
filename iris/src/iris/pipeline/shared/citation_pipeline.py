@@ -107,13 +107,12 @@ class CitationPipeline(Pipeline):
             end_time_str = str(datetime.timedelta(seconds=int(end_time_sec)))
             lct = (
                 f"Lecture Transcription: {paragraph.lecture_name}, Unit: {paragraph.lecture_unit_name}, "
-                f"Page: {paragraph.page_number}, Link: {paragraph.lecture_unit_link}, "
-                f"Start Time: {start_time_str} ({start_time_sec}s), End Time: {end_time_str} ({end_time_sec}s),\n"
+                f"Page: {paragraph.page_number}, Link: {paragraph.video_link or "No link available"}, "
+                f"Start Time: {start_time_str}, End Time: {end_time_str},\n"
                 f"Content:\n"
                 f"---{paragraph.segment_text}---\n\n"
             )
             formatted_string_lecture_transcriptions += lct
-
         return formatted_string_lecture_page_chunks.replace("{", "{{").replace(
             "}", "}}"
         ), formatted_string_lecture_transcriptions.replace("{", "{{").replace("}", "}}")
