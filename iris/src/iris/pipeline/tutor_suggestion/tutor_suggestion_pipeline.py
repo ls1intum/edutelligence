@@ -22,10 +22,7 @@ from iris.llm import CompletionArguments, ModelVersionRequestHandler
 from iris.llm.external.model import LanguageModel
 from iris.llm.langchain import IrisLangchainChatModel
 from iris.pipeline import Pipeline
-from iris.pipeline.prompts.tutor_suggestion.helper_prompts import (
-    lecture_summary_prompt,
-    question_answered_prompt,
-)
+from iris.pipeline.prompts.tutor_suggestion.helper_prompts import question_answered_prompt
 from iris.pipeline.shared.utils import filter_variants_by_available_models
 from iris.pipeline.tutor_suggestion.tutor_suggestion_channel_base_pipeline import (
     TutorSuggestionChannelBasePipeline,
@@ -122,13 +119,13 @@ class TutorSuggestionPipeline(Pipeline):
         faq_content_result = {}
 
         def get_lecture_content():
-            lecture_content_result["data"] = self._get_relevant_lecture_content(dto)
+            lecture_content_result["data"] = lecture_content_retrieval(dto, self.summary_text, self.db)
+            self.callback.in_progress("Retrieved relevant lecture content")
 
         def get_faq_content():
             faq_content_result["data"] = faq_content_retrieval(
                 self.db, self.summary_text, dto
             )
-            self.callback.in_progress("Retrieved relevant FAQ content")
 
         lecture_thread = threading.Thread(target=get_lecture_content)
         faq_thread = threading.Thread(target=get_faq_content)
@@ -255,38 +252,3 @@ class TutorSuggestionPipeline(Pipeline):
         return filter_variants_by_available_models(
             available_llms, variant_specs, pipeline_name="TutorSuggestionPipeline"
         )
-
-    def _get_relevant_lecture_content(
-        self, dto: CommunicationTutorSuggestionPipelineExecutionDTO
-    ) -> str:
-        """
-        Retrieves relevant lecture content based on the current DTO and summary.
-        :return: Relevant lecture content as a string.
-        """
-        lecture_content = lecture_content_retrieval(dto, self.summary_text, self.db)
-        prompt = ChatPromptTemplate.from_messages(
-            [("system", lecture_summary_prompt())]
-        )
-        try:
-            completion_args = CompletionArguments(temperature=0, max_tokens=8000)
-            model = (
-                GPT_ADVANCED_MODEL if self.variant == "advanced" else GPT_DEFAULT_MODEL
-            )
-
-            llm = IrisLangchainChatModel(
-                request_handler=ModelVersionRequestHandler(version=model),
-                completion_args=completion_args,
-            )
-            pipeline = llm | StrOutputParser()
-            response = (prompt | pipeline).invoke(
-                input={
-                    "lecture_content": lecture_content,
-                    "summary_text": self.summary_text,
-                }
-            )
-            self._append_tokens(llm.tokens, PipelineEnum.IRIS_TUTOR_SUGGESTION_PIPELINE)
-            self.callback.in_progress("Retrieved relevant lecture content")
-            return response
-        except Exception as e:
-            logger.error("Error retrieving relevant lecture content: %s", str(e))
-            return "Error retrieving relevant lecture content"
