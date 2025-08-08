@@ -6,8 +6,6 @@ services:
     container_name: transcriber-service
     expose:
       - "5000"
-    env_file:
-      - ../.env
     environment:
       - LLM_CONFIG_PATH=/app/llm_config.nebula.yml
     volumes:
@@ -22,8 +20,6 @@ services:
     container_name: faq-service
     expose:
       - "5001"
-    env_file:
-      - ../.env
     environment:
       - LLM_CONFIG_PATH=/app/llm_config.nebula.yml
     volumes:
@@ -33,8 +29,6 @@ services:
   envoy:
     image: envoyproxy/envoy:v1.30-latest
     container_name: envoy
-    env_file:
-      - ../.env          # relativ zur Compose-Datei
     environment:
       - LLM_CONFIG_PATH=/app/llm_config.nebula.yml
     volumes:
