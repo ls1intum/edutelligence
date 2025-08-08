@@ -105,7 +105,7 @@ jobs:
             modules/text/module_text_llm/.venv/bin/pip install bert-score torch transformers numpy
             
             # Download required NLTK data
-            modules/text/module_text_llm/.venv/bin/python -c "import nltk; nltk.download('punkt')"
+            modules/text/module_text_llm/.venv/bin/python -c "import nltk; nltk.download('punkt', quiet=True); nltk.download('punkt_tab', quiet=True)"
             
             # Change to the module directory and run the analysis
             cd modules/text/module_text_llm
