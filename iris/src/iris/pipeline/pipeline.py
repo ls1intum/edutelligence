@@ -1,13 +1,16 @@
-from abc import ABCMeta
-from typing import List
+from abc import ABCMeta, abstractmethod
+from typing import Generic, List, TypeVar
 
 from iris.common.pipeline_enum import PipelineEnum
 from iris.common.token_usage_dto import TokenUsageDTO
 from iris.domain import FeatureDTO
+from iris.domain.variant.abstract_variant import AbstractAgentVariant, AbstractVariant
 from iris.llm.external.model import LanguageModel
 
+VARIANT = TypeVar("VARIANT", bound=AbstractAgentVariant)
 
-class Pipeline(metaclass=ABCMeta):
+
+class Pipeline(Generic[VARIANT], metaclass=ABCMeta):
     """Abstract class for all pipelines"""
 
     implementation_id: str
@@ -39,25 +42,14 @@ class Pipeline(metaclass=ABCMeta):
         tokens.pipeline = pipeline
         self.tokens.append(tokens)
 
+    @abstractmethod
     @classmethod
-    def get_variants(
-        cls, available_llms: List[LanguageModel]  # pylint: disable=unused-argument
-    ) -> List[FeatureDTO]:
+    def get_variants(cls) -> List[AbstractVariant]:
         """
-        Returns available variants for this pipeline based on available LLMs.
-        By default, returns a single 'default' variant.
-        Pipeline subclasses can override this method to provide custom variant logic.
-
-        Args:
-            available_llms: List of available language models
+        Returns a list of all variants for this pipeline.
+        This method should be implemented by subclasses to provide specific variants.
 
         Returns:
-            List of FeatureDTO objects representing available variants
+            List of variants available for this pipeline.
         """
-        return [
-            FeatureDTO(
-                id="default",
-                name="Default Variant",
-                description="Default pipeline variant.",
-            )
-        ]
+        raise NotImplementedError("Subclasses must implement the get_variants method.")

@@ -31,12 +31,13 @@ from ...common.tools import (
     create_tool_get_student_exercise_metrics,
     create_tool_lecture_content_retrieval,
 )
-from ...domain import CourseChatPipelineExecutionDTO, FeatureDTO
+from ...domain import CourseChatPipelineExecutionDTO
 from ...domain.chat.interaction_suggestion_dto import (
     InteractionSuggestionPipelineExecutionDTO,
 )
 from ...domain.data.metrics.competency_jol_dto import CompetencyJolDTO
 from ...domain.data.text_message_content_dto import TextMessageContentDTO
+from ...domain.variant.course_chat_variant import CourseChatVariant
 from ...llm import (
     CompletionArguments,
     ModelVersionRequestHandler,
@@ -88,7 +89,7 @@ from .lecture_chat_pipeline import LectureChatPipeline
 logger = logging.getLogger(__name__)
 
 
-class CourseChatPipeline(Pipeline):
+class CourseChatPipeline(Pipeline[CourseChatVariant]):
     """Course chat pipeline that answers course related questions from students."""
 
     llm: IrisLangchainChatModel
@@ -670,26 +671,20 @@ class CourseChatPipeline(Pipeline):
             )
 
     @classmethod
-    def get_variants(cls, available_llms: List[LanguageModel]) -> List[FeatureDTO]:
-        variant_specs = [
-            (
-                ["gpt-4.1-mini"],
-                FeatureDTO(
-                    id="default",
-                    name="Default",
-                    description="Uses a smaller model for faster and cost-efficient responses.",
-                ),
+    def get_variants(cls) -> List[CourseChatVariant]:
+        return [
+            CourseChatVariant(
+                id="default",
+                name="Default",
+                description="Uses a smaller model for faster and cost-efficient responses.",
+                agent_model="gpt-4.1-mini",
+                citation_model="gpt-4.1-mini",
             ),
-            (
-                ["gpt-4.1", "gpt-4.1-mini"],
-                FeatureDTO(
-                    id="advanced",
-                    name="Advanced",
-                    description="Uses a larger chat model, balancing speed and quality.",
-                ),
+            CourseChatVariant(
+                id="advanced",
+                name="Advanced",
+                description="Uses a larger chat model, balancing speed and quality.",
+                agent_model="gpt-4.1",
+                citation_model="gpt-4.1-mini",
             ),
         ]
-
-        return filter_variants_by_available_models(
-            available_llms, variant_specs, pipeline_name="CourseChatPipeline"
-        )

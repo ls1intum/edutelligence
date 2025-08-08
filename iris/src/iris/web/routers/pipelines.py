@@ -1,6 +1,7 @@
 import logging
 import traceback
 from threading import Thread
+from typing import List
 
 from fastapi import APIRouter, Body, Depends, Query, Response, status
 from sentry_sdk import capture_exception
@@ -10,6 +11,7 @@ from iris.domain import (
     CompetencyExtractionPipelineExecutionDTO,
     CourseChatPipelineExecutionDTO,
     ExerciseChatPipelineExecutionDTO,
+    FeatureDTO,
     InconsistencyCheckPipelineExecutionDTO,
 )
 from iris.domain.chat.lecture_chat.lecture_chat_pipeline_execution_dto import (
@@ -24,6 +26,8 @@ from iris.domain.rewriting_pipeline_execution_dto import (
 from iris.domain.text_exercise_chat_pipeline_execution_dto import (
     TextExerciseChatPipelineExecutionDTO,
 )
+from iris.domain.variant.abstract_variant import AbstractVariant
+from iris.llm.external.model import LanguageModel
 from iris.llm.llm_manager import LlmManager
 from iris.pipeline.chat.course_chat_pipeline import CourseChatPipeline
 from iris.pipeline.chat.exercise_chat_agent_pipeline import (
@@ -137,13 +141,19 @@ def run_exercise_chat_pipeline(
     thread.start()
 
 
-def run_course_chat_pipeline_worker(dto, variant, event):
+def run_course_chat_pipeline_worker(dto, variant_id, event):
     try:
         callback = CourseChatStatusCallback(
             run_id=dto.settings.authentication_token,
             base_url=dto.settings.artemis_base_url,
             initial_stages=dto.initial_stages,
         )
+        for variant in CourseChatPipeline.get_variants():
+            if variant.id == variant_id:
+                variant = variant
+                break
+        else:
+            raise ValueError(f"Unknown variant: {variant_id}")
         pipeline = CourseChatPipeline(callback=callback, variant=variant, event=event)
     except Exception as e:
         logger.error("Error preparing exercise chat pipeline: %s", e)
@@ -401,7 +411,7 @@ def run_communication_tutor_suggestions_pipeline(
 
 
 @router.get("/{feature}/variants")
-def get_pipeline(feature: str):
+def get_pipeline(feature: str) -> List[FeatureDTO]:
     """
     Get the pipeline variants for the given feature.
     """
@@ -417,7 +427,9 @@ def get_pipeline(feature: str):
         case "TEXT_EXERCISE_CHAT":
             return TextExerciseChatPipeline.get_variants(available_llms)
         case "COURSE_CHAT":
-            return CourseChatPipeline.get_variants(available_llms)
+            return get_available_variants(
+                CourseChatPipeline.get_variants(), available_llms
+            )
         case "COMPETENCY_GENERATION":
             return CompetencyExtractionPipeline.get_variants(available_llms)
         case "LECTURE_CHAT":
@@ -436,3 +448,23 @@ def get_pipeline(feature: str):
             return TutorSuggestionPipeline.get_variants(available_llms)
         case _:
             return Response(status_code=status.HTTP_400_BAD_REQUEST)
+
+
+def get_available_variants(
+    all_variants: List[AbstractVariant], available_llms: List[LanguageModel]
+) -> List[FeatureDTO]:
+    """
+    Returns available variants for this pipeline based on available LLMs.
+
+    Args:
+        available_llms: List of available language models
+    Returns:
+        List of variants that are can be used with the available LLMs.
+    """
+    return [
+        variant.feature_dto()
+        for variant in all_variants
+        if set(variant.required_models()).issubset(
+            {llm.model for llm in available_llms}
+        )
+    ]
