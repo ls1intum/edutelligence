@@ -158,6 +158,8 @@ class WeaviateMemoryRepository(MemoryRepository, _WeaviateBaseRepository):
     def search_multi(
         self, tenant: str, vectors: Mapping[str, Sequence[float]], count: int
     ) -> list[Memory]:
+        if not vectors:
+            return []
         try:
             if not self.collection.tenants.exists(tenant):
                 return []

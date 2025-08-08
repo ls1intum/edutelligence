@@ -26,7 +26,7 @@ class MemoryDTO(BaseModel):
         Create a MemoryDto from a Memory object.
         """
         return cls(
-            id=str(memory.id),
+            id=str(memory.id) if memory.id else None,
             title=memory.title,
             content=memory.content,
             learnings=[str(id) for id in memory.learnings],
@@ -44,7 +44,7 @@ class MemoryDTO(BaseModel):
         )
 
     def __eq__(self, other) -> bool:
-        if other is None or not isinstance(other, Memory):
+        if other is None or not isinstance(other, MemoryDTO):
             return False
         if self.id:
             return self.id == other.id

@@ -1,3 +1,4 @@
+import logging
 from threading import Thread
 from typing import Callable, Sequence
 from uuid import UUID
@@ -106,7 +107,13 @@ def has_memories_for_tenant(tenant: Tenant, memory_service: MemoryService) -> bo
     Returns:
         bool: True if there are memories for the tenant, False otherwise.
     """
-    return len(memory_service.get_all_memories(tenant)) > 0
+    try:
+        return len(memory_service.get_all_memories(tenant)) > 0
+    except Exception as e:
+        logging.error(
+            "Error checking memories for tenant %s: %s", tenant, e, exc_info=True
+        )
+        return False
 
 
 class MemirisWrapper:
@@ -147,8 +154,13 @@ class MemirisWrapper:
         """
 
         def _create_memories():
-            memories = self.create_memories(text)
-            result_storage.extend(memories)
+            try:
+                memories = self.create_memories(text)
+                result_storage.extend(memories)
+            except Exception as e:
+                logging.error(
+                    "Failed to create memories in thread: %s", e, exc_info=True
+                )
 
         thread = Thread(name="MemirisMemoryCreationThread", target=_create_memories)
         thread.start()
@@ -245,7 +257,7 @@ class MemirisWrapper:
                     connections, key=lambda x: x.weight, reverse=True
                 ):
                     for mid in connection.memories:
-                        if memory_id not in memory_ids:
+                        if mid not in memory_ids:
                             memory_ids.append(mid)
 
                 if len(memory_ids) > limit:
