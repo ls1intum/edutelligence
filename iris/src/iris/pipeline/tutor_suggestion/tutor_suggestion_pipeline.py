@@ -39,8 +39,6 @@ logger = logging.getLogger(__name__)
 
 ADVANCED_VARIANT = "deepseek-r1:8b"
 DEFAULT_VARIANT = "gemma3:27b"
-GPT_ADVANCED_MODEL = "gpt-4.1"
-GPT_DEFAULT_MODEL = "gpt-4.1-mini"
 
 
 class TutorSuggestionPipeline(Pipeline):
