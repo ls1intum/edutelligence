@@ -4,7 +4,7 @@ from typing import Any, Dict, List
 from pydantic import BaseModel, Field, TypeAdapter
 
 
-class LearningCreationDto(BaseModel):
+class LearningCreationDLO(BaseModel):
     """
     Data transfer object for learning creation operations.
     Contains the essential fields needed to create a new learning entry.
@@ -19,29 +19,29 @@ class LearningCreationDto(BaseModel):
     @staticmethod
     def json_type() -> TypeAdapter:
         """
-        Generate the TypeAdapter for LearningCreationDto.
+        Generate the TypeAdapter for LearningCreationDLO.
         """
-        return TypeAdapter(LearningCreationDto)
+        return TypeAdapter(LearningCreationDLO)
 
     @staticmethod
     def json_array_type() -> TypeAdapter:
         """
-        Generate the TypeAdapter for an array of LearningCreationDto objects.
+        Generate the TypeAdapter for an array of LearningCreationDLO objects.
         """
-        return TypeAdapter(List[LearningCreationDto])
+        return TypeAdapter(List[LearningCreationDLO])
 
     @staticmethod
     def json_schema() -> Dict[str, Any]:
         """
-        Generate the JSON schema for LearningCreationDto.
+        Generate the JSON schema for LearningCreationDLO.
         """
-        return LearningCreationDto.json_type().json_schema()
+        return LearningCreationDLO.json_type().json_schema()
 
     @staticmethod
     def json_array_schema() -> str:
         """
-        Generate the JSON schema for an array of LearningCreationDto objects.
+        Generate the JSON schema for an array of LearningCreationDLO objects.
         """
-        learning_json_dict = LearningCreationDto.json_array_type().json_schema()
+        learning_json_dict = LearningCreationDLO.json_array_type().json_schema()
 
         return json.dumps(learning_json_dict, indent=2)

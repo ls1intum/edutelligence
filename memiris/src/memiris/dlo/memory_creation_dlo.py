@@ -5,17 +5,17 @@ from uuid import UUID
 from pydantic import BaseModel, Field, TypeAdapter
 
 
-class MemoryDto(BaseModel):
+class MemoryCreationDLO(BaseModel):
     """
-    Data transfer object for representing a memory.
-    Contains the complete representation of a memory object including its identifier and learning references.
+    Data transfer object for memory creation operations.
+    Contains the essential fields needed to create a new memory including references to learnings.
     """
 
-    id: UUID = Field(description="The unique identifier of the memory object.")
     title: str = Field(description="The title of the memory object. Should be short.")
     content: str = Field(
         description="The content of the memory object. "
         "Contains the aggregated information from the learnings connecting them to a cohesive whole."
+        "Should include all relevant information from the learnings."
     )
     learnings: List[UUID] = Field(
         description="The list of unique identifiers of learning objects that this memory object was created from."
@@ -24,29 +24,29 @@ class MemoryDto(BaseModel):
     @staticmethod
     def json_type() -> TypeAdapter:
         """
-        Generate the TypeAdapter for MemoryDto.
+        Generate the TypeAdapter for MemoryCreationDLO.
         """
-        return TypeAdapter(MemoryDto)
+        return TypeAdapter(MemoryCreationDLO)
 
     @staticmethod
     def json_array_type() -> TypeAdapter:
         """
-        Generate the TypeAdapter for an array of MemoryDto objects.
+        Generate the TypeAdapter for an array of MemoryCreationDLO objects.
         """
-        return TypeAdapter(List[MemoryDto])
+        return TypeAdapter(List[MemoryCreationDLO])
 
     @staticmethod
     def json_schema() -> Dict[str, Any]:
         """
-        Generate the JSON schema for MemoryDto.
+        Generate the JSON schema for MemoryCreationDLO.
         """
-        return MemoryDto.json_type().json_schema()
+        return MemoryCreationDLO.json_type().json_schema()
 
     @staticmethod
     def json_array_schema() -> str:
         """
-        Generate the JSON schema for an array of MemoryDto objects.
+        Generate the JSON schema for an array of MemoryCreationDLO objects.
         """
-        memory_json_dict = MemoryDto.json_array_type().json_schema()
+        memory_json_dict = MemoryCreationDLO.json_array_type().json_schema()
 
         return json.dumps(memory_json_dict, indent=2)

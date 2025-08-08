@@ -321,7 +321,7 @@ def run_rewriting_pipeline(dto: RewritingPipelineExecutionDTO):
     variant = validate_pipeline_variant(
         dto.execution.settings, RewritingPipeline
     ).lower()
-    logger.info("Rewriting pipeline started with variant: %s and dto: %s", variant, dto)
+    logger.info("Rewriting pipeline started with variant: %s and dlo: %s", variant, dto)
 
     thread = Thread(target=run_rewriting_pipeline_worker, args=(dto, variant))
     thread.start()
@@ -365,7 +365,7 @@ def run_inconsistency_check_pipeline(dto: InconsistencyCheckPipelineExecutionDTO
 def run_communication_tutor_suggestions_pipeline_worker(
     dto: CommunicationTutorSuggestionPipelineExecutionDTO, _variant: str
 ):  # pylint: disable=invalid-name
-    logger.info("Communication tutor suggestions pipeline started with dto: %s", dto)
+    logger.info("Communication tutor suggestions pipeline started with dlo: %s", dto)
     try:
         callback = TutorSuggestionCallback(
             run_id=dto.settings.authentication_token,

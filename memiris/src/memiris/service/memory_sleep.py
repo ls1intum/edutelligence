@@ -10,15 +10,15 @@ from langfuse import observe
 from langfuse._client.client import Langfuse
 from ollama import Message
 
+from memiris.dlo.memory_connection_dlo import MemoryConnectionDLO
+from memiris.dlo.memory_deduplication_dlo import MemoryDeduplicationDLO
+from memiris.dlo.memory_deduplication_input_dlo import (
+    LearningInfoDLO,
+    MemoryDeduplicationInputDLO,
+)
 from memiris.domain.learning import Learning
 from memiris.domain.memory import Memory
 from memiris.domain.memory_connection import ConnectionType, MemoryConnection
-from memiris.dto.memory_connection_dto import MemoryConnectionDto
-from memiris.dto.memory_deduplication_dto import MemoryDeduplicationDto
-from memiris.dto.memory_deduplication_input_dto import (
-    LearningInfoDto,
-    MemoryDeduplicationInputDto,
-)
 from memiris.repository.learning_repository import LearningRepository
 from memiris.repository.memory_connection_repository import MemoryConnectionRepository
 from memiris.repository.memory_repository import MemoryRepository
@@ -135,9 +135,9 @@ class MemorySleeper:
 
         # 2. Connect memories with each other
         logging.debug("Connecting memories for tenant %s", tenant)
-        connection_dtos = self._create_memory_connections(recent_memories, **kwargs)
+        connection_dlos = self._create_memory_connections(recent_memories, **kwargs)
 
-        connections = self._save_memory_connections(connection_dtos, tenant, **kwargs)
+        connections = self._save_memory_connections(connection_dlos, tenant, **kwargs)
 
         logging.debug(
             "Created %s connections for %s recent memories in tenant %s",
@@ -185,7 +185,7 @@ class MemorySleeper:
 
     @observe(name="memory-data-caching")
     def _data_caching(
-        self, duplicate_connections: List[MemoryConnectionDto], tenant: str
+        self, duplicate_connections: List[MemoryConnectionDLO], tenant: str
     ):
         all_memory_ids = set(
             memory_id
@@ -243,7 +243,7 @@ class MemorySleeper:
 
         Args:
             memory_cache: Cache of Memory objects indexed by their IDs
-            connections: List of MemoryConnectionDto objects representing connections between memories
+            connections: List of MemoryConnectionDLO objects representing connections between memories
             tenant: The tenant identifier
             **kwargs: Additional arguments to pass to the LLM
 
@@ -266,8 +266,8 @@ class MemorySleeper:
             return []
 
         # Group memories by their IDs from the processed connections
-        memory_groups: list[list[MemoryDeduplicationInputDto]] = []
-        current_group: list[MemoryDeduplicationInputDto] = []
+        memory_groups: list[list[MemoryDeduplicationInputDLO]] = []
+        current_group: list[MemoryDeduplicationInputDLO] = []
 
         for connection in duplicate_connections:
             if len(connection.memories) < 2:
@@ -277,12 +277,12 @@ class MemorySleeper:
                 continue
 
             new_group_elements = [
-                MemoryDeduplicationInputDto(
+                MemoryDeduplicationInputDLO(
                     id=memory_id,
                     title=self.memory_cache[memory_id].title,
                     content=self.memory_cache[memory_id].content,
                     learnings=[
-                        LearningInfoDto(
+                        LearningInfoDLO(
                             id=learning_id,
                             title=self.learning_cache[learning_id].title,
                             content=self.learning_cache[learning_id].content,
@@ -372,7 +372,7 @@ class MemorySleeper:
 
     @observe(name="process-memory-group-for-deduplication")
     def _process_memory_group_for_deduplication(
-        self, memory_group: List[MemoryDeduplicationInputDto], **kwargs
+        self, memory_group: List[MemoryDeduplicationInputDLO], **kwargs
     ) -> Tuple[List[Memory], List[MemoryConnection]]:
         """
         Process a group of memories for deduplication.
@@ -383,7 +383,7 @@ class MemorySleeper:
         3. Marks original memories as deleted
 
         Args:
-            memory_group: List of MemoryDeduplicationInputDto objects representing a group of memories
+            memory_group: List of MemoryDeduplicationInputDLO objects representing a group of memories
             tenant: The tenant identifier
             **kwargs: Additional arguments to pass to the LLM
 
@@ -395,8 +395,8 @@ class MemorySleeper:
             return [], []
 
         # Prepare the prompt for the LLM
-        memory_json_schema = MemoryDeduplicationDto.json_array_schema()
-        memory_input_schema = MemoryDeduplicationInputDto.json_array_schema()
+        memory_json_schema = MemoryDeduplicationDLO.json_array_schema()
+        memory_input_schema = MemoryDeduplicationInputDLO.json_array_schema()
 
         system_message = self.template_deduplication.render(
             memory_deduplication_json_schema=memory_json_schema,
@@ -407,7 +407,7 @@ class MemorySleeper:
         logging.debug("System message for LLM deduplication: %s", system_message)
 
         # Use type adapter for proper JSON serialization
-        memory_input_json = MemoryDeduplicationInputDto.json_array_type().dump_json(
+        memory_input_json = MemoryDeduplicationInputDLO.json_array_type().dump_json(
             memory_group
         )
 
@@ -424,7 +424,7 @@ class MemorySleeper:
         response = self.ollama_service.chat(
             model=self.response_llm,
             messages=messages,
-            response_format=MemoryDeduplicationDto.json_array_type().json_schema(),
+            response_format=MemoryDeduplicationDLO.json_array_type().json_schema(),
             options={"temperature": 0.05},
         )
 
@@ -441,12 +441,12 @@ class MemorySleeper:
             logging.debug("Parsing deduplicated memories from LLM response.")
 
             # Parse the deduplicated memories from the LLM response
-            memory_dtos = MemoryDeduplicationDto.json_array_type().validate_json(
+            memory_dlos = MemoryDeduplicationDLO.json_array_type().validate_json(
                 response.message.content
             )
             logging.debug(
-                "Parsed %s deduplicated memory DTOs from LLM response.",
-                len(memory_dtos),
+                "Parsed %s deduplicated memory DLOs from LLM response.",
+                len(memory_dlos),
             )
 
             # Track which memories were used in deduplication (to be deleted later)
@@ -454,34 +454,34 @@ class MemorySleeper:
             deduplicated_results = []
             created_from_connections = []
 
-            for memory_dto in memory_dtos:
+            for memory_dlo in memory_dlos:
                 # Skip if no memories are referenced (shouldn't happen)
-                if not memory_dto.memories:
+                if not memory_dlo.memories:
                     logging.warning(
-                        "Skipping memory DTO with no referenced memories: %s",
-                        memory_dto,
+                        "Skipping memory DLO with no referenced memories: %s",
+                        memory_dlo,
                     )
                     continue
 
                 # If only one memory is referenced, it wasn't deduplicated
-                if len(memory_dto.memories) == 1:
+                if len(memory_dlo.memories) == 1:
                     continue
 
                 # Multiple memories were combined - create a new consolidated memory
                 original_memories = [
-                    self.memory_cache[memory_id] for memory_id in memory_dto.memories
+                    self.memory_cache[memory_id] for memory_id in memory_dlo.memories
                 ]
 
                 logging.debug(
-                    "Found %s original memories for memory DTO: %s",
+                    "Found %s original memories for memory DLO: %s",
                     len(original_memories),
-                    memory_dto,
+                    memory_dlo,
                 )
 
                 if not original_memories:
                     logging.warning(
-                        "No valid original memories found for memory DTO: %s",
-                        memory_dto,
+                        "No valid original memories found for memory DLO: %s",
+                        memory_dlo,
                     )
                     continue
 
@@ -503,8 +503,8 @@ class MemorySleeper:
                 # Create new memory with combined information
                 new_memory = Memory(
                     uid=uuid.uuid4(),
-                    title=memory_dto.title,
-                    content=memory_dto.content,
+                    title=memory_dlo.title,
+                    content=memory_dlo.content,
                     learnings=combined_learnings,
                     slept_on=True,  # Mark as slept on since we're processing it
                 )
@@ -538,8 +538,8 @@ class MemorySleeper:
 
     @observe(name="process-memory-connections-duplication")
     def _process_connection_type_duplicate(
-        self, connections: List[MemoryConnectionDto]
-    ) -> List[MemoryConnectionDto]:
+        self, connections: List[MemoryConnectionDLO]
+    ) -> List[MemoryConnectionDLO]:
         """
         Processing for the DUPLICATE connection type.
         This method processes connections of type DUPLICATE, ensuring that
@@ -547,9 +547,9 @@ class MemorySleeper:
         """
         seen_connections: dict[UUID, list[UUID]] = {}
 
-        unique_connections: List[MemoryConnectionDto] = []
+        unique_connections: List[MemoryConnectionDLO] = []
 
-        filtered_connections: List[MemoryConnectionDto] = [
+        filtered_connections: List[MemoryConnectionDLO] = [
             connection
             for connection in connections
             if connection.connection_type == ConnectionType.DUPLICATE
@@ -605,7 +605,7 @@ class MemorySleeper:
             len(unique_connections),
         )
 
-        final_connections: List[MemoryConnectionDto] = []
+        final_connections: List[MemoryConnectionDLO] = []
 
         # Collect the seen connections into as few unique connections as possible
         for memory_id, ids in seen_connections.items():
@@ -618,7 +618,7 @@ class MemorySleeper:
                 continue
 
             # Create a new connection with the seen memories
-            new_connection = MemoryConnectionDto(
+            new_connection = MemoryConnectionDLO(
                 connection_type=ConnectionType.DUPLICATE,
                 memories=[memory_id] + ids,
                 description="Automatically deduplicated connection",
@@ -633,21 +633,21 @@ class MemorySleeper:
 
     @observe(name="process-memory-connections-other")
     def _process_other_connection_types(
-        self, connections: List[MemoryConnectionDto]
-    ) -> List[MemoryConnectionDto]:
+        self, connections: List[MemoryConnectionDLO]
+    ) -> List[MemoryConnectionDLO]:
         """
         Process other connection types (RELATED, CONTRADICTS, SAME_TOPIC).
         This method processes connections of types other than DUPLICATE.
         """
 
-        filtered_connections: List[MemoryConnectionDto] = [
+        filtered_connections: List[MemoryConnectionDLO] = [
             connection
             for connection in connections
             if connection.connection_type != ConnectionType.DUPLICATE
         ]
 
         # Turn all connections into 2 memory connections
-        processed_connections: List[MemoryConnectionDto] = []
+        processed_connections: List[MemoryConnectionDLO] = []
         for connection in filtered_connections:
             if len(connection.memories) < 2:
                 logging.warning(
@@ -658,7 +658,7 @@ class MemorySleeper:
             # Create a connection for each pair of memories
             for i in range(len(connection.memories)):
                 for j in range(i + 1, len(connection.memories)):
-                    new_connection = MemoryConnectionDto(
+                    new_connection = MemoryConnectionDLO(
                         connection_type=connection.connection_type,
                         memories=[
                             connection.memories[i],
@@ -671,10 +671,10 @@ class MemorySleeper:
 
         # Remove duplicates from the processed connections
         seen_connections: set[Tuple[UUID, UUID]] = set()
-        unique_connections: List[MemoryConnectionDto] = []
+        unique_connections: List[MemoryConnectionDLO] = []
 
         # Sort by weight
-        sorted_connections: List[MemoryConnectionDto] = sorted(
+        sorted_connections: List[MemoryConnectionDLO] = sorted(
             processed_connections,
             key=lambda x: x.weight or 0.5,
             reverse=True,
@@ -714,25 +714,25 @@ class MemorySleeper:
 
     @observe(name="process-memory-group-for-connecting")
     def _process_memory_group_for_connecting(
-        self, memory_group: List[MemoryDeduplicationInputDto], **kwargs
-    ) -> List[MemoryConnectionDto]:
+        self, memory_group: List[MemoryDeduplicationInputDLO], **kwargs
+    ) -> List[MemoryConnectionDLO]:
         """
         Process a group of memories to identify connections using an LLM.
 
         Args:
-            memory_group: List of MemoryDeduplicationInputDto objects representing the memory group
+            memory_group: List of MemoryDeduplicationInputDLO objects representing the memory group
             tenant: The tenant identifier
             **kwargs: Additional arguments to pass to the LLM
 
         Returns:
-            List of MemoryConnectionDto objects representing the identified connections
+            List of MemoryConnectionDLO objects representing the identified connections
         """
         if not memory_group or len(memory_group) < 2:
             logging.warning("Not enough memories in group to process connections.")
             return []
 
         # Prepare the prompt for the LLM
-        memory_connection_json_schema = MemoryConnectionDto.json_array_schema()
+        memory_connection_json_schema = MemoryConnectionDLO.json_array_schema()
 
         system_message = self.template_connector.render(
             memory_connection_json_schema=memory_connection_json_schema,
@@ -745,7 +745,7 @@ class MemorySleeper:
         )
 
         # Use type adapter for proper JSON serialization
-        memory_input_json = MemoryDeduplicationInputDto.json_array_type().dump_json(
+        memory_input_json = MemoryDeduplicationInputDLO.json_array_type().dump_json(
             memory_group
         )
 
@@ -760,7 +760,7 @@ class MemorySleeper:
         response = self.ollama_service.chat(
             model=self.response_llm,
             messages=messages,
-            response_format=MemoryConnectionDto.json_array_type().json_schema(),
+            response_format=MemoryConnectionDLO.json_array_type().json_schema(),
             options={"temperature": 0.05},
         )
 
@@ -778,16 +778,16 @@ class MemorySleeper:
             logging.debug("Parsing memory connections from LLM response.")
 
             # Parse the connections from the LLM response
-            connection_dtos = MemoryConnectionDto.json_array_type().validate_json(
+            connection_dlos = MemoryConnectionDLO.json_array_type().validate_json(
                 response.message.content
             )
 
             logging.debug(
-                "Parsed %s memory connection DTOs from LLM response.",
-                len(connection_dtos),
+                "Parsed %s memory connection DLOs from LLM response.",
+                len(connection_dlos),
             )
 
-            return connection_dtos
+            return connection_dlos
         except Exception as e:
             logging.error(
                 "Error processing memory connections: %s. Response content: %s",
@@ -799,7 +799,7 @@ class MemorySleeper:
     @observe(name="connect-memories")
     def _create_memory_connections(
         self, memories: List[Memory], **kwargs
-    ) -> List[MemoryConnectionDto]:
+    ) -> List[MemoryConnectionDLO]:
         """
         Connect memories with each other using an LLM.
 
@@ -823,10 +823,10 @@ class MemorySleeper:
             return []
 
         # Prepare memory data for LLM processing
-        memory_input_dtos = []
+        memory_input_dlos = []
         valid_memories = []
 
-        logging.debug("Converting memories to input DTOs for connection analysis.")
+        logging.debug("Converting memories to input DLOs for connection analysis.")
 
         for memory in memories:
             if not memory.id:
@@ -835,31 +835,31 @@ class MemorySleeper:
 
             valid_memories.append(memory)
 
-            # Create the input DTO for this memory (simplified for connection identification)
-            memory_input_dto = MemoryDeduplicationInputDto(
+            # Create the input DLO for this memory (simplified for connection identification)
+            memory_input_dlo = MemoryDeduplicationInputDLO(
                 id=memory.id,
                 title=memory.title,
                 content=memory.content,
                 learnings=[],  # We don't need detailed learning info for connections
             )
 
-            memory_input_dtos.append(memory_input_dto)
+            memory_input_dlos.append(memory_input_dlo)
 
         # If insufficient valid memories, return original list
-        if len(memory_input_dtos) < 2:
+        if len(memory_input_dlos) < 2:
             logging.warning(
                 "Not enough valid memories with IDs for connection analysis."
             )
             return []
 
         logging.debug(
-            "Converted %s valid memories to %s input DTOs for connection analysis.",
+            "Converted %s valid memories to %s input DLOs for connection analysis.",
             len(valid_memories),
-            len(memory_input_dtos),
+            len(memory_input_dlos),
         )
 
         memory_groups = greedy_cover_max_groups(
-            memory_input_dtos, self.group_size, self.max_groups
+            memory_input_dlos, self.group_size, self.max_groups
         )
 
         with ThreadPoolExecutor(max_workers=self.max_threads) as executor:
@@ -874,7 +874,7 @@ class MemorySleeper:
                 for group in memory_groups
             }
 
-            all_connections: list[MemoryConnectionDto] = []
+            all_connections: list[MemoryConnectionDLO] = []
 
             for future in as_completed(futures):
                 try:
@@ -916,31 +916,31 @@ class MemorySleeper:
 
     @observe(name="save-memory-connections")
     def _save_memory_connections(
-        self, connection_dtos: List[MemoryConnectionDto], tenant: str
+        self, connection_dlos: List[MemoryConnectionDLO], tenant: str
     ) -> List[MemoryConnection]:
         try:
             logging.debug("Parsing memory connections from LLM response.")
-            # Create memory connections from DTOs
+            # Create memory connections from DLOs
             connections = []
 
-            for connection_dto in connection_dtos:
-                if len(connection_dto.memories) < 2:
+            for connection_dlo in connection_dlos:
+                if len(connection_dlo.memories) < 2:
                     logging.warning(
-                        "Skipping connection DTO with less than 2 memories: %s",
-                        connection_dto,
+                        "Skipping connection DLO with less than 2 memories: %s",
+                        connection_dlo,
                     )
                     continue
 
                 try:
-                    connection_type = ConnectionType(connection_dto.connection_type)
+                    connection_type = ConnectionType(connection_dlo.connection_type)
                 except ValueError:
                     connection_type = ConnectionType.RELATED
 
                 connection = MemoryConnection(
                     connection_type=connection_type,
-                    memories=connection_dto.memories,
-                    description=connection_dto.description,
-                    weight=connection_dto.weight or 0.5,
+                    memories=connection_dlo.memories,
+                    description=connection_dlo.description,
+                    weight=connection_dlo.weight or 0.5,
                 )
 
                 logging.debug(
