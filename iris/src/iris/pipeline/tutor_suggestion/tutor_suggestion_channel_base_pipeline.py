@@ -30,6 +30,7 @@ from iris.pipeline.prompts.tutor_suggestion.suggestion_prompts import (
     programming_exercise_prompt,
     text_exercise_prompt,
 )
+from iris.pipeline.sub_pipeline import SubPipeline
 from iris.pipeline.tutor_suggestion.tutor_suggestion_user_query_pipeline import (
     TutorSuggestionUserQueryPipeline,
 )
@@ -38,7 +39,7 @@ from iris.web.status.status_update import TutorSuggestionCallback
 logger = logging.getLogger(__name__)
 
 
-class TutorSuggestionChannelBasePipeline(Pipeline):
+class TutorSuggestionChannelBasePipeline(SubPipeline):
     """
     Base class for tutor suggestion channel pipelines.
     """

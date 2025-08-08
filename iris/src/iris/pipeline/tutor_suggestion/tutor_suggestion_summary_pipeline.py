@@ -19,12 +19,13 @@ from iris.llm import CompletionArguments, ModelVersionRequestHandler
 from iris.llm.langchain import IrisLangchainChatModel
 from iris.pipeline import Pipeline
 from iris.pipeline.prompts.tutor_suggestion.helper_prompts import post_summary_prompt
+from iris.pipeline.sub_pipeline import SubPipeline
 from iris.web.status.status_update import TutorSuggestionCallback
 
 logger = logging.getLogger(__name__)
 
 
-class TutorSuggestionSummaryPipeline(Pipeline):
+class TutorSuggestionSummaryPipeline(SubPipeline):
     """
     The TutorSuggestionSummaryPipeline creates a summary of the post
     when called it uses the post received as an argument to create a summary based on the conversation.

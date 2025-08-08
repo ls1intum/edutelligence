@@ -27,12 +27,13 @@ from iris.pipeline.prompts.tutor_suggestion.tutor_query_prompts import (
     programming_exercise_query_prompt,
     text_exercise_query_prompt,
 )
+from iris.pipeline.sub_pipeline import SubPipeline
 from iris.web.status.status_update import TutorSuggestionCallback
 
 logger = logging.getLogger(__name__)
 
 
-class TutorSuggestionUserQueryPipeline(Pipeline):
+class TutorSuggestionUserQueryPipeline(SubPipeline):
     """
     The TutorSuggestionUserQueryPipeline processes user queries in various educational contexts.
     It generates answers based on the chat summary, chat history, and relevant DTOs (text exercise, programming
