@@ -10,18 +10,13 @@ from iris.common.memiris_setup import MemirisWrapper
 from iris.common.message_converters import convert_iris_message_to_langchain_message
 from iris.common.pyris_message import IrisMessageRole, PyrisMessage
 from iris.domain.data.text_message_content_dto import TextMessageContentDTO
+from iris.domain.variant.abstract_variant import AbstractAgentVariant
 from iris.pipeline.shared.utils import generate_structured_tools_from_functions
 from iris.vector_database.database import VectorDatabase
 from iris.web.status.status_update import StatusCallback
 
 DTO = TypeVar("DTO")
-
-
-class AbstractVariant(ABC):
-    """Marker base class for pipeline variants."""
-
-
-VARIANT = TypeVar("VARIANT", bound=AbstractVariant)
+VARIANT = TypeVar("VARIANT", bound=AbstractAgentVariant)
 
 
 class AgentPipelineExecutionState(Generic[DTO, VARIANT]):
@@ -66,13 +61,13 @@ class AbstractAgentPipeline(ABC, Generic[DTO]):
 
     @abstractmethod
     def is_memiris_memory_creation_enabled(
-        self, state: "AgentPipelineExecutionState[DTO, VARIANT]"
+        self, state: AgentPipelineExecutionState[DTO, VARIANT]
     ) -> bool:
         """Return True if background memory creation should be enabled for this run."""
 
     @abstractmethod
     def get_tools(
-        self, state: "AgentPipelineExecutionState[DTO, VARIANT]"
+        self, state: AgentPipelineExecutionState[DTO, VARIANT]
     ) -> list[Callable]:
         """
         Get the tools available for the agent pipeline.
@@ -83,18 +78,18 @@ class AbstractAgentPipeline(ABC, Generic[DTO]):
         raise NotImplementedError("This method should be implemented by subclasses.")
 
     @abstractmethod
-    def create_llm(self, state: "AgentPipelineExecutionState[DTO, VARIANT]") -> Any:
+    def create_llm(self, state: AgentPipelineExecutionState[DTO, VARIANT]) -> Any:
         """Return the LLM to be used for this pipeline run."""
 
     @abstractmethod
     def build_system_message(
-        self, state: "AgentPipelineExecutionState[DTO, VARIANT]"
+        self, state: AgentPipelineExecutionState[DTO, VARIANT]
     ) -> str:
         """Return a ChatPromptTemplate containing only messages before chat history."""
 
     @abstractmethod
     def get_agent_params(
-        self, state: "AgentPipelineExecutionState[DTO, VARIANT]"
+        self, state: AgentPipelineExecutionState[DTO, VARIANT]
     ) -> dict[str, Any]:
         """Return the parameter dict passed to the agent executor."""
 
@@ -107,7 +102,7 @@ class AbstractAgentPipeline(ABC, Generic[DTO]):
     # ========================================
 
     def get_text_of_latest_user_message(
-        self, state: "AgentPipelineExecutionState[DTO, VARIANT]"
+        self, state: AgentPipelineExecutionState[DTO, VARIANT]
     ) -> str:
         """
         Extract the latest user's text input from chat history.
@@ -127,7 +122,7 @@ class AbstractAgentPipeline(ABC, Generic[DTO]):
         return ""
 
     def get_history_limit(
-        self, state: "AgentPipelineExecutionState[DTO, VARIANT]"
+        self, state: AgentPipelineExecutionState[DTO, VARIANT]
     ) -> int:
         """
         Return how many of the most recent messages should be considered as history.
@@ -135,9 +130,9 @@ class AbstractAgentPipeline(ABC, Generic[DTO]):
         """
         return 15
 
-    def get_recent_history_from_DTO(
+    def get_recent_history_from_dto(
         self,
-        state: "AgentPipelineExecutionState[DTO, VARIANT]",
+        state: AgentPipelineExecutionState[DTO, VARIANT],
         limit: int | None = None,
     ) -> list[PyrisMessage]:
         """
@@ -149,7 +144,7 @@ class AbstractAgentPipeline(ABC, Generic[DTO]):
         return chat_history[-effective_limit:] if chat_history else []
 
     def get_latest_user_message(
-        self, state: "AgentPipelineExecutionState[DTO, VARIANT]"
+        self, state: AgentPipelineExecutionState[DTO, VARIANT]
     ) -> Optional[PyrisMessage]:
         """
         Return the most recent message sent by the USER, or None if not found.
@@ -159,7 +154,7 @@ class AbstractAgentPipeline(ABC, Generic[DTO]):
                 return message
         return None
 
-    def execute_agent(self, state: "AgentPipelineExecutionState[DTO, VARIANT]") -> str:
+    def execute_agent(self, state: AgentPipelineExecutionState[DTO, VARIANT]) -> str:
         """
         Default agent execution: create LLM, prompt, tools and run the agent loop.
 
@@ -171,7 +166,9 @@ class AbstractAgentPipeline(ABC, Generic[DTO]):
 
         # Create and run agent
         agent_executor, _ = self._create_agent_executor(
-            llm=state.llm, prompt=state.prompt, tool_functions=state.tools
+            llm=state.variant.agent_model,
+            prompt=state.prompt,
+            tool_functions=state.tools,
         )
         output = self._run_agent_iterations(
             state=state, agent_executor=agent_executor, params=params
@@ -179,7 +176,7 @@ class AbstractAgentPipeline(ABC, Generic[DTO]):
         return output or ""
 
     def assemble_prompt_with_history(
-        self, state: "AgentPipelineExecutionState[DTO, VARIANT]", system_prompt: str
+        self, state: AgentPipelineExecutionState[DTO, VARIANT], system_prompt: str
     ) -> ChatPromptTemplate:
         """
         Combine the prefix prompt with converted chat history and add the agent scratchpad.
@@ -285,10 +282,9 @@ class AbstractAgentPipeline(ABC, Generic[DTO]):
         )
 
         # 1. Prepare message history, user query, LLM, prompt and tools
-        state.message_history = self.get_recent_history_from_DTO(state)
+        state.message_history = self.get_recent_history_from_dto(state)
         user_query = self.get_text_of_latest_user_message(state)
 
-        state.llm = self.create_llm(state)  # TODO: Move up? Variantensystem
         system_message = self.build_system_message(state)
         state.prompt = self.assemble_prompt_with_history(
             state=state, system_prompt=system_message
