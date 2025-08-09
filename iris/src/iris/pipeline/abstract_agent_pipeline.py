@@ -11,6 +11,8 @@ from iris.common.message_converters import convert_iris_message_to_langchain_mes
 from iris.common.pyris_message import IrisMessageRole, PyrisMessage
 from iris.domain.data.text_message_content_dto import TextMessageContentDTO
 from iris.domain.variant.abstract_variant import AbstractAgentVariant
+from iris.llm import CompletionArguments, ModelVersionRequestHandler
+from iris.llm.langchain import IrisLangchainChatModel
 from iris.pipeline import Pipeline
 from iris.pipeline.shared.utils import generate_structured_tools_from_functions
 from iris.vector_database.database import VectorDatabase
@@ -40,7 +42,7 @@ class AgentPipelineExecutionState(Generic[DTO, VARIANT]):
     prompt: ChatPromptTemplate | None
 
 
-class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO]):
+class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
     """
     Abstract base class for agent pipelines.
 
@@ -78,10 +80,6 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO]):
             list: A list of tools available for the agent pipeline.
         """
         raise NotImplementedError("This method should be implemented by subclasses.")
-
-    @abstractmethod
-    def create_llm(self, state: AgentPipelineExecutionState[DTO, VARIANT]) -> Any:
-        """Return the LLM to be used for this pipeline run."""
 
     @abstractmethod
     def build_system_message(
@@ -123,7 +121,7 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO]):
             return latest_user.contents[0].text_content
         return ""
 
-    def get_history_limit(
+    def get_history_limit(  # pylint: disable=unused-argument
         self, state: AgentPipelineExecutionState[DTO, VARIANT]
     ) -> int:
         """
@@ -158,17 +156,17 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO]):
 
     def execute_agent(self, state: AgentPipelineExecutionState[DTO, VARIANT]) -> str:
         """
-        Default agent execution: create LLM, prompt, tools and run the agent loop.
+        Default agent execution: uses the LLM from state, prompt, tools and runs the agent loop.
 
-        Subclasses customize behavior by implementing create_llm, build_prompt,
-        get_tools and get_agent_params, and using on_agent_step/post_agent_hook hooks.
+        Subclasses customize behavior by implementing get_tools, build_system_message,
+        get_agent_params, and using on_agent_step/post_agent_hook hooks.
         """
 
         params = self.get_agent_params(state)
 
-        # Create and run agent
+        # Create and run agent using the LLM from state
         agent_executor, _ = self._create_agent_executor(
-            llm=state.variant.agent_model,
+            llm=state.llm,
             prompt=state.prompt,
             tool_functions=state.tools,
         )
@@ -197,7 +195,9 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO]):
         )
         return ChatPromptTemplate.from_messages(combined)
 
-    def pre_agent_hook(self, state: AgentPipelineExecutionState[DTO, VARIANT]) -> None:
+    def pre_agent_hook(
+        self, state: AgentPipelineExecutionState[DTO, VARIANT]
+    ) -> None:  # pylint: disable=unused-argument
         """
         Optional hook to run before the agent processes the DTO.
         This can be overridden by subclasses if needed.
@@ -211,7 +211,7 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO]):
         """
         return state.result
 
-    def on_agent_step(
+    def on_agent_step(  # pylint: disable=unused-argument
         self, state: AgentPipelineExecutionState[DTO, VARIANT], step: dict[str, Any]
     ) -> None:
         """
@@ -279,6 +279,8 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO]):
         state.message_history = []
         state.tools = []
         state.result = ""
+        state.llm = None
+        state.prompt = None
         state.memiris_wrapper = MemirisWrapper(
             state.db.client, self.get_memiris_tenant(state.dto)
         )
@@ -286,6 +288,15 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO]):
         # 1. Prepare message history, user query, LLM, prompt and tools
         state.message_history = self.get_recent_history_from_dto(state)
         user_query = self.get_text_of_latest_user_message(state)
+
+        # Create LLM from variant's agent_model
+        completion_args = CompletionArguments(temperature=0.5, max_tokens=2000)
+        state.llm = IrisLangchainChatModel(
+            request_handler=ModelVersionRequestHandler(
+                version=state.variant.agent_model
+            ),
+            completion_args=completion_args,
+        )
 
         system_message = self.build_system_message(state)
         state.prompt = self.assemble_prompt_with_history(
