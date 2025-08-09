@@ -2,18 +2,18 @@ import { useEffect, useState } from "react";
 import { v4 as uuidv4 } from "uuid";
 import { downloadJSONFile } from "@/helpers/download";
 import { twMerge } from "tailwind-merge";
-import MetricsForm from "@/components/view_mode/evaluation_mode/expert_evaluation/metrics_form";
+import MetricsForm from "@/components/view_mode/expert_evaluation/metrics_form";
 import { ExpertEvaluationConfig } from "@/model/expert_evaluation_config";
 import EvaluationConfigSelector from "@/components/selectors/evaluation_config_selector";
 import {
   EvaluationManagementExportImport
-} from "@/components/view_mode/evaluation_mode/expert_evaluation/evaluation_management_export_import";
+} from "@/components/view_mode/expert_evaluation/evaluation_management_export_import";
 import {
   fetchAllExpertEvaluationConfigs,
   saveExpertEvaluationConfig as externalSaveExpertEvaluationConfig
 } from "@/hooks/playground/expert_evaluation_config";
-import ExpertLinks from "@/components/view_mode/evaluation_mode/expert_evaluation/expert_links";
-import ExerciseImport from "@/components/view_mode/evaluation_mode/expert_evaluation/exercise_import";
+import ExpertLinks from "@/components/view_mode/expert_evaluation/expert_links";
+import ExerciseImport from "@/components/view_mode/expert_evaluation/exercise_import";
 import useDownloadExpertEvaluationData from "@/hooks/playground/expert_evaluation";
 
 const createNewEvaluationConfig = (name = ""): ExpertEvaluationConfig => ({
