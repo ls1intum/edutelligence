@@ -23,7 +23,7 @@ services:
     environment:
       - LLM_CONFIG_PATH=/app/llm_config.nebula.yml
     volumes:
-      - ../llm_config.nebula.yml:/app/llm_config.nebula.yml:ro
+      -/opt/llm_config.nebula.yml:/app/llm_config.nebula.yml:ro
     restart: unless-stopped
 
   envoy:
