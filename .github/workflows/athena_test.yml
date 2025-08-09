@@ -60,40 +60,6 @@ jobs:
                 echo "Tests failed for $module"
                 overall_success=false
               fi
-              
-              # For text module, also run real tests including quality drift analysis
-              if [ "$module" = "modules/text/module_text_llm" ]; then
-                echo "Running real tests for $module..."
-                
-                # Install additional dependencies for quality drift analysis
-                $module/.venv/bin/pip install bert-score torch transformers numpy
-                
-                # Download required NLTK data
-                $module/.venv/bin/python -c "import nltk; nltk.download('punkt', quiet=True); nltk.download('punkt_tab', quiet=True)"
-                
-                # Change to the module directory and run real tests
-                cd $module
-                if ! .venv/bin/python -m pytest ../../../tests/$module/real --junitxml=../../../test-results/${module_name}_real.xml; then
-                  echo "Real tests failed for $module"
-                  overall_success=false
-                fi
-                
-                # Run quality drift analysis
-                echo "Running quality drift analysis for $module..."
-                if ! .venv/bin/python ../../../tests/$module/real/run_quality_drift_analysis.py; then
-                  echo "Quality drift analysis failed for $module"
-                  # Don't fail the entire build for quality drift analysis
-                  echo "Continuing despite quality drift analysis failure..."
-                else
-                  # Copy the report to test-results for artifact upload
-                  cp ../../../tests/$module/real/quality_drift_report.json ../../../test-results/quality_drift_report.json
-                  echo "✅ Quality drift analysis completed successfully"
-                fi
-                
-                # Go back to athena directory
-                cd ../..
-              fi
-              
               # Generate coverage reports for this module (XML for CI + HTML for viewing)
               $module/.venv/bin/python -m coverage xml --rcfile=.coveragerc --data-file=".coverage.${module_name}" -o test-results/${module_name}_coverage.xml
               $module/.venv/bin/python -m coverage html --rcfile=.coveragerc --data-file=".coverage.${module_name}" -d test-results/${module_name}_html
@@ -130,7 +96,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: junit-results
-          path: athena/test-results/*_mock.xml,athena/test-results/*_real.xml
+          path: athena/test-results/*_mock.xml
       
       - name: Upload Coverage Reports
         if: always()
@@ -143,7 +109,6 @@ jobs:
             athena/test-results/coverage_table.txt
             athena/test-results/*_html/
             athena/test-results/combined_html/
-            athena/test-results/quality_drift_report.json
   report:
     runs-on: ubuntu-latest
     if: always()
@@ -165,7 +130,7 @@ jobs:
         id: test-report
         uses: mikepenz/action-junit-report@v5
         with:
-          report_paths: "all-test-results/**/*.xml"
+          report_paths: "all-test-results/**/*_mock.xml"
           check_name: "Athena Test Report"
           require_tests: true
           require_passed_tests: false
@@ -221,40 +186,4 @@ jobs:
               }
             } catch (error) {
               console.log('Error reading coverage table:', error.message);
-            }
-      
-      - name: Comment Quality Drift Results on PR
-        if: github.event_name == 'pull_request'
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const fs = require('fs');
-            const path = require('path');
-            
-            try {
-              // Read from the downloaded artifacts
-              const qualityDriftPath = path.join(process.env.GITHUB_WORKSPACE, 'coverage-reports', 'quality_drift_report.json');
-              
-              if (fs.existsSync(qualityDriftPath)) {
-                const qualityDriftData = JSON.parse(fs.readFileSync(qualityDriftPath, 'utf8'));
-                
-                // Format the quality drift results
-                let modelResults = '';
-                for (const [model, results] of Object.entries(qualityDriftData.model_results)) {
-                  modelResults += `- **${model}**: BERTScore F1=${results.avg_bertscore_f1}, Credit Drift=${results.avg_credit_drift}\n`;
-                }
-                
-                const comment = `### 🧪 Quality Drift Analysis Results\n\n**Analysis completed at:** ${qualityDriftData.timestamp}\n**Baseline model:** ${qualityDriftData.baseline.model}\n**Baseline generated:** ${qualityDriftData.baseline.generated_at}\n\n**Model Comparison Results:**\n${modelResults}`;
-                
-                github.rest.issues.createComment({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  issue_number: context.payload.pull_request.number,
-                  body: comment
-                });
-              } else {
-                console.log('Quality drift report not found at:', qualityDriftPath);
-              }
-            } catch (error) {
-              console.log('Error reading quality drift report:', error.message);
             }

@@ -1,21 +1,94 @@
 {
-  "timestamp": "2025-08-08 15:36:34",
-  "baseline": {
-    "model": "azure_openai_gpt-4o",
-    "generated_at": "2025-08-08T14:49:07.282605"
-  },
-  "model_results": {
-    "gpt-4o": {
-      "avg_bertscore_f1": 0.89,
-      "avg_credit_drift": 2.17
+  "exercises": {
+    "6770": {
+      "timestamp": "2025-08-09 21:00:22",
+      "exercise_id": 6770,
+      "exercise_file": "exercise-6770.json",
+      "baseline": {
+        "model": "azure_openai_gpt-4o",
+        "generated_at": "2025-08-09T20:46:34.056237"
+      },
+      "thresholds": {
+        "min_bertscore_f1": 0.8,
+        "max_avg_credit_drift": 3.0
+      },
+      "model_results": {
+        "gpt-4o": {
+          "avg_bertscore_f1": 0.886,
+          "avg_credit_drift": 1.08,
+          "passed": true
+        },
+        "gpt-4-turbo": {
+          "avg_bertscore_f1": 0.872,
+          "avg_credit_drift": 1.62,
+          "passed": true
+        },
+        "gpt-35-turbo": {
+          "avg_bertscore_f1": 0.866,
+          "avg_credit_drift": 2.33,
+          "passed": true
+        }
+      }
     },
-    "gpt-4-turbo": {
-      "avg_bertscore_f1": 0.875,
-      "avg_credit_drift": 2.46
+    "6715": {
+      "timestamp": "2025-08-09 20:55:52",
+      "exercise_id": 6715,
+      "exercise_file": "exercise-6715.json",
+      "baseline": {
+        "model": "azure_openai_gpt-4o",
+        "generated_at": "2025-08-09T20:48:16.332303"
+      },
+      "thresholds": {
+        "min_bertscore_f1": 0.8,
+        "max_avg_credit_drift": 3.0
+      },
+      "model_results": {
+        "gpt-4o": {
+          "avg_bertscore_f1": 0.909,
+          "avg_credit_drift": 0.33,
+          "passed": true
+        },
+        "gpt-4-turbo": {
+          "avg_bertscore_f1": 0.91,
+          "avg_credit_drift": 0.12,
+          "passed": true
+        },
+        "gpt-35-turbo": {
+          "avg_bertscore_f1": 0.898,
+          "avg_credit_drift": 0.62,
+          "passed": true
+        }
+      }
     },
-    "gpt-35-turbo": {
-      "avg_bertscore_f1": 0.869,
-      "avg_credit_drift": 2.23
+    "7": {
+      "timestamp": "2025-08-09 20:58:29",
+      "exercise_id": 7,
+      "exercise_file": "exercise-7.json",
+      "baseline": {
+        "model": "azure_openai_gpt-4o",
+        "generated_at": "2025-08-08T14:49:07.282605"
+      },
+      "thresholds": {
+        "min_bertscore_f1": 0.8,
+        "max_avg_credit_drift": 3.0
+      },
+      "model_results": {
+        "gpt-4o": {
+          "avg_bertscore_f1": 0.887,
+          "avg_credit_drift": 1.82,
+          "passed": true
+        },
+        "gpt-4-turbo": {
+          "avg_bertscore_f1": 0.868,
+          "avg_credit_drift": 2.21,
+          "passed": true
+        },
+        "gpt-35-turbo": {
+          "avg_bertscore_f1": 0.871,
+          "avg_credit_drift": 1.8,
+          "passed": true
+        }
+      }
     }
   }
 }
