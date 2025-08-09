@@ -2,6 +2,7 @@ import base64
 import os
 import tempfile
 import threading
+import traceback
 from asyncio.log import logger
 from typing import List, Optional
 
@@ -182,6 +183,7 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
             return self.course_language, self.tokens
         except Exception as e:
             logger.error("Error updating lecture unit: %s", e)
+            traceback.print_exc()
             self.callback.error(
                 f"Failed to ingest lectures into the database: {e}",
                 exception=e,
@@ -231,6 +233,7 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
                         batch.add_object(properties=chunk, vector=embed_chunk)
                 except Exception as e:
                     logger.error("Error updating lecture unit: %s", e)
+                    traceback.print_exc()
                     self.callback.error(
                         f"Failed to ingest lectures into the database: {e}",
                         exception=e,
