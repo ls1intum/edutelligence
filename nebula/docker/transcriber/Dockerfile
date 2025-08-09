@@ -23,7 +23,6 @@ RUN poetry install --only main --no-root
 
 # Copy source code and config files
 COPY src/nebula ./src/nebula
-COPY llm_config.nebula.yml .
 
 # Set PYTHONPATH so Python can find src/nebula
 ENV PYTHONPATH=/app/src
