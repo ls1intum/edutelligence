@@ -156,7 +156,7 @@ def run_course_chat_pipeline_worker(dto, variant_id, event):
                 break
         else:
             raise ValueError(f"Unknown variant: {variant_id}")
-        pipeline = CourseChatPipeline(callback=callback, variant=variant, event=event)
+        pipeline = CourseChatPipeline(event=event)
     except Exception as e:
         logger.error("Error preparing exercise chat pipeline: %s", e)
         logger.error(traceback.format_exc())
@@ -164,7 +164,7 @@ def run_course_chat_pipeline_worker(dto, variant_id, event):
         return
 
     try:
-        pipeline(dto=dto)
+        pipeline(dto=dto,callback=callback, variant=variant)
     except Exception as e:
         logger.error("Error running exercise chat pipeline: %s", e)
         logger.error(traceback.format_exc())
