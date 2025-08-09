@@ -109,7 +109,7 @@ class OllamaModel(
     api_key: Optional[str] = None
     _client: Client
 
-    def model_post_init(self, __context: Any) -> None:
+    def model_post_init(self, context) -> None:  # pylint: disable=unused-argument
         self._client = Client()
 
         # Use custom HTTP transport to speed up request performance and avoid default retry/backoff behavior

@@ -21,18 +21,18 @@ from iris.domain.communication.communication_tutor_suggestion_pipeline_execution
 )
 from iris.llm import CompletionArguments, ModelVersionRequestHandler
 from iris.llm.langchain import IrisLangchainChatModel
-from iris.pipeline import Pipeline
 from iris.pipeline.prompts.tutor_suggestion.tutor_query_prompts import (
     lecture_query_prompt,
     programming_exercise_query_prompt,
     text_exercise_query_prompt,
 )
+from iris.pipeline.sub_pipeline import SubPipeline
 from iris.web.status.status_update import TutorSuggestionCallback
 
 logger = logging.getLogger(__name__)
 
 
-class TutorSuggestionUserQueryPipeline(Pipeline):
+class TutorSuggestionUserQueryPipeline(SubPipeline):
     """
     The TutorSuggestionUserQueryPipeline processes user queries in various educational contexts.
     It generates answers based on the chat summary, chat history, and relevant DTOs (text exercise, programming

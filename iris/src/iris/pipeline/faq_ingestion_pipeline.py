@@ -9,14 +9,13 @@ from iris.domain.ingestion.ingestion_pipeline_execution_dto import (
     FaqIngestionPipelineExecutionDto,
 )
 
-from ..domain import FeatureDTO
 from ..domain.data.faq_dto import FaqDTO
+from ..domain.variant.faq_ingestion_variant import FaqIngestionVariant
 from ..ingestion.abstract_ingestion import AbstractIngestion
 from ..llm import (
     CompletionArguments,
     ModelVersionRequestHandler,
 )
-from ..llm.external.model import LanguageModel
 from ..llm.langchain import IrisLangchainChatModel
 from ..vector_database.database import batch_update_lock
 from ..vector_database.faq_schema import FaqSchema, init_faq_schema
@@ -24,7 +23,7 @@ from ..web.status.faq_ingestion_status_callback import FaqIngestionStatus
 from . import Pipeline
 
 
-class FaqIngestionPipeline(AbstractIngestion, Pipeline):
+class FaqIngestionPipeline(AbstractIngestion, Pipeline[FaqIngestionVariant]):
     """FaqIngestionPipeline handles the ingestion of FAQs into the database.
 
     It deletes old FAQs, processes new FAQ data using the language model pipeline,
@@ -52,21 +51,20 @@ class FaqIngestionPipeline(AbstractIngestion, Pipeline):
         self.tokens = []
 
     @classmethod
-    def get_variants(cls, available_llms: List[LanguageModel]) -> List[FeatureDTO]:
+    def get_variants(cls) -> List[FaqIngestionVariant]:
         """
-        Returns available variants for the FaqIngestionPipeline based on available LLMs.
-
-        Args:
-            available_llms: List of available language models
+        Returns available variants for the FaqIngestionPipeline.
 
         Returns:
-            List of FeatureDTO objects representing available variants
+            List of FaqIngestionVariant objects representing available variants
         """
         return [
-            FeatureDTO(
-                id="default",
-                name="Default Variant",
-                description="Default FAQ ingestion variant.",
+            FaqIngestionVariant(
+                variant_id="default",
+                name="Default",
+                description="Default FAQ ingestion variant using efficient models.",
+                chat_model="gpt-4.1-mini",
+                embedding_model="text-embedding-3-small",
             )
         ]
 

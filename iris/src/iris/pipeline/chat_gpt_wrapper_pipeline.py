@@ -7,22 +7,20 @@ from langchain_core.prompts import (
 from langchain_core.runnables import Runnable
 
 from iris.common.pyris_message import IrisMessageRole, PyrisMessage
-from iris.domain import FeatureDTO
 from iris.domain.chat.exercise_chat.exercise_chat_pipeline_execution_dto import (
     ExerciseChatPipelineExecutionDTO,
 )
 from iris.domain.data.text_message_content_dto import TextMessageContentDTO
+from iris.domain.variant.chat_gpt_wrapper_variant import ChatGPTWrapperVariant
 from iris.llm import (
     CompletionArguments,
     ModelVersionRequestHandler,
 )
-from iris.llm.external.model import LanguageModel
 from iris.llm.langchain.iris_langchain_chat_model import IrisLangchainChatModel
 from iris.pipeline import Pipeline
 from iris.pipeline.prompts.chat_gpt_wrapper_prompts import (
     chat_gpt_initial_system_prompt,
 )
-from iris.pipeline.shared.utils import filter_variants_by_available_models
 from iris.web.status.status_update import ChatGPTWrapperStatusCallback
 
 logger = logging.getLogger(__name__)
@@ -54,7 +52,7 @@ def convert_chat_history_to_str(chat_history: List[PyrisMessage]) -> str:
     )
 
 
-class ChatGPTWrapperPipeline(Pipeline):
+class ChatGPTWrapperPipeline(Pipeline[ChatGPTWrapperVariant]):
     """ChatGPTWrapperPipeline executes a single-step response generation process using ChatGPT.
 
     It constructs a system prompt along with the chat history, sends the assembled prompts to a model request
@@ -125,27 +123,18 @@ class ChatGPTWrapperPipeline(Pipeline):
         self.callback.done(final_result=response.contents[0].text_content)
 
     @classmethod
-    def get_variants(cls, available_llms: List[LanguageModel]) -> List[FeatureDTO]:
+    def get_variants(cls) -> List[ChatGPTWrapperVariant]:
         """
-        Returns available variants for the ChatGPTWrapperPipeline based on available LLMs.
-
-        Args:
-            available_llms: List of available language models
+        Returns available variants for the ChatGPTWrapperPipeline.
 
         Returns:
-            List of FeatureDTO objects representing available variants
+            List of ChatGPTWrapperVariant objects representing available variants
         """
-        variant_specs = [
-            (
-                ["gpt-4.1"],
-                FeatureDTO(
-                    id="chat-gpt-wrapper",
-                    name="ChatGPT Wrapper",
-                    description="Uses ChatGPT model to respond to queries.",
-                ),
+        return [
+            ChatGPTWrapperVariant(
+                variant_id="chat-gpt-wrapper",
+                name="ChatGPT Wrapper",
+                description="Uses ChatGPT model to respond to queries.",
+                agent_model="gpt-4.1",
             )
         ]
-
-        return filter_variants_by_available_models(
-            available_llms, variant_specs, pipeline_name="ChatGPTWrapperPipeline"
-        )

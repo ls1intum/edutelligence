@@ -10,12 +10,12 @@ from langchain_core.runnables import Runnable
 
 from ...llm import ModelVersionRequestHandler
 from ...llm.langchain import IrisLangchainCompletionModel
-from ...pipeline import Pipeline
+from ..sub_pipeline import SubPipeline
 
 logger = logging.getLogger(__name__)
 
 
-class SummaryPipeline(Pipeline):
+class SummaryPipeline(SubPipeline):
     """A generic summary pipeline that can be used to summarize any text"""
 
     llm: IrisLangchainCompletionModel

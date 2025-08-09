@@ -24,6 +24,8 @@ class IrisLangchainCompletionModel(BaseLLM):
         run_manager: Optional[CallbackManagerForLLMRun] = None,
         **kwargs: Any,
     ) -> LLMResult:
+        _ = run_manager  # Unused but required by interface
+        _ = kwargs  # Unused but required by interface
         generations = []
         args = CompletionArguments(stop=stop, temperature=0.0)
         if self.max_tokens:
