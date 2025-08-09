@@ -180,7 +180,8 @@ class CourseChatPipeline(
         if state.dto.course.competencies and len(state.dto.course.competencies) > 0:
             tool_list.append(create_tool_get_competency_list(state.dto, callback))
 
-        if allow_lecture_tool and self.lecture_retriever:
+        if allow_lecture_tool:
+            self.lecture_retriever = LectureRetrieval(state.db.client)
             tool_list.append(
                 create_tool_lecture_content_retrieval(
                     self.lecture_retriever,
@@ -192,7 +193,8 @@ class CourseChatPipeline(
                 )
             )
 
-        if allow_faq_tool and self.faq_retriever:
+        if allow_faq_tool:
+            self.faq_retriever = FaqRetrieval(state.db.client)
             tool_list.append(
                 create_tool_faq_content_retrieval(
                     self.faq_retriever,
@@ -333,19 +335,6 @@ class CourseChatPipeline(
     # ========================================
     # === CAN override (optional methods) ===
     # ========================================
-
-    def pre_agent_hook(
-        self,
-        state: AgentPipelineExecutionState[
-            CourseChatPipelineExecutionDTO, CourseChatVariant
-        ],
-    ) -> None:
-        """
-        Initialize retrievers before agent execution.
-        """
-        # Initialize retrievers with the db from state
-        self.lecture_retriever = LectureRetrieval(state.db.client)
-        self.faq_retriever = FaqRetrieval(state.db.client)
 
     def post_agent_hook(
         self,
