@@ -41,7 +41,7 @@ def get_lecture_unit_ingestion_state(
     """
     db = VectorDatabase()
     decoded_base_url = unquote(base_url)
-    result = db.lectures.query.fetch_objects(
+    result = db.lecture_units.query.fetch_objects(
         filters=(
             Filter.by_property(LectureUnitSchema.BASE_URL.value).equal(decoded_base_url)
             & Filter.by_property(LectureUnitSchema.COURSE_ID.value).equal(course_id)
