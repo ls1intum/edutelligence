@@ -7,6 +7,12 @@ from modules.programming.module_programming_llm.mock.utils.mock_config import (
     create_mock_non_graded_config,
 )
 
+import module_programming_llm
+from module_programming_llm.config import GradedBasicApproachConfig, NonGradedBasicApproachConfig
+from module_programming_llm.helpers import utils
+from module_programming_llm.prompts import generate_graded_suggestions_by_file as graded_prompts
+from module_programming_llm.prompts import generate_non_graded_suggestions_by_file as non_graded_prompts
+
 
 @dataclass
 class MockFeedback:
@@ -114,3 +120,21 @@ async def test_error_handling(mock_exercise, mock_empty_submission):
 
     assert feedbacks is not None
     assert len(feedbacks) == 0
+
+
+@pytest.mark.asyncio
+async def test_real_module_config_import():
+
+    assert module_programming_llm is not None
+    
+    assert GradedBasicApproachConfig is not None
+    assert NonGradedBasicApproachConfig is not None
+    
+    assert hasattr(GradedBasicApproachConfig, '__init__')
+    assert hasattr(NonGradedBasicApproachConfig, '__init__')
+    
+    assert utils is not None
+    assert graded_prompts is not None
+    assert non_graded_prompts is not None
+    
+

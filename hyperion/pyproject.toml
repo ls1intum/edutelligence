@@ -38,6 +38,7 @@ flake8 = "7.1.2"
 mypy = "1.16.1"
 pytest = "^8.4.1"
 pytest-asyncio = "^1.0.0"
+uvicorn = {extras = ["standard"], version = "^0.34.0"}
 
 [virtualenvs]
 create = true

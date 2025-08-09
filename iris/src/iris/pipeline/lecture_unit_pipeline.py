@@ -29,12 +29,14 @@ class LectureUnitPipeline(Pipeline):
         self.llm_embedding = ModelVersionRequestHandler("text-embedding-3-small")
 
     def __call__(self, lecture_unit: LectureUnitDTO):
-        lecture_unit_segment_summaries = LectureUnitSegmentSummaryPipeline(
-            self.weaviate_client, lecture_unit
-        )()
-        lecture_unit.lecture_unit_summary = LectureUnitSummaryPipeline(
-            self.weaviate_client, lecture_unit, lecture_unit_segment_summaries
-        )()
+        lecture_unit_segment_summaries, token_unit_segment_summary = (
+            LectureUnitSegmentSummaryPipeline(self.weaviate_client, lecture_unit)()
+        )
+        lecture_unit.lecture_unit_summary, tokens_unit_summary = (
+            LectureUnitSummaryPipeline(
+                self.weaviate_client, lecture_unit, lecture_unit_segment_summaries
+            )()
+        )
 
         # Delete existing lecture unit
         self.lecture_unit_collection.data.delete_many(
@@ -65,8 +67,11 @@ class LectureUnitPipeline(Pipeline):
                     LectureUnitSchema.LECTURE_UNIT_ID.value: lecture_unit.lecture_unit_id,
                     LectureUnitSchema.LECTURE_UNIT_NAME.value: lecture_unit.lecture_unit_name,
                     LectureUnitSchema.LECTURE_UNIT_LINK.value: lecture_unit.lecture_unit_link,
+                    LectureUnitSchema.VIDEO_LINK.value: lecture_unit.video_link,
                     LectureUnitSchema.BASE_URL.value: lecture_unit.base_url,
                     LectureUnitSchema.LECTURE_UNIT_SUMMARY.value: lecture_unit.lecture_unit_summary,
                 },
                 vector=embedding,
             )
+
+        return tokens_unit_summary + token_unit_segment_summary

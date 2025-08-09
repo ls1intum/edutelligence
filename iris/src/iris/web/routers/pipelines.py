@@ -41,7 +41,9 @@ from iris.pipeline.inconsistency_check_pipeline import (
 from iris.pipeline.lecture_ingestion_pipeline import LectureUnitPageIngestionPipeline
 from iris.pipeline.rewriting_pipeline import RewritingPipeline
 from iris.pipeline.text_exercise_chat_pipeline import TextExerciseChatPipeline
-from iris.pipeline.tutor_suggestion_pipeline import TutorSuggestionPipeline
+from iris.pipeline.tutor_suggestion.tutor_suggestion_pipeline import (
+    TutorSuggestionPipeline,
+)
 from iris.web.status.status_update import (
     ChatGPTWrapperStatusCallback,
     CompetencyExtractionCallback,
@@ -321,7 +323,7 @@ def run_rewriting_pipeline(dto: RewritingPipelineExecutionDTO):
     variant = validate_pipeline_variant(
         dto.execution.settings, RewritingPipeline
     ).lower()
-    logger.info("Rewriting pipeline started with variant: %s and dto: %s", variant, dto)
+    logger.info("Rewriting pipeline started with variant: %s and dlo: %s", variant, dto)
 
     thread = Thread(target=run_rewriting_pipeline_worker, args=(dto, variant))
     thread.start()
@@ -365,14 +367,14 @@ def run_inconsistency_check_pipeline(dto: InconsistencyCheckPipelineExecutionDTO
 def run_communication_tutor_suggestions_pipeline_worker(
     dto: CommunicationTutorSuggestionPipelineExecutionDTO, _variant: str
 ):  # pylint: disable=invalid-name
-    logger.info("Communication tutor suggestions pipeline started with dto: %s", dto)
+    logger.info("Communication tutor suggestions pipeline started with dlo: %s", dto)
     try:
         callback = TutorSuggestionCallback(
             run_id=dto.settings.authentication_token,
             base_url=dto.settings.artemis_base_url,
             initial_stages=dto.initial_stages,
         )
-        pipeline = TutorSuggestionPipeline(callback=callback)
+        pipeline = TutorSuggestionPipeline(callback=callback, variant=_variant)
     except Exception as e:
         logger.error("Error preparing communication tutor suggestions pipeline: %s", e)
 
