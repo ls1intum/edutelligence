@@ -11,12 +11,13 @@ from iris.common.pyris_message import IrisMessageRole, PyrisMessage
 from iris.domain import CompetencyExtractionPipelineExecutionDTO
 from iris.domain.data.competency_dto import Competency
 from iris.domain.data.text_message_content_dto import TextMessageContentDTO
-from iris.domain.variant.competency_extraction_variant import CompetencyExtractionVariant
+from iris.domain.variant.competency_extraction_variant import (
+    CompetencyExtractionVariant,
+)
 from iris.llm import (
     CompletionArguments,
     ModelVersionRequestHandler,
 )
-from iris.llm.external.model import LanguageModel
 from iris.pipeline import Pipeline
 from iris.pipeline.prompts.competency_extraction import system_prompt
 from iris.web.status.status_update import CompetencyExtractionCallback
@@ -118,7 +119,7 @@ class CompetencyExtractionPipeline(Pipeline[CompetencyExtractionVariant]):
         """
         return [
             CompetencyExtractionVariant(
-                id="default",
+                variant_id="default",
                 name="Default",
                 description="Default competency extraction variant using GPT-4.1",
                 agent_model="gpt-4.1",

@@ -146,7 +146,7 @@ class LectureUnitDeletionPipeline(Pipeline[LectureUnitDeletionVariant]):
     def get_variants(cls) -> List[LectureUnitDeletionVariant]:
         return [
             LectureUnitDeletionVariant(
-                id="default",
+                variant_id="default",
                 name="Default",
                 description="Standard lecture unit deletion with no model requirements.",
             ),

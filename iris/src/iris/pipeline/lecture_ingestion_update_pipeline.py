@@ -8,7 +8,9 @@ from iris.domain.ingestion.ingestion_pipeline_execution_dto import (
     IngestionPipelineExecutionDto,
 )
 from iris.domain.lecture.lecture_unit_dto import LectureUnitDTO
-from iris.domain.variant.lecture_ingestion_update_variant import LectureIngestionUpdateVariant
+from iris.domain.variant.lecture_ingestion_update_variant import (
+    LectureIngestionUpdateVariant,
+)
 from iris.pipeline import Pipeline
 from iris.pipeline.lecture_ingestion_pipeline import LectureUnitPageIngestionPipeline
 from iris.pipeline.lecture_unit_pipeline import LectureUnitPipeline
@@ -106,16 +108,18 @@ class LectureIngestionUpdatePipeline(Pipeline[LectureIngestionUpdateVariant]):
         """
         return [
             LectureIngestionUpdateVariant(
-                id="default",
+                variant_id="default",
                 name="Default",
-                description="Default lecture ingestion update variant using efficient models for processing and embeddings.",
+                description="Default lecture ingestion update variant using efficient models "
+                "for processing and embeddings.",
                 chat_model="gpt-4.1-mini",
                 embedding_model="text-embedding-3-small",
             ),
             LectureIngestionUpdateVariant(
-                id="advanced",
+                variant_id="advanced",
                 name="Advanced",
-                description="Advanced lecture ingestion update variant using higher-quality models for improved accuracy.",
+                description="Advanced lecture ingestion update variant using higher-quality models "
+                "for improved accuracy.",
                 chat_model="gpt-4.1",
                 embedding_model="text-embedding-3-large",
             ),

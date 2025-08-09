@@ -2,7 +2,6 @@ from weaviate.classes.query import Filter
 
 from iris.domain.lecture.lecture_unit_dto import LectureUnitDTO
 from iris.llm import ModelVersionRequestHandler
-from iris.pipeline import Pipeline
 from iris.pipeline.lecture_unit_segment_summary_pipeline import (
     LectureUnitSegmentSummaryPipeline,
 )

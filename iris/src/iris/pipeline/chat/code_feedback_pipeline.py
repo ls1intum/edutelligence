@@ -10,21 +10,17 @@ from pydantic import BaseModel
 
 from iris.common.pipeline_enum import PipelineEnum
 from iris.common.token_usage_dto import TokenUsageDTO
-from ..sub_pipeline import SubPipeline
 
 from ...common.pyris_message import PyrisMessage
-from ...domain import FeatureDTO
 from ...domain.data.build_log_entry import BuildLogEntryDTO
 from ...domain.data.feedback_dto import FeedbackDTO
 from ...llm import (
     CompletionArguments,
     ModelVersionRequestHandler,
 )
-from ...llm.external.model import LanguageModel
 from ...llm.langchain import IrisLangchainChatModel
-from ...pipeline import Pipeline
 from ...web.status.status_update import StatusCallback
-from ..shared.utils import filter_variants_by_available_models
+from ..sub_pipeline import SubPipeline
 
 logger = logging.getLogger(__name__)
 

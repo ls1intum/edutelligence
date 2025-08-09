@@ -51,7 +51,7 @@ def create_tool_get_submission_details(
         callback.in_progress("Reading submission details...")
         if not dto.submission:
             return {
-                field: f"No {field.replace('_', ' ')} is provided"
+                field: f'No {field.replace("_", " ")} is provided'
                 for field in [
                     "submission_date",
                     "is_practice",
@@ -73,7 +73,7 @@ def create_tool_get_submission_details(
             key: (
                 str(value)
                 if value is not None
-                else f"No {key.replace('_', ' ')} is provided"
+                else f'No {key.replace("_", " ")} is provided'
             )
             for key, value in zip(keys, values)
         }

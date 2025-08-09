@@ -23,7 +23,6 @@ from iris.llm.langchain import IrisLangchainChatModel
 from iris.llm.request_handler.rerank_request_handler import (
     RerankRequestHandler,
 )
-from iris.pipeline import Pipeline
 from iris.pipeline.sub_pipeline import SubPipeline
 from iris.vector_database.lecture_unit_page_chunk_schema import (
     LectureUnitPageChunkSchema,

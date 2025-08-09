@@ -12,7 +12,7 @@ class ChatGPTWrapperVariant(AbstractAgentVariant):
         agent_model: str,
     ):
         super().__init__(
-            id=variant_id,
+            variant_id=variant_id,
             name=name,
             description=description,
             agent_model=agent_model,

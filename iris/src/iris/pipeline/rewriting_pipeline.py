@@ -25,8 +25,6 @@ from iris.pipeline.prompts.rewriting_prompts import (
 )
 from iris.web.status.status_update import RewritingCallback
 
-from ..domain import FeatureDTO
-from ..llm.external.model import LanguageModel
 from ..retrieval.faq_retrieval import FaqRetrieval
 from ..vector_database.database import VectorDatabase
 from .prompts.faq_consistency_prompt import faq_consistency_prompt
@@ -178,14 +176,14 @@ class RewritingPipeline(Pipeline[RewritingVariant]):
         """
         return [
             RewritingVariant(
-                id="faq",
+                variant_id="faq",
                 name="Default FAQ Variant",
                 description="Default FAQ rewriting variant.",
                 rewriting_model="gpt-4.1",
                 consistency_model="gpt-4.1",
             ),
             RewritingVariant(
-                id="problem_statement",
+                variant_id="problem_statement",
                 name="Default Variant",
                 description="Default Problem statement rewriting variant.",
                 rewriting_model="gpt-4.1",

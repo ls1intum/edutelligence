@@ -15,10 +15,11 @@ from weaviate import WeaviateClient
 from weaviate.classes.query import Filter
 
 from iris.common.pipeline_enum import PipelineEnum
-from iris.domain import FeatureDTO
-from iris.domain.variant.lecture_unit_page_ingestion_variant import LectureUnitPageIngestionVariant
 from iris.domain.ingestion.ingestion_pipeline_execution_dto import (
     IngestionPipelineExecutionDto,
+)
+from iris.domain.variant.lecture_unit_page_ingestion_variant import (
+    LectureUnitPageIngestionVariant,
 )
 
 from ..common.pyris_message import IrisMessageRole, PyrisMessage
@@ -30,7 +31,6 @@ from ..llm import (
     CompletionArguments,
     ModelVersionRequestHandler,
 )
-from ..llm.external.model import LanguageModel
 from ..llm.langchain import IrisLangchainChatModel
 from ..vector_database.lecture_unit_page_chunk_schema import (
     LectureUnitPageChunkSchema,
@@ -93,7 +93,9 @@ def create_page_data(
     ]
 
 
-class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline[LectureUnitPageIngestionVariant]):
+class LectureUnitPageIngestionPipeline(
+    AbstractIngestion, Pipeline[LectureUnitPageIngestionVariant]
+):
     """LectureUnitPageIngestionPipeline ingests lecture unit pages into the database by chunking lecture PDFs,
     processing the content, and updating the vector database."""
 
@@ -128,14 +130,15 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline[LectureUnitPa
         """
         return [
             LectureUnitPageIngestionVariant(
-                id="default",
+                variant_id="default",
                 name="Default",
-                description="Default lecture ingestion variant using efficient models for text processing and embeddings.",
+                description="Default lecture ingestion variant using efficient models "
+                "for text processing and embeddings.",
                 chat_model="gpt-4.1-mini",
                 embedding_model="text-embedding-3-small",
             ),
             LectureUnitPageIngestionVariant(
-                id="advanced",
+                variant_id="advanced",
                 name="Advanced",
                 description="Advanced lecture ingestion variant using higher-quality models for improved accuracy.",
                 chat_model="gpt-4.1",

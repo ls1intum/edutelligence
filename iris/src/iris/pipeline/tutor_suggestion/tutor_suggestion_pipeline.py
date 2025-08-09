@@ -16,19 +16,16 @@ from iris.common.tutor_suggestion import (
     get_channel_type,
     lecture_content_retrieval,
 )
-from iris.domain import FeatureDTO
-from iris.domain.variant.tutor_suggestion_variant import TutorSuggestionVariant
 from iris.domain.communication.communication_tutor_suggestion_pipeline_execution_dto import (
     CommunicationTutorSuggestionPipelineExecutionDTO,
 )
+from iris.domain.variant.tutor_suggestion_variant import TutorSuggestionVariant
 from iris.llm import CompletionArguments, ModelVersionRequestHandler
-from iris.llm.external.model import LanguageModel
 from iris.llm.langchain import IrisLangchainChatModel
 from iris.pipeline import Pipeline
 from iris.pipeline.prompts.tutor_suggestion.helper_prompts import (
     question_answered_prompt,
 )
-from iris.pipeline.shared.utils import filter_variants_by_available_models
 from iris.pipeline.tutor_suggestion.tutor_suggestion_channel_base_pipeline import (
     TutorSuggestionChannelBasePipeline,
 )
@@ -231,13 +228,13 @@ class TutorSuggestionPipeline(Pipeline[TutorSuggestionVariant]):
         """
         return [
             TutorSuggestionVariant(
-                id="default",
+                variant_id="default",
                 name="Default",
                 description="Default tutor suggestion variant using Gemma 3 model.",
                 agent_model=DEFAULT_VARIANT,
             ),
             TutorSuggestionVariant(
-                id="advanced",
+                variant_id="advanced",
                 name="Advanced",
                 description="Advanced tutor suggestion variant using DeepSeek R1 model.",
                 agent_model=ADVANCED_VARIANT,

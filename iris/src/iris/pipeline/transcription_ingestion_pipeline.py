@@ -21,7 +21,6 @@ from iris.llm import (
     ModelVersionRequestHandler,
 )
 from iris.llm.langchain import IrisLangchainChatModel
-from iris.pipeline import Pipeline
 from iris.pipeline.prompts.transcription_ingestion_prompts import (
     transcription_summary_prompt,
 )

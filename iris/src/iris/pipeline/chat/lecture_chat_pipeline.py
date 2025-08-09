@@ -111,14 +111,14 @@ class LectureChatPipeline(Pipeline[LectureChatVariant]):
     def get_variants(cls) -> List[LectureChatVariant]:
         return [
             LectureChatVariant(
-                id="default",
+                variant_id="default",
                 name="Default",
                 description="Uses a smaller model for faster and cost-efficient responses.",
                 agent_model="gpt-4.1-mini",
                 citation_model="gpt-4.1-nano",
             ),
             LectureChatVariant(
-                id="advanced",
+                variant_id="advanced",
                 name="Advanced",
                 description="Uses a larger chat model, balancing speed and quality.",
                 agent_model="gpt-4.1",

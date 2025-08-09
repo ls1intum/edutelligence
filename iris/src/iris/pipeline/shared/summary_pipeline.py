@@ -8,10 +8,9 @@ from langchain_core.prompts import (
 )
 from langchain_core.runnables import Runnable
 
-from ..sub_pipeline import SubPipeline
 from ...llm import ModelVersionRequestHandler
 from ...llm.langchain import IrisLangchainCompletionModel
-from ...pipeline import Pipeline
+from ..sub_pipeline import SubPipeline
 
 logger = logging.getLogger(__name__)
 

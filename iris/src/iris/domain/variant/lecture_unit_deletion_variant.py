@@ -2,14 +2,16 @@ from .abstract_variant import AbstractVariant
 
 
 class LectureUnitDeletionVariant(AbstractVariant):
+    """Variant configuration for the LectureUnitDeletionPipeline."""
+
     def __init__(
         self,
-        id: str,
+        variant_id: str,
         name: str,
         description: str,
     ):
         super().__init__(
-            id=id,
+            variant_id=variant_id,
             name=name,
             description=description,
         )

@@ -27,14 +27,12 @@ def validate_pipeline_variant(
 
     # Get all variants for the pipeline
     all_variants = pipeline_class.get_variants()
-    
     # Find the requested variant
     requested_variant = None
     for v in all_variants:
         if v.id == variant:
             requested_variant = v
             break
-    
     # Check if variant exists
     if requested_variant is None:
         available_variant_ids = [v.id for v in all_variants]
@@ -43,17 +41,15 @@ def validate_pipeline_variant(
             detail={
                 "type": "variant_not_available",
                 "errorMessage": f'Variant "{variant}" is not available. '
-                f"Available variants: {", ".join(available_variant_ids)}",
+                f'Available variants: {", ".join(available_variant_ids)}',
             },
         )
-    
     # Check if required models are available
     # For variants that have required_models method, check model availability
-    if hasattr(requested_variant, 'required_models'):
+    if hasattr(requested_variant, "required_models"):
         llm_manager = LlmManager()
         available_models = {llm.model for llm in llm_manager.entries}
         required_models = requested_variant.required_models()
-        
         missing_models = required_models - available_models
         if missing_models:
             raise HTTPException(

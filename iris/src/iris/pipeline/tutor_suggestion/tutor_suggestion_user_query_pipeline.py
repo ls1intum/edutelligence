@@ -21,7 +21,6 @@ from iris.domain.communication.communication_tutor_suggestion_pipeline_execution
 )
 from iris.llm import CompletionArguments, ModelVersionRequestHandler
 from iris.llm.langchain import IrisLangchainChatModel
-from iris.pipeline import Pipeline
 from iris.pipeline.prompts.tutor_suggestion.tutor_query_prompts import (
     lecture_query_prompt,
     programming_exercise_query_prompt,

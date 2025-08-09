@@ -2,16 +2,18 @@ from .abstract_variant import AbstractVariant
 
 
 class LectureIngestionUpdateVariant(AbstractVariant):
+    """Variant configuration for the LectureIngestionUpdatePipeline."""
+
     def __init__(
         self,
-        id: str,
+        variant_id: str,
         name: str,
         description: str,
         chat_model: str,
         embedding_model: str,
     ):
         super().__init__(
-            id=id,
+            variant_id=variant_id,
             name=name,
             description=description,
         )

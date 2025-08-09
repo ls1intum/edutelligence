@@ -12,7 +12,7 @@ class InconsistencyCheckVariant(AbstractVariant):
         solver_model: str,
     ):
         super().__init__(
-            id=variant_id,
+            variant_id=variant_id,
             name=name,
             description=description,
         )

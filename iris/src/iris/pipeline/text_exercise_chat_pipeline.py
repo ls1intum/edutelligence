@@ -51,13 +51,13 @@ class TextExerciseChatPipeline(Pipeline[TextExerciseChatVariant]):
     def get_variants(cls) -> List[TextExerciseChatVariant]:
         return [
             TextExerciseChatVariant(
-                id="default",
+                variant_id="default",
                 name="Default",
                 description="Uses a smaller model for faster and cost-efficient responses.",
                 agent_model="gpt-4.1-mini",
             ),
             TextExerciseChatVariant(
-                id="advanced",
+                variant_id="advanced",
                 name="Advanced",
                 description="Uses a larger chat model, balancing speed and quality.",
                 agent_model="gpt-4.1",

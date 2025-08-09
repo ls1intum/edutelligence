@@ -3,9 +3,7 @@ from typing import Generic, List, TypeVar
 
 from iris.common.pipeline_enum import PipelineEnum
 from iris.common.token_usage_dto import TokenUsageDTO
-from iris.domain import FeatureDTO
 from iris.domain.variant.abstract_variant import AbstractAgentVariant, AbstractVariant
-from iris.llm.external.model import LanguageModel
 
 VARIANT = TypeVar("VARIANT", bound=AbstractAgentVariant)
 

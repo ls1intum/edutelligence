@@ -24,7 +24,6 @@ from ..common.message_converters import (
 )
 from ..common.pyris_message import PyrisMessage
 from ..llm.langchain import IrisLangchainChatModel
-from ..pipeline import Pipeline
 from ..pipeline.sub_pipeline import SubPipeline
 
 logger = logging.getLogger(__name__)

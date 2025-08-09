@@ -13,7 +13,7 @@ class FaqIngestionVariant(AbstractVariant):
         embedding_model: str,
     ):
         super().__init__(
-            id=variant_id,
+            variant_id=variant_id,
             name=name,
             description=description,
         )

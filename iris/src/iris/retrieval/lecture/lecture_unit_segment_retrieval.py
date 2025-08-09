@@ -18,7 +18,6 @@ from iris.llm.request_handler.model_version_request_handler import (
 from iris.llm.request_handler.rerank_request_handler import (
     RerankRequestHandler,
 )
-from iris.pipeline import Pipeline
 from iris.pipeline.sub_pipeline import SubPipeline
 from iris.vector_database.lecture_unit_schema import (
     LectureUnitSchema,

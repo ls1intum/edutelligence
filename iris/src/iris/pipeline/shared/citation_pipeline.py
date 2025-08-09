@@ -15,7 +15,6 @@ from iris.llm import (
     ModelVersionRequestHandler,
 )
 from iris.llm.langchain import IrisLangchainChatModel
-from iris.pipeline import Pipeline
 from iris.pipeline.sub_pipeline import SubPipeline
 from iris.vector_database.faq_schema import FaqSchema
 

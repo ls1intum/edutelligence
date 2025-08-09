@@ -4,12 +4,15 @@ from ..feature_dto import FeatureDTO
 
 
 class AbstractVariant(ABC):
-    id: str
+    """Abstract base class for all variant configurations."""
+
+    variant_id: str
     name: str
     description: str
 
-    def __init__(self, id: str, name: str, description: str):
-        self.id = id
+    def __init__(self, variant_id: str, name: str, description: str):
+        self.variant_id = variant_id
+        self.id = variant_id  # Keep for backward compatibility
         self.name = name
         self.description = description
 
@@ -25,17 +28,19 @@ class AbstractVariant(ABC):
         Returns a FeatureDTO representing the agent variant.
         """
         return FeatureDTO(
-            id=self.id,
+            id=self.variant_id,
             name=self.name,
             description=self.description,
         )
 
 
 class AbstractAgentVariant(AbstractVariant):
+    """Abstract base class for agent-based variant configurations."""
+
     agent_model: str
 
-    def __init__(self, id: str, name: str, description: str, agent_model: str):
-        super().__init__(id=id, name=name, description=description)
+    def __init__(self, variant_id: str, name: str, description: str, agent_model: str):
+        super().__init__(variant_id=variant_id, name=name, description=description)
         self.agent_model = agent_model
 
     def required_models(self) -> set[str]:

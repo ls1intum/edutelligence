@@ -17,26 +17,14 @@ from ...domain.ingestion.deletion_pipeline_execution_dto import (
     FaqDeletionExecutionDto,
     LecturesDeletionExecutionDto,
 )
-from ...domain.ingestion.transcription_ingestion.transcription_ingestion_pipeline_execution_dto import (
-    TranscriptionIngestionPipelineExecutionDto,
-)
 from ...ingestion.ingestion_job_handler import IngestionJobHandler
 from ...pipeline.delete_lecture_units_pipeline import LectureUnitDeletionPipeline
 from ...pipeline.faq_ingestion_pipeline import FaqIngestionPipeline
-from ...pipeline.lecture_ingestion_pipeline import (
-    LectureUnitPageIngestionPipeline,
-)
 from ...pipeline.lecture_ingestion_update_pipeline import LectureIngestionUpdatePipeline
-from ...pipeline.transcription_ingestion_pipeline import (
-    TranscriptionIngestionPipeline,
-)
 from ...vector_database.database import VectorDatabase
 from ..status.faq_ingestion_status_callback import FaqIngestionStatus
 from ..status.lecture_deletion_status_callback import (
     LecturesDeletionStatusCallback,
-)
-from ..status.transcription_ingestion_callback import (
-    TranscriptionIngestionStatus,
 )
 
 router = APIRouter(prefix="/api/v1/webhooks", tags=["webhooks"])
@@ -163,6 +151,7 @@ def lecture_deletion_webhook(dto: LecturesDeletionExecutionDto):
 
     thread = Thread(target=run_lecture_deletion_pipeline_worker, args=(dto,))
     thread.start()
+
 
 @router.post(
     "/faqs/ingest",

@@ -6,12 +6,11 @@ from datetime import datetime
 from typing import Any, Callable, List, Optional, cast
 
 import pytz
-from jinja2 import Environment, FileSystemLoader
+from jinja2 import Environment, FileSystemLoader, select_autoescape
 from langsmith import traceable
 
 from ...common.mastery_utils import get_mastery
 from ...common.memiris_setup import get_tenant_for_user
-from ...common.pipeline_enum import PipelineEnum
 from ...common.token_usage_dto import TokenUsageDTO
 from ...common.tools import (
     create_tool_faq_content_retrieval,
@@ -87,7 +86,10 @@ class CourseChatPipeline(
         template_dir = os.path.join(
             os.path.dirname(__file__), "..", "prompts", "templates"
         )
-        self.jinja_env = Environment(loader=FileSystemLoader(template_dir))
+        self.jinja_env = Environment(
+            loader=FileSystemLoader(template_dir),
+            autoescape=select_autoescape(["html", "xml", "j2"]),
+        )
         self.system_prompt_template = self.jinja_env.get_template(
             "course_chat_system_prompt.j2"
         )
@@ -452,13 +454,12 @@ class CourseChatPipeline(
             traceback.print_exc()
             return None
 
-    def _append_tokens(self, tokens: TokenUsageDTO, pipeline: PipelineEnum) -> None:
+    def _append_tokens(self, tokens: TokenUsageDTO) -> None:
         """
         Append tokens to the token list.
 
         Args:
-            token_usage: Token usage information to append
-            pipeline: The pipeline type for token tracking
+            tokens: Token usage information to append
         """
         # Override the parent method to handle token tracking properly
         # Convert TokenUsageDTO to the list format expected by this pipeline
@@ -511,14 +512,14 @@ class CourseChatPipeline(
         """
         return [
             CourseChatVariant(
-                id="default",
+                variant_id="default",
                 name="Default",
                 description="Uses a smaller model for faster and cost-efficient responses.",
                 agent_model="gpt-4.1-mini",
                 citation_model="gpt-4.1-mini",
             ),
             CourseChatVariant(
-                id="advanced",
+                variant_id="advanced",
                 name="Advanced",
                 description="Uses a larger chat model, balancing speed and quality.",
                 agent_model="gpt-4.1",
