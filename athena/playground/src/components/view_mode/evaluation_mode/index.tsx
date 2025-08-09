@@ -6,7 +6,6 @@ import { useState } from "react";
 import DefineExperiment from "./define_experiment";
 import ConfigureModules from "./configure_modules";
 import ConductExperiment from "./conduct_experiment";
-import ComparativeEvaluationStudyManagement from "@/components/view_mode/comparative_evaluation_study/index";
 
 export default function EvaluationMode() {
   const [experiment, setExperiment] = useState<Experiment | undefined>(
