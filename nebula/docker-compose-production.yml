@@ -9,7 +9,7 @@ services:
     environment:
       - LLM_CONFIG_PATH=/app/llm_config.nebula.yml
     volumes:
-      - ../llm_config.nebula.yml:/app/llm_config.nebula.yml:ro
+      - ../../llm_config.nebula.yml:/app/llm_config.nebula.yml:ro
       - ./temp:/app/temp
     restart: unless-stopped
 
@@ -23,7 +23,7 @@ services:
     environment:
       - LLM_CONFIG_PATH=/app/llm_config.nebula.yml
     volumes:
-      -/opt/llm_config.nebula.yml:/app/llm_config.nebula.yml:ro
+      -../../llm_config.nebula.yml:/app/llm_config.nebula.yml:ro
     restart: unless-stopped
 
   envoy:
@@ -31,7 +31,6 @@ services:
     container_name: envoy
     environment:
       - NEBULA_SECRET_TOKEN=${NEBULA_SECRET_TOKEN}
-      - LLM_CONFIG_PATH=/app/llm_config.nebula.yml
     volumes:
       - ./envoy.yaml:/etc/envoy/envoy.yaml:ro
     ports:
