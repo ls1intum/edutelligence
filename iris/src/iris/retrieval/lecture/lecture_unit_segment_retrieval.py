@@ -161,7 +161,7 @@ class LectureUnitSegmentRetrieval(SubPipeline):
             ],
             lecture_unit_name=lecture_unit[LectureUnitSchema.LECTURE_UNIT_NAME.value],
             lecture_unit_link=lecture_unit[LectureUnitSchema.LECTURE_UNIT_LINK.value],
-            video_link=lecture_unit[LectureUnitSchema.VIDEO_LINK.value],
+            video_link=lecture_unit.get(LectureUnitSchema.VIDEO_LINK.value),
             page_number=lecture_unit_segment[
                 LectureUnitSegmentSchema.PAGE_NUMBER.value
             ],
