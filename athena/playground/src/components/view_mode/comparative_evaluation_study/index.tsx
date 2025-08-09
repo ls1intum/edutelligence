@@ -143,102 +143,99 @@ export default function ComparativeEvaluationStudyManagement() {
     : "";
 
   return (
-    <div className="bg-white rounded-md p-4 mb-8 space-y-4">
-      <div className="flex flex-row justify-between items-center">
-        <h3 className="text-2xl font-bold">Manage Evaluations</h3>
-        <EvaluationManagementExportImport
-          definedExpertEvaluationConfig={selectedConfig}
-          handleExport={handleExport}
-          handleImport={handleImport}
-        />
-      </div>
+      <>
+        <h2 className="text-4xl font-bold text-white mb-4">Comparative Evaluation Study</h2>
+        <div className="bg-white rounded-md p-4 mb-8 space-y-4">
+        <div className="flex flex-row justify-between items-center">
+          <h3 className="text-2xl font-bold">Manage Evaluations</h3>
+          <EvaluationManagementExportImport
+            definedExpertEvaluationConfig={selectedConfig}
+            handleExport={handleExport}
+            handleImport={handleImport} />
+        </div>
 
-      <EvaluationConfigSelector
-        selectedConfigId={selectedConfig.id}
-        setSelectedConfigId={handleSelectConfig}
-        expertEvaluationConfigs={expertEvaluationConfigs}
-      />
+        <EvaluationConfigSelector
+          selectedConfigId={selectedConfig.id}
+          setSelectedConfigId={handleSelectConfig}
+          expertEvaluationConfigs={expertEvaluationConfigs} />
 
-      <label className="flex flex-col">
-        <span className="text-lg font-bold mb-2">Evaluation Name</span>
-        <input
-          type="text"
-          placeholder="Enter a name for the evaluation."
-          className={`border border-gray-300 rounded-md p-2 ${inputDisabledStyle}`}
-          value={selectedConfig.name}
-          onChange={(e) => updateSelectedConfig({ name: e.target.value })}
-          disabled={selectedConfig.started}
-        />
-      </label>
+        <label className="flex flex-col">
+          <span className="text-lg font-bold mb-2">Evaluation Name</span>
+          <input
+            type="text"
+            placeholder="Enter a name for the evaluation."
+            className={`border border-gray-300 rounded-md p-2 ${inputDisabledStyle}`}
+            value={selectedConfig.name}
+            onChange={(e) => updateSelectedConfig({ name: e.target.value })}
+            disabled={selectedConfig.started} />
+        </label>
 
-      <ExerciseImport
-        exercises={selectedConfig.exercises}
-        setExercises={(newExercises) => updateSelectedConfig({ exercises: newExercises })}
-        disabled={selectedConfig.started}
-      />
+        <ExerciseImport
+          exercises={selectedConfig.exercises}
+          setExercises={(newExercises) => updateSelectedConfig({ exercises: newExercises })}
+          disabled={selectedConfig.started} />
 
-      <MetricsForm
-        metrics={selectedConfig.metrics}
-        setMetrics={(newMetrics) => updateSelectedConfig({ metrics: newMetrics })}
-        disabled={selectedConfig.started}
-      />
+        <MetricsForm
+          metrics={selectedConfig.metrics}
+          setMetrics={(newMetrics) => updateSelectedConfig({ metrics: newMetrics })}
+          disabled={selectedConfig.started} />
 
-      <ExpertLinks
-        expertIds={selectedConfig.expertIds!}
-        setExpertIds={(newExpertIds) => updateSelectedConfig({ expertIds: newExpertIds })}
-        configId={selectedConfig.id}
-        started={selectedConfig.started}
-      />
+        <ExpertLinks
+          expertIds={selectedConfig.expertIds!}
+          setExpertIds={(newExpertIds) => updateSelectedConfig({ expertIds: newExpertIds })}
+          configId={selectedConfig.id}
+          started={selectedConfig.started} />
 
-      <div className="flex flex-row gap-2 mt-4">
-        <button
-          className={twMerge(
-            selectedConfig.id === "new" ? "bg-blue-500 hover:bg-blue-600" : "bg-green-500 hover:bg-green-600",
-            "text-white rounded-md p-2",
-            !hasUnsavedChanges ? "opacity-60 cursor-not-allowed" : ""
-          )}
-          onClick={() => saveExpertEvaluationConfig(selectedConfig)}
-          disabled={!hasUnsavedChanges}
-        >
-          {selectedConfig.id === "new" ? "Define Experiment" : "Save Changes"}
-        </button>
-
-        <button
-          className={twMerge(
-            selectedConfig.id === "new"
-              ? "bg-red-500 hover:bg-red-600"
-              : "bg-gray-500 hover:bg-gray-600",
-            "text-white rounded-md p-2",
-            !hasUnsavedChanges ? "opacity-60 cursor-not-allowed" : ""
-          )}
-          onClick={resetChanges}
-          disabled={!hasUnsavedChanges}
-        >
-          {selectedConfig.id === "new" ? "Cancel" : "Reset Changes"}
-        </button>
-
-        {selectedConfig.started && (
+        <div className="flex flex-row gap-2 mt-4">
           <button
             className={twMerge(
-              "bg-blue-500 text-white rounded-md p-2 hover:bg-blue-600",
-              isExporting ? "opacity-75 cursor-not-allowed" : ""
+              selectedConfig.id === "new" ? "bg-blue-500 hover:bg-blue-600" : "bg-green-500 hover:bg-green-600",
+              "text-white rounded-md p-2",
+              !hasUnsavedChanges ? "opacity-60 cursor-not-allowed" : ""
             )}
-            onClick={() => downloadEvaluationData({ configId: selectedConfig.id })}
-            disabled={isExporting}
+            onClick={() => saveExpertEvaluationConfig(selectedConfig)}
+            disabled={!hasUnsavedChanges}
           >
-            {isExporting ? "Downloading..." : "Download Results"}
+            {selectedConfig.id === "new" ? "Define Experiment" : "Save Changes"}
           </button>
-        )}
 
-        {selectedConfig.id !== "new" && !selectedConfig.started && (
           <button
-            className="bg-green-500 text-white rounded-md p-2 hover:bg-green-600"
-            onClick={startEvaluation}
+            className={twMerge(
+              selectedConfig.id === "new"
+                ? "bg-red-500 hover:bg-red-600"
+                : "bg-gray-500 hover:bg-gray-600",
+              "text-white rounded-md p-2",
+              !hasUnsavedChanges ? "opacity-60 cursor-not-allowed" : ""
+            )}
+            onClick={resetChanges}
+            disabled={!hasUnsavedChanges}
           >
-            Start Evaluation
+            {selectedConfig.id === "new" ? "Cancel" : "Reset Changes"}
           </button>
-        )}
+
+          {selectedConfig.started && (
+            <button
+              className={twMerge(
+                "bg-blue-500 text-white rounded-md p-2 hover:bg-blue-600",
+                isExporting ? "opacity-75 cursor-not-allowed" : ""
+              )}
+              onClick={() => downloadEvaluationData({ configId: selectedConfig.id })}
+              disabled={isExporting}
+            >
+              {isExporting ? "Downloading..." : "Download Results"}
+            </button>
+          )}
+
+          {selectedConfig.id !== "new" && !selectedConfig.started && (
+            <button
+              className="bg-green-500 text-white rounded-md p-2 hover:bg-green-600"
+              onClick={startEvaluation}
+            >
+              Start Evaluation
+            </button>
+          )}
+        </div>
       </div>
-    </div>
+    </>
   );
 }
