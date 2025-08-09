@@ -1,3 +1,4 @@
+import logging
 from abc import ABC, abstractmethod
 from threading import Thread
 from typing import Any, Callable, Generic, Optional, TypeVar
@@ -17,6 +18,8 @@ from iris.pipeline import Pipeline
 from iris.pipeline.shared.utils import generate_structured_tools_from_functions
 from iris.vector_database.database import VectorDatabase
 from iris.web.status.status_update import StatusCallback
+
+logger = logging.getLogger(__name__)
 
 DTO = TypeVar("DTO")
 VARIANT = TypeVar("VARIANT", bound=AbstractAgentVariant)
@@ -88,18 +91,18 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         """Return a ChatPromptTemplate containing only messages before chat history."""
 
     @abstractmethod
-    def get_agent_params(
-        self, state: AgentPipelineExecutionState[DTO, VARIANT]
-    ) -> dict[str, Any]:
-        """Return the parameter dict passed to the agent executor."""
-
-    @abstractmethod
     def get_memiris_tenant(self, dto: DTO) -> str:
         """Return the Memiris tenant identifier for the current user."""
 
     # ========================================
     # === CAN override (optional methods) ===
     # ========================================
+
+    def get_agent_params(  # pylint: disable=unused-argument
+        self, state: AgentPipelineExecutionState[DTO, VARIANT]
+    ) -> dict[str, Any]:
+        """Return the parameter dict passed to the agent executor."""
+        return {}
 
     def get_text_of_latest_user_message(
         self, state: AgentPipelineExecutionState[DTO, VARIANT]
@@ -183,7 +186,9 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
 
         Subclasses can override to customize how history is injected.
         """
-        prefix_messages = [("system", system_prompt)]
+        prefix_messages = [
+            ("system", system_prompt.replace("{", "{{").replace("}", "}}"))
+        ]
         history_lc_messages = [
             convert_iris_message_to_langchain_message(message)
             for message in state.message_history
@@ -257,9 +262,8 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
             # Allow subclasses to process each step (e.g., token accounting)
             try:
                 self.on_agent_step(state, step)
-            except Exception:
-                # Swallow hook exceptions to avoid breaking agent loop
-                pass
+            except Exception as exc:
+                logger.exception("Exception in on_agent_step", exc_info=exc)
             if step.get("output") is not None:
                 final_output = step["output"]
         return final_output

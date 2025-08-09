@@ -67,7 +67,7 @@ logger = logging.getLogger(__name__)
 
 def run_exercise_chat_pipeline_worker(
     dto: ExerciseChatPipelineExecutionDTO,
-    variant: str,
+    variant_id: str,
     event: str | None = None,
 ):
     try:
@@ -76,9 +76,7 @@ def run_exercise_chat_pipeline_worker(
             base_url=dto.settings.artemis_base_url,
             initial_stages=dto.initial_stages,
         )
-        pipeline = ExerciseChatAgentPipeline(
-            callback=callback, variant=variant, event=event
-        )
+        pipeline = ExerciseChatAgentPipeline()
     except Exception as e:
         logger.error("Error preparing exercise chat pipeline: %s", e)
         logger.error(traceback.format_exc())
@@ -86,7 +84,13 @@ def run_exercise_chat_pipeline_worker(
         return
 
     try:
-        pipeline(dto=dto)
+        for variant in ExerciseChatAgentPipeline.get_variants():
+            if variant.id == variant_id:
+                break
+        else:
+            raise ValueError(f"Unknown variant: {variant_id}")
+
+        pipeline(dto=dto, variant=variant, callback=callback, event=event)
     except Exception as e:
         logger.error("Error running exercise chat pipeline: %s", e)
         logger.error(traceback.format_exc())
@@ -152,7 +156,6 @@ def run_course_chat_pipeline_worker(dto, variant_id, event):
         )
         for variant in CourseChatPipeline.get_variants():
             if variant.id == variant_id:
-                variant = variant
                 break
         else:
             raise ValueError(f"Unknown variant: {variant_id}")
@@ -164,7 +167,7 @@ def run_course_chat_pipeline_worker(dto, variant_id, event):
         return
 
     try:
-        pipeline(dto=dto,callback=callback, variant=variant)
+        pipeline(dto=dto, callback=callback, variant=variant)
     except Exception as e:
         logger.error("Error running exercise chat pipeline: %s", e)
         logger.error(traceback.format_exc())

@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Any, Callable, List, cast
 
 import pytz
-from jinja2 import Environment, FileSystemLoader
+from jinja2 import Environment, FileSystemLoader, select_autoescape
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
@@ -77,7 +77,9 @@ class ExerciseChatAgentPipeline(
         template_dir = os.path.join(
             os.path.dirname(__file__), "..", "prompts", "templates"
         )
-        self.jinja_env = Environment(loader=FileSystemLoader(template_dir))
+        self.jinja_env = Environment(
+            loader=FileSystemLoader(template_dir), autoescape=select_autoescape(["j2"])
+        )
         self.system_prompt_template = self.jinja_env.get_template(
             "exercise_chat_system_prompt.j2"
         )
@@ -131,7 +133,7 @@ class ExerciseChatAgentPipeline(
         Returns:
             True if memory creation should be enabled, False otherwise.
         """
-        return bool(state.dto.user and state.dto.user.memiris_enabled)
+        return False
 
     def get_memiris_tenant(self, dto: ExerciseChatPipelineExecutionDTO) -> str:
         """
@@ -146,23 +148,6 @@ class ExerciseChatAgentPipeline(
         if not dto.user:
             raise ValueError("User is required for memiris tenant")
         return get_tenant_for_user(dto.user.id)
-
-    def get_agent_params(
-        self,
-        state: AgentPipelineExecutionState[
-            ExerciseChatPipelineExecutionDTO, ExerciseChatVariant
-        ],
-    ) -> dict[str, Any]:
-        """
-        Return parameters passed to the agent executor.
-
-        Args:
-            state: The current pipeline execution state.
-
-        Returns:
-            Dictionary of agent parameters.
-        """
-        return {}
 
     def get_tools(
         self,
@@ -268,29 +253,13 @@ class ExerciseChatAgentPipeline(
             "exercise_title": exercise_title,
             "problem_statement": problem_statement,
             "programming_language": programming_language,
-            "event": getattr(self, "event", None),
+            "event": self.event,
             "has_query": query is not None,
             "has_chat_history": len(state.message_history) > 0,
             "custom_instructions": custom_instructions,
         }
 
         return self.system_prompt_template.render(template_context)
-
-    def pre_agent_hook(
-        self,
-        state: AgentPipelineExecutionState[
-            ExerciseChatPipelineExecutionDTO, ExerciseChatVariant
-        ],
-    ) -> None:
-        """
-        Initialize resources before agent execution.
-
-        Args:
-            state: The current pipeline execution state.
-        """
-        # Initialize storage for lecture content and FAQs
-        setattr(state, "lecture_content_storage", {})
-        setattr(state, "faq_storage", {})
 
     def on_agent_step(
         self,
@@ -340,9 +309,7 @@ class ExerciseChatAgentPipeline(
             self._generate_suggestions(state, result)
 
             # Update final callback with tokens
-            state.callback.done(
-                "Response created", final_result=result, tokens=self.tokens
-            )
+            state.callback.done("Done!", final_result=result, tokens=self.tokens)
 
             return result
 
@@ -506,6 +473,7 @@ class ExerciseChatAgentPipeline(
         dto: ExerciseChatPipelineExecutionDTO,
         variant: ExerciseChatVariant,
         callback: ExerciseChatStatusCallback,
+        event: str | None,
     ):
         """
         Execute the pipeline with the provided arguments.
@@ -518,10 +486,7 @@ class ExerciseChatAgentPipeline(
         try:
             logger.info("Running exercise chat pipeline...")
 
-            # Store event if provided in the original constructor
-            # This is a temporary compatibility measure
-            if hasattr(self, "_temp_event"):
-                setattr(self, "event", self._temp_event)
+            self.event = event
 
             # Delegate to parent class for standardized execution
             super().__call__(dto, variant, callback)
