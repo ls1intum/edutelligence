@@ -15,6 +15,7 @@ from typing import (
 
 from langchain_core.tools import BaseTool
 from langchain_core.utils.function_calling import convert_to_openai_tool
+from openai import APIConnectionError  # Added for retry logic
 from openai import (
     APIError,
     APITimeoutError,
@@ -288,6 +289,7 @@ class OpenAIChatModel(ChatModel):
                 except (
                     APIError,
                     APITimeoutError,
+                    APIConnectionError,  # Added to retry on connection errors
                     RateLimitError,
                 ):
                     wait_time = initial_delay * (backoff_factor**attempt)
