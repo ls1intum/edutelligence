@@ -14,7 +14,6 @@ Config.ensure_dirs()
 app = FastAPI(title="Nebula FAQ Service")
 
 # Include routers
-app.include_router(health_router, prefix="/faq", tags=["FAQ"])
 app.include_router(faq_router, prefix="/faq", tags=["FAQ"])
 
 
