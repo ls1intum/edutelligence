@@ -41,8 +41,6 @@ export default function EvaluationMode() {
           )}
         </>
       )}
-      <h2 className="text-4xl font-bold text-white mb-4">Expert Evaluation</h2>
-      <ComparativeEvaluationStudyManagement />
     </>
   );
 }
