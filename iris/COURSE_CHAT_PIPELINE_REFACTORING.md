@@ -16,6 +16,31 @@ Many pipelines in the system were originally implemented as custom classes that 
 
 The `AbstractAgentPipeline` was introduced to provide a standardized framework that handles these common concerns automatically, allowing pipeline implementations to focus on domain-specific logic.
 
+## Completed Migrations
+
+### ✅ Course Chat Pipeline
+
+- **Status**: Complete
+- **Features**: Tools extracted to `src/iris/common/tools.py`
+- **Benefits**: Reduced code duplication, standardized execution flow
+- **Date Completed**: Previous migration
+
+### ✅ Exercise Chat Agent Pipeline
+
+- **Status**: Complete
+- **Features**:
+  - Tools extracted to `src/iris/common/exercise_chat_tools.py`
+  - Utilities extracted to `src/iris/common/exercise_chat_utils.py`
+  - Full inheritance from `AbstractAgentPipeline`
+  - Type safety improvements
+  - Code quality score: 8.10/10 (pylint)
+- **Benefits**:
+  - Eliminated ~200+ lines of boilerplate code
+  - Standardized tool creation pattern
+  - Improved error handling and state management
+  - Better separation of concerns
+- **Date Completed**: August 9, 2025
+
 ## When to Migrate
 
 ### Pipelines That Should Migrate
