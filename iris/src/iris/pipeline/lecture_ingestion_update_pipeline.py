@@ -38,7 +38,7 @@ class LectureIngestionUpdatePipeline(Pipeline):
             tokens = []
             if (
                 self.dto.lecture_unit.pdf_file_base64 is not None
-                or self.dto.lecture_unit.pdf_file_base64 != ""
+                and self.dto.lecture_unit.pdf_file_base64 != ""
             ):
                 page_content_pipeline = LectureUnitPageIngestionPipeline(
                     client=client, dto=self.dto, callback=callback
