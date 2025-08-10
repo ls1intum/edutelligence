@@ -1,4 +1,3 @@
-# nebula-dev.yml
 services:
   transcriber:
     extends:
@@ -34,9 +33,9 @@ services:
     restart: unless-stopped
     container_name: nginx-proxy
     volumes:
-      - ${NEBULA_NGINX_CONFIG_FILE}:/etc/nginx/nginx.conf:ro
-      - ${NEBULA_SSL_CERT}:/path/to/your/certificate.crt:ro
-      - ${NEBULA_SSL_KEY}:/path/to/your/private.key:ro
+      - ${NEBULA_NGINX_CONFIG_FILE}:/usr/local/openresty/nginx/conf/nginx.conf:ro
+      - ${NEBULA_SSL_CERT}:${NEBULA_SSL_CERT}:ro
+      - ${NEBULA_SSL_KEY}:${NEBULA_SSL_KEY}:ro
 
 networks:
   nebula:

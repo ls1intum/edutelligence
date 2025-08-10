@@ -13,7 +13,7 @@ COPY nebula/src/nebula ./nebula
 ENV PYTHONPATH=/app
 
 # Expose FastAPI port
-EXPOSE 5001
+EXPOSE 3871
 
 # Start FastAPI app via uvicorn
-CMD ["poetry", "run", "uvicorn", "nebula.faq.app:app", "--host", "0.0.0.0", "--port", "5000"]
+CMD ["poetry", "run", "uvicorn", "nebula.faq.app:app", "--host", "0.0.0.0", "--port", "3871"]

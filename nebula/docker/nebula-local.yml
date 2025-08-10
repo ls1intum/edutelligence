@@ -1,11 +1,10 @@
-# nebula-dev.yml
 services:
   transcriber:
     extends:
       file: nebula.yml
       service: transcriber
     volumes:
-      - ../llm_config.nebula.yml:/app/llm_config.nebula.yml:ro
+      - ../llm_config.local.yml:/app/llm_config.nebula.yml:ro
       - ../temp:/app/temp
     environment:
       LLM_LOG_LEVEL: DEBUG
@@ -24,7 +23,7 @@ services:
       file: nebula.yml
       service: nginx
     volumes:
-      - ../nginx.local.conf:/etc/nginx/nginx.conf:ro
+      - ../nginx.local.conf:/usr/local/openresty/nginx/conf/nginx.conf:ro
       # For local development with SSL (optional):
       # - ../ssl/local.crt:/path/to/your/certificate.crt:ro
       # - ../ssl/local.key:/path/to/your/private.key:ro

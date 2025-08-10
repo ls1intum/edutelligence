@@ -28,7 +28,7 @@ COPY nebula/src/nebula ./nebula
 ENV PYTHONPATH=/app
 
 # Expose FastAPI port
-EXPOSE 5000
+EXPOSE 3870
 
 # Run app
-CMD ["poetry", "run", "uvicorn", "nebula.transcript.app:app", "--host", "0.0.0.0", "--port", "5000"]
+CMD ["poetry", "run", "uvicorn", "nebula.transcript.app:app", "--host", "0.0.0.0", "--port", "3870"]

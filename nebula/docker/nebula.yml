@@ -9,7 +9,7 @@ services:
       dockerfile: ./nebula/docker/transcriber/Dockerfile
     container_name: transcriber-service
     expose:
-      - "5000"
+      - "3870"
     environment:
       - LLM_CONFIG_PATH=/app/llm_config.nebula.yml
     restart: unless-stopped
@@ -22,7 +22,7 @@ services:
       dockerfile: ./nebula/docker/faq/Dockerfile
     container_name: faq-service
     expose:
-      - "5000"
+      - "3871"
     environment:
       - LLM_CONFIG_PATH=/app/llm_config.nebula.yml
     restart: unless-stopped
@@ -30,7 +30,7 @@ services:
       - nebula
 
   nginx:
-    image: nginx:alpine
+    image: huynhquangtoan/openresty-lua-resty-http:latest
     container_name: nginx-proxy
     ports:
       - "80:80"
