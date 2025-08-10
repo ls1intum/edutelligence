@@ -1,25 +1,16 @@
 # nebula-dev.yml
 services:
-  traefik:
-    extends:
-      file: nebula.yml
-      service: traefik
-    ports:
-      - "80:80"
-  auth:
-    extends:
-      file: nebula.yml
-      service: auth
-    environment:
-      LOG_LEVEL: DEBUG
-
   transcriber:
     extends:
       file: nebula.yml
       service: transcriber
+    image: ghcr.io/ls1intum/edutelligence/nebula-transcriber:${NEBULA_DOCKER_TAG}
+    pull_policy: always
+    restart: unless-stopped
+    container_name: transcriber-service
     volumes:
-      - ../../../llm_config.nebula.yml:/app/llm_config.nebula.yml:ro
-      - ../temp:/app/temp
+      - ${NEBULA_LLM_CONFIG_FILE}:/app/llm_config.nebula.yml:ro
+      - ${NEBULA_TEMP_DIR}:/app/temp
     environment:
       LLM_LOG_LEVEL: DEBUG
 
@@ -27,12 +18,22 @@ services:
     extends:
       file: nebula.yml
       service: faq
+    image: ghcr.io/ls1intum/edutelligence/nebula-faq:${NEBULA_DOCKER_TAG}
+    pull_policy: always
+    restart: unless-stopped
+    container_name: faq-service
     volumes:
-      - ../../../llm_config.nebula.yml:/app/llm_config.nebula.yml:ro
+      - ${NEBULA_LLM_CONFIG_FILE}:/app/llm_config.nebula.yml:ro
     environment:
       LLM_LOG_LEVEL: DEBUG
 
-networks:
-  nebula:
-    driver: "bridge"
-    name: nebula
+  nginx:
+    extends:
+      file: nebula.yml
+      service: nginx
+    restart: unless-stopped
+    container_name: nginx-proxy
+    volumes:
+      - ${NEBULA_NGINX_CONFIG_FILE}:/etc/nginx/nginx.conf:ro
+      - ${NEBULA_SSL_CERT}:/path/to/your/certificate.crt:ro
+      - ${NEBULA_SSL_KEY}:/path/to/your/private.key:ro

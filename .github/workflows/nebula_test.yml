@@ -74,7 +74,7 @@ jobs:
         working-directory: nebula
 
       - name: Use example config as test config
-        run: cp application_local.example.nebula.yml application_local.nebula.yml
+        run: cp application_local.example.yml application_local.nebula.yml
         working-directory: nebula
 
       - name: Clean old coverage data

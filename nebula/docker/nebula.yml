@@ -3,32 +3,6 @@
 # ----------------------------------------------------------------------------------------------------------------------
 
 services:
-  traefik:
-    image: traefik:v3.0
-    container_name: traefik
-    command:
-      - --api.dashboard=false
-      - --entrypoints.web.address=:80
-      - --providers.docker=true
-      - --providers.docker.exposedbydefault=false
-    ports:
-      - "80:80"
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-    restart: unless-stopped
-
-  auth:
-    build:
-      context: ..
-      dockerfile: ./docker/auth/Dockerfile
-    env_file:
-      - ../.env
-    environment:
-      - NEBULA_SECRET=${NEBULA_SECRET}
-    expose:
-      - "9000"
-    restart: unless-stopped
-
   transcriber:
     build:
       context: ..
@@ -38,18 +12,9 @@ services:
       - "5000"
     environment:
       - LLM_CONFIG_PATH=/app/llm_config.nebula.yml
-    volumes:
-      - ../llm_config.nebula.yml:/app/llm_config.nebula.yml:ro
-      - ../temp:/app/temp
     restart: unless-stopped
-    labels:
-      - traefik.enable=true
-      - traefik.http.routers.transcriber.rule=PathPrefix(`/transcriber`)
-      - traefik.http.routers.transcriber.entrypoints=web
-      - traefik.http.services.transcriber.loadbalancer.server.port=5000
-      - traefik.http.middlewares.nebula-auth.forwardauth.address=http://auth:9000/authorize
-      - traefik.http.middlewares.nebula-auth.forwardauth.trustforwardheader=true
-      - traefik.http.routers.transcriber.middlewares=nebula-auth@docker
+    networks:
+      - nebula
 
   faq:
     build:
@@ -57,18 +22,25 @@ services:
       dockerfile: ./docker/faq/Dockerfile
     container_name: faq-service
     expose:
-      - "5001"
+      - "5000"
     environment:
       - LLM_CONFIG_PATH=/app/llm_config.nebula.yml
-    volumes:
-      - ../llm_config.nebula.yml:/app/llm_config.nebula.yml:ro
     restart: unless-stopped
-    labels:
-      - traefik.enable=true
-      - traefik.http.routers.faq.rule=PathPrefix(`/faq`)
-      - traefik.http.routers.faq.entrypoints=web
-      - traefik.http.services.faq.loadbalancer.server.port=5001
-      - traefik.http.routers.faq.middlewares=nebula-auth@docker
+    networks:
+      - nebula
+
+  nginx:
+    image: nginx:alpine
+    container_name: nginx-proxy
+    ports:
+      - "80:80"
+      - "443:443"
+    depends_on:
+      - transcriber
+      - faq
+    restart: unless-stopped
+    networks:
+      - nebula
 
 networks:
   nebula:

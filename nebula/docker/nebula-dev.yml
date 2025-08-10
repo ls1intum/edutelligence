@@ -1,18 +1,5 @@
 # nebula-dev.yml
 services:
-  traefik:
-    extends:
-      file: nebula.yml
-      service: traefik
-    ports:
-      - "80:80"
-  auth:
-    extends:
-      file: nebula.yml
-      service: auth
-    environment:
-      LOG_LEVEL: DEBUG
-
   transcriber:
     extends:
       file: nebula.yml
@@ -28,11 +15,16 @@ services:
       file: nebula.yml
       service: faq
     volumes:
-      - ../llm_config.nebula.yml:/app/llm_config.nebula.yml:ro
+      - ../llm_config.local.yml:/app/llm_config.nebula.yml:ro
     environment:
       LLM_LOG_LEVEL: DEBUG
 
-networks:
-  nebula:
-    driver: "bridge"
-    name: nebula
+  nginx:
+    extends:
+      file: nebula.yml
+      service: nginx
+    volumes:
+      - ../nginx.local.conf:/etc/nginx/nginx.conf:ro
+      # For local development with SSL (optional):
+      # - ../ssl/local.crt:/path/to/your/certificate.crt:ro
+      # - ../ssl/local.key:/path/to/your/private.key:ro
