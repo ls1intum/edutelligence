@@ -2,7 +2,7 @@
 # Custom rules        #
 #######################
 application.local.yml
-llm_config.local.yml
+llm_config.nebula.yml
 llm_config.production.yml
 nginx.local.conf
 nginx.production.conf

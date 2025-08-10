@@ -34,7 +34,7 @@ def split_audio_ffmpeg(audio_path, output_dir, chunk_duration=60):
         "-y",
     ]
 
-    logger.info("🔪 Splitting audio using FFmpeg: %s", audio_path)
+    logger.info("Splitting audio using FFmpeg: %s", audio_path)
     result = subprocess.run(
         command, shell=False, capture_output=True, text=True, check=True  # nosec B603
     )
