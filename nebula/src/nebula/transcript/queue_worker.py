@@ -2,6 +2,7 @@
 import asyncio
 import logging
 import os
+import shutil
 import uuid
 from typing import Tuple
 
@@ -137,8 +138,6 @@ async def _light_phase(
             for entry in os.listdir(Config.VIDEO_STORAGE_PATH):
                 full = os.path.join(Config.VIDEO_STORAGE_PATH, entry)
                 if entry.startswith(chunk_dir_prefix) and os.path.isdir(full):
-                    import shutil
-
                     shutil.rmtree(full)
                     logging.debug("[Job %s] Removed chunk directory: %s", job_id, full)
         except Exception as ce:

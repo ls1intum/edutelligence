@@ -1,8 +1,5 @@
 # tests/transcript/test_job_store.py
 # pylint: disable=redefined-outer-name,unused-argument,missing-class-docstring,import-outside-toplevel
-
-import time
-
 from nebula.transcript.jobs import (
     cleanup_finished_jobs,
     create_job,

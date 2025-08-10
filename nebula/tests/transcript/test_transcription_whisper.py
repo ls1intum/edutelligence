@@ -84,7 +84,7 @@ def llm_config_azure(monkeypatch):
         wu,
         "load_llm_config",
         lambda llm_id=None: {
-            "api_key": "az-key",
+            "api_key": "az-key",  # pragma: allowlist secret
             "endpoint": "https://example.azure.com",
             "api_version": "2024-06-01",
         },
@@ -198,7 +198,7 @@ def test_openai_transcribe_max_retries_exhausted(
 
 
 def test_get_audio_duration(monkeypatch):
-    def mock_probe(_p):
+    def mock_probe(probe_path):
         return {"format": {"duration": "12.34"}}
 
     monkeypatch.setattr(wu.ffmpeg, "probe", mock_probe, raising=True)
