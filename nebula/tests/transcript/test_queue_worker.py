@@ -9,6 +9,7 @@ import nebula.transcript.queue_worker as qw  # use module so monkeypatching stic
 from nebula.transcript.dto import TranscribeRequestDTO
 from nebula.transcript.jobs import fail_job, get_job_status, save_job_result
 
+
 @pytest.mark.anyio
 async def test_fifo_heavy_phase_order(monkeypatch):
     # Fresh queue bound to this loop
@@ -29,7 +30,9 @@ async def test_fifo_heavy_phase_order(monkeypatch):
 
     async def fake_light_phase(job_id, req, transcription, video_path, audio_path, uid):
         # mark result and signal completion
-        save_job_result(job_id, {"lectureUnitId": 123, "language": "en", "segments": []})
+        save_job_result(
+            job_id, {"lectureUnitId": 123, "language": "en", "segments": []}
+        )
         done_events[job_id].set()
 
     monkeypatch.setattr(qw, "_heavy_pipeline", fake_heavy_pipeline, raising=True)
@@ -37,7 +40,9 @@ async def test_fifo_heavy_phase_order(monkeypatch):
 
     qw.start_worker()
 
-    req = TranscribeRequestDTO(videoUrl="https://example.com/video.m3u8", lectureUnitId=123)
+    req = TranscribeRequestDTO(
+        videoUrl="https://example.com/video.m3u8", lectureUnitId=123
+    )
     jobs = ["job0", "job1", "job2"]
 
     # create per-job events BEFORE enqueue so the light phase can set them
@@ -65,6 +70,7 @@ async def test_fifo_heavy_phase_order(monkeypatch):
         assert get_job_status(jid).get("status") == "done"
 
     await qw.stop_worker()
+
 
 @pytest.mark.anyio
 async def test_light_phase_failure_marks_job_error(monkeypatch):

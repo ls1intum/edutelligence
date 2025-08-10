@@ -2,6 +2,7 @@
 # pylint: disable=redefined-outer-name,unused-argument,missing-class-docstring,import-outside-toplevel
 
 import pytest
+
 import nebula.transcript.whisper_utils as wu
 
 # Functions under test
@@ -35,7 +36,9 @@ def fast_retries(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def avoid_config_file(monkeypatch):
-    monkeypatch.setattr(wu.Config, "get_whisper_llm_id", lambda: "test-llm", raising=True)
+    monkeypatch.setattr(
+        wu.Config, "get_whisper_llm_id", lambda: "test-llm", raising=True
+    )
 
 
 # ---- Test fixtures ------------------------------------------------------------------
@@ -128,13 +131,21 @@ def _mock_requests_sequence(monkeypatch, seq):
 # ---- Tests -------------------------------------------------------------------------
 
 
-def test_openai_transcribe_happy_path(tmp_path, fake_chunks, llm_config_openai, monkeypatch):
+def test_openai_transcribe_happy_path(
+    tmp_path, fake_chunks, llm_config_openai, monkeypatch
+):
     _mock_requests_sequence(
         monkeypatch,
         [
             {"status_code": 429},
-            {"status_code": 200, "json": {"segments": [{"start": 0.0, "end": 1.2, "text": "Hello"}]}},
-            {"status_code": 200, "json": {"segments": [{"start": 0.0, "end": 0.8, "text": "World"}]}},
+            {
+                "status_code": 200,
+                "json": {"segments": [{"start": 0.0, "end": 1.2, "text": "Hello"}]},
+            },
+            {
+                "status_code": 200,
+                "json": {"segments": [{"start": 0.0, "end": 0.8, "text": "World"}]},
+            },
         ],
     )
 
@@ -148,12 +159,20 @@ def test_openai_transcribe_happy_path(tmp_path, fake_chunks, llm_config_openai, 
     assert out["segments"][1]["start"] >= 3.0  # offset from second chunk
 
 
-def test_azure_transcribe_happy_path(tmp_path, fake_chunks, llm_config_azure, monkeypatch):
+def test_azure_transcribe_happy_path(
+    tmp_path, fake_chunks, llm_config_azure, monkeypatch
+):
     _mock_requests_sequence(
         monkeypatch,
         [
-            {"status_code": 200, "json": {"segments": [{"start": 0.2, "end": 0.7, "text": "Foo"}]}},
-            {"status_code": 200, "json": {"segments": [{"start": 0.1, "end": 0.5, "text": "Bar"}]}},
+            {
+                "status_code": 200,
+                "json": {"segments": [{"start": 0.2, "end": 0.7, "text": "Foo"}]},
+            },
+            {
+                "status_code": 200,
+                "json": {"segments": [{"start": 0.1, "end": 0.5, "text": "Bar"}]},
+            },
         ],
     )
 
@@ -166,7 +185,9 @@ def test_azure_transcribe_happy_path(tmp_path, fake_chunks, llm_config_azure, mo
     assert out["segments"][1]["start"] >= 3.0
 
 
-def test_openai_transcribe_max_retries_exhausted(tmp_path, fake_chunks, llm_config_openai, monkeypatch):
+def test_openai_transcribe_max_retries_exhausted(
+    tmp_path, fake_chunks, llm_config_openai, monkeypatch
+):
     _mock_requests_sequence(monkeypatch, [{"status_code": 429}])
 
     audio_path = tmp_path / "audio.wav"
