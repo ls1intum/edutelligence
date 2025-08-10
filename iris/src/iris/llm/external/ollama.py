@@ -1,4 +1,7 @@
 import base64
+import inspect
+import json
+import logging
 from datetime import datetime
 from typing import (
     Any,
@@ -13,7 +16,8 @@ from typing import (
 
 from httpx import Client as HTTPXClient
 from httpx import HTTPTransport, Timeout
-from langchain_core.tools import BaseTool
+from langchain_core.tools import BaseTool, StructuredTool
+from langchain_experimental.llms.ollama_functions import convert_to_ollama_tool
 from ollama import Client, Message
 from pydantic import BaseModel, Field
 from requests.auth import HTTPBasicAuth
@@ -27,6 +31,7 @@ from ...domain.data.text_message_content_dto import TextMessageContentDTO
 from ...llm import CompletionArguments
 from ...llm.external.model import ChatModel, CompletionModel, EmbeddingModel
 
+logger = logging.getLogger(__name__)
 
 def convert_to_ollama_images(base64_images: list[str]) -> list[bytes] | None:
     """
@@ -148,25 +153,180 @@ class OllamaModel(
         )
         return response["response"]
 
+    def _callable_to_ollama_tool(self, func: callable) -> Dict[str, Any]:
+        """Create a minimal OpenAI-style tool schema for a plain callable."""
+        params = {"type": "object", "properties": {}}
+        sig = inspect.signature(func)
+        # If the callable actually takes arguments, expose them as free-form
+        # (customize here to generate a real JSON Schema if you like)
+        if any(p.kind in (p.POSITIONAL_OR_KEYWORD, p.KEYWORD_ONLY) for p in sig.parameters.values()):
+            params = {"type": "object", "additionalProperties": True}
+        return {
+            "name": func.__name__,
+            "description": (func.__doc__ or "").strip() or f"Callable tool {func.__name__}",
+            "parameters": params,
+        }
+
+    def _build_tooling(
+        self,
+        tools: Optional[
+            Sequence[Union[Dict[str, Any], Type[BaseModel], callable, BaseTool]]
+        ],
+    ):
+        """
+        Returns:
+          tool_defs: list[{"type":"function","function":{...}}] to send to Ollama
+          executors: dict[name -> callable(args_dict)->Any]
+        """
+        tool_defs = []
+        executors: Dict[str, callable] = {}
+
+        if not tools:
+            return None, {}
+
+        for tool in tools:
+            # Figure out the schema we send to the model…
+            if callable(tool) and not isinstance(tool, BaseTool):
+                schema = self._callable_to_ollama_tool(tool)
+                name = schema["name"]
+                tool_defs.append({"type": "function", "function": schema})
+                # …and the executor we will run locally.
+                def _exec_callable(args, _tool=tool):
+                    if not args:
+                        return _tool()
+                    # Try kwargs; if it fails, try pass-through single arg
+                    try:
+                        return _tool(**args)
+                    except TypeError:
+                        return _tool(args)
+                executors[name] = _exec_callable
+                continue
+
+            # Non-callable kinds: use your provided converter for the schema
+            schema = convert_to_ollama_tool(tool)
+            name = schema["name"]
+            tool_defs.append({"type": "function", "function": schema})
+
+            # And wire up executors for supported kinds
+            if isinstance(tool, BaseTool):
+                def _exec_basetool(args, _tool=tool):
+                    if hasattr(_tool, "invoke"):
+                        return _tool.invoke(args or {})
+                    if hasattr(_tool, "run"):
+                        # Some tools expect a string; give them JSON if dict
+                        return _tool.run(args if isinstance(args, str) else json.dumps(args or {}))
+                    raise RuntimeError(f"Unsupported BaseTool without invoke/run: {type(_tool)}")
+                executors[name] = _exec_basetool
+
+            elif isinstance(tool, dict):
+                # Bare dict tool schema provided – no executor attached.
+                # You can add an executor here if you keep a separate {name: callable} registry.
+                pass
+
+            elif inspect.isclass(tool) and issubclass(tool, BaseModel):
+                # Pure schema (Pydantic class) with no bound executor.
+                # If you have a convention (e.g., class defines a staticmethod `run`), wire it here.
+                run_fn = getattr(tool, "run", None)
+                if callable(run_fn):
+                    def _exec_pydantic(args, _run=run_fn, _cls=tool):
+                        # Validate then run
+                        instance = _cls.model_validate(args or {})
+                        return _run(instance)
+                    executors[name] = _exec_pydantic
+
+        return tool_defs, executors
+
+    def _execute_tool(self, executors: Dict[str, callable], name: str, raw_args: Any):
+        # Ollama may return arguments as a JSON string or a dict
+        args = raw_args
+        if isinstance(raw_args, str):
+            try:
+                args = json.loads(raw_args) if raw_args.strip() else {}
+            except Exception:
+                # If it's an arbitrary string, pass it through
+                args = raw_args
+
+        exec_fn = executors.get(name)
+        if not exec_fn:
+            return {"error": f"Tool '{name}' has no executor bound."}
+
+        try:
+            out = exec_fn(args if isinstance(args, dict) else args)
+            return out
+        except Exception as e:
+            return {"error": f"Exception in tool '{name}': {e}"}
+
     def chat(
         self,
-        messages: list[PyrisMessage],
-        arguments: CompletionArguments,
+        messages: list,  # list[PyrisMessage]
+        arguments,       # CompletionArguments
         tools: Optional[
-            Sequence[Union[Dict[str, Any], Type[BaseModel], Callable, BaseTool]]
+            Sequence[Union[Dict[str, Any], Type[BaseModel], callable, BaseTool]]
         ],
-    ) -> PyrisMessage:
-        response = self._client.chat(
-            model=self.model,
-            messages=convert_to_ollama_messages(messages),
-            format="json" if arguments.response_format == "JSON" else "",
-            options=self.options,
-        )
+    ):
+        # Build tool schemas for the model + executors for local runtime
+        tool_defs, executors = self._build_tooling(tools)
+
+        # Start from your converted messages, then extend with model/tool turns
+        ollama_messages = convert_to_ollama_messages(messages)
+
+        total_prompt_eval = 0
+        total_eval = 0
+        model_used = self.model
+
+        for _ in range(10):
+            response = self._client.chat(
+                model=self.model,
+                messages=ollama_messages,
+                tools=tool_defs,  # pass tools every round
+                format="json" if getattr(arguments, "response_format", None) == "JSON" else "",
+                options=self.options,
+            )
+
+            msg = response.get("message", {}) or {}
+            model_used = response.get("model", self.model)
+            total_prompt_eval += int(response.get("prompt_eval_count", 0) or 0)
+            total_eval += int(response.get("eval_count", 0) or 0)
+
+            tool_calls = msg.get("tool_calls") or []
+            if tool_calls:
+                # Add the model's tool-call message to the conversation
+                ollama_messages.append(msg)
+
+                # Execute each tool and append the tool result
+                for call in tool_calls:
+                    fn = (call.get("function") or {})
+                    name = fn.get("name")
+                    args = fn.get("arguments")
+                    result = self._execute_tool(executors, name, args)
+
+                    # Stringify non-string results
+                    content = result if isinstance(result, str) else json.dumps(result, ensure_ascii=False)
+
+                    ollama_messages.append({
+                        "role": "tool",
+                        "name": name,
+                        "content": content,
+                    })
+                # Loop again so the model can see tool outputs
+                continue
+
+            # No tool calls → we have the final assistant message
+            if msg:
+                ollama_messages.append(msg)
+            return convert_to_iris_message(
+                msg,
+                total_prompt_eval,
+                total_eval,
+                response.get("model", model_used),
+            )
+
+        # Safety valve: max rounds reached; return whatever the last msg was
         return convert_to_iris_message(
-            response.get("message"),
-            response.get("prompt_eval_count", 0),
-            response.get("eval_count", 0),
-            response.get("model", self.model),
+            msg if 'msg' in locals() else {},
+            total_prompt_eval,
+            total_eval,
+            model_used,
         )
 
     def embed(self, text: str) -> list[float]:
