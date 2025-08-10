@@ -30,7 +30,7 @@
   name: GPT 4 Omni (OpenAI)
   type: openai
   model: gpt-4o
-  api_key: "your-api-key"
+  api_key:
   capabilities:
     image_recognition: true
     context_length: 128000
@@ -42,4 +42,4 @@
   name: OpenAI Whisper
   type: openai_whisper
   model: whisper-1
-  api_key: "your-api-key"
+  api_key:

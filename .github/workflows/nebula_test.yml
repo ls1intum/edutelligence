@@ -73,9 +73,7 @@ jobs:
         run: poetry install
         working-directory: nebula
 
-      - name: Use example config as test config
-        run: cp application_local.example.yml application_local.nebula.yml
-        working-directory: nebula
+      # TODO: Create LLM config from example?
 
       - name: Clean old coverage data
         run: |
