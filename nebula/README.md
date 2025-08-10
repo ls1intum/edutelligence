@@ -131,7 +131,6 @@ cp llm_config.example.yml llm_config.production.yml
 # Edit the .env file with your production values
 nano .env
 # Update these key variables:
-# - NEBULA_SSL_CERT and NEBULA_SSL_KEY with your SSL certificate paths
 # - NEBULA_NGINX_CONFIG_FILE=./nginx.production.conf
 # - NEBULA_LLM_CONFIG_FILE=./llm_config.production.yml
 # - NEBULA_TEMP_DIR with your desired temp directory

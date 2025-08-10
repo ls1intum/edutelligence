@@ -34,8 +34,6 @@ services:
     container_name: nginx-proxy
     volumes:
       - ${NEBULA_NGINX_CONFIG_FILE}:/usr/local/openresty/nginx/conf/nginx.conf:ro
-      - ${NEBULA_SSL_CERT}:${NEBULA_SSL_CERT}:ro
-      - ${NEBULA_SSL_KEY}:${NEBULA_SSL_KEY}:ro
 
 networks:
   nebula:
