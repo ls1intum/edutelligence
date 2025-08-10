@@ -5,8 +5,8 @@
 services:
   transcriber:
     build:
-      context: ..
-      dockerfile: ./docker/transcriber/Dockerfile
+      context: ../..
+      dockerfile: ./nebula/docker/transcriber/Dockerfile
     container_name: transcriber-service
     expose:
       - "5000"
@@ -18,8 +18,8 @@ services:
 
   faq:
     build:
-      context: ..
-      dockerfile: ./docker/faq/Dockerfile
+      context: ../..
+      dockerfile: ./nebula/docker/faq/Dockerfile
     container_name: faq-service
     expose:
       - "5000"

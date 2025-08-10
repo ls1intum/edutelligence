@@ -37,3 +37,8 @@ services:
       - ${NEBULA_NGINX_CONFIG_FILE}:/etc/nginx/nginx.conf:ro
       - ${NEBULA_SSL_CERT}:/path/to/your/certificate.crt:ro
       - ${NEBULA_SSL_KEY}:/path/to/your/private.key:ro
+
+networks:
+  nebula:
+    driver: "bridge"
+    name: nebula

@@ -28,3 +28,8 @@ services:
       # For local development with SSL (optional):
       # - ../ssl/local.crt:/path/to/your/certificate.crt:ro
       # - ../ssl/local.key:/path/to/your/private.key:ro
+
+networks:
+  nebula:
+    driver: "bridge"
+    name: nebula
