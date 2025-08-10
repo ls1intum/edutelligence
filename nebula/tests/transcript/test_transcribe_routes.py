@@ -1,4 +1,6 @@
 # tests/transcript/test_transcribe_routes.py
+# pylint: disable=redefined-outer-name,unused-argument,missing-class-docstring,import-outside-toplevel
+
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 

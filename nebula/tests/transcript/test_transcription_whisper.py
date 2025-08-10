@@ -1,4 +1,6 @@
 # tests/transcript/test_transcription_whisper.py
+# pylint: disable=redefined-outer-name,unused-argument,missing-class-docstring,import-outside-toplevel
+
 import pytest
 
 import nebula.transcript.whisper_utils as wu

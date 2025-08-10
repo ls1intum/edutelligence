@@ -1,4 +1,5 @@
 # tests/transcript/test_app.py
+# pylint: disable=redefined-outer-name,unused-argument,missing-class-docstring,import-outside-toplevel
 from fastapi.testclient import TestClient
 
 import nebula.transcript.app as app_mod  # <-- patch the symbols the app actually uses

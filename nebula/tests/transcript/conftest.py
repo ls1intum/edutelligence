@@ -1,3 +1,4 @@
+# pylint: disable=redefined-outer-name,unused-argument,missing-class-docstring,import-outside-toplevel
 import asyncio
 import os
 import tempfile
