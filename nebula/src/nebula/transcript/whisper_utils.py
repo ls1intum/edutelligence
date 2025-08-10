@@ -57,7 +57,7 @@ def transcribe_with_azure_whisper(audio_path: str, llm_id: str | None = None) ->
                     )
 
                     if response.status_code == 429:
-                        wait = 10 * (attempt + 1)
+                        wait = 60 * (attempt + 1)
                         logger.warning(
                             "429 Too Many Requests. Retrying in %ss...", wait
                         )
