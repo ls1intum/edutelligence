@@ -4,12 +4,12 @@ from pydantic import BaseModel
 from typing import Optional
 
 
-from atlasml.agent import AIAgent
-
-AI_AGENT_AVAILABLE = True
+try:
+    from atlasml.agent import AIAgent
+    AI_AGENT_AVAILABLE = True
 except ImportError as e:
-logging.error(f"Failed to import AIAgent: {e}")
-AI_AGENT_AVAILABLE = False
+    logging.error(f"Failed to import AIAgent: {e}")
+    AI_AGENT_AVAILABLE = False
 
 from atlasml.dependencies import TokenValidator
 
