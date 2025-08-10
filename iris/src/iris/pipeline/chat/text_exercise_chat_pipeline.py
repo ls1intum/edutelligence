@@ -8,11 +8,6 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 from langsmith import traceable
 
 from ...common.pyris_message import IrisMessageRole, PyrisMessage
-from ...common.tools import (
-    create_tool_faq_content_retrieval,
-    create_tool_get_course_details,
-    create_tool_lecture_content_retrieval,
-)
 from ...domain.data.text_message_content_dto import TextMessageContentDTO
 from ...domain.text_exercise_chat_pipeline_execution_dto import (
     TextExerciseChatPipelineExecutionDTO,
@@ -22,10 +17,15 @@ from ...retrieval.faq_retrieval import FaqRetrieval
 from ...retrieval.faq_retrieval_utils import should_allow_faq_tool
 from ...retrieval.lecture.lecture_retrieval import LectureRetrieval
 from ...retrieval.lecture.lecture_retrieval_utils import should_allow_lecture_tool
+from ...tools import (
+    create_tool_faq_content_retrieval,
+    create_tool_get_course_details,
+    create_tool_lecture_content_retrieval,
+)
 from ...web.status.status_update import TextExerciseChatCallback
 from ..abstract_agent_pipeline import AbstractAgentPipeline, AgentPipelineExecutionState
 from ..shared.citation_pipeline import CitationPipeline, InformationType
-from ..shared.utils import format_custom_instructions
+from ..shared.utils import datetime_to_string, format_custom_instructions
 
 logger = logging.getLogger(__name__)
 
@@ -153,16 +153,11 @@ class TextExerciseChatPipeline(
         # Build tool list
         tool_list: list[Callable] = []
 
-        # Create a DTO-like object with course info for compatibility with existing tools
-        class CourseDTO:
-            def __init__(self, course):
-                self.course = course
-
-        course_dto = CourseDTO(dto.exercise.course if dto.exercise else None)
-
-        # Add course details tool (reuse from common tools)
+        # Add course details tool
         if dto.exercise and dto.exercise.course:
-            tool_list.append(create_tool_get_course_details(course_dto, callback))
+            tool_list.append(
+                create_tool_get_course_details(dto.exercise.course, callback)
+            )
 
         # Add lecture content retrieval if available
         if dto.exercise and dto.exercise.course and dto.exercise.course.id:
@@ -172,7 +167,12 @@ class TextExerciseChatPipeline(
                 tool_list.append(
                     create_tool_lecture_content_retrieval(
                         lecture_retriever,
-                        course_dto,
+                        dto.exercise.course.id,
+                        (
+                            dto.execution.settings.artemis_base_url
+                            if dto.execution.settings
+                            else ""
+                        ),
                         callback,
                         query_text,
                         state.message_history,
@@ -188,7 +188,13 @@ class TextExerciseChatPipeline(
                 tool_list.append(
                     create_tool_faq_content_retrieval(
                         faq_retriever,
-                        course_dto,
+                        dto.exercise.course.id,
+                        dto.exercise.course.name,
+                        (
+                            dto.execution.settings.artemis_base_url
+                            if dto.execution.settings
+                            else ""
+                        ),
                         callback,
                         query_text,
                         state.message_history,
@@ -240,7 +246,7 @@ class TextExerciseChatPipeline(
 
         # Build system prompt using Jinja2 template
         template_context = {
-            "current_date": datetime.now(tz=pytz.UTC).strftime("%Y-%m-%d %H:%M:%S"),
+            "current_date": datetime_to_string(datetime.now(tz=pytz.UTC)),
             "exercise_id": dto.exercise.id if dto.exercise else "",
             "exercise_title": exercise_title,
             "course_name": course_name,
@@ -374,25 +380,34 @@ class TextExerciseChatPipeline(
             faq_storage = getattr(state, "faq_storage", {})
             if faq_storage.get("faqs"):
                 state.callback.in_progress("Adding FAQ references...")
-                # Note: We'd need a base_url from settings if available
+                base_url = (
+                    state.dto.execution.settings.artemis_base_url
+                    if state.dto.execution.settings
+                    else ""
+                )
                 result = self.citation_pipeline(
                     faq_storage["faqs"],
                     result,
                     InformationType.FAQS,
                     variant=state.variant.id,
-                    base_url="",
+                    base_url=base_url,
                 )
 
             # Add lecture content citations
             lecture_content_storage = getattr(state, "lecture_content_storage", {})
             if lecture_content_storage.get("content"):
                 state.callback.in_progress("Adding lecture references...")
+                base_url = (
+                    state.dto.execution.settings.artemis_base_url
+                    if state.dto.execution.settings
+                    else ""
+                )
                 result = self.citation_pipeline(
                     lecture_content_storage["content"],
                     result,
                     InformationType.PARAGRAPHS,
                     variant=state.variant.id,
-                    base_url="",
+                    base_url=base_url,
                 )
 
             # Track tokens from citation pipeline

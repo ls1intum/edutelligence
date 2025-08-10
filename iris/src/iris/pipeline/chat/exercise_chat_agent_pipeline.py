@@ -10,16 +10,6 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langsmith import traceable
 
-from ...common.exercise_chat_tools import (
-    create_tool_faq_content_retrieval,
-    create_tool_file_lookup,
-    create_tool_get_additional_exercise_details,
-    create_tool_get_build_logs_analysis,
-    create_tool_get_feedbacks,
-    create_tool_get_submission_details,
-    create_tool_lecture_content_retrieval,
-    create_tool_repository_files,
-)
 from ...common.memiris_setup import get_tenant_for_user
 from ...domain import ExerciseChatPipelineExecutionDTO
 from ...domain.chat.interaction_suggestion_dto import (
@@ -35,10 +25,20 @@ from ...retrieval.faq_retrieval import FaqRetrieval
 from ...retrieval.faq_retrieval_utils import should_allow_faq_tool
 from ...retrieval.lecture.lecture_retrieval import LectureRetrieval
 from ...retrieval.lecture.lecture_retrieval_utils import should_allow_lecture_tool
+from ...tools import (
+    create_tool_faq_content_retrieval,
+    create_tool_file_lookup,
+    create_tool_get_additional_exercise_details,
+    create_tool_get_build_logs_analysis,
+    create_tool_get_feedbacks,
+    create_tool_get_submission_details,
+    create_tool_lecture_content_retrieval,
+    create_tool_repository_files,
+)
 from ...web.status.status_update import ExerciseChatStatusCallback
 from ..abstract_agent_pipeline import AbstractAgentPipeline, AgentPipelineExecutionState
 from ..shared.citation_pipeline import CitationPipeline, InformationType
-from ..shared.utils import format_custom_instructions
+from ..shared.utils import datetime_to_string, format_custom_instructions
 from .code_feedback_pipeline import CodeFeedbackPipeline
 from .interaction_suggestion_pipeline import InteractionSuggestionPipeline
 
@@ -177,12 +177,16 @@ class ExerciseChatAgentPipeline(
 
         # Build tool list based on available data and permissions
         tool_list: list[Callable] = [
-            create_tool_get_submission_details(dto, callback),
-            create_tool_get_additional_exercise_details(dto, callback),
-            create_tool_get_build_logs_analysis(dto, callback),
-            create_tool_get_feedbacks(dto, callback),
-            create_tool_repository_files(dto, callback),
-            create_tool_file_lookup(dto, callback),
+            create_tool_get_submission_details(dto.submission, callback),
+            create_tool_get_additional_exercise_details(dto.exercise, callback),
+            create_tool_get_build_logs_analysis(dto.submission, callback),
+            create_tool_get_feedbacks(dto.submission, callback),
+            create_tool_repository_files(
+                dto.submission.repository if dto.submission else None, callback
+            ),
+            create_tool_file_lookup(
+                dto.submission.repository if dto.submission else None, callback
+            ),
         ]
 
         # Add lecture content retrieval if available
@@ -190,9 +194,10 @@ class ExerciseChatAgentPipeline(
             lecture_retriever = LectureRetrieval(state.db.client)
             tool_list.append(
                 create_tool_lecture_content_retrieval(
-                    dto,
-                    callback,
                     lecture_retriever,
+                    dto.course.id,
+                    dto.settings.artemis_base_url if dto.settings else "",
+                    callback,
                     query_text,
                     state.message_history,
                     lecture_content_storage,
@@ -204,9 +209,11 @@ class ExerciseChatAgentPipeline(
             faq_retriever = FaqRetrieval(state.db.client)
             tool_list.append(
                 create_tool_faq_content_retrieval(
-                    dto,
-                    callback,
                     faq_retriever,
+                    dto.course.id,
+                    dto.course.name,
+                    dto.settings.artemis_base_url if dto.settings else "",
+                    callback,
                     query_text,
                     state.message_history,
                     faq_storage,
@@ -247,7 +254,7 @@ class ExerciseChatAgentPipeline(
 
         # Build system prompt using Jinja2 template
         template_context = {
-            "current_date": datetime.now(tz=pytz.UTC).strftime("%Y-%m-%d %H:%M:%S"),
+            "current_date": datetime_to_string(datetime.now(tz=pytz.UTC)),
             "exercise_title": exercise_title,
             "problem_statement": problem_statement,
             "programming_language": programming_language,

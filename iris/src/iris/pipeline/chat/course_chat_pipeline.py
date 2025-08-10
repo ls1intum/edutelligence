@@ -11,15 +11,6 @@ from langsmith import traceable
 
 from ...common.mastery_utils import get_mastery
 from ...common.memiris_setup import get_tenant_for_user
-from ...common.tools import (
-    create_tool_faq_content_retrieval,
-    create_tool_get_competency_list,
-    create_tool_get_course_details,
-    create_tool_get_exercise_list,
-    create_tool_get_exercise_problem_statement,
-    create_tool_get_student_exercise_metrics,
-    create_tool_lecture_content_retrieval,
-)
 from ...domain import CourseChatPipelineExecutionDTO
 from ...domain.chat.interaction_suggestion_dto import (
     InteractionSuggestionPipelineExecutionDTO,
@@ -30,12 +21,22 @@ from ...retrieval.faq_retrieval import FaqRetrieval
 from ...retrieval.faq_retrieval_utils import should_allow_faq_tool
 from ...retrieval.lecture.lecture_retrieval import LectureRetrieval
 from ...retrieval.lecture.lecture_retrieval_utils import should_allow_lecture_tool
+from ...tools import (
+    create_tool_faq_content_retrieval,
+    create_tool_get_competency_list,
+    create_tool_get_course_details,
+    create_tool_get_exercise_list,
+    create_tool_get_exercise_problem_statement,
+    create_tool_get_student_exercise_metrics,
+    create_tool_lecture_content_retrieval,
+)
 from ...web.status.status_update import (
     CourseChatStatusCallback,
 )
 from ..abstract_agent_pipeline import AbstractAgentPipeline, AgentPipelineExecutionState
 from ..shared.citation_pipeline import CitationPipeline, InformationType
 from ..shared.utils import (
+    datetime_to_string,
     format_custom_instructions,
 )
 from .interaction_suggestion_pipeline import (
@@ -157,13 +158,17 @@ class CourseChatPipeline(
             callback = cast(CourseChatStatusCallback, state.callback)
 
         tool_list: list[Callable] = [
-            create_tool_get_course_details(state.dto, callback),
+            create_tool_get_course_details(state.dto.course, callback),
         ]
 
         if state.dto.course.exercises:
-            tool_list.append(create_tool_get_exercise_list(state.dto, callback))
             tool_list.append(
-                create_tool_get_exercise_problem_statement(state.dto, callback)
+                create_tool_get_exercise_list(state.dto.course.exercises, callback)
+            )
+            tool_list.append(
+                create_tool_get_exercise_problem_statement(
+                    state.dto.course.exercises, callback
+                )
             )
 
         if (
@@ -172,18 +177,23 @@ class CourseChatPipeline(
             and state.dto.course.exercises
         ):
             tool_list.append(
-                create_tool_get_student_exercise_metrics(state.dto, callback)
+                create_tool_get_student_exercise_metrics(state.dto.metrics, callback)
             )
 
         if state.dto.course.competencies and len(state.dto.course.competencies) > 0:
-            tool_list.append(create_tool_get_competency_list(state.dto, callback))
+            tool_list.append(
+                create_tool_get_competency_list(
+                    state.dto.course.competencies, state.dto.metrics, callback
+                )
+            )
 
         if allow_lecture_tool:
             self.lecture_retriever = LectureRetrieval(state.db.client)
             tool_list.append(
                 create_tool_lecture_content_retrieval(
                     self.lecture_retriever,
-                    state.dto,
+                    state.dto.course.id,
+                    state.dto.settings.artemis_base_url if state.dto.settings else "",
                     callback,
                     query_text,
                     state.message_history,
@@ -196,7 +206,9 @@ class CourseChatPipeline(
             tool_list.append(
                 create_tool_faq_content_retrieval(
                     self.faq_retriever,
-                    state.dto,
+                    state.dto.course.id,
+                    state.dto.course.name,
+                    state.dto.settings.artemis_base_url if state.dto.settings else "",
                     callback,
                     query_text,
                     state.message_history,
@@ -254,7 +266,7 @@ class CourseChatPipeline(
 
         # Prepare template context
         template_context = {
-            "current_date": datetime.now(tz=pytz.UTC).strftime("%Y-%m-%d %H:%M:%S"),
+            "current_date": datetime_to_string(datetime.now(tz=pytz.UTC)),
             "has_competencies": bool(state.dto.course.competencies),
             "has_exercises": bool(state.dto.course.exercises),
             "allow_lecture_tool": allow_lecture_tool,
