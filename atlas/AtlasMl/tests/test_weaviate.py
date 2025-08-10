@@ -394,3 +394,67 @@ def test_collection_initialization_error():
                 WeaviateOperationError, match="Failed to initialize collections"
             ):
                 WeaviateClient()
+
+
+def test_delete_by_property_success(mock_weaviate_client):
+    """Test successful deletion by property."""
+    client = WeaviateClient()
+    collection_name = CollectionNames.COMPETENCY.value
+    property_name = "competency_id"
+    property_value = "comp-1"
+
+    deleted_count = client.delete_by_property(
+        collection_name, property_name, property_value
+    )
+
+    assert deleted_count == 2  # Mock returns 2 successful deletions
+
+
+def test_delete_by_property_with_invalid_params(mock_weaviate_client):
+    """Test delete_by_property with invalid parameters."""
+    client = WeaviateClient()
+    collection_name = CollectionNames.COMPETENCY.value
+
+    # Test with empty property name
+    with pytest.raises(ValueError, match="Property name and value must be provided"):
+        client.delete_by_property(collection_name, "", "value")
+
+    # Test with empty property value
+    with pytest.raises(ValueError, match="Property name and value must be provided"):
+        client.delete_by_property(collection_name, "property", "")
+
+
+def test_delete_by_property_nonexistent_collection(mock_weaviate_client):
+    """Test delete_by_property with non-existent collection."""
+    client = WeaviateClient()
+    collection_name = "NonExistentCollection"
+    property_name = "some_property"
+    property_value = "some_value"
+
+    with pytest.raises(
+        ValueError, match=f"Collection '{collection_name}' does not exist"
+    ):
+        client.delete_by_property(collection_name, property_name, property_value)
+
+
+def test_delete_by_property_query_error():
+    """Test delete_by_property with Weaviate query error."""
+    from unittest.mock import patch
+    from atlasml.clients.weaviate import WeaviateOperationError
+    from tests.conftest import MockWeaviateClient
+
+    # Create a mock client and configure to fail
+    mock_client = MockWeaviateClient()
+    collection = mock_client.collections.get(CollectionNames.COMPETENCY.value)
+    collection.data.set_fail_delete(True)
+
+    with patch("weaviate.connect_to_local", return_value=mock_client):
+        with patch("atlasml.clients.weaviate.WeaviateClientSingleton._instance", None):
+            client = WeaviateClient()
+
+            with pytest.raises(
+                WeaviateOperationError, match="Unexpected error deleting by property"
+            ):
+                client.delete_by_property(
+                    CollectionNames.COMPETENCY.value, "competency_id", "comp-1"
+                )

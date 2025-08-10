@@ -165,12 +165,20 @@ class MockWeaviateQuery:
         self._should_fail_fetch = should_fail
 
 
+class MockDeleteResult:
+    """Mock delete operation result."""
+    
+    def __init__(self, successful_count: int):
+        self.successful = successful_count
+
+
 class MockWeaviateData:
     """Mock collection data operations."""
 
     def __init__(self):
         self._should_fail_insert = False
         self._should_fail_update = False
+        self._should_fail_delete = False
 
     def insert(self, properties=None, vector=None):
         """Mock insert operation."""
@@ -184,6 +192,13 @@ class MockWeaviateData:
             raise Exception("Mock update error")
         return True
 
+    def delete_many(self, where=None):
+        """Mock delete_many operation."""
+        if self._should_fail_delete:
+            raise Exception("Mock delete error")
+        # Return mock result with successful count
+        return MockDeleteResult(2)
+
     def set_fail_insert(self, should_fail: bool):
         """Set whether insert operations should fail."""
         self._should_fail_insert = should_fail
@@ -191,6 +206,10 @@ class MockWeaviateData:
     def set_fail_update(self, should_fail: bool):
         """Set whether update operations should fail."""
         self._should_fail_update = should_fail
+
+    def set_fail_delete(self, should_fail: bool):
+        """Set whether delete operations should fail."""
+        self._should_fail_delete = should_fail
 
 
 class MockWeaviateConfig:

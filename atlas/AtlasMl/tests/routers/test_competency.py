@@ -150,3 +150,76 @@ def test_save_competencies_missing_required_fields(test_env, mock_weaviate_clien
 
     # Should return 422 Unprocessable Entity for missing required fields
     assert response.status_code == 422
+
+
+def test_suggest_competency_relations_valid_input(test_env, mock_weaviate_client):
+    """Test suggest_competency_relations with valid course_id input."""
+    course_id = "course-1"
+    
+    response = client.get(
+        f"/api/v1/competency/relations/suggest/{course_id}",
+        headers={"Authorization": "secret-token"},
+    )
+    
+    assert response.status_code == 200
+    
+    # Validate response structure matches CompetencyRelationSuggestionResponse
+    response_data = response.json()
+    assert "relations" in response_data
+    assert isinstance(response_data["relations"], list)
+
+
+def test_suggest_competency_relations_output_structure(test_env, mock_weaviate_client):
+    """Test suggest_competency_relations output structure matches expected model."""
+    course_id = "course-1"
+    
+    response = client.get(
+        f"/api/v1/competency/relations/suggest/{course_id}",
+        headers={"Authorization": "secret-token"},
+    )
+    
+    assert response.status_code == 200
+    response_data = response.json()
+    
+    # Validate CompetencyRelationSuggestionResponse structure
+    assert "relations" in response_data
+    relations = response_data["relations"]
+    assert isinstance(relations, list)
+    
+    # If relations exist, validate CompetencyRelation structure
+    if relations:
+        relation = relations[0]
+        assert "tail_id" in relation
+        assert "head_id" in relation
+        assert "relation_type" in relation
+        assert isinstance(relation["tail_id"], str)
+        assert isinstance(relation["head_id"], str)
+        assert relation["relation_type"] in ["MATCHES", "EXTENDS", "REQUIRES"]
+
+
+def test_suggest_competency_relations_empty_course_id(test_env, mock_weaviate_client):
+    """Test suggest_competency_relations with empty course_id."""
+    course_id = ""
+    
+    response = client.get(
+        f"/api/v1/competency/relations/suggest/{course_id}",
+        headers={"Authorization": "secret-token"},
+    )
+    
+    # Should handle empty course_id (likely 404 or validation error)
+    assert response.status_code in [404, 422]
+
+
+def test_suggest_competency_relations_special_characters(test_env, mock_weaviate_client):
+    """Test suggest_competency_relations with course_id containing special characters."""
+    course_id = "course-with-special@chars!"
+    
+    response = client.get(
+        f"/api/v1/competency/relations/suggest/{course_id}",
+        headers={"Authorization": "secret-token"},
+    )
+    
+    # Should handle special characters in path parameter
+    assert response.status_code == 200
+    response_data = response.json()
+    assert "relations" in response_data
