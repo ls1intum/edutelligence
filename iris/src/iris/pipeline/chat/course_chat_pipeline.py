@@ -11,7 +11,6 @@ from langsmith import traceable
 
 from ...common.mastery_utils import get_mastery
 from ...common.memiris_setup import get_tenant_for_user
-from ...common.token_usage_dto import TokenUsageDTO
 from ...common.tools import (
     create_tool_faq_content_retrieval,
     create_tool_get_competency_list,
@@ -338,6 +337,28 @@ class CourseChatPipeline(
     # === CAN override (optional methods) ===
     # ========================================
 
+    def on_agent_step(
+        self,
+        state: AgentPipelineExecutionState[
+            CourseChatPipelineExecutionDTO, CourseChatVariant
+        ],
+        step: dict[str, Any],
+    ) -> None:
+        """
+        Handle each agent execution step.
+
+        Args:
+            state: The current pipeline execution state.
+            step: The current step information.
+        """
+        # Track token usage
+        if hasattr(state, "llm") and state.llm and hasattr(state.llm, "tokens"):
+            self.tokens.append(state.llm.tokens)
+
+        # Update progress
+        if step.get("intermediate_steps"):
+            state.callback.in_progress("Thinking ...")
+
     def post_agent_hook(
         self,
         state: AgentPipelineExecutionState[
@@ -441,6 +462,11 @@ class CourseChatPipeline(
                 suggestion_dto.chat_history = dto.chat_history
                 suggestion_dto.last_message = output
                 suggestions = self.suggestion_pipeline(suggestion_dto)
+
+                # Track tokens from suggestion pipeline
+                if self.suggestion_pipeline.tokens is not None:
+                    self.tokens.append(self.suggestion_pipeline.tokens)
+
                 return suggestions
             else:
                 # This should never happen but whatever
@@ -453,22 +479,6 @@ class CourseChatPipeline(
             )
             traceback.print_exc()
             return None
-
-    def _append_tokens(self, tokens: TokenUsageDTO) -> None:
-        """
-        Append tokens to the token list.
-
-        Args:
-            tokens: Token usage information to append
-        """
-        # Override the parent method to handle token tracking properly
-        # Convert TokenUsageDTO to the list format expected by this pipeline
-        if hasattr(tokens, "tokens"):
-            self.tokens.extend(tokens.tokens)
-        else:
-            # Handle case where token_usage is already a list or other format
-            if isinstance(tokens, list):
-                self.tokens.extend(tokens)
 
     @traceable(name="Course Chat Pipeline")
     def __call__(
