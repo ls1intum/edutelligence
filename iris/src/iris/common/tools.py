@@ -1,17 +1,24 @@
+import logging
 import typing
 from datetime import datetime
 from typing import Callable, List, Optional, Union
 
 import pytz
+from langchain_core.tools import BaseTool
 
+from .pyris_message import IrisMessageRole, PyrisMessage
 from ..domain import CourseChatPipelineExecutionDTO
+from ..domain.communication.communication_tutor_suggestion_pipeline_execution_dto import \
+    CommunicationTutorSuggestionPipelineExecutionDTO
+from ..domain.data.programming_exercise_dto import ProgrammingExerciseDTO
+from ..domain.data.text_exercise_dto import TextExerciseDTO
 from ..retrieval.faq_retrieval import FaqRetrieval
 from ..retrieval.faq_retrieval_utils import format_faqs
 from ..retrieval.lecture.lecture_retrieval import LectureRetrieval
-from ..web.status.status_update import CourseChatStatusCallback
+from ..web.status.status_update import CourseChatStatusCallback, TutorSuggestionCallback, StatusCallback
 from .mastery_utils import get_mastery
 
-
+logger = logging.getLogger(__name__)
 def datetime_to_string(dt: Optional[datetime]) -> str:
     """
     Convert a datetime to a formatted string.
@@ -288,11 +295,11 @@ def create_tool_get_competency_list(
 
     return get_competency_list
 
-
+#TODO: Update dto types to be more generic if needed
 def create_tool_lecture_content_retrieval(
     lecture_retriever: LectureRetrieval,
-    dto: CourseChatPipelineExecutionDTO,
-    callback: CourseChatStatusCallback,
+    dto: CourseChatPipelineExecutionDTO | CommunicationTutorSuggestionPipelineExecutionDTO,
+    callback: StatusCallback,
     query_text: str,
     history: List,
     lecture_content_storage: dict,
@@ -303,13 +310,13 @@ def create_tool_lecture_content_retrieval(
     Args:
         lecture_retriever (LectureRetrieval): Lecture retrieval instance.
         dto (CourseChatPipelineExecutionDTO): Execution DTO with course data.
-        callback (CourseChatStatusCallback): Callback for status updates.
+        callback (StatusCallback): Callback for status updates.
         query_text (str): The student's query text.
         history (List): Chat history messages.
         lecture_content_storage (dict): Storage for retrieved content.
 
     Returns:
-        Callable[[], str]: Function that returns lecture content string.
+        BaseTool: Tool that returns lecture content string.
     """
 
     def lecture_content_retrieval() -> str:
@@ -364,11 +371,11 @@ def create_tool_lecture_content_retrieval(
 
     return lecture_content_retrieval
 
-
+#TODO: Update dto types to be more generic if needed
 def create_tool_faq_content_retrieval(
     faq_retriever: FaqRetrieval,
-    dto: CourseChatPipelineExecutionDTO,
-    callback: CourseChatStatusCallback,
+    dto: CourseChatPipelineExecutionDTO | CommunicationTutorSuggestionPipelineExecutionDTO,
+    callback: StatusCallback,
     query_text: str,
     history: List,
     faq_storage: dict,
@@ -420,3 +427,93 @@ def create_tool_faq_content_retrieval(
         return result
 
     return faq_content_retrieval
+
+
+def create_tool_get_problem_statement(
+        dto: TextExerciseDTO | ProgrammingExerciseDTO,
+        callback: StatusCallback,
+) -> Callable[[], str]:
+    """
+    Create a tool that retrieves the problem statement of an exercise.
+
+    Args:
+        dto (TextExerciseDTO | ProgrammingExerciseDTO): DTO containing exercise data.
+
+    Returns:
+        Callable: Function that returns the problem statement.
+    """
+    def get_problem_statement() -> str:
+        """
+        Get the problem statement of the exercise.
+        Use this if the student asks you about the problem statement of a text or programming exercise.
+
+        Returns:
+            str: The problem statement or an error message if not found.
+        """
+        callback.in_progress("Reading problem statement ...")
+        return dto.problem_statement
+
+    return get_problem_statement
+
+
+def create_tool_get_example_solution(
+        dto: TextExerciseDTO,
+        callback: StatusCallback,
+) -> Callable[[], str]:
+    """
+    Create a tool that retrieves the example solution of a text exercise.
+
+    Args:
+        dto (TextExerciseDTO): DTO containing text exercise data.
+
+    Returns:
+        Callable[[], str]: Function that returns the example solution.
+    """
+
+    def get_example_solution() -> str:
+        """
+        Get the example solution of the text exercise.
+        Use this if the student asks you about the example solution of a text exercise.
+
+        Returns:
+            str: The example solution or an error message if not found.
+        """
+        callback.in_progress("Reading example solution ...")
+        return dto.example_solution or "No example solution provided"
+
+    return get_example_solution
+
+def create_tool_get_last_artifact(
+    chat_history: List[PyrisMessage], callback: StatusCallback
+) -> Callable[[], str]:
+    """
+    Create a tool that retrieves the last artifact from the chat history.
+
+    Args:
+        chat_history (List[PyrisMessage]): List of messages in the chat history.
+        callback (StatusCallback): Callback for status updates.
+
+    Returns:
+        Callable[[], str]: Function that returns the last artifact content.
+    """
+
+    def get_last_artifact() -> str:
+        """
+        Get the last artifact from the chat history.
+        Use this if you want to refer to the last artifact in the conversation.
+
+        Returns:
+            str: The last artifact content or an error message if not found.
+        """
+        callback.in_progress("Retrieving last artifact ...")
+        if chat_history:
+            for message in reversed(chat_history):
+                if message.sender == IrisMessageRole.ARTIFACT:
+                    if message.contents:
+                        return message.contents[0].text_content
+                    return "Artifact message has no content."
+        return "No artifact found in chat history."
+
+    return get_last_artifact
+
+
