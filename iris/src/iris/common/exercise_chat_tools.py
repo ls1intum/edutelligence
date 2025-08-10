@@ -217,7 +217,8 @@ def create_tool_get_feedbacks(
         callback.in_progress("Analyzing feedbacks ...")
         if not submission:
             return "No feedbacks available."
-        feedbacks = submission.latest_result.feedbacks
+        latest_result = getattr(submission, "latest_result", None)
+        feedbacks = latest_result.feedbacks if latest_result else None
         feedback_list = (
             "\n".join(
                 [

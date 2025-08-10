@@ -196,14 +196,14 @@ class OllamaModel(
                 tool_defs.append({"type": "function", "function": schema})
 
                 # …and the executor we will run locally.
-                def _exec_callable(args, _tool=tool):
+                def _exec_callable(args, tool_attr=tool):
                     if not args:
-                        return _tool()
+                        return tool_attr()
                     # Try kwargs; if it fails, try pass-through single arg
                     try:
-                        return _tool(**args)
+                        return tool_attr(**args)
                     except TypeError:
-                        return _tool(args)
+                        return tool_attr(args)
 
                 executors[name] = _exec_callable
                 continue

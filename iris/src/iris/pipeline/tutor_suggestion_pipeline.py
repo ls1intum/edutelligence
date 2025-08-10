@@ -105,16 +105,18 @@ class TutorSuggestionPipeline(
 
         tool_list: List[Callable] = []
         if is_programming_exercise:
-            programming_exercise_tools = [
-                create_tool_get_submission_details(state.dto.submission, callback),
-                create_tool_get_additional_exercise_details(
-                    state.dto.programming_exercise, callback
-                ),
-                create_tool_get_build_logs_analysis(state.dto.submission, callback),
-                create_tool_get_feedbacks(state.dto.submission, callback),
-                create_tool_repository_files(state.dto.submission, callback),
-                create_tool_file_lookup(state.dto.submission, callback),
+            programming_exercise_tools: list[Callable] = [
+                create_tool_get_additional_exercise_details(state.dto.exercise, callback),
             ]
+            if state.dto.submission is not None:
+                submission = state.dto.submission
+                programming_exercise_tools.extend([
+                    create_tool_get_submission_details(submission, callback),
+                    create_tool_get_build_logs_analysis(submission, callback),
+                    create_tool_get_feedbacks(submission, callback),
+                    create_tool_repository_files(submission, callback),
+                    create_tool_file_lookup(submission, callback),
+                ])
             tool_list.extend(programming_exercise_tools)
 
         if is_text_exercise:
@@ -249,15 +251,17 @@ class TutorSuggestionPipeline(
             except Exception:
                 result_text = None
                 suggestions = raw
+        artifact_text = (
+            suggestions
+            if isinstance(suggestions, str) and suggestions.strip()
+            else (json.dumps(suggestions,
+                             ensure_ascii=False) if suggestions else "No suggestions generated, please try again.")
+        )
         state.callback.done(
             "Response generated",
             final_result=result_text,
             tokens=self.tokens,
-            artifact=(
-                suggestions
-                if suggestions != ""
-                else "No suggestions generated, please try again."
-            ),
+            artifact=artifact_text,
         )
         return ""
 
