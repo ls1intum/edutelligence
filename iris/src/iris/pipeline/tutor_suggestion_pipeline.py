@@ -226,7 +226,7 @@ class TutorSuggestionPipeline(
             "Response generated",
             final_result=result_text,
             tokens=self.tokens,
-            artifact=suggestions,
+            artifact=suggestions if suggestions is not "" else "No suggestions generated, please try again.",
         )
         return ""
 
