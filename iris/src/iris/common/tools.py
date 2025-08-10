@@ -4,21 +4,26 @@ from datetime import datetime
 from typing import Callable, List, Optional, Union
 
 import pytz
-from langchain_core.tools import BaseTool
 
-from .pyris_message import IrisMessageRole, PyrisMessage
 from ..domain import CourseChatPipelineExecutionDTO
-from ..domain.communication.communication_tutor_suggestion_pipeline_execution_dto import \
-    CommunicationTutorSuggestionPipelineExecutionDTO
+from ..domain.communication.communication_tutor_suggestion_pipeline_execution_dto import (
+    CommunicationTutorSuggestionPipelineExecutionDTO,
+)
 from ..domain.data.programming_exercise_dto import ProgrammingExerciseDTO
 from ..domain.data.text_exercise_dto import TextExerciseDTO
 from ..retrieval.faq_retrieval import FaqRetrieval
 from ..retrieval.faq_retrieval_utils import format_faqs
 from ..retrieval.lecture.lecture_retrieval import LectureRetrieval
-from ..web.status.status_update import CourseChatStatusCallback, TutorSuggestionCallback, StatusCallback
+from ..web.status.status_update import (
+    CourseChatStatusCallback,
+    StatusCallback,
+)
 from .mastery_utils import get_mastery
+from .pyris_message import IrisMessageRole, PyrisMessage
 
 logger = logging.getLogger(__name__)
+
+
 def datetime_to_string(dt: Optional[datetime]) -> str:
     """
     Convert a datetime to a formatted string.
@@ -295,10 +300,14 @@ def create_tool_get_competency_list(
 
     return get_competency_list
 
-#TODO: Update dto types to be more generic if needed
+
+# TODO: Update dto types to be more generic if needed
 def create_tool_lecture_content_retrieval(
     lecture_retriever: LectureRetrieval,
-    dto: CourseChatPipelineExecutionDTO | CommunicationTutorSuggestionPipelineExecutionDTO,
+    dto: (
+        CourseChatPipelineExecutionDTO
+        | CommunicationTutorSuggestionPipelineExecutionDTO
+    ),
     callback: StatusCallback,
     query_text: str,
     history: List,
@@ -371,10 +380,14 @@ def create_tool_lecture_content_retrieval(
 
     return lecture_content_retrieval
 
-#TODO: Update dto types to be more generic if needed
+
+# TODO: Update dto types to be more generic if needed
 def create_tool_faq_content_retrieval(
     faq_retriever: FaqRetrieval,
-    dto: CourseChatPipelineExecutionDTO | CommunicationTutorSuggestionPipelineExecutionDTO,
+    dto: (
+        CourseChatPipelineExecutionDTO
+        | CommunicationTutorSuggestionPipelineExecutionDTO
+    ),
     callback: StatusCallback,
     query_text: str,
     history: List,
@@ -430,8 +443,8 @@ def create_tool_faq_content_retrieval(
 
 
 def create_tool_get_problem_statement(
-        dto: TextExerciseDTO | ProgrammingExerciseDTO,
-        callback: StatusCallback,
+    dto: TextExerciseDTO | ProgrammingExerciseDTO,
+    callback: StatusCallback,
 ) -> Callable[[], str]:
     """
     Create a tool that retrieves the problem statement of an exercise.
@@ -442,6 +455,7 @@ def create_tool_get_problem_statement(
     Returns:
         Callable: Function that returns the problem statement.
     """
+
     def get_problem_statement() -> str:
         """
         Get the problem statement of the exercise.
@@ -457,8 +471,8 @@ def create_tool_get_problem_statement(
 
 
 def create_tool_get_example_solution(
-        dto: TextExerciseDTO,
-        callback: StatusCallback,
+    dto: TextExerciseDTO,
+    callback: StatusCallback,
 ) -> Callable[[], str]:
     """
     Create a tool that retrieves the example solution of a text exercise.
@@ -482,6 +496,7 @@ def create_tool_get_example_solution(
         return dto.example_solution or "No example solution provided"
 
     return get_example_solution
+
 
 def create_tool_get_last_artifact(
     chat_history: List[PyrisMessage], callback: StatusCallback
@@ -515,5 +530,3 @@ def create_tool_get_last_artifact(
         return "No artifact found in chat history."
 
     return get_last_artifact
-
-

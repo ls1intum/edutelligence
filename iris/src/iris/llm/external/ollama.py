@@ -5,7 +5,6 @@ import logging
 from datetime import datetime
 from typing import (
     Any,
-    Callable,
     Dict,
     Literal,
     Optional,
@@ -16,7 +15,7 @@ from typing import (
 
 from httpx import Client as HTTPXClient
 from httpx import HTTPTransport, Timeout
-from langchain_core.tools import BaseTool, StructuredTool
+from langchain_core.tools import BaseTool
 from langchain_experimental.llms.ollama_functions import convert_to_ollama_tool
 from ollama import Client, Message
 from pydantic import BaseModel, Field
@@ -32,6 +31,7 @@ from ...llm import CompletionArguments
 from ...llm.external.model import ChatModel, CompletionModel, EmbeddingModel
 
 logger = logging.getLogger(__name__)
+
 
 def convert_to_ollama_images(base64_images: list[str]) -> list[bytes] | None:
     """
@@ -159,11 +159,15 @@ class OllamaModel(
         sig = inspect.signature(func)
         # If the callable actually takes arguments, expose them as free-form
         # (customize here to generate a real JSON Schema if you like)
-        if any(p.kind in (p.POSITIONAL_OR_KEYWORD, p.KEYWORD_ONLY) for p in sig.parameters.values()):
+        if any(
+            p.kind in (p.POSITIONAL_OR_KEYWORD, p.KEYWORD_ONLY)
+            for p in sig.parameters.values()
+        ):
             params = {"type": "object", "additionalProperties": True}
         return {
             "name": func.__name__,
-            "description": (func.__doc__ or "").strip() or f"Callable tool {func.__name__}",
+            "description": (func.__doc__ or "").strip()
+            or f"Callable tool {func.__name__}",
             "parameters": params,
         }
 
@@ -190,6 +194,7 @@ class OllamaModel(
                 schema = self._callable_to_ollama_tool(tool)
                 name = schema["name"]
                 tool_defs.append({"type": "function", "function": schema})
+
                 # …and the executor we will run locally.
                 def _exec_callable(args, _tool=tool):
                     if not args:
@@ -199,6 +204,7 @@ class OllamaModel(
                         return _tool(**args)
                     except TypeError:
                         return _tool(args)
+
                 executors[name] = _exec_callable
                 continue
 
@@ -209,13 +215,19 @@ class OllamaModel(
 
             # And wire up executors for supported kinds
             if isinstance(tool, BaseTool):
-                def _exec_basetool(args, _tool=tool):
-                    if hasattr(_tool, "invoke"):
-                        return _tool.invoke(args or {})
-                    if hasattr(_tool, "run"):
+
+                def _exec_basetool(args, tool_attr=tool):
+                    if hasattr(tool_attr, "invoke"):
+                        return tool_attr.invoke(args or {})
+                    if hasattr(tool_attr, "run"):
                         # Some tools expect a string; give them JSON if dict
-                        return _tool.run(args if isinstance(args, str) else json.dumps(args or {}))
-                    raise RuntimeError(f"Unsupported BaseTool without invoke/run: {type(_tool)}")
+                        return tool_attr.run(
+                            args if isinstance(args, str) else json.dumps(args or {})
+                        )
+                    raise RuntimeError(
+                        f"Unsupported BaseTool without invoke/run: {type(tool_attr)}"
+                    )
+
                 executors[name] = _exec_basetool
 
             elif isinstance(tool, dict):
@@ -228,10 +240,12 @@ class OllamaModel(
                 # If you have a convention (e.g., class defines a staticmethod `run`), wire it here.
                 run_fn = getattr(tool, "run", None)
                 if callable(run_fn):
-                    def _exec_pydantic(args, _run=run_fn, _cls=tool):
+
+                    def _exec_pydantic(args, run_attr=run_fn, cls_attr=tool):
                         # Validate then run
-                        instance = _cls.model_validate(args or {})
-                        return _run(instance)
+                        instance = cls_attr.model_validate(args or {})
+                        return run_attr(instance)
+
                     executors[name] = _exec_pydantic
 
         return tool_defs, executors
@@ -259,7 +273,7 @@ class OllamaModel(
     def chat(
         self,
         messages: list,  # list[PyrisMessage]
-        arguments,       # CompletionArguments
+        arguments,  # CompletionArguments
         tools: Optional[
             Sequence[Union[Dict[str, Any], Type[BaseModel], callable, BaseTool]]
         ],
@@ -279,7 +293,11 @@ class OllamaModel(
                 model=self.model,
                 messages=ollama_messages,
                 tools=tool_defs,  # pass tools every round
-                format="json" if getattr(arguments, "response_format", None) == "JSON" else "",
+                format=(
+                    "json"
+                    if getattr(arguments, "response_format", None) == "JSON"
+                    else ""
+                ),
                 options=self.options,
             )
 
@@ -295,19 +313,25 @@ class OllamaModel(
 
                 # Execute each tool and append the tool result
                 for call in tool_calls:
-                    fn = (call.get("function") or {})
+                    fn = call.get("function") or {}
                     name = fn.get("name")
                     args = fn.get("arguments")
                     result = self._execute_tool(executors, name, args)
 
                     # Stringify non-string results
-                    content = result if isinstance(result, str) else json.dumps(result, ensure_ascii=False)
+                    content = (
+                        result
+                        if isinstance(result, str)
+                        else json.dumps(result, ensure_ascii=False)
+                    )
 
-                    ollama_messages.append({
-                        "role": "tool",
-                        "name": name,
-                        "content": content,
-                    })
+                    ollama_messages.append(
+                        {
+                            "role": "tool",
+                            "name": name,
+                            "content": content,
+                        }
+                    )
                 # Loop again so the model can see tool outputs
                 continue
 
@@ -323,7 +347,7 @@ class OllamaModel(
 
         # Safety valve: max rounds reached; return whatever the last msg was
         return convert_to_iris_message(
-            msg if 'msg' in locals() else {},
+            msg if "msg" in locals() else {},
             total_prompt_eval,
             total_eval,
             model_used,

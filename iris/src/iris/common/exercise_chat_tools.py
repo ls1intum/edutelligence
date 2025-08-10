@@ -4,6 +4,7 @@ Exercise chat tools for the exercise chat agent pipeline.
 This module contains tool creation functions for the exercise chat pipeline,
 following the builder pattern to accommodate required local variables.
 """
+
 from datetime import datetime
 from operator import attrgetter
 from typing import Callable, List
@@ -115,10 +116,14 @@ def create_tool_get_additional_exercise_details(
         current_time = datetime.now(tz=pytz.UTC)
         return {
             "start_date": (
-                exercise.start_date.isoformat() if exercise and exercise.start_date else "No start date provided"
+                exercise.start_date.isoformat()
+                if exercise and exercise.start_date
+                else "No start date provided"
             ),
             "end_date": (
-                exercise.end_date.isoformat() if exercise and exercise.end_date else "No end date provided"
+                exercise.end_date.isoformat()
+                if exercise and exercise.end_date
+                else "No end date provided"
             ),
             "due_date_over": (
                 exercise.end_date < current_time

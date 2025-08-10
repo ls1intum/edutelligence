@@ -1,20 +1,30 @@
+import json
 import logging
 import os
-import json
 import traceback
 from datetime import datetime
-from typing import List, Callable, cast, Any
+from typing import Any, Callable, List, cast
 
 import pytz
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from langchain_core.runnables import Runnable
 from langsmith import traceable
 
-from iris.common.exercise_chat_tools import create_tool_get_feedbacks, create_tool_repository_files, \
-    create_tool_file_lookup, create_tool_get_build_logs_analysis, create_tool_get_additional_exercise_details, \
-    create_tool_get_submission_details
-from iris.common.tools import create_tool_lecture_content_retrieval, create_tool_faq_content_retrieval, \
-    create_tool_get_problem_statement, create_tool_get_example_solution, create_tool_get_last_artifact
+from iris.common.exercise_chat_tools import (
+    create_tool_file_lookup,
+    create_tool_get_additional_exercise_details,
+    create_tool_get_build_logs_analysis,
+    create_tool_get_feedbacks,
+    create_tool_get_submission_details,
+    create_tool_repository_files,
+)
+from iris.common.tools import (
+    create_tool_faq_content_retrieval,
+    create_tool_get_example_solution,
+    create_tool_get_last_artifact,
+    create_tool_get_problem_statement,
+    create_tool_lecture_content_retrieval,
+)
 from iris.common.tutor_suggestion import (
     ADVANCED_VARIANT,
     DEFAULT_VARIANT,
@@ -24,7 +34,12 @@ from iris.domain.communication.communication_tutor_suggestion_pipeline_execution
 )
 from iris.domain.data.post_dto import PostDTO
 from iris.domain.variant.tutor_suggestion_variant import TutorSuggestionVariant
-from iris.pipeline.abstract_agent_pipeline import AbstractAgentPipeline, AgentPipelineExecutionState, DTO, VARIANT
+from iris.pipeline.abstract_agent_pipeline import (
+    DTO,
+    VARIANT,
+    AbstractAgentPipeline,
+    AgentPipelineExecutionState,
+)
 from iris.retrieval.faq_retrieval import FaqRetrieval
 from iris.retrieval.faq_retrieval_utils import should_allow_faq_tool
 from iris.retrieval.lecture.lecture_retrieval import LectureRetrieval
@@ -35,7 +50,9 @@ logger = logging.getLogger(__name__)
 
 
 class TutorSuggestionPipeline(
-    AbstractAgentPipeline[CommunicationTutorSuggestionPipelineExecutionDTO, TutorSuggestionVariant]
+    AbstractAgentPipeline[
+        CommunicationTutorSuggestionPipelineExecutionDTO, TutorSuggestionVariant
+    ]
 ):
     """
     The TutorSuggestionPipeline creates a tutor suggestion
@@ -51,9 +68,7 @@ class TutorSuggestionPipeline(
         self.lecture_retriever = None
         self.faq_retriever = None
 
-        template_dir = os.path.join(
-            os.path.dirname(__file__), "prompts", "templates"
-        )
+        template_dir = os.path.join(os.path.dirname(__file__), "prompts", "templates")
         self.jinja_env = Environment(
             loader=FileSystemLoader(template_dir),
             autoescape=select_autoescape(["html", "xml", "j2"]),
@@ -70,8 +85,7 @@ class TutorSuggestionPipeline(
     def get_tools(
         self,
         state: AgentPipelineExecutionState[
-            CommunicationTutorSuggestionPipelineExecutionDTO,
-            TutorSuggestionVariant
+            CommunicationTutorSuggestionPipelineExecutionDTO, TutorSuggestionVariant
         ],
     ) -> list[Callable]:
         allow_lecture_tools = should_allow_lecture_tool(state.db, state.dto.course.id)
@@ -93,7 +107,9 @@ class TutorSuggestionPipeline(
         if is_programming_exercise:
             programming_exercise_tools = [
                 create_tool_get_submission_details(state.dto.submission, callback),
-                create_tool_get_additional_exercise_details(state.dto.programming_exercise, callback),
+                create_tool_get_additional_exercise_details(
+                    state.dto.programming_exercise, callback
+                ),
                 create_tool_get_build_logs_analysis(state.dto.submission, callback),
                 create_tool_get_feedbacks(state.dto.submission, callback),
                 create_tool_repository_files(state.dto.submission, callback),
@@ -103,8 +119,12 @@ class TutorSuggestionPipeline(
 
         if is_text_exercise:
             text_exercise_tools = [
-                create_tool_get_problem_statement(state.dto.text_exercise, state.callback),
-                create_tool_get_example_solution(state.dto.text_exercise, state.callback),
+                create_tool_get_problem_statement(
+                    state.dto.text_exercise, state.callback
+                ),
+                create_tool_get_example_solution(
+                    state.dto.text_exercise, state.callback
+                ),
             ]
             tool_list.extend(text_exercise_tools)
         query_text = self._generate_retrieval_query_text(
@@ -144,10 +164,10 @@ class TutorSuggestionPipeline(
         return tool_list
 
     def build_system_message(
-            self,
-            state: AgentPipelineExecutionState[
-                CommunicationTutorSuggestionPipelineExecutionDTO, TutorSuggestionVariant
-            ],
+        self,
+        state: AgentPipelineExecutionState[
+            CommunicationTutorSuggestionPipelineExecutionDTO, TutorSuggestionVariant
+        ],
     ) -> str:
         allow_lecture_tool = should_allow_lecture_tool(state.db, state.dto.course.id)
         allow_faq_tool = should_allow_faq_tool(state.db, state.dto.course.id)
@@ -188,7 +208,9 @@ class TutorSuggestionPipeline(
         """
         return {}
 
-    def get_memiris_tenant(self, dto: CommunicationTutorSuggestionPipelineExecutionDTO) -> str:
+    def get_memiris_tenant(
+        self, dto: CommunicationTutorSuggestionPipelineExecutionDTO
+    ) -> str:
         """
         Return the Memiris tenant identifier for the current user.
 
@@ -198,18 +220,19 @@ class TutorSuggestionPipeline(
         return ""
 
     def is_memiris_memory_creation_enabled(
-            self, state: AgentPipelineExecutionState[DTO, VARIANT]
+        self, state: AgentPipelineExecutionState[DTO, VARIANT]
     ) -> bool:
         return False
 
     def post_agent_hook(
-            self,
-            state: AgentPipelineExecutionState[
-                CommunicationTutorSuggestionPipelineExecutionDTO, TutorSuggestionVariant
-            ],
+        self,
+        state: AgentPipelineExecutionState[
+            CommunicationTutorSuggestionPipelineExecutionDTO, TutorSuggestionVariant
+        ],
     ) -> str:
         raw = state.result
-        logger.info(raw)
+        result_text = None
+        suggestions = ""
         # Extract the textual suggestion robustly whether the agent returned a dict or a JSON string
         if isinstance(raw, dict):
             suggestions = raw.get("suggestions") or json.dumps(raw)
@@ -218,7 +241,11 @@ class TutorSuggestionPipeline(
             try:
                 parsed = json.loads(raw)
                 suggestions = parsed.get("suggestions", raw)
-                result_text = parsed.get("reply") if isinstance(parsed, dict) and "reply" in parsed else None
+                result_text = (
+                    parsed.get("reply")
+                    if isinstance(parsed, dict) and "reply" in parsed
+                    else None
+                )
             except Exception:
                 result_text = None
                 suggestions = raw
@@ -226,7 +253,11 @@ class TutorSuggestionPipeline(
             "Response generated",
             final_result=result_text,
             tokens=self.tokens,
-            artifact=suggestions if suggestions is not "" else "No suggestions generated, please try again.",
+            artifact=(
+                suggestions
+                if suggestions != ""
+                else "No suggestions generated, please try again."
+            ),
         )
         return ""
 
@@ -275,11 +306,11 @@ class TutorSuggestionPipeline(
 
     @traceable(name="Tutor Suggestion Pipeline")
     def __call__(
-            self,
-            dto: CommunicationTutorSuggestionPipelineExecutionDTO,
-            variant: TutorSuggestionVariant,
-            callback: TutorSuggestionCallback,
-     ):
+        self,
+        dto: CommunicationTutorSuggestionPipelineExecutionDTO,
+        variant: TutorSuggestionVariant,
+        callback: TutorSuggestionCallback,
+    ):
         """
         Run the pipeline.
         :param dto: execution data transfer object
