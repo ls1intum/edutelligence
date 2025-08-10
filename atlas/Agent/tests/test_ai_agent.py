@@ -163,7 +163,7 @@ class TestAIAgent:
         """Test function definitions are properly structured."""
         functions = agent._get_function_definitions()
         
-        assert len(functions) == 3
+        assert len(functions) == 4
         function_names = [f["name"] for f in functions]
         assert "get_competency_suggestions" in function_names
         assert "get_courses" in function_names
