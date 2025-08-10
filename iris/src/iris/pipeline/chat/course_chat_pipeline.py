@@ -58,7 +58,6 @@ class CourseChatPipeline(
     faq_retriever: Optional[FaqRetrieval]
     jinja_env: Environment
     system_prompt_template: Any
-    tokens: list
     event: Optional[str]
 
     def __init__(
@@ -92,8 +91,6 @@ class CourseChatPipeline(
         self.system_prompt_template = self.jinja_env.get_template(
             "course_chat_system_prompt.j2"
         )
-
-        self.tokens = []
 
     def __repr__(self):
         return f"{self.__class__.__name__}(event={self.event})"
@@ -351,10 +348,6 @@ class CourseChatPipeline(
             state: The current pipeline execution state.
             step: The current step information.
         """
-        # Track token usage
-        if hasattr(state, "llm") and state.llm and hasattr(state.llm, "tokens"):
-            self.tokens.append(state.llm.tokens)
-
         # Update progress
         if step.get("intermediate_steps"):
             state.callback.in_progress("Thinking ...")
@@ -374,6 +367,7 @@ class CourseChatPipeline(
         # Process citations if we have them
         if hasattr(state, "lecture_content_storage") and hasattr(state, "faq_storage"):
             state.result = self._process_citations(
+                state,
                 state.result,
                 state.lecture_content_storage,
                 state.faq_storage,
@@ -382,13 +376,12 @@ class CourseChatPipeline(
             )
 
         # Generate suggestions
-        suggestions = self._generate_suggestions(state.result, state.dto)
+        suggestions = self._generate_suggestions(state, state.result, state.dto)
 
-        # Complete main process with suggestions
         state.callback.done(
             "Response created",
             final_result=state.result,
-            tokens=self.tokens,
+            tokens=state.tokens,
             accessed_memories=getattr(state, "accessed_memory_storage", []),
             suggestions=suggestions,
         )
@@ -401,6 +394,9 @@ class CourseChatPipeline(
 
     def _process_citations(
         self,
+        state: AgentPipelineExecutionState[
+            CourseChatPipelineExecutionDTO, CourseChatVariant
+        ],
         output: str,
         lecture_content_storage: dict[str, Any],
         faq_storage: dict[str, Any],
@@ -411,6 +407,7 @@ class CourseChatPipeline(
         Process citations for lecture content and FAQs.
 
         Args:
+            state: The current pipeline execution state
             output: The agent's output
             lecture_content_storage: Storage for lecture content
             faq_storage: Storage for FAQ content
@@ -429,7 +426,9 @@ class CourseChatPipeline(
                 variant=variant.id,
                 base_url=base_url,
             )
-        self.tokens.extend(self.citation_pipeline.tokens)
+        if hasattr(self.citation_pipeline, "tokens") and self.citation_pipeline.tokens:
+            for token in self.citation_pipeline.tokens:
+                self._track_tokens(state, token)
 
         if faq_storage.get("faqs"):
             base_url = dto.settings.artemis_base_url if dto.settings else ""
@@ -444,12 +443,18 @@ class CourseChatPipeline(
         return output
 
     def _generate_suggestions(
-        self, output: str, dto: CourseChatPipelineExecutionDTO
+        self,
+        state: AgentPipelineExecutionState[
+            CourseChatPipelineExecutionDTO, CourseChatVariant
+        ],
+        output: str,
+        dto: CourseChatPipelineExecutionDTO,
     ) -> Optional[Any]:
         """
         Generate interaction suggestions based on the output.
 
         Args:
+            state: The current pipeline execution state
             output: The agent's output
             dto: The pipeline execution DTO
 
@@ -463,9 +468,8 @@ class CourseChatPipeline(
                 suggestion_dto.last_message = output
                 suggestions = self.suggestion_pipeline(suggestion_dto)
 
-                # Track tokens from suggestion pipeline
                 if self.suggestion_pipeline.tokens is not None:
-                    self.tokens.append(self.suggestion_pipeline.tokens)
+                    self._track_tokens(state, self.suggestion_pipeline.tokens)
 
                 return suggestions
             else:
@@ -509,7 +513,7 @@ class CourseChatPipeline(
             traceback.print_exc()
             callback.error(
                 "An error occurred while running the course chat pipeline.",
-                tokens=self.tokens,
+                tokens=[],
             )
 
     @classmethod

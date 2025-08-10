@@ -59,7 +59,6 @@ class ExerciseChatAgentPipeline(
     jinja_env: Environment
     system_prompt_template: Any
     guide_prompt_template: Any
-    tokens: List[Any]
 
     def __init__(self):
         """
@@ -71,7 +70,6 @@ class ExerciseChatAgentPipeline(
         self.suggestion_pipeline = InteractionSuggestionPipeline(variant="exercise")
         self.code_feedback_pipeline = CodeFeedbackPipeline()
         self.citation_pipeline = CitationPipeline()
-        self.tokens = []
 
         # Setup Jinja2 template environment
         template_dir = os.path.join(
@@ -275,10 +273,6 @@ class ExerciseChatAgentPipeline(
             state: The current pipeline execution state.
             step: The current step information.
         """
-        # Track token usage
-        if hasattr(state, "llm") and state.llm and hasattr(state.llm, "tokens"):
-            self.tokens.append(state.llm.tokens)
-
         # Update progress
         if step.get("intermediate_steps"):
             state.callback.in_progress("Thinking ...")
@@ -308,8 +302,7 @@ class ExerciseChatAgentPipeline(
             # Generate suggestions
             self._generate_suggestions(state, result)
 
-            # Update final callback with tokens
-            state.callback.done("Done!", final_result=result, tokens=self.tokens)
+            state.callback.done("Done!", final_result=result, tokens=state.tokens)
 
             return result
 
@@ -359,7 +352,7 @@ class ExerciseChatAgentPipeline(
 
             guide_response = (prompt | llm_small | StrOutputParser()).invoke({})
 
-            self.tokens.append(llm_small.tokens)
+            self._track_tokens(state, llm_small.tokens)
 
             if "!ok!" in guide_response:
                 logger.info("Response is ok and not rewritten")
@@ -421,7 +414,12 @@ class ExerciseChatAgentPipeline(
                     base_url=base_url,
                 )
 
-            self.tokens.extend(self.citation_pipeline.tokens)
+            if (
+                hasattr(self.citation_pipeline, "tokens")
+                and self.citation_pipeline.tokens
+            ):
+                for token in self.citation_pipeline.tokens:
+                    self._track_tokens(state, token)
             return result
 
         except Exception as e:
@@ -449,14 +447,17 @@ class ExerciseChatAgentPipeline(
                 suggestion_dto.last_message = result
                 suggestions = self.suggestion_pipeline(suggestion_dto)
 
-                tokens = []
                 if self.suggestion_pipeline.tokens is not None:
-                    tokens = [self.suggestion_pipeline.tokens]
+                    self._track_tokens(state, self.suggestion_pipeline.tokens)
 
                 state.callback.done(
                     final_result=None,
                     suggestions=suggestions,
-                    tokens=tokens,
+                    tokens=(
+                        [self.suggestion_pipeline.tokens]
+                        if self.suggestion_pipeline.tokens
+                        else []
+                    ),
                 )
             else:
                 state.callback.skip(
