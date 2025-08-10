@@ -2,9 +2,8 @@ import logging
 
 from fastapi import FastAPI
 
-from nebula.health import router as health_router
-from nebula.transcript.config import Config
 from nebula.faq.routes.faq_routes import router as faq_router
+from nebula.transcript.config import Config
 
 # Set up logging and configuration
 logging.basicConfig(level=getattr(logging, Config.get_log_level()))

@@ -44,8 +44,8 @@ def transcribe_with_azure_whisper(audio_path: str, llm_id: str | None = None) ->
                 try:
                     response = requests.post(
                         url=(
-                            f"{config['endpoint']}/openai/deployments/whisper/audio/transcriptions"
-                            f"?api-version={config['api_version']}"
+                            f'{config["endpoint"]}/openai/deployments/whisper/audio/transcriptions'
+                            f'?api-version={config["api_version"]}'
                         ),
                         headers=headers,
                         files={"file": (os.path.basename(chunk_path), f, "audio/wav")},
@@ -78,14 +78,10 @@ def transcribe_with_azure_whisper(audio_path: str, llm_id: str | None = None) ->
                     break
 
                 except requests.RequestException as e:
-                    logger.error(
-                        "Azure Whisper failed on chunk %s: %s", chunk_path, e
-                    )
+                    logger.error("Azure Whisper failed on chunk %s: %s", chunk_path, e)
 
         if not success:
-            raise RuntimeError(
-                "Azure Whisper too many retries for chunk %s" % chunk_path
-            )
+            raise RuntimeError(f"Azure Whisper too many retries for chunk {chunk_path}")
 
         offset += get_audio_duration(chunk_path)
 
@@ -95,7 +91,7 @@ def transcribe_with_azure_whisper(audio_path: str, llm_id: str | None = None) ->
 def transcribe_with_openai_whisper(audio_path: str, llm_id: str | None = None) -> dict:
     llm_id = llm_id or Config.get_whisper_llm_id()
     config = load_llm_config(llm_id=llm_id)
-    headers = {"Authorization": f"Bearer {config['api_key']}"}
+    headers = {"Authorization": f'Bearer {config["api_key"]}'}
 
     uid = os.path.splitext(os.path.basename(audio_path))[0]
     chunks_dir = os.path.join(os.path.dirname(audio_path), f"chunks_{uid}")
@@ -150,13 +146,11 @@ def transcribe_with_openai_whisper(audio_path: str, llm_id: str | None = None) -
                     break
 
                 except requests.RequestException as e:
-                    logger.error(
-                        "OpenAI Whisper failed on chunk %s: %s", chunk_path, e
-                    )
+                    logger.error("OpenAI Whisper failed on chunk %s: %s", chunk_path, e)
 
         if not success:
             raise RuntimeError(
-                "OpenAI Whisper too many retries for chunk %s" % chunk_path
+                f"OpenAI Whisper too many retries for chunk {chunk_path}"
             )
 
         offset += get_audio_duration(chunk_path)

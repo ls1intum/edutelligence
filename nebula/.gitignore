@@ -4,6 +4,7 @@
 application.local.yml
 llm_config.local.yml
 nginx.local.conf
+node_modules/
 
 ######################
 # Docker

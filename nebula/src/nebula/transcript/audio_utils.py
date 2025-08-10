@@ -40,7 +40,7 @@ def split_audio_ffmpeg(audio_path, output_dir, chunk_duration=60):
     )
 
     if result.returncode != 0:
-        raise RuntimeError("FFmpeg split failed: %s" % result.stderr)
+        raise RuntimeError(f"FFmpeg split failed: {result.stderr}")
 
     chunk_files = sorted(
         [

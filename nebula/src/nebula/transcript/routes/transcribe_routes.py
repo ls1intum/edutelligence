@@ -71,7 +71,7 @@ async def run_transcription(req: TranscribeRequestDTO, job_id: str):
                 audio_path, llm_id=whisper_config["id"]
             )
         else:
-            raise ValueError(f"Unsupported Whisper type: {whisper_config['type']}")
+            raise ValueError(f'Unsupported Whisper type: {whisper_config["type"]}')
 
         logging.debug("▶ Extracting frames for GPT...")
         timestamps = [s["start"] for s in transcription["segments"]]

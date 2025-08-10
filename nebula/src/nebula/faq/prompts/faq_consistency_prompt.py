@@ -29,8 +29,9 @@ Generate the following response dictionary:
 The following four entries are optional and should only be set if inconsistencies are detected.
 
 "inconsistencies": a list of strings. Each entry must clearly describe why the final_result is inconsistent and \n
-explicitly reference the relevant existing FAQ via its faq_id. 
-When mentioning the faqId, use a phrase like "This is inconsistent with the FAQ 3 " with the actual faq_id from the FAQs.
+explicitly reference the relevant existing FAQ via its faq_id.
+When mentioning the faqId, use a phrase like "This is inconsistent with the FAQ 3 " with the actual faq_id from
+the FAQs.
 If there are no inconsistencies this entry should be an empty list.
 
 "faqIds": a list of numbers.  Each entry(faq_id) for which inconsistencies were detected.
@@ -51,8 +52,8 @@ Make sure to not include any additional FAQs that are consistent with the final_
 Both should have the same amount of entries.
 
 -"improvement": This entry should be a string that represents the improved version of the final result.
-Make sure to not include any additional information in the improved version. If you find inconsistencies, make sure to 
-improve the final result to be consistent with the existing FAQs. 
+Make sure to not include any additional information in the improved version. If you find inconsistencies, make sure to
+improve the final result to be consistent with the existing FAQs.
 You must always return an improved version, if there is a inconsistency.
 
 

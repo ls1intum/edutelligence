@@ -31,7 +31,7 @@ static_resources:
                         function envoy_on_request(handle)
                           local expected = os.getenv("NEBULA_SECRET_TOKEN") or ""
                           local auth = handle:headers():get("authorization") or ""
-                      
+
                           if auth ~= expected then
                             handle:respond(
                               {[":status"] = "403"},

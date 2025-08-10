@@ -5,7 +5,7 @@ services:
     image: traefik:v3.0
     container_name: traefik
     command:
-      - --api.dashboard=true                 # optional: Dashboard
+      - --api.dashboard=true # optional: Dashboard
       - --entrypoints.web.address=:80
       - --providers.docker=true
       - --providers.docker.exposedbydefault=false
@@ -18,7 +18,7 @@ services:
 
   auth:
     build:
-      context: .                      # Projektroot
+      context: . # Projektroot
       dockerfile: docker/auth/Dockerfile
     environment:
       - NEBULA_SECRET=${NEBULA_SECRET}
