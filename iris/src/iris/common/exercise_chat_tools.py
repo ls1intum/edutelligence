@@ -12,20 +12,22 @@ from typing import Callable, List
 import pytz
 
 from ..domain import ExerciseChatPipelineExecutionDTO
+from ..domain.data.programming_exercise_dto import ProgrammingExerciseDTO
+from ..domain.data.programming_submission_dto import ProgrammingSubmissionDTO
 from ..retrieval.faq_retrieval import FaqRetrieval
 from ..retrieval.faq_retrieval_utils import format_faqs
 from ..retrieval.lecture.lecture_retrieval import LectureRetrieval
-from ..web.status.status_update import ExerciseChatStatusCallback
+from ..web.status.status_update import ExerciseChatStatusCallback, StatusCallback
 
 
 def create_tool_get_submission_details(
-    dto: ExerciseChatPipelineExecutionDTO, callback: ExerciseChatStatusCallback
+    submission: ProgrammingSubmissionDTO, callback: StatusCallback
 ) -> Callable[[], dict]:
     """
     Create a tool that retrieves submission details.
 
     Args:
-        dto: Execution DTO containing submission data.
+        submission: Execution DTO containing submission data.
         callback: Callback for status updates.
 
     Returns:
@@ -49,7 +51,7 @@ def create_tool_get_submission_details(
             dict: Dictionary containing submission details.
         """
         callback.in_progress("Reading submission details...")
-        if not dto.submission:
+        if not submission:
             return {
                 field: f'No {field.replace("_", " ")} is provided'
                 for field in [
@@ -61,7 +63,7 @@ def create_tool_get_submission_details(
             }
 
         getter = attrgetter("date", "is_practice", "build_failed", "latest_result")
-        values = getter(dto.submission)
+        values = getter(submission)
         keys = [
             "submission_date",
             "is_practice",
@@ -82,13 +84,13 @@ def create_tool_get_submission_details(
 
 
 def create_tool_get_additional_exercise_details(
-    dto: ExerciseChatPipelineExecutionDTO, callback: ExerciseChatStatusCallback
+    exercise: ProgrammingExerciseDTO, callback: StatusCallback
 ) -> Callable[[], dict]:
     """
     Create a tool that retrieves additional exercise details.
 
     Args:
-        dto: Execution DTO containing exercise data.
+        exercise: Execution DTO containing exercise data.
         callback: Callback for status updates.
 
     Returns:
@@ -114,14 +116,14 @@ def create_tool_get_additional_exercise_details(
         current_time = datetime.now(tz=pytz.UTC)
         return {
             "start_date": (
-                dto.exercise.start_date if dto.exercise else "No start date provided"
+                exercise.start_date if exercise else "No start date provided"
             ),
             "end_date": (
-                dto.exercise.end_date if dto.exercise else "No end date provided"
+                exercise.end_date if exercise else "No end date provided"
             ),
             "due_date_over": (
-                dto.exercise.end_date < current_time
-                if dto.exercise.end_date
+                exercise.end_date < current_time
+                if exercise.end_date
                 else "No end date provided"
             ),
         }
@@ -130,13 +132,13 @@ def create_tool_get_additional_exercise_details(
 
 
 def create_tool_get_build_logs_analysis(
-    dto: ExerciseChatPipelineExecutionDTO, callback: ExerciseChatStatusCallback
+    submission: ProgrammingSubmissionDTO, callback: StatusCallback
 ) -> Callable[[], str]:
     """
     Create a tool that analyzes build logs.
 
     Args:
-        dto: Execution DTO containing submission data.
+        submission: Execution DTO containing submission data.
         callback: Callback for status updates.
 
     Returns:
@@ -161,10 +163,10 @@ def create_tool_get_build_logs_analysis(
             str: Build logs analysis result.
         """
         callback.in_progress("Analyzing build logs ...")
-        if not dto.submission:
+        if not submission:
             return "No build logs available."
-        build_failed = dto.submission.build_failed
-        build_logs = dto.submission.build_log_entries
+        build_failed = submission.build_failed
+        build_logs = submission.build_log_entries
         logs = (
             "The build was successful."
             if not build_failed
@@ -180,13 +182,13 @@ def create_tool_get_build_logs_analysis(
 
 
 def create_tool_get_feedbacks(
-    dto: ExerciseChatPipelineExecutionDTO, callback: ExerciseChatStatusCallback
+    submission: ProgrammingSubmissionDTO, callback: StatusCallback
 ) -> Callable[[], str]:
     """
     Create a tool that retrieves automated test feedback.
 
     Args:
-        dto: Execution DTO containing submission data.
+        submission: submission data.
         callback: Callback for status updates.
 
     Returns:
@@ -209,9 +211,9 @@ def create_tool_get_feedbacks(
             str: Formatted feedback information.
         """
         callback.in_progress("Analyzing feedbacks ...")
-        if not dto.submission:
+        if not submission:
             return "No feedbacks available."
-        feedbacks = dto.submission.latest_result.feedbacks
+        feedbacks = submission.latest_result.feedbacks
         feedback_list = (
             "\n".join(
                 [
@@ -228,13 +230,13 @@ def create_tool_get_feedbacks(
 
 
 def create_tool_repository_files(
-    dto: ExerciseChatPipelineExecutionDTO, callback: ExerciseChatStatusCallback
+    submission: ProgrammingSubmissionDTO, callback: StatusCallback
 ) -> Callable[[], str]:
     """
     Create a tool that lists repository files.
 
     Args:
-        dto: Execution DTO containing submission data.
+        submission: submission data.
         callback: Callback for status updates.
 
     Returns:
@@ -266,9 +268,9 @@ def create_tool_repository_files(
             str: List of files in the repository.
         """
         callback.in_progress("Checking repository content ...")
-        if not dto.submission:
+        if not submission:
             return "No repository content available."
-        repository = dto.submission.repository
+        repository = submission.repository
         file_list = "\n------------\n".join(
             [f"- {file_name}" for (file_name, _) in repository.items()]
         )
@@ -278,13 +280,13 @@ def create_tool_repository_files(
 
 
 def create_tool_file_lookup(
-    dto: ExerciseChatPipelineExecutionDTO, callback: ExerciseChatStatusCallback
+    submission: ProgrammingSubmissionDTO, callback: StatusCallback
 ) -> Callable[[str], str]:
     """
     Create a tool that looks up file content.
 
     Args:
-        dto: Execution DTO containing submission data.
+        submission: Execution DTO containing submission data.
         callback: Callback for status updates.
 
     Returns:
@@ -324,10 +326,10 @@ def create_tool_file_lookup(
             str: File content or error message.
         """
         callback.in_progress(f"Looking into file {file_path} ...")
-        if not dto.submission:
+        if not submission:
             return "No repository content available. File content cannot be retrieved."
 
-        repository = dto.submission.repository
+        repository = submission.repository
         if file_path in repository:
             return f"{file_path}:\n{repository[file_path]}\n"
         return "File not found or does not exist in the repository."

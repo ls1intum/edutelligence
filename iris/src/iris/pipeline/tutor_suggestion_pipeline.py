@@ -10,6 +10,9 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 from langchain_core.runnables import Runnable
 from langsmith import traceable
 
+from iris.common.exercise_chat_tools import create_tool_get_feedbacks, create_tool_repository_files, \
+    create_tool_file_lookup, create_tool_get_build_logs_analysis, create_tool_get_additional_exercise_details, \
+    create_tool_get_submission_details
 from iris.common.tools import create_tool_lecture_content_retrieval, create_tool_faq_content_retrieval, \
     create_tool_get_problem_statement, create_tool_get_example_solution, create_tool_get_last_artifact
 from iris.common.tutor_suggestion import (
@@ -86,30 +89,36 @@ class TutorSuggestionPipeline(
             callback = cast(TutorSuggestionCallback, state.callback)
         discussion = self._get_post_discussion(state.dto.post)
 
-        tool_dict: dict[str, Callable] = {}
+        tool_list: List[Callable] = []
         if is_programming_exercise:
-            tool_dict["get_problem_statement"] = (
-                create_tool_get_problem_statement(state.dto.programming_exercise, state.callback))
+            programming_exercise_tools = [
+                create_tool_get_submission_details(state.dto.submission, callback),
+                create_tool_get_additional_exercise_details(state.dto.programming_exercise, callback),
+                create_tool_get_build_logs_analysis(state.dto.submission, callback),
+                create_tool_get_feedbacks(state.dto.submission, callback),
+                create_tool_repository_files(state.dto.submission, callback),
+                create_tool_file_lookup(state.dto.submission, callback),
+            ]
+            tool_list.extend(programming_exercise_tools)
 
         if is_text_exercise:
-            tool_dict["get_problem_statement"] = (
-                create_tool_get_problem_statement(state.dto.text_exercise, state.callback)
-            )
-            tool_dict["get_example_solution"] = (
-                create_tool_get_example_solution(state.dto.text_exercise, state.callback)
-            )
+            text_exercise_tools = [
+                create_tool_get_problem_statement(state.dto.text_exercise, state.callback),
+                create_tool_get_example_solution(state.dto.text_exercise, state.callback),
+            ]
+            tool_list.extend(text_exercise_tools)
         query_text = self._generate_retrieval_query_text(
             discussion,
             self.get_text_of_latest_user_message(state),
         )
 
         if len(state.dto.chat_history) > 0:
-            tool_dict["get_last_artifact"] = (
+            tool_list.append(
                 create_tool_get_last_artifact(state.dto.chat_history, callback)
             )
         if allow_lecture_tools:
             self.lecture_retriever = LectureRetrieval(state.db.client)
-            tool_dict["lecture_content_retrieval"] = (
+            tool_list.append(
                 create_tool_lecture_content_retrieval(
                     self.lecture_retriever,
                     state.dto,
@@ -122,7 +131,7 @@ class TutorSuggestionPipeline(
 
         if allow_faq_tool:
             self.faq_retriever = FaqRetrieval(state.db.client)
-            tool_dict["faq_content_retrieva"] =(
+            tool_list.append(
                 create_tool_faq_content_retrieval(
                     self.faq_retriever,
                     state.dto,
@@ -132,7 +141,7 @@ class TutorSuggestionPipeline(
                     getattr(state, "faq_storage", {}),
                 )
             )
-        return list(tool_dict.values())
+        return tool_list
 
     def build_system_message(
             self,
