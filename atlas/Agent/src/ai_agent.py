@@ -58,9 +58,12 @@ Available functions:
 
 Remember: Never make changes without explicit user confirmation."""
 
-    async def handle_prompt_async(self, user_input: str) -> str:
+    async def handle_prompt_async(self, user_input: str, course_id: Optional[int] = None) -> str:
         """
         Asynchronously handles a user prompt with function calling support.
+        Args:
+            user_input: The user's message
+            course_id: Optional course ID to set as context
         """
         if not user_input or not user_input.strip():
             raise ValueError("User input cannot be empty")
@@ -68,6 +71,10 @@ Remember: Never make changes without explicit user confirmation."""
         # Handle confirmation responses
         if self.pending_confirmation:
             return await self._handle_confirmation(user_input)
+
+        # Set course context if provided
+        if course_id is not None:
+            self.current_course_context = course_id
 
         # Add user message to memory
         self.memory.append({"role": "user", "content": user_input})
@@ -170,6 +177,19 @@ Remember: Never make changes without explicit user confirmation."""
                     },
                     "required": ["course_id"]
                 }
+            },
+            {
+                "name": "apply_competency_mapping",
+                "description": "Request applying a competency to an exercise (will ask for confirmation).",
+                "parameters": {
+                "type": "object",
+                "properties": {
+                    "competency_id": {"type": "string", "description": "Atlas competency ID"},
+                    "exercise_id": {"type": "integer", "description": "Artemis exercise ID"},
+                    "course_id": {"type": "string", "description": "Artemis course ID"}
+                    },
+                    "required": ["competency_id", "exercise_id", "course_id"]
+                }
             }
         ]
 
@@ -196,9 +216,12 @@ Remember: Never make changes without explicit user confirmation."""
                 result = self._get_courses()
             elif function_name == "get_exercises":
                 result = self._get_exercises(**function_args)
+
+            elif function_name == "apply_competency_mapping":
+                result = self.request_competency_mapping_confirmation(**function_args)
             else:
                 result = f"Unknown function: {function_name}"
-            
+
             # Add function result to memory
             self.memory.append({
                 "role": "function",

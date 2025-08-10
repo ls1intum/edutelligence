@@ -147,14 +147,14 @@ class ArtemisAPIClient:
             logger.error(f"Failed to apply competency mapping: {str(e)}")
             return False
     
-    def health_check(self) -> bool:
+    async def health_check(self) -> bool:
         """Check if Artemis API is available.
         
         Returns:
             True if API is healthy, False otherwise
         """
         try:
-            with httpx.Client(timeout=10.0) as client:
+            async with httpx.Client(timeout=10.0) as client:
                 response = client.get(
                     f"{self.base_url}/api/health",
                     headers={"Accept": "application/json"}
