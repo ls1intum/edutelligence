@@ -13,6 +13,7 @@ from starlette.responses import JSONResponse
 from atlasml.clients.weaviate import get_weaviate_client
 from atlasml.routers.competency import router as competency_router
 from atlasml.routers.health import router as health_router
+from atlasml.routers.agent import router as agent_router
 from atlasml.config import settings
 
 # Configure logging
@@ -113,3 +114,4 @@ app.add_middleware(RequestLoggingMiddleware)
 
 app.include_router(health_router)
 app.include_router(competency_router)
+app.include_router(agent_router)
