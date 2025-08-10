@@ -103,7 +103,7 @@ class TutorSuggestionPipeline(
         if is_programming_exercise:
             programming_exercise_tools: list[Callable] = [
                 create_tool_get_additional_exercise_details(
-                    state.dto.exercise, callback
+                    state.dto.programming_exercise, callback
                 ),
             ]
             if state.dto.submission is not None:
