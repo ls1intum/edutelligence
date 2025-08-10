@@ -2,7 +2,6 @@
 # pylint: disable=redefined-outer-name,unused-argument,missing-class-docstring,import-outside-toplevel
 
 import pytest
-
 import nebula.transcript.whisper_utils as wu
 
 # Functions under test
@@ -30,9 +29,13 @@ def fast_retries(monkeypatch):
         if hasattr(wu, name):
             monkeypatch.setattr(wu, name, value, raising=True)
 
-    # Disable blocking sleeps in the module under test
     if hasattr(wu, "time"):
         monkeypatch.setattr(wu.time, "sleep", lambda s: None, raising=True)
+
+
+@pytest.fixture(autouse=True)
+def avoid_config_file(monkeypatch):
+    monkeypatch.setattr(wu.Config, "get_whisper_llm_id", lambda: "test-llm", raising=True)
 
 
 # ---- Test fixtures ------------------------------------------------------------------
@@ -49,7 +52,6 @@ def fake_chunks(tmp_path, monkeypatch):
     c1.write_bytes(b"\x00" * 10)
     c2.write_bytes(b"\x00" * 10)
 
-    # Patch where the code under test looks (whisper_utils)
     monkeypatch.setattr(
         wu,
         "split_audio_ffmpeg",
@@ -108,14 +110,13 @@ def _mock_requests_sequence(monkeypatch, seq):
             self.text = "err"
 
         def raise_for_status(self):
-            # Let 429 pass (retry logic), fail others >=400
             if self.status_code >= 400 and self.status_code != 429:
                 raise RuntimeError("HTTP error")
 
         def json(self):
             return self._payload
 
-    def mock_post(url, headers=None, files=None, data=None, timeout=None):
+    def mock_post(url=None, headers=None, files=None, data=None, timeout=None):
         i = calls["i"]
         calls["i"] += 1
         spec = seq[min(i, len(seq) - 1)]
@@ -127,79 +128,56 @@ def _mock_requests_sequence(monkeypatch, seq):
 # ---- Tests -------------------------------------------------------------------------
 
 
-def test_openai_transcribe_happy_path(
-    tmp_path, fake_chunks, llm_config_openai, monkeypatch
-):
-    # First call hits a 429 (rate limit), then success; second chunk succeeds
+def test_openai_transcribe_happy_path(tmp_path, fake_chunks, llm_config_openai, monkeypatch):
     _mock_requests_sequence(
         monkeypatch,
         [
             {"status_code": 429},
-            {
-                "status_code": 200,
-                "json": {"segments": [{"start": 0.0, "end": 1.2, "text": "Hello"}]},
-            },
-            {
-                "status_code": 200,
-                "json": {"segments": [{"start": 0.0, "end": 0.8, "text": "World"}]},
-            },
+            {"status_code": 200, "json": {"segments": [{"start": 0.0, "end": 1.2, "text": "Hello"}]}},
+            {"status_code": 200, "json": {"segments": [{"start": 0.0, "end": 0.8, "text": "World"}]}},
         ],
     )
 
     audio_path = tmp_path / "audio.wav"
     audio_path.write_bytes(b"\x00" * 100)
 
-    out = transcribe_with_openai_whisper(str(audio_path), llm_id=None)
+    out = transcribe_with_openai_whisper(str(audio_path), llm_id="test-llm")
     assert "segments" in out
     texts = [s["text"] for s in out["segments"]]
     assert texts == ["Hello", "World"]
-    # Second chunk should be offset by our patched 3.0s duration
-    assert out["segments"][1]["start"] >= 3.0
+    assert out["segments"][1]["start"] >= 3.0  # offset from second chunk
 
 
-def test_azure_transcribe_happy_path(
-    tmp_path, fake_chunks, llm_config_azure, monkeypatch
-):
+def test_azure_transcribe_happy_path(tmp_path, fake_chunks, llm_config_azure, monkeypatch):
     _mock_requests_sequence(
         monkeypatch,
         [
-            {
-                "status_code": 200,
-                "json": {"segments": [{"start": 0.2, "end": 0.7, "text": "Foo"}]},
-            },
-            {
-                "status_code": 200,
-                "json": {"segments": [{"start": 0.1, "end": 0.5, "text": "Bar"}]},
-            },
+            {"status_code": 200, "json": {"segments": [{"start": 0.2, "end": 0.7, "text": "Foo"}]}},
+            {"status_code": 200, "json": {"segments": [{"start": 0.1, "end": 0.5, "text": "Bar"}]}},
         ],
     )
 
     audio_path = tmp_path / "a.wav"
     audio_path.write_bytes(b"\x00" * 10)
 
-    out = transcribe_with_azure_whisper(str(audio_path), llm_id=None)
+    out = transcribe_with_azure_whisper(str(audio_path), llm_id="test-llm")
     texts = [s["text"] for s in out["segments"]]
     assert texts == ["Foo", "Bar"]
-    # Second chunk offset applied using fake 3.0s duration
     assert out["segments"][1]["start"] >= 3.0
 
 
-def test_openai_transcribe_max_retries_exhausted(
-    tmp_path, fake_chunks, llm_config_openai, monkeypatch
-):
-    # Always returns 429; implementation should raise after retry budget
+def test_openai_transcribe_max_retries_exhausted(tmp_path, fake_chunks, llm_config_openai, monkeypatch):
     _mock_requests_sequence(monkeypatch, [{"status_code": 429}])
 
     audio_path = tmp_path / "audio.wav"
     audio_path.write_bytes(b"\x00" * 10)
 
     with pytest.raises(RuntimeError):
-        transcribe_with_openai_whisper(str(audio_path))
+        transcribe_with_openai_whisper(str(audio_path), llm_id="test-llm")
 
 
 def test_get_audio_duration(monkeypatch):
-    # Validate wrapper over ffmpeg.probe used by whisper_utils.get_audio_duration
-    def mock_probe(p):
+    def mock_probe(_p):
         return {"format": {"duration": "12.34"}}
 
     monkeypatch.setattr(wu.ffmpeg, "probe", mock_probe, raising=True)
