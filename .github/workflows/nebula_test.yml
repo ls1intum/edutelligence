@@ -88,7 +88,7 @@ jobs:
         working-directory: nebula
 
       - name: Generate Coverage Report
-        run: poetry run coverage xml --ignore-errors
+        run: poetry run coverage xml
         working-directory: nebula
 
       #- name: Upload Coverage Report
