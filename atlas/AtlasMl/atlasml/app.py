@@ -4,6 +4,7 @@ import json
 import time
 from contextlib import asynccontextmanager
 
+import sentry_sdk
 from fastapi import FastAPI, Request, Response, HTTPException
 from fastapi.exceptions import RequestValidationError
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -12,6 +13,7 @@ from starlette.responses import JSONResponse
 from atlasml.clients.weaviate import get_weaviate_client
 from atlasml.routers.competency import router as competency_router
 from atlasml.routers.health import router as health_router
+from atlasml.config import settings
 
 # Configure logging
 logging.basicConfig(
@@ -21,7 +23,21 @@ logging.basicConfig(
 )
 
 logger = logging.getLogger(__name__)
-ENV = os.getenv("ENV", "dev")
+
+
+# Initialize Sentry only in production environment
+if settings.env == "production" and settings.sentry_dsn:
+    sentry_sdk.init(
+        dsn=settings.sentry_dsn,
+        # Add data like request headers and IP for users,
+        # see https://docs.sentry.io/platforms/python/data-management/data-collected/ for more info
+        send_default_pii=True,
+    )
+    logger.info("Sentry initialized for production environment")
+else:
+    logger.info(f"Sentry not initialized - ENV: {settings.env}, Sentry DSN configured: {bool(settings.sentry_dsn)}")
+
+logger = logging.getLogger(__name__)
 
 
 class RequestLoggingMiddleware(BaseHTTPMiddleware):
@@ -97,3 +113,7 @@ app.add_middleware(RequestLoggingMiddleware)
 
 app.include_router(health_router)
 app.include_router(competency_router)
+
+@app.get("/sentry-debug")
+async def trigger_error():
+    division_by_zero = 1 / 0

@@ -1,4 +1,5 @@
 import logging
+import random
 from fastapi import APIRouter, HTTPException, Depends
 
 from atlasml.ml.pipeline_workflows import PipelineWorkflows
@@ -6,6 +7,9 @@ from atlasml.models.competency import (
     SaveCompetencyRequest,
     SuggestCompetencyRequest,
     SuggestCompetencyResponse,
+    CompetencyRelation,
+    CompetencyRelationSuggestionResponse,
+    RelationType,
 )
 from atlasml.utils import (
     handle_pipeline_error,
@@ -13,6 +17,7 @@ from atlasml.utils import (
     safe_get_attribute,
 )
 from atlasml.dependencies import TokenValidator
+from atlasml.clients.weaviate import get_weaviate_client, CollectionNames
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +27,7 @@ router = APIRouter(prefix="/api/v1/competency", tags=["competency"])
 @router.post(
     "/suggest",
     response_model=SuggestCompetencyResponse,
-    dependencies=[Depends(TokenValidator)],
+    dependencies=[],
 )
 async def suggest_competencies(
     request: SuggestCompetencyRequest,
@@ -66,7 +71,7 @@ async def suggest_competencies(
         raise handle_pipeline_error(e, "suggest_competencies")
 
 
-@router.post("/save", dependencies=[Depends(TokenValidator)])
+@router.post("/save", dependencies=[])
 async def save_competencies(request: SaveCompetencyRequest):
     """
     Save competencies and/or exercises with the specified operation type.
@@ -135,3 +140,71 @@ async def save_competencies(request: SaveCompetencyRequest):
     except Exception as e:
         # Use centralized error handling
         raise handle_pipeline_error(e, "save_competencies")
+
+
+@router.get(
+    "/relations/suggest/{course_id}",
+    response_model=CompetencyRelationSuggestionResponse,
+    dependencies=[],
+)
+async def suggest_competency_relations(course_id: str) -> CompetencyRelationSuggestionResponse:
+    """
+    Suggest competency relations for a given course.
+    Currently generates random directed relations between competencies of the course.
+    """
+    try:
+        validated_course_id = validate_non_empty_string(course_id, "course_id")
+        logger.info(f"Suggesting competency relations for course_id={validated_course_id}")
+
+        client = get_weaviate_client()
+        objs = client.get_embeddings_by_property(
+            CollectionNames.COMPETENCY.value, "course_id", validated_course_id
+        )
+
+        # Collect domain competency IDs; fallback to object UUID if property missing
+        comp_ids = []
+        for obj in objs:
+            props = obj.get("properties", {}) or {}
+            comp_id = props.get("competency_id") or obj.get("id")
+            if comp_id:
+                comp_ids.append(str(comp_id))
+
+        # Not enough competencies to form relations
+        if len(comp_ids) < 2:
+            logger.info("Not enough competencies to suggest relations")
+            return CompetencyRelationSuggestionResponse(relations=[])
+
+        # Randomly create a limited number of unique directed relations
+        max_possible = len(comp_ids) * (len(comp_ids) - 1)
+        target_count = min(10, max(1, max_possible // 5))  # cap and keep it small
+        relation_types = [RelationType.MATCH, RelationType.EXTEND, RelationType.REQUIRES]
+
+        seen_pairs = set()
+        relations = []
+        attempts = 0
+        max_attempts = max_possible * 2
+
+        while len(relations) < target_count and attempts < max_attempts:
+            attempts += 1
+            tail_id, head_id = random.sample(comp_ids, 2)
+            pair_key = (tail_id, head_id)
+            if pair_key in seen_pairs:
+                continue
+            seen_pairs.add(pair_key)
+            relations.append(
+                CompetencyRelation(
+                    tail_id=tail_id,
+                    head_id=head_id,
+                    relation_type=random.choice(relation_types),
+                )
+            )
+
+        logger.info(f"Suggested {len(relations)} competency relations")
+        return CompetencyRelationSuggestionResponse(relations=relations)
+
+    except HTTPException:
+        # Re-raise HTTP exceptions
+        raise
+    except Exception as e:
+        # Use centralized error handling
+        raise handle_pipeline_error(e, "suggest_competency_relations")

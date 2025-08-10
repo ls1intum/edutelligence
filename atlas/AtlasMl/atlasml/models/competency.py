@@ -53,3 +53,17 @@ class SaveCompetencyRequest(BaseModel):
     competency: Optional[Competency] = None
     exercise: Optional[ExerciseWithCompetencies] = None
     operation_type: OperationType
+
+class RelationType(str, Enum):
+    MATCH = "MATCHES"
+    EXTEND = "EXTENDS"
+    REQUIRES = "REQUIRES"
+
+class CompetencyRelation(BaseModel):
+    tail_id: str
+    head_id: str
+    relation_type: RelationType
+
+
+class CompetencyRelationSuggestionResponse(BaseModel):
+    relations: list[CompetencyRelation]
