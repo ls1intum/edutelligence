@@ -9,22 +9,22 @@ class OperationType(str, Enum):
 
 
 class Competency(BaseModel):
-    id: str
+    id: int
     title: str
     description: str
-    course_id: str
+    course_id: int
 
 
 class ExerciseWithCompetencies(BaseModel):
-    id: str
+    id: int
     title: str
     description: str
-    competencies: list[str]
-    course_id: str
+    competencies: list[int]
+    course_id: int
 
 
 class GenerateCompetencyRequest(BaseModel):
-    id: str
+    id: int
     description: str
 
 
@@ -42,7 +42,7 @@ class GenerateEmbeddingsResponse(BaseModel):
 
 class SuggestCompetencyRequest(BaseModel):
     description: str
-    course_id: str
+    course_id: int
 
 
 class SuggestCompetencyResponse(BaseModel):
@@ -60,8 +60,8 @@ class RelationType(str, Enum):
     REQUIRES = "REQUIRES"
 
 class CompetencyRelation(BaseModel):
-    tail_id: str
-    head_id: str
+    tail_id: int
+    head_id: int
     relation_type: RelationType
 
 

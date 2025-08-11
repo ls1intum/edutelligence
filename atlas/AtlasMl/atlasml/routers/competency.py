@@ -53,7 +53,7 @@ async def suggest_competencies(
         validated_description = validate_non_empty_string(
             request.description, "description"
         )
-        validated_course_id = validate_non_empty_string(request.course_id, "course_id")
+        validated_course_id = str(request.course_id)
 
         pipeline = PipelineWorkflows()
         competencies = pipeline.suggest_competencies_by_similarity(
@@ -147,13 +147,13 @@ async def save_competencies(request: SaveCompetencyRequest):
     response_model=CompetencyRelationSuggestionResponse,
     dependencies=[],
 )
-async def suggest_competency_relations(course_id: str) -> CompetencyRelationSuggestionResponse:
+async def suggest_competency_relations(course_id: int) -> CompetencyRelationSuggestionResponse:
     """
     Suggest competency relations for a given course.
     Currently generates random directed relations between competencies of the course.
     """
     try:
-        validated_course_id = validate_non_empty_string(course_id, "course_id")
+        validated_course_id = str(course_id)
         logger.info(f"Suggesting competency relations for course_id={validated_course_id}")
 
         client = get_weaviate_client()
@@ -167,7 +167,7 @@ async def suggest_competency_relations(course_id: str) -> CompetencyRelationSugg
             props = obj.get("properties", {}) or {}
             comp_id = props.get("competency_id") or obj.get("id")
             if comp_id:
-                comp_ids.append(str(comp_id))
+                comp_ids.append(int(comp_id))
 
         # Not enough competencies to form relations
         if len(comp_ids) < 2:
