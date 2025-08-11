@@ -278,9 +278,19 @@ class MockWeaviateCollection:
                     properties={
                         "cluster_id": "cluster-1",
                         "label_id": "algebra-basics",
+                        "course_id": "course-1",
                     },
                     vector=[0.1, 0.2, 0.3],
-                )
+                ),
+                MockWeaviateObject(
+                    uuid="cluster-uuid-2",
+                    properties={
+                        "cluster_id": "cluster-2",
+                        "label_id": "calculus-basics",
+                        "course_id": "course-1",
+                    },
+                    vector=[0.4, 0.5, 0.6],
+                ),
             ]
         return []
 
@@ -446,6 +456,7 @@ def weaviate_test_data(mock_weaviate_client):
                 "title": "Algebra",
                 "description": "Basic algebra concepts",
                 "course_id": "course-1",
+                "cluster_id": "cluster-1",
             },
         )
     )
@@ -457,7 +468,34 @@ def weaviate_test_data(mock_weaviate_client):
                 "title": "Calculus",
                 "description": "Basic calculus concepts",
                 "course_id": "course-1",
+                "cluster_id": "cluster-2",
             },
+        )
+    )
+    # Add test data to cluster collection
+    cluster_collection = mock_weaviate_client.collections.get(
+        CollectionNames.CLUSTERCENTER.value
+    )
+    cluster_collection.add_object(
+        MockWeaviateObject(
+            uuid="cluster-1",
+            properties={
+                "cluster_id": "cluster-1",
+                "course_id": "course-1",
+                "label_id": "cluster-1",
+            },
+            vector=[0.1, 0.2, 0.3],
+        )
+    )
+    cluster_collection.add_object(
+        MockWeaviateObject(
+            uuid="cluster-2",
+            properties={
+                "cluster_id": "cluster-2",
+                "course_id": "course-1",
+                "label_id": "cluster-2",
+            },
+            vector=[0.2, 0.2, 0.2],
         )
     )
 

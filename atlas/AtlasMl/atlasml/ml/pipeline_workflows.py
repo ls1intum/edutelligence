@@ -3,13 +3,14 @@ import numpy as np
 import uuid
 
 from atlasml.clients.weaviate import get_weaviate_client, CollectionNames
-from atlasml.ml.clustering import apply_hdbscan, SimilarityMetric
+from atlasml.ml import update_cluster_centroid_on_removal, update_cluster_centroid
+from atlasml.ml.clustering import apply_hdbscan, SimilarityMetric, apply_kmeans
 from atlasml.ml.embeddings import generate_embeddings_openai
 from atlasml.ml.similarity_measures import compute_cosine_similarity
 from atlasml.models.competency import (
     ExerciseWithCompetencies,
     Competency,
-    OperationType,
+    OperationType, ClusterCenters,
 )
 import logging
 
@@ -48,45 +49,12 @@ class PipelineWorkflows:
         )
 
     def initial_exercises(self, exercises: list[ExerciseWithCompetencies]):
-        """Process and store initial text entries in the database.
-
-        Takes a list of texts, generates embeddings for each one, and stores them
-        in the Weaviate database with unique IDs and empty competency associations.
-
-        Args:
-            texts (list[str]): List of text strings to be processed and stored.
-
-        Note:
-            Each text is stored with:
-            - A randomly generated UUID
-            - The original text content
-            - An empty competencyIDs list
-            - Its vector embedding
-        """
+        """Process and store initial text entries in the database. """
         for exercise in exercises:
             self.save_exercise_to_weaviate(exercise)
 
     def initial_competencies(self, competencies: list[Competency]):
-        """Process and store initial competencies in the database.
-
-        Takes a list of competencies, generates embeddings for each competency, and stores them in
-        the Weaviate competency collection. Each competency entry is created with a unique ID and
-        initialized with an empty cluster ID.
-
-        Args:
-            competencies (list[dict]): List of competency dictionaries containing 'title' and 'description'
-
-        The workflow:
-            1. For each competency:
-            2. Generate a unique UUID
-            3. Create vector embedding using the competency description
-            4. Store in Weaviate competency collection with:
-                - competency_id: Generated UUID
-                - title: Competency title
-                - description: Competency description
-                - cluster_id: Empty string
-                - vector: Competency embedding
-        """
+        """Process and store initial competencies in the database. """
         for competency in competencies:
             self.save_competency_to_weaviate(competency)
 
@@ -241,55 +209,6 @@ class PipelineWorkflows:
 
         return
 
-    def newTextPipeline(self, text: str) -> Competency:
-        """Process a new text entry and associate it with existing clusters.
-
-        Takes a single text input, computes its embedding, and assigns it to the
-        most similar existing cluster based on medoid similarity.
-
-        Args:
-            text (str): The text content to be processed
-            uuid (str): Unique identifier for the text entry
-
-        Returns:
-            str: The competency ID of the best matching competency
-
-        The process includes:
-        1. Generating embedding for the input text
-        2. Finding the most similar cluster medoid
-        3. Retrieving the associated competency
-        4. Storing the text with its competency association
-
-        Note:
-            Adds the new text entry to the TEXT collection with its embedding
-            and competency association.
-        """
-        embedding = generate_embeddings_openai(text)
-        clusters = self.weaviate_client.get_all_embeddings(
-            CollectionNames.CLUSTERCENTER.value
-        )
-        medoids = np.array([entry["vector"]["default"] for entry in clusters])
-        similarity_scores = np.array(
-            [compute_cosine_similarity(embedding, medoid) for medoid in medoids]
-        )
-
-        # TODO: @ArdaKaraman Currently returns the best match, but we should return the top 3 matches (To be discussed)
-        best_medoid_idx = int(np.argmax(similarity_scores))
-        competency = self.weaviate_client.get_embeddings_by_property(
-            CollectionNames.COMPETENCY.value,
-            "cluster_id",
-            clusters[best_medoid_idx]["properties"]["cluster_id"],
-        )
-        if not competency:
-            return None
-        best_competency = Competency(
-            id=competency[0]["properties"]["competency_id"],
-            title=competency[0]["properties"]["title"],
-            description=competency[0]["properties"]["description"],
-            course_id=competency[0]["properties"].get("course_id", "unknown"),
-        )
-        return best_competency
-
     def save_competency(
         self,
         competency: Competency,
@@ -321,11 +240,8 @@ class PipelineWorkflows:
                 )
             else:
                 self.save_competency_to_weaviate(competency)
-
-            # Re-cluster after updating competency
-            # self.weaviate_client.delete_all_data_from_collection(CollectionNames.CLUSTERCENTER.value)
-            # self.initial_cluster_pipeline()
-            # self.initial_cluster_to_competency_pipeline()
+            # Re-cluster after update
+            self.recluster_with_new_competencies(competency=competency, course_id=competency.course_id)
 
     def delete_competency(self, competency: Competency):
         """Delete a competency from Weaviate and trigger re-clustering."""
@@ -340,18 +256,138 @@ class PipelineWorkflows:
             self.weaviate_client.delete_by_id(
                 CollectionNames.COMPETENCY.value, competency_to_delete["id"]
             )
-
             # Re-cluster after deletion
-            self.weaviate_client.delete_all_data_from_collection(
-                CollectionNames.CLUSTERCENTER.value
-            )
-            self.initial_cluster_pipeline()
-            self.initial_cluster_to_competency_pipeline()
+            self.recluster_with_new_competencies(competency=competency, course_id=competency.course_id)
         else:
             logger.warning(f"Competency with id {competency.id} not found for deletion")
 
+    def recluster_with_new_competencies(self, competency: Competency, course_id: str):
+        # Get competencies and exercise embeddings
+        competencies = self.weaviate_client.get_embeddings_by_property(
+            CollectionNames.COMPETENCY.value, "course_id", course_id
+        )
+        if len(competencies) == 0: return
+        exercises = self.weaviate_client.get_embeddings_by_property(
+            CollectionNames.EXERCISE.value, "course_id", course_id
+        )
+        if len(exercises) == 0: return
+
+        # Delete all cluster centers for new centers
+        # TODO: We need to use course_id to filter for course such as below
+        # self.weaviate_client.delete_by_property(
+        #     CollectionNames.CLUSTERCENTER.value, "course_id", course_id
+        # )
+        self.weaviate_client.delete_all_data_from_collection(CollectionNames.CLUSTERCENTER.value)
+
+        exercise_embeddings = np.vstack(
+            [exercise["vector"]["default"] for exercise in exercises]
+        )
+        # Cluster texts and get cluster centroids
+        labels, centroids = apply_kmeans(
+            matrix=exercise_embeddings,
+            n_clusters=len(competencies)
+        )
+
+        # Expose clusters
+        for index in range(len(centroids)):
+            cluster = {"cluster_id": uuid.uuid4(), "label_id": str(index)}
+            self.weaviate_client.add_embeddings(
+                CollectionNames.CLUSTERCENTER.value, centroids[index].tolist(), cluster
+            )
+
+        clusters = self.weaviate_client.get_all_embeddings(CollectionNames.CLUSTERCENTER.value)
+
+        # Calculate similarity matrix for all competencies to all centroids
+        competency_embeddings = np.array([comp["vector"]["default"] for comp in competencies])
+        similarity_matrix = np.array([
+            [compute_cosine_similarity(comp_emb, centroid)
+             for centroid in centroids]
+            for comp_emb in competency_embeddings
+        ])
+
+        # Use Hungarian algorithm or greedy approach for optimal 1-to-1 assignment
+        used_clusters = set()
+        competency_assignments = []
+
+        # Sort competencies by their best similarity scores (descending)
+        competency_indices = list(range(len(competencies)))
+        competency_indices.sort(key=lambda i: np.max(similarity_matrix[i]), reverse=True)
+
+        for comp_idx in competency_indices:
+            # Find the best available cluster for this competency
+            available_clusters = [i for i in range(len(centroids)) if i not in used_clusters]
+            if not available_clusters:
+                raise ValueError("Not enough clusters for all competencies")
+
+            best_cluster_idx = max(available_clusters,
+                                   key=lambda i: similarity_matrix[comp_idx][i])
+
+            competency_assignments.append((comp_idx, best_cluster_idx))
+            used_clusters.add(best_cluster_idx)
+
+        # Update competencies with their assigned clusters
+        for comp_idx, cluster_idx in competency_assignments:
+            competency = competencies[comp_idx]
+            competency_id = competency["properties"]["competency_id"]
+            similarity_score = similarity_matrix[comp_idx][cluster_idx]
+
+            properties = {
+                "competency_id": competency_id,
+                "title": competency["properties"]["title"],
+                "description": competency["properties"]["description"],
+                "cluster_id": clusters[cluster_idx]["properties"]["cluster_id"],
+                "cluster_similarity_score": float(similarity_score),
+            }
+            self.weaviate_client.update_property_by_id(
+                CollectionNames.COMPETENCY.value, competency["id"], properties
+            )
+        return
+
+    def new_text_suggestion(
+            self, exercise_description: str, course_id: str
+    ) -> list[tuple[Competency, float]]:
+        """Process a new text entry and associate it with existing clusters."""
+        exercise_embedding = generate_embeddings_openai(exercise_description)
+        clusters = self.weaviate_client.get_embeddings_by_property(
+            CollectionNames.CLUSTERCENTER.value, "course_id", course_id
+        )
+
+        if not clusters:
+            logger.warning("No clusters found in database")
+            return []
+        else:
+            # There are clusters which also mean that there are competencies
+            cluster_centers = [
+                ClusterCenters(cluster_id=str(entry["properties"]["cluster_id"]),
+                               course_id=entry["properties"]["course_id"],
+                               vector_embedding=entry["vector"]["default"])
+                for entry in clusters
+            ]
+            similarities_with_indices: list[tuple[float, ClusterCenters]] =  [
+                (compute_cosine_similarity(exercise_embedding, cluster.vector_embedding), cluster)
+                for cluster in cluster_centers
+            ]
+            similarities_with_indices.sort(key=lambda x: x[0], reverse=True)  # Sort by similarity score descending
+
+            top3_competencies = []
+            for similarity_score, best_medoid  in similarities_with_indices[:3]:
+                competency = self.weaviate_client.get_embeddings_by_property(
+                    CollectionNames.COMPETENCY.value,
+                    "cluster_id",
+                    best_medoid.cluster_id
+                )
+                best_competency = Competency(
+                    id=competency[0]["properties"]["competency_id"],
+                    title=competency[0]["properties"]["title"],
+                    description=competency[0]["properties"]["description"],
+                    course_id=competency[0]["properties"].get("course_id", "unknown"),
+                )
+                top3_competencies.append((best_competency, similarity_score))
+
+            return top3_competencies
+
     def suggest_competencies_by_similarity(
-        self, exercise_description: str, course_id: str, top_k: int = 5
+        self, exercise_description: str, course_id: str, top_k: int = 3
     ) -> list[Competency]:
         """Suggest competencies based on embedding similarity without re-clustering.
 
@@ -363,36 +399,11 @@ class PipelineWorkflows:
         Returns:
             List of most similar competencies ordered by similarity score
         """
-        exercise_embedding = generate_embeddings_openai(exercise_description)
-
-        all_competencies = self.weaviate_client.get_embeddings_by_property(
-            CollectionNames.COMPETENCY.value, "course_id", course_id
-        )
-
-        if not all_competencies:
-            logger.warning("No competencies found in database")
-            return []
-
-        similarities = []
-        for competency_data in all_competencies:
-            competency_embedding = competency_data["vector"]["default"]
-            similarity_score = compute_cosine_similarity(
-                exercise_embedding, competency_embedding
-            )
-
-            competency = Competency(
-                id=competency_data["properties"]["competency_id"],
-                title=competency_data["properties"]["title"],
-                description=competency_data["properties"]["description"],
-                course_id=competency_data["properties"]["course_id"],
-            )
-            similarities.append((competency, similarity_score))
-
-        similarities.sort(key=lambda x: x[1], reverse=True)
-        top_competencies = [comp for comp, _ in similarities[:top_k]]
+        top_competencies_with_similarity_scores = self.new_text_suggestion(exercise_description, course_id)
+        top_competencies = [competency for competency, similarity_score in top_competencies_with_similarity_scores]
 
         logger.info(
-            f"Found {len(top_competencies)} similar competencies for exercise description"
+            f"Found {len(top_competencies_with_similarity_scores)} similar competencies for exercise description"
         )
         return top_competencies
 
@@ -412,7 +423,8 @@ class PipelineWorkflows:
                     len(existing_exercise) == 1
                 ), "Multiple exercises found for the same ID"  # TODO: Throw error
                 exercise_to_update = existing_exercise[0]
-                embedings = generate_embeddings_openai(exercise.description)
+                embeddings = generate_embeddings_openai(exercise.description)
+                self.instructor_feedback(exercise, embeddings, exercise_to_update)
                 properties = {
                     "exercise_id": exercise.id,
                     "description": exercise.description,
@@ -423,18 +435,13 @@ class PipelineWorkflows:
                     CollectionNames.EXERCISE.value,
                     exercise_to_update["id"],
                     properties,
-                    embedings,
+                    embeddings,
                 )
             else:
                 self.save_exercise_to_weaviate(exercise)
 
-            # Re-cluster after updating exercise
-            # self.weaviate_client.delete_all_data_from_collection(CollectionNames.CLUSTERCENTER.value)
-            # self.initial_cluster_pipeline()
-            # self.initial_cluster_to_competency_pipeline()
-
     def delete_exercise(self, exercise: ExerciseWithCompetencies):
-        """Delete an exercise from Weaviate and trigger re-clustering."""
+        """Delete an exercise from Weaviate."""
         existing_exercise = self.weaviate_client.get_embeddings_by_property(
             CollectionNames.EXERCISE.value, "exercise_id", exercise.id
         )
@@ -446,10 +453,96 @@ class PipelineWorkflows:
             self.weaviate_client.delete_by_id(
                 CollectionNames.EXERCISE.value, exercise_to_delete["id"]
             )
-
-            # Re-cluster after deletion
-            # self.weaviate_client.delete_all_data_from_collection(CollectionNames.CLUSTERCENTER.value)
-            # self.initial_cluster_pipeline()
-            # self.initial_cluster_to_competency_pipeline()
         else:
             logger.warning(f"Exercise with id {exercise.id} not found for deletion")
+
+    def instructor_feedback(
+            self,
+            updated_exercise: ExerciseWithCompetencies,
+            updated_exercise_embedding: list[float],
+            old_exercise,
+    ):
+        old_exercise_with_competencies = ExerciseWithCompetencies(
+            id=old_exercise["properties"]["exercise_id"],
+            title="",
+            description=old_exercise["properties"]["description"],
+            competencies=old_exercise["properties"]["competency_ids"],
+            course_id=old_exercise["properties"]["course_id"]
+        )
+
+        # Get competency IDs from both exercises
+        old_competency_ids = set(old_exercise_with_competencies.competencies)
+        updated_competency_ids = set(updated_exercise.competencies)
+
+        # Find differences in terms of competencies
+        added_competencies = updated_competency_ids - old_competency_ids
+        removed_competencies = old_competency_ids - updated_competency_ids
+        unchanged_competencies = old_competency_ids & updated_competency_ids
+
+        logger.info(f"Competency analysis for exercise {updated_exercise.id}:")
+
+        # Process removed and added competencies
+        if removed_competencies:
+            self.update_cluster_for_competencies(updated_exercise_embedding, removed_competencies, is_removal=True)
+            logger.info(f"Removed competencies: {list(removed_competencies)}")
+
+        if added_competencies:
+            self.update_cluster_for_competencies(updated_exercise_embedding, added_competencies, is_removal=False)
+            logger.info(f"Added competencies: {list(added_competencies)}")
+
+    def update_cluster_for_competencies(
+            self,
+            exercise_embedding,
+            competency_ids,
+            is_removal=False
+    ):
+        """Helper function to update cluster centroids for a set of competencies."""
+        for comp_id in competency_ids:
+            # Get the competency and its cluster
+            competency_data = self.weaviate_client.get_embeddings_by_property(
+                CollectionNames.COMPETENCY.value, "competency_id", comp_id
+            )
+            if not competency_data:
+                continue
+
+            cluster_id = competency_data[0]["properties"]["cluster_id"]
+
+            # Get current cluster centroid
+            cluster_data = self.weaviate_client.get_embeddings_by_property(
+                CollectionNames.CLUSTERCENTER.value, "cluster_id", cluster_id
+            )
+            if not cluster_data:
+                continue
+
+            current_centroid = np.array(cluster_data[0]["vector"]["default"])
+
+            # Count exercises currently in this cluster
+            exercises_in_cluster = self.weaviate_client.get_embeddings_by_property(
+                CollectionNames.EXERCISE.value, "competency_ids", comp_id
+            )
+            cluster_size = len(exercises_in_cluster)
+
+            # Update centroid based on operation type
+            if is_removal:
+                if cluster_size > 1:
+                    updated_centroid = update_cluster_centroid_on_removal(
+                        current_centroid, cluster_size, exercise_embedding
+                    )
+                    action = "removed"
+                else:
+                    continue
+            else:
+                cluster_size -= 1
+                updated_centroid = update_cluster_centroid(
+                    current_centroid, cluster_size, exercise_embedding
+                )
+                action = "added"
+
+            # Update the cluster centroid in Weaviate
+            self.weaviate_client.update_property_by_id(
+                CollectionNames.CLUSTERCENTER.value,
+                cluster_data[0]["id"],
+                cluster_data[0]["properties"],
+                updated_centroid.tolist()
+            )
+            logger.info(f"Updated cluster centroid for {action} competency {comp_id}")

@@ -200,7 +200,7 @@ def test_cluster_center_collection_data(mock_weaviate_client):
 
     results = client.get_all_embeddings(collection_name)
 
-    assert len(results) == 1
+    assert len(results) == 2
     assert results[0]["id"] == "cluster-uuid-1"
     assert results[0]["properties"]["cluster_id"] == "cluster-1"
     assert results[0]["properties"]["label_id"] == "algebra-basics"

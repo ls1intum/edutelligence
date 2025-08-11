@@ -196,7 +196,8 @@ def test_newTextPipeline(workflows):
                     "competency_id": "K0",
                     "cluster_id": "K0",
                     "course_id": "course-1",
-                }
+                },
+                "vector": {"default": [0.0, 1.0]},
             }
         ]
     )
@@ -207,5 +208,5 @@ def test_newTextPipeline(workflows):
     ):
         mock_embed.return_value = [1.0, 0.0]
         mock_cosine.side_effect = [0.99, 0.01]
-        cid = workflows.newTextPipeline("Some text")
-    assert cid.id == "K0"
+        cid = workflows.new_text_suggestion("Some text", "course-1")
+    assert cid[0][0].id == "K0"
