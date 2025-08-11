@@ -11,11 +11,8 @@ data/*
 .env
 **/.env
 **/data/*
-!**/data/exercise-7.json
-!**/data/exercise-7195.json
-!**/data/exercise-6715.json
-!**/data/exercise-6716.json
-!**/data/exercise-6770.json
+!**/data/exercises/
+!**/data/samples/
 test-results/*
 .coverage*
 **/.coverage*

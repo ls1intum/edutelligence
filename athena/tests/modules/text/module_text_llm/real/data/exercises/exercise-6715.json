@@ -15,558 +15,70 @@
       "meta": {},
       "text": "Software development is an exercise in solving real world problems. Because the real world continues to change daily in terms of technology, economy, and politics, it follows that the solutions created to solve the problems must also evolve and change to remain applicable.\n\nThe ongoing coronavirus pandemic is exemplary in illustrating this point. Countermeasures taken by governing bodies worldwide compelled people to alter a significant portion of their lifestyle, which created interest in new markets. The teleconference software Zoom achieved significant growth as a result of widespread use in businesses and other professional environments, as they found the alternatives offered by the likes of Google or Skype had features that were less than sufficient.\n\nChanging the requirements may be necessary when the original version turns out to be infeasible or ill suited to the actual needs of the customer. This may be due to a lack of funds for an ambitious project, technological impossibilities, or perhaps concerns regarding the legality of the project.\n\nOrganisational changes are relevant when for example, new management or new employees are hired to work on the software. This may require the team to adapt to their individual habits, such as preferred work hours, coding style, version control and so on. In order to stay functional the team must then adapt to this change and find a compromise that everyone can accept and supports productivity.\n\nChanges in technology will naturally influence software development significantly. Using the introduction of commercially viable electric cars as an example, this then opens up a new market for software compatible with this technology. Furthermore the use of artificial intelligence can be seen in this field, which is a result of the progress in research and testing.",
       "score": 91.7,
-      "language": "ENGLISH",
-      "feedbacks": [
-        {
-          "id": 126258901,
-          "description": "The student provides a clear explanation of why change occurs in software development, linking it to the continuous changes in the real world such as technology, economy, and politics. This understanding is well articulated and relevant.",
-          "title": "Explanation of Why Change Occurs",
-          "index_start": 68,
-          "index_end": 273,
-          "credits": 2.0,
-          "meta": {}
-        },
-        {
-          "id": 126258902,
-          "description": "The student provides a relevant example of change in the real world, discussing the coronavirus pandemic and its impact on software development, specifically referencing teleconference software like Zoom. This example is well chosen and explained.",
-          "title": "Example of Change in Software Development",
-          "index_start": 275,
-          "index_end": 765,
-          "credits": 1.0,
-          "meta": {}
-        },
-        {
-          "id": 126258903,
-          "description": "The student discusses requirements changes effectively, highlighting reasons such as infeasibility, lack of funds, and legal concerns. This explanation is clear and provides a comprehensive understanding of the topic.",
-          "title": "Discussion of Requirements Changes",
-          "index_start": 767,
-          "index_end": 1064,
-          "credits": 1.0,
-          "meta": {}
-        },
-        {
-          "id": 126258904,
-          "description": "The student identifies organizational changes with examples like new management or hiring new employees, and emphasizes the need for adaptation. This explanation is clear and relevant to the topic.",
-          "title": "Discussion of Organizational Changes",
-          "index_start": 1066,
-          "index_end": 1462,
-          "credits": 1.0,
-          "meta": {}
-        },
-        {
-          "id": 126258905,
-          "description": "The student discusses technology changes and provides examples such as the introduction of electric cars and artificial intelligence. This explanation is relevant and demonstrates an understanding of how technology can influence software development.",
-          "title": "Discussion of Technology Changes",
-          "index_start": 1464,
-          "index_end": 1832,
-          "credits": 1.0,
-          "meta": {}
-        }
-      ]
+      "language": "ENGLISH"
     },
     {
       "id": 1264912,
       "meta": {},
       "text": "There are several reasons for changes in software development. First of all, there are unclear requirements and they change when they become clearer. Secondly. the enviroment for using the software changes. Finally there are additional needs by the customer that lead to changes in software development.\n\nThe electric car by Volkswagen the ID 4 shows the changes in software development. \nThe over air up date is a special feature compared to older car models. The requirements have changed for this feature. The car should work as usual without interruption when the car updates over the air(safety issue, better user experience). Concerning the technology changes, the module for receiving the over the air update packages should have high data flow capacity. As regard the organization changes, a new firm was founded by Volkswagen (Cariad) which specifically deals with software development for its cars as part of solving the software problems. \n\nAnother example is the Remote Maintenance system for medical equipment by Siemens Healithineers. One single maintenace center to which all delivered medical equipment are connected, controls the entire system. The requirements changed as more maintenance is performed remotely by configuring the software from the maintenance center or by identifying the software bugs so that the usage rate stays at a high level. As it concerns medical equipment with sensitive data from patients, the technology should be secure, safe and fast. The new systems which involves more software development also brings changes in the organization. More software developers working from remote maintenance center are needed rather than technicians working directly at the site.",
       "score": 100,
-      "language": "ENGLISH",
-      "feedbacks": [
-        {
-          "id": 126491201,
-          "description": "Your explanation of why change occurs in software development is clear. You mentioned unclear requirements, environmental changes, and additional customer needs, which are all valid reasons for change. To improve, consider elaborating more on how these factors lead to changes during the software development lifecycle.",
-          "title": "Explanation of Why Change Occurs",
-          "index_start": 207,
-          "index_end": 303,
-          "credits": 1.5,
-          "meta": {}
-        },
-        {
-          "id": 126491202,
-          "description": "The example of Volkswagen's ID 4 electric car with over-the-air updates is a relevant example of change in software development. It highlights how technological advancements influence the need for software updates. Good job on providing a real-world example that ties back to your explanation.",
-          "title": "Example of Change in Software Development",
-          "index_start": 305,
-          "index_end": 631,
-          "credits": 1.0,
-          "meta": {}
-        },
-        {
-          "id": 126491203,
-          "description": "Your discussion on requirements changes is well-explained, especially with the example of Volkswagen's ID 4 car needing uninterrupted updates. You have effectively illustrated how new requirements emerge and evolve during development. However, try to clarify the connection between examples and the broader concept of requirements changes.",
-          "title": "Requirements Changes",
-          "index_start": 461,
-          "index_end": 631,
-          "credits": 1.0,
-          "meta": {}
-        },
-        {
-          "id": 126491204,
-          "description": "You successfully identified technology changes with the need for high data flow capacity for over-the-air updates. Your example is apt and demonstrates how advancements in data transmission technology can lead to software changes. Consider expanding on the implications of these changes on the overall system design.",
-          "title": "Technology Changes",
-          "index_start": 632,
-          "index_end": 761,
-          "credits": 1.0,
-          "meta": {}
-        },
-        {
-          "id": 126491205,
-          "description": "Your submission provides a relevant example of organizational changes with Volkswagen founding Cariad to address software issues. This illustrates how companies adapt to changing demands by restructuring. To improve, you could further discuss how organizational changes can impact team dynamics and workflow.",
-          "title": "Organizational Changes",
-          "index_start": 762,
-          "index_end": 949,
-          "credits": 1.0,
-          "meta": {}
-        },
-        {
-          "id": 126491206,
-          "description": "The example of Siemens Healthineers' Remote Maintenance system is insightful. It highlights changes in requirements, technology, and organization, showing how remote maintenance has shifted the focus from on-site technicians to remote software developers. This example complements your main discussion, but ensure primary examples are directly tied to the categories discussed.",
-          "title": "Additional Example",
-          "index_start": 952,
-          "index_end": 1709,
-          "credits": 0.5,
-          "meta": {}
-        }
-      ]
+      "language": "ENGLISH"
     },
     {
       "id": 1265409,
       "meta": {},
       "text": "Change in Software Development is as normal as in real life. It might occur due to a better understanding of the problem, the stakeholder needs, technology changes due to innovations or feasibility, general feasibility issues,  cost induced changes etc. \n\nRequirement Changes: Occurs within software development activities. Mainly due to changes/ adjustments in the requirements of users. Additionally due to re-structuring of customer organization, the availability of new technologies or a depend understanding of stakeholder needs.\n\ne.g. Software Development project for a client. Clients requirements proposal is not fully finished yet and adjustments occur due to Input of Stakeholders. \n\n Technology Changes: Changes in Technology might occur within the Development process as well. For instance in a software implementation project, difficulties in the compatibility of legacy systems and the software developments might occur. Additionally, innovations in technology might lead to changes in already developed systems, especially in long-term implementation / development projects. \n\ne.g. SAP implementation in a company with complex legacy Structures\n\nOrganisational changes: Changes in a companys structure might effect the requirements due to an increase or decrease of requirements  resulting from a change in perspective, cost-cutting, budget expending and so. \n\ne.g. New Departmennt Business Development decides to needs enhancement of  Software for Sales business. Thus, new add-ons in Software need to be considered. ",
       "score": 100,
-      "language": "ENGLISH",
-      "feedbacks": [
-        {
-          "id": 126540901,
-          "description": "Your explanation of why change occurs in software development is clear and includes various reasons such as better understanding of the problem, stakeholder needs, and technology changes. However, try to elaborate more on the impact of these changes and how they integrate into the development process.",
-          "title": "Explanation of Why Change Occurs",
-          "index_start": 61,
-          "index_end": 253,
-          "credits": 1.5,
-          "meta": {}
-        },
-        {
-          "id": 126540902,
-          "description": "The example you provided for change in software development is a bit vague. Try to offer a specific scenario where a real-world event caused a change in a software project, such as a regulatory change impacting software design or a market shift requiring new features.",
-          "title": "Example of Change",
-          "index_start": 536,
-          "index_end": 691,
-          "credits": 0.5,
-          "meta": {}
-        },
-        {
-          "id": 126540903,
-          "description": "Your explanation of requirements change is generally correct. However, the example provided lacks depth. It would be helpful to include a specific case study or scenario illustrating how requirement changes impacted a project.",
-          "title": "Requirements Change",
-          "index_start": 256,
-          "index_end": 691,
-          "credits": 0.5,
-          "meta": {}
-        },
-        {
-          "id": 126540904,
-          "description": "The discussion on technology changes is well-articulated, mentioning both compatibility with legacy systems and innovations in technology. Your example is relevant, but further elaboration on how these changes were managed or the outcomes would improve your submission.",
-          "title": "Technology Changes",
-          "index_start": 695,
-          "index_end": 1159,
-          "credits": 1.0,
-          "meta": {}
-        },
-        {
-          "id": 126540905,
-          "description": "Your explanation of organizational changes affecting software requirements is good, but the example provided is somewhat simplistic. Consider discussing specific organizational shifts, such as mergers or policy changes, and their impacts on software projects.",
-          "title": "Organizational Changes",
-          "index_start": 1161,
-          "index_end": 1532,
-          "credits": 0.5,
-          "meta": {}
-        }
-      ]
+      "language": "ENGLISH"
     },
     {
       "id": 1265422,
       "meta": {},
       "text": "Software development is constantly changing because developers are adapting to changing parameters and developments. For example, the possibilities available on Smartphones are improving constantly and this is accompanied by change in users' interests, who calling for new applications to make the best use of this. \n\nRequirements changes: Due to the constantly changing world, the requirements for software change. A good example is the corona crisis. Everything changed in many areas at once, the software developers had to react quickly and adapt the software to these changes. For example, the FaceID of smartphones no longer worked due to the mask requirement. Developers worked at full speed to adapt the software so that it still works despite the mask, but does not create security gaps.\n\nTechnology changes: As a result of the growth of the technology sector, new technologies are naturally being developed or old ones improved and modified. This plays an important role for safety. Security gaps are constantly being found in programs or they arise as result of the development of new technology. It is important that programs such as apps are continuously developed to counterac newly emerging security gaps. This is also important for computers. software developers are constantly changing and improving the technology of operating system. Updates are not only providing exciting new features for users, but also  improve the security of the computer.\n\nOrganizational changes: The structure of a company also changes, a software development company grows or expands and has to reorganize itself accordingly. new employees have to be hired and the hierarchies have to be changed. A move may also be necessary or the equipment may need to be renewed. ",
       "score": 83.3,
-      "language": "ENGLISH",
-      "feedbacks": [
-        {
-          "id": 126542201,
-          "description": "You provided a clear explanation of why change occurs in software development, highlighting adaptation to changing parameters and developments. This is a good start, but try to elaborate more on the underlying causes, such as shifts in user needs, technological advancements, and organizational dynamics. This will give a more comprehensive understanding.",
-          "title": "Explanation of Why Change Occurs",
-          "index_start": 0,
-          "index_end": 116,
-          "credits": 1.5,
-          "meta": {}
-        },
-        {
-          "id": 126542202,
-          "description": "The example provided regarding smartphones and changing user interests is relevant and illustrates how change can occur due to evolving user expectations. However, adding more context on how this impacts software development directly would strengthen the example.",
-          "title": "Example of Change in Software Development",
-          "index_start": 117,
-          "index_end": 315,
-          "credits": 0.5,
-          "meta": {}
-        },
-        {
-          "id": 126542203,
-          "description": "Your discussion on requirements changes using the example of the corona crisis is effective in showing how external factors can necessitate changes in software requirements. The FaceID adaptation due to mask requirements is a concrete example, though a more detailed explanation of the process and challenges faced would enrich the discussion.",
-          "title": "Requirements Changes",
-          "index_start": 318,
-          "index_end": 795,
-          "credits": 1.0,
-          "meta": {}
-        },
-        {
-          "id": 126542204,
-          "description": "The explanation of technology changes is well-founded, highlighting the importance of security and continuous updates. However, the examples provided are quite general. Adding specific instances of technology upgrades or developments, such as new programming languages or frameworks, would make this section stronger.",
-          "title": "Technology Changes",
-          "index_start": 797,
-          "index_end": 1463,
-          "credits": 0.5,
-          "meta": {}
-        },
-        {
-          "id": 126542205,
-          "description": "You touched upon organizational changes and the impact on software development, such as hiring new employees and restructuring. This is a good start, but providing a real-world example, like a company merger or acquisition, would give more depth and context to your explanation.",
-          "title": "Organizational Changes",
-          "index_start": 1465,
-          "index_end": 1760,
-          "credits": 0.5,
-          "meta": {}
-        }
-      ]
+      "language": "ENGLISH"
     },
     {
       "id": 1266343,
       "meta": {},
       "text": "Change is an essential characteristic of software development being an undertaking done unisolated within an influential environment of different collaborating teams and stakeholders (customers/project leaders...) all having concurring or mostly differing agendas  & requirements. Influencing factors especially reside within the triangle of budgeting, delivery time and complexity within a software project since these are prone to change itself. Explaining this by the example of a global ERP system introduction taking place in 2020 with the sudden hit of COVID crisis. This had tremendous influence on the software project like changing the collaboration style to remote, limited workforce due to illness/isolation, financial limitations on the customer side due to revenue drop effecting in project postponements and a limitation of ordered customized applications. All this means change in project execution which has to be dealt with in an agile and responsive way.\n\nChanges in requirements which state the requested outcomes for the developed software can occur at any stage. Changes can arise due to misunderstandings of the stated customer's functionality requirements which need to be revised in the beginning or the customer might lately realize the need to extend user access to the software indicating additional requests for user roles and data security management directly affecting the code styling.\n\nTechnological change is the practical usability of new technologies is occurring tremendously fast as can be seen with the progression of cloud computing and the cheaper availability of main memory on computers. This affected the market for ERP software largely since now browser-based cloud applications are providing new opportunities affecting software development projects in terms of skaleability and security requirements.\n\nOrganisational Change refers to changes in the workforce due to staff turnover or changes in the reporting or disciplinary hierarchy of an organisation. This especially affects software projects if high experienced programmers or talented project leaders are quitting as this loss of knowledge might lead to making former solutions unrealizable and negatively affect the on time delivery of the project due to the lack of leadership.\n\n\n\n\n(Adpated from last years own submission)",
       "score": 100,
-      "language": "ENGLISH",
-      "feedbacks": [
-        {
-          "id": 126634301,
-          "description": "You provided a solid explanation of why change is a core aspect of software development. By noting the influential environment and differing agendas, you effectively highlighted why change is inevitable. However, it would have been beneficial to discuss how these changes can improve the software or adapt to evolving user needs.",
-          "title": "Explanation of Why Change Occurs",
-          "index_start": 281,
-          "index_end": 447,
-          "credits": 1.5,
-          "meta": {}
-        },
-        {
-          "id": 126634302,
-          "description": "Your example of the global ERP system introduction during the COVID crisis was an appropriate illustration of how external factors can necessitate change in software development. This example clearly demonstrated the impact of unforeseen events on project management and collaboration.",
-          "title": "Example of Change in Software Development",
-          "index_start": 448,
-          "index_end": 972,
-          "credits": 1.0,
-          "meta": {}
-        },
-        {
-          "id": 126634303,
-          "description": "You effectively described how requirements can change due to misunderstandings or new insights from the customer. The example of extending user access is relevant and clearly explains the direct impact on the software development process.",
-          "title": "Requirements Changes",
-          "index_start": 974,
-          "index_end": 1416,
-          "credits": 1.0,
-          "meta": {}
-        },
-        {
-          "id": 126634304,
-          "description": "Your discussion on technological changes was strong, particularly with the example of cloud computing and its impact on the ERP software market. This shows a good understanding of how technological advancements can reshape software development projects.",
-          "title": "Technological Changes",
-          "index_start": 1418,
-          "index_end": 1846,
-          "credits": 1.0,
-          "meta": {}
-        },
-        {
-          "id": 126634305,
-          "description": "You addressed organizational changes well by focusing on workforce turnover and hierarchy changes. The example involving experienced programmers and project leaders quitting effectively illustrates the potential impact on project delivery.",
-          "title": "Organizational Changes",
-          "index_start": 1848,
-          "index_end": 2281,
-          "credits": 1.0,
-          "meta": {}
-        },
-        {
-          "id": 126634306,
-          "description": "While you adapted content from a previous submission, your explanations were generally original and not directly copied from lecture slides or internet sources. Ensure to continue using your own words for future submissions.",
-          "title": "Use of Own Words",
-          "index_start": 2001,
-          "index_end": 2326,
-          "credits": 0.0,
-          "meta": {}
-        }
-      ]
+      "language": "ENGLISH"
     },
     {
       "id": 1266386,
       "meta": {},
       "text": "As stakeholders learn more about the process and developers learn and improve about things, the change in software development is impreventable. Additionally, by time the business and the client environment changes, which you need to adapt to. As an example I find something really interesting, while searching for the changes in software development that I want to share . In the past you needed years to be able to build an application or a start-up. But right now all you need is a few months! To understand the change in software development, we will talk about the three areas. \n\nFrom the start till the outcome time a work or a product need changes because the market can change or the financial situation as well as the need of modifications can cause new requirements. That is how the requirement changes happen.\n\nOrganizational changes affect the group dynamic with resoulatiınary changing- levels and the approach. It happens due to the change of the type of company coordination, of the employee and their group structure and lastly due to the change of the group section. For example when you change the laptop system from intel to m1-chip , then you make a change in the process and expect every employee to adapt to the new system. \n\nTechnology changes is the change of the process within the 3 levels: invention, innovation and diffusion. Throughout this change, people can analyse the improvement of the technology regards to its topic\nThe invention and the innovation of phones are example of technology changes.\n",
       "score": 100,
-      "language": "ENGLISH",
-      "feedbacks": [
-        {
-          "id": 126638601,
-          "description": "Your explanation of why change occurs in software development is somewhat clear. You mention stakeholders learning and adapting, but it could be more detailed by including aspects such as technological advancements and organizational shifts.",
-          "title": "Explanation of Why Change Occurs",
-          "index_start": 145,
-          "index_end": 243,
-          "credits": 1.5,
-          "meta": {}
-        },
-        {
-          "id": 126638602,
-          "description": "The example provided about the reduction in time needed to build applications is relevant and illustrates the impact of changes in software development. However, it could be more specific by tying it directly to a particular technological or process change.",
-          "title": "Example of Change in Software Development",
-          "index_start": 244,
-          "index_end": 496,
-          "credits": 0.5,
-          "meta": {}
-        },
-        {
-          "id": 126638603,
-          "description": "You mention market and financial changes as drivers for requirements changes, which is a valid point. However, your description could benefit from specific real-world examples to illustrate these changes more effectively.",
-          "title": "Requirements Changes",
-          "index_start": 585,
-          "index_end": 820,
-          "credits": 0.5,
-          "meta": {}
-        },
-        {
-          "id": 126638604,
-          "description": "Your explanation of organizational changes includes relevant points about group dynamics and structure. However, the example of changing to M1-chip hardware is more aligned with technological changes rather than organizational. Consider providing a clearer example of organizational change.",
-          "title": "Organizational Changes",
-          "index_start": 822,
-          "index_end": 1245,
-          "credits": 0.5,
-          "meta": {}
-        },
-        {
-          "id": 126638605,
-          "description": "The explanation of technology changes through invention, innovation, and diffusion is a good framework. However, the example of phone invention and innovation could be more specific. It would be beneficial to explain how these changes directly impact software development.",
-          "title": "Technology Changes",
-          "index_start": 1248,
-          "index_end": 1529,
-          "credits": 1.0,
-          "meta": {}
-        }
-      ]
+      "language": "ENGLISH"
     },
     {
       "id": 1266418,
       "meta": {},
       "text": "Changes in software development happen because development teams work in an agile way and receive frequent feedback. With the often used process model SCRUM, a new release of the software takes place after a sprint, which is then evaluated by the customer. This feedback is incorporated into the next sprint and thus changes are often made.\n\nChanges in software development can also result from requirements, technology, or organizational changes.\nThere can be several reasons for requirements changes. One would be that if crucial stakeholder of a project were left out in the definition phase. A real-world example of such a procedure would be if the CEO of a company decides on his own to introduce a new tool. The department that uses this tool in the end is left out of this process step and therefore changes have to be made later to the definition or the software.\n\nTechnical reasons for changes in software development can be, for example, new features in a program language. In order to keep the developed software up to date and potentially add new features, the developers need to make changes to the existing code.\n\nOrganizational reasons may also occur. For example, when an important part of the development team leaves the company. In this case, tasks and responsibilities must be redistributed. To keep these organizational changes and the resulting effort as small as possible, it is even more crucial to document all information.\n",
       "score": 83.3,
-      "language": "ENGLISH",
-      "feedbacks": [
-        {
-          "id": 126641801,
-          "description": "Your explanation of why change happens in software development is clear and covers multiple aspects such as agile methodologies and feedback loops. However, you could enhance it by mentioning other factors like market conditions or competition which might necessitate changes.",
-          "title": "Explanation of Why Change Occurs",
-          "index_start": 342,
-          "index_end": 447,
-          "credits": 1.5,
-          "meta": {}
-        },
-        {
-          "id": 126641802,
-          "description": "The example you provided about the CEO introducing a new tool and the necessary changes is relevant. However, connecting it more explicitly to software development rather than organizational decision-making would strengthen the point.",
-          "title": "Example of Change in Software Development",
-          "index_start": 596,
-          "index_end": 871,
-          "credits": 0.5,
-          "meta": {}
-        },
-        {
-          "id": 126641803,
-          "description": "Your discussion on requirements change is appropriate, and the example involving a stakeholder like a CEO is helpful. Ensure the example clearly ties back to software requirements and not just organizational decisions.",
-          "title": "Requirements Change",
-          "index_start": 448,
-          "index_end": 871,
-          "credits": 1.0,
-          "meta": {}
-        },
-        {
-          "id": 126641804,
-          "description": "You correctly identified technology changes as a factor, mentioning new features in programming languages. This is a solid example. Consider expanding on how developers might leverage these features to improve software functionality.",
-          "title": "Technology Change",
-          "index_start": 873,
-          "index_end": 1126,
-          "credits": 1.0,
-          "meta": {}
-        },
-        {
-          "id": 126641805,
-          "description": "Your example of organizational change, focusing on team members leaving, is valid. You correctly emphasize the importance of documentation, which is crucial for minimizing disruption. You may want to consider other organizational factors like mergers or policy shifts for a more comprehensive view.",
-          "title": "Organizational Change",
-          "index_start": 1128,
-          "index_end": 1447,
-          "credits": 1.0,
-          "meta": {}
-        }
-      ]
+      "language": "ENGLISH"
     },
     {
       "id": 1266538,
       "meta": {},
       "text": "There are numerous reasons, some are that the customer might need some different features than planned, the software has to be adapted to modern standards, business team cuts / increases budget, bugs could be found, the team might grow or shrink, and much more...\n\nRequirements changes happen because the customer might change their expectations as the development goes on, as the product materializes, the developers might understand exact needs better than in the planning phase. Customers might even want to change some requirements post-development because they might need the product for other purposes, other goals. An example is, customers saying they want the product to be as fast as possible rather than easy to use half way through development when they arent satisfied with the speed.\n\nTechnology changes, as the technology advances, the product might need to be adapted for better compatibility, performance, ease of use, etc. Upgrading a 30-year-old server and having to adapt all the software because of it would be an example.\n\nOrganizational changes can happen because of the company being bought by another company, cutting costs, adding new devs, or losing devs, change in the company standards, etc. An example would be a company setting new low emission and sustainability goals so that the developed software should be as efficient as possible rather than fast.",
       "score": 66.7,
-      "language": "ENGLISH",
-      "feedbacks": [
-        {
-          "id": 126653801,
-          "description": "You provided a good overview of why change occurs in software development, mentioning factors such as evolving customer needs, adaptation to modern standards, and changes in team dynamics. However, try to structure your explanation more clearly to enhance readability.",
-          "title": "Explanation of Why Change Occurs",
-          "index_start": 0,
-          "index_end": 263,
-          "credits": 1.5,
-          "meta": {}
-        },
-        {
-          "id": 126653802,
-          "description": "The example given about customers wanting the product to be faster is relevant and illustrates how change can occur due to shifting priorities during development. This demonstrates your understanding of how requirements can evolve.",
-          "title": "Example of Change in Software Development",
-          "index_start": 622,
-          "index_end": 796,
-          "credits": 1.0,
-          "meta": {}
-        },
-        {
-          "id": 126653803,
-          "description": "Requirements changes are well explained with examples of evolving customer expectations and post-development changes. You've demonstrated understanding of how requirements can shift as the project progresses.",
-          "title": "Discussion of Requirements Changes",
-          "index_start": 265,
-          "index_end": 621,
-          "credits": 1.0,
-          "meta": {}
-        },
-        {
-          "id": 126653804,
-          "description": "You noted that technology changes might require adaptation for compatibility and performance. The server upgrade example is appropriate, showing how technological advancements can necessitate software changes.",
-          "title": "Discussion of Technology Changes",
-          "index_start": 798,
-          "index_end": 1042,
-          "credits": 1.0,
-          "meta": {}
-        },
-        {
-          "id": 126653805,
-          "description": "Organizational changes are discussed with examples like company acquisitions and changes in goals. The example of a company setting new sustainability goals is relevant, illustrating how organizational shifts can impact software development.",
-          "title": "Discussion of Organizational Changes",
-          "index_start": 1044,
-          "index_end": 1383,
-          "credits": 1.0,
-          "meta": {}
-        }
-      ]
+      "language": "ENGLISH"
     },
     {
       "id": 1261983,
       "meta": {},
       "text": "Software has always provided functions to solve tasks. Today, society and the technical environment are changing rapidly and processes need to be faster and more efficient. It must meet the needs of the customers who use it. One example of this is the constant updating of the software version of our smartphones. This fixes bugs and makes the smartphone work better. \nRequirements changes: Change in requirements due to internal problems (e.g., defects) or external pressures such as changes in laws and regulations.\nTechnology changes: Technological change is generally understood to mean technical progress. It includes new means of production and new uses of raw materials. The various technological changes lead to an increase in the productivity of labor and other factors of production.\nOrganizational changes: A company or business changes a key component of its organization, such as new leadership or implementation of a new technology (e.g., upgrading the operating system from Windows 9 to Windows 10). ",
       "score": 100,
-      "language": "ENGLISH",
-      "feedbacks": [
-        {
-          "id": 126198301,
-          "description": "The explanation provided in sentences 0-2 touches on the need for software to adapt to rapidly changing societal and technical environments. However, it could be more specific about the factors driving these changes, such as evolving user needs, technological advancements, and competitive pressures. Consider elaborating on these aspects to strengthen your explanation.",
-          "title": "Explanation of Why Change Occurs",
-          "index_start": 173,
-          "index_end": 224,
-          "credits": 1.0,
-          "meta": {}
-        },
-        {
-          "id": 126198302,
-          "description": "The example of smartphone software updates in sentences 3-4 is relevant and illustrates the concept of change in software development. It highlights the need for constant improvements and bug fixes, which are common reasons for updates.",
-          "title": "Example of Change",
-          "index_start": 225,
-          "index_end": 367,
-          "credits": 1.0,
-          "meta": {}
-        },
-        {
-          "id": 126198303,
-          "description": "Sentence 5 addresses requirements changes but lacks specific examples that illustrate how these changes impact software development projects. Consider providing a real-world instance where legal or regulatory changes necessitated a shift in software requirements.",
-          "title": "Requirements Changes",
-          "index_start": 369,
-          "index_end": 517,
-          "credits": 0.5,
-          "meta": {}
-        },
-        {
-          "id": 126198304,
-          "description": "Sentences 6-8 discuss technological changes broadly but could benefit from specific examples related to software development, such as the adoption of a new programming language or framework that enhances productivity.",
-          "title": "Technology Changes",
-          "index_start": 518,
-          "index_end": 793,
-          "credits": 0.5,
-          "meta": {}
-        },
-        {
-          "id": 126198305,
-          "description": "Sentence 9 provides an example of organizational change but could be more relevant by focusing on changes directly impacting software development, such as restructuring the development team or adopting agile methodologies.",
-          "title": "Organizational Changes",
-          "index_start": 794,
-          "index_end": 1014,
-          "credits": 0.5,
-          "meta": {}
-        }
-      ]
+      "language": "ENGLISH"
     },
     {
       "id": 1263721,
       "meta": {},
       "text": "Change in software development is vital in many aspects. It can define the quality of the product and the continous improvement of it. Software should adapt to the client's needs, not vice versa. Because of this, it is important to provide accurate and granular requirements at the start of each software project. But change can also be necessary when it comes to bug fixing, adding features or improving the usability. An example for change in the real world is the safety of cars. It all started with no safety features at all, then the safety belt followed and the fatality rate of car accidents dropped significantly. Later, airbags, stability and brake assistance systems made their way into the vehicles. Today, cars can already stop the car completely and call assistance if the driver gets suddely unconscious or falls asleep.\n\nRequirements change: If the softare project starts with vague or unfinished requirements of the customer, it is already doomed to fail. It can also happen during development that the team identifies a better solution or workflow for the initial problem and advices the customer to redefine the requirements.\n\nTechnology change: The evolution of technology and performance of computing components heavily increased  throughout the last 30 years. And with it comes an opportunity to maximize the company's productivity and profit. New technologies often operate with more performance while consuming less power. As software gets more complex, the computing performance has to improve to take advantage of the new software products.\n\nOrganizational change: In order to work effectively, teams may need to overthink the current organizational structure regarding the development process. For example, implementing Scrum or other comparable development methods can have a huge impact on collaboration and internal management. Structures or processes may have to be readjusted towards the new model. It is vital that all members accept the new model and are open to learn something new. It can be difficult, especially at the beginning, to keep up the productivity while trying to cope with new challenges coming with the change.",
       "score": 83.3,
-      "language": "ENGLISH",
-      "feedbacks": [
-        {
-          "id": 126372101,
-          "description": "Your explanation of why change occurs in software development is well-founded. You highlight the importance of adapting to client needs and the necessity for continuous improvement. However, consider elaborating on how changes can also arise due to external factors such as market trends, technological advancements, or organizational shifts.",
-          "title": "Explanation of Why Change Occurs",
-          "index_start": 314,
-          "index_end": 419,
-          "credits": 1.5,
-          "meta": {}
-        },
-        {
-          "id": 126372102,
-          "description": "Your example of change using the evolution of safety features in cars is clear and appropriate. It successfully parallels how software development evolves similarly with new requirements and technologies. Consider connecting this example more explicitly to software development to strengthen the analogy.",
-          "title": "Example of Change in Software Development",
-          "index_start": 420,
-          "index_end": 834,
-          "credits": 1.0,
-          "meta": {}
-        },
-        {
-          "id": 126372103,
-          "description": "You effectively describe requirements change with the example of vague initial requirements and the evolution of understanding during development. It would be beneficial to include a specific real-world example to further illustrate this point, such as a well-known project that underwent significant requirement changes.",
-          "title": "Requirements Change",
-          "index_start": 836,
-          "index_end": 1143,
-          "credits": 0.5,
-          "meta": {}
-        },
-        {
-          "id": 126372104,
-          "description": "Your discussion on technology change is insightful, emphasizing the need for improved computing performance with advancing software complexity. Try illustrating this with a specific example, such as the transition from traditional software to cloud-based solutions, highlighting the benefits and challenges faced.",
-          "title": "Technology Change",
-          "index_start": 1145,
-          "index_end": 1565,
-          "credits": 0.5,
-          "meta": {}
-        },
-        {
-          "id": 126372105,
-          "description": "You address organizational change well by discussing the adoption of methodologies like Scrum. Including a specific example of a company that successfully transitioned to a new organizational structure could enhance your explanation.",
-          "title": "Organizational Change",
-          "index_start": 1567,
-          "index_end": 2159,
-          "credits": 0.5,
-          "meta": {}
-        }
-      ]
+      "language": "ENGLISH"
     },
     {
       "id": 1264089,
@@ -9878,23 +9390,5 @@
       "score": 100,
       "language": "ENGLISH"
     }
-  ],
-  "baseline_info": {
-    "model": "azure_openai_gpt-4o",
-    "approach": "basic",
-    "generated_at": "2025-08-09T20:48:16.332303",
-    "description": "Baseline feedbacks generated by GPT-4o using basic approach",
-    "submission_ids_used": [
-      1265409,
-      1266343,
-      1263721,
-      1266538,
-      1265422,
-      1264912,
-      1266386,
-      1266418,
-      1262589,
-      1261983
-    ]
-  }
+  ]
 }

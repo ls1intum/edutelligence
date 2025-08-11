@@ -1,0 +1,749 @@
+{
+  "id": 6787,
+  "course_id": 169,
+  "title": "H03E01 Bumpers Nonfunctional Requirements (SS22)",
+  "type": "text",
+  "max_points": 6,
+  "bonus_points": 0,
+  "grading_instructions": "<ins>General Grading Scheme:</ins>\n- up to 6 Points for 6 NFR from all four URPS-Categories\n    - 1 Point per NFR per URPS-Category (-> 4 Points in total)\n    - up to 2 Points for two additional NFR from any URPS-category\n    - Use either the Grading Criterion with 0 or -1 points to ensure the rule is fulfilled\n- Good answers indicate how the non-functional requirements can be measured\n\n\n<ins>General Rules:</ins>\n- If the student provides more NFR than necessary, the worst one counts. (You can still provide feedback, but under no circumstances publish the evaluation guidelines)\n- No points for examples from the lecture (as always)\n- Different solutions to each of the U, R, P, S elements are allowed, but they should make sense in the respective category\n- This answer does not accept any function-related requirements!\n- The 250-word limit is a soft limit, the hard limit is at 500 words. In such cases, please assess the submission with 0 points and reference to the 250-word limit. DO NOT communicate the 500-word limit to the students!\n- In case one submission is suspicious of plagiarism, please report the assessment-link with a brief explanation to the plagiarism subteam on Confluence",
+  "problem_statement": "In order to solve the following task, first re-read Bumpers' Problem Statement.\n\n### Bumpers Problem Statement\nBumpers is a game where cars drive on a game board and can crash each other. In each collision, there is a winning car.\nThe car that wins all collisions is the winner of the game.\nThe player can start and stop the game. When the game is started, music is played.\nA car can be either fast or slow. There is one car controlled by the player.\nThe player can steer the direction of the car with the mouse and change its speed.\nThe game should be platform independent.\nIt should visualize different parameters of the car, e.g. the speed, consumption and location of the car. When cars crash, there has to be a sound effect.\nThe game should support different collisions.\nThe determination of the collision winner should be changeable during gameplay.\n\n\n### Your Job\nDefine in total 6 quality requirements (i.e., non-functional requirements) for the Bumpers game, which should cover all the four different URPS categories.\n\n*Requirement: Use your own words and do not just copy the lecture slides nor internet sources! Limit yourself to around 250 words*",
+  "example_solution": "- Portability: Bumpers can be moved from iOS to Android.\n- Usability: Bumpers can be played without reading a user manual.\n- Reliability: Bumpers should not crash more than 1 out of 1000 executions.\n- Performance: The game board should support an update of 25 frames per second.\n- Performance: The cars direction should be changeable within 1/10 sec after steering.\n- Maintainability: Bumpers must be re-designable to a client-server architecture.\n- Adaptability: As Bumpers must support North Americas and European markets, it must support metric and imperial systems. \n- Supportability: The game should be supported on Linux, MacOS and Windows.",
+  "meta": {},
+  "submissions": [
+    {
+      "id": 1284089,
+      "meta": {},
+      "text": "NFRs: \nUsability:\n1. The player can start and stop the game. \n2. There is one car controlled by the player. \n3. The player can steer the direction of the car with the mouse and change its speed. \nReliability:\n4. The game should support different collisions. \nPerformance: \n5. When the game is started, music is played.\nSupportability:\n6. The determination of the collision winner should be changeable during gameplay. ",
+      "score": 0,
+      "language": "ENGLISH",
+      "feedbacks": [
+        {
+          "id": 128408901,
+          "description": "It seems that the submission lists functionalities rather than non-functional requirements. Non-functional requirements should address aspects like usability, reliability, performance, and supportability in measurable terms.",
+          "title": "Understanding of Non-Functional Requirements",
+          "index_start": 338,
+          "index_end": 417,
+          "credits": 0.0,
+          "meta": {}
+        },
+        {
+          "id": 128408902,
+          "description": "The usability aspect should focus on how intuitive or easy the game is for players to interact with, such as having a clear and user-friendly interface, rather than listing functionalities like controlling the car. A measurable requirement could be: 'The game should be playable without prior instruction within 5 minutes.'",
+          "title": "Usability Requirement",
+          "index_start": 7,
+          "index_end": 194,
+          "credits": -1.0,
+          "meta": {}
+        },
+        {
+          "id": 128408903,
+          "description": "Reliability should address the stability of the game, such as how often it crashes or the accuracy of game outcomes. A measurable requirement could be: 'The game should not crash more than once in 1000 hours of gameplay.'",
+          "title": "Reliability Requirement",
+          "index_start": 196,
+          "index_end": 257,
+          "credits": -1.0,
+          "meta": {}
+        },
+        {
+          "id": 128408904,
+          "description": "Performance requirements should focus on the responsiveness and efficiency of the game, such as frame rates or loading times. A measurable requirement could be: 'The game should maintain a minimum frame rate of 30 FPS during gameplay.'",
+          "title": "Performance Requirement",
+          "index_start": 259,
+          "index_end": 318,
+          "credits": -1.0,
+          "meta": {}
+        },
+        {
+          "id": 128408905,
+          "description": "Supportability should encompass the game's ability to be supported across different platforms or operating systems. A measurable requirement could be: 'The game should be compatible with Windows, macOS, and Linux operating systems.'",
+          "title": "Supportability Requirement",
+          "index_start": 319,
+          "index_end": 417,
+          "credits": -1.0,
+          "meta": {}
+        }
+      ]
+    },
+    {
+      "id": 1287637,
+      "meta": {},
+      "text": "1. The car that wins all collisions is the winner of the game. (Usability)\n2. There is one car controlled by the player. (Maintainability Supportability)\n3. The player can steer the direction of the car with the mouse and change its speed. (Usability)\n4. The game should visualize different parameters of the car, e.g. the speed, consumption, and location of the car. (Performance)\n5. When cars crash, there has to be a sound effect. (Performance)\n6. The game should be platform-independent. (Robustness Reliability)\n\n\n\n",
+      "score": 8.3,
+      "language": "ENGLISH",
+      "feedbacks": [
+        {
+          "id": 128763701,
+          "description": "The usability requirements mentioned in sentences 2 and 8 are valid. However, it would be beneficial to specify how usability can be measured, such as ease of control or intuitive gameplay mechanics without needing extensive instructions.",
+          "title": "Usability Requirement",
+          "index_start": 63,
+          "index_end": 251,
+          "credits": 1.0,
+          "meta": {}
+        },
+        {
+          "id": 128763702,
+          "description": "The requirement listed in sentence 5 combines Maintainability and Supportability. This could be split into two distinct requirements: Maintainability could address ease of updates and modifications to the game code, while Supportability might specify compatibility with various operating systems.",
+          "title": "Maintainability and Supportability",
+          "index_start": 121,
+          "index_end": 153,
+          "credits": 0.0,
+          "meta": {}
+        },
+        {
+          "id": 128763703,
+          "description": "The Performance requirements mentioned in sentences 12 and 15 are valid but could be more specific. For instance, you can specify performance metrics like system responsiveness or the frequency of updates (e.g., 'Parameters should refresh every second').",
+          "title": "Performance Requirement",
+          "index_start": 368,
+          "index_end": 447,
+          "credits": 1.0,
+          "meta": {}
+        },
+        {
+          "id": 128763704,
+          "description": "In sentence 18, you mention a Reliability requirement. It would be helpful to define measurable criteria for reliability, such as how often the game should run without crashing or the acceptable error rate.",
+          "title": "Reliability Requirement",
+          "index_start": 492,
+          "index_end": 516,
+          "credits": 1.0,
+          "meta": {}
+        },
+        {
+          "id": 128763705,
+          "description": "The submission lacks distinct requirements for Robustness and Portability. Consider adding requirements that address how the game handles errors (Robustness) and how easily it can be transferred or adapted to different platforms (Portability).",
+          "title": "Missing Requirements",
+          "index_start": 492,
+          "index_end": 516,
+          "credits": -1.0,
+          "meta": {}
+        }
+      ]
+    },
+    {
+      "id": 1282020,
+      "meta": {},
+      "text": "usability:  -player can start and stop the game\n                - the player controls one car\n                - the player can steer the direction of the car with the mouse\nsupportability: \n                - game should be platform independent\nperformance:\n                - the game should run smoothly\nReliability:\n               - game should not give out errors",
+      "score": 16.7,
+      "language": "ENGLISH",
+      "feedbacks": [
+        {
+          "id": 128202001,
+          "description": "Your usability requirements focus on basic functionalities of the game, such as starting/stopping and controlling the car. Consider adding more specific criteria for usability, such as 'The game interface should be intuitive, allowing new players to understand controls within 5 minutes of gameplay.' This provides a measurable target for usability.",
+          "title": "Usability Requirement",
+          "index_start": 94,
+          "index_end": 172,
+          "credits": 0.0,
+          "meta": {}
+        },
+        {
+          "id": 128202002,
+          "description": "You've mentioned platform independence under supportability, which is a valid requirement. However, you could make it more specific by stating 'The game should be compatible with Windows, macOS, and Linux operating systems.' This provides clear targets for supportability.",
+          "title": "Supportability Requirement",
+          "index_start": 173,
+          "index_end": 243,
+          "credits": 1.0,
+          "meta": {}
+        },
+        {
+          "id": 128202003,
+          "description": "Your performance requirement 'the game should run smoothly' is too vague. Consider specifying performance metrics, such as 'The game should maintain a frame rate of at least 30 frames per second under all conditions.' This makes the requirement measurable.",
+          "title": "Performance Requirement",
+          "index_start": 244,
+          "index_end": 303,
+          "credits": 0.0,
+          "meta": {}
+        },
+        {
+          "id": 128202004,
+          "description": "Your reliability requirement states that the game should not give out errors, which is a solid expectation. However, specify metrics such as 'The game should not crash more than once in 1000 hours of gameplay.' This provides a clear, measurable standard for reliability.",
+          "title": "Reliability Requirement",
+          "index_start": 304,
+          "index_end": 365,
+          "credits": 1.0,
+          "meta": {}
+        },
+        {
+          "id": 128202005,
+          "description": "You have not covered all URPS categories. Consider adding requirements for Portability, such as 'The game should be easily transferable between different devices without loss of data.' This would complete the coverage of URPS categories.",
+          "title": "Missing URPS Category",
+          "index_start": 317,
+          "index_end": 365,
+          "credits": -1.0,
+          "meta": {}
+        },
+        {
+          "id": 128202006,
+          "description": "To achieve full points, consider adding more requirements under any URPS category. For example, 'Maintainability: The game code should be modular to allow updates and additions without affecting existing functionality.' This adds depth to your submission.",
+          "title": "Additional Requirement Suggestion",
+          "index_start": 317,
+          "index_end": 365,
+          "credits": 0.0,
+          "meta": {}
+        }
+      ]
+    },
+    {
+      "id": 1287401,
+      "meta": {},
+      "text": "The four big categories of non-functional requirements are Usability, Reliability, Performance and Supportability.\nthe following are example requirements based on the Bumpers problem statement.\n\n1. Usability:\nExample: User only requires minimal and singular mouse movements to control the direction of his car\n\n2. Reliability:\nExample: The game can be ran on various operating systems such as MacOS or Windows\n\n3. Performance:\nExample: Crash sound will play less than 10 milliseconds after the crash occurs\n\n4. Supportability:\nExample: Different possible collision effects depending on the circumstances of the collision, f.e. if the car has one collision so far, it won't get crunched in the \"doublecollision\" option\n\n5. Performance:\nExample: Game will boot up within 50 milliseconds of launching the application\n\n6. Reliability:\nExample: The game can be played with benchmark requirements of 4gb ram",
+      "score": 25,
+      "language": "ENGLISH",
+      "feedbacks": [
+        {
+          "id": 128740101,
+          "description": "The requirement for usability is specific and actionable, focusing on minimal mouse movements for car control, which enhances user experience. Consider also mentioning how intuitiveness and ease of learning can be measured for users.",
+          "title": "Usability Requirement",
+          "index_start": 198,
+          "index_end": 309,
+          "credits": 1.0,
+          "meta": {}
+        },
+        {
+          "id": 128740102,
+          "description": "The requirement under reliability is misplaced. Platform compatibility fits better under portability or supportability rather than reliability. Consider revisiting this and defining reliability in terms of system stability or error rates.",
+          "title": "Reliability Requirement",
+          "index_start": 314,
+          "index_end": 409,
+          "credits": 0.0,
+          "meta": {}
+        },
+        {
+          "id": 128740103,
+          "description": "The requirement for performance is well defined with a clear measurable response time for crash sound effects. Ensure you provide similar measurable criteria for other performance aspects.",
+          "title": "Performance Requirement",
+          "index_start": 414,
+          "index_end": 506,
+          "credits": 1.0,
+          "meta": {}
+        },
+        {
+          "id": 128740104,
+          "description": "The requirement under supportability is unclear and seems to address a functional aspect related to collision effects. Supportability should focus on aspects like documentation, compatibility, or customer support. Consider revising.",
+          "title": "Supportability Requirement",
+          "index_start": 511,
+          "index_end": 717,
+          "credits": 0.0,
+          "meta": {}
+        },
+        {
+          "id": 128740105,
+          "description": "The additional performance requirement regarding boot time is specific and measurable, adding value to the performance category. Ensure it aligns with realistic hardware capabilities.",
+          "title": "Additional Performance Requirement",
+          "index_start": 722,
+          "index_end": 813,
+          "credits": 1.0,
+          "meta": {}
+        },
+        {
+          "id": 128740106,
+          "description": "The second reliability requirement addressing RAM requirements fits better under performance, as it deals with system resource usage rather than reliability. Consider defining reliability in terms of game uptime or error frequency.",
+          "title": "Second Reliability Requirement",
+          "index_start": 818,
+          "index_end": 901,
+          "credits": 0.0,
+          "meta": {}
+        }
+      ]
+    },
+    {
+      "id": 1283747,
+      "meta": {},
+      "text": "usability:\n1.Large and clear graphics of the car\n2.The screen can show the current direction of your mouse control\nreliability:\n3.Set the maximum number of hours you can play per day to prevent damage to your eyesight\n4.There is a lock button to change the speed to prevent accidentally pressing the number and changing the speed\nperformance:\n5.Up to 3 players at the same time\nAvailability：\n 6.the availability of the system is at least 90%",
+      "score": 33.3,
+      "language": "ENGLISH",
+      "feedbacks": [
+        {
+          "id": 128374701,
+          "description": "The submission provides usability requirements in sentences 0-2, focusing on clear graphics and the display of mouse control direction. These requirements are valid but could be more specific about how usability is measured, such as ease of learning or user satisfaction.",
+          "title": "Usability Requirement",
+          "index_start": 49,
+          "index_end": 114,
+          "credits": 1.0,
+          "meta": {}
+        },
+        {
+          "id": 128374702,
+          "description": "The reliability requirement in sentences 3-5 is not clearly related to the typical aspects of reliability such as error rates or uptime. Limiting playtime for eyesight protection is more related to user health than system reliability. Consider revising this to align with system reliability aspects.",
+          "title": "Reliability Requirement",
+          "index_start": 115,
+          "index_end": 329,
+          "credits": 0.0,
+          "meta": {}
+        },
+        {
+          "id": 128374703,
+          "description": "Sentence 7 addresses performance by allowing up to 3 players simultaneously. This is a valid performance aspect, but it could be enhanced by specifying metrics like response time or speed under varying load conditions.",
+          "title": "Performance Requirement",
+          "index_start": 330,
+          "index_end": 377,
+          "credits": 1.0,
+          "meta": {}
+        },
+        {
+          "id": 128374704,
+          "description": "The availability requirement in sentence 8-9 is correctly identified, with the system needing to be available at least 90% of the time. This aligns well with the 'Supportability' category and provides a measurable standard.",
+          "title": "Availability Requirement",
+          "index_start": 378,
+          "index_end": 441,
+          "credits": 1.0,
+          "meta": {}
+        },
+        {
+          "id": 128374705,
+          "description": "The submission is missing a requirement from the 'Security' category, which could include aspects such as data protection or user authentication.",
+          "title": "Missing URPS Category",
+          "index_start": 0,
+          "index_end": 10,
+          "credits": -1.0,
+          "meta": {}
+        }
+      ]
+    },
+    {
+      "id": 1281650,
+      "meta": {},
+      "text": "Usability:\n1. The player needs to use the mouse to control the car. When the mouse changes direction, the car must also change direction\n2. The player can play without an internet connection\n\nRealizability:\n1. The game does not need to network, installation and use when there will be no network virus invasion\n\nPerformance:\n1. The system can simultaneously determine the impact patterns of different cars\n2. The system can simultaneously control the speed and direction of the NPC car\n\nSupportability:\n1. The game should be platform independent, users can use it in different processors\n ",
+      "score": 41.7,
+      "language": "ENGLISH",
+      "feedbacks": [
+        {
+          "id": 128165001,
+          "description": "The requirement related to using the mouse for controlling the car is a functional requirement, not a non-functional one. Consider specifying how intuitive the controls are or how quickly players can learn to use them effectively.",
+          "title": "Usability Requirement",
+          "index_start": 14,
+          "index_end": 136,
+          "credits": -1.0,
+          "meta": {}
+        },
+        {
+          "id": 128165002,
+          "description": "Playing without an internet connection is more related to availability or accessibility rather than usability. Consider specifying how easy it is to navigate the game interface or access help features within the game.",
+          "title": "Usability Requirement",
+          "index_start": 140,
+          "index_end": 190,
+          "credits": -1.0,
+          "meta": {}
+        },
+        {
+          "id": 128165003,
+          "description": "The statement about not needing a network is unclear in terms of reliability. Consider stating how often the game should run without errors or crashes, even when offline.",
+          "title": "Reliability Requirement",
+          "index_start": 210,
+          "index_end": 310,
+          "credits": -1.0,
+          "meta": {}
+        },
+        {
+          "id": 128165004,
+          "description": "The simultaneous determination of impact patterns is a performance-related requirement. However, it lacks specifics on how performance can be measured, such as latency or processing time for impact determination.",
+          "title": "Performance Requirement",
+          "index_start": 328,
+          "index_end": 405,
+          "credits": 1.0,
+          "meta": {}
+        },
+        {
+          "id": 128165005,
+          "description": "Controlling the speed and direction of NPC cars is a functional requirement rather than a performance one. Consider specifying metrics like response time for NPC actions.",
+          "title": "Performance Requirement",
+          "index_start": 409,
+          "index_end": 485,
+          "credits": -1.0,
+          "meta": {}
+        },
+        {
+          "id": 128165006,
+          "description": "Platform independence is correctly identified as a supportability requirement. However, specify which platforms or processors are supported or clarify the extent of platform independence.",
+          "title": "Supportability Requirement",
+          "index_start": 506,
+          "index_end": 587,
+          "credits": 1.0,
+          "meta": {}
+        }
+      ]
+    },
+    {
+      "id": 1284431,
+      "meta": {},
+      "text": "The respective URPS attribute is written in brackets beneath the non-functional requirement.\n\n- The user controlls the car with a mouse\n-> [U]\n\n- The game must be playable at at least 60fps \n-> [P] Response Time\n\n- Steering should be comfortably controllable (not to fast, not to small) \n-> [P] Accuracy\n\n- The system design should be easily extensible \n-> [S] Adaptability, [S] Maintainability (-> Easy extensibility keeps the source code more structured in the first place)\n\n- The game should be cross plattform\n-> [S] Portability\n\n- Cars should not glitch when colliding\n-> [R] Robustness (as in the game works properly)",
+      "score": 58.3,
+      "language": "ENGLISH",
+      "feedbacks": [
+        {
+          "id": 128443101,
+          "description": "The usability requirement mentioned, 'The user controls the car with a mouse', is functional rather than non-functional. Consider defining how user interaction can be intuitive or easy to learn, which aligns with usability.",
+          "title": "Usability Requirement",
+          "index_start": 94,
+          "index_end": 142,
+          "credits": 0.0,
+          "meta": {}
+        },
+        {
+          "id": 128443102,
+          "description": "The performance requirement 'The game must be playable at at least 60fps' is a strong choice. It directly addresses the game's responsiveness and can be measured effectively.",
+          "title": "Performance Requirement",
+          "index_start": 144,
+          "index_end": 211,
+          "credits": 1.0,
+          "meta": {}
+        },
+        {
+          "id": 128443103,
+          "description": "The requirement 'Steering should be comfortably controllable' is vague. Consider specifying measurable parameters like 'The car's direction should change within 0.1 seconds of user input' to ensure precision.",
+          "title": "Performance Requirement - Accuracy",
+          "index_start": 213,
+          "index_end": 303,
+          "credits": 0.0,
+          "meta": {}
+        },
+        {
+          "id": 128443104,
+          "description": "The system design should be easily extensible, which fits under adaptability and maintainability. However, these are URPS overlapping categories. Consider focusing on one aspect, such as adaptability, to enhance clarity.",
+          "title": "Supportability Requirement",
+          "index_start": 305,
+          "index_end": 475,
+          "credits": 0.5,
+          "meta": {}
+        },
+        {
+          "id": 128443105,
+          "description": "The requirement 'The game should be cross-platform' is well-aligned with portability. It can be measured by the number of platforms supported.",
+          "title": "Portability Requirement",
+          "index_start": 477,
+          "index_end": 532,
+          "credits": 1.0,
+          "meta": {}
+        },
+        {
+          "id": 128443106,
+          "description": "The requirement 'Cars should not glitch when colliding' addresses robustness. It would be beneficial to specify a measurable metric, such as the percentage of collisions resulting in glitches.",
+          "title": "Reliability Requirement",
+          "index_start": 534,
+          "index_end": 623,
+          "credits": 1.0,
+          "meta": {}
+        }
+      ]
+    },
+    {
+      "id": 1284391,
+      "meta": {},
+      "text": "Performance: The program has to run fluent including 500 cars. It has to run at least on a HP Laptop 15s-eq2755ng with no lags. \n\nMaintainability: The program shall be implemented in Java code. All developers should stick to the Standard Java Naming Conventions so it's easier to keep an overview over the whole program.\n\nSafety: In traffic there is safety first so the program needs to defend against cheaters. The developers should include basic anti cheat software like ABC AntiCheat or AntiCheatReloaded.\n\nUsability: It's important that the program is easy to use and it doesn't take more then 2-3 clicks to start a game. \n\nReliability: The program should not contain complex algorithms, single methods shouldn't be longer than 20 lines of code. Therefore helping methods can be implemented. Also the error and exception handling should not be neglected. These are two methods to prevent potential application failures and to increase the reliability. \n\nAdaptability: The program should be flexible to integrate new features such as new car types or other new ideas and add ons that make the game more fun. ",
+      "score": 66.7,
+      "language": "ENGLISH",
+      "feedbacks": [
+        {
+          "id": 128439101,
+          "description": "The performance requirement mentioning fluent operation with 500 cars is a good start (line 0). However, specifying a measurable frame rate, such as 30 frames per second, would make it clearer and assessable. Including a specific hardware requirement (line 1) is restrictive. Consider rephrasing to suggest minimum system specifications without referencing specific models.",
+          "title": "Performance Requirement",
+          "index_start": 63,
+          "index_end": 127,
+          "credits": 0.0,
+          "meta": {}
+        },
+        {
+          "id": 128439102,
+          "description": "Maintainability is correctly addressed with the suggestion to use Java and adhere to naming conventions (lines 2-3). However, this requirement is more about coding standards than maintainability. Consider emphasizing aspects like modular design and ease of updating the code.",
+          "title": "Maintainability Requirement",
+          "index_start": 130,
+          "index_end": 320,
+          "credits": 0.0,
+          "meta": {}
+        },
+        {
+          "id": 128439103,
+          "description": "The safety requirement focuses on anti-cheat measures, which are relevant for game integrity (lines 4-5). However, this is more aligned with security rather than safety. Consider rephrasing to focus on player data protection or the safe operation of the game.",
+          "title": "Safety Requirement",
+          "index_start": 322,
+          "index_end": 508,
+          "credits": -1.0,
+          "meta": {}
+        },
+        {
+          "id": 128439104,
+          "description": "The usability requirement is well formulated, highlighting ease of starting a game within 2-3 clicks (line 6). This is a clear and measurable standard that improves user experience.",
+          "title": "Usability Requirement",
+          "index_start": 510,
+          "index_end": 625,
+          "credits": 1.0,
+          "meta": {}
+        },
+        {
+          "id": 128439105,
+          "description": "The reliability requirement mentions avoiding complex algorithms and using error handling (lines 7-10). However, limiting method length isn’t a direct reliability metric. Focus more on error rates or system uptime as reliability indicators.",
+          "title": "Reliability Requirement",
+          "index_start": 628,
+          "index_end": 955,
+          "credits": 0.0,
+          "meta": {}
+        },
+        {
+          "id": 128439106,
+          "description": "The adaptability requirement is well stated, emphasizing the integration of new features and add-ons (line 11). This encourages future growth and flexibility of the game.",
+          "title": "Adaptability Requirement",
+          "index_start": 958,
+          "index_end": 1110,
+          "credits": 1.0,
+          "meta": {}
+        }
+      ]
+    },
+    {
+      "id": 1282085,
+      "meta": {},
+      "text": "NFR1 Speed Change: the user can speed up his car with a double click (usability)\nNFR2 Game Start: the game starts automatically when the player chooses car type\nNFR3 Mouse Disconnection: the game pauses automatically if the mouse gets disconnected(reliability)\nNFR4 Storage of last winning collision: the game stores  a gif file of the player's last winning collision(performance)\nNFR5 Winner collision selection: the type of winner collision is defined at the begging of the game in less than 2 s(performance)\nNFR6 Collision Type: new type of collision can be added to the system (supportability)",
+      "score": 75,
+      "language": "ENGLISH",
+      "feedbacks": [
+        {
+          "id": 128208501,
+          "description": "The first requirement, 'Speed Change', correctly identifies a usability aspect by allowing users to easily change speed using a double-click. However, it could specify how quickly the speed change should be recognized for better measurement.",
+          "title": "Usability NFR",
+          "index_start": 0,
+          "index_end": 80,
+          "credits": 1.0,
+          "meta": {}
+        },
+        {
+          "id": 128208502,
+          "description": "The 'Mouse Disconnection' requirement is a good reliability aspect, as it ensures the game responds appropriately to hardware changes. To improve, consider specifying how quickly the game should pause after disconnection.",
+          "title": "Reliability NFR",
+          "index_start": 161,
+          "index_end": 260,
+          "credits": 1.0,
+          "meta": {}
+        },
+        {
+          "id": 128208503,
+          "description": "The 'Storage of last winning collision' requirement incorrectly categorizes under performance. This is more related to data management or usability. Instead, focus on performance aspects like frame rate or response time.",
+          "title": "Performance NFR",
+          "index_start": 261,
+          "index_end": 380,
+          "credits": 0.0,
+          "meta": {}
+        },
+        {
+          "id": 128208504,
+          "description": "'Winner collision selection' correctly addresses performance by specifying a time limit for setting collision types. This could be improved by stating how the game ensures selection within 2 seconds.",
+          "title": "Performance NFR",
+          "index_start": 381,
+          "index_end": 510,
+          "credits": 1.0,
+          "meta": {}
+        },
+        {
+          "id": 128208505,
+          "description": "'Collision Type' is a good supportability requirement, allowing flexibility and expansion. Consider specifying how new collision types can be added without disrupting existing functionality.",
+          "title": "Supportability NFR",
+          "index_start": 511,
+          "index_end": 597,
+          "credits": 1.0,
+          "meta": {}
+        },
+        {
+          "id": 128208506,
+          "description": "'Game Start' requirement lacks clarity and does not fit any URPS category effectively. Suggest focusing on aspects like platform independence or user experience instead.",
+          "title": "Game Start NFR",
+          "index_start": 81,
+          "index_end": 160,
+          "credits": 0.0,
+          "meta": {}
+        }
+      ]
+    },
+    {
+      "id": 1286406,
+      "meta": {},
+      "text": "NFR1 Usability: \nIn terms of usability, the app could include a simple tutorial on how to play the game, which would be a part of the sub-category learnability.\n\nNFR2 Performance: \nThe app should be performant enough to render at least 30 frames per second in order to appear smooth to the user of the app.\n\nNFR3 Performance: \nTo be accurate enough, the collisions of cars shall not be evaluated thorugh the use of rectangles, but rather more complex polygons. This is believed to improve the user experience.\n\nNFR4 Reliability: \nThe game should be efficient enough to support a big GameBoard with a resonably high number of cars still delivering stable and high frame rates.\n\nNFR5 Supportability:\nThe software shall be designed in a way to easily create new types of cars or collisions. In general, the game should be designed modular for coming features.\n\nNFR6: Supportability:\nThe game should be portable and therefore accessible on all (good) popular platforms (Linux, (Windows), Android) in order to reach a broad userbase.",
+      "score": 83.3,
+      "language": "ENGLISH",
+      "feedbacks": [
+        {
+          "id": 128640601,
+          "description": "The suggestion to include a simple tutorial for learnability is a good start for usability. Consider specifying how the effectiveness of the tutorial could be measured, such as through user satisfaction surveys or completion rates.",
+          "title": "Usability Requirement",
+          "index_start": 17,
+          "index_end": 160,
+          "credits": 1.0,
+          "meta": {}
+        },
+        {
+          "id": 128640602,
+          "description": "The performance requirement of rendering at least 30 frames per second is clearly stated and measurable. This aligns well with the category of performance.",
+          "title": "Performance Requirement",
+          "index_start": 162,
+          "index_end": 306,
+          "credits": 1.0,
+          "meta": {}
+        },
+        {
+          "id": 128640603,
+          "description": "The proposal to use polygons instead of rectangles for collision detection is relevant to performance and user experience. However, this requirement could be more specific about the expected accuracy improvement and its measurable impact on performance.",
+          "title": "Performance Requirement",
+          "index_start": 308,
+          "index_end": 509,
+          "credits": 1.0,
+          "meta": {}
+        },
+        {
+          "id": 128640604,
+          "description": "The reliability requirement about supporting a large game board with stable frame rates is valid, but it overlaps with performance. Consider specifying a measure for reliability, such as uptime or error rates.",
+          "title": "Reliability Requirement",
+          "index_start": 511,
+          "index_end": 675,
+          "credits": 0.0,
+          "meta": {}
+        },
+        {
+          "id": 128640605,
+          "description": "Designing the software to easily create new types of cars or collisions is a good point for supportability. Consider adding how the modular design will be evaluated or measured.",
+          "title": "Supportability Requirement",
+          "index_start": 677,
+          "index_end": 856,
+          "credits": 1.0,
+          "meta": {}
+        },
+        {
+          "id": 128640606,
+          "description": "The requirement for the game to be accessible on various popular platforms fits well under portability. Ensure that there is a way to measure this, such as testing across different platforms.",
+          "title": "Portability Requirement",
+          "index_start": 858,
+          "index_end": 1028,
+          "credits": 1.0,
+          "meta": {}
+        }
+      ]
+    },
+    {
+      "id": 1282888,
+      "meta": {},
+      "text": "NFR 1 (Performance/Response Time): The system should be able to react to user inputs within 20 ms\nNFR 2 (Robustness): Wrong user inputs should have no effect on the system\nNFR 3 (Usability): The User needs at most 2 clicks to start the game\nNFR 4 (Maintainability): The system can be easily updated once every 3 months\nNFR 5 (Portability):  The game should playable on Windows, MacOS and Linux\nNFR 6 (Availability): The system should be available for 99.8% of the time",
+      "score": 91.7,
+      "language": "ENGLISH",
+      "feedbacks": [
+        {
+          "id": 128288801,
+          "description": "The requirement specifying a 20 ms response time for user inputs is clear and measurable, aligning well with the Performance category. This demonstrates a strong understanding of the category. Well done!",
+          "title": "Performance Requirement",
+          "index_start": 0,
+          "index_end": 97,
+          "credits": 1.0,
+          "meta": {}
+        },
+        {
+          "id": 128288802,
+          "description": "The requirement about wrong user inputs having no effect is a valid consideration under reliability, but it lacks a measurable aspect. Consider defining how 'no effect' is verified, such as through error logging or system behavior analysis.",
+          "title": "Robustness Requirement",
+          "index_start": 98,
+          "index_end": 171,
+          "credits": 0.0,
+          "meta": {}
+        },
+        {
+          "id": 128288803,
+          "description": "The usability requirement about starting the game with at most 2 clicks is specific and measurable, fitting well within the Usability category. This is a good example of making user interaction efficient.",
+          "title": "Usability Requirement",
+          "index_start": 172,
+          "index_end": 240,
+          "credits": 1.0,
+          "meta": {}
+        },
+        {
+          "id": 128288804,
+          "description": "The requirement on maintainability, stating easy updates every 3 months, could be enhanced by specifying what 'easy updates' entail. Consider detailing the process or criteria that define an update as easy.",
+          "title": "Maintainability Requirement",
+          "index_start": 241,
+          "index_end": 318,
+          "credits": 0.0,
+          "meta": {}
+        },
+        {
+          "id": 128288805,
+          "description": "The portability requirement is well-defined, specifying the support for multiple operating systems: Windows, MacOS, and Linux. This shows good understanding of platform independence.",
+          "title": "Portability Requirement",
+          "index_start": 319,
+          "index_end": 393,
+          "credits": 1.0,
+          "meta": {}
+        },
+        {
+          "id": 128288806,
+          "description": "The availability requirement specifying 99.8% uptime is a valid consideration under reliability, but it is important to note this is more about availability than robustness. Ensure that the specific URPS category is correctly identified.",
+          "title": "Availability Requirement",
+          "index_start": 394,
+          "index_end": 468,
+          "credits": 1.0,
+          "meta": {}
+        }
+      ]
+    },
+    {
+      "id": 1281975,
+      "meta": {},
+      "text": "-Usability:\n\t-It shouldn't take more than 4 mouse clicks for the player to start playing the game\n\t-There should be no delay with the steering of the car, meaning after one mouseclick the direction of the car \t\t \n          the player controls should change in less than 0.1 seconds\n\t-The position of the specific buttons the player controls to start/stop the game and to choose his collision \n          type should always be the same\n-Reliability:\n\t-The game should not crash when the user enters a wrong input (e.g pressing space instead of using the \t \n          mouse to steer the car)\n-Performance:\n\t-The game should not use more than 250MB of RAM\n-Supportability:\n\t-The game should be able to be remotely updated to e.g support new type of collisions or add new cars",
+      "score": 100,
+      "language": "ENGLISH",
+      "feedbacks": [
+        {
+          "id": 128197501,
+          "description": "The usability requirements provided are well-constructed and measurable. Specifically, limiting the number of mouse clicks to start playing the game and ensuring quick responsiveness to steering commands are clear and actionable. The consistency in button positions is also a valuable usability consideration. Overall, these requirements effectively address user interaction and experience.",
+          "title": "Usability Requirement",
+          "index_start": 393,
+          "index_end": 433,
+          "credits": 1.0,
+          "meta": {}
+        },
+        {
+          "id": 128197502,
+          "description": "The reliability requirement concerning the game's behavior when incorrect inputs are entered is appropriate. Ensuring the game does not crash under these circumstances is critical for maintaining a smooth user experience. This requirement is specific and measurable, which is a positive aspect.",
+          "title": "Reliability Requirement",
+          "index_start": 434,
+          "index_end": 588,
+          "credits": 1.0,
+          "meta": {}
+        },
+        {
+          "id": 128197503,
+          "description": "The performance requirement concerning memory usage is clear and measurable. Specifying a maximum RAM usage of 250MB provides a concrete target for developers to ensure efficient resource management. This requirement is well-constructed.",
+          "title": "Performance Requirement",
+          "index_start": 589,
+          "index_end": 651,
+          "credits": 1.0,
+          "meta": {}
+        },
+        {
+          "id": 128197504,
+          "description": "The supportability requirement regarding remote updates is relevant and valuable. It ensures that the game remains adaptable and can evolve by adding new features like collision types or cars. However, this requirement could be more detailed by specifying the platforms or technologies that would support such updates.",
+          "title": "Supportability Requirement",
+          "index_start": 652,
+          "index_end": 771,
+          "credits": 1.0,
+          "meta": {}
+        },
+        {
+          "id": 128197505,
+          "description": "Your submission does not include a requirement for portability, which is an essential category in URPS. Consider adding a requirement that specifies the game's ability to operate across different platforms, such as Windows, macOS, and Linux, to ensure a wider reach and user accessibility.",
+          "title": "Missing URPS Category - Portability",
+          "index_start": 669,
+          "index_end": 771,
+          "credits": -1.0,
+          "meta": {}
+        },
+        {
+          "id": 128197506,
+          "description": "Consider adding another requirement that could enhance the game's usability or reliability, such as accessibility features for players with disabilities, or specifying uptime requirements to ensure consistent availability.",
+          "title": "Additional Requirement Suggestion",
+          "index_start": 669,
+          "index_end": 771,
+          "credits": 0.0,
+          "meta": {}
+        }
+      ]
+    }
+  ],
+  "baseline_info": {
+    "model": "azure_openai_gpt-4o",
+    "approach": "basic",
+    "generated_at": "2025-08-11T16:46:13.398577",
+    "description": "Baseline feedbacks generated by GPT-4o using basic approach"
+  }
+}

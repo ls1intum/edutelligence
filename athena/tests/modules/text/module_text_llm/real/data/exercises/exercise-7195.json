@@ -15,54 +15,7 @@
       "meta": {},
       "text": "Core Essence of SCRUM\n\tSCRUM is a software development management process that enables transparency and collaboration \twithin the development team and allows the team to respond to frequent change. The process is comprised of several consecutive periods called Sprints, wherein the mission is to complete the respective goals set for that sprint and produce a shippable product increment that can be displayed to the product owner and key stakeholders in the sprint review meeting. Change is probable to occur to the SCRUM team must be adaptable and agile in their development process.\n\nSCRUM Advantage 1\n\tSCRUM provides transparency within the development team.\n\nExample) \n\tAt the daily sprint meeting, each development team member is asked what they accomplished since the last daily meeting, what impediments are standing in her way, and what she will accomplish by the next daily meeting. This way, every team member is kept abreast of the development team’s progress.\n\nComparison to Spiral\n\tIt is not common protocol to provide daily updates to the rest of the development team, so there is less transparency within the development team.\n\nSCRUM Advantage 2\n\tSCRUM allows for agile software development. \n\nExample) \n\tThe product owners can remove, add, and alter items in both the product backlog and the sprint backlog, so the development team must be adaptable to change.\n\nComparison to Spiral\n\tThe Spiral method allows for change at certain periods, but change cannot occur within one of the four major activities.\n\nSCRUM Disadvantage 1\n\tIt is possible that the development team will not be fully committed to developing the best possible versions of each sprint item because if the respective sprint backlog item is changed by the product owner, then it is possible that this extra effort may be in vain.\n\nExample)\n\tA developer has the opportunity to implement an extra functionality in the class she is working on that could be useful to the client but opts to stick to the minimum requirements in the sprint backlog because she does not know if the backlog item will end up being scrapped.\n\nComparison to Spiral\n\tIn Spiral, change cannot occur within an activity, so the developers at least know that what they are currently working on will not be scrapped before the next activity occurs.\n\nSCRUM Disadvantage 2\n\tWhile it is possible to have the SCRUM methodology applied to multiple SCRUM teams, in general SCRUM does not scale extremely well.\n\nExample)\n\tIf there is a very complex project that requires many developers, then SCRUM may not be suitable because the team members may not be able to interact as frequently or as intimately as is ideal for SCRUM.\n\nComparison to Spiral\nSpiral does not require as many team discussions and meetings as does SCRUM, so a large project requiring many developers may not be a significant of a hindrance to the Spiral methodology.\n",
       "score": 100,
-      "language": "ENGLISH",
-      "feedbacks": [
-        {
-          "id": 562017801,
-          "description": "The core essence of SCRUM has been adequately explained, focusing on transparency, collaboration, and adaptability to changes within the development team. However, the explanation could be more concise, especially regarding the Agile aspect, as this overlaps with the advantages section.",
-          "title": "Core Essence of SCRUM",
-          "index_start": 22,
-          "index_end": 585,
-          "credits": 1.5,
-          "meta": {}
-        },
-        {
-          "id": 562017802,
-          "description": "You have effectively described transparency as an advantage of SCRUM, supported by a clear example of daily sprint meetings. The comparison to the Spiral model is valid, highlighting the lack of daily updates as a contrast.",
-          "title": "SCRUM Advantage 1: Transparency",
-          "index_start": 605,
-          "index_end": 1142,
-          "credits": 2.5,
-          "meta": {}
-        },
-        {
-          "id": 562017803,
-          "description": "The advantage of Agile development in SCRUM is well articulated, with a practical example of backlog adjustments. The comparison to the Spiral model is accurate, as it points out the restricted periods for change in Spiral.",
-          "title": "SCRUM Advantage 2: Agile Development",
-          "index_start": 1162,
-          "index_end": 1521,
-          "credits": 2.5,
-          "meta": {}
-        },
-        {
-          "id": 562017804,
-          "description": "The potential lack of commitment due to changing sprint backlogs is a valid disadvantage. The example is illustrative, and the comparison to the Spiral model correctly shows how change restrictions can assure developers their work won't be scrapped.",
-          "title": "SCRUM Disadvantage 1: Commitment Issues",
-          "index_start": 1544,
-          "index_end": 2299,
-          "credits": 2.5,
-          "meta": {}
-        },
-        {
-          "id": 562017805,
-          "description": "You've identified scalability as a disadvantage of SCRUM, supported by a complex project example. The comparison to the Spiral model is appropriate, noting fewer team discussions make Spiral more suitable for large projects.",
-          "title": "SCRUM Disadvantage 2: Scalability",
-          "index_start": 2322,
-          "index_end": 2880,
-          "credits": 2.5,
-          "meta": {}
-        }
-      ]
+      "language": "ENGLISH"
     },
     {
       "id": 5620807,
@@ -76,162 +29,21 @@
       "meta": {},
       "text": "In SCRUM, agile processes are used to be able to deal with interruptions and changes during development. It consists of a product backlog, a sprint, where in 2-4 weeks a potential shipable product increment is delivered to the customer and feedback sessions (sprint retrospective and sprint review)  after sprints within the team and with the project owner. In SCRUM, there is a scrum master who acts as a facilitator between the development team and the product owner and tries to sovle potential issues.\n\nIn SCRUM, changes are easily possible, because after a sprint, the product owner can give directly feedback and additional required features, which are added to the product backlog afterwards. In the Spiral model, no changes within an activity are possible anymore.\nSince product increments are constantly delivered to the product owner, the product owner can start to use the software already very early (with limited features). Hence, an implementation is faster possible. In the Spiral model, the product is delivered to the customer after all required features are completely developped. Hence, the customer does not get an early, reduced version of the system.\n\nIn SCRUM, it is more difficult to estimate the duration and the extent of a project (no definite end date). Since constantly feedback from the product owner is searched, the product owner can adapt his/her expectations and requirements which consequently enlarges the product scope. In the Spiral model, after an activity is achieved, no changes are anymore possible in this activity. Hence, it is easier to estimate the scope of a project.\n\nSCRUM requires self-organization and individual responsibility in team to be able to identify the next tasks for the sprint backlog, the estimated duration for a task and the abiltiy to solve these tasks. This becomes a disadvantage if the development team does not want this responsbility and rather preferes fixed tasks and clear instructions from a boss. In the Spiral model this problem is also present, but in a that big scope. The following iterations are more defined and clear for the team and the project leader takes a more traditional role (distribute tasks) compared to scrum, where the master has the role of a facilitator.",
       "score": 100,
-      "language": "ENGLISH",
-      "feedbacks": [
-        {
-          "id": 562133901,
-          "description": "The explanation of SCRUM's core essence is clear and concise, highlighting the agile process, product backlog, and potential shippable product increment delivered after each sprint. It effectively conveys the iterative nature of SCRUM and its focus on adaptability.",
-          "title": "Core Essence of SCRUM",
-          "index_start": 507,
-          "index_end": 699,
-          "credits": 2.0,
-          "meta": {}
-        },
-        {
-          "id": 562133902,
-          "description": "The advantage of early product delivery in SCRUM is well explained. The comparison to the Spiral model effectively highlights how SCRUM allows for early use of the software, whereas the Spiral model waits for complete development before delivery. This is a strong point.",
-          "title": "Advantage of SCRUM: Early Product Delivery",
-          "index_start": 773,
-          "index_end": 1172,
-          "credits": 2.5,
-          "meta": {}
-        },
-        {
-          "id": 562133903,
-          "description": "SCRUM's adaptability is well described, emphasizing how changes are possible after each sprint with direct feedback from the product owner. The comparison with the Spiral model is accurate in illustrating the limitations of changes within an activity in the Spiral model.",
-          "title": "Advantage of SCRUM: Adaptability and Flexibility",
-          "index_start": 507,
-          "index_end": 772,
-          "credits": 2.5,
-          "meta": {}
-        },
-        {
-          "id": 562133904,
-          "description": "The challenge of estimating project duration in SCRUM is clearly articulated. The comparison with the Spiral model correctly points out that the Spiral model allows easier estimation due to its structured approach.",
-          "title": "Disadvantage of SCRUM: Difficulty in Estimating Duration",
-          "index_start": 1174,
-          "index_end": 1614,
-          "credits": 2.5,
-          "meta": {}
-        },
-        {
-          "id": 562133905,
-          "description": "The need for self-organization in SCRUM is presented as a disadvantage, especially for teams that prefer traditional hierarchies. The comparison with the Spiral model is somewhat weak, as it suggests the problem exists but not in as large a scope, which needs more clarity.",
-          "title": "Disadvantage of SCRUM: Requirement for Self-Organization",
-          "index_start": 1616,
-          "index_end": 2252,
-          "credits": 1.5,
-          "meta": {}
-        }
-      ]
+      "language": "ENGLISH"
     },
     {
       "id": 5622098,
       "meta": {},
       "text": "Scum is a working technique that allows an agile working mode in order to be able to react to change. It is a process where a team of 5-7 team members split the project into several sprints of 2-4 weeks to work on a subset of requirements in order to deliver a valid product increment after each sprint. \nOne important advantage of scrum is that for example when the exact solution of the finished project is unknown at first, after each sprint it is possible to react to a changing environment and for example adjust the product backlog/requirements. The spiral model allows reacting to change as well, as it is an iterative approach, however only after each activity and not within an activity.\nA second advantage of scrum is the fact, that it is easy to structure the project and divide it into subproblems. This allows smaller milestones and early successes with a first MVP that is continuously improved in each sprint. Again, the spiral model already delivers a better solution than any linear model as you have 9 iterations that each reach separate milestones. However, it takes very long until a first product can be delivered.\nOn the other hand, scrum also has disadvantages. For example, it is much harder to plan the entire duration of the project, as the exact solution is not yet known and changes can occur and influence the project duration. As there are 9 fixed iterations with 4 steps in the spiral model, planning can be easier here at the cost of flexibility.\nAnother disadvantage of scrum is that it takes a lot of planning and reviewing effort. First, there is a kick off meeting to discuss general requirements. Then, there are Sprint planning meetings in the beginning and review and retrospective meetings in the end of each sprint. These meetings are not needed as much in the spiral model, as the entire project is planned once in the beginning and only continuously reviewed, but usually no further planning of the next sprint needs to be done.",
       "score": 100,
-      "language": "ENGLISH",
-      "feedbacks": [
-        {
-          "id": 562209801,
-          "description": "The explanation of SCRUM's core essence is concise and generally accurate. However, the mention of 'Scum' appears to be a typographical error and should be corrected to 'Scrum'. Additionally, while the agile nature of Scrum is highlighted, it would be beneficial to emphasize its iterative and incremental approach in managing projects.",
-          "title": "Core Essence of SCRUM",
-          "index_start": 102,
-          "index_end": 303,
-          "credits": 1.5,
-          "meta": {}
-        },
-        {
-          "id": 562209802,
-          "description": "The advantage of Scrum in allowing adaptation to change is well articulated. The comparison to the spiral model is correctly noted, as both are iterative but Scrum allows for changes within an activity, offering more flexibility. This is well explained with a common example.",
-          "title": "Advantage of Reacting to Change",
-          "index_start": 305,
-          "index_end": 696,
-          "credits": 2.5,
-          "meta": {}
-        },
-        {
-          "id": 562209803,
-          "description": "Structuring projects into subproblems for smaller milestones is a valid advantage of Scrum. The comparison with the spiral model is reasonably made, noting its longer time to deliver a first product. However, the explanation could be more detailed on how Scrum achieves early successes through MVPs.",
-          "title": "Advantage of Structuring Projects",
-          "index_start": 697,
-          "index_end": 1135,
-          "credits": 2.0,
-          "meta": {}
-        },
-        {
-          "id": 562209804,
-          "description": "The difficulty in planning the entire duration of a Scrum project due to its flexible nature is a well-pointed disadvantage. The comparison with the spiral model is apt, as the latter has fixed iterations which simplify planning. This is a clear and practical disadvantage.",
-          "title": "Disadvantage of Project Planning",
-          "index_start": 1136,
-          "index_end": 1478,
-          "credits": 2.5,
-          "meta": {}
-        },
-        {
-          "id": 562209805,
-          "description": "The additional planning and reviewing effort required in Scrum is noted as a disadvantage. The comparison with the spiral model is correct, highlighting its single planning phase. However, the explanation could be improved by discussing why frequent meetings in Scrum add value despite being time-consuming.",
-          "title": "Disadvantage of Planning and Reviewing Effort",
-          "index_start": 1479,
-          "index_end": 1971,
-          "credits": 2.0,
-          "meta": {}
-        }
-      ]
+      "language": "ENGLISH"
     },
     {
       "id": 5622301,
       "meta": {},
       "text": "Scrum is an agile software development lifecycle model that adapts well to frequent requirement changes and improves risk management by defining a better way of communication and cooperation. It is collaboratively performed by a product owner, a rum master and scrum team members and consists of multiple sprints, every of which implements a part of the product backlog created at first and produces product increments.\n\nAdvantage 1: adaptivity for changes. Frequent changes on the requirement are tolerated, because backlog items are adjusted at the beginning of every sprint. For an example of building an online shop: when the stakeholders want to give users coupons instead of direct discount at checkout, the development team only need to remove the backlog item „give user discount at checkout“ and add a one called „give user coupons at checkout“. Changes in real code will then be handled in later sprints.\nThe spiral model only deals with changes between activities, while scrum handles changes within activities too.\n\nAdvantage 2: risks are better handled. Since regular communication is expected between all roles in scrum, a problem reaches everyone faster. For example, when the implementation of a backlog item „push notification to mobile app“ encounters technical issues and isn’t possible to finish within the current sprint, the product owner will know the situation no later than the review meeting of the current sprint.\nThe spiral model only handles a fixed list of risks and isn’t able to change these during one iteration.\n\nDisadvantage 1: hard to determine the big deadline. Because all increments after every sprint are potentially shippable, it’s not easy to tell the extract end of development. For example, if the customer always add more requirements after the sprint that clears all backlog items, the scrum will never stop.\nThe spiral model also has multiple iterations and therefore has the same problem.\n\nDisadvantage 2: difficult to scale. Scrum relies on the cooperation within a typically small and close team. It doesn’t suit big projects requiring lots of roles and human resources. For example, scrum demands daily meetings which are practically impossible for large teams out of hundreds of people.\nThe spiral model uses small teams during engineering too, but is also compatible with larger teams during production stage.",
       "score": 100,
-      "language": "ENGLISH",
-      "feedbacks": [
-        {
-          "id": 562230101,
-          "description": "Your explanation of Scrum as an agile software development lifecycle model is clear and concise. You have successfully highlighted its adaptability to frequent requirement changes and improved communication. Great job on summarizing the essence of Scrum within the word limit!",
-          "title": "Core Essence of Scrum",
-          "index_start": 192,
-          "index_end": 419,
-          "credits": 2.0,
-          "meta": {}
-        },
-        {
-          "id": 562230102,
-          "description": "You effectively described how Scrum adapts to frequent changes by adjusting backlog items at the beginning of each sprint. The example of the online shop is clear and relevant. The comparison to the Spiral model is accurate, highlighting Scrum's ability to handle changes within activities. Excellent work!",
-          "title": "Advantage 1: Adaptivity for Changes",
-          "index_start": 421,
-          "index_end": 1026,
-          "credits": 2.5,
-          "meta": {}
-        },
-        {
-          "id": 562230103,
-          "description": "Your explanation of improved risk handling in Scrum due to regular communication is well-articulated. The example provided illustrates how problems are communicated quickly. The comparison to the Spiral model is correctly stated, emphasizing Scrum's dynamic risk management. Well done!",
-          "title": "Advantage 2: Better Risk Handling",
-          "index_start": 1028,
-          "index_end": 1545,
-          "credits": 2.5,
-          "meta": {}
-        },
-        {
-          "id": 562230104,
-          "description": "You accurately identified the challenge of determining the project deadline in Scrum due to ongoing requirement changes. The example is insightful, but the comparison to the Spiral model is overly simplistic. While both models have multiple iterations, the Spiral model typically has more structured phases that can aid in deadline estimation. Consider refining the comparison for better clarity.",
-          "title": "Disadvantage 1: Difficulty in Determining Deadline",
-          "index_start": 1547,
-          "index_end": 1936,
-          "credits": 1.5,
-          "meta": {}
-        },
-        {
-          "id": 562230105,
-          "description": "Your discussion of scaling difficulties in Scrum is well-presented, with a clear example of the impracticality of daily meetings in large teams. The comparison to the Spiral model is valid, as it can accommodate larger teams during production. Great job on highlighting this aspect!",
-          "title": "Disadvantage 2: Difficulty to Scale",
-          "index_start": 1938,
-          "index_end": 2362,
-          "credits": 2.5,
-          "meta": {}
-        }
-      ]
+      "language": "ENGLISH"
     },
     {
       "id": 5623229,
@@ -252,351 +64,42 @@
       "meta": {},
       "text": "Scrum is an empirical process control model. It works by means of iteratively creating increasingly more complex product increments. An iteration is called sprint and lasts 2-4 weeks, after which a potentially ship-able package is ready. If the deadline is still away another sprint is started.\n\nOne advantage of Scrum is the fundamental structure, which follows the divide-and-conquer principle of dividing a large and complex process into several smaller and more easily completed sprints. For example the merge sort algorithm works in a similar way. First the list is divided into smaller parts, such that the sorting of the parts becomes trivial. Then the parts are merged back together.\n\nAnother advantage is transparency. Through the daily meetings all team members are aware of the progress made by other team members. This helps with planning the next sprint and figuring out which members are productive. As an example in school projects there was always a team member who didn't do anything and ended up receiving credit where no credit was due. The teacher not being involved in the development phase wouldn't know.\n\nWhile the daily meetings can be beneficial in large groups they can become a hindrance. For example, when the daily meeting is held and everyone has to present their progress, this would take forever if the group is too big. This would end up wasting time which you never have enough of. \n\nFurthermore, it can be difficult to tell if the project is making sufficient progress in the grand scope.  Because the next sprint is planned after the last sprint completed. Therefore, someone working in management won't be able to tell , whether he can tell shareholders if the project is on track and will be completed on time.\n\nThe spiral model has the whole process planned. So it's easy to determine the progress made. Scrum doesn't plan into the future. The spiral model is linear, which means that steps are completed after each other where as in SCRUM, different teams can work on entirely different components at the same time.\n\n",
       "score": 33.3,
-      "language": "ENGLISH",
-      "feedbacks": [
-        {
-          "id": 564034701,
-          "description": "Your explanation of the core essence of SCRUM is accurate and concise. You have effectively described the empirical process control model and the iterative nature of sprints, which are key elements of SCRUM.",
-          "title": "Core Essence of SCRUM",
-          "index_start": 238,
-          "index_end": 294,
-          "credits": 2.0,
-          "meta": {}
-        },
-        {
-          "id": 564034702,
-          "description": "You successfully highlight the divide-and-conquer principle as an advantage of SCRUM, comparing it to the merge sort algorithm. However, the comparison to the Spiral Model is missing. Consider explaining how SCRUM's division into sprints contrasts with the Spiral Model's approach to handling large projects.",
-          "title": "Advantage: Divide-and-Conquer",
-          "index_start": 296,
-          "index_end": 691,
-          "credits": 1.5,
-          "meta": {}
-        },
-        {
-          "id": 564034703,
-          "description": "The advantage of transparency through daily meetings is well articulated. You provide a relatable example from school projects. However, the comparison to the Spiral Model is not included. You might want to compare how transparency in SCRUM contrasts with the communication structure in the Spiral Model.",
-          "title": "Advantage: Transparency",
-          "index_start": 693,
-          "index_end": 1126,
-          "credits": 1.5,
-          "meta": {}
-        },
-        {
-          "id": 564034704,
-          "description": "You correctly identify the potential disadvantage of daily meetings in large groups. However, the comparison to the Spiral Model is absent. Consider discussing how daily meetings might be less of an issue in the Spiral Model due to different team dynamics.",
-          "title": "Disadvantage: Daily Meetings",
-          "index_start": 1128,
-          "index_end": 1415,
-          "credits": 1.5,
-          "meta": {}
-        },
-        {
-          "id": 564034705,
-          "description": "Your explanation of the difficulty in tracking progress due to the iterative nature of SCRUM is clear. You provide a strong comparison to the Spiral Model, which plans the entire process, making progress easier to determine. This provides a solid contrast between the two models.",
-          "title": "Disadvantage: Progress Tracking",
-          "index_start": 1418,
-          "index_end": 1878,
-          "credits": 2.5,
-          "meta": {}
-        },
-        {
-          "id": 564034706,
-          "description": "Your comparison of the linear nature of the Spiral Model to SCRUM's flexible team workflow is insightful. It highlights a fundamental difference in how tasks are managed in each model. This is well explained.",
-          "title": "Comparison: Team Workflow",
-          "index_start": 1879,
-          "index_end": 2055,
-          "credits": 2.5,
-          "meta": {}
-        }
-      ]
+      "language": "ENGLISH"
     },
     {
       "id": 5644634,
       "meta": {},
       "text": "The essence of scrum is that it is a heuristic approach to software engineering, acknowledging the existence of unpredictability in its process. Instead of having one linear formalized flow, its first of all adaptable to the specific teams and secondly agile and empirical by nature: deviations from the plan are already foreseen and can be addressed in the framework of Scrum.\n\nAn advantage of Scrum is that each team member is aware of the progress of the whole project  - all tasks and who works on what are transparent. This is due to Scrum's daily meetings which help communication.\nFor example, a team working on the EIST project: Paul is working on adding endpoints for getting all restaurants while Leon is working on doing the frontend. During the daily meeting, they update each other about their progress.\nIn the spiral model, this is not given as there are no meetings and active information exchange.\n\nAnother advantage is that large projects are divided into smaller sprints which more easy manageable. For example, the team has decided in the weekly sprint planning that it wants to finish reserving by next week. This makes tracking progress and seeing faster results delivered easier.\nIn the spiral model, the iterations split the project into smaller tasks as well.\n\nA disadvantage of Scrum is that adopting it in bigger teams is hard. Given a large team, the daily meeting as well as the other meetings could take a long time and each team member isn't as focused on what the other ones have to say. If the EIST project would have 50 members, each meeting, even the daily ones, could easily take a few hours.\nIn the spiral model, there are no daily meetings so the time constraints don't apply.\n\nAnother disadvantage is that in Scrum are that the daily meetings themselves can frustrate and annoy team members. Having to meet every day, Leon feels like he's wasting his time with a meeting instead of working on the project itself in the same time.\nIn the spiral model, there are no meetings so that's no problem there.\n",
       "score": 100,
-      "language": "ENGLISH",
-      "feedbacks": [
-        {
-          "id": 564463401,
-          "description": "The student has provided a clear and concise explanation of the core essence of Scrum, highlighting its heuristic approach, adaptability, and empirical nature. This is a strong explanation that captures the essence of Scrum well.",
-          "title": "Core Essence of Scrum",
-          "index_start": 145,
-          "index_end": 377,
-          "credits": 2.0,
-          "meta": {}
-        },
-        {
-          "id": 564463402,
-          "description": "The student correctly identifies transparency and communication as an advantage of Scrum, supported by the example of daily meetings. This is well explained and correctly compared to the spiral model where such meetings are not present.",
-          "title": "Advantage - Transparency and Communication",
-          "index_start": 379,
-          "index_end": 913,
-          "credits": 2.5,
-          "meta": {}
-        },
-        {
-          "id": 564463403,
-          "description": "The student identifies manageable sprints as an advantage of Scrum, supported by the example of weekly sprint planning. However, the comparison to the spiral model is weak since spiral iterations also divide projects into smaller tasks. Consider strengthening the comparison by explaining how sprints in Scrum might lead to quicker visible results compared to spiral iterations.",
-          "title": "Advantage - Manageable Sprints",
-          "index_start": 915,
-          "index_end": 1283,
-          "credits": 2.0,
-          "meta": {}
-        },
-        {
-          "id": 564463404,
-          "description": "The student correctly points out that Scrum meetings can be challenging in larger teams, supported by an example. This is well explained and correctly compared to the spiral model which doesn't have daily meetings and thus avoids this issue.",
-          "title": "Disadvantage - Large Team Meetings",
-          "index_start": 1285,
-          "index_end": 1713,
-          "credits": 2.5,
-          "meta": {}
-        },
-        {
-          "id": 564463405,
-          "description": "The student identifies the potential frustration of frequent meetings as a disadvantage of Scrum, supported by an example. The comparison to the spiral model is correct as it lacks such meetings. However, consider explaining how the frequent meetings might affect productivity more specifically.",
-          "title": "Disadvantage - Meeting Frustration",
-          "index_start": 1715,
-          "index_end": 2038,
-          "credits": 2.5,
-          "meta": {}
-        }
-      ]
+      "language": "ENGLISH"
     },
     {
       "id": 5644820,
       "meta": {},
       "text": "core essence: \nScrum as an example of agile project management method is used for dealing with challenges (for example, ill-defined requirements, requirements changes, software architecture changes, etc.) by focusing on small product increments that are developed in short time bursts.\n\n2 advantages of Scrum:\n- deals better with frequent changes\n- makes process of project management to plan and make decisions more repeatable and predictable.\n\n2 disadvantages of Scrum:\n- because some activities and actions of Scrum can be executed at same time, the final results of each activities or actions may not be applicable to each other.\n- too frequent meetings during Scrum may waste time and resources.",
       "score": 16.7,
-      "language": "ENGLISH",
-      "feedbacks": [
-        {
-          "id": 564482001,
-          "description": "Your explanation of the core essence of Scrum is clear and concise, capturing the agile nature of Scrum and its focus on small product increments. However, it could be more focused on the iterative and collaborative aspects, as these are key to understanding Scrum's approach. Consider emphasizing the iterative cycles and collaborative team efforts.",
-          "title": "Core Essence Description",
-          "index_start": 205,
-          "index_end": 285,
-          "credits": 1.5,
-          "meta": {}
-        },
-        {
-          "id": 564482002,
-          "description": "Your mention of Scrum's ability to handle frequent changes is a valid advantage. However, it would be beneficial to provide a comparison to the Spiral Model, such as how Scrum's iterative sprints allow for more flexibility than the Spiral Model's planned iterations.",
-          "title": "Advantage: Handling Frequent Changes",
-          "index_start": 310,
-          "index_end": 346,
-          "credits": 1.5,
-          "meta": {}
-        },
-        {
-          "id": 564482003,
-          "description": "While Scrum can make project management more predictable and repeatable, this point needs further explanation. It would be helpful to compare how Scrum's structured ceremonies contrast with the Spiral Model's risk-driven approach, which can sometimes lead to unpredictability.",
-          "title": "Advantage: Predictability and Repeatability",
-          "index_start": 347,
-          "index_end": 444,
-          "credits": 1.0,
-          "meta": {}
-        },
-        {
-          "id": 564482004,
-          "description": "Your point about concurrent activities in Scrum leading to incompatible results is interesting but lacks clarity. Providing examples or scenarios would strengthen this point. Additionally, comparing this to the Spiral Model would provide context on how the Spiral Model might mitigate such issues by focusing on risk assessment before proceeding.",
-          "title": "Disadvantage: Concurrent Activities",
-          "index_start": 472,
-          "index_end": 633,
-          "credits": 1.0,
-          "meta": {}
-        },
-        {
-          "id": 564482005,
-          "description": "Your observation about frequent meetings wasting resources is valid. However, it would be beneficial to contrast this with the Spiral Model, which might have fewer meetings due to its longer iterations but could result in less frequent feedback.",
-          "title": "Disadvantage: Frequent Meetings",
-          "index_start": 634,
-          "index_end": 700,
-          "credits": 1.5,
-          "meta": {}
-        }
-      ]
+      "language": "ENGLISH"
     },
     {
       "id": 5644946,
       "meta": {},
       "text": "SCRUM is a method that actively deals with changes and participates it during the development. If actually welcomes changes as potential advantage.\nAll desired requirements, functions and features of the new product are specified in the product backlog (which can change all the time, e.g. if the customer decides for a new feature or to use a different hardware). Form this we select a few items in the sprint backlog (which cannot change after selection anymore) and process them in the next sprint. There are 2 kinds of sprints (major sprint 2-4week and daily sprints). After each sprint we have a sprint review and a potentially shippable product increment. We therefore build the product step by step with this little increments which makes us very flexible and we can actively adopt for changes during the process. Communication is improved because there are regular meetings and everyone has a special role (product owner, scrum master, scrum team members) that help to make sure every aspect and perspective is assessed. e.g. the product owner has the perspective of the customer and might see bottlenecks in the customers system faster than other team members that are focused on other aspects of the project. SCRUM therefore helps to improve risk management (by early realization of risk factors and flexibility to attack these), communication and cooperation. e.g. if a method is not feasible or performed not good enough this could show up early in the process and developers can attack these issues in the next sprint. In a spiral model is could happen that these problems are not discovered for a long time (because they come at the end of the spiral) and changes are then not easily possible anymore within the available resources.\nThe sprial model might have the disadvantage that the customer does not regularly participate in the process and cannot give feedback. SCRUM therefore helps because every product increment can be shown to the customer and changes of the product backlog are welcome. E.g. if the customers frequently changes his mind it is not a big problem for SCRUM to adapt.\n\nSCRUM has all advantages of the Spiral model because in every major sprint you go throw all development activities (like in the spiral). Furthermore, SCRUM enables the developers to go back more easily and flexible and therefore welcome changes, which might not be so easy (if possible at all) in the spiral. In this sense the SCRUM model is a natural next stage in software development.",
       "score": 50,
-      "language": "ENGLISH",
-      "feedbacks": [
-        {
-          "id": 564494601,
-          "description": "The explanation of the core essence of SCRUM is somewhat unclear. Sentence 0 mentions dealing with changes but lacks clarity on SCRUM's emphasis on iterative development and teamwork. Consider providing a clearer and concise definition, such as: 'SCRUM is an agile framework that focuses on iterative progress through regular feedback and collaboration, allowing for flexibility and adaptation to change.'",
-          "title": "Core Essence of SCRUM",
-          "index_start": 0,
-          "index_end": 94,
-          "credits": 1.0,
-          "meta": {}
-        },
-        {
-          "id": 564494602,
-          "description": "The advantage of flexibility and active adaptation to changes is well-explained in sentences 1-7. You provided examples of how SCRUM handles changes, such as product backlog updates and sprint reviews. The comparison to the spiral model is valid but could be more precise by highlighting that the spiral model involves progressive refinement but may not adapt as quickly to change requests.",
-          "title": "Advantage: Flexibility and Adaptation",
-          "index_start": 95,
-          "index_end": 820,
-          "credits": 2.0,
-          "meta": {}
-        },
-        {
-          "id": 564494603,
-          "description": "The submission effectively describes improved communication and risk management as advantages of SCRUM in sentences 8-13. You provide examples of roles like product owner and how SCRUM meetings facilitate these advantages. The comparison with the spiral model is present, noting the delayed discovery of problems in the spiral model. This provides a solid contrast.",
-          "title": "Advantage: Improved Communication and Risk Management",
-          "index_start": 821,
-          "index_end": 1746,
-          "credits": 2.5,
-          "meta": {}
-        },
-        {
-          "id": 564494604,
-          "description": "The disadvantage relating to frequent changes by the customer is mentioned in sentences 15-18, suggesting that SCRUM handles this well compared to the spiral model, where customer feedback is less frequent. However, the submission lacks depth in explaining why frequent changes might be a challenge for SCRUM, such as potential scope creep or resource strain.",
-          "title": "Disadvantage: Frequent Changes by Customer",
-          "index_start": 1747,
-          "index_end": 2106,
-          "credits": 1.5,
-          "meta": {}
-        },
-        {
-          "id": 564494605,
-          "description": "The complexity of managing the product backlog in SCRUM is not explicitly discussed as a disadvantage, which could be improved by mentioning potential issues like prioritization conflicts or overwhelming backlog items. The spiral model avoids this by having more structured phases, which could be compared here.",
-          "title": "Disadvantage: Complexity in Backlog Management",
-          "index_start": 148,
-          "index_end": 364,
-          "credits": 0.5,
-          "meta": {}
-        },
-        {
-          "id": 564494606,
-          "description": "The comparison between SCRUM and the spiral model is mentioned throughout but lacks depth in some areas. For instance, sentence 20 states SCRUM is more flexible without explaining why the spiral model might not be able to facilitate such flexibility. Consider improving the comparison by highlighting specific elements of the spiral model that are less adaptive to change.",
-          "title": "Comparison to Spiral Model",
-          "index_start": 2108,
-          "index_end": 2416,
-          "credits": 1.0,
-          "meta": {}
-        }
-      ]
+      "language": "ENGLISH"
     },
     {
       "id": 5645019,
       "meta": {},
       "text": "At its core, scrum is a framework which structures a work method for the development of software products. It's composed of the scrum team, which holds short and efficient daily meetings based upon a sprint backlog which contains the features that need to be implemented in the upcoming work sprint. After the work has been completed, the scrum team comes together again for a sprint review, where the members explain what they've accomplished in search for feedback, as well as a sprint retrospective, during which the team reflect upon their own work in order to ameliorate or solve issues. Then the process starts anew. \nThis carries some obvious advantages. It provides stakeholders i.e. the people financing the development, a clear and concise up-to-date evolution of the product, thanks to the daily meetings. The daily sprint reviews also permits the integration of feedback directly into the development. For example, as a shareholder, you can see what the newest functioning features are and test then out for yourself. Compared to this, the spiral model has no defined meetups.\nAnother big advantage is that it almost guarantees an effective use of resources, namely time and money. Indeed, as the entire team keeps track of what is done every day, the misallocation of resources can be reduced upon identification. An example for this could be the renting of a server for testing purposes. If the programmers notice during the meetings that they don't use it enough to justify costs, they can cancel it and save funds. Our previous model doesn't have this, because there isn't any clear method of gaining an overview of the progress made by the team.\nHowever, the method doesn't only carry positives. For example, due to the rapid development nature of the product, guaranteeing quality isn't a very easy task. Indeed, more emphasis will be placed solely on the implementation of features. In developing a UI for example, it might perhaps function on test devices but not appear properly on all. In this regard, our previous model has a clear testing phase.\nOne last disadvantage is that Scrum is highly dependent on its members to stay focused on the work for the entirety of the project. For example, if one programmer isn't focused on his part, the entirety will suffer because of the lack of implementation. The spiral model once again doesn't have this concept of a daily feedback loop where tasks are assigned and therefore isn't as impacted. \nThank you for listening!",
       "score": 72.9,
-      "language": "ENGLISH",
-      "feedbacks": [
-        {
-          "id": 564501901,
-          "description": "The core essence of Scrum is well-explained in sentences 0 to 3, capturing the iterative nature and focus on teamwork and feedback. However, consider emphasizing the adaptability and incremental progress which are key characteristics of Scrum.",
-          "title": "Core Essence of Scrum",
-          "index_start": 593,
-          "index_end": 622,
-          "credits": 2.0,
-          "meta": {}
-        },
-        {
-          "id": 564501902,
-          "description": "You correctly identify stakeholder visibility as an advantage of Scrum due to regular updates and feedback. However, the comparison with the spiral model lacks clarity. It would be helpful to mention that while the spiral model offers updates at the end of each iteration, Scrum provides more frequent insights, enhancing stakeholder engagement.",
-          "title": "Advantage: Stakeholder Visibility",
-          "index_start": 624,
-          "index_end": 1088,
-          "credits": 2.0,
-          "meta": {}
-        },
-        {
-          "id": 564501903,
-          "description": "The explanation of resource efficiency in Scrum is clear, particularly with the example of server rental. However, the comparison to the spiral model needs refinement. Highlight how Scrum's daily meetings offer quicker identification of resource misallocation compared to the longer cycles of the spiral model.",
-          "title": "Advantage: Resource Efficiency",
-          "index_start": 1089,
-          "index_end": 1662,
-          "credits": 2.0,
-          "meta": {}
-        },
-        {
-          "id": 564501904,
-          "description": "The disadvantage regarding quality assurance in Scrum is well-stated, particularly in rapid development environments. The comparison with the spiral model's structured testing phase is accurate. Consider elaborating on how the spiral model's emphasis on planning and risk assessment supports thorough testing.",
-          "title": "Disadvantage: Quality Assurance",
-          "index_start": 1663,
-          "index_end": 2069,
-          "credits": 2.5,
-          "meta": {}
-        },
-        {
-          "id": 564501905,
-          "description": "The dependency on team focus in Scrum is correctly identified as a disadvantage. The comparison with the spiral model is spot on, as the spiral model's less frequent meetings mean less dependency on continuous focus. Enhance this section by discussing how Scrum's reliance on team dynamics can be mitigated with strong leadership and clear task delegation.",
-          "title": "Disadvantage: Dependency on Team Focus",
-          "index_start": 2070,
-          "index_end": 2460,
-          "credits": 2.5,
-          "meta": {}
-        },
-        {
-          "id": 564501906,
-          "description": "The submission is within the 350-word limit, which is excellent for ensuring clarity and conciseness in communicating ideas.",
-          "title": "Word Count Compliance",
-          "index_start": 2462,
-          "index_end": 2486,
-          "credits": 0.0,
-          "meta": {}
-        }
-      ]
+      "language": "ENGLISH"
     },
     {
       "id": 5621608,
       "meta": {},
       "text": "Scrum is an agile model based on small teams which can deal with changing requirements in e.g. daily sprint meetings. After defining the functional requirements in the product backlog, the team members have several sprints (lasting 2-4 weeks) in which some requirements are implemented, resulting in a potentially shippable product after each sprint.\n\nAdvantages:\nThere is a risk reduction since information is shared early and problems can be fixed immediately in daily sprint meetings. For example when developing a restaurant website, one team member who implements the user interface needs the database to include the menu for the restaurant, which is does not currently. This problem can be resolved very quickly through communication in a daily meeting.\nIn the spiral model change can only occur between activities and not as frequently.\n\nScrum integrates the product vertically since the team has a potentially shippable product after each sprint. This leads to reduced risk, since the communication between layers (user interface, middleware, database) is not implemented last like in the spiral model. This can lead to problems in late development phases resulting in having to reimplement big parts again to ensure the correct communication.\nFor example when developing a restaurant website in the first sprint, the database only includes the location and name, and the communication to the middleware and database works. It is easy to also include the menu in the database with low risk of unfunctional communication.\n\nDisadvantages:\nScrum may need restructuring since scrum is based on small teams. For example when the team of our firm consists of 30 developers there has to be a large restructuring. The spiral model can be used for a large amount of developers.\n\nScrum is not ideal when the firm needs the product to be implemented by a hard deadline, since it always produces only a potentially shippable product. For example when the product owner needs the product in 6 weeks (3 sprints) the product after 3 weeks might not include all functional requirements. This can also be said for the spiral model, however the spiral model does not necessarily have a potentially shippable product after 6 weeks.",
       "score": 100,
-      "language": "ENGLISH",
-      "feedbacks": [
-        {
-          "id": 562160801,
-          "description": "You have provided a concise explanation of the core essence of Scrum, highlighting its agile nature and focus on small teams and changing requirements. This is well-articulated, but you could improve by emphasizing the iterative process and the role of the product backlog in guiding the team's efforts.",
-          "title": "Core Essence of Scrum",
-          "index_start": 95,
-          "index_end": 117,
-          "credits": 1.5,
-          "meta": {}
-        },
-        {
-          "id": 562160802,
-          "description": "The advantage of risk reduction through early sharing of information and problem-solving in daily sprint meetings is well-explained. Your example illustrates this benefit effectively. The comparison with the spiral model is relevant, but you could strengthen it by explaining how Scrum's frequent iterations specifically enhance risk management compared to the spiral model's longer cycles.",
-          "title": "Advantage: Risk Reduction",
-          "index_start": 364,
-          "index_end": 843,
-          "credits": 2.0,
-          "meta": {}
-        },
-        {
-          "id": 562160803,
-          "description": "You've successfully highlighted the vertical integration advantage, with a clear comparison to the spiral model. Your example is appropriate, demonstrating how Scrum's iterative approach helps reduce risks associated with late-phase communication issues. Consider explaining how this iterative integration can lead to a more cohesive final product.",
-          "title": "Advantage: Vertical Integration",
-          "index_start": 845,
-          "index_end": 1528,
-          "credits": 2.5,
-          "meta": {}
-        },
-        {
-          "id": 562160804,
-          "description": "The disadvantage related to the need for restructuring in larger teams is clearly stated. You provide a suitable example to illustrate this point. The comparison with the spiral model is accurate; however, you could enhance your analysis by discussing how Scrum's team structure impacts scalability compared to the spiral model.",
-          "title": "Disadvantage: Need for Restructuring",
-          "index_start": 1545,
-          "index_end": 1776,
-          "credits": 2.0,
-          "meta": {}
-        },
-        {
-          "id": 562160805,
-          "description": "You've identified a valid disadvantage of Scrum regarding deadlines and potentially shippable products. Your comparison with the spiral model is acknowledged, but it would benefit from more detail on how each model manages deadlines and deliverables differently. Expand on the implications of Scrum's iterative delivery on project timelines.",
-          "title": "Disadvantage: Potentially Shippable Product",
-          "index_start": 1778,
-          "index_end": 2220,
-          "credits": 2.0,
-          "meta": {}
-        }
-      ]
+      "language": "ENGLISH"
     },
     {
       "id": 5621680,
@@ -6576,23 +6079,5 @@
       "score": 100,
       "language": "ENGLISH"
     }
-  ],
-  "baseline_info": {
-    "model": "azure_openai_gpt-4o",
-    "approach": "basic",
-    "generated_at": "2025-08-09T20:30:51.545005",
-    "description": "Baseline feedbacks generated by GPT-4o using basic approach",
-    "submission_ids_used": [
-      5621608,
-      5640347,
-      5620178,
-      5622098,
-      5644820,
-      5644946,
-      5644634,
-      5621339,
-      5622301,
-      5645019
-    ]
-  }
+  ]
 }
