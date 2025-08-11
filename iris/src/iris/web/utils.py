@@ -21,26 +21,45 @@ def validate_pipeline_variant(
         str: The validated variant name
 
     Raises:
-        HTTPException: If the variant is not available
+        HTTPException: If the variant is not available or required models are missing
     """
     variant = settings.variant
 
-    # Get available LLMs from LlmManager
-    llm_manager = LlmManager()
-    available_llms = llm_manager.entries
-
-    # Get available variants for the pipeline
-    available_variants = [v.id for v in pipeline_class.get_variants(available_llms)]
-
-    # Validate variant
-    if variant not in available_variants:
+    # Get all variants for the pipeline
+    all_variants = pipeline_class.get_variants()
+    # Find the requested variant
+    requested_variant = None
+    for v in all_variants:
+        if v.id == variant:
+            requested_variant = v
+            break
+    # Check if variant exists
+    if requested_variant is None:
+        available_variant_ids = [v.id for v in all_variants]
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={
                 "type": "variant_not_available",
                 "errorMessage": f'Variant "{variant}" is not available. '
-                f"Available variants: {", ".join(available_variants)}",
+                f'Available variants: {", ".join(available_variant_ids)}',
             },
         )
+    # Check if required models are available
+    # For variants that have required_models method, check model availability
+    if hasattr(requested_variant, "required_models"):
+        llm_manager = LlmManager()
+        available_models = {llm.model for llm in llm_manager.entries}
+        required_models = requested_variant.required_models()
+        missing_models = required_models - available_models
+        if missing_models:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "type": "models_not_available",
+                    "errorMessage": f'Variant "{variant}" requires models that are not available: '
+                    f'{", ".join(missing_models)}. '
+                    f'Required models: {", ".join(required_models)}',
+                },
+            )
 
     return variant

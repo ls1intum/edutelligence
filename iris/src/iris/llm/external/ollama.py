@@ -104,28 +104,33 @@ class OllamaModel(
     type: Literal["ollama"]
     host: str
     options: dict[str, Any] = Field(default={})
-    username: str
-    password: str
+    username: Optional[str] = None
+    password: Optional[str] = None
+    api_key: Optional[str] = None
     _client: Client
 
-    def model_post_init(self, __context: Any) -> None:
+    def model_post_init(self, context) -> None:  # pylint: disable=unused-argument
         self._client = Client()
 
         # Use custom HTTP transport to speed up request performance and avoid default retry/backoff behavior
         timeout = Timeout(connect=10.0, read=60.0, write=10.0, pool=5.0)
 
         transport = HTTPTransport(retries=1)
+        headers = {"Content-Type": "application/json"}
+        auth = None
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        elif self.username and self.password:
+            auth = HTTPBasicAuth(self.username, self.password)
+
         # Override the internal HTTPX client used by Ollama to enable HTTP/2 and ensure consistent authentication
         self._client._client = HTTPXClient(  # pylint: disable=protected-access
             base_url=self.host,
             http2=True,
             transport=transport,
             timeout=timeout,
-            auth=(
-                HTTPBasicAuth(self.username, self.password)
-                if self.username and self.password
-                else None
-            ),
+            auth=auth,
+            headers=headers,
         )
 
     def complete(

@@ -27,7 +27,6 @@ from ...llm import (
     ModelVersionRequestHandler,
 )
 from ...llm.langchain import IrisLangchainChatModel
-from ..pipeline import Pipeline
 from ..prompts.iris_interaction_suggestion_prompts import (
     course_chat_begin_prompt,
     course_chat_history_exists_prompt,
@@ -39,6 +38,7 @@ from ..prompts.iris_interaction_suggestion_prompts import (
     iris_default_suggestion_initial_system_prompt,
     iris_exercise_suggestion_initial_system_prompt,
 )
+from ..sub_pipeline import SubPipeline
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +47,7 @@ class Questions(BaseModel):
     questions: List[str] = Field(description="questions that students may ask")
 
 
-class InteractionSuggestionPipeline(Pipeline):
+class InteractionSuggestionPipeline(SubPipeline):
     """
     Interaction suggestion pipeline that suggests next chat interactions, either for exercises or courses.
     """

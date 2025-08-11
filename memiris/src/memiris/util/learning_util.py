@@ -1,47 +1,47 @@
 from typing import Optional
 
+from memiris.dlo.learning_creation_dlo import LearningCreationDLO
+from memiris.dlo.learning_main_dlo import LearningDLO
 from memiris.domain.learning import Learning
-from memiris.dto.learning_creation_dto import LearningCreationDto
-from memiris.dto.learning_main_dto import LearningDto
 
 
-def creation_dto_to_learning(
-    learning_dto: LearningCreationDto, reference: Optional[str]
+def creation_dlo_to_learning(
+    learning_dlo: LearningCreationDLO, reference: Optional[str]
 ) -> Learning:
     """
-    Convert a LearningCreationDto to a Learning object.
+    Convert a LearningCreationDLO to a Learning object.
     """
     return Learning(
-        title=learning_dto.title,
-        content=learning_dto.content,
+        title=learning_dlo.title,
+        content=learning_dlo.content,
         reference=reference or "",
     )
 
 
-def learning_to_creation_dto(learning: Learning) -> LearningCreationDto:
+def learning_to_creation_dlo(learning: Learning) -> LearningCreationDLO:
     """
-    Convert a Learning object to a LearningCreationDto.
+    Convert a Learning object to a LearningCreationDLO.
     """
-    return LearningCreationDto(title=learning.title, content=learning.content)
+    return LearningCreationDLO(title=learning.title, content=learning.content)
 
 
-def dto_to_learning(learning_dto: LearningDto) -> Learning:
+def dlo_to_learning(learning_dlo: LearningDLO) -> Learning:
     """
-    Convert a LearningDto to a Learning object.
+    Convert a LearningDLO to a Learning object.
     """
     return Learning(
-        uid=learning_dto.id,
-        title=learning_dto.title,
-        content=learning_dto.content,
+        uid=learning_dlo.id,
+        title=learning_dlo.title,
+        content=learning_dlo.content,
         reference="",
     )
 
 
-def learning_to_dto(learning: Learning) -> LearningDto:
+def learning_to_dlo(learning: Learning) -> LearningDLO:
     """
-    Convert a Learning object to a LearningDto.
+    Convert a Learning object to a LearningDLO.
     """
-    return LearningDto(
+    return LearningDLO(
         id=learning.id,  # type: ignore
         title=learning.title,
         content=learning.content,
