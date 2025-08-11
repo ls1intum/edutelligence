@@ -47,6 +47,7 @@ class PipelineWorkflows:
         self.weaviate_client.add_embeddings(
             CollectionNames.EXERCISE.value, embedding, properties
         )
+        return embedding
 
     def initial_exercises(self, exercises: list[ExerciseWithCompetencies]):
         """Process and store initial text entries in the database. """
@@ -273,11 +274,9 @@ class PipelineWorkflows:
         if len(exercises) == 0: return
 
         # Delete all cluster centers for new centers
-        # TODO: We need to use course_id to filter for course such as below
-        # self.weaviate_client.delete_by_property(
-        #     CollectionNames.CLUSTERCENTER.value, "course_id", course_id
-        # )
-        self.weaviate_client.delete_all_data_from_collection(CollectionNames.CLUSTERCENTER.value)
+        self.weaviate_client.delete_by_property(
+            CollectionNames.CLUSTERCENTER.value, "course_id", course_id
+        )
 
         exercise_embeddings = np.vstack(
             [exercise["vector"]["default"] for exercise in exercises]
@@ -290,7 +289,7 @@ class PipelineWorkflows:
 
         # Expose clusters
         for index in range(len(centroids)):
-            cluster = {"cluster_id": uuid.uuid4(), "label_id": str(index)}
+            cluster = {"cluster_id": uuid.uuid4(), "label_id": str(index), "course_id": course_id}
             self.weaviate_client.add_embeddings(
                 CollectionNames.CLUSTERCENTER.value, centroids[index].tolist(), cluster
             )
@@ -344,7 +343,10 @@ class PipelineWorkflows:
         return
 
     def new_text_suggestion(
-            self, exercise_description: str, course_id: str
+            self,
+            exercise_description: str,
+            course_id: str,
+            top_k: int = 3,
     ) -> list[tuple[Competency, float]]:
         """Process a new text entry and associate it with existing clusters."""
         exercise_embedding = generate_embeddings_openai(exercise_description)
@@ -370,12 +372,14 @@ class PipelineWorkflows:
             similarities_with_indices.sort(key=lambda x: x[0], reverse=True)  # Sort by similarity score descending
 
             top3_competencies = []
-            for similarity_score, best_medoid  in similarities_with_indices[:3]:
+            for similarity_score, best_medoid  in similarities_with_indices[:top_k]:
                 competency = self.weaviate_client.get_embeddings_by_property(
                     CollectionNames.COMPETENCY.value,
                     "cluster_id",
                     best_medoid.cluster_id
                 )
+                if not competency:
+                    raise ValueError("No competency found for cluster")
                 best_competency = Competency(
                     id=competency[0]["properties"]["competency_id"],
                     title=competency[0]["properties"]["title"],
@@ -394,12 +398,12 @@ class PipelineWorkflows:
         Args:
             exercise_description: Description of the exercise to find similar competencies for
             course_id: Course ID to filter competencies by
-            top_k: Number of top similar competencies to return (default: 5)
+            top_k: Number of top similar competencies to return (default: 3)
 
         Returns:
             List of most similar competencies ordered by similarity score
         """
-        top_competencies_with_similarity_scores = self.new_text_suggestion(exercise_description, course_id)
+        top_competencies_with_similarity_scores = self.new_text_suggestion(exercise_description, course_id, top_k)
         top_competencies = [competency for competency, similarity_score in top_competencies_with_similarity_scores]
 
         logger.info(
@@ -438,7 +442,8 @@ class PipelineWorkflows:
                     embeddings,
                 )
             else:
-                self.save_exercise_to_weaviate(exercise)
+                embedding = self.save_exercise_to_weaviate(exercise)
+                self.instructor_feedback_on_new_text(exercise, embedding)
 
     def delete_exercise(self, exercise: ExerciseWithCompetencies):
         """Delete an exercise from Weaviate."""
@@ -455,6 +460,13 @@ class PipelineWorkflows:
             )
         else:
             logger.warning(f"Exercise with id {exercise.id} not found for deletion")
+
+    def instructor_feedback_on_new_text(
+            self,
+            new_exercise: ExerciseWithCompetencies,
+            new_exercise_embedding: list[float],
+    ):
+        self.update_cluster_for_competencies(new_exercise_embedding, new_exercise.competencies, is_removal=False, is_new_exercise=True)
 
     def instructor_feedback(
             self,
@@ -494,7 +506,8 @@ class PipelineWorkflows:
             self,
             exercise_embedding,
             competency_ids,
-            is_removal=False
+            is_removal=False,
+            is_new_exercise=False,
     ):
         """Helper function to update cluster centroids for a set of competencies."""
         for comp_id in competency_ids:
@@ -532,7 +545,7 @@ class PipelineWorkflows:
                 else:
                     continue
             else:
-                cluster_size -= 1
+                cluster_size = cluster_size if is_new_exercise else (cluster_size - 1)
                 updated_centroid = update_cluster_centroid(
                     current_centroid, cluster_size, exercise_embedding
                 )
