@@ -59,7 +59,7 @@ class InitialAssessment(BaseModel):
     reasoning: str = Field(description="Reasoning why the feedback was given")
     improvment_suggestion: str = Field(description="Suggestion for improvement for the student")
     grading_instruction_id: Optional[int] = Field(
-        description="ID of the grading instruction that was used to generate this feedback, or empty if no grading instruction was used"
+        description="ID of the grading instruction that was used to generate this feedback, or None if no grading instruction was used"
     )
 
 
