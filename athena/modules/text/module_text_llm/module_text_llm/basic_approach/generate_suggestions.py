@@ -1,8 +1,10 @@
 from typing import List, Optional
+
 from athena import emit_meta
 from athena.schemas import LearnerProfile
 from athena.text import Exercise, Submission, Feedback
 from athena.logger import logger
+
 from llm_core.utils.llm_utils import (
     get_chat_prompt,
     check_prompt_length_and_omit_features_if_necessary,
@@ -11,47 +13,40 @@ from llm_core.utils.llm_utils import (
 from llm_core.core.predict_and_parse import predict_and_parse
 from module_text_llm.basic_approach import BasicApproachConfig
 from module_text_llm.registry import register_approach
-
 from module_text_llm.helpers.utils import (
     add_sentence_numbers,
     get_index_range_from_line_range,
     format_grading_instructions,
 )
-from module_text_llm.basic_approach.prompt_generate_suggestions import AssessmentModel
-from module_text_llm.basic_approach.prompt_submission_analysis import SubmissionAnalysis
+from module_text_llm.basic_approach.schemas import AssessmentModel, SubmissionAnalysis
 
 
-@register_approach("basic")
-async def generate_suggestions(
-    exercise: Exercise,
-    submission: Submission,
-    config: BasicApproachConfig,
-    *,
-    debug: bool,
-    is_graded: bool,
-    learner_profile: Optional[LearnerProfile],
-    latest_submission: Optional[Submission] = None,
-) -> List[Feedback]:
-    if latest_submission is None:
-        logger.info("Latest submission is not provided.")
-
-    # Use default preferences if none provided
+def _setup_learner_profile(
+    learner_profile: Optional[LearnerProfile], 
+    config: BasicApproachConfig
+) -> LearnerProfile:
+    """Setup and validate learner profile with fallbacks."""
     if learner_profile is None:
-        logger.info(
-            "Overriding the learner profile with the config from the playground."
-        )
+        logger.info("Overriding the learner profile with the config from the playground.")
         learner_profile = config.profile
 
     if learner_profile is None:
-        logger.info(
-            "Learner profile was not provided - continuing with the default values."
-        )
+        logger.info("Learner profile was not provided - continuing with the default values.")
         learner_profile = LearnerProfile(
             feedback_detail=2,
             feedback_formality=2
         )
+    
+    return learner_profile
 
-    prompt_input = {
+
+def _prepare_analysis_prompt_input(
+    exercise: Exercise,
+    submission: Submission,
+    latest_submission: Optional[Submission] = None,
+) -> dict:
+    """Prepare input data for the submission analysis prompt."""
+    return {
         "max_points": exercise.max_points,
         "bonus_points": exercise.bonus_points,
         "grading_instructions": format_grading_instructions(
@@ -64,6 +59,15 @@ async def generate_suggestions(
             latest_submission.text) if latest_submission is not None else "Previous submission is not available.",
     }
 
+
+async def _analyze_submission(
+    exercise: Exercise,
+    submission: Submission,
+    config: BasicApproachConfig,
+    prompt_input: dict,
+    debug: bool,
+) -> Optional[SubmissionAnalysis]:
+    """Perform the first LLM call to analyze the submission."""
     chat_prompt = get_chat_prompt(
         system_message=config.analyze_submission_prompt.system_message,
         human_message=config.analyze_submission_prompt.human_message,
@@ -92,7 +96,7 @@ async def generate_suggestions(
                 "error",
                 f"Input too long {num_tokens_from_prompt(chat_prompt, prompt_input)} > {config.max_input_tokens}",
             )
-        return []
+        return None
 
     submission_analysis: SubmissionAnalysis = await predict_and_parse(
         model=config.model,
@@ -107,8 +111,20 @@ async def generate_suggestions(
 
     if submission_analysis is None:
         logger.warning("Submission analysis returned None – no feedback generated.")
-        return []
+        return None
 
+    return submission_analysis
+
+
+async def _generate_feedback(
+    exercise: Exercise,
+    submission: Submission,
+    config: BasicApproachConfig,
+    submission_analysis: SubmissionAnalysis,
+    learner_profile: LearnerProfile,
+    debug: bool,
+) -> Optional[AssessmentModel]:
+    """Perform the second LLM call to generate feedback."""
     second_prompt_input = {
         "example_solution": exercise.example_solution,
         "max_points": exercise.max_points,
@@ -140,14 +156,21 @@ async def generate_suggestions(
         emit_meta(
             "generate_suggestions",
             {
-                "prompt": chat_prompt.format(**prompt_input),
+                "prompt": second_chat_prompt.format(**second_prompt_input),
                 "result": result.dict() if result is not None else None
             }
         )
 
-    if result is None:
-        return []
+    return result
 
+
+def _convert_to_feedback_objects(
+    result: AssessmentModel,
+    exercise: Exercise,
+    submission: Submission,
+    is_graded: bool,
+) -> List[Feedback]:
+    """Convert AssessmentModel to Feedback objects."""
     grading_instruction_ids = set(
         grading_instruction.id
         for criterion in exercise.grading_criteria or []
@@ -180,3 +203,42 @@ async def generate_suggestions(
         )
 
     return feedbacks
+
+
+@register_approach("basic")
+async def generate_suggestions(
+    exercise: Exercise,
+    submission: Submission,
+    config: BasicApproachConfig,
+    *,
+    debug: bool,
+    is_graded: bool,
+    learner_profile: Optional[LearnerProfile],
+    latest_submission: Optional[Submission] = None,
+) -> List[Feedback]:
+    """Generate feedback suggestions for a student submission using a two-step LLM approach."""
+    if latest_submission is None:
+        logger.info("Latest submission is not provided.")
+
+    # Setup learner profile with fallbacks
+    learner_profile = _setup_learner_profile(learner_profile, config)
+
+    # Prepare input for submission analysis
+    prompt_input = _prepare_analysis_prompt_input(exercise, submission, latest_submission)
+
+    # Analyze the submission
+    submission_analysis = await _analyze_submission(
+        exercise, submission, config, prompt_input, debug
+    )
+    if submission_analysis is None:
+        return []
+
+    # Generate feedback based on analysis
+    result = await _generate_feedback(
+        exercise, submission, config, submission_analysis, learner_profile, debug
+    )
+    if result is None:
+        return []
+
+    # Convert to Feedback objects
+    return _convert_to_feedback_objects(result, exercise, submission, is_graded)

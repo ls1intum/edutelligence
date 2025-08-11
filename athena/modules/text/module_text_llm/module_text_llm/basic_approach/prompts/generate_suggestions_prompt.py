@@ -1,34 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import Optional, List
-from enum import Enum
 
-
-# === ENUMS ===
-
-class FeedbackType(str, Enum):
-    FULL_POINTS = "Full Points"
-    NEEDS_REVISION = "Needs Revision"
-    NOT_ATTEMPTED = "Not Attempted"
-
-
-# === FEEDBACK MODEL ===
-
-class FeedbackModel(BaseModel):
-    title: str = Field(description="Short summary of the feedback issue or praise")
-    description: str = Field(description="Student-facing explanation, respectful and constructive")
-    type: FeedbackType = Field(description="Evaluation of the student's performance")
-    suggested_action: str = Field(description="What the student should do next to improve or explore more")
-    line_start: Optional[int] = Field(default=None, description="Start line in student's answer")
-    line_end: Optional[int] = Field(default=None, description="End line in student's answer")
-    credits: float = Field(default=0.0, description="Points awarded or deducted")
-    grading_instruction_id: Optional[int] = Field(default=None, description="Linked grading instruction ID")
-
-
-class AssessmentModel(BaseModel):
-    feedbacks: List[FeedbackModel]
-
-
-# === PROMPT DEFINITIONS ===
 
 system_message = """
 You are a grading assistant. Your job is to generate high-quality, structured feedback based on the student's submission analysis without revealing the sample solution.
@@ -50,7 +21,7 @@ Your task:
     - description: student-facing explanation, respectful and constructive. Do not reveal the solution. {writing_style}
     - type: whether they received full points, need revision, or didn't attempt it. Do not reveal the solution
     - suggested_action: a specific next step (action) the student should take. {writing_style}:
-        - Example actions: “Review concept X”, “Improve explanation by doing Y”, “Explore topic Z further”, "Revisit lecture material A"
+        - Example actions: "Review concept X", "Improve explanation by doing Y", "Explore topic Z further", "Revisit lecture material A"
     - line_start: start line in student's answer, optional if a specific part of the submission is relevant
     - line_end: end line in student's answer, optional if a specific part of the submission is relevant
     - credits: points awarded; ensure the total across all feedbacks does not exceed {max_points}
@@ -85,7 +56,7 @@ type unchanged with is_positive false or null
 
 Constraints:
 - *Never reveal, paraphrase, or hint at the sample solution*
-- Do not mention phrases such as “the correct answer is”
+- Do not mention phrases such as "the correct answer is"
 - Do not exceed {max_points} total points
 - Avoid repeating the student's own words
 - Focus on clarity, constructiveness, and progression awareness
@@ -117,9 +88,8 @@ Student's feedback preferences:
 {feedback_preferences}
 """
 
-# === PROMPT WRAPPER CLASS ===
 
 class GenerateSuggestionsPrompt(BaseModel):
     """Prompt class for generating feedback from merged competency and comparison analysis."""
     system_message: str = Field(default=system_message)
-    human_message: str = Field(default=human_message)
+    human_message: str = Field(default=human_message) 
