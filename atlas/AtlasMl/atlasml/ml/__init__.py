@@ -3,6 +3,7 @@ from .clustering import (
     SimilarityMetric,
     apply_hdbscan,
     apply_tsne,
+    apply_kmeans,
 )
 
 # Embedding functions
@@ -27,6 +28,11 @@ from .centroid_similarity import (
     generate_competency_relationship,
 )
 
+from .feedback_loop import (
+    update_cluster_centroid,
+    update_cluster_centroid_on_removal
+)
+
 # Pipeline workflows
 from .pipeline_workflows import (
     PipelineWorkflows,
@@ -37,6 +43,7 @@ __all__ = [
     "SimilarityMetric",
     "apply_hdbscan",
     "apply_tsne",
+    "apply_kmeans",
     # Embeddings
     "EmbeddingGenerator",
     "ModelDimension",
@@ -50,6 +57,9 @@ __all__ = [
     "compute_cosine_similarity",
     # Centroid similarity
     "generate_competency_relationship",
+    # Feedback loop
+    "update_cluster_centroid",
+    "update_cluster_centroid_on_removal",
     # Pipeline workflows
     "PipelineWorkflows",
 ]
