@@ -153,23 +153,7 @@ class OllamaModel(
         )
         return response["response"]
 
-    def _callable_to_ollama_tool(self, func: callable) -> Dict[str, Any]:
-        """Create a minimal OpenAI-style tool schema for a plain callable."""
-        params = {"type": "object", "properties": {}}
-        sig = inspect.signature(func)
-        # If the callable actually takes arguments, expose them as free-form
-        # (customize here to generate a real JSON Schema if you like)
-        if any(
-            p.kind in (p.POSITIONAL_OR_KEYWORD, p.KEYWORD_ONLY)
-            for p in sig.parameters.values()
-        ):
-            params = {"type": "object", "additionalProperties": True}
-        return {
-            "name": func.__name__,
-            "description": (func.__doc__ or "").strip()
-            or f"Callable tool {func.__name__}",
-            "parameters": params,
-        }
+    # --- Tooling helpers -----------------------------------------------------
 
     def _build_tooling(
         self,
@@ -178,49 +162,62 @@ class OllamaModel(
         ],
     ):
         """
-        Returns:
-          tool_defs: list[{"type":"function","function":{...}}] to send to Ollama
-          executors: dict[name -> callable(args_dict)->Any]
-        """
-        tool_defs = []
-        executors: Dict[str, callable] = {}
+        Build the list we pass to Ollama and bind local executors.
 
+        We follow Ollama's API:
+          - Python functions can be passed directly; Ollama converts them to Tools
+            based on Google-style docstrings.
+          - Dict schemas and 'Ollama Tools' are accepted as-is.
+          - For LangChain BaseTool / Pydantic models we convert to a function schema.
+
+        Returns:
+          tools_for_client: list accepted by ollama.Client.chat(..., tools=...)
+          executors: dict[name -> callable(args_dict) -> Any]
+        """
         if not tools:
             return None, {}
 
-        for tool in tools:
-            # Figure out the schema we send to the model…
-            if callable(tool) and not isinstance(tool, BaseTool):
-                schema = self._callable_to_ollama_tool(tool)
-                name = schema["name"]
-                tool_defs.append({"type": "function", "function": schema})
+        tools_for_client: list = []
+        executors: Dict[str, callable] = {}
 
-                # …and the executor we will run locally.
-                def _exec_callable(args, tool_attr=tool):
-                    if not args:
-                        return tool_attr()
-                    # Try kwargs; if it fails, try pass-through single arg
-                    try:
-                        return tool_attr(**args)
-                    except TypeError:
-                        return tool_attr(args)
+        for tool in tools:
+            # 1) Plain Python function: pass through unchanged + bind executor
+            if callable(tool) and not isinstance(tool, BaseTool):
+                name = getattr(tool, "__name__", tool.__class__.__name__)
+                tools_for_client.append(tool)
+
+                if not inspect.getdoc(tool):
+                    logger.debug(
+                        "Callable '%s' has no docstring. "
+                        "Ollama converts callables using Google-style docstrings; "
+                        "consider adding one for better parameter schemas.",
+                        name,
+                    )
+
+                def _exec_callable(args, fn=tool):
+                    if args is None:
+                        return fn()
+                    if isinstance(args, dict):
+                        try:
+                            return fn(**args)
+                        except TypeError:
+                            # Fallback: pass the dict as a single positional
+                            return fn(args)
+                    return fn(args)
 
                 executors[name] = _exec_callable
                 continue
 
-            # Non-callable kinds: use your provided converter for the schema
-            schema = convert_to_ollama_tool(tool)
-            name = schema["name"]
-            tool_defs.append({"type": "function", "function": schema})
-
-            # And wire up executors for supported kinds
+            # 2) LangChain BaseTool → schema + executor
             if isinstance(tool, BaseTool):
+                schema = convert_to_ollama_tool(tool)  # inner "function" schema
+                name = schema["name"]
+                tools_for_client.append({"type": "function", "function": schema})
 
                 def _exec_basetool(args, tool_attr=tool):
                     if hasattr(tool_attr, "invoke"):
                         return tool_attr.invoke(args or {})
                     if hasattr(tool_attr, "run"):
-                        # Some tools expect a string; give them JSON if dict
                         return tool_attr.run(
                             args if isinstance(args, str) else json.dumps(args or {})
                         )
@@ -229,26 +226,37 @@ class OllamaModel(
                     )
 
                 executors[name] = _exec_basetool
+                continue
 
-            elif isinstance(tool, dict):
-                # Bare dict tool schema provided – no executor attached.
-                # You can add an executor here if you keep a separate {name: callable} registry.
-                pass
+            # 3) Raw dict tool schema (either inner function schema or already wrapped)
+            if isinstance(tool, dict):
+                # Accept both {"type":"function","function":{...}} and a bare {name,parameters,...}
+                if "type" in tool and tool.get("type") == "function":
+                    tools_for_client.append(tool)
+                else:
+                    tools_for_client.append({"type": "function", "function": tool})
+                # No executor unless you wire one separately
+                continue
 
-            elif inspect.isclass(tool) and issubclass(tool, BaseModel):
-                # Pure schema (Pydantic class) with no bound executor.
-                # If you have a convention (e.g., class defines a staticmethod `run`), wire it here.
+            # 4) Pydantic model class → schema (+ optional .run executor)
+            if inspect.isclass(tool) and issubclass(tool, BaseModel):
+                schema = convert_to_ollama_tool(tool)  # inner function schema
+                name = schema["name"]
+                tools_for_client.append({"type": "function", "function": schema})
+
                 run_fn = getattr(tool, "run", None)
                 if callable(run_fn):
 
                     def _exec_pydantic(args, run_attr=run_fn, cls_attr=tool):
-                        # Validate then run
                         instance = cls_attr.model_validate(args or {})
                         return run_attr(instance)
 
                     executors[name] = _exec_pydantic
+                continue
 
-        return tool_defs, executors
+            logger.warning("Unsupported tool type: %s", type(tool))
+
+        return tools_for_client, executors
 
     def _execute_tool(self, executors: Dict[str, callable], name: str, raw_args: Any):
         # Ollama may return arguments as a JSON string or a dict
@@ -278,8 +286,8 @@ class OllamaModel(
             Sequence[Union[Dict[str, Any], Type[BaseModel], callable, BaseTool]]
         ],
     ):
-        # Build tool schemas for the model + executors for local runtime
-        tool_defs, executors = self._build_tooling(tools)
+        # Build the list for Ollama and the local executors
+        tools_for_client, executors = self._build_tooling(tools)
 
         # Start from your converted messages, then extend with model/tool turns
         ollama_messages = convert_to_ollama_messages(messages)
@@ -292,7 +300,7 @@ class OllamaModel(
             response = self._client.chat(
                 model=self.model,
                 messages=ollama_messages,
-                tools=tool_defs,  # pass tools every round
+                tools=tools_for_client,
                 format=(
                     "json"
                     if getattr(arguments, "response_format", None) == "JSON"
@@ -318,7 +326,6 @@ class OllamaModel(
                     args = fn.get("arguments")
                     result = self._execute_tool(executors, name, args)
 
-                    # Stringify non-string results
                     content = (
                         result
                         if isinstance(result, str)
