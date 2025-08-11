@@ -1,6 +1,6 @@
 import numpy as np
 
-def update_cluster_centroid(
+def update_cluster_centroid_on_addition(
         old_centroid: np.ndarray,
         cluster_size: int,
         new_point: np.ndarray

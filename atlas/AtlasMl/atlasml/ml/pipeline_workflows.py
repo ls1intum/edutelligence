@@ -3,7 +3,7 @@ import numpy as np
 import uuid
 
 from atlasml.clients.weaviate import get_weaviate_client, CollectionNames
-from atlasml.ml import update_cluster_centroid_on_removal, update_cluster_centroid
+from atlasml.ml import update_cluster_centroid_on_removal, update_cluster_centroid_on_addition
 from atlasml.ml.clustering import apply_hdbscan, SimilarityMetric, apply_kmeans
 from atlasml.ml.embeddings import generate_embeddings_openai
 from atlasml.ml.similarity_measures import compute_cosine_similarity
@@ -371,7 +371,8 @@ class PipelineWorkflows:
             ]
             similarities_with_indices.sort(key=lambda x: x[0], reverse=True)  # Sort by similarity score descending
 
-            top3_competencies = []
+            top_k = top_k if top_k < len(similarities_with_indices) else len(similarities_with_indices)
+            topk_competencies = []
             for similarity_score, best_medoid  in similarities_with_indices[:top_k]:
                 competency = self.weaviate_client.get_embeddings_by_property(
                     CollectionNames.COMPETENCY.value,
@@ -386,9 +387,9 @@ class PipelineWorkflows:
                     description=competency[0]["properties"]["description"],
                     course_id=competency[0]["properties"].get("course_id", "unknown"),
                 )
-                top3_competencies.append((best_competency, similarity_score))
+                topk_competencies.append((best_competency, similarity_score))
 
-            return top3_competencies
+            return topk_competencies
 
     def suggest_competencies_by_similarity(
         self, exercise_description: str, course_id: str, top_k: int = 3
@@ -546,7 +547,7 @@ class PipelineWorkflows:
                     continue
             else:
                 cluster_size = cluster_size if is_new_exercise else (cluster_size - 1)
-                updated_centroid = update_cluster_centroid(
+                updated_centroid = update_cluster_centroid_on_addition(
                     current_centroid, cluster_size, exercise_embedding
                 )
                 action = "added"
