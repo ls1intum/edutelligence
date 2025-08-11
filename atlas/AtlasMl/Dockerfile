@@ -14,10 +14,11 @@ WORKDIR /atlasml
 COPY pyproject.toml poetry.lock README.md  ./ 
 COPY atlasml/ ./atlasml/
 
-RUN poetry install
+# Install with dev group to include uvicorn for running the app
+RUN poetry install --with dev
 
 
-FROM python:3.13-slim as runtime
+FROM python:3.13-slim AS runtime
 
 WORKDIR /atlasml
 
@@ -33,9 +34,7 @@ COPY --from=builder /atlasml/atlasml /atlasml/atlasml
 ENV VIRTUAL_ENV=/atlasml/.venv
 ENV PATH="/atlasml/.venv/bin:$PATH"
 
-# Copy configuration files
-COPY application.yml ./
-
+# Expose application port
 EXPOSE 8000
 
-CMD ["/atlasml/.venv/bin/uvicorn", "atlasml.app:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["/atlasml/.venv/bin/python", "-m", "uvicorn", "atlasml.app:app", "--host", "0.0.0.0", "--port", "8000"]
