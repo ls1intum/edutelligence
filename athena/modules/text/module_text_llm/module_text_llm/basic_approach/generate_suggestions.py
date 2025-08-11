@@ -120,6 +120,7 @@ async def _generate_feedback(
     exercise: Exercise,
     submission: Submission,
     config: BasicApproachConfig,
+    *,
     submission_analysis: SubmissionAnalysis,
     learner_profile: LearnerProfile,
     debug: bool,
@@ -235,7 +236,12 @@ async def generate_suggestions(
 
     # Generate feedback based on analysis
     result = await _generate_feedback(
-        exercise, submission, config, submission_analysis, learner_profile, debug
+        exercise=exercise,
+        submission=submission,
+        config=config,
+        submission_analysis=submission_analysis,
+        learner_profile=learner_profile,
+        debug=debug,
     )
     if result is None:
         return []
