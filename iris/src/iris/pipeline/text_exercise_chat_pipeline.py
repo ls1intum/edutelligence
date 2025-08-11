@@ -3,28 +3,26 @@ from datetime import datetime
 from typing import List, Optional, Tuple
 
 from iris.common.pyris_message import IrisMessageRole, PyrisMessage
-from iris.domain import FeatureDTO
 from iris.domain.text_exercise_chat_pipeline_execution_dto import (
     TextExerciseChatPipelineExecutionDTO,
 )
+from iris.domain.variant.text_exercise_chat_variant import TextExerciseChatVariant
 from iris.llm import (
     CompletionArguments,
     ModelVersionRequestHandler,
 )
-from iris.llm.external.model import LanguageModel
 from iris.pipeline import Pipeline
 from iris.pipeline.prompts.text_exercise_chat_prompts import (
     fmt_extract_sentiments_prompt,
     fmt_sentiment_analysis_prompt,
     fmt_system_prompt,
 )
-from iris.pipeline.shared.utils import filter_variants_by_available_models
 from iris.web.status.status_update import TextExerciseChatCallback
 
 logger = logging.getLogger(__name__)
 
 
-class TextExerciseChatPipeline(Pipeline):
+class TextExerciseChatPipeline(Pipeline[TextExerciseChatVariant]):
     """TextExerciseChatPipeline handles text exercise chat processing by extracting sentiments from user input and
     generating appropriate responses based on exercise details and conversation context.
     """
@@ -50,29 +48,21 @@ class TextExerciseChatPipeline(Pipeline):
         self.request_handler = ModelVersionRequestHandler(version=model)
 
     @classmethod
-    def get_variants(cls, available_llms: List[LanguageModel]) -> List[FeatureDTO]:
-        variant_specs = [
-            (
-                ["gpt-4.1-mini"],
-                FeatureDTO(
-                    id="default",
-                    name="Default",
-                    description="Uses a smaller model for faster and cost-efficient responses.",
-                ),
+    def get_variants(cls) -> List[TextExerciseChatVariant]:
+        return [
+            TextExerciseChatVariant(
+                variant_id="default",
+                name="Default",
+                description="Uses a smaller model for faster and cost-efficient responses.",
+                agent_model="gpt-4.1-mini",
             ),
-            (
-                ["gpt-4.1"],
-                FeatureDTO(
-                    id="advanced",
-                    name="Advanced",
-                    description="Uses a larger chat model, balancing speed and quality.",
-                ),
+            TextExerciseChatVariant(
+                variant_id="advanced",
+                name="Advanced",
+                description="Uses a larger chat model, balancing speed and quality.",
+                agent_model="gpt-4.1",
             ),
         ]
-
-        return filter_variants_by_available_models(
-            available_llms, variant_specs, pipeline_name="TextExerciseChatPipeline"
-        )
 
     def __call__(
         self,

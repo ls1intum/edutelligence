@@ -2,6 +2,7 @@ import base64
 import os
 import tempfile
 import threading
+import traceback
 from asyncio.log import logger
 from typing import List, Optional
 
@@ -14,9 +15,11 @@ from weaviate import WeaviateClient
 from weaviate.classes.query import Filter
 
 from iris.common.pipeline_enum import PipelineEnum
-from iris.domain import FeatureDTO
 from iris.domain.ingestion.ingestion_pipeline_execution_dto import (
     IngestionPipelineExecutionDto,
+)
+from iris.domain.variant.lecture_unit_page_ingestion_variant import (
+    LectureUnitPageIngestionVariant,
 )
 
 from ..common.pyris_message import IrisMessageRole, PyrisMessage
@@ -28,7 +31,6 @@ from ..llm import (
     CompletionArguments,
     ModelVersionRequestHandler,
 )
-from ..llm.external.model import LanguageModel
 from ..llm.langchain import IrisLangchainChatModel
 from ..vector_database.lecture_unit_page_chunk_schema import (
     LectureUnitPageChunkSchema,
@@ -91,7 +93,9 @@ def create_page_data(
     ]
 
 
-class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
+class LectureUnitPageIngestionPipeline(
+    AbstractIngestion, Pipeline[LectureUnitPageIngestionVariant]
+):
     """LectureUnitPageIngestionPipeline ingests lecture unit pages into the database by chunking lecture PDFs,
     processing the content, and updating the vector database."""
 
@@ -117,22 +121,29 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         self.course_language = None
 
     @classmethod
-    def get_variants(cls, available_llms: List[LanguageModel]) -> List[FeatureDTO]:
+    def get_variants(cls) -> List[LectureUnitPageIngestionVariant]:
         """
-        Returns available variants for the LectureUnitPageIngestionPipeline based on available LLMs.
-
-        Args:
-            _available_llms: List of available language models
+        Returns available variants for the LectureUnitPageIngestionPipeline.
 
         Returns:
-            List of FeatureDTO objects representing available variants
+            List of LectureUnitPageIngestionVariant objects representing available variants
         """
         return [
-            FeatureDTO(
-                id="default",
-                name="Default Variant",
-                description="Default lecture ingestion variant.",
-            )
+            LectureUnitPageIngestionVariant(
+                variant_id="default",
+                name="Default",
+                description="Default lecture ingestion variant using efficient models "
+                "for text processing and embeddings.",
+                chat_model="gpt-4.1-mini",
+                embedding_model="text-embedding-3-small",
+            ),
+            LectureUnitPageIngestionVariant(
+                variant_id="advanced",
+                name="Advanced",
+                description="Advanced lecture ingestion variant using higher-quality models for improved accuracy.",
+                chat_model="gpt-4.1",
+                embedding_model="text-embedding-3-large",
+            ),
         ]
 
     def __call__(self) -> (str, []):
@@ -182,6 +193,7 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
             return self.course_language, self.tokens
         except Exception as e:
             logger.error("Error updating lecture unit: %s", e)
+            traceback.print_exc()
             self.callback.error(
                 f"Failed to ingest lectures into the database: {e}",
                 exception=e,
@@ -231,6 +243,7 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
                         batch.add_object(properties=chunk, vector=embed_chunk)
                 except Exception as e:
                     logger.error("Error updating lecture unit: %s", e)
+                    traceback.print_exc()
                     self.callback.error(
                         f"Failed to ingest lectures into the database: {e}",
                         exception=e,

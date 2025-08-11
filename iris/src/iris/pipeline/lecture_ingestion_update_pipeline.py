@@ -1,5 +1,6 @@
 import traceback
 from asyncio.log import logger
+from typing import List
 
 from sentry_sdk import capture_exception
 
@@ -7,6 +8,9 @@ from iris.domain.ingestion.ingestion_pipeline_execution_dto import (
     IngestionPipelineExecutionDto,
 )
 from iris.domain.lecture.lecture_unit_dto import LectureUnitDTO
+from iris.domain.variant.lecture_ingestion_update_variant import (
+    LectureIngestionUpdateVariant,
+)
 from iris.pipeline import Pipeline
 from iris.pipeline.lecture_ingestion_pipeline import LectureUnitPageIngestionPipeline
 from iris.pipeline.lecture_unit_pipeline import LectureUnitPipeline
@@ -17,7 +21,7 @@ from iris.vector_database.database import VectorDatabase
 from iris.web.status.ingestion_status_callback import IngestionStatusCallback
 
 
-class LectureIngestionUpdatePipeline(Pipeline):
+class LectureIngestionUpdatePipeline(Pipeline[LectureIngestionUpdateVariant]):
     """Lecture Ingestion Update Pipeline to update or ingest lecture page chunks and lecture transcriptions at once"""
 
     def __init__(self, dto: IngestionPipelineExecutionDto):
@@ -38,7 +42,7 @@ class LectureIngestionUpdatePipeline(Pipeline):
             tokens = []
             if (
                 self.dto.lecture_unit.pdf_file_base64 is not None
-                or self.dto.lecture_unit.pdf_file_base64 != ""
+                and self.dto.lecture_unit.pdf_file_base64 != ""
             ):
                 page_content_pipeline = LectureUnitPageIngestionPipeline(
                     client=client, dto=self.dto, callback=callback
@@ -93,3 +97,30 @@ class LectureIngestionUpdatePipeline(Pipeline):
             logger.error("Error Ingestion pipeline: %s", e)
             logger.error(traceback.format_exc())
             capture_exception(e)
+
+    @classmethod
+    def get_variants(cls) -> List[LectureIngestionUpdateVariant]:
+        """
+        Returns available variants for the LectureIngestionUpdatePipeline.
+
+        Returns:
+            List of LectureIngestionUpdateVariant objects representing available variants
+        """
+        return [
+            LectureIngestionUpdateVariant(
+                variant_id="default",
+                name="Default",
+                description="Default lecture ingestion update variant using efficient models "
+                "for processing and embeddings.",
+                chat_model="gpt-4.1-mini",
+                embedding_model="text-embedding-3-small",
+            ),
+            LectureIngestionUpdateVariant(
+                variant_id="advanced",
+                name="Advanced",
+                description="Advanced lecture ingestion update variant using higher-quality models "
+                "for improved accuracy.",
+                chat_model="gpt-4.1",
+                embedding_model="text-embedding-3-large",
+            ),
+        ]
