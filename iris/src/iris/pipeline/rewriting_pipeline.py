@@ -13,6 +13,7 @@ from iris.domain.data.text_message_content_dto import TextMessageContentDTO
 from iris.domain.rewriting_pipeline_execution_dto import (
     RewritingPipelineExecutionDTO,
 )
+from iris.domain.variant.rewriting_variant import RewritingVariant
 from iris.llm import (
     CompletionArguments,
     ModelVersionRequestHandler,
@@ -24,8 +25,6 @@ from iris.pipeline.prompts.rewriting_prompts import (
 )
 from iris.web.status.status_update import RewritingCallback
 
-from ..domain import FeatureDTO
-from ..llm.external.model import LanguageModel
 from ..retrieval.faq_retrieval import FaqRetrieval
 from ..vector_database.database import VectorDatabase
 from .prompts.faq_consistency_prompt import faq_consistency_prompt
@@ -33,7 +32,7 @@ from .prompts.faq_consistency_prompt import faq_consistency_prompt
 logger = logging.getLogger(__name__)
 
 
-class RewritingPipeline(Pipeline):
+class RewritingPipeline(Pipeline[RewritingVariant]):
     """RewritingPipeline processes text rewriting requests by interfacing with a language model via a capability
      request handler.
 
@@ -168,26 +167,26 @@ class RewritingPipeline(Pipeline):
         return result_dict
 
     @classmethod
-    def get_variants(cls, available_llms: List[LanguageModel]) -> List[FeatureDTO]:
+    def get_variants(cls) -> List[RewritingVariant]:
         """
-        Returns available variants for the FaqIngestionPipeline based on available LLMs.
-
-        Args:
-            available_llms: List of available language models
+        Returns available variants for the RewritingPipeline.
 
         Returns:
-            List of FeatureDTO objects representing available variants
+            List of RewritingVariant objects representing available variants
         """
         return [
-            FeatureDTO(
-                id="faq",
+            RewritingVariant(
+                variant_id="faq",
                 name="Default FAQ Variant",
                 description="Default FAQ rewriting variant.",
+                rewriting_model="gpt-4.1",
+                consistency_model="gpt-4.1",
             ),
-            FeatureDTO(
-                id="problem_statement",
+            RewritingVariant(
+                variant_id="problem_statement",
                 name="Default Variant",
                 description="Default Problem statement rewriting variant.",
+                rewriting_model="gpt-4.1",
             ),
         ]
 

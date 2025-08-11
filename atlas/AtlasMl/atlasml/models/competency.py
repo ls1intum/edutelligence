@@ -1,33 +1,26 @@
+from pydantic import BaseModel
+from typing import Optional
 from enum import Enum
 
-from pydantic import BaseModel
 
-
-class CompetencyTaxonomy(str, Enum):
-    REMEMBER = "R"
-    UNDERSTAND = "U"
-    APPLY = "Y"
-    ANALYZE = "A"
-    EVALUATE = "E"
-    CREATE = "C"
+class OperationType(str, Enum):
+    UPDATE = "UPDATE"
+    DELETE = "DELETE"
 
 
 class Competency(BaseModel):
-    # id
+    id: str
     title: str
     description: str
-    taxonomy: CompetencyTaxonomy
+    course_id: str
 
 
-class CompetencyRelationType(str, Enum):  # TOBE DETERMINED LATER
-    SUPERSET = "SUPERSET"
-    SUBSET = "SUBSET"
-
-
-class CompetencyRelation(BaseModel):
-    tail_competency_id: str
-    head_competency_id: str
-    relation_type: CompetencyRelationType
+class ExerciseWithCompetencies(BaseModel):
+    id: str
+    title: str
+    description: str
+    competencies: list[str]
+    course_id: str
 
 
 class GenerateCompetencyRequest(BaseModel):
@@ -41,7 +34,6 @@ class GenerateCompetencyRequestBatch(BaseModel):
 
 class GenerateCompetencyResponse(BaseModel):
     competencies: list[Competency]
-    competency_relations: list[CompetencyRelation]
 
 
 class GenerateEmbeddingsResponse(BaseModel):
@@ -49,22 +41,15 @@ class GenerateEmbeddingsResponse(BaseModel):
 
 
 class SuggestCompetencyRequest(BaseModel):
-    id: str
     description: str
+    course_id: str
 
 
 class SuggestCompetencyResponse(BaseModel):
     competencies: list[Competency]
-    competency_relations: list[CompetencyRelation]
 
 
 class SaveCompetencyRequest(BaseModel):
-    id: str
-    description: str
-    competencies: list[Competency]
-    competency_relations: list[CompetencyRelation]
-
-
-class SaveCompetencyResponse(BaseModel):
-    competencies: list[Competency]
-    competency_relations: list[CompetencyRelation]
+    competency: Optional[Competency] = None
+    exercise: Optional[ExerciseWithCompetencies] = None
+    operation_type: OperationType

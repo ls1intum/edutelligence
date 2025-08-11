@@ -1,3 +1,4 @@
+import atexit
 import logging
 import threading
 
@@ -32,6 +33,7 @@ class VectorDatabase:
                     port=settings.weaviate.port,
                     grpc_port=settings.weaviate.grpc_port,
                 )
+                atexit.register(VectorDatabase._client_instance.close)
                 logger.info("Weaviate client initialized")
         self.client = VectorDatabase._client_instance
         self.lectures = init_lecture_unit_page_chunk_schema(self.client)
