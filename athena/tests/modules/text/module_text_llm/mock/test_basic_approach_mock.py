@@ -70,6 +70,8 @@ async def test_generate_suggestions_basic(mock_exercise, mock_submission, mock_c
             config=mock_config,
             debug=False,
             is_graded=True,
+            learner_profile=None,
+            latest_submission=None,
         )
 
         assert isinstance(feedbacks, list)
@@ -99,6 +101,8 @@ async def test_generate_suggestions_empty_submission(mock_exercise, mock_config)
             config=mock_config,
             debug=False,
             is_graded=True,
+            learner_profile=None,
+            latest_submission=None,
         )
 
         assert isinstance(feedbacks, list)
@@ -140,6 +144,8 @@ async def test_generate_suggestions_long_input(mock_exercise, mock_config):
             config=mock_config,
             debug=False,
             is_graded=True,
+            learner_profile=None,
+            latest_submission=None,
         )
 
         assert isinstance(feedbacks, list)
