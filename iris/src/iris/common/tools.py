@@ -129,6 +129,7 @@ def create_tool_get_exercise_problem_statement(
 
     return get_exercise_problem_statement
 
+
 def create_tool_get_simple_course_details(
     dto: CourseDTO, callback: StatusCallback
 ) -> Callable[[], dict]:
@@ -158,6 +159,7 @@ def create_tool_get_simple_course_details(
         }
 
     return get_simple_course_details
+
 
 def create_tool_get_course_details(
     dto: CourseChatPipelineExecutionDTO, callback: CourseChatStatusCallback

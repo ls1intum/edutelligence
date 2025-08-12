@@ -23,7 +23,8 @@ from iris.common.tools import (
     create_tool_get_example_solution,
     create_tool_get_last_artifact,
     create_tool_get_problem_statement,
-    create_tool_lecture_content_retrieval, create_tool_get_simple_course_details,
+    create_tool_get_simple_course_details,
+    create_tool_lecture_content_retrieval,
 )
 from iris.domain.communication.communication_tutor_suggestion_pipeline_execution_dto import (
     CommunicationTutorSuggestionPipelineExecutionDTO,
@@ -49,7 +50,7 @@ class TutorSuggestionPipeline(
     ]
 ):
     """
-    The TutorSuggestionPipeline creates a tutor suggestion when called. 
+    The TutorSuggestionPipeline creates a tutor suggestion when called.
     It uses the post received as an argument to create a suggestion based on the conversation
     """
 
@@ -161,9 +162,7 @@ class TutorSuggestionPipeline(
             )
 
         tool_list.append(
-            create_tool_get_simple_course_details(
-                state.dto.course, callback
-            )
+            create_tool_get_simple_course_details(state.dto.course, callback)
         )
         return tool_list
 
@@ -224,7 +223,10 @@ class TutorSuggestionPipeline(
         return ""
 
     def is_memiris_memory_creation_enabled(
-        self, state: AgentPipelineExecutionState[CommunicationTutorSuggestionPipelineExecutionDTO, TutorSuggestionVariant]
+        self,
+        state: AgentPipelineExecutionState[
+            CommunicationTutorSuggestionPipelineExecutionDTO, TutorSuggestionVariant
+        ],
     ) -> bool:
         return False
 
