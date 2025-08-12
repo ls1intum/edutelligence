@@ -18,13 +18,13 @@ def workflows():
 def test_initial_texts_integration(workflows):
     texts = [
         ExerciseWithCompetencies(
-            id=str(uuid.uuid4()),
+            id=i + 1,
             title="Integration Exercise",
             description="Integration Exercise Description",
             competencies=[],
-            course_id="course-1",
+            course_id=1,
         )
-        for _ in range(2)
+        for i in range(2)
     ]
     workflows.initial_exercises(texts)
     inserted = workflows.weaviate_client.get_all_embeddings("Exercise")
@@ -36,10 +36,10 @@ def test_initial_texts_integration(workflows):
 def test_initial_competencies_integration(workflows):
     competencies = [
         Competency(
-            id=str(uuid.uuid4()),
+            id=i + 1,
             title="Integration Competency",
             description="Description",
-            course_id="course-1",
+            course_id=1,
         )
         for i in range(2)
     ]
@@ -76,34 +76,34 @@ def test_initial_cluster_pipeline_integration(workflows):
         ]
         texts = [
             ExerciseWithCompetencies(
-                id=str(uuid.uuid4()),
+                id=i + 1,
                 title=title,
                 description=title,
                 competencies=[],
-                course_id="course-1",
+                course_id=1,
             )
-            for title in titles
+            for i, title in enumerate(titles)
         ]
         workflows.initial_exercises(texts)
 
         competencies = [
             Competency(
-                id=str(uuid.uuid4()),
+                id=1,
                 title="Data Structures Mastery",
                 description="Ability to understand and efficiently use core data structures such as lists, arrays, dictionaries, tuples, and sets. This includes selecting the appropriate structure for a task and applying common operations like searching, sorting, and modifying data.",
-                course_id="course-1",
+                course_id=1,
             ),
             Competency(
-                id=str(uuid.uuid4()),
+                id=2,
                 title="Programming Fundamentals",
                 description="Proficiency in core programming concepts, including variables, loops, and functions. Capable of writing, reading, and debugging code that uses these basic elements to implement algorithms and solve problems.",
-                course_id="course-1",
+                course_id=1,
             ),
             Competency(
-                id=str(uuid.uuid4()),
+                id=3,
                 title="Object-Oriented and Algorithmic Thinking",
                 description="Understanding of object-oriented programming concepts such as classes and recursion, and their role in organizing code and solving complex problems. Can design class hierarchies, use recursion effectively, and apply these patterns to real-world scenarios.",
-                course_id="course-1",
+                course_id=1,
             ),
         ]
 
@@ -136,34 +136,34 @@ def test_initial_cluster_to_competencyPipeline_integration(workflows):
         ]
         texts = [
             ExerciseWithCompetencies(
-                id=str(uuid.uuid4()),
+                id=i + 1,
                 title=title,
                 description=title,
                 competencies=[],
-                course_id="course-1",
+                course_id=1,
             )
-            for title in titles
+            for i, title in enumerate(titles)
         ]
         workflows.initial_exercises(texts)
 
         competencies = [
             Competency(
-                id=str(uuid.uuid4()),
+                id=4,
                 title="Data Structures Mastery",
                 description="Ability to understand and efficiently use core data structures such as lists, arrays, dictionaries, tuples, and sets. This includes selecting the appropriate structure for a task and applying common operations like searching, sorting, and modifying data.",
-                course_id="course-1",
+                course_id=1,
             ),
             Competency(
-                id=str(uuid.uuid4()),
+                id=5,
                 title="Programming Fundamentals",
                 description="Proficiency in core programming concepts, including variables, loops, and functions. Capable of writing, reading, and debugging code that uses these basic elements to implement algorithms and solve problems.",
-                course_id="course-1",
+                course_id=1,
             ),
             Competency(
-                id=str(uuid.uuid4()),
+                id=6,
                 title="Object-Oriented and Algorithmic Thinking",
                 description="Understanding of object-oriented programming concepts such as classes and recursion, and their role in organizing code and solving complex problems. Can design class hierarchies, use recursion effectively, and apply these patterns to real-world scenarios.",
-                course_id="course-1",
+                course_id=1,
             ),
         ]
 
@@ -187,22 +187,22 @@ def test_newTextPipeline_integration(workflows):
     with patch("atlasml.ml.pipeline_workflows.apply_hdbscan", side_effect=fake_hdbscan):
         competencies = [
             Competency(
-                id=str(uuid.uuid4()),
+                id=7,
                 title="Data Structures Mastery",
                 description="Ability to understand and efficiently use core data structures such as lists, arrays, dictionaries, tuples, and sets. This includes selecting the appropriate structure for a task and applying common operations like searching, sorting, and modifying data.",
-                course_id="course-1",
+                course_id=1,
             ),
             Competency(
-                id=str(uuid.uuid4()),
+                id=8,
                 title="Programming Fundamentals",
                 description="Proficiency in core programming concepts, including variables, loops, and functions. Capable of writing, reading, and debugging code that uses these basic elements to implement algorithms and solve problems.",
-                course_id="course-1",
+                course_id=1,
             ),
             Competency(
-                id=str(uuid.uuid4()),
+                id=9,
                 title="Object-Oriented and Algorithmic Thinking",
                 description="Understanding of object-oriented programming concepts such as classes and recursion, and their role in organizing code and solving complex problems. Can design class hierarchies, use recursion effectively, and apply these patterns to real-world scenarios.",
-                course_id="course-1",
+                course_id=1,
             ),
         ]
         workflows.initial_competencies(competencies)
@@ -220,13 +220,13 @@ def test_newTextPipeline_integration(workflows):
         ]
         texts = [
             ExerciseWithCompetencies(
-                id=str(uuid.uuid4()),
+                id=i + 10,
                 title=title,
                 description=title,
                 competencies=[],
-                course_id="course-1",
+                course_id=1,
             )
-            for title in titles
+            for i, title in enumerate(titles)
         ]
         workflows.initial_exercises(texts)
         workflows.initial_cluster_pipeline()

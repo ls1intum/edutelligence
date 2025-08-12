@@ -123,10 +123,10 @@ class MockWeaviateQuery:
                 MockWeaviateObject(
                     uuid="exercise-uuid-1",
                     properties={
-                        "exercise_id": "ex-1",
+                        "exercise_id": "1",
                         "description": "Solve linear equations",
-                        "competency_ids": ["comp-1", "comp-2"],
-                        "course_id": "course-1",
+                        "competency_ids": ["1", "2"],
+                        "course_id": "1",
                     },
                     vector=[0.1, 0.2, 0.3],
                 )
@@ -136,12 +136,12 @@ class MockWeaviateQuery:
                 MockWeaviateObject(
                     uuid="competency-uuid-1",
                     properties={
-                        "competency_id": "comp-1",
+                        "competency_id": "1",
                         "title": "Algebra",
                         "description": "Basic algebra concepts",
-                        "cluster_id": "cluster-1",
+                        "cluster_id": "1",
                         "cluster_similarity_score": 0.85,
-                        "course_id": "course-1",
+                        "course_id": "1",
                     },
                     vector=[0.1, 0.2, 0.3],
                 )
@@ -151,7 +151,7 @@ class MockWeaviateQuery:
                 MockWeaviateObject(
                     uuid="cluster-uuid-1",
                     properties={
-                        "cluster_id": "cluster-1",
+                        "cluster_id": "1",
                         "label_id": "algebra-basics",
                     },
                     vector=[0.1, 0.2, 0.3],
@@ -245,20 +245,20 @@ class MockWeaviateCollection:
                 MockWeaviateObject(
                     uuid="exercise-uuid-1",
                     properties={
-                        "exercise_id": "ex-1",
+                        "exercise_id": "1",
                         "description": "Solve linear equations",
-                        "competency_ids": ["comp-1", "comp-2"],
-                        "course_id": "course-1",
+                        "competency_ids": ["1", "2"],
+                        "course_id": "1",
                     },
                     vector=[0.1, 0.2, 0.3],
                 ),
                 MockWeaviateObject(
                     uuid="exercise-uuid-2",
                     properties={
-                        "exercise_id": "ex-2",
+                        "exercise_id": "2",
                         "description": "Calculus derivatives",
-                        "competency_ids": ["comp-3"],
-                        "course_id": "course-1",
+                        "competency_ids": ["3"],
+                        "course_id": "1",
                     },
                     vector=[0.4, 0.5, 0.6],
                 ),
@@ -268,24 +268,24 @@ class MockWeaviateCollection:
                 MockWeaviateObject(
                     uuid="competency-uuid-1",
                     properties={
-                        "competency_id": "comp-1",
+                        "competency_id": "1",
                         "title": "Algebra",
                         "description": "Basic algebra concepts",
-                        "cluster_id": "cluster-1",
+                        "cluster_id": "1",
                         "cluster_similarity_score": 0.85,
-                        "course_id": "course-1",
+                        "course_id": "1",
                     },
                     vector=[0.1, 0.2, 0.3],
                 ),
                 MockWeaviateObject(
                     uuid="competency-uuid-2",
                     properties={
-                        "competency_id": "comp-2",
+                        "competency_id": "2",
                         "title": "Calculus",
                         "description": "Basic calculus concepts",
-                        "cluster_id": "cluster-2",
+                        "cluster_id": "2",
                         "cluster_similarity_score": 0.92,
-                        "course_id": "course-1",
+                        "course_id": "1",
                     },
                     vector=[0.4, 0.5, 0.6],
                 ),
@@ -295,7 +295,7 @@ class MockWeaviateCollection:
                 MockWeaviateObject(
                     uuid="cluster-uuid-1",
                     properties={
-                        "cluster_id": "cluster-1",
+                        "cluster_id": "1",
                         "label_id": "algebra-basics",
                     },
                     vector=[0.1, 0.2, 0.3],
@@ -461,10 +461,10 @@ def weaviate_test_data(mock_weaviate_client):
         MockWeaviateObject(
             uuid="comp-1",
             properties={
-                "competency_id": "comp-1",
+                "competency_id": "1",
                 "title": "Algebra",
                 "description": "Basic algebra concepts",
-                "course_id": "course-1",
+                "course_id": "1",
             },
         )
     )
@@ -472,10 +472,10 @@ def weaviate_test_data(mock_weaviate_client):
         MockWeaviateObject(
             uuid="comp-2",
             properties={
-                "competency_id": "comp-2",
+                "competency_id": "2",
                 "title": "Calculus",
                 "description": "Basic calculus concepts",
-                "course_id": "course-1",
+                "course_id": "1",
             },
         )
     )
@@ -488,9 +488,9 @@ def weaviate_test_data(mock_weaviate_client):
         MockWeaviateObject(
             uuid="ex-1",
             properties={
-                "exercise_id": "ex-1",
+                "exercise_id": "1",
                 "description": "Solve linear equations",
-                "course_id": "course-1",
+                "course_id": "1",
             },
         )
     )

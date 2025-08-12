@@ -113,7 +113,3 @@ app.add_middleware(RequestLoggingMiddleware)
 
 app.include_router(health_router)
 app.include_router(competency_router)
-
-@app.get("/sentry-debug")
-async def trigger_error():
-    division_by_zero = 1 / 0

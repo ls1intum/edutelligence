@@ -31,7 +31,7 @@ def test_add_embeddings(mock_weaviate_client):
     client = WeaviateClient()
     collection_name = CollectionNames.COMPETENCY.value
     embeddings = [0.1, 0.2, 0.3]
-    properties = {"competency_id": "comp-1", "title": "Test Competency"}
+    properties = {"competency_id": "1", "title": "Test Competency"}
 
     uuid = client.add_embeddings(collection_name, embeddings, properties)
 
@@ -47,7 +47,7 @@ def test_get_all_embeddings(mock_weaviate_client):
 
     assert len(results) == 2
     assert results[0]["id"] == "competency-uuid-1"
-    assert results[0]["properties"]["competency_id"] == "comp-1"
+    assert results[0]["properties"]["competency_id"] == "1"
     assert results[0]["properties"]["title"] == "Algebra"
     assert results[0]["vector"] == [0.1, 0.2, 0.3]
 
@@ -57,7 +57,7 @@ def test_get_embeddings_by_property(mock_weaviate_client):
     client = WeaviateClient()
     collection_name = CollectionNames.COMPETENCY.value
     property_name = "competency_id"
-    property_value = "comp-1"
+    property_value = "1"
 
     results = client.get_embeddings_by_property(
         collection_name, property_name, property_value
@@ -65,7 +65,7 @@ def test_get_embeddings_by_property(mock_weaviate_client):
 
     assert len(results) == 1
     assert results[0]["id"] == "competency-uuid-1"
-    assert results[0]["properties"]["competency_id"] == "comp-1"
+    assert results[0]["properties"]["competency_id"] == "1"
     assert results[0]["properties"]["title"] == "Algebra"
 
 
@@ -74,7 +74,7 @@ def test_search_by_multiple_properties(mock_weaviate_client):
     client = WeaviateClient()
     collection_name = CollectionNames.COMPETENCY.value
     property_filters = {
-        "competency_id": "comp-1",
+        "competency_id": "1",
         "cluster_similarity_score": 0.85,
     }
 
@@ -188,9 +188,9 @@ def test_exercise_collection_data(mock_weaviate_client):
 
     assert len(results) == 2
     assert results[0]["id"] == "exercise-uuid-1"
-    assert results[0]["properties"]["exercise_id"] == "ex-1"
+    assert results[0]["properties"]["exercise_id"] == "1"
     assert results[0]["properties"]["description"] == "Solve linear equations"
-    assert results[0]["properties"]["competency_ids"] == ["comp-1", "comp-2"]
+    assert results[0]["properties"]["competency_ids"] == ["1", "2"]
 
 
 def test_cluster_center_collection_data(mock_weaviate_client):
@@ -202,7 +202,7 @@ def test_cluster_center_collection_data(mock_weaviate_client):
 
     assert len(results) == 1
     assert results[0]["id"] == "cluster-uuid-1"
-    assert results[0]["properties"]["cluster_id"] == "cluster-1"
+    assert results[0]["properties"]["cluster_id"] == "1"
     assert results[0]["properties"]["label_id"] == "algebra-basics"
 
 
@@ -286,7 +286,7 @@ def test_get_embeddings_by_property_query_error():
                 match="Unexpected error getting embeddings by property",
             ):
                 client.get_embeddings_by_property(
-                    CollectionNames.COMPETENCY.value, "competency_id", "comp-1"
+                    CollectionNames.COMPETENCY.value, "competency_id", "1"
                 )
 
 
@@ -401,7 +401,7 @@ def test_delete_by_property_success(mock_weaviate_client):
     client = WeaviateClient()
     collection_name = CollectionNames.COMPETENCY.value
     property_name = "competency_id"
-    property_value = "comp-1"
+    property_value = "1"
 
     deleted_count = client.delete_by_property(
         collection_name, property_name, property_value
@@ -456,5 +456,5 @@ def test_delete_by_property_query_error():
                 WeaviateOperationError, match="Unexpected error deleting by property"
             ):
                 client.delete_by_property(
-                    CollectionNames.COMPETENCY.value, "competency_id", "comp-1"
+                    CollectionNames.COMPETENCY.value, "competency_id", "1"
                 )
