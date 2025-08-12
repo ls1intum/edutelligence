@@ -23,7 +23,7 @@ from iris.common.tools import (
     create_tool_get_example_solution,
     create_tool_get_last_artifact,
     create_tool_get_problem_statement,
-    create_tool_lecture_content_retrieval, create_tool_get_course_details, create_tool_get_simple_course_details,
+    create_tool_lecture_content_retrieval, create_tool_get_simple_course_details,
 )
 from iris.domain.communication.communication_tutor_suggestion_pipeline_execution_dto import (
     CommunicationTutorSuggestionPipelineExecutionDTO,
@@ -31,8 +31,6 @@ from iris.domain.communication.communication_tutor_suggestion_pipeline_execution
 from iris.domain.data.post_dto import PostDTO
 from iris.domain.variant.tutor_suggestion_variant import TutorSuggestionVariant
 from iris.pipeline.abstract_agent_pipeline import (
-    DTO,
-    VARIANT,
     AbstractAgentPipeline,
     AgentPipelineExecutionState,
 )
