@@ -325,7 +325,7 @@ def create_tool_lecture_content_retrieval(
         lecture_content_storage (dict): Storage for retrieved content.
 
     Returns:
-        BaseTool: Tool that returns lecture content string.
+        Callable[[], str]: Function that returns lecture content string.
     """
 
     def lecture_content_retrieval() -> str:
@@ -453,7 +453,7 @@ def create_tool_get_problem_statement(
         dto (TextExerciseDTO | ProgrammingExerciseDTO): DTO containing exercise data.
 
     Returns:
-        Callable: Function that returns the problem statement.
+        Callable[[], str]: Function that returns the problem statement.
     """
 
     def get_problem_statement() -> str:

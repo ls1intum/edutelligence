@@ -51,9 +51,8 @@ class TutorSuggestionPipeline(
     ]
 ):
     """
-    The TutorSuggestionPipeline creates a tutor suggestion
-
-    when called, it uses the post received as an argument to create a suggestion based on the conversation
+    The TutorSuggestionPipeline creates a tutor suggestion when called. 
+    It uses the post received as an argument to create a suggestion based on the conversation
     """
 
     pipeline: Runnable
@@ -222,7 +221,7 @@ class TutorSuggestionPipeline(
         return ""
 
     def is_memiris_memory_creation_enabled(
-        self, state: AgentPipelineExecutionState[DTO, VARIANT]
+        self, state: AgentPipelineExecutionState[CommunicationTutorSuggestionPipelineExecutionDTO, TutorSuggestionVariant]
     ) -> bool:
         return False
 
@@ -349,13 +348,13 @@ class TutorSuggestionPipeline(
             TutorSuggestionVariant(
                 variant_id="default",
                 name="Default",
-                description="Default tutor suggestion variant using Gemma 3 model.",
+                description="Default tutor suggestion variant using the OpenAI GPT-OSS 20B model.",
                 agent_model="gpt-oss:20b",
             ),
             TutorSuggestionVariant(
                 variant_id="advanced",
                 name="Advanced",
-                description="Advanced tutor suggestion variant using DeepSeek R1 model.",
+                description="Advanced tutor suggestion variant using the OpenAI GPT-OSS 120B model.",
                 agent_model="gpt-oss:120b",
             ),
         ]
