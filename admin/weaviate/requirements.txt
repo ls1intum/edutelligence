@@ -1,0 +1,4 @@
+# Python dependencies for Weaviate RBAC setup
+weaviate-client>=3.24.0
+python-dotenv>=1.0.0
+argparse>=1.4.0
