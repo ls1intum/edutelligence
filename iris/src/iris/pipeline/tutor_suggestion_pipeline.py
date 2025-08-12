@@ -56,7 +56,6 @@ class TutorSuggestionPipeline(
     """
 
     pipeline: Runnable
-    is_answered: bool = False
 
     def __init__(self):
         super().__init__(implementation_id="tutor_suggestion_pipeline")
