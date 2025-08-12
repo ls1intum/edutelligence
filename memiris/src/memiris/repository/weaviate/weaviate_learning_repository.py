@@ -121,6 +121,8 @@ class WeaviateLearningRepository(LearningRepository, _WeaviateBaseRepository):
     def search_multi(
         self, tenant: str, vectors: Mapping[str, Sequence[float]], count: int
     ) -> list[Learning]:
+        if not vectors:
+            return []
         try:
             vectors = {
                 vector_name: vector for vector_name, vector in vectors.items() if vector

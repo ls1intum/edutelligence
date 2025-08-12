@@ -13,10 +13,10 @@ from iris.llm import (
     ModelVersionRequestHandler,
 )
 from iris.llm.langchain import IrisLangchainChatModel
-from iris.pipeline import Pipeline
 from iris.pipeline.prompts.lecture_unit_segment_summary_prompt import (
     lecture_unit_segment_summary_prompt,
 )
+from iris.pipeline.sub_pipeline import SubPipeline
 from iris.vector_database.lecture_transcription_schema import (
     LectureTranscriptionSchema,
     init_lecture_transcription_schema,
@@ -31,7 +31,7 @@ from iris.vector_database.lecture_unit_segment_schema import (
 )
 
 
-class LectureUnitSegmentSummaryPipeline(Pipeline):
+class LectureUnitSegmentSummaryPipeline(SubPipeline):
     """LectureUnitSegmentSummaryPipeline processes lecture unit segments by summarizing the transcription and slide
      content.
 
@@ -80,7 +80,7 @@ class LectureUnitSegmentSummaryPipeline(Pipeline):
             summary = self._create_summary(transcriptions, slides)
             summaries.append(summary)
             self._upsert_lecture_object(slide_index, summary)
-        return summaries
+        return summaries, self.tokens
 
     def _get_transcriptions(self, slide_number: int):
         transcription_filter = self._get_lecture_transcription_filter()

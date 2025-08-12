@@ -4,6 +4,7 @@ import { useBaseInfo } from "@/hooks/base_info_context";
 import BaseInfoHeader from "@/components/base_info_header";
 import ModuleRequests from "@/components/view_mode/module_requests";
 import EvaluationMode from "@/components/view_mode/evaluation_mode";
+import ComparativeEvaluationStudyManagement from "@/components/view_mode/comparative_evaluation_study";
 
 export default function Playground() {
   const { viewMode } = useBaseInfo();
@@ -14,6 +15,7 @@ export default function Playground() {
       <BaseInfoHeader />
       {viewMode === "module_requests" && <ModuleRequests />}
       {viewMode === "evaluation_mode" && <EvaluationMode />}
+      {viewMode === "comparative_evaluation_study" && <ComparativeEvaluationStudyManagement />}
     </main>
   );
 }

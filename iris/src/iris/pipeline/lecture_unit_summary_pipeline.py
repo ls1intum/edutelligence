@@ -12,13 +12,13 @@ from iris.llm import (
     ModelVersionRequestHandler,
 )
 from iris.llm.langchain import IrisLangchainChatModel
-from iris.pipeline import Pipeline
 from iris.pipeline.prompts.lecture_unit_summary_prompt import (
     lecture_unit_summary_prompt,
 )
+from iris.pipeline.sub_pipeline import SubPipeline
 
 
-class LectureUnitSummaryPipeline(Pipeline):
+class LectureUnitSummaryPipeline(SubPipeline):
     """LectureUnitSummaryPipeline summarizes lecture unit segments into a cohesive summary
     by constructing and invoking a language model pipeline with a custom prompt.
     """
@@ -69,6 +69,6 @@ class LectureUnitSummaryPipeline(Pipeline):
             self._append_tokens(
                 self.llm.tokens, PipelineEnum.IRIS_LECTURE_SUMMARY_PIPELINE
             )
-            return response
+            return response, self.tokens
         except Exception as e:
             raise e

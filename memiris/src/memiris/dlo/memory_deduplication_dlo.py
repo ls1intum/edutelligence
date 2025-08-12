@@ -5,7 +5,7 @@ from uuid import UUID
 from pydantic import BaseModel, Field, TypeAdapter
 
 
-class MemoryDeduplicationDto(BaseModel):
+class MemoryDeduplicationDLO(BaseModel):
     """
     Data transfer object for memory deduplication operations.
     Represents a memory that results from deduplicating multiple memories.
@@ -23,29 +23,29 @@ class MemoryDeduplicationDto(BaseModel):
     @staticmethod
     def json_type() -> TypeAdapter:
         """
-        Generate the TypeAdapter for MemoryDeduplicationDto.
+        Generate the TypeAdapter for MemoryDeduplicationDLO.
         """
-        return TypeAdapter(MemoryDeduplicationDto)
+        return TypeAdapter(MemoryDeduplicationDLO)
 
     @staticmethod
     def json_array_type() -> TypeAdapter:
         """
-        Generate the TypeAdapter for an array of MemoryDeduplicationDto objects.
+        Generate the TypeAdapter for an array of MemoryDeduplicationDLO objects.
         """
-        return TypeAdapter(List[MemoryDeduplicationDto])
+        return TypeAdapter(List[MemoryDeduplicationDLO])
 
     @staticmethod
     def json_schema() -> Dict[str, Any]:
         """
-        Generate the JSON schema for MemoryDeduplicationDto.
+        Generate the JSON schema for MemoryDeduplicationDLO.
         """
-        return MemoryDeduplicationDto.json_type().json_schema()
+        return MemoryDeduplicationDLO.json_type().json_schema()
 
     @staticmethod
     def json_array_schema() -> str:
         """
-        Generate the JSON schema for an array of MemoryDeduplicationDto objects.
+        Generate the JSON schema for an array of MemoryDeduplicationDLO objects.
         """
-        learning_json_dict = MemoryDeduplicationDto.json_array_type().json_schema()
+        learning_json_dict = MemoryDeduplicationDLO.json_array_type().json_schema()
 
         return json.dumps(learning_json_dict, indent=2)

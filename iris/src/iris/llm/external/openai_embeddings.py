@@ -1,6 +1,6 @@
 import logging
 import time
-from typing import Any, Literal
+from typing import Literal
 
 from langchain_experimental.text_splitter import SemanticChunker
 from langchain_openai import AzureOpenAIEmbeddings, OpenAIEmbeddings
@@ -68,7 +68,7 @@ class OpenAIEmbeddingModel(EmbeddingModel):
 class DirectOpenAIEmbeddingModel(OpenAIEmbeddingModel):
     type: Literal["openai_embedding"]
 
-    def model_post_init(self, __context: Any) -> None:
+    def model_post_init(self, context) -> None:  # pylint: disable=unused-argument
         self._client = OpenAIEmbeddings(api_key=self.api_key)
 
     def __str__(self):
@@ -86,7 +86,7 @@ class AzureOpenAIEmbeddingModel(OpenAIEmbeddingModel):
     azure_deployment: str
     api_version: str
 
-    def model_post_init(self, __context: Any) -> None:
+    def model_post_init(self, context) -> None:  # pylint: disable=unused-argument
         self._client = AzureOpenAIEmbeddings(
             azure_endpoint=self.endpoint,
             azure_deployment=self.azure_deployment,
