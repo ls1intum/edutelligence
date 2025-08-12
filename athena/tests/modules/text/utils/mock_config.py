@@ -1,6 +1,7 @@
 from pydantic import BaseModel, Field
 from typing import Any, Callable
 from module_text_llm.approach_config import ApproachConfig
+from athena.schemas import LearnerProfile
 
 
 class MockPrompt(BaseModel):
@@ -31,6 +32,7 @@ class MockModelConfig(BaseModel):
 class MockApproachConfig(ApproachConfig):
     model: MockModelConfig = Field(default_factory=MockModelConfig)
     generate_suggestions_prompt: MockPrompt = Field(default_factory=MockPrompt)
+    profile: LearnerProfile = Field(default_factory=lambda: LearnerProfile(feedback_detail=2, feedback_formality=2))
 
     async def generate_suggestions(
         self, exercise, submission, debug=False, is_graded=True
