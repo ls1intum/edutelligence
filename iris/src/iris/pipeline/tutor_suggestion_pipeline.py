@@ -23,7 +23,7 @@ from iris.common.tools import (
     create_tool_get_example_solution,
     create_tool_get_last_artifact,
     create_tool_get_problem_statement,
-    create_tool_lecture_content_retrieval,
+    create_tool_lecture_content_retrieval, create_tool_get_course_details, create_tool_get_simple_course_details,
 )
 from iris.domain.communication.communication_tutor_suggestion_pipeline_execution_dto import (
     CommunicationTutorSuggestionPipelineExecutionDTO,
@@ -161,6 +161,12 @@ class TutorSuggestionPipeline(
                     getattr(state, "faq_storage", {}),
                 )
             )
+
+        tool_list.append(
+            create_tool_get_simple_course_details(
+                state.dto.course, callback
+            )
+        )
         return tool_list
 
     def build_system_message(
@@ -235,8 +241,8 @@ class TutorSuggestionPipeline(
         suggestions = ""
         # Extract the textual suggestion robustly whether the agent returned a dict or a JSON string
         if isinstance(raw, dict):
-            suggestions = raw.get("suggestions") or json.dumps(raw)
-            result_text = raw.get("reply") if "suggestions" in raw else None
+            suggestions = raw.get("suggestions") or None
+            result_text = raw.get("reply") or None
         elif isinstance(raw, str):
             try:
                 parsed = json.loads(raw)
