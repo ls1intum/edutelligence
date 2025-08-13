@@ -31,7 +31,7 @@ def test_add_embeddings(mock_weaviate_client):
     client = WeaviateClient()
     collection_name = CollectionNames.COMPETENCY.value
     embeddings = [0.1, 0.2, 0.3]
-    properties = {"competency_id": "comp-1", "title": "Test Competency"}
+    properties = {"competency_id": "1", "title": "Test Competency"}
 
     uuid = client.add_embeddings(collection_name, embeddings, properties)
 
@@ -47,7 +47,7 @@ def test_get_all_embeddings(mock_weaviate_client):
 
     assert len(results) == 2
     assert results[0]["id"] == "competency-uuid-1"
-    assert results[0]["properties"]["competency_id"] == "comp-1"
+    assert results[0]["properties"]["competency_id"] == "1"
     assert results[0]["properties"]["title"] == "Algebra"
     assert results[0]["vector"] == [0.1, 0.2, 0.3]
 
@@ -57,7 +57,7 @@ def test_get_embeddings_by_property(mock_weaviate_client):
     client = WeaviateClient()
     collection_name = CollectionNames.COMPETENCY.value
     property_name = "competency_id"
-    property_value = "comp-1"
+    property_value = "1"
 
     results = client.get_embeddings_by_property(
         collection_name, property_name, property_value
@@ -65,7 +65,7 @@ def test_get_embeddings_by_property(mock_weaviate_client):
 
     assert len(results) == 1
     assert results[0]["id"] == "competency-uuid-1"
-    assert results[0]["properties"]["competency_id"] == "comp-1"
+    assert results[0]["properties"]["competency_id"] == "1"
     assert results[0]["properties"]["title"] == "Algebra"
 
 
@@ -74,7 +74,7 @@ def test_search_by_multiple_properties(mock_weaviate_client):
     client = WeaviateClient()
     collection_name = CollectionNames.COMPETENCY.value
     property_filters = {
-        "competency_id": "comp-1",
+        "competency_id": "1",
         "cluster_similarity_score": 0.85,
     }
 
@@ -188,9 +188,9 @@ def test_exercise_collection_data(mock_weaviate_client):
 
     assert len(results) == 2
     assert results[0]["id"] == "exercise-uuid-1"
-    assert results[0]["properties"]["exercise_id"] == "ex-1"
+    assert results[0]["properties"]["exercise_id"] == "1"
     assert results[0]["properties"]["description"] == "Solve linear equations"
-    assert results[0]["properties"]["competency_ids"] == ["comp-1", "comp-2"]
+    assert results[0]["properties"]["competency_ids"] == ["1", "2"]
 
 
 def test_cluster_center_collection_data(mock_weaviate_client):
@@ -202,7 +202,7 @@ def test_cluster_center_collection_data(mock_weaviate_client):
 
     assert len(results) == 1
     assert results[0]["id"] == "cluster-uuid-1"
-    assert results[0]["properties"]["cluster_id"] == "cluster-1"
+    assert results[0]["properties"]["cluster_id"] == "1"
     assert results[0]["properties"]["label_id"] == "algebra-basics"
 
 
@@ -286,7 +286,7 @@ def test_get_embeddings_by_property_query_error():
                 match="Unexpected error getting embeddings by property",
             ):
                 client.get_embeddings_by_property(
-                    CollectionNames.COMPETENCY.value, "competency_id", "comp-1"
+                    CollectionNames.COMPETENCY.value, "competency_id", "1"
                 )
 
 
@@ -394,3 +394,67 @@ def test_collection_initialization_error():
                 WeaviateOperationError, match="Failed to initialize collections"
             ):
                 WeaviateClient()
+
+
+def test_delete_by_property_success(mock_weaviate_client):
+    """Test successful deletion by property."""
+    client = WeaviateClient()
+    collection_name = CollectionNames.COMPETENCY.value
+    property_name = "competency_id"
+    property_value = "1"
+
+    deleted_count = client.delete_by_property(
+        collection_name, property_name, property_value
+    )
+
+    assert deleted_count == 2  # Mock returns 2 successful deletions
+
+
+def test_delete_by_property_with_invalid_params(mock_weaviate_client):
+    """Test delete_by_property with invalid parameters."""
+    client = WeaviateClient()
+    collection_name = CollectionNames.COMPETENCY.value
+
+    # Test with empty property name
+    with pytest.raises(ValueError, match="Property name and value must be provided"):
+        client.delete_by_property(collection_name, "", "value")
+
+    # Test with empty property value
+    with pytest.raises(ValueError, match="Property name and value must be provided"):
+        client.delete_by_property(collection_name, "property", "")
+
+
+def test_delete_by_property_nonexistent_collection(mock_weaviate_client):
+    """Test delete_by_property with non-existent collection."""
+    client = WeaviateClient()
+    collection_name = "NonExistentCollection"
+    property_name = "some_property"
+    property_value = "some_value"
+
+    with pytest.raises(
+        ValueError, match=f"Collection '{collection_name}' does not exist"
+    ):
+        client.delete_by_property(collection_name, property_name, property_value)
+
+
+def test_delete_by_property_query_error():
+    """Test delete_by_property with Weaviate query error."""
+    from unittest.mock import patch
+    from atlasml.clients.weaviate import WeaviateOperationError
+    from tests.conftest import MockWeaviateClient
+
+    # Create a mock client and configure to fail
+    mock_client = MockWeaviateClient()
+    collection = mock_client.collections.get(CollectionNames.COMPETENCY.value)
+    collection.data.set_fail_delete(True)
+
+    with patch("weaviate.connect_to_local", return_value=mock_client):
+        with patch("atlasml.clients.weaviate.WeaviateClientSingleton._instance", None):
+            client = WeaviateClient()
+
+            with pytest.raises(
+                WeaviateOperationError, match="Unexpected error deleting by property"
+            ):
+                client.delete_by_property(
+                    CollectionNames.COMPETENCY.value, "competency_id", "1"
+                )
