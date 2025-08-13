@@ -7,7 +7,6 @@ from typing import Any, Callable, List, cast
 
 import pytz
 from jinja2 import Environment, FileSystemLoader, select_autoescape
-from langchain_core.runnables import Runnable
 from langsmith import traceable
 
 from iris.common.exercise_chat_tools import (
@@ -18,7 +17,7 @@ from iris.common.exercise_chat_tools import (
     create_tool_get_submission_details,
     create_tool_repository_files,
 )
-from iris.common.pyris_message import IrisMessageRole, PyrisMessage
+from iris.common.pyris_message import IrisMessageRole
 from iris.common.tools import (
     create_tool_faq_content_retrieval,
     create_tool_get_example_solution,
