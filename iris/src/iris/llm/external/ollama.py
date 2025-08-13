@@ -301,11 +301,6 @@ class OllamaModel(
                 model=self.model,
                 messages=ollama_messages,
                 tools=tools_for_client,
-                format=(
-                    "json"
-                    if getattr(arguments, "response_format", None) == "JSON"
-                    else ""
-                ),
                 options=self.options,
             )
 

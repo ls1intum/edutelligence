@@ -61,6 +61,11 @@ Blend concise feedback with an open-ended question, as described in the system p
 Use the tools available to you to gather insights - never guess or invent details.
 Use tools if useful, e.g., to figure out what topic to bring up from how the student is doing or if there was a question about the course. Ensure to use the correct IDs when calling tools, such as the course ID, exercise ID, or lecture ID. Do not guess.
 
+{% if regeneration_requested %}
+The tutor triggered a regeneration request. You must provide a new, original response based on the current context and discussion. He might not be satisfied with the previous response, so ensure your new reply is concise, relevant, and directly addresses the tutor's needs without repeating or reusing any previous messages.
+YOU MUST NOW GENERATE NEW SUGGESTIONS AS THE TUTOR REQUESTED A REGENERATION. DO NEVER PROVIDE NOTHING OR AN EMPTY RESPONSE.
+{% endif %}
+
 {% if tutor_query %}
 {# ————— QUERY MODE ————— #}
 

@@ -18,6 +18,7 @@ from iris.common.exercise_chat_tools import (
     create_tool_get_submission_details,
     create_tool_repository_files,
 )
+from iris.common.pyris_message import IrisMessageRole, PyrisMessage
 from iris.common.tools import (
     create_tool_faq_content_retrieval,
     create_tool_get_example_solution,
@@ -53,8 +54,6 @@ class TutorSuggestionPipeline(
     The TutorSuggestionPipeline creates a tutor suggestion when called.
     It uses the post received as an argument to create a suggestion based on the conversation
     """
-
-    pipeline: Runnable
 
     def __init__(self):
         super().__init__(implementation_id="tutor_suggestion_pipeline")
@@ -178,6 +177,7 @@ class TutorSuggestionPipeline(
         is_text_exercise = state.dto.text_exercise is not None
         tutor_query = self.get_text_of_latest_user_message(state) != ""
         discussion = self._get_post_discussion(state.dto.post)
+        regeneration_requested = self.is_regeneration_by_user_requested(state)
         template_context = {
             "current_date": datetime.now(tz=pytz.UTC).strftime("%Y-%m-%d %H:%M:%S"),
             "allow_lecture_tool": allow_lecture_tool,
@@ -192,6 +192,7 @@ class TutorSuggestionPipeline(
                 if state.dto.course and state.dto.course.name
                 else "the course"
             ),
+            "regeneration_requested": regeneration_requested,
         }
         complete_system_prompt = self.system_prompt_template.render(template_context)
         logger.info(complete_system_prompt)
@@ -282,7 +283,7 @@ class TutorSuggestionPipeline(
             str: The discussion of the post.
         """
         if post and post.content:
-            discussion = f"The posts question is: {post.content} by {post.user_id}\n"
+            discussion = f"The posts question is: {post.content} by a user with id {post.user_id}\n"
             if post.answers:
                 discussion += "The discussion of the post is:\n"
                 for answer in post.answers:
@@ -294,6 +295,26 @@ class TutorSuggestionPipeline(
             discussion = "No post content available."
 
         return discussion
+
+    def is_regeneration_by_user_requested(
+        self,
+        state: AgentPipelineExecutionState[
+            CommunicationTutorSuggestionPipelineExecutionDTO, TutorSuggestionVariant
+        ],
+    ) -> bool:
+        """
+        Check if the user has requested a regeneration of the tutor suggestion.
+
+        Args:
+            state (AgentPipelineExecutionState): The current state of the pipeline execution.
+
+        Returns:
+            bool: True if regeneration is requested, False otherwise.
+        """
+        return (
+            len(state.message_history) > 0
+            and state.message_history[-1].sender == IrisMessageRole.ARTIFACT
+        )
 
     def _generate_retrieval_query_text(
         self,

@@ -49,7 +49,7 @@ def convert_iris_message_to_langchain_message(
         case IrisMessageRole.SYSTEM:
             return SystemMessage(content=message.text_content)
         case IrisMessageRole.ARTIFACT:
-            return AIMessage(content=message.text_content)
+            return SystemMessage(content="Previous suggestion: " + message.text_content)
         case _:
             raise ValueError(f"Unknown message role: {iris_message.sender}")
 
