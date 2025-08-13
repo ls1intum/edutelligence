@@ -18,6 +18,8 @@ class WeaviateSettings(BaseModel):
 class Settings(BaseModel):
     api_keys: list[APIKeyConfig]
     weaviate: WeaviateSettings
+    sentry_dsn: str | None = None
+    env: str = "dev"
 
     @classmethod
     def _get_default_settings(cls):
@@ -31,7 +33,7 @@ class Settings(BaseModel):
             host="localhost", port=8080, grpc_port=50051
         )
 
-        return cls(api_keys=default_api_keys, weaviate=default_weaviate)
+        return cls(api_keys=default_api_keys, weaviate=default_weaviate, sentry_dsn=None, env="dev")
 
     @classmethod
     def get_settings(cls, use_defaults: bool = False):
@@ -84,11 +86,17 @@ class Settings(BaseModel):
             host=weaviate_host, port=weaviate_port, grpc_port=weaviate_grpc_port
         )
 
+        # Get Sentry DSN from environment (optional)
+        sentry_dsn = os.environ.get("SENTRY_DSN")
+        
+        # Get environment
+        env = os.environ.get("ENV", "dev")
+
         logger.info(
-            f"Loaded settings - API keys count: {len(api_keys)}, Weaviate: {weaviate_host}:{weaviate_port}"
+            f"Loaded settings - ENV: {env}, API keys count: {len(api_keys)}, Weaviate: {weaviate_host}:{weaviate_port}, Sentry: {'configured' if sentry_dsn else 'not configured'}"
         )
 
-        return cls(api_keys=api_keys, weaviate=weaviate_settings)
+        return cls(api_keys=api_keys, weaviate=weaviate_settings, sentry_dsn=sentry_dsn, env=env)
 
     @classmethod
     def get_api_keys(cls):
@@ -130,6 +138,14 @@ class SettingsProxy:
     @property
     def weaviate(self):
         return get_settings().weaviate
+
+    @property
+    def sentry_dsn(self):
+        return get_settings().sentry_dsn
+    
+    @property
+    def env(self):
+        return get_settings().env
 
 
 settings = SettingsProxy()
