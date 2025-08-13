@@ -21,18 +21,18 @@ def test_initial_texts_calls_add_embeddings(workflows):
     # Arrange
     texts = [
         ExerciseWithCompetencies(
-            id=str(uuid.uuid4()),
+            id=1,
             title="A",
             description="A",
             competencies=[],
-            course_id="course-1",
+            course_id=1,
         ),
         ExerciseWithCompetencies(
-            id=str(uuid.uuid4()),
+            id=2,
             title="B",
             description="B",
             competencies=[],
-            course_id="course-1",
+            course_id=1,
         ),
     ]
     workflows.weaviate_client.add_embeddings = MagicMock()
@@ -53,10 +53,10 @@ def test_initial_texts_calls_add_embeddings(workflows):
 def test_initial_competencies_calls_add_embeddings(workflows):
     competencies = [
         Competency(
-            id=str(uuid.uuid4()), title="T1", description="Desc1", course_id="course-1"
+            id=3, title="T1", description="Desc1", course_id=1
         ),
         Competency(
-            id=str(uuid.uuid4()), title="T2", description="Desc2", course_id="course-1"
+            id=4, title="T2", description="Desc2", course_id=1
         ),
     ]
     workflows.weaviate_client.add_embeddings = MagicMock()
@@ -193,9 +193,9 @@ def test_newTextPipeline(workflows):
                 "properties": {
                     "title": "K0",
                     "description": "description",
-                    "competency_id": "K0",
-                    "cluster_id": "K0",
-                    "course_id": "course-1",
+                    "competency_id": "1",
+                    "cluster_id": "1",
+                    "course_id": "1",
                 },
                 "vector": {"default": [0.0, 1.0]},
             }
@@ -209,4 +209,4 @@ def test_newTextPipeline(workflows):
         mock_embed.return_value = [1.0, 0.0]
         mock_cosine.side_effect = [0.99, 0.01]
         cid = workflows.new_text_suggestion("Some text", "course-1")
-    assert cid[0][0].id == "K0"
+    assert cid[0][0].id == 1

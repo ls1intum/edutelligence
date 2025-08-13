@@ -27,10 +27,10 @@ class PipelineWorkflows:
     def save_competency_to_weaviate(self, competency: Competency):
         embedding = generate_embeddings_openai(competency.description)
         properties = {
-            "competency_id": competency.id,
+            "competency_id": str(competency.id),
             "title": competency.title,
             "description": competency.description,
-            "course_id": competency.course_id,
+            "course_id": str(competency.course_id),
         }
         self.weaviate_client.add_embeddings(
             CollectionNames.COMPETENCY.value, embedding, properties
@@ -39,10 +39,10 @@ class PipelineWorkflows:
     def save_exercise_to_weaviate(self, exercise: ExerciseWithCompetencies):
         embedding = generate_embeddings_openai(exercise.description)
         properties = {
-            "exercise_id": exercise.id,
+            "exercise_id": str(exercise.id),
             "description": exercise.description,
-            "competency_ids": exercise.competencies,
-            "course_id": exercise.course_id,
+            "competency_ids": [str(comp_id) for comp_id in exercise.competencies],
+            "course_id": str(exercise.course_id),
         }
         self.weaviate_client.add_embeddings(
             CollectionNames.EXERCISE.value, embedding, properties
@@ -219,7 +219,7 @@ class PipelineWorkflows:
             self.delete_competency(competency)
         else:  # UPDATE operation
             existing_competency = self.weaviate_client.get_embeddings_by_property(
-                CollectionNames.COMPETENCY.value, "competency_id", competency.id
+                CollectionNames.COMPETENCY.value, "competency_id", str(competency.id)
             )
             if existing_competency:
                 assert (
@@ -228,10 +228,10 @@ class PipelineWorkflows:
                 competency_to_update = existing_competency[0]
                 embedings = generate_embeddings_openai(competency.description)
                 properties = {
-                    "competency_id": competency.id,
+                    "competency_id": str(competency.id),
                     "title": competency.title,
                     "description": competency.description,
-                    "course_id": competency.course_id,
+                    "course_id": str(competency.course_id),
                 }
                 self.weaviate_client.update_property_by_id(
                     CollectionNames.COMPETENCY.value,
@@ -247,7 +247,7 @@ class PipelineWorkflows:
     def delete_competency(self, competency: Competency):
         """Delete a competency from Weaviate and trigger re-clustering."""
         existing_competency = self.weaviate_client.get_embeddings_by_property(
-            CollectionNames.COMPETENCY.value, "competency_id", competency.id
+            CollectionNames.COMPETENCY.value, "competency_id", str(competency.id)
         )
         if existing_competency:
             assert (
@@ -345,13 +345,13 @@ class PipelineWorkflows:
     def new_text_suggestion(
             self,
             exercise_description: str,
-            course_id: str,
+            course_id: int,
             top_k: int = 3,
     ) -> list[tuple[Competency, float]]:
         """Process a new text entry and associate it with existing clusters."""
         exercise_embedding = generate_embeddings_openai(exercise_description)
         clusters = self.weaviate_client.get_embeddings_by_property(
-            CollectionNames.CLUSTERCENTER.value, "course_id", course_id
+            CollectionNames.CLUSTERCENTER.value, "course_id", str(course_id)
         )
 
         if not clusters:
@@ -392,7 +392,7 @@ class PipelineWorkflows:
             return topk_competencies
 
     def suggest_competencies_by_similarity(
-        self, exercise_description: str, course_id: str, top_k: int = 3
+        self, exercise_description: str, course_id: int, top_k: int = 3
     ) -> list[Competency]:
         """Suggest competencies based on embedding similarity without re-clustering.
 
@@ -421,7 +421,7 @@ class PipelineWorkflows:
             self.delete_exercise(exercise)
         else:  # UPDATE operation
             existing_exercise = self.weaviate_client.get_embeddings_by_property(
-                CollectionNames.EXERCISE.value, "exercise_id", exercise.id
+                CollectionNames.EXERCISE.value, "exercise_id", str(exercise.id)
             )
             if existing_exercise:
                 assert (
@@ -449,7 +449,7 @@ class PipelineWorkflows:
     def delete_exercise(self, exercise: ExerciseWithCompetencies):
         """Delete an exercise from Weaviate."""
         existing_exercise = self.weaviate_client.get_embeddings_by_property(
-            CollectionNames.EXERCISE.value, "exercise_id", exercise.id
+            CollectionNames.EXERCISE.value, "exercise_id", str(exercise.id)
         )
         if existing_exercise:
             assert (
