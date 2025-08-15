@@ -5,6 +5,7 @@ from typing import Optional
 from google.adk.agents import LlmAgent
 from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
+from google.genai import types
 from atlasml.config import get_settings
 from atlasml.adk_tools import atlas_artemis_tools
 
@@ -108,11 +109,17 @@ Remember: Never make changes without explicit user confirmation. Always provide 
                 pass
 
             # Use ADK runner to handle the conversation
+            # Format message as types.Content object
+            content = types.Content(
+                role='user',
+                parts=[types.Part(text=context_input)]
+            )
+            
             reply_parts = []
             async for event in self.runner.run_async(
                 user_id=self.user_id,
                 session_id=self.session_id,
-                new_message=context_input
+                new_message=content
             ):
                 if hasattr(event, 'text') and event.text:
                     reply_parts.append(event.text)
