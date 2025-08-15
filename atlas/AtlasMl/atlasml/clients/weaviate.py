@@ -53,8 +53,9 @@ COLLECTION_SCHEMAS = {
     },
     CollectionNames.CLUSTERCENTER.value: {
         "properties": [
-            {"name": "cluster_id", "data_type": DataType.UUID, "indexFilterable": True},
+            {"name": "cluster_id", "data_type": DataType.TEXT, "indexFilterable": True},
             {"name": "label_id", "data_type": DataType.TEXT, "indexFilterable": True},
+            {"name": "course_id", "data_type": DataType.TEXT, "indexFilterable": True},
         ]
     },
 }
