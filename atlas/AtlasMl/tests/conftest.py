@@ -167,7 +167,7 @@ class MockWeaviateQuery:
 
 class MockDeleteResult:
     """Mock delete operation result."""
-    
+
     def __init__(self, successful_count: int):
         self.successful = successful_count
 
@@ -400,7 +400,7 @@ class MockWeaviateClient:
         return "mock-uuid"
 
     def get_embeddings_by_property(
-        self, collection_name: str, property_name: str, property_value: str
+            self, collection_name: str, property_name: str, property_value: str
     ):
         """Mock get_embeddings_by_property method."""
         collection = self.collections.get(collection_name)
@@ -420,7 +420,7 @@ class MockWeaviateClient:
         return results
 
     def update_property_by_id(
-        self, collection_name: str, obj_id: str, properties: dict, vector=None
+            self, collection_name: str, obj_id: str, properties: dict, vector=None
     ):
         """Mock update_property_by_id method."""
         collection = self.collections.get(collection_name)
@@ -452,8 +452,8 @@ def mock_weaviate_client():
         with patch("atlasml.clients.weaviate.WeaviateClientSingleton._instance", None):
             # Patch get_weaviate_client to return our mock
             with patch(
-                "atlasml.ml.pipeline_workflows.get_weaviate_client",
-                return_value=mock_client,
+                    "atlasml.ml.pipeline_workflows.get_weaviate_client",
+                    return_value=mock_client,
             ):
                 yield mock_client
 
@@ -475,7 +475,6 @@ def weaviate_test_data(mock_weaviate_client):
                 "title": "Algebra",
                 "description": "Basic algebra concepts",
                 "course_id": "1",
-                "cluster_id": "cluster-1",
             },
         )
     )
@@ -487,32 +486,6 @@ def weaviate_test_data(mock_weaviate_client):
                 "title": "Calculus",
                 "description": "Basic calculus concepts",
                 "course_id": "1",
-                "cluster_id": "cluster-2",
-            },
-        )
-    )
-    # Add test data to cluster collection
-    cluster_collection = mock_weaviate_client.collections.get(
-        CollectionNames.CLUSTERCENTER.value
-    )
-    cluster_collection.add_object(
-        MockWeaviateObject(
-            uuid="cluster-1",
-            properties={
-                "cluster_id": "cluster-1",
-                "course_id": "1",
-                "label_id": "cluster-1",
-            },
-            vector=[0.1, 0.2, 0.3],
-        )
-    )
-    cluster_collection.add_object(
-        MockWeaviateObject(
-            uuid="cluster-2",
-            properties={
-                "cluster_id": "cluster-2",
-                "course_id": "1",
-                "label_id": "cluster-2",
             },
             vector=[0.2, 0.2, 0.2],
         )
