@@ -1,5 +1,7 @@
 import pytest
 import uuid
+
+from atlasml.clients.weaviate import CollectionNames
 from atlasml.ml.pipeline_workflows import PipelineWorkflows
 from atlasml.models.competency import ExerciseWithCompetencies, Competency
 from unittest.mock import patch
@@ -114,7 +116,7 @@ def test_initial_cluster_pipeline_integration(workflows):
             workflows.weaviate_client.add_embeddings(
                 "ClusterCenter",
                 [0.1, 0.2, 0.3],  # match your embedding size
-                {"cluster_id": "fake-cluster-id"},
+                {"cluster_id": "fake-cluster-id", "course_id": "course-1"},
             )
         clusters = workflows.weaviate_client.get_all_embeddings("ClusterCenter")
         assert clusters, "Clusters were not created!"
@@ -174,7 +176,7 @@ def test_initial_cluster_to_competencyPipeline_integration(workflows):
             workflows.weaviate_client.add_embeddings(
                 "ClusterCenter",
                 [0.1, 0.2, 0.3],  # match your embedding size
-                {"cluster_id": "fake-cluster-id"},
+                {"cluster_id": "fake-cluster-id", "course_id": "course-1"},
             )
         workflows.initial_cluster_to_competency_pipeline()
         clusters = workflows.weaviate_client.get_all_embeddings("ClusterCenter")
@@ -206,6 +208,18 @@ def test_newTextPipeline_integration(workflows):
             ),
         ]
         workflows.initial_competencies(competencies)
+        workflows.weaviate_client.add_embeddings(
+            "Competency",
+            [0.1, 0.2, 0.3],  # match your embedding size
+            {
+                "competency_id": 10,
+                "title": "Fake Competency",
+                "description": "Fake Competency Description",
+                "cluster_id": "fake-cluster-id",
+                "cluster_similarity_score": 0.9,
+                "course_id": "1"
+             },
+        )
         titles = [
             "Lists",
             "Arrays",
@@ -229,16 +243,15 @@ def test_newTextPipeline_integration(workflows):
             for i, title in enumerate(titles)
         ]
         workflows.initial_exercises(texts)
-        workflows.initial_cluster_pipeline()
         # Ensure at least one cluster exists for downstream code
-        if not workflows.weaviate_client.get_all_embeddings("ClusterCenter"):
-            workflows.weaviate_client.add_embeddings(
-                "ClusterCenter",
-                [0.1, 0.2, 0.3],  # match your embedding size
-                {"cluster_id": "fake-cluster-id"},
-            )
+        fake_cluster_id = workflows.weaviate_client.get_all_embeddings(CollectionNames.COMPETENCY.value)[3]["properties"]["cluster_id"]
+        workflows.weaviate_client.add_embeddings(
+            "ClusterCenter",
+            [0.1, 0.2, 0.3],  # match your embedding size
+            {"cluster_id": fake_cluster_id, "course_id": "1"},
+        )
         test_text = "object-oriented programming"
-        competency = workflows.newTextPipeline(test_text)
+        competency = workflows.new_text_suggestion(test_text, course_id=1)
         assert competency, "Competency ID not found!"
 
 

@@ -22,6 +22,10 @@ class ExerciseWithCompetencies(BaseModel):
     competencies: list[int]
     course_id: int
 
+class ClusterCenters(BaseModel):
+    cluster_id: str
+    course_id: int
+    vector_embedding: list[float]
 
 class GenerateCompetencyRequest(BaseModel):
     id: int
