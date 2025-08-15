@@ -129,6 +129,10 @@ class Settings(BaseModel):
             artemis_api_token=os.environ.get("ARTEMIS_API_TOKEN", "")
         )
 
+        # Get environment and Sentry settings
+        env = os.environ.get("ENV", "dev")
+        sentry_dsn = os.environ.get("SENTRY_DSN")
+
         logger.info(
             f"Loaded settings - ENV: {env}, API keys count: {len(api_keys)}, Weaviate: {weaviate_host}:{weaviate_port}, Sentry: {'configured' if sentry_dsn else 'not configured'}"
         )
