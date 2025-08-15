@@ -179,12 +179,12 @@ class ExerciseChatAgentPipeline(
 
         # Build tool list based on available data and permissions
         tool_list: list[Callable] = [
-            create_tool_get_submission_details(dto, callback),
-            create_tool_get_additional_exercise_details(dto, callback),
-            create_tool_get_build_logs_analysis(dto, callback),
-            create_tool_get_feedbacks(dto, callback),
-            create_tool_repository_files(dto, callback),
-            create_tool_file_lookup(dto, callback),
+            create_tool_get_submission_details(dto.submission, callback),
+            create_tool_get_additional_exercise_details(dto.exercise, callback),
+            create_tool_get_build_logs_analysis(dto.submission, callback),
+            create_tool_get_feedbacks(dto.submission, callback),
+            create_tool_repository_files(dto.submission, callback),
+            create_tool_file_lookup(dto.submission, callback),
         ]
 
         # Add lecture content retrieval if available
