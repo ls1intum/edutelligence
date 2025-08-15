@@ -11,6 +11,8 @@ data/*
 .env
 **/.env
 **/data/*
+!**/data/exercises/
+!**/data/samples/
 test-results/*
 .coverage*
 **/.coverage*
