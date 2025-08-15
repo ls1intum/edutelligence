@@ -492,7 +492,7 @@ class PipelineWorkflows:
             return topk_competencies
 
     def suggest_competencies_by_similarity(
-            self, exercise_description: str, course_id: str, top_k: int = 5
+            self, exercise_description: str, course_id: int, top_k: int = 3
     ) -> list[Competency]:
         """Suggest competencies based on embedding similarity without re-clustering.
 
