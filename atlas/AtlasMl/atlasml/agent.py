@@ -3,8 +3,8 @@
 import logging
 from typing import Optional
 from google.adk.agents import LlmAgent
-from google.adk.core import Runner, Event
-from google.adk.core.session import MemorySessionService
+from google.adk.runners import Runner
+from google.adk.sessions import InMemorySessionService
 from atlasml.config import get_settings
 from atlasml.adk_tools import atlas_artemis_tools
 
@@ -33,7 +33,7 @@ class AIAgent:
         )
 
         # Initialize session service and runner
-        self.session_service = MemorySessionService()
+        self.session_service = InMemorySessionService()
         self.runner = Runner(
             agent=self.agent,
             app_name="AtlasArtemisCoordinator",
@@ -97,11 +97,15 @@ Remember: Never make changes without explicit user confirmation. Always provide 
             logger.info(f"Processing request: {user_input[:50]}...")
 
             # Create session if it doesn't exist
-            await self.session_service.create_session(
-                app_name="AtlasArtemisCoordinator",
-                user_id=self.user_id,
-                session_id=self.session_id
-            )
+            try:
+                await self.session_service.create_session(
+                    app_name="AtlasArtemisCoordinator",
+                    user_id=self.user_id,
+                    session_id=self.session_id
+                )
+            except Exception:
+                # Session might already exist, continue
+                pass
 
             # Use ADK runner to handle the conversation
             reply_parts = []
@@ -140,7 +144,7 @@ Remember: Never make changes without explicit user confirmation. Always provide 
         """Reset the agent's conversation memory."""
         try:
             # Reset session service memory
-            self.session_service = MemorySessionService()
+            self.session_service = InMemorySessionService()
             
             # Recreate the agent with same configuration
             self.agent = LlmAgent(
