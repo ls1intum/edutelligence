@@ -109,7 +109,7 @@ class TestArtemisAPIClient:
         mock_response = MagicMock()
         mock_response.status_code = 200
 
-        with patch('httpx.AsyncClient') as mock_client:
+        with patch('httpx.Client') as mock_client:
             mock_client.return_value.__aenter__.return_value.get.return_value = mock_response
 
             result = await artemis_client.health_check()
@@ -118,7 +118,7 @@ class TestArtemisAPIClient:
     @pytest.mark.asyncio
     async def test_health_check_failure(self, artemis_client):
         """Test failed health check."""
-        with patch('httpx.AsyncClient') as mock_client:
+        with patch('httpx.Client') as mock_client:
             mock_client.return_value.__aenter__.return_value.get.side_effect = Exception("Connection failed")
 
             result = await artemis_client.health_check()
