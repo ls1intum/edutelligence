@@ -3,6 +3,8 @@
 import logging
 from typing import Optional
 from google.adk.agents import LlmAgent
+from google.adk.core import Runner, Event
+from google.adk.core.session import MemorySessionService
 from atlasml.config import get_settings
 from atlasml.adk_tools import atlas_artemis_tools
 
@@ -30,9 +32,19 @@ class AIAgent:
             model=model_name,
         )
 
+        # Initialize session service and runner
+        self.session_service = MemorySessionService()
+        self.runner = Runner(
+            agent=self.agent,
+            app_name="AtlasArtemisCoordinator",
+            session_service=self.session_service
+        )
+        
         # Compatibility attributes for existing code
         self.pending_confirmation = None  # ADK handles confirmations internally
         self.model_name = model_name
+        self.user_id = "default_user"
+        self.session_id = "default_session"
 
         logger.info("ADK AtlasArtemisAgent initialized successfully")
 
@@ -84,10 +96,24 @@ Remember: Never make changes without explicit user confirmation. Always provide 
 
             logger.info(f"Processing request: {user_input[:50]}...")
 
-            # Use ADK agent to handle the conversation
-            response = await self.agent.run(context_input)
+            # Create session if it doesn't exist
+            await self.session_service.create_session(
+                app_name="AtlasArtemisCoordinator",
+                user_id=self.user_id,
+                session_id=self.session_id
+            )
 
-            reply = response.text
+            # Use ADK runner to handle the conversation
+            reply_parts = []
+            async for event in self.runner.run_async(
+                user_id=self.user_id,
+                session_id=self.session_id,
+                new_message=context_input
+            ):
+                if hasattr(event, 'text') and event.text:
+                    reply_parts.append(event.text)
+
+            reply = ''.join(reply_parts) if reply_parts else "No response generated"
 
             logger.info("Request processed successfully")
             return reply
@@ -113,9 +139,9 @@ Remember: Never make changes without explicit user confirmation. Always provide 
     def reset_memory(self):
         """Reset the agent's conversation memory."""
         try:
-            # Get current configuration
-            current_model = self.agent.model
-
+            # Reset session service memory
+            self.session_service = MemorySessionService()
+            
             # Recreate the agent with same configuration
             self.agent = LlmAgent(
                 name="AtlasArtemisCoordinator",
@@ -123,6 +149,13 @@ Remember: Never make changes without explicit user confirmation. Always provide 
                 instruction=self._get_system_instruction(),
                 description="AI assistant for Atlas competency management and Artemis course management",
                 tools=atlas_artemis_tools,
+            )
+            
+            # Recreate the runner with new session service
+            self.runner = Runner(
+                agent=self.agent,
+                app_name="AtlasArtemisCoordinator",
+                session_service=self.session_service
             )
 
             logger.info("Agent memory reset successfully")
