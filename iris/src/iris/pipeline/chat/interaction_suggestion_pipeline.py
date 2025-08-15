@@ -1,7 +1,6 @@
 import logging
 import traceback
-from datetime import datetime
-from typing import List, Optional
+from typing import List
 
 from langchain_core.messages import AIMessage
 from langchain_core.output_parsers import JsonOutputParser
@@ -157,10 +156,3 @@ class InteractionSuggestionPipeline(SubPipeline):
             )
             traceback.print_exc()
             return []
-
-
-def datetime_to_string(dt: Optional[datetime]) -> str:
-    if dt is None:
-        return "No date provided"
-    else:
-        return dt.strftime("%Y-%m-%d %H:%M:%S")

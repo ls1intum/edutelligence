@@ -1,7 +1,7 @@
 import logging
 from abc import ABC, abstractmethod
 from threading import Thread
-from typing import Any, Callable, Generic, Optional, TypeVar
+from typing import Any, Callable, Generic, List, Optional, TypeVar
 
 from langchain.agents import AgentExecutor, create_tool_calling_agent
 from langchain_core.prompts import ChatPromptTemplate
@@ -10,6 +10,7 @@ from memiris.domain.memory import Memory
 from iris.common.memiris_setup import MemirisWrapper
 from iris.common.message_converters import convert_iris_message_to_langchain_message
 from iris.common.pyris_message import IrisMessageRole, PyrisMessage
+from iris.common.token_usage_dto import TokenUsageDTO
 from iris.domain.data.text_message_content_dto import TextMessageContentDTO
 from iris.domain.variant.abstract_variant import AbstractAgentVariant
 from iris.llm import CompletionArguments, ModelVersionRequestHandler
@@ -43,6 +44,7 @@ class AgentPipelineExecutionState(Generic[DTO, VARIANT]):
     result: str
     llm: Any | None
     prompt: ChatPromptTemplate | None
+    tokens: List[TokenUsageDTO]
 
 
 class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
@@ -60,7 +62,6 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         Initialize the agent pipeline.
         """
         super().__init__(*args, **kwargs)
-        pass
 
     # ========================================
     # === MUST override (abstract methods) ===
@@ -97,6 +98,21 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
     # ========================================
     # === CAN override (optional methods) ===
     # ========================================
+
+    def _track_tokens(
+        self,
+        state: AgentPipelineExecutionState[DTO, VARIANT],
+        tokens: Optional[TokenUsageDTO],
+    ) -> None:
+        """
+        Protected method for subclasses to track tokens from sub-pipelines.
+
+        Args:
+            state: The current pipeline execution state
+            tokens: Token usage to track (can be None)
+        """
+        if tokens is not None:
+            state.tokens.append(tokens)
 
     def get_agent_params(  # pylint: disable=unused-argument
         self, state: AgentPipelineExecutionState[DTO, VARIANT]
@@ -259,7 +275,11 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         """
         final_output: Optional[str] = None
         for step in agent_executor.iter(params):
-            # Allow subclasses to process each step (e.g., token accounting)
+            # Track LLM tokens
+            if hasattr(state, "llm") and state.llm and hasattr(state.llm, "tokens"):
+                state.tokens.append(state.llm.tokens)
+
+            # Allow subclasses to process each step
             try:
                 self.on_agent_step(state, step)
             except Exception as exc:
@@ -285,6 +305,7 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         state.result = ""
         state.llm = None
         state.prompt = None
+        state.tokens = []
         state.memiris_wrapper = MemirisWrapper(
             state.db.client, self.get_memiris_tenant(state.dto)
         )
