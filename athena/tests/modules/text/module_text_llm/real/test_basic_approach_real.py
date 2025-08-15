@@ -35,6 +35,8 @@ async def test_generate_suggestions_algorithm_explanation(real_config):
         config=real_config,
         debug=False,
         is_graded=True,
+        learner_profile=None,
+        latest_submission=None,
     )
 
     for feedback in feedbacks:
@@ -102,6 +104,8 @@ async def test_generate_suggestions_code_documentation(real_config):
         config=real_config,
         debug=False,
         is_graded=True,
+        learner_profile=None,
+        latest_submission=None,
     )
 
     for feedback in feedbacks:
@@ -153,6 +157,8 @@ async def test_generate_suggestions_design_pattern(real_config):
         config=real_config,
         debug=False,
         is_graded=True,
+        learner_profile=None,
+        latest_submission=None,
     )
 
     for feedback in feedbacks:
