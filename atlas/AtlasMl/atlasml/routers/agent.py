@@ -15,12 +15,12 @@ from atlasml.dependencies import TokenValidator
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/v1/agent", tags=["agent"])
+router = APIRouter(prefix="", tags=["agent"])
 
 class AgentChatRequest(BaseModel):
     message: str
     courseId: Optional[int] = None
-    sessionId: Optional[str] = "default"  # Keep for Java compatibility but ignore
+    sessionId: Optional[str] = "default"
 
 class AgentChatResponse(BaseModel):
     reply: str
@@ -46,7 +46,7 @@ def get_agent_instance() -> "AIAgent":
 @router.post("/chat", response_model=AgentChatResponse, dependencies=[Depends(TokenValidator)])
 async def chat_with_agent(request: AgentChatRequest) -> AgentChatResponse:
     """
-    Chat endpoint for the AI agent - compatible with Artemis integration.
+    Chat endpoint for the AI agent
     """
     try:
         logger.info(f"Agent chat request: {request.message[:100]}...")
@@ -80,13 +80,11 @@ async def agent_health():
             }
         try:
             agent = get_agent_instance()
-            atlas_ok = await agent.atlas_client.health_check()
             artemis_ok = await agent.artemis_client.health_check()
-            status = "healthy" if atlas_ok and artemis_ok else "degraded"
+            status = "healthy" if artemis_ok else "degraded"
             return {
                 "status": status,
                 "agent_available": True,
-                "atlas_connected": atlas_ok,
                 "artemis_connected": artemis_ok
             }
         except Exception as e:
