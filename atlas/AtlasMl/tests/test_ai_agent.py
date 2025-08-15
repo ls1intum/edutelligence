@@ -133,10 +133,10 @@ class TestAIAgent:
         from atlasml.models.competency import Competency
         mock_competencies = [
             Competency(
-                id="comp-1",
+                id=1,
                 title="Test Competency",
                 description="Test description",
-                course_id="course-1"
+                course_id=1
             )
         ]
 
@@ -157,7 +157,7 @@ class TestAIAgent:
             # Verify result contains competency information
             assert "Test Competency" in result
             assert "Test description" in result
-            assert "comp-1" in result
+            assert "1" in result
 
     def test_atlas_ml_functions_without_client_mocking(self, mock_weaviate_client):
         """Test direct use of AtlasML functions without mocking any clients - full integration."""
@@ -172,10 +172,10 @@ class TestAIAgent:
             mock_pipeline_instance = MagicMock()
             mock_pipeline_instance.suggest_competencies_by_similarity.return_value = [
                 Competency(
-                    id="direct-comp-1",
+                    id=1,
                     title="Direct Function Test",
                     description="Testing direct function call",
-                    course_id="course-1"
+                    course_id=1
                 )
             ]
             mock_get_pipeline.return_value = mock_pipeline_instance
