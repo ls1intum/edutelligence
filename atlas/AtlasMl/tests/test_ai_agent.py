@@ -1,8 +1,6 @@
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 
-from tests.conftest import mock_generate_embeddings_openai, mock_weaviate_client
-
 @pytest.fixture
 def mock_adk_agent():
     """Mock ADK components for testing."""
