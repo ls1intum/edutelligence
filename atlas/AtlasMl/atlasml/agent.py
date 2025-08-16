@@ -27,6 +27,7 @@ class AIAgent:
             instruction=self._get_system_instruction(),
             description="AI assistant for Atlas competency management",
             tools=atlas_artemis_tools,
+            model=model_name,
         )
 
         # Compatibility attributes for existing code
@@ -118,7 +119,7 @@ Remember: Never make changes without explicit user confirmation. Always provide 
             # Recreate the agent with same configuration
             self.agent = LlmAgent(
                 name="AtlasArtemisCoordinator",
-                model=current_model,
+                model=self.model_name,
                 instruction=self._get_system_instruction(),
                 description="AI assistant for Atlas competency management and Artemis course management",
                 tools=atlas_artemis_tools,

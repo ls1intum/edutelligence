@@ -1,7 +1,7 @@
 import httpx
 import logging
 from typing import List, Dict, Any, Optional
-from ..config import AgentConfig
+from ..config import agent_config
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
@@ -32,8 +32,8 @@ class ArtemisAPIClient:
     """Client for interacting with Artemis API for course and exercise operations."""
 
     def __init__(self, base_url: str = None, api_token: str = None):
-        self.base_url = base_url or AgentConfig.ARTEMIS_API_URL or "http://localhost:8080"
-        self.api_token = api_token or AgentConfig.ARTEMIS_API_TOKEN
+        self.base_url = (base_url or agent_config.ARTEMIS_API_URL or "http://localhost:8080").rstrip("/")
+        self.api_token = api_token or agent_config.ARTEMIS_API_TOKEN
 
         if not self.api_token:
             logger.warning("No Artemis API token provided - requests may fail")
@@ -155,7 +155,7 @@ class ArtemisAPIClient:
         """
         try:
             async with httpx.Client(timeout=10.0) as client:
-                response = client.get(
+                response = await client.get(
                     f"{self.base_url}/api/health",
                     headers={"Accept": "application/json"}
                 )
