@@ -1,6 +1,6 @@
 import pytest
 import httpx
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, AsyncMock
 import sys
 import os
 
@@ -47,8 +47,10 @@ class TestArtemisAPIClient:
         mock_response.status_code = 404
         mock_response.text = "Not Found"
 
-        with patch('httpx.Client') as mock_client:
-            mock_client.return_value.__enter__.return_value.post.return_value = mock_response
+        with patch('httpx.AsyncClient') as mock_client:
+            mock_instance = MagicMock()
+            mock_instance.get = AsyncMock(return_value=mock_response)
+            mock_client.return_value.__aenter__.return_value = mock_instance
 
             result = artemis_client.apply_competency_mapping(sample_mapping)
 
@@ -118,8 +120,10 @@ class TestArtemisAPIClient:
     @pytest.mark.asyncio
     async def test_health_check_failure(self, artemis_client):
         """Test failed health check."""
-        with patch('httpx.Client') as mock_client:
-            mock_client.return_value.__aenter__.return_value.get.side_effect = Exception("Connection failed")
+        with patch('httpx.AsyncClient') as mock_client:
+            mock_instance = MagicMock()
+            mock_instance.get = AsyncMock(side_effect=Exception("Connection failed"))
+            mock_client.return_value.__aenter__.return_value = mock_instance
 
             result = await artemis_client.health_check()
             assert result is False

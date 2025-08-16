@@ -36,17 +36,17 @@ class PipelineWorkflows:
             raise ValueError("No exercise or competency found for mapping")
 
         exercise = ExerciseWithCompetencies(
-            id=exercise_data[0]["id"],
+            id=int(exercise_data[0]["properties"]["exercise_id"]),
             title="",
             description=exercise_data[0]["properties"]["description"],
             competencies=exercise_data[0]["properties"]["competency_ids"],
             course_id=exercise_data[0]["properties"]["course_id"],
         )
         competency = Competency(
-            id=competency_data[0]["properties"]["competency_id"],
+            id=int(competency_data[0]["properties"]["competency_id"]),
             title=competency_data[0]["properties"]["title"],
             description=competency_data[0]["properties"]["description"],
-            course_id=competency_data[0]["properties"]["course_id"],
+            course_id=int(competency_data[0]["properties"]["course_id"]),
         )
 
         if competency.id not in exercise.competencies:
@@ -55,7 +55,7 @@ class PipelineWorkflows:
         properties = {
             "exercise_id": exercise.id,
             "description": exercise.description,
-            "competency_ids": exercise.competencies,
+            "competency_ids": [str(cid) for cid in exercise.competencies],
             "course_id": exercise.course_id,
         }
         self.weaviate_client.update_property_by_id(
