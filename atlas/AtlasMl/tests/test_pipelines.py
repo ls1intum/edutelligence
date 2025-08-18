@@ -254,6 +254,231 @@ def test_newTextPipeline_integration(workflows):
         competency = workflows.new_text_suggestion(test_text, course_id=1)
         assert competency, "Competency ID not found!"
 
+    def test_suggest_competency_relations_integration(workflows):
+        """Test the suggest_competency_relations pipeline method"""
+        with patch("atlasml.ml.pipeline_workflows.generate_competency_relationship") as mock_generate:
+            # Setup test competencies
+            competencies = [
+                Competency(
+                    id=10,
+                    title="Python Programming",
+                    description="Basic Python programming skills including variables, loops, and functions",
+                    course_id=1,
+                ),
+                Competency(
+                    id=11,
+                    title="Data Structures",
+                    description="Understanding of lists, dictionaries, sets and their applications",
+                    course_id=1,
+                ),
+                Competency(
+                    id=12,
+                    title="Algorithm Design",
+                    description="Ability to design and analyze algorithms for problem solving",
+                    course_id=1,
+                )
+            ]
+
+            # Add competencies to workflows
+            workflows.initial_competencies(competencies)
+
+            # Mock the relationship generation to return a predictable matrix
+            # 3x3 matrix with different relation types
+            mock_relationship_matrix = np.array([
+                ["NONE", "REQUIRES", "EXTENDS"],
+                ["MATCH", "NONE", "REQUIRES"],
+                ["NONE", "EXTENDS", "NONE"]
+            ])
+            mock_generate.return_value = mock_relationship_matrix
+
+            # Test the suggest_competency_relations method
+            result = workflows.suggest_competency_relations(course_id=1)
+
+            # Verify the result structure
+            assert hasattr(result, 'relations'), "Result should have relations attribute"
+            assert isinstance(result.relations, list), "Relations should be a list"
+
+            # Should have 5 relations (excluding NONE diagonal and NONE entries)
+            # REQUIRES: (0,1), EXTENDS: (0,2), MATCH: (1,0), REQUIRES: (1,2), EXTENDS: (2,1)
+            assert len(result.relations) == 5, f"Expected 5 relations, got {len(result.relations)}"
+
+            # Verify specific relations
+            relation_dict = {
+                (r.tail_id, r.head_id): r.relation_type.value
+                for r in result.relations
+            }
+
+            # Check expected relations based on our mock matrix
+            expected_relations = {
+                ("10", "11"): "REQUIRES",  # competency 10 -> 11
+                ("10", "12"): "EXTENDS",  # competency 10 -> 12
+                ("11", "10"): "MATCH",  # competency 11 -> 10
+                ("11", "12"): "REQUIRES",  # competency 11 -> 12
+                ("12", "11"): "EXTENDS",  # competency 12 -> 11
+            }
+
+            for (tail, head), expected_type in expected_relations.items():
+                assert (tail, head) in relation_dict, f"Missing relation {tail} -> {head}"
+                assert relation_dict[(tail, head)] == expected_type, \
+                    f"Expected {expected_type} for {tail}->{head}, got {relation_dict[(tail, head)]}"
+
+            # Verify generate_competency_relationship was called correctly
+            mock_generate.assert_called_once()
+            call_args = mock_generate.call_args
+            embeddings_arg = call_args[0][0]  # First positional argument
+            descriptions_arg = call_args[1]  # Second positional argument
+
+            # Should be called with 3 embeddings and 3 descriptions
+            assert len(embeddings_arg) == 3, "Should pass 3 embeddings"
+            assert len(descriptions_arg) == 3, "Should pass 3 descriptions"
+
+    def test_suggest_competency_relations_empty_course(workflows):
+        """Test suggest_competency_relations with no competencies"""
+        with patch("atlasml.ml.pipeline_workflows.generate_competency_relationship") as mock_generate:
+            # Test with non-existent course_id
+            result = workflows.suggest_competency_relations(course_id=999)
+
+            # Should return empty relations
+            assert hasattr(result, 'relations'), "Result should have relations attribute"
+            assert isinstance(result.relations, list), "Relations should be a list"
+            assert len(result.relations) == 0, "Should return empty relations for non-existent course"
+
+            # generate_competency_relationship should not be called
+            mock_generate.assert_not_called()
+
+    def test_suggest_competency_relations_single_competency(workflows):
+        """Test suggest_competency_relations with only one competency"""
+        with patch("atlasml.ml.pipeline_workflows.generate_competency_relationship") as mock_generate:
+            # Setup single competency
+            single_competency = [
+                Competency(
+                    id=20,
+                    title="Single Competency",
+                    description="The only competency in this course",
+                    course_id=2,
+                )
+            ]
+
+            workflows.initial_competencies(single_competency)
+
+            # Mock should return 1x1 matrix with NONE
+            mock_generate.return_value = np.array([["NONE"]])
+
+            result = workflows.suggest_competency_relations(course_id=2)
+
+            # Should return empty relations (no relations for single competency)
+            assert len(result.relations) == 0, "Single competency should result in no relations"
+
+            # generate_competency_relationship should still be called
+            mock_generate.assert_called_once()
+
+    def test_suggest_competency_relations_two_competencies(workflows):
+        """Test suggest_competency_relations with exactly two competencies"""
+        with patch("atlasml.ml.pipeline_workflows.generate_competency_relationship") as mock_generate:
+            # Setup two competencies
+            two_competencies = [
+                Competency(
+                    id=30,
+                    title="First Competency",
+                    description="First competency description",
+                    course_id=3,
+                ),
+                Competency(
+                    id=31,
+                    title="Second Competency",
+                    description="Second competency description",
+                    course_id=3,
+                )
+            ]
+
+            workflows.initial_competencies(two_competencies)
+
+            # Mock 2x2 matrix
+            mock_generate.return_value = np.array([
+                ["NONE", "REQUIRES"],
+                ["EXTENDS", "NONE"]
+            ])
+
+            result = workflows.suggest_competency_relations(course_id="3")
+
+            # Should have 2 relations
+            assert len(result.relations) == 2, f"Expected 2 relations, got {len(result.relations)}"
+
+            # Verify the specific relations
+            relation_types = [(r.tail_id, r.head_id, r.relation_type.value) for r in result.relations]
+            expected = [("30", "31", "REQUIRES"), ("31", "30", "EXTENDS")]
+
+            for expected_relation in expected:
+                assert expected_relation in relation_types, f"Missing expected relation: {expected_relation}"
+
+    def test_suggest_competency_relations_all_none_matrix(workflows):
+        """Test suggest_competency_relations when all relations are NONE"""
+        with patch("atlasml.ml.pipeline_workflows.generate_competency_relationship") as mock_generate:
+            # Setup competencies
+            competencies = [
+                Competency(
+                    id=40,
+                    title="Independent Competency 1",
+                    description="First independent competency",
+                    course_id=4,
+                ),
+                Competency(
+                    id=41,
+                    title="Independent Competency 2",
+                    description="Second independent competency",
+                    course_id=4,
+                )
+            ]
+
+            workflows.initial_competencies(competencies)
+
+            # Mock matrix with all NONE values
+            mock_generate.return_value = np.array([
+                ["NONE", "NONE"],
+                ["NONE", "NONE"]
+            ])
+
+            result = workflows.suggest_competency_relations(course_id="4")
+
+            # Should return empty relations (all NONE filtered out)
+            assert len(result.relations) == 0, "All NONE relations should result in empty list"
+
+    def test_suggest_competency_relations_large_course(workflows):
+        """Test suggest_competency_relations with many competencies"""
+        with patch("atlasml.ml.pipeline_workflows.generate_competency_relationship") as mock_generate:
+            # Setup 5 competencies
+            many_competencies = [
+                Competency(
+                    id=50 + i,
+                    title=f"Competency {i + 1}",
+                    description=f"Description for competency {i + 1}",
+                    course_id=5,
+                )
+                for i in range(5)
+            ]
+
+            workflows.initial_competencies(many_competencies)
+
+            # Create a 5x5 matrix with some relations
+            matrix = np.full((5, 5), "NONE", dtype=object)
+            matrix[0, 1] = "REQUIRES"
+            matrix[1, 2] = "EXTENDS"
+            matrix[2, 3] = "MATCH"
+            matrix[3, 4] = "REQUIRES"
+            matrix[4, 0] = "EXTENDS"
+
+            mock_generate.return_value = matrix
+
+            result = workflows.suggest_competency_relations(course_id="5")
+
+            # Should have 5 non-NONE relations
+            assert len(result.relations) == 5, f"Expected 5 relations, got {len(result.relations)}"
+
+            # Verify all relation types are represented
+            relation_types = {r.relation_type.value for r in result.relations}
+            expected_types = {"REQUIRES", "EXTENDS", "MATCH"}
+            assert relation_types == expected_types, f"Expected {expected_types}, got {relation_types}"
+
 
 class FakeWeaviateClient:
     def __init__(self):

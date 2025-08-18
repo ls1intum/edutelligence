@@ -1,4 +1,6 @@
 import uuid
+from typing import Optional
+
 import numpy as np
 import uuid
 
@@ -6,11 +8,12 @@ from atlasml.clients.weaviate import get_weaviate_client, CollectionNames
 from atlasml.ml import update_cluster_centroid_on_removal, update_cluster_centroid_on_addition
 from atlasml.ml.clustering import apply_hdbscan, SimilarityMetric, apply_kmeans
 from atlasml.ml.embeddings import generate_embeddings_openai
+from atlasml.ml.generate_competency_relationship import generate_competency_relationship
 from atlasml.ml.similarity_measures import compute_cosine_similarity
 from atlasml.models.competency import (
     ExerciseWithCompetencies,
     Competency,
-    OperationType, ClusterCenters,
+    OperationType, ClusterCenters, CompetencyRelation, CompetencyRelationSuggestionResponse, RelationType,
 )
 import logging
 
@@ -560,3 +563,32 @@ class PipelineWorkflows:
                 updated_centroid.tolist()
             )
             logger.info(f"Updated cluster centroid for {action} competency {comp_id}")
+
+    def suggest_competency_relations(self, course_id: str) -> CompetencyRelationSuggestionResponse:
+        """Suggest competency relations based on embedding similarity."""
+        course_competencies = self.weaviate_client.get_embeddings_by_property(CollectionNames.COMPETENCY.value, "course_id", course_id)
+        competencies: list[Competency] = [
+            Competency(id=competency["properties"]["competency_id"],
+                       title=competency["properties"]["title"],
+                       description=competency["properties"]["description"],
+                       course_id=competency["properties"].get("course_id", "unknown"))
+            for competency in course_competencies
+        ]
+        descriptions: list[str] = [i.description for i in competencies]
+        embeddings = np.array(
+            [competency["vector"]["default"]
+            for competency in course_competencies]
+        )
+        relationship_matrix = generate_competency_relationship(embeddings, descriptions)
+        competencyRelationSuggestionResponse = CompetencyRelationSuggestionResponse(relations=[])
+        for i in range(len(relationship_matrix)):
+            for j in range(len(relationship_matrix)):
+                relation_type: Optional[RelationType] = None
+                if relationship_matrix[i][j] == "NONE": continue
+                if relationship_matrix[i][j] == "MATCH": relation_type = RelationType.MATCH
+                if relationship_matrix[i][j] == "REQUIRE": relation_type = RelationType.REQUIRES
+                if relationship_matrix[i][j] == "EXTEND": relation_type = RelationType.EXTEND
+                relation: CompetencyRelation = CompetencyRelation(tail_id=competencies[j].id, head_id=competencies[i].id, relation_type=relation_type)
+                competencyRelationSuggestionResponse.relations.append(relation)
+        return competencyRelationSuggestionResponse
+

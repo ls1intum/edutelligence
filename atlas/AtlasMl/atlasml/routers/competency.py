@@ -156,51 +156,11 @@ async def suggest_competency_relations(course_id: int) -> CompetencyRelationSugg
         validated_course_id = str(course_id)
         logger.info(f"Suggesting competency relations for course_id={validated_course_id}")
 
-        client = get_weaviate_client()
-        objs = client.get_embeddings_by_property(
-            CollectionNames.COMPETENCY.value, "course_id", validated_course_id
-        )
+        pipeline = PipelineWorkflows()
+        relations = pipeline.suggest_competency_relations(validated_course_id)
 
-        # Collect domain competency IDs; fallback to object UUID if property missing
-        comp_ids = []
-        for obj in objs:
-            props = obj.get("properties", {}) or {}
-            comp_id = props.get("competency_id") or obj.get("id")
-            if comp_id:
-                comp_ids.append(int(comp_id))
-
-        # Not enough competencies to form relations
-        if len(comp_ids) < 2:
-            logger.info("Not enough competencies to suggest relations")
-            return CompetencyRelationSuggestionResponse(relations=[])
-
-        # Randomly create a limited number of unique directed relations
-        max_possible = len(comp_ids) * (len(comp_ids) - 1)
-        target_count = min(10, max(1, max_possible // 5))  # cap and keep it small
-        relation_types = [RelationType.MATCH, RelationType.EXTEND, RelationType.REQUIRES]
-
-        seen_pairs = set()
-        relations = []
-        attempts = 0
-        max_attempts = max_possible * 2
-
-        while len(relations) < target_count and attempts < max_attempts:
-            attempts += 1
-            tail_id, head_id = random.sample(comp_ids, 2)
-            pair_key = (tail_id, head_id)
-            if pair_key in seen_pairs:
-                continue
-            seen_pairs.add(pair_key)
-            relations.append(
-                CompetencyRelation(
-                    tail_id=tail_id,
-                    head_id=head_id,
-                    relation_type=random.choice(relation_types),
-                )
-            )
-
-        logger.info(f"Suggested {len(relations)} competency relations")
-        return CompetencyRelationSuggestionResponse(relations=relations)
+        logger.info(f"Suggested {len(relations.relations)} competency relations")
+        return relations
 
     except HTTPException:
         # Re-raise HTTP exceptions
