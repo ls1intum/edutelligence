@@ -11,19 +11,19 @@ from llm_core.utils.llm_utils import (
     num_tokens_from_prompt,
 )
 from llm_core.core.predict_and_parse import predict_and_parse
-from module_text_llm.basic_approach import BasicApproachConfig
+from module_text_llm.default_approach import DefaultApproachConfig
 from module_text_llm.registry import register_approach
 from module_text_llm.helpers.utils import (
     add_sentence_numbers,
     get_index_range_from_line_range,
     format_grading_instructions,
 )
-from module_text_llm.basic_approach.schemas import AssessmentModel, SubmissionAnalysis
+from module_text_llm.default_approach.schemas import AssessmentModel, SubmissionAnalysis
 
 
 def _setup_learner_profile(
     learner_profile: Optional[LearnerProfile], 
-    config: BasicApproachConfig
+    config: DefaultApproachConfig
 ) -> LearnerProfile:
     """Setup and validate learner profile with fallbacks."""
     if learner_profile is None:
@@ -63,7 +63,7 @@ def _prepare_analysis_prompt_input(
 async def _analyze_submission(
     exercise: Exercise,
     submission: Submission,
-    config: BasicApproachConfig,
+    config: DefaultApproachConfig,
     prompt_input: dict,
     debug: bool,
 ) -> Optional[SubmissionAnalysis]:
@@ -119,7 +119,7 @@ async def _analyze_submission(
 async def _generate_feedback(
     exercise: Exercise,
     submission: Submission,
-    config: BasicApproachConfig,
+    config: DefaultApproachConfig,
     *,
     submission_analysis: SubmissionAnalysis,
     learner_profile: LearnerProfile,
@@ -206,11 +206,11 @@ def _convert_to_feedback_objects(
     return feedbacks
 
 
-@register_approach("basic")
+@register_approach("default")
 async def generate_suggestions(
     exercise: Exercise,
     submission: Submission,
-    config: BasicApproachConfig,
+    config: DefaultApproachConfig,
     *,
     debug: bool,
     is_graded: bool,

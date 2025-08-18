@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import patch
-from module_text_llm.basic_approach.generate_suggestions import generate_suggestions
+from module_text_llm.default_approach.generate_suggestions import generate_suggestions
 from athena.text import Exercise, Submission, Feedback
 from athena.schemas.exercise_type import ExerciseType
 from modules.text.module_text_llm.mock.utils.mock_env import mock_sent_tokenize
@@ -39,8 +39,8 @@ def mock_submission(mock_exercise):
 
 
 @pytest.mark.asyncio
-async def test_generate_suggestions_basic(mock_exercise, mock_submission, mock_config):
-    """Test basic feedback generation with a simple submission."""
+async def test_generate_suggestions_default(mock_exercise, mock_submission, mock_config):
+    """Test default feedback generation with a simple submission."""
     mock_result = MockAssessmentModel(
         feedbacks=[
             MockFeedbackModel(
@@ -55,7 +55,7 @@ async def test_generate_suggestions_basic(mock_exercise, mock_submission, mock_c
 
     # Patch the predict_and_parse function to return our mock result
     with patch(
-        "module_text_llm.basic_approach.generate_suggestions.predict_and_parse",
+        "module_text_llm.default_approach.generate_suggestions.predict_and_parse",
         return_value=mock_result,
     ):
         mock_sent_tokenize.return_value = [
@@ -90,7 +90,7 @@ async def test_generate_suggestions_empty_submission(mock_exercise, mock_config)
 
     # Patch the predict_and_parse function to return our mock result
     with patch(
-        "module_text_llm.basic_approach.generate_suggestions.predict_and_parse",
+        "module_text_llm.default_approach.generate_suggestions.predict_and_parse",
         return_value=mock_result,
     ):
         mock_sent_tokenize.return_value = []
@@ -133,7 +133,7 @@ async def test_generate_suggestions_long_input(mock_exercise, mock_config):
 
     # Patch the predict_and_parse function to return our mock result
     with patch(
-        "module_text_llm.basic_approach.generate_suggestions.predict_and_parse",
+        "module_text_llm.default_approach.generate_suggestions.predict_and_parse",
         return_value=mock_result,
     ):
         mock_sent_tokenize.return_value = ["Test " * 100 for _ in range(10)]

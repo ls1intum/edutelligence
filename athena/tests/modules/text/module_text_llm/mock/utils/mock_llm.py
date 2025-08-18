@@ -4,7 +4,7 @@ from langchain_core.language_models.base import BaseLanguageModel
 from langchain_core.runnables import RunnableConfig
 from langchain_core.prompt_values import PromptValue
 from langchain_core.messages import BaseMessage
-from module_text_llm.basic_approach.schemas import AssessmentModel as RealAssessmentModel, FeedbackType
+from module_text_llm.default_approach.schemas import AssessmentModel as RealAssessmentModel, FeedbackType
 
 
 class MockFeedbackModel(BaseModel):

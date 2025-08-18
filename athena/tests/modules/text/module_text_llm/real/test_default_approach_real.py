@@ -1,7 +1,7 @@
 import pytest
 from athena.text import Exercise, Submission
 from athena.schemas.exercise_type import ExerciseType
-from module_text_llm.basic_approach.generate_suggestions import generate_suggestions
+from module_text_llm.default_approach.generate_suggestions import generate_suggestions
 from athena.schemas.text_submission import TextLanguageEnum
 
 
