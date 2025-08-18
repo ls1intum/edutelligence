@@ -32,6 +32,7 @@ class MockModelConfig(BaseModel):
 class MockApproachConfig(ApproachConfig):
     model: MockModelConfig = Field(default_factory=MockModelConfig)
     generate_suggestions_prompt: MockPrompt = Field(default_factory=MockPrompt)
+    analyze_submission_prompt: MockPrompt = Field(default_factory=MockPrompt)
     profile: LearnerProfile = Field(default_factory=lambda: LearnerProfile(feedback_detail=2, feedback_formality=2))
 
     async def generate_suggestions(

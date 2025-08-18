@@ -21,6 +21,7 @@ class MockApproachConfig(ApproachConfig):
     """Mock approach configuration for testing."""
 
     generate_suggestions_prompt: MockPrompt = Field(default_factory=MockPrompt)
+    analyze_submission_prompt: MockPrompt = Field(default_factory=MockPrompt)
 
     async def generate_suggestions(
         self, exercise, submission, debug=False, is_graded=True
