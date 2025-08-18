@@ -275,11 +275,14 @@ class PipelineWorkflows:
         )
 
         if len(competencies) == 0: return
+
         exercises = self.weaviate_client.get_embeddings_by_property(
             CollectionNames.EXERCISE.value, "course_id", course_id
         )
 
         if len(exercises) == 0: return
+
+        if len(competencies) > len(exercises): return
 
         # Delete all cluster centers for new centers
         self.weaviate_client.delete_by_property(
@@ -453,8 +456,7 @@ class PipelineWorkflows:
                 )
             else:
                 embedding = self.save_exercise_to_weaviate(exercise)
-                if exercise.competencies:
-                    self.instructor_feedback_on_new_text(exercise, embedding)
+                self.instructor_feedback_on_new_text(exercise, embedding)
 
     def delete_exercise(self, exercise: ExerciseWithCompetencies):
         """Delete an exercise from Weaviate."""
@@ -477,6 +479,8 @@ class PipelineWorkflows:
             new_exercise: ExerciseWithCompetencies,
             new_exercise_embedding: list[float],
     ):
+        # If there are no competencies, then there is nothing to do
+        if new_exercise.competencies == []: return
         self.update_cluster_for_competencies(new_exercise_embedding, new_exercise.competencies, is_removal=False, is_new_exercise=True)
 
     def instructor_feedback(
@@ -485,6 +489,9 @@ class PipelineWorkflows:
             updated_exercise_embedding: list[float],
             old_exercise,
     ):
+        # If there are no competencies, then there is nothing to do
+        if updated_exercise.competencies == []: return
+
         old_exercise_with_competencies = ExerciseWithCompetencies(
             id=old_exercise["properties"]["exercise_id"],
             title=old_exercise["properties"]["title"],
@@ -549,7 +556,7 @@ class PipelineWorkflows:
             if is_removal:
                 if cluster_size > 1:
                     updated_centroid = update_cluster_centroid_on_removal(
-                        current_centroid, cluster_size, exercise_embedding
+                        current_centroid, cluster_size, np.array(exercise_embedding)
                     )
                     action = "removed"
                 else:
@@ -557,7 +564,7 @@ class PipelineWorkflows:
             else:
                 cluster_size = cluster_size if is_new_exercise else (cluster_size - 1)
                 updated_centroid = update_cluster_centroid_on_addition(
-                    current_centroid, cluster_size, exercise_embedding
+                    current_centroid, cluster_size, np.array(exercise_embedding)
                 )
                 action = "added"
 
