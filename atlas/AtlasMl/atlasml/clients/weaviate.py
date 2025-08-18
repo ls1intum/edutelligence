@@ -46,7 +46,7 @@ COLLECTION_SCHEMAS = {
             },
             {"name": "title", "data_type": DataType.TEXT},
             {"name": "description", "data_type": DataType.TEXT},
-            {"name": "cluster_id", "data_type": DataType.NUMBER, "indexFilterable": True},
+            {"name": "cluster_id", "data_type": DataType.TEXT, "indexFilterable": True},
             {"name": "cluster_similarity_score", "data_type": DataType.NUMBER},
             {"name": "course_id", "data_type": DataType.NUMBER, "indexFilterable": True},
         ]
