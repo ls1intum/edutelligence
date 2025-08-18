@@ -53,11 +53,10 @@ async def suggest_competencies(
         validated_description = validate_non_empty_string(
             request.description, "description"
         )
-        validated_course_id = str(request.course_id)
 
         pipeline = PipelineWorkflows()
         competencies = pipeline.suggest_competencies_by_similarity(
-            validated_description, course_id=validated_course_id
+            validated_description, course_id=request.course_id
         )
 
         logger.info(f"Successfully suggested {len(competencies)} competencies")
@@ -153,11 +152,10 @@ async def suggest_competency_relations(course_id: int) -> CompetencyRelationSugg
     Currently generates random directed relations between competencies of the course.
     """
     try:
-        validated_course_id = str(course_id)
-        logger.info(f"Suggesting competency relations for course_id={validated_course_id}")
+        logger.info(f"Suggesting competency relations for course_id={course_id}")
 
         pipeline = PipelineWorkflows()
-        relations = pipeline.suggest_competency_relations(validated_course_id)
+        relations = pipeline.suggest_competency_relations(course_id)
 
         logger.info(f"Suggested {len(relations.relations)} competency relations")
         return relations

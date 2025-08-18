@@ -169,7 +169,7 @@ def test_recreate_collection_with_different_schemas(mock_weaviate_client):
     # Test recreation of different collection types
     test_collections = [
         CollectionNames.COMPETENCY.value,
-        CollectionNames.CLUSTERCENTER.value,
+        CollectionNames.SEMANTIC_CLUSTER.value,
         CollectionNames.EXERCISE.value,
     ]
 
@@ -194,9 +194,9 @@ def test_exercise_collection_data(mock_weaviate_client):
 
 
 def test_cluster_center_collection_data(mock_weaviate_client):
-    """Test that ClusterCenter collection returns appropriate schema data."""
+    """Test that SEMANTIC_CLUSTER collection returns appropriate schema data."""
     client = WeaviateClient()
-    collection_name = CollectionNames.CLUSTERCENTER.value
+    collection_name = CollectionNames.SEMANTIC_CLUSTER.value
 
     results = client.get_all_embeddings(collection_name)
 

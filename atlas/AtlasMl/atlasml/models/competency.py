@@ -19,10 +19,10 @@ class ExerciseWithCompetencies(BaseModel):
     id: int
     title: str
     description: str
-    competencies: list[int]
+    competencies: Optional[list[int]] = None
     course_id: int
 
-class ClusterCenters(BaseModel):
+class SemanticCluster(BaseModel):
     cluster_id: str
     course_id: int
     vector_embedding: list[float]

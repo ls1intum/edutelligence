@@ -112,13 +112,13 @@ def test_initial_cluster_pipeline_integration(workflows):
         workflows.initial_competencies(competencies)
         workflows.initial_cluster_pipeline()
         # Ensure at least one cluster exists for downstream code
-        if not workflows.weaviate_client.get_all_embeddings("ClusterCenter"):
+        if not workflows.weaviate_client.get_all_embeddings("SEMANTIC_CLUSTER"):
             workflows.weaviate_client.add_embeddings(
-                "ClusterCenter",
+                "SEMANTIC_CLUSTER",
                 [0.1, 0.2, 0.3],  # match your embedding size
-                {"cluster_id": "fake-cluster-id", "course_id": "course-1"},
+                {"cluster_id": "fake-cluster-id", "course_id": 1},
             )
-        clusters = workflows.weaviate_client.get_all_embeddings("ClusterCenter")
+        clusters = workflows.weaviate_client.get_all_embeddings("SEMANTIC_CLUSTER")
         assert clusters, "Clusters were not created!"
 
 
@@ -172,14 +172,14 @@ def test_initial_cluster_to_competencyPipeline_integration(workflows):
         workflows.initial_competencies(competencies)
         workflows.initial_cluster_pipeline()
         # Ensure at least one cluster exists for downstream code
-        if not workflows.weaviate_client.get_all_embeddings("ClusterCenter"):
+        if not workflows.weaviate_client.get_all_embeddings("SEMANTIC_CLUSTER"):
             workflows.weaviate_client.add_embeddings(
-                "ClusterCenter",
+                "SEMANTIC_CLUSTER",
                 [0.1, 0.2, 0.3],  # match your embedding size
-                {"cluster_id": "fake-cluster-id", "course_id": "course-1"},
+                {"cluster_id": "fake-cluster-id", "course_id": 1},
             )
         workflows.initial_cluster_to_competency_pipeline()
-        clusters = workflows.weaviate_client.get_all_embeddings("ClusterCenter")
+        clusters = workflows.weaviate_client.get_all_embeddings("SEMANTIC_CLUSTER")
         competencies = workflows.weaviate_client.get_all_embeddings("Competency")
         assert clusters, "Clusters were not created!"
         assert competencies, "Competencies missing!"
@@ -246,7 +246,7 @@ def test_newTextPipeline_integration(workflows):
         # Ensure at least one cluster exists for downstream code
         fake_cluster_id = workflows.weaviate_client.get_all_embeddings(CollectionNames.COMPETENCY.value)[3]["properties"]["cluster_id"]
         workflows.weaviate_client.add_embeddings(
-            "ClusterCenter",
+            "SEMANTIC_CLUSTER",
             [0.1, 0.2, 0.3],  # match your embedding size
             {"cluster_id": fake_cluster_id, "course_id": "1"},
         )
@@ -485,7 +485,7 @@ class FakeWeaviateClient:
         self.collections = {
             "Exercise": [],
             "Competency": [],
-            "ClusterCenter": [],
+            "SEMANTIC_CLUSTER": [],
         }
 
     def _ensure_collections_exist(self):

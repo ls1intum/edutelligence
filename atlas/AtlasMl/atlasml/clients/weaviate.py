@@ -16,7 +16,7 @@ from atlasml.config import WeaviateSettings, get_settings
 class CollectionNames(str, Enum):
     EXERCISE = "Exercise"
     COMPETENCY = "Competency"
-    CLUSTERCENTER = "ClusterCenter"
+    SEMANTIC_CLUSTER = "SemanticCluster"
 
 
 COLLECTION_SCHEMAS = {
@@ -24,38 +24,38 @@ COLLECTION_SCHEMAS = {
         "properties": [
             {
                 "name": "exercise_id",
-                "data_type": DataType.TEXT,
+                "data_type": DataType.NUMBER,
                 "indexFilterable": True,
                 "indexNullState": True,
             },
             {"name": "description", "data_type": DataType.TEXT},
             {
                 "name": "competency_ids",
-                "data_type": DataType.TEXT_ARRAY,
+                "data_type": DataType.NUMBER_ARRAY,
                 "indexFilterable": True,
             },
-            {"name": "course_id", "data_type": DataType.TEXT, "indexFilterable": True},
+            {"name": "course_id", "data_type": DataType.NUMBER, "indexFilterable": True},
         ]
     },
     CollectionNames.COMPETENCY.value: {
         "properties": [
             {
                 "name": "competency_id",
-                "data_type": DataType.TEXT,
+                "data_type": DataType.NUMBER,
                 "indexFilterable": True,
             },
             {"name": "title", "data_type": DataType.TEXT},
             {"name": "description", "data_type": DataType.TEXT},
-            {"name": "cluster_id", "data_type": DataType.TEXT, "indexFilterable": True},
+            {"name": "cluster_id", "data_type": DataType.NUMBER, "indexFilterable": True},
             {"name": "cluster_similarity_score", "data_type": DataType.NUMBER},
-            {"name": "course_id", "data_type": DataType.TEXT, "indexFilterable": True},
+            {"name": "course_id", "data_type": DataType.NUMBER, "indexFilterable": True},
         ]
     },
-    CollectionNames.CLUSTERCENTER.value: {
+    CollectionNames.SEMANTIC_CLUSTER.value: {
         "properties": [
             {"name": "cluster_id", "data_type": DataType.TEXT, "indexFilterable": True},
             {"name": "label_id", "data_type": DataType.TEXT, "indexFilterable": True},
-            {"name": "course_id", "data_type": DataType.TEXT, "indexFilterable": True},
+            {"name": "course_id", "data_type": DataType.NUMBER, "indexFilterable": True},
         ]
     },
 }
@@ -313,7 +313,7 @@ class WeaviateClient:
             raise WeaviateOperationError(f"Unexpected error getting embeddings: {e}")
 
     def get_embeddings_by_property(
-        self, collection_name: str, property_name: str, property_value: str
+        self, collection_name: str, property_name: str, property_value: int | str
     ) -> List[Dict[str, Any]]:
         """
         Fetch objects and their vectors from the collection that match a property value.
@@ -540,7 +540,7 @@ class WeaviateClient:
         self,
         collection_name: str,
         property_name: str,
-        property_value: str,
+        property_value: str | int,
     ) -> int:
         """
         Delete objects from the collection that match a property value.
