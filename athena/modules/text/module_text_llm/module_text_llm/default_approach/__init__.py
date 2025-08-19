@@ -1,5 +1,7 @@
 from pydantic import Field
 from typing import Literal
+
+from athena.schemas import LearnerProfile
 from module_text_llm.approach_config import ApproachConfig
 from module_text_llm.default_approach.prompts import GenerateSuggestionsPrompt, AnalysisPrompt
 
@@ -30,4 +32,10 @@ class DefaultApproachConfig(ApproachConfig):
     )
     analyze_submission_prompt: AnalysisPrompt = Field(
         default=AnalysisPrompt()
+    )
+    learner_profile: LearnerProfile = Field(
+        default=LearnerProfile(
+            feedback_detail=2,
+            feedback_formality=2,
+        )
     )

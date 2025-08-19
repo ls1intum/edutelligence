@@ -142,6 +142,32 @@ async def _generate_feedback(
         human_message=config.generate_suggestions_prompt.human_message,
     )
 
+    # Check if the prompt is too long and omit features if necessary (in order of importance)
+    omittable_features = [
+        "submission_analysis",
+        "writing_style",
+        "feedback_preferences",
+        "example_solution",
+    ]
+    second_prompt_input, should_run = check_prompt_length_and_omit_features_if_necessary(
+        prompt=second_chat_prompt,
+        prompt_input=second_prompt_input,
+        max_input_tokens=config.max_input_tokens,
+        omittable_features=omittable_features,
+        debug=debug,
+    )
+
+    # Skip if the prompt is too long
+    if not should_run:
+        logger.warning("Input too long. Skipping.")
+        if debug:
+            emit_meta("prompt", second_chat_prompt.format(**second_prompt_input))
+            emit_meta(
+                "error",
+                f"Input too long {num_tokens_from_prompt(second_chat_prompt, second_prompt_input)} > {config.max_input_tokens}",
+            )
+        return None
+
     result = await predict_and_parse(
         model=config.model,
         chat_prompt=second_chat_prompt,
