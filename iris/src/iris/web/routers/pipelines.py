@@ -3,7 +3,7 @@ import traceback
 from threading import Thread
 from typing import List
 
-from fastapi import APIRouter, Body, Depends, Query, Response, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 from sentry_sdk import capture_exception
 
 from iris.dependencies import TokenValidator
@@ -34,7 +34,7 @@ from iris.pipeline.chat.exercise_chat_agent_pipeline import (
     ExerciseChatAgentPipeline,
 )
 from iris.pipeline.chat.lecture_chat_pipeline import LectureChatPipeline
-from iris.pipeline.chat_gpt_wrapper_pipeline import ChatGPTWrapperPipeline
+from iris.pipeline.chat.text_exercise_chat_pipeline import TextExerciseChatPipeline
 from iris.pipeline.competency_extraction_pipeline import (
     CompetencyExtractionPipeline,
 )
@@ -44,12 +44,10 @@ from iris.pipeline.inconsistency_check_pipeline import (
 )
 from iris.pipeline.lecture_ingestion_pipeline import LectureUnitPageIngestionPipeline
 from iris.pipeline.rewriting_pipeline import RewritingPipeline
-from iris.pipeline.text_exercise_chat_pipeline import TextExerciseChatPipeline
-from iris.pipeline.tutor_suggestion_pipeline import (
+from iris.pipeline.tutor_suggestion.tutor_suggestion_pipeline import (
     TutorSuggestionPipeline,
 )
 from iris.web.status.status_update import (
-    ChatGPTWrapperStatusCallback,
     CompetencyExtractionCallback,
     CourseChatStatusCallback,
     ExerciseChatStatusCallback,
@@ -97,31 +95,6 @@ def run_exercise_chat_pipeline_worker(
         callback.error("Fatal error.", exception=e)
 
 
-def run_chatgpt_wrapper_pipeline_worker(
-    dto: ExerciseChatPipelineExecutionDTO, _variant: str
-):  # pylint: disable=invalid-name
-    try:
-        callback = ChatGPTWrapperStatusCallback(
-            run_id=dto.settings.authentication_token,
-            base_url=dto.settings.artemis_base_url,
-            initial_stages=dto.initial_stages,
-        )
-        pipeline = ChatGPTWrapperPipeline(callback=callback)
-    except Exception as e:
-        logger.error("Error preparing ChatGPT wrapper pipeline: %s", e)
-        logger.error(traceback.format_exc())
-        callback.error("Fatal error.", exception=e)
-        capture_exception(e)
-        return
-
-    try:
-        pipeline(dto=dto)
-    except Exception as e:
-        logger.error("Error running ChatGPT wrapper pipeline: %s", e)
-        logger.error(traceback.format_exc())
-        callback.error("Fatal error.", exception=e)
-
-
 @router.post(
     "/programming-exercise-chat/run",
     status_code=status.HTTP_202_ACCEPTED,
@@ -134,16 +107,10 @@ def run_exercise_chat_pipeline(
     ),
 ):
     variant = validate_pipeline_variant(dto.settings, ExerciseChatAgentPipeline)
-
-    if variant == "chat-gpt-wrapper":
-        # Additional validation for ChatGPT wrapper variant
-        validate_pipeline_variant(dto.settings, ChatGPTWrapperPipeline)
-        thread = Thread(target=run_chatgpt_wrapper_pipeline_worker, args=(dto, variant))
-    else:
-        thread = Thread(
-            target=run_exercise_chat_pipeline_worker,
-            args=(dto, variant, event),
-        )
+    thread = Thread(
+        target=run_exercise_chat_pipeline_worker,
+        args=(dto, variant, event),
+    )
     thread.start()
 
 
@@ -191,14 +158,19 @@ def run_course_chat_pipeline(
     thread.start()
 
 
-def run_text_exercise_chat_pipeline_worker(dto, variant):
+def run_text_exercise_chat_pipeline_worker(dto, variant_id):
     try:
         callback = TextExerciseChatCallback(
             run_id=dto.execution.settings.authentication_token,
             base_url=dto.execution.settings.artemis_base_url,
             initial_stages=dto.execution.initial_stages,
         )
-        pipeline = TextExerciseChatPipeline(callback=callback, variant=variant)
+        for variant in TextExerciseChatPipeline.get_variants():
+            if variant.id == variant_id:
+                break
+        else:
+            raise ValueError(f"Unknown variant: {variant_id}")
+        pipeline = TextExerciseChatPipeline()
     except Exception as e:
         logger.error("Error preparing text exercise chat pipeline: %s", e)
         logger.error(traceback.format_exc())
@@ -206,7 +178,7 @@ def run_text_exercise_chat_pipeline_worker(dto, variant):
         return
 
     try:
-        pipeline(dto=dto)
+        pipeline(dto=dto, variant=variant, callback=callback)
     except Exception as e:
         logger.error("Error running text exercise chat pipeline: %s", e)
         logger.error(traceback.format_exc())
@@ -424,7 +396,7 @@ def run_communication_tutor_suggestions_pipeline(
 
 
 @router.get("/{feature}/variants")
-def get_pipeline(feature: str) -> List[FeatureDTO]:
+def get_pipeline(feature: str) -> list[FeatureDTO]:
     """
     Get the pipeline variants for the given feature.
     """
@@ -465,10 +437,6 @@ def get_pipeline(feature: str) -> List[FeatureDTO]:
             return get_available_variants(
                 RewritingPipeline.get_variants(), available_llms
             )
-        case "CHAT_GPT_WRAPPER":
-            return get_available_variants(
-                ChatGPTWrapperPipeline.get_variants(), available_llms
-            )
         case "LECTURE_INGESTION":
             return get_available_variants(
                 LectureUnitPageIngestionPipeline.get_variants(), available_llms
@@ -482,7 +450,10 @@ def get_pipeline(feature: str) -> List[FeatureDTO]:
                 TutorSuggestionPipeline.get_variants(), available_llms
             )
         case _:
-            return Response(status_code=status.HTTP_400_BAD_REQUEST)
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Unknown feature: {feature}",
+            )
 
 
 def get_available_variants(
@@ -491,10 +462,10 @@ def get_available_variants(
     """
     Returns available variants for this pipeline based on available LLMs.
 
-    Args:
-        available_llms: List of available language models
-    Returns:
-        List of variants that are can be used with the available LLMs.
+    :param all_variants: List of all variants for the pipeline
+    :param available_llms: List of available language models
+
+    :return: List of FeatureDTO objects for supported variants
     """
     return [
         variant.feature_dto()
