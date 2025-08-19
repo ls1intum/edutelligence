@@ -2,8 +2,9 @@ from enum import Enum
 import numpy as np
 from typing import Tuple, Optional
 
-from sklearn.cluster import HDBSCAN
+from sklearn.cluster import HDBSCAN, KMeans
 from sklearn.manifold import TSNE
+
 
 
 class SimilarityMetric(Enum):
@@ -66,3 +67,33 @@ def apply_tsne(
     )
     transformed = tsne.fit_transform(matrix)
     return transformed
+
+
+def apply_kmeans(
+    matrix: np.ndarray,
+    n_clusters: int,
+    random_state: int = 42,
+    max_iter: int = 300,
+    init: str = "k-means++",
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Applies K-means clustering algorithm to a given nxn matrix.
+
+    Parameters:
+        matrix (numpy.ndarray): An n x n matrix (data points x features).
+        n_clusters (int): The number of clusters to form.
+        random_state (int): Random state for reproducibility.
+        max_iter (int): Maximum number of iterations for a single run.
+        init (str): Method for initialization ('k-means++', 'random').
+
+    Returns:
+        tuple: The cluster labels and centroids assigned to each data point.
+    """
+    clusterer = KMeans(
+        n_clusters=n_clusters,
+        random_state=random_state,
+        max_iter=max_iter,
+        init=init
+    )
+    clusterer.fit(matrix)
+    return clusterer.labels_, clusterer.cluster_centers_
