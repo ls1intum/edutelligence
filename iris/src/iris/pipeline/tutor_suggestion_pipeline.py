@@ -140,11 +140,7 @@ class TutorSuggestionPipeline(
                 create_tool_lecture_content_retrieval(
                     self.lecture_retriever,
                     state.dto.course.id,
-                    (
-                        state.dto.settings.artemis_base_url
-                        if state.dto.settings
-                        else ""
-                    ),
+                    (state.dto.settings.artemis_base_url if state.dto.settings else ""),
                     callback,
                     query_text,
                     state.message_history,
@@ -159,11 +155,7 @@ class TutorSuggestionPipeline(
                     self.faq_retriever,
                     state.dto.course.id,
                     state.dto.course.name,
-                    (
-                        state.dto.settings.artemis_base_url
-                        if state.dto.settings
-                        else ""
-                    ),
+                    (state.dto.settings.artemis_base_url if state.dto.settings else ""),
                     callback,
                     query_text,
                     state.message_history,
