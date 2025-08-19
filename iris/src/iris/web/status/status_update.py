@@ -121,6 +121,7 @@ class StatusCallback(ABC):
         improvement: Optional[str] = None,
         accessed_memories: Optional[List[Memory]] = None,
         created_memories: Optional[List[Memory]] = None,
+        artifact: Optional[str] = None,
     ):
         """
         Transition the current stage to DONE and update the status.
@@ -149,7 +150,8 @@ class StatusCallback(ABC):
                 if created_memories
                 else []
             )
-
+        if hasattr(self.status, "artifact"):
+            self.status.artifact = artifact
         next_stage = self.get_next_stage()
 
         if next_stage is not None:
@@ -463,16 +465,3 @@ class TutorSuggestionCallback(StatusCallback):
             stages[stage],
             stage,
         )
-
-    def done(
-        self,
-        message: Optional[str] = None,
-        final_result: Optional[str] = None,
-        suggestions: Optional[List[str]] = None,
-        tokens: Optional[List[TokenUsageDTO]] = None,
-        next_stage_message: Optional[str] = None,
-        start_next_stage: bool = True,
-        artifact: Optional[str] = None,
-    ):
-        self.status.artifact = artifact
-        super().done(message=message, final_result=final_result, tokens=tokens)
