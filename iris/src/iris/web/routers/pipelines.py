@@ -3,7 +3,7 @@ import traceback
 from threading import Thread
 from typing import List
 
-from fastapi import APIRouter, Body, Depends, Query, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 from sentry_sdk import capture_exception
 
 from iris.dependencies import TokenValidator
@@ -442,7 +442,10 @@ def get_pipeline(feature: str) -> list[FeatureDTO]:
                 TutorSuggestionPipeline.get_variants(), available_llms
             )
         case _:
-            raise ValueError(f"Unknown feature: {feature}")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Unknown feature: {feature}",
+            )
 
 
 def get_available_variants(

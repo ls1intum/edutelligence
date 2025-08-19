@@ -34,7 +34,9 @@ def create_tool_get_course_details(
 
         # ExtendedCourseDTO has more fields than CourseDTO
         result = {
-            "course_name": (course.name if course else "No course provided"),
+            "course_name": (
+                course.name if (course and course.name) else "No course name provided"
+            ),
             "course_description": (
                 course.description
                 if course and course.description

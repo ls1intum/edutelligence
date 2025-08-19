@@ -49,7 +49,20 @@ def create_tool_get_competency_list(
             return []
 
         if not metrics or not metrics.competency_metrics:
-            return competencies
+            return [
+                {
+                    "info": (
+                        comp.model_dump()
+                        if hasattr(comp, "model_dump")
+                        else comp.dict()
+                    ),
+                    "exercise_ids": [],
+                    "progress": 0,
+                    "mastery": 0,
+                    "judgment_of_learning": None,
+                }
+                for comp in competencies
+            ]
 
         competency_metrics = metrics.competency_metrics
         return [
@@ -62,7 +75,7 @@ def create_tool_get_competency_list(
                     competency_metrics.confidence.get(comp, 0),
                 ),
                 "judgment_of_learning": (
-                    competency_metrics.jol_values.get[comp].json()
+                    competency_metrics.jol_values.get(comp).json()
                     if competency_metrics.jol_values
                     and comp in competency_metrics.jol_values
                     else None
