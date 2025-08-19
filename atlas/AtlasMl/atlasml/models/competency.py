@@ -54,7 +54,7 @@ class SuggestCompetencyResponse(BaseModel):
 
 
 class SaveCompetencyRequest(BaseModel):
-    competency: Optional[Competency] = None
+    competencies: Optional[list[Competency]] = None
     exercise: Optional[ExerciseWithCompetencies] = None
     operation_type: OperationType
 

@@ -250,6 +250,49 @@ class PipelineWorkflows:
             # Re-cluster after update
             self.recluster_with_new_competencies(competency=competency, course_id=competency.course_id)
 
+    def save_competencies(
+        self,
+        competencies: list[Competency],
+        operation_type: OperationType = OperationType.UPDATE,
+    ):
+        if not competencies:
+            return
+            
+        course_id = competencies[0].course_id
+        
+        # Save all competencies first
+        for competency in competencies:
+            if operation_type == OperationType.DELETE:
+                self.delete_competency(competency)
+            else:  # UPDATE operation
+                existing_competency = self.weaviate_client.get_embeddings_by_property(
+                    CollectionNames.COMPETENCY.value, "competency_id", competency.id
+                )
+                logger.info(f"Existing competency: {existing_competency}")
+                if existing_competency:
+                    assert (
+                        len(existing_competency) == 1
+                    ), "Multiple competencies found for the same ID"  # TODO: Throw error
+                    competency_to_update = existing_competency[0]
+                    embedings = generate_embeddings_openai(competency.description)
+                    properties = {
+                        "competency_id": competency.id,
+                        "title": competency.title,
+                        "description": competency.description,
+                        "course_id": competency.course_id,
+                    }
+                    self.weaviate_client.update_property_by_id(
+                        CollectionNames.COMPETENCY.value,
+                        competency_to_update["id"],
+                        properties,
+                        embedings,
+                    )
+                else:
+                    self.save_competency_to_weaviate(competency)
+        
+        # Recluster once after all competencies are saved
+        self.recluster_with_new_competencies(competency=competencies[0], course_id=course_id)
+
     def delete_competency(self, competency: Competency):
         """Delete a competency from Weaviate and trigger re-clustering."""
         existing_competency = self.weaviate_client.get_embeddings_by_property(

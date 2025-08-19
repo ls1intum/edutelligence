@@ -90,7 +90,7 @@ async def save_competencies(request: SaveCompetencyRequest):
         )
 
         # Validate that at least one item is provided
-        if not request.competency and not request.exercise:
+        if not request.competencies and not request.exercise:
             raise ValueError("At least one competency or exercise must be provided")
 
         # Validate operation type
@@ -101,19 +101,18 @@ async def save_competencies(request: SaveCompetencyRequest):
         pipeline = PipelineWorkflows()
         saved_items = []
 
-        # Save competency if provided
-        if request.competency:
+        # Save competencies if provided
+        if request.competencies:
             try:
-                competency_name = safe_get_attribute(request.competency, "title")
-                logger.info(f"Saving competency: {competency_name}")
-                result = pipeline.save_competency(
-                    request.competency, validated_operation_type
+                logger.info(f"Saving {len(request.competencies)} competencies")
+                result = pipeline.save_competencies(
+                    request.competencies, validated_operation_type
                 )
-                saved_items.append({"type": "competency", "result": result})
-                logger.info("Competency saved successfully")
+                saved_items.append({"type": "competencies", "result": result})
+                logger.info("All competencies saved and reclustered successfully")
             except Exception as e:
-                logger.error(f"Failed to save competency: {e}")
-                raise Exception(f"Failed to save competency: {str(e)}")
+                logger.error(f"Failed to save competencies: {e}")
+                raise Exception(f"Failed to save competencies: {str(e)}")
 
         # Save exercise if provided
         if request.exercise:
