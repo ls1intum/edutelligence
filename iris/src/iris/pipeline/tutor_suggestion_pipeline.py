@@ -109,7 +109,7 @@ class TutorSuggestionPipeline(
                         create_tool_repository_files(submission.repository, callback),
                         create_tool_file_lookup(submission.repository, callback),
                         create_tool_get_problem_statement(
-                            state.dto.text_exercise, state.callback
+                            state.dto.programming_exercise, state.callback
                         ),
                     ]
                 )
