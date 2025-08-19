@@ -460,11 +460,7 @@ class ExerciseChatAgentPipeline(
                 state.callback.done(
                     final_result=None,
                     suggestions=suggestions,
-                    tokens=(
-                        [self.suggestion_pipeline.tokens]
-                        if self.suggestion_pipeline.tokens
-                        else []
-                    ),
+                    tokens=state.tokens,
                 )
             else:
                 state.callback.skip(
