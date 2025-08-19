@@ -62,9 +62,7 @@ def create_tool_faq_content_retrieval(
         # Store the retrieved FAQs for later use (e.g., citation pipeline)
         faq_storage["faqs"] = retrieved_faqs
 
-        # Extract the properties dict from each FAQ wrapper before formatting
-        faq_properties = [faq["properties"] for faq in retrieved_faqs]
-        result = format_faqs(faq_properties)
+        result = format_faqs(retrieved_faqs)
         return result
 
     return faq_content_retrieval

@@ -245,9 +245,7 @@ def faq_content_retrieval(
         base_url=dto.settings.artemis_base_url,
     )
 
-    # Extract the properties dict from each FAQ wrapper before formatting
-    faq_properties = [faq["properties"] for faq in retrieved_faqs]
-    result = format_faqs(faq_properties)
+    result = format_faqs(retrieved_faqs)
     return result
 
 
