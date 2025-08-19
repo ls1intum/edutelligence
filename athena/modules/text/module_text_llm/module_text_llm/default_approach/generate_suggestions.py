@@ -28,7 +28,7 @@ def _setup_learner_profile(
     """Setup and validate learner profile with fallbacks."""
     if learner_profile is None:
         logger.info("Overriding the learner profile with the config from the playground.")
-        learner_profile = config.profile
+        learner_profile = config.learner_profile
 
     if learner_profile is None:
         logger.info("Learner profile was not provided - continuing with the default values.")
