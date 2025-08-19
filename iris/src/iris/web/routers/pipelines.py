@@ -44,9 +44,7 @@ from iris.pipeline.inconsistency_check_pipeline import (
 )
 from iris.pipeline.lecture_ingestion_pipeline import LectureUnitPageIngestionPipeline
 from iris.pipeline.rewriting_pipeline import RewritingPipeline
-from iris.pipeline.tutor_suggestion.tutor_suggestion_pipeline import (
-    TutorSuggestionPipeline,
-)
+from iris.pipeline.tutor_suggestion_pipeline import TutorSuggestionPipeline
 from iris.web.status.status_update import (
     CompetencyExtractionCallback,
     CourseChatStatusCallback,

@@ -9,23 +9,7 @@ import pytz
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from langsmith import traceable
 
-from iris.common.exercise_chat_tools import (
-    create_tool_file_lookup,
-    create_tool_get_additional_exercise_details,
-    create_tool_get_build_logs_analysis,
-    create_tool_get_feedbacks,
-    create_tool_get_submission_details,
-    create_tool_repository_files,
-)
 from iris.common.pyris_message import IrisMessageRole
-from iris.common.tools import (
-    create_tool_faq_content_retrieval,
-    create_tool_get_example_solution,
-    create_tool_get_last_artifact,
-    create_tool_get_problem_statement,
-    create_tool_get_simple_course_details,
-    create_tool_lecture_content_retrieval,
-)
 from iris.domain.communication.communication_tutor_suggestion_pipeline_execution_dto import (
     CommunicationTutorSuggestionPipelineExecutionDTO,
 )
@@ -39,6 +23,20 @@ from iris.retrieval.faq_retrieval import FaqRetrieval
 from iris.retrieval.faq_retrieval_utils import should_allow_faq_tool
 from iris.retrieval.lecture.lecture_retrieval import LectureRetrieval
 from iris.retrieval.lecture.lecture_retrieval_utils import should_allow_lecture_tool
+from iris.tools import (
+    create_tool_faq_content_retrieval,
+    create_tool_file_lookup,
+    create_tool_get_additional_exercise_details,
+    create_tool_get_build_logs_analysis,
+    create_tool_get_example_solution,
+    create_tool_get_feedbacks,
+    create_tool_get_last_artifact,
+    create_tool_get_problem_statement,
+    create_tool_get_simple_course_details,
+    create_tool_get_submission_details,
+    create_tool_lecture_content_retrieval,
+    create_tool_repository_files,
+)
 from iris.web.status.status_update import TutorSuggestionCallback
 
 logger = logging.getLogger(__name__)
@@ -108,8 +106,11 @@ class TutorSuggestionPipeline(
                         create_tool_get_submission_details(submission, callback),
                         create_tool_get_build_logs_analysis(submission, callback),
                         create_tool_get_feedbacks(submission, callback),
-                        create_tool_repository_files(submission, callback),
-                        create_tool_file_lookup(submission, callback),
+                        create_tool_repository_files(submission.repository, callback),
+                        create_tool_file_lookup(submission.repository, callback),
+                        create_tool_get_problem_statement(
+                            state.dto.text_exercise, state.callback
+                        ),
                     ]
                 )
             tool_list.extend(programming_exercise_tools)
@@ -138,7 +139,12 @@ class TutorSuggestionPipeline(
             tool_list.append(
                 create_tool_lecture_content_retrieval(
                     self.lecture_retriever,
-                    state.dto,
+                    state.dto.course.id,
+                    (
+                        state.dto.settings.artemis_base_url
+                        if state.dto.settings
+                        else ""
+                    ),
                     callback,
                     query_text,
                     state.message_history,
@@ -151,7 +157,13 @@ class TutorSuggestionPipeline(
             tool_list.append(
                 create_tool_faq_content_retrieval(
                     self.faq_retriever,
-                    state.dto,
+                    state.dto.course.id,
+                    state.dto.course.name,
+                    (
+                        state.dto.settings.artemis_base_url
+                        if state.dto.settings
+                        else ""
+                    ),
                     callback,
                     query_text,
                     state.message_history,
