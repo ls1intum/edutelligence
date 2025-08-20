@@ -3,6 +3,7 @@
 **Logos** is an LLM Engineering Platform that includes usage logging, billing, central resouce management, policy-based model selection, scheduling, and monitoring.
 
 # Setup
+
 ## Prerequisites
 
 - **Python 3.13**
