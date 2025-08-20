@@ -580,6 +580,9 @@ class PipelineWorkflows:
 
             cluster_id = competency_data[0]["properties"]["cluster_id"]
 
+            if not cluster_id:
+                continue
+
             # Get current cluster centroid
             cluster_data = self.weaviate_client.get_embeddings_by_property(
                 CollectionNames.SEMANTIC_CLUSTER.value, "cluster_id", cluster_id
