@@ -1,13 +1,10 @@
 from dependency_injector import containers, providers
 
+from .settings import Settings
+
 
 class DependencyContainer(containers.DeclarativeContainer):
-    """Central IoC container for Athena."""
-
-    # add your providers / singletons here, e.g.:
-    # config = providers.Configuration()
-    # db_session = providers.Singleton(create_session)
-    ...
+    settings = providers.Singleton(Settings)
 
 
 # Create one global, reusable instance

@@ -1,31 +1,42 @@
 """
 Entry point for the assessment module manager.
 """
-import uvicorn
 
+import uvicorn
 from uvicorn.config import LOGGING_CONFIG
-from assessment_module_manager.app import app
-from assessment_module_manager import endpoints, env
+from .app_factory import create_app
 from assessment_module_manager.logger import logger
+
+app = create_app()
 
 
 def main():
     """
     Start the assessment module manager using uvicorn.
     """
-    LOGGING_CONFIG["formatters"]["default"]["fmt"] = "%(asctime)s %(levelname)s --- [%(name)s] : %(message)s"
-    LOGGING_CONFIG["formatters"]["access"]["fmt"] = "%(asctime)s %(levelname)s --- [%(name)s] : %(message)s"
+    container = app.state.container
+    settings = container.settings()
+
+    LOGGING_CONFIG["formatters"]["default"][
+        "fmt"
+    ] = "%(asctime)s %(levelname)s --- [%(name)s] : %(message)s"
+    LOGGING_CONFIG["formatters"]["access"][
+        "fmt"
+    ] = "%(asctime)s %(levelname)s --- [%(name)s] : %(message)s"
     logger.info("Starting assessment module manager")
 
-    if env.PRODUCTION:
+    if settings.production:
         logger.info("Running in PRODUCTION mode")
-        uvicorn.run("assessment_module_manager.__main__:app", host="0.0.0.0", port=5100)
+        uvicorn.run(app, host="0.0.0.0", port=5100)
     else:
         logger.warning("Running in DEVELOPMENT mode")
-        uvicorn.run("assessment_module_manager.__main__:app", host="0.0.0.0", port=5100, reload=True)
+        uvicorn.run(
+            "assessment_module_manager.__main__:app",
+            host="0.0.0.0",
+            port=5100,
+            reload=True,
+        )
 
 
-# Add things to __all__ just to mark them as important to import
-__all__ = ["app", "endpoints", "main"]
 if __name__ == "__main__":
     main()

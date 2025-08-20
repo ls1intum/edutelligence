@@ -170,6 +170,7 @@ files = []
 develop = true
 
 [package.dependencies]
+dependency-injector = "^4.48.1"
 fastapi = "^0.109.1"
 gitpython = "^3.1.41"
 httpx = "^0.24.1"
@@ -1076,6 +1077,7 @@ develop = true
 
 [package.dependencies]
 athena = {path = "../athena", develop = true}
+dependency-injector = "^4.48.1"
 gitpython = "3.1.41"
 langchain = "0.2.15"
 langchain-community = "0.2.15"
@@ -2624,4 +2626,4 @@ propcache = ">=0.2.0"
 [metadata]
 lock-version = "2.1"
 python-versions = "3.11.*"
-content-hash = "3d1393b99f56e599bbbbf7834c641c971852aebf783caa3be21528dbfc7bc237"
+content-hash = "cf20f6e1a8d4f1ed1b4ba0486d99060bdded67208a737f45d52a911f9099cc7b"

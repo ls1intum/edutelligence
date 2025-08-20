@@ -1,14 +1,21 @@
 from typing import Dict, Any, Optional
-from fastapi import Body, HTTPException, Request
+from fastapi import APIRouter, Body, HTTPException, Request, Depends
 from starlette.responses import JSONResponse
 
 from assessment_module_manager.authenticate import authenticated
 from athena.schemas import ExerciseType
-from assessment_module_manager.app import app
-from assessment_module_manager.module import ModuleResponse, find_module_by_name, request_to_module
+from assessment_module_manager.module import (
+    ModuleResponse,
+    find_module_by_name,
+    request_to_module,
+)
+from ..dependencies import get_settings
+from ..settings import Settings
+
+router = APIRouter()
 
 
-@app.api_route(
+@router.api_route(
     "/modules/{module_type}/{module_name}/{path:path}",
     methods=["POST", "GET"],
     responses={
@@ -17,7 +24,7 @@ from assessment_module_manager.module import ModuleResponse, find_module_by_name
         },
         403: {
             "description": "API secret is invalid - set the environment variable SECRET and the Authorization header "
-                           "to the same value",
+            "to the same value",
         },
         404: {
             "description": "Module is not found (not listed in modules.ini)",
@@ -30,7 +37,12 @@ from assessment_module_manager.module import ModuleResponse, find_module_by_name
 )
 @authenticated
 async def proxy_to_module(
-    module_type: ExerciseType, module_name: str, path: str, request: Request, data: Optional[Dict[Any, Any]] = Body(None),
+    module_type: ExerciseType,
+    module_name: str,
+    path: str,
+    request: Request,
+    data: Optional[Dict[Any, Any]] = Body(None),
+    settings: Settings = Depends(get_settings),
 ) -> JSONResponse:
     """
     This endpoint is called by the LMS to proxy requests to modules.
@@ -38,43 +50,52 @@ async def proxy_to_module(
     Example module documentation on this: [http://localhost:5001/docs](http://localhost:5001/docs).
     """
     if request.method == "GET" and data is not None:
-        raise HTTPException(status_code=400, detail="GET request should not contain a body")
+        raise HTTPException(
+            status_code=400, detail="GET request should not contain a body"
+        )
 
     module = await find_module_by_name(module_name)
     if module is None:
-        raise HTTPException(status_code=404, detail=f"Module {module_name} not found. Is it listed in modules.ini?")
+        raise HTTPException(
+            status_code=404,
+            detail=f"Module {module_name} not found. Is it listed in modules.ini?",
+        )
     if module.type != module_type:
-        raise HTTPException(status_code=400, detail=f"Found module {module_name} is not of type {module_type}.")
-    
+        raise HTTPException(
+            status_code=400,
+            detail=f"Found module {module_name} is not of type {module_type}.",
+        )
+
     # Prepare headers (except Authorization)
     headers = {}
-    
+
     # Module configuration
-    module_config = request.headers.get('X-Module-Config')
+    module_config = request.headers.get("X-Module-Config")
     if module_config:
-        headers['X-Module-Config'] = module_config
+        headers["X-Module-Config"] = module_config
 
     # Experiment information tracking experiment, module configuration, and run
-    experiment_id = request.headers.get('X-Experiment-ID')
+    experiment_id = request.headers.get("X-Experiment-ID")
     if experiment_id:
-        headers['X-Experiment-ID'] = experiment_id
-    module_configuration_id = request.headers.get('X-Module-Configuration-ID')
+        headers["X-Experiment-ID"] = experiment_id
+    module_configuration_id = request.headers.get("X-Module-Configuration-ID")
     if module_configuration_id:
-        headers['X-Module-Configuration-ID'] = module_configuration_id
-    run_id = request.headers.get('X-Run-ID')
+        headers["X-Module-Configuration-ID"] = module_configuration_id
+    run_id = request.headers.get("X-Run-ID")
     if run_id:
-        headers['X-Run-ID'] = run_id
-    lms_server_url = request.headers.get('X-Server-URL')
+        headers["X-Run-ID"] = run_id
+    lms_server_url = request.headers.get("X-Server-URL")
     if lms_server_url:
-        headers['X-Server-URL'] = lms_server_url
+        headers["X-Server-URL"] = lms_server_url
 
     resp = await request_to_module(
         module,
         headers,
-        '/' + path,
-        lms_server_url,
+        "/" + path,
+        lms_server_url or "",
         data,
         method=request.method,
+        settings=settings,
     )
     return JSONResponse(
         status_code=resp.status,

@@ -3,8 +3,7 @@ from dataclasses import dataclass
 import json
 from pydantic import BaseModel, ValidationError
 from typing import TypeVar, Optional, Type
-
-from fastapi import HTTPException, Header, status
+from fastapi import HTTPException, Header, Request, status
 
 from .schemas.exercise_type import ExerciseType
 
@@ -12,6 +11,7 @@ from .schemas.exercise_type import ExerciseType
 @dataclass
 class ModuleConfig:
     """Config from module.conf."""
+
     name: str
     type: ExerciseType
     port: int
@@ -29,28 +29,49 @@ def get_module_config() -> ModuleConfig:
 
 
 C = TypeVar("C", bound=BaseModel)
-def get_dynamic_module_config_factory(module_config_type: Optional[Type[C]]):
-    """Create a function that gets the dynamic module config from the request header."""
 
-    async def get_dynamic_module_config(module_config: Optional[str] = Header(None, alias="X-Module-Config")) -> Optional[C]:
-        """Get the dynamic module config from the request header."""
-        if module_config_type is None:
+
+def get_header_module_config_factory(module_config_type: Type[C]):
+    """Parse X-Module-Config into the concrete model, or return None."""
+
+    async def dep(
+        module_config: Optional[str] = Header(None, alias="X-Module-Config")
+    ) -> Optional[C]:
+        if module_config is None:
             return None
+        try:
+            data = json.loads(module_config)
+        except json.JSONDecodeError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid module config: could not parse JSON from X-Module-Config.",
+            ) from exc
+        try:
+            return module_config_type.parse_obj(data)
+        except ValidationError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Validation error for module config: {exc}",
+            ) from exc
 
-        if module_config is not None:
-            try:
-                config_dict = json.loads(module_config)
-            except json.JSONDecodeError as exc:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, 
-                                    detail="Invalid module config received, could not parse JSON from X-Module-Config header.") from exc
-            
-            try:
-                return module_config_type.parse_obj(config_dict)
-            except ValidationError as exc:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, 
-                                    detail=f"Validation error for module config: {exc}") from exc
-        
-        # Return a default instance of module_config_type when module_config is None
-        return module_config_type()
-    
-    return get_dynamic_module_config
+    return dep
+
+
+def get_default_module_config_from_app_factory(module_config_type: Type[C]):
+    """Fetch default from request.app.state.container.module_config()."""
+
+    async def dep(request: Request) -> C:
+        app_container = getattr(
+            getattr(getattr(request, "app", None), "state", None), "container", None
+        )
+        if app_container and hasattr(app_container, "module_config"):
+            return app_container.module_config()  # type: ignore[return-value]
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=(
+                "No module config available. Provide X-Module-Config header or attach a container with "
+                "`module_config()` to app.state.container."
+            ),
+        )
+
+    return dep

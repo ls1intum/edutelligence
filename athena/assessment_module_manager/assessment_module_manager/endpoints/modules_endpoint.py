@@ -1,14 +1,20 @@
 from typing import List
+from fastapi import APIRouter, Depends
 
-from assessment_module_manager.app import app
-from assessment_module_manager.module import Module, list_modules
+from assessment_module_manager.module import Module
+from ..dependencies import get_settings
+from ..settings import Settings
+
+router = APIRouter()
 
 
-@app.get("/modules")
-def get_modules() -> List[Module]:
+@router.get("/modules")
+def get_modules(
+    settings: Settings = Depends(get_settings),
+) -> List[Module]:
     """
     Get a list of all Athena modules that are available.
 
     This endpoint is not authenticated.
     """
-    return list_modules()
+    return settings.list_modules()

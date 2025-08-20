@@ -1,62 +1,68 @@
-import os
-import requests
+# llm_core/loaders/model_loaders/ollama_loader.py
+
+from __future__ import annotations
+
 from enum import Enum
+from types import MappingProxyType
 from typing import Dict, List
-from langchain_community.chat_models import ChatOllama
+
+import requests
+
+from langchain.base_language import BaseLanguageModel
+
+# Depending on your LangChain version, ChatOllama import moves.
+# This path is widely compatible; if your repo uses a different path, keep that one.
+try:
+    from langchain_ollama import ChatOllama
+except Exception:  # pragma: no cover
+    from langchain_community.chat_models import ChatOllama  # type: ignore
+
 from athena.logger import logger
+from athena.settings import LLMSettings
+from llm_core.catalog import ModelCatalog
+
 
 OLLAMA_PREFIX = "ollama_"
 
-OLLAMA_BASE_URL: str = os.getenv("OLLAMA_ENDPOINT", "http://localhost:11434")
-GPU_USER = os.getenv("GPU_USER")
-GPU_PASSWORD = os.getenv("GPU_PASSWORD")
 
-_auth = (GPU_USER, GPU_PASSWORD) if GPU_USER and GPU_PASSWORD else None
-_headers = (
-    {"Authorization": requests.auth._basic_auth_str(GPU_USER, GPU_PASSWORD)}  # type: ignore
-    if _auth
-    else None
-)
+def _list_ollama_models(host: str) -> List[str]:
+    """
+    GET {host}/api/tags  -> { "models": [ { "name": "llama3:latest", ... }, ... ] }
+    Returns the 'name' field for each local model.
+    """
+    resp = requests.get(f"{host}/api/tags", timeout=10)
+    resp.raise_for_status()
+    payload = resp.json() or {}
+    models = payload.get("models") or []
+    names = []
+    for m in models:
+        # Prefer 'name' (e.g. "llama3:latest"). Fallback to 'model' if present.
+        name = m.get("name") or m.get("model")
+        if name:
+            names.append(name)
+    return names
 
 
-def _discover_ollama_models() -> List[str]:
+def bootstrap(settings: LLMSettings) -> ModelCatalog:
+    """
+    Discover local Ollama models and return an immutable catalog of ChatOllama templates.
+    If nothing is discovered, return an empty catalog and an empty enum (no fallbacks).
+    """
+    templates: Dict[str, BaseLanguageModel] = {}
+
     try:
-        resp = requests.get(f"{OLLAMA_BASE_URL}/api/tags", auth=_auth, timeout=15)
-        resp.raise_for_status()
-        data = resp.json()
-        return [m["name"] for m in data.get("models", [])]
+        names = _list_ollama_models(settings.OLLAMA_HOST)
+        for n in names:
+            key = f"{OLLAMA_PREFIX}{n.replace(':', '_')}"
+            templates[key] = ChatOllama(model=n, base_url=settings.OLLAMA_HOST)
     except Exception as exc:
-        logger.warning("Could not query Ollama server (%s): %s", OLLAMA_BASE_URL, exc)
-        return []
+        logger.warning("Ollama discovery failed: %s", exc, exc_info=False)
 
+    if templates:
+        logger.info("Available Ollama models: %s", ", ".join(sorted(templates)))
+        OllamaModel = Enum("OllamaModel", {name: name for name in templates})
+    else:
+        logger.warning("No Ollama models discovered at %s.", settings.OLLAMA_HOST)
+        OllamaModel = Enum("OllamaModel", {})
 
-ollama_available_models: Dict[str, ChatOllama] = {}
-
-for _name in _discover_ollama_models():
-    key = OLLAMA_PREFIX + _name
-    params = {
-        "model": _name,
-        "base_url": OLLAMA_BASE_URL,
-        "format": "json",
-    }
-    if _headers:
-        params["headers"] = _headers
-    ollama_available_models[key] = ChatOllama(**params)
-
-if ollama_available_models:
-    logger.info("Available Ollama models: %s", ", ".join(ollama_available_models))
-else:
-    logger.warning("No Ollama models discovered at %s.", OLLAMA_BASE_URL)
-
-
-# Enum for referencing the discovered models
-if ollama_available_models:
-    OllamaModel = Enum(
-        "OllamaModel", {name: name for name in ollama_available_models}  # type: ignore
-    )
-else:
-
-    class OllamaModel(str, Enum):
-        """Fallback enum used when no Ollama server is reachable."""
-
-        pass
+    return ModelCatalog(templates=MappingProxyType(templates), enum=OllamaModel)

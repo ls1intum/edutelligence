@@ -1,7 +1,7 @@
-from pathlib import Path
-from llm_core.loaders.llm_config_loader import get_llm_config
 from llm_core.models import ModelConfigType
 from pydantic import BaseModel, Field
+from typing import Optional
+from llm_core.models.llm_config import LLMConfig, LLMConfigModel, RawLLMConfig
 
 from athena import config_schema_provider
 from module_modeling_llm.prompts import (
@@ -9,9 +9,6 @@ from module_modeling_llm.prompts import (
     filter_feedback_prompt,
     structured_grading_instructions_prompt,
 )
-
-_CONFIG_PATH = Path(__file__).resolve().parent.parent / "llm_config.yml"
-llm_config = get_llm_config(str(_CONFIG_PATH))
 
 
 class GenerateSuggestionsPrompt(BaseModel):
@@ -55,25 +52,25 @@ class BasicApproachConfig(BaseModel):
     max_input_tokens: int = Field(
         default=5000, description="Maximum number of tokens in the input prompt."
     )
-    generate_feedback: ModelConfigType = Field(
+    generate_feedback: Optional[ModelConfigType] = Field(
+        default=None,
         title="Generate Feedback Provider",
         description="Select the LLM provider to use for generating feedback.",
-        default=llm_config.models.base_model_config,
     )
-    filter_feedback: ModelConfigType = Field(
+    filter_feedback: Optional[ModelConfigType] = Field(
+        default=None,
         title="Filter Feedback Provider",
         description="Select the LLM provider to use for filtering feedback.",
-        default=llm_config.models.base_model_config,
     )
-    review_feedback: ModelConfigType = Field(
+    review_feedback: Optional[ModelConfigType] = Field(
+        default=None,
         title="Review Feedback Provider",
         description="Select the LLM provider to use for reviewing feedback.",
-        default=llm_config.models.base_model_config,
     )
-    generate_grading_instructions: ModelConfigType = Field(
+    generate_grading_instructions: Optional[ModelConfigType] = Field(
+        default=None,
         title="Generate Grading Instructions Provider",
         description="Select the LLM provider to use for generating grading instructions.",
-        default=llm_config.models.base_model_config,
     )
     generate_suggestions_prompt: GenerateSuggestionsPrompt = Field(
         default=GenerateSuggestionsPrompt()
@@ -83,4 +80,7 @@ class BasicApproachConfig(BaseModel):
 @config_schema_provider
 class Configuration(BaseModel):
     debug: bool = Field(default=False, description="Enable debug mode.")
-    approach: BasicApproachConfig = Field(default=BasicApproachConfig())
+    approach: BasicApproachConfig = Field(
+        default_factory=BasicApproachConfig,
+        description="Configuration for the basic approach.",
+    )

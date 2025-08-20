@@ -1,71 +1,89 @@
+# llm_core/loaders/model_loaders/azure_loader.py
+
+from __future__ import annotations
+
 from enum import Enum
-import os
+from types import MappingProxyType
+from typing import Dict, List, Mapping, Tuple
+
 import requests
-from typing import Dict, List
 
 from langchain.base_language import BaseLanguageModel
 from langchain_openai import AzureChatOpenAI
 
 from athena.logger import logger
+from athena.settings import LLMSettings
+from llm_core.catalog import ModelCatalog
 
 
-# Discover available models from Azure
 AZURE_OPENAI_PREFIX = "azure_openai_"
-azure_available = bool(os.environ.get("AZURE_OPENAI_API_KEY"))
-
-azure_available_models: Dict[str, BaseLanguageModel] = {}
-
-# Azure OpenAI
-if azure_available:
-
-    def _get_azure_openai_deployments() -> List[str]:
-        base_url = f"{os.environ.get('AZURE_OPENAI_ENDPOINT')}/openai"
-        headers = {"api-key": os.environ["AZURE_OPENAI_API_KEY"]}
-
-        models_response = requests.get(
-            f"{base_url}/models?api-version=2023-03-15-preview",
-            headers=headers,
-            timeout=30,
-        )
-        models_data = models_response.json()["data"]
-
-        deployments_response = requests.get(
-            f"{base_url}/deployments?api-version=2023-03-15-preview",
-            headers=headers,
-            timeout=30,
-        )
-        deployments_data = deployments_response.json()["data"]
-
-        # If deployment["model"] is substring of model["id"], we consider it a chat completion model
-        chat_completion_models = ",".join(
-            m["id"] for m in models_data if m["capabilities"]["chat_completion"]
-        )
-        return [
-            d["id"] for d in deployments_data if d["model"] in chat_completion_models
-        ]
-
-    for deployment in _get_azure_openai_deployments():
-        azure_available_models[AZURE_OPENAI_PREFIX + deployment] = AzureChatOpenAI(
-            azure_deployment=deployment
-        )
 
 
-if azure_available_models:
-    logger.info("Available azure models: %s", ", ".join(azure_available_models.keys()))
-else:
-    logger.warning("No azure models discovered.")
+def _get_azure_openai_deployments(
+    endpoint: str, api_key: str, api_version: str
+) -> Tuple[List[dict], List[str]]:
+    base_url = f"{endpoint}/openai"
+    headers = {"api-key": api_key}
 
-# Enum for referencing the discovered models
-if azure_available_models:
-    AzureModel = Enum("AzureModel", {name: name for name in azure_available_models})  # type: ignore
-else:
+    models_resp = requests.get(
+        f"{base_url}/models",
+        params={"api-version": api_version},
+        headers=headers,
+        timeout=30,
+    )
+    models_resp.raise_for_status()
+    models_data = models_resp.json()["data"]
 
-    class AzureModel(str, Enum):
-        azure_openai_gpt_35_turbo = "azure_openai_gpt-35-turbo"
-        azure_openai_gpt_4_turbo = "azure_openai_gpt-4-turbo"
-        azure_openai_gpt_4o = "azure_openai_gpt-4o"
-        azure_openai_gpt_4o_mini = "azure_openai_gpt-4o-mini"
-        azure_openai_o3_mini = "azure_openai_o3-mini"
-        azure_openai_gpt_41 = "azure_openai_gpt-41"
-        azure_openai_gpt_41_mini = "azure_openai_gpt-41-mini"
-        azure_openai_gpt_41_nano = "azure_openai_gpt-41-nano"
+    print("Models data:", models_data)  # Debugging line
+
+    deployments_resp = requests.get(
+        f"{base_url}/deployments",
+        params={"api-version": api_version},
+        headers=headers,
+        timeout=30,
+    )
+    deployments_resp.raise_for_status()
+    deployments_data = deployments_resp.json()["data"]
+
+    chat_completion_models = {
+        m["id"] for m in models_data if m.get("capabilities", {}).get("chat_completion")
+    }
+    chosen_deployments = [
+        d["id"] for d in deployments_data if d.get("model") in chat_completion_models
+    ]
+    return deployments_data, chosen_deployments
+
+
+def bootstrap(settings: LLMSettings) -> ModelCatalog:
+    templates: Dict[str, BaseLanguageModel] = {}
+
+    azure_ok = bool(settings.AZURE_OPENAI_API_KEY) and bool(
+        settings.AZURE_OPENAI_ENDPOINT
+    )
+
+    if azure_ok:
+        try:
+            _, deployments = _get_azure_openai_deployments(
+                endpoint=settings.AZURE_OPENAI_ENDPOINT,
+                api_key=settings.AZURE_OPENAI_API_KEY,
+                api_version=settings.AZURE_OPENAI_API_VERSION,
+            )
+            for dep in deployments:
+                key = AZURE_OPENAI_PREFIX + dep
+                templates[key] = AzureChatOpenAI(
+                    azure_deployment=dep,
+                    azure_endpoint=settings.AZURE_OPENAI_ENDPOINT,
+                    api_version=settings.AZURE_OPENAI_API_VERSION,
+                    openai_api_key=settings.AZURE_OPENAI_API_KEY,
+                )
+        except Exception as exc:
+            logger.warning("Azure discovery failed: %s", exc, exc_info=False)
+
+    if templates:
+        logger.info("Available Azure models: %s", ", ".join(sorted(templates)))
+        AzureModel = Enum("AzureModel", {name: name for name in templates})
+    else:
+        logger.warning("No Azure models discovered.")
+        AzureModel = Enum("AzureModel", {})
+
+    return ModelCatalog(templates=MappingProxyType(templates), enum=AzureModel)

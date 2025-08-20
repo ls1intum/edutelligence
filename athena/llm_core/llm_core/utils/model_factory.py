@@ -1,4 +1,6 @@
-from typing import Optional
+from __future__ import annotations  # Enables string-based type hints without imports
+
+from typing import Optional, Protocol
 
 from llm_core.models.model_config import ModelConfig
 from llm_core.models.providers.openai_model_config import OpenAIModelConfig
@@ -17,14 +19,18 @@ def _detect_provider(model_name: str) -> Optional[str]:
     return None
 
 
-def create_config_for_model(model_name: str) -> ModelConfig:
+class ModelFactories(Protocol):
+    def openai_model_config(self, **kwargs) -> ModelConfig: ...
+    def azure_model_config(self, **kwargs) -> ModelConfig: ...
+    def ollama_model_config(self, **kwargs) -> ModelConfig: ...
+
+
+def create_config_for_model(model_name: str, factories: ModelFactories) -> ModelConfig:
     provider = _detect_provider(model_name)
-
     if provider == "openai":
-        return OpenAIModelConfig(model_name=model_name)
+        return factories.openai_model_config(model_name=model_name)
     if provider == "azure_openai":
-        return AzureModelConfig(model_name=model_name)
+        return factories.azure_model_config(model_name=model_name)
     if provider == "ollama":
-        return OllamaModelConfig(model_name=model_name)
-
+        return factories.ollama_model_config(model_name=model_name)
     raise ValueError(f"Unknown or unsupported provider for model '{model_name}'.")

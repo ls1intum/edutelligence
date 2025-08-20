@@ -49,6 +49,8 @@ async def generate_suggestions(
         ]
     )
 
+    print("Config for filter feedback: ", config.json())
+
     feedback_result = await predict_and_parse(
         model=config.generate_feedback,
         chat_prompt=chat_prompt,
