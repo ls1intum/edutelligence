@@ -1,10 +1,8 @@
-# llm_core/loaders/model_loaders/azure_loader.py
-
 from __future__ import annotations
 
 from enum import Enum
 from types import MappingProxyType
-from typing import Dict, List, Mapping, Tuple
+from typing import Dict, List, Tuple
 
 import requests
 

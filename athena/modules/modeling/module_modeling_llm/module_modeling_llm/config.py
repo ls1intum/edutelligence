@@ -1,7 +1,6 @@
 from llm_core.models import ModelConfigType
 from pydantic import BaseModel, Field
 from typing import Optional
-from llm_core.models.llm_config import LLMConfig, LLMConfigModel, RawLLMConfig
 
 from athena import config_schema_provider
 from module_modeling_llm.prompts import (

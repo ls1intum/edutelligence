@@ -1,22 +1,11 @@
-# llm_core/loaders/model_loaders/ollama_loader.py
-
 from __future__ import annotations
-
+import requests
 from enum import Enum
 from types import MappingProxyType
 from typing import Dict, List
 
-import requests
-
 from langchain.base_language import BaseLanguageModel
-
-# Depending on your LangChain version, ChatOllama import moves.
-# This path is widely compatible; if your repo uses a different path, keep that one.
-try:
-    from langchain_ollama import ChatOllama
-except Exception:  # pragma: no cover
-    from langchain_community.chat_models import ChatOllama  # type: ignore
-
+from langchain_community.chat_models import ChatOllama
 from athena.logger import logger
 from athena.settings import LLMSettings
 from llm_core.catalog import ModelCatalog

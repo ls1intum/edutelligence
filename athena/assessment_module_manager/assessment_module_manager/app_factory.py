@@ -2,14 +2,13 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from .settings import Settings
-from . import endpoints  # should expose `routers`
+from . import endpoints
 
 
 def create_app() -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        # Initialize settings
         settings = Settings()
         app.state.settings = settings
         try:
