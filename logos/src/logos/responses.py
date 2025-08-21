@@ -267,6 +267,7 @@ def resource_behaviour(logos_key, headers, data, models):
             "classification_time": end - start,
         }
     else:
+        logging.info(f"Skipping classification, using model {mdl}")
         mdls = [found]
         classified = {
             "classification_data": [
