@@ -78,6 +78,7 @@ async def _analyze_submission(
         "example_solution",
         "problem_statement",
         "grading_instructions",
+        "previous_submission",
     ]
     prompt_input, should_run = check_prompt_length_and_omit_features_if_necessary(
         prompt=chat_prompt,
@@ -144,10 +145,12 @@ async def _generate_feedback(
 
     # Check if the prompt is too long and omit features if necessary (in order of importance)
     omittable_features = [
+        "example_solution",
+        "problem_statement",
+        "grading_instructions",
         "submission_analysis",
         "writing_style",
         "feedback_preferences",
-        "example_solution",
     ]
     second_prompt_input, should_run = check_prompt_length_and_omit_features_if_necessary(
         prompt=second_chat_prompt,
