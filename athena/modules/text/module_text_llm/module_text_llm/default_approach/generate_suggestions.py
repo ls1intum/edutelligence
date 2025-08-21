@@ -204,7 +204,7 @@ def _convert_to_feedback_objects(
     grading_instruction_ids = set(
         grading_instruction.id
         for criterion in exercise.grading_criteria or []
-        for grading_instruction in criterion.structured_grading_instructions
+        for grading_instruction in (criterion.structured_grading_instructions or [])
     )
 
     feedbacks = []
