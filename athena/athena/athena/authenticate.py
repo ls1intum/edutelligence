@@ -2,11 +2,9 @@ import inspect
 from functools import wraps
 from typing import Callable
 
-from fastapi import HTTPException, Depends
+from fastapi import HTTPException, Depends, Request
 from fastapi.security import APIKeyHeader
-from dependency_injector.wiring import inject, Provide
 
-from athena.container import AthenaContainer
 from athena.settings import Settings
 from .logger import logger
 from .contextvars import set_lms_url_context_var
@@ -15,10 +13,19 @@ api_key_auth_header = APIKeyHeader(name="Authorization", auto_error=False)
 api_key_lms_url_header = APIKeyHeader(name="X-Server-URL", auto_error=False)
 
 
-@inject
+def get_settings(request: Request) -> Settings:
+    settings = getattr(request.app.state, "settings", None)
+    if settings is None:
+        # Fallback to non-prod to avoid hard-crashing in dev
+        raise HTTPException(
+            status_code=500, detail="Settings not initialized on app.state."
+        )
+    return settings
+
+
 def verify_inter_module_secret_key(
     secret: str | None,
-    settings: Settings = Provide[AthenaContainer.settings],
+    settings: Settings,
 ):
     if secret != settings.SECRET:
         if settings.PRODUCTION:
@@ -29,11 +36,6 @@ def verify_inter_module_secret_key(
 def authenticated(func: Callable) -> Callable:
     """
     Decorator for endpoints that require authentication.
-    Usage:
-    @app.post("/endpoint")
-    @authenticated
-    def endpoint():
-        ...
     """
 
     @wraps(func)
@@ -43,32 +45,43 @@ def authenticated(func: Callable) -> Callable:
         lms_url: str = Depends(api_key_lms_url_header),
         **kwargs
     ):
-        verify_inter_module_secret_key(
-            secret
-        )  # this happens after the ASM Module reissued the request
+        # Get request from kwargs (FastAPI will inject it)
+        request = kwargs.get("request")
+        if request:
+            settings = get_settings(request)
+        else:
+            # Fallback - create default settings
+            from athena.settings import Settings
+            import os
+
+            settings = Settings(
+                PRODUCTION=os.getenv("PRODUCTION", "False").lower()
+                in ("true", "1", "yes"),
+                SECRET=os.getenv("SECRET", "development-secret"),
+            )
+
+        verify_inter_module_secret_key(secret, settings)
         set_lms_url_context_var(lms_url)
         if inspect.iscoroutinefunction(func):
             return await func(*args, **kwargs)
         return func(*args, **kwargs)
 
-    # Update the function signature with the 'secret' parameter, but otherwise keep the annotations intact
+    # Update the function signature
     sig = inspect.signature(func)
     params = list(sig.parameters.values())
-    params.append(
-        inspect.Parameter(
-            "secret",
-            inspect.Parameter.POSITIONAL_OR_KEYWORD,
-            default=Depends(api_key_auth_header),
-        )
+    params.extend(
+        [
+            inspect.Parameter(
+                "secret",
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                default=Depends(api_key_auth_header),
+            ),
+            inspect.Parameter(
+                "lms_url",
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                default=Depends(api_key_lms_url_header),
+            ),
+        ]
     )
-    params.append(
-        inspect.Parameter(
-            "lms_url",
-            inspect.Parameter.POSITIONAL_OR_KEYWORD,
-            default=Depends(api_key_lms_url_header),
-        )
-    )
-    new_sig = sig.replace(parameters=params)
-    wrapper.__signature__ = new_sig  # type: ignore # https://github.com/python/mypy/issues/12472
-
+    wrapper.__signature__ = sig.replace(parameters=params)  # type: ignore
     return wrapper

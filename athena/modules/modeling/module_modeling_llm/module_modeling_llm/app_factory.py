@@ -1,28 +1,44 @@
 from contextlib import asynccontextmanager
-import asyncio
-from pathlib import Path
-from fastapi import FastAPI
-from athena.settings import Settings
-from athena.database import create_tables
-from athena.app import app as base_app
-from athena import module_health
-from llm_core.loaders.model_loaders import azure_loader, openai_loader, ollama_loader
-from llm_core.utils.model_factory import ModelFactories as ModelFactoriesProtocol
-from llm_core.loaders.llm_config_loader import get_llm_config
 from types import SimpleNamespace
-from llm_core.models.providers.openai_model_config import OpenAIModelConfig
-from llm_core.models.providers.azure_model_config import AzureModelConfig
-from llm_core.models.providers.ollama_model_config import OllamaModelConfig
-from sqlalchemy import create_engine
-from module_modeling_llm.core.context import AppContext
+from typing import Any
+
+import yaml
+from fastapi import FastAPI
+
+from athena.app import create_app as create_athena_app
+from athena.settings import Settings
+from athena.module_config import get_module_config
+from athena.database import create_tables
+from athena.schemas.exercise_type import ExerciseType
+
+# LLM discovery + config materialization
+from llm_core.loaders.model_loaders.azure_loader import bootstrap as azure_bootstrap
+from llm_core.loaders.model_loaders.openai_loader import bootstrap as openai_bootstrap
+from llm_core.loaders.model_loaders.ollama_loader import bootstrap as ollama_bootstrap
+from llm_core.loaders.llm_config_loader import get_llm_config
+from llm_core.utils.model_factory import ModelFactories
+
 from module_modeling_llm.config import Configuration, BasicApproachConfig
 
 
-def load_raw_config(path):
-    import yaml
+def _build_factories(azure_catalog, openai_catalog, ollama_catalog) -> ModelFactories:
+    class _Factories:
+        def openai_model_config(self, **kwargs):
+            from llm_core.models.providers.openai_model_config import OpenAIModelConfig
 
-    with open(path, "r") as f:
-        return yaml.safe_load(f)
+            return OpenAIModelConfig(catalog=openai_catalog, **kwargs)
+
+        def azure_model_config(self, **kwargs):
+            from llm_core.models.providers.azure_model_config import AzureModelConfig
+
+            return AzureModelConfig(catalog=azure_catalog, **kwargs)
+
+        def ollama_model_config(self, **kwargs):
+            from llm_core.models.providers.ollama_model_config import OllamaModelConfig
+
+            return OllamaModelConfig(catalog=ollama_catalog, **kwargs)
+
+    return _Factories()  # type: ignore
 
 
 def _warm_start():
@@ -35,92 +51,67 @@ def _warm_start():
     tiktoken.get_encoding("cl100k_base")
 
 
-def create_app() -> FastAPI:
-    @asynccontextmanager
-    async def lifespan(app: FastAPI):
-        print("Module 'module_modeling_llm' is starting up...")
-
-        # Use the settings from environment automatically via pydantic
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # 1) settings - reuse if already set by run_app, otherwise create
+    settings = getattr(app.state, "settings", None)
+    if settings is None:
         import os
 
         settings = Settings(
             PRODUCTION=os.getenv("PRODUCTION", "False").lower() in ("true", "1", "yes"),
             SECRET=os.getenv("SECRET", "development-secret"),
         )
+        app.state.settings = settings
 
-        # Bootstrap catalogs
-        azure_catalog = azure_loader.bootstrap(settings=settings.llm)
-        openai_catalog = openai_loader.bootstrap(settings=settings.llm)
-        ollama_catalog = ollama_loader.bootstrap(settings=settings.llm)
+    # 2) discover LLM catalogs (optional if credentials missing)
+    azure_catalog = azure_bootstrap(settings.llm if hasattr(settings, "llm") else settings)  # type: ignore
+    openai_catalog = openai_bootstrap(settings.llm if hasattr(settings, "llm") else settings)  # type: ignore
+    ollama_catalog = ollama_bootstrap(settings.llm if hasattr(settings, "llm") else settings)  # type: ignore
 
-        # Factories with catalogs
-        class ModelFactories(ModelFactoriesProtocol):
-            def openai_model_config(self, **kw):
-                return OpenAIModelConfig(catalog=openai_catalog, **kw)
+    app.state.ctx = SimpleNamespace(
+        azure_catalog=azure_catalog,
+        openai_catalog=openai_catalog,
+        ollama_catalog=ollama_catalog,
+    )
 
-            def azure_model_config(self, **kw):
-                return AzureModelConfig(catalog=azure_catalog, **kw)
+    # 3) load llm_config.yml and bake a default module Configuration
+    with open("llm_config.yml", "r", encoding="utf-8") as f:
+        raw = yaml.safe_load(f) or {}
 
-            def ollama_model_config(self, **kw):
-                return OllamaModelConfig(catalog=ollama_catalog, **kw)
+    factories = _build_factories(azure_catalog, openai_catalog, ollama_catalog)
+    llm_config = get_llm_config(raw_config=raw, factories=factories)
 
-        factories = ModelFactories()
+    # build the module's default Configuration using discovered model configs
+    approach = BasicApproachConfig(
+        generate_feedback=llm_config.models.base_model_config,
+        filter_feedback=llm_config.models.mini_model_config
+        or llm_config.models.base_model_config,
+        review_feedback=llm_config.models.fast_reasoning_model_config
+        or llm_config.models.base_model_config,
+        generate_grading_instructions=llm_config.models.long_reasoning_model_config
+        or llm_config.models.base_model_config,
+    )
+    app.state.module_config = Configuration(approach=approach)
 
-        # Load llm_config.yml
-        config_path = Path(__file__).resolve().parent.parent / "llm_config.yml"
-        raw_config = load_raw_config(config_path)
-        llm_config = get_llm_config(raw_config, factories)
+    # 4) ensure tables exist for this module type
+    module_cfg = get_module_config()
+    from sqlalchemy import create_engine
 
-        # Default config using llm_config
-        default_config = Configuration(
-            approach=BasicApproachConfig(
-                generate_feedback=llm_config.models.base_model_config,
-                filter_feedback=llm_config.models.base_model_config,
-                review_feedback=llm_config.models.base_model_config,
-                generate_grading_instructions=llm_config.models.base_model_config,
-            )
-        )
+    engine = create_engine(settings.DATABASE_URL)
+    create_tables(engine=engine, exercise_type=module_cfg.type.value)
 
-        # LLM factory with fast fail on unknown models
-        all_templates = {
-            **azure_catalog.templates,
-            **openai_catalog.templates,
-            **ollama_catalog.templates,
-        }
+    # 5) warm start
+    import asyncio
 
-        def llm_factory(name: str):
-            if name not in all_templates:
-                from fastapi import HTTPException
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(None, _warm_start)
 
-                raise HTTPException(status_code=400, detail=f"Unknown model '{name}'")
-            return all_templates[name]
+    yield
 
-        ctx = AppContext(
-            azure_catalog=azure_catalog,
-            openai_catalog=openai_catalog,
-            ollama_catalog=ollama_catalog,
-            default_config=default_config,
-            llm_factory=llm_factory,
-        )
-        app.state.ctx = ctx
 
-        # DB
-        db_engine = create_engine(settings.DATABASE_URL)
-
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(
-            None, create_tables, db_engine, settings.module.type.name
-        )
-        await loop.run_in_executor(None, _warm_start)
-
-        try:
-            yield
-        finally:
-            print("Module 'module_modeling_llm' is shutting down.")
-
-    from athena.app import create_app as athena_create_app
-
-    app = athena_create_app(lifespan)
+def create_app() -> FastAPI:
+    app = create_athena_app(lifespan)
     from .endpoints import suggest_feedback  # Import to register the endpoint
 
     return app

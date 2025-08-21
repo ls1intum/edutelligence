@@ -1,9 +1,10 @@
 from typing import List
 
 from .module import Module
-from ..container import get_container
+from ..settings import Settings
 
 
 def list_modules() -> List[Module]:
     """Get a list of all Athena modules that are available."""
-    return get_container().settings().list_modules()
+    settings = Settings()
+    return settings.list_modules()

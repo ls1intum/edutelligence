@@ -45,6 +45,9 @@ def run_app(app_to_run: FastAPI, settings: "athena.settings.Settings"):
     """
     Starts the Uvicorn server for the given app and settings.
     """
+    # Expose settings to dependencies
+    app_to_run.state.settings = settings
+
     LOGGING_CONFIG["formatters"]["default"][
         "fmt"
     ] = "%(asctime)s %(levelname)s --- [%(name)s] : %(message)s"

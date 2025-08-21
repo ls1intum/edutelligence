@@ -1,14 +1,19 @@
-from fastapi import Depends, Request
+from fastapi import Request
+from .settings import Settings
 
 
-def get_container(request: Request):
-    return request.app.state.container
+def get_settings(request: Request) -> Settings:
+    settings = getattr(request.app.state, "settings", None)
+    if settings is None:
+        from fastapi import HTTPException
+
+        raise HTTPException(
+            status_code=500, detail="Settings not initialized on app.state."
+        )
+    return settings
 
 
-def get_settings(container=Depends(get_container)):
-    return container.settings()
-
-
-def get_registry(container=Depends(get_container)):
+def get_registry(request: Request):
     # If you have a registry/provider for modules, surface it here
-    return container.settings() if hasattr(container, "settings") else None
+    settings = get_settings(request)
+    return settings if hasattr(settings, "settings") else None

@@ -10,6 +10,7 @@ from athena.metadata import with_meta
 from athena.module_config import (
     get_header_module_config_factory,
     get_default_module_config_from_app_factory,
+    get_dynamic_module_config_factory,
 )
 from athena.logger import logger
 from athena.schemas import Exercise, Submission, Feedback, LearnerProfile
@@ -404,8 +405,12 @@ def feedback_provider(
         submission: submission_type,
         isGraded: is_graded_type = Body(True, alias="isGraded"),
         learner_profile: learner_profile_type = Body(None, alias="learnerProfile"),
-        header_cfg: Optional[Any] = Depends(HeaderConfigDep) if HeaderConfigDep else None,
-        default_cfg: Optional[Any] = Depends(DefaultConfigDep) if DefaultConfigDep else None,
+        header_cfg: Optional[Any] = (
+            Depends(HeaderConfigDep) if HeaderConfigDep else None
+        ),
+        default_cfg: Optional[Any] = (
+            Depends(DefaultConfigDep) if DefaultConfigDep else None
+        ),
     ):
         config = header_cfg or default_cfg
 

@@ -2,17 +2,24 @@ import json
 from typing import TypeVar, Generic, Optional
 
 import httpx
-from fastapi import HTTPException
+from fastapi import HTTPException, Request, Depends
 from pydantic.generics import GenericModel
-
-from dependency_injector.wiring import inject, Provide
 
 from .module import Module
 from .list_modules import list_modules
 from athena import ExerciseType
 from assessment_module_manager.logger import logger
-from ..container import DependencyContainer
 from ..settings import Settings
+
+
+def get_settings(request: Request) -> Settings:
+    settings = getattr(request.app.state, "settings", None)
+    if settings is None:
+        raise HTTPException(
+            status_code=500, detail="Settings not initialized on app.state."
+        )
+    return settings
+
 
 D = TypeVar("D")
 M = TypeVar("M")
@@ -40,7 +47,6 @@ async def find_module_by_name(module_name: str) -> Optional[Module]:
 
 
 # pylint: disable=too-many-positional-arguments
-@inject
 async def request_to_module(
     module: Module,
     headers: dict,
@@ -48,7 +54,7 @@ async def request_to_module(
     lms_url: str,
     data: Optional[dict],
     method: str,
-    settings: Settings = Provide[DependencyContainer.settings],
+    settings: Settings,
 ) -> ModuleResponse:
     """
     Helper function to send a request to a module.

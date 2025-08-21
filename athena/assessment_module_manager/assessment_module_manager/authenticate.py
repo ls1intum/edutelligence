@@ -2,24 +2,29 @@ import inspect
 from functools import wraps
 from typing import Callable
 
-from dependency_injector.wiring import inject, Provide
-
-from fastapi import HTTPException, Depends
+from fastapi import HTTPException, Depends, Request
 from fastapi.security import APIKeyHeader
 
 from .logger import logger
-from .container import DependencyContainer
 from .settings import Settings
 
 api_key_auth_header = APIKeyHeader(name="Authorization", auto_error=False)
 api_key_lms_url_header = APIKeyHeader(name="X-Server-URL", auto_error=False)
 
 
-@inject
+def get_settings(request: Request) -> Settings:
+    settings = getattr(request.app.state, "settings", None)
+    if settings is None:
+        raise HTTPException(
+            status_code=500, detail="Settings not initialized on app.state."
+        )
+    return settings
+
+
 def verify_lms_athena_key(
     lms_url: str,
     secret: str,
-    settings: Settings = Provide[DependencyContainer.settings],
+    settings: Settings,
 ):
     if lms_url is None:
         raise HTTPException(status_code=401, detail="Invalid X-Server-URL.")
@@ -38,11 +43,6 @@ def verify_lms_athena_key(
 def authenticated(func: Callable) -> Callable:
     """
     Decorator for endpoints that require authentication.
-    Usage:
-    @app.post("/endpoint")
-    @authenticated
-    def endpoint():
-        ...
     """
 
     @wraps(func)
@@ -52,31 +52,37 @@ def authenticated(func: Callable) -> Callable:
         lms_url: str = Depends(api_key_lms_url_header),
         **kwargs
     ):
-        verify_lms_athena_key(
-            lms_url, secret
-        )  # this happens in scope of the ASM Module
+        # Get request from kwargs (FastAPI will inject it)
+        request = kwargs.get("request")
+        if request:
+            settings = get_settings(request)
+        else:
+            # Fallback - create default settings
+            from .settings import Settings
+
+            settings = Settings()
+
+        verify_lms_athena_key(lms_url, secret, settings)
         if inspect.iscoroutinefunction(func):
             return await func(*args, **kwargs)
         return func(*args, **kwargs)
 
-    # Update the function signature with the 'secret' parameter, but otherwise keep the annotations intact
+    # Update the function signature
     sig = inspect.signature(func)
     params = list(sig.parameters.values())
-    params.append(
-        inspect.Parameter(
-            "secret",
-            inspect.Parameter.POSITIONAL_OR_KEYWORD,
-            default=Depends(api_key_auth_header),
-        )
+    params.extend(
+        [
+            inspect.Parameter(
+                "secret",
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                default=Depends(api_key_auth_header),
+            ),
+            inspect.Parameter(
+                "lms_url",
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                default=Depends(api_key_lms_url_header),
+            ),
+        ]
     )
-    params.append(
-        inspect.Parameter(
-            "lms_url",
-            inspect.Parameter.POSITIONAL_OR_KEYWORD,
-            default=Depends(api_key_lms_url_header),
-        )
-    )
-    new_sig = sig.replace(parameters=params)
-    wrapper.__signature__ = new_sig  # type: ignore # https://github.com/python/mypy/issues/12472
-
+    wrapper.__signature__ = sig.replace(parameters=params)  # type: ignore
     return wrapper

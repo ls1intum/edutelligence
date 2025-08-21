@@ -58,20 +58,32 @@ def get_header_module_config_factory(module_config_type: Type[C]):
 
 
 def get_default_module_config_from_app_factory(module_config_type: Type[C]):
-    """Fetch default from request.app.state.container.module_config()."""
+    """Fetch default from request.app.state.module_config (no DI container)."""
 
     async def dep(request: Request) -> C:
-        app_container = getattr(
-            getattr(getattr(request, "app", None), "state", None), "container", None
-        )
-        if app_container and hasattr(app_container, "module_config"):
-            return app_container.module_config()  # type: ignore[return-value]
+        cfg = getattr(getattr(request, "app", None).state, "module_config", None)  # type: ignore
+        if cfg:
+            return cfg
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=(
-                "No module config available. Provide X-Module-Config header or attach a container with "
-                "`module_config()` to app.state.container."
+                "No module config available. Provide X-Module-Config header or attach "
+                "`module_config` to app.state."
             ),
         )
+
+    return dep
+
+
+def get_dynamic_module_config_factory(module_config_type: Type[C]):
+    """Prefer header override; otherwise default from app.state.module_config."""
+    HeaderDep = get_header_module_config_factory(module_config_type)
+    DefaultDep = get_default_module_config_from_app_factory(module_config_type)
+
+    async def dep(
+        header_cfg: Optional[C] = HeaderDep(),  # type: ignore
+        default_cfg: C = DefaultDep(),  # type: ignore
+    ) -> C:
+        return header_cfg or default_cfg
 
     return dep

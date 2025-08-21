@@ -5,6 +5,7 @@ Entry point for the assessment module manager.
 import uvicorn
 from uvicorn.config import LOGGING_CONFIG
 from .app_factory import create_app
+from .settings import Settings
 from assessment_module_manager.logger import logger
 
 app = create_app()
@@ -14,8 +15,8 @@ def main():
     """
     Start the assessment module manager using uvicorn.
     """
-    container = app.state.container
-    settings = container.settings()
+    settings = Settings()
+    app.state.settings = settings
 
     LOGGING_CONFIG["formatters"]["default"][
         "fmt"
