@@ -11,16 +11,6 @@ from langsmith import traceable
 
 from ...common.mastery_utils import get_mastery
 from ...common.memiris_setup import get_tenant_for_user
-from ...common.token_usage_dto import TokenUsageDTO
-from ...common.tools import (
-    create_tool_faq_content_retrieval,
-    create_tool_get_competency_list,
-    create_tool_get_course_details,
-    create_tool_get_exercise_list,
-    create_tool_get_exercise_problem_statement,
-    create_tool_get_student_exercise_metrics,
-    create_tool_lecture_content_retrieval,
-)
 from ...domain import CourseChatPipelineExecutionDTO
 from ...domain.chat.interaction_suggestion_dto import (
     InteractionSuggestionPipelineExecutionDTO,
@@ -31,12 +21,22 @@ from ...retrieval.faq_retrieval import FaqRetrieval
 from ...retrieval.faq_retrieval_utils import should_allow_faq_tool
 from ...retrieval.lecture.lecture_retrieval import LectureRetrieval
 from ...retrieval.lecture.lecture_retrieval_utils import should_allow_lecture_tool
+from ...tools import (
+    create_tool_faq_content_retrieval,
+    create_tool_get_competency_list,
+    create_tool_get_course_details,
+    create_tool_get_exercise_list,
+    create_tool_get_exercise_problem_statement,
+    create_tool_get_student_exercise_metrics,
+    create_tool_lecture_content_retrieval,
+)
 from ...web.status.status_update import (
     CourseChatStatusCallback,
 )
 from ..abstract_agent_pipeline import AbstractAgentPipeline, AgentPipelineExecutionState
 from ..shared.citation_pipeline import CitationPipeline, InformationType
 from ..shared.utils import (
+    datetime_to_string,
     format_custom_instructions,
 )
 from .interaction_suggestion_pipeline import (
@@ -59,7 +59,6 @@ class CourseChatPipeline(
     faq_retriever: Optional[FaqRetrieval]
     jinja_env: Environment
     system_prompt_template: Any
-    tokens: list
     event: Optional[str]
 
     def __init__(
@@ -93,8 +92,6 @@ class CourseChatPipeline(
         self.system_prompt_template = self.jinja_env.get_template(
             "course_chat_system_prompt.j2"
         )
-
-        self.tokens = []
 
     def __repr__(self):
         return f"{self.__class__.__name__}(event={self.event})"
@@ -161,13 +158,17 @@ class CourseChatPipeline(
             callback = cast(CourseChatStatusCallback, state.callback)
 
         tool_list: list[Callable] = [
-            create_tool_get_course_details(state.dto, callback),
+            create_tool_get_course_details(state.dto.course, callback),
         ]
 
         if state.dto.course.exercises:
-            tool_list.append(create_tool_get_exercise_list(state.dto, callback))
             tool_list.append(
-                create_tool_get_exercise_problem_statement(state.dto, callback)
+                create_tool_get_exercise_list(state.dto.course.exercises, callback)
+            )
+            tool_list.append(
+                create_tool_get_exercise_problem_statement(
+                    state.dto.course.exercises, callback
+                )
             )
 
         if (
@@ -176,18 +177,23 @@ class CourseChatPipeline(
             and state.dto.course.exercises
         ):
             tool_list.append(
-                create_tool_get_student_exercise_metrics(state.dto, callback)
+                create_tool_get_student_exercise_metrics(state.dto.metrics, callback)
             )
 
         if state.dto.course.competencies and len(state.dto.course.competencies) > 0:
-            tool_list.append(create_tool_get_competency_list(state.dto, callback))
+            tool_list.append(
+                create_tool_get_competency_list(
+                    state.dto.course.competencies, state.dto.metrics, callback
+                )
+            )
 
         if allow_lecture_tool:
             self.lecture_retriever = LectureRetrieval(state.db.client)
             tool_list.append(
                 create_tool_lecture_content_retrieval(
                     self.lecture_retriever,
-                    state.dto,
+                    state.dto.course.id,
+                    state.dto.settings.artemis_base_url if state.dto.settings else "",
                     callback,
                     query_text,
                     state.message_history,
@@ -200,7 +206,9 @@ class CourseChatPipeline(
             tool_list.append(
                 create_tool_faq_content_retrieval(
                     self.faq_retriever,
-                    state.dto,
+                    state.dto.course.id,
+                    state.dto.course.name,
+                    state.dto.settings.artemis_base_url if state.dto.settings else "",
                     callback,
                     query_text,
                     state.message_history,
@@ -258,7 +266,7 @@ class CourseChatPipeline(
 
         # Prepare template context
         template_context = {
-            "current_date": datetime.now(tz=pytz.UTC).strftime("%Y-%m-%d %H:%M:%S"),
+            "current_date": datetime_to_string(datetime.now(tz=pytz.UTC)),
             "has_competencies": bool(state.dto.course.competencies),
             "has_exercises": bool(state.dto.course.exercises),
             "allow_lecture_tool": allow_lecture_tool,
@@ -338,6 +346,24 @@ class CourseChatPipeline(
     # === CAN override (optional methods) ===
     # ========================================
 
+    def on_agent_step(
+        self,
+        state: AgentPipelineExecutionState[
+            CourseChatPipelineExecutionDTO, CourseChatVariant
+        ],
+        step: dict[str, Any],
+    ) -> None:
+        """
+        Handle each agent execution step.
+
+        Args:
+            state: The current pipeline execution state.
+            step: The current step information.
+        """
+        # Update progress
+        if step.get("intermediate_steps"):
+            state.callback.in_progress("Thinking ...")
+
     def post_agent_hook(
         self,
         state: AgentPipelineExecutionState[
@@ -353,6 +379,7 @@ class CourseChatPipeline(
         # Process citations if we have them
         if hasattr(state, "lecture_content_storage") and hasattr(state, "faq_storage"):
             state.result = self._process_citations(
+                state,
                 state.result,
                 state.lecture_content_storage,
                 state.faq_storage,
@@ -361,13 +388,12 @@ class CourseChatPipeline(
             )
 
         # Generate suggestions
-        suggestions = self._generate_suggestions(state.result, state.dto)
+        suggestions = self._generate_suggestions(state, state.result, state.dto)
 
-        # Complete main process with suggestions
         state.callback.done(
             "Response created",
             final_result=state.result,
-            tokens=self.tokens,
+            tokens=state.tokens,
             accessed_memories=getattr(state, "accessed_memory_storage", []),
             suggestions=suggestions,
         )
@@ -380,6 +406,9 @@ class CourseChatPipeline(
 
     def _process_citations(
         self,
+        state: AgentPipelineExecutionState[
+            CourseChatPipelineExecutionDTO, CourseChatVariant
+        ],
         output: str,
         lecture_content_storage: dict[str, Any],
         faq_storage: dict[str, Any],
@@ -390,6 +419,7 @@ class CourseChatPipeline(
         Process citations for lecture content and FAQs.
 
         Args:
+            state: The current pipeline execution state
             output: The agent's output
             lecture_content_storage: Storage for lecture content
             faq_storage: Storage for FAQ content
@@ -408,7 +438,9 @@ class CourseChatPipeline(
                 variant=variant.id,
                 base_url=base_url,
             )
-        self.tokens.extend(self.citation_pipeline.tokens)
+        if hasattr(self.citation_pipeline, "tokens") and self.citation_pipeline.tokens:
+            for token in self.citation_pipeline.tokens:
+                self._track_tokens(state, token)
 
         if faq_storage.get("faqs"):
             base_url = dto.settings.artemis_base_url if dto.settings else ""
@@ -423,12 +455,18 @@ class CourseChatPipeline(
         return output
 
     def _generate_suggestions(
-        self, output: str, dto: CourseChatPipelineExecutionDTO
+        self,
+        state: AgentPipelineExecutionState[
+            CourseChatPipelineExecutionDTO, CourseChatVariant
+        ],
+        output: str,
+        dto: CourseChatPipelineExecutionDTO,
     ) -> Optional[Any]:
         """
         Generate interaction suggestions based on the output.
 
         Args:
+            state: The current pipeline execution state
             output: The agent's output
             dto: The pipeline execution DTO
 
@@ -441,6 +479,10 @@ class CourseChatPipeline(
                 suggestion_dto.chat_history = dto.chat_history
                 suggestion_dto.last_message = output
                 suggestions = self.suggestion_pipeline(suggestion_dto)
+
+                if self.suggestion_pipeline.tokens is not None:
+                    self._track_tokens(state, self.suggestion_pipeline.tokens)
+
                 return suggestions
             else:
                 # This should never happen but whatever
@@ -453,22 +495,6 @@ class CourseChatPipeline(
             )
             traceback.print_exc()
             return None
-
-    def _append_tokens(self, tokens: TokenUsageDTO) -> None:
-        """
-        Append tokens to the token list.
-
-        Args:
-            tokens: Token usage information to append
-        """
-        # Override the parent method to handle token tracking properly
-        # Convert TokenUsageDTO to the list format expected by this pipeline
-        if hasattr(tokens, "tokens"):
-            self.tokens.extend(tokens.tokens)
-        else:
-            # Handle case where token_usage is already a list or other format
-            if isinstance(tokens, list):
-                self.tokens.extend(tokens)
 
     @traceable(name="Course Chat Pipeline")
     def __call__(
@@ -499,7 +525,7 @@ class CourseChatPipeline(
             traceback.print_exc()
             callback.error(
                 "An error occurred while running the course chat pipeline.",
-                tokens=self.tokens,
+                tokens=[],
             )
 
     @classmethod

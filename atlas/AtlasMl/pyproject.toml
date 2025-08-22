@@ -16,6 +16,7 @@ matplotlib = "^3.10.1"
 scipy = "^1.15.2"
 apscheduler = "^3.10.4"
 openai = "==1.93.0"
+sentry-sdk = {extras = ["fastapi"], version = "^2.34.1"}
 
 
 [tool.poetry.group.dev.dependencies]
