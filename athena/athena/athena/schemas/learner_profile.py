@@ -2,6 +2,9 @@ from typing import Annotated
 
 from pydantic import BaseModel, Field
 
+from .schema import to_camel
+
+
 class LearnerProfile(BaseModel):
     """
     Model representing learner profile.
@@ -20,9 +23,7 @@ class LearnerProfile(BaseModel):
         description="Preference for formal (1) vs friendly (3) feedback."
     )]
     class Config:
-        @staticmethod
-        def alias_generator(s: str) -> str:
-            return ''.join([s.split('_')[0]] + [word.capitalize() for word in s.split('_')[1:]])
+        alias_generator = to_camel
         allow_population_by_field_name = True
 
     def _get_feedback_detail_prompt(self) -> str:
