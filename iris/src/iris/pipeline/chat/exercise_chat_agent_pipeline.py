@@ -59,6 +59,7 @@ from ..shared.utils import (
 )
 from .code_feedback_pipeline import CodeFeedbackPipeline
 from .interaction_suggestion_pipeline import InteractionSuggestionPipeline
+from .session_title_generation_pipeline import SessionTitleGenerationPipeline
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -113,6 +114,7 @@ class ExerciseChatAgentPipeline(Pipeline):
     llm_small: IrisLangchainChatModel
     pipeline: Runnable
     callback: ExerciseChatStatusCallback
+    session_title_pipeline: SessionTitleGenerationPipeline
     suggestion_pipeline: InteractionSuggestionPipeline
     code_feedback_pipeline: CodeFeedbackPipeline
     prompt: ChatPromptTemplate
@@ -153,6 +155,7 @@ class ExerciseChatAgentPipeline(Pipeline):
 
         # Create the pipelines
         self.db = VectorDatabase()
+        self.session_title_pipeline = SessionTitleGenerationPipeline()
         self.suggestion_pipeline = InteractionSuggestionPipeline(variant="exercise")
         self.lecture_retriever = LectureRetrieval(self.db.client)
         self.faq_retriever = FaqRetrieval(self.db.client)
@@ -688,6 +691,30 @@ class ExerciseChatAgentPipeline(Pipeline):
                 )
                 traceback.print_exc()
                 self.callback.error("Error in refining response")
+            # --- Generate a session title if this is the first student message ---
+            try:
+                # Only generate a title when this is the first user turn that produced a tutor reply
+                if out and len(dto.chat_history) == 1:
+                    first_user_msg = dto.chat_history[0].contents[0].text_content
+                    session_title = self.title_pipeline(first_user_msg, out)
+                    if self.title_pipeline.tokens is not None:
+                        tokens = [self.title_pipeline.tokens]
+                    else:
+                        tokens = []
+                    self.callback.done(
+                        final_result=None,
+                        session_title=session_title,
+                        tokens=tokens,
+                    )
+                else:
+                    self.callback.skip("Skipping session title generation.")
+            except Exception as e:
+                logger.error(
+                    "An error occurred while running the session title generation pipeline",
+                    exc_info=e,
+                )
+                traceback.print_exc()
+                self.callback.error("Generating session title failed.")
             try:
                 if out:
                     suggestion_dto = InteractionSuggestionPipelineExecutionDTO()
