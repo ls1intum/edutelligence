@@ -3,17 +3,17 @@ from typing import TypeVar, Generic, Optional
 
 import httpx
 from fastapi import HTTPException
-from pydantic.generics import GenericModel
 
 from .module import Module
 from .list_modules import list_modules
 from athena import ExerciseType
 from assessment_module_manager import env
 from assessment_module_manager.logger import logger
+from pydantic import BaseModel
 
 D = TypeVar('D')
 M = TypeVar('M')
-class ModuleResponse(GenericModel, Generic[D, M]):
+class ModuleResponse(BaseModel, Generic[D, M]):
     """
     A response from a module.
     """
@@ -52,7 +52,7 @@ async def request_to_module(module: Module, headers: dict, path: str, lms_url: s
         # should be the same as the LMS key
 
     try:
-        async with httpx.AsyncClient(base_url=module.url, timeout=600) as client:
+        async with httpx.AsyncClient(base_url=str(module.url), timeout=600) as client:
             if method == "POST":
                 response = await client.post(path, json=data, headers=headers)
             elif method == "GET":
