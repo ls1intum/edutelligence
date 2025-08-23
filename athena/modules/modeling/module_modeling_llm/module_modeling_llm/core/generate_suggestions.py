@@ -33,7 +33,7 @@ async def generate_suggestions(
         problem_statement=exercise_model.problem_statement,
         max_points=exercise_model.max_points,
         bonus_points=exercise_model.bonus_points,
-        structured_grading_instructions=structured_grading_instructions.json(),
+        structured_grading_instructions=structured_grading_instructions.model_dump_json(),
         submission_uml_type=exercise_model.submission_uml_type,
         example_solution=exercise_model.transformed_example_solution,
         uml_diagram_format=apollon_format_description,
@@ -52,7 +52,7 @@ async def generate_suggestions(
     feedback_result = await predict_and_parse(
         model=config.generate_feedback,
         chat_prompt=chat_prompt,
-        prompt_input=prompt_inputs.dict(),
+        prompt_input=prompt_inputs.model_dump(),
         pydantic_object=AssessmentModel,
         tags=[
             f"exercise-{exercise_model.exercise_id}",
@@ -64,9 +64,9 @@ async def generate_suggestions(
         emit_meta(
             "generate_suggestions",
             {
-                "prompt": chat_prompt.format(**prompt_inputs.dict()),
+                "prompt": chat_prompt.format(**prompt_inputs.model_dump()),
                 "result": (
-                    feedback_result.dict() if feedback_result is not None else None
+                    feedback_result.model_dump() if feedback_result is not None else None
                 ),
             },
         )
