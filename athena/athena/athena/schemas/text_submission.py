@@ -13,5 +13,5 @@ class TextLanguageEnum(str, Enum):
 
 class TextSubmission(Submission):
     """Submission on a text exercise."""
-    text: str = Field(example="Lorem ipsum dolor sit amet, consectetur adipiscing elit.")
-    language: Optional[TextLanguageEnum] = Field(None, example=TextLanguageEnum.ENGLISH)
+    text: str = Field(examples=["Lorem ipsum dolor sit amet, consectetur adipiscing elit."])
+    language: Optional[TextLanguageEnum] = Field(None, examples=[TextLanguageEnum.ENGLISH])

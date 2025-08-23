@@ -1,15 +1,13 @@
 from abc import ABC
 
-from pydantic import Field
+from pydantic import ConfigDict, Field
 
 from .schema import Schema
 
 
 class Submission(Schema, ABC):
-    id: int = Field(example=1)
-    exercise_id: int = Field(example=1)
+    id: int = Field(examples=[1])
+    exercise_id: int = Field(examples=[1])
 
-    meta: dict = Field({}, example={})
-
-    class Config:
-        orm_mode = True
+    meta: dict = Field({}, examples=[{}])
+    model_config = ConfigDict(from_attributes=True)
