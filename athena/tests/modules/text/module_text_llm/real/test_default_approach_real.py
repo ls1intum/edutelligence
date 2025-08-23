@@ -1,7 +1,7 @@
 import pytest
 from athena.text import Exercise, Submission
 from athena.schemas.exercise_type import ExerciseType
-from module_text_llm.basic_approach.generate_suggestions import generate_suggestions
+from module_text_llm.default_approach.generate_suggestions import generate_suggestions
 from athena.schemas.text_submission import TextLanguageEnum
 
 
@@ -35,6 +35,8 @@ async def test_generate_suggestions_algorithm_explanation(real_config):
         config=real_config,
         debug=False,
         is_graded=True,
+        learner_profile=None,
+        latest_submission=None,
     )
 
     for feedback in feedbacks:
@@ -102,6 +104,8 @@ async def test_generate_suggestions_code_documentation(real_config):
         config=real_config,
         debug=False,
         is_graded=True,
+        learner_profile=None,
+        latest_submission=None,
     )
 
     for feedback in feedbacks:
@@ -153,6 +157,8 @@ async def test_generate_suggestions_design_pattern(real_config):
         config=real_config,
         debug=False,
         is_graded=True,
+        learner_profile=None,
+        latest_submission=None,
     )
 
     for feedback in feedbacks:
