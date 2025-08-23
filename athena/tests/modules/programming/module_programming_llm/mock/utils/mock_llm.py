@@ -1,5 +1,5 @@
 from typing import List, Optional, Dict, Any
-from pydantic import BaseModel, Field
+from pydantic import ConfigDict, BaseModel, Field
 from unittest.mock import AsyncMock
 
 class MockLanguageModel:
@@ -40,8 +40,7 @@ class MockLanguageModel:
                 }
 
 class MockAssessmentModel(BaseModel):
-    class Config:
-        arbitrary_types_allowed = True
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
     assess: AsyncMock = Field(default_factory=lambda: AsyncMock(
         return_value={
