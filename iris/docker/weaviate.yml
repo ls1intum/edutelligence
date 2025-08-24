@@ -12,6 +12,9 @@ services:
     expose:
       - 8001
       - 50051
+    ports:
+      - "8001:8001"
+      - "50051:50051"
     volumes:
       - ${WEAVIATE_VOLUME_MOUNT:-./.docker-data/weaviate-data}:/var/lib/weaviate
     restart: on-failure:3

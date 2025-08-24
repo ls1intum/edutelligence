@@ -123,10 +123,10 @@ class MockWeaviateQuery:
                 MockWeaviateObject(
                     uuid="exercise-uuid-1",
                     properties={
-                        "exercise_id": "ex-1",
+                        "exercise_id": "1",
                         "description": "Solve linear equations",
-                        "competency_ids": ["comp-1", "comp-2"],
-                        "course_id": "course-1",
+                        "competency_ids": ["1", "2"],
+                        "course_id": "1",
                     },
                     vector=[0.1, 0.2, 0.3],
                 )
@@ -136,12 +136,12 @@ class MockWeaviateQuery:
                 MockWeaviateObject(
                     uuid="competency-uuid-1",
                     properties={
-                        "competency_id": "comp-1",
+                        "competency_id": "1",
                         "title": "Algebra",
                         "description": "Basic algebra concepts",
-                        "cluster_id": "cluster-1",
+                        "cluster_id": "1",
                         "cluster_similarity_score": 0.85,
-                        "course_id": "course-1",
+                        "course_id": "1",
                     },
                     vector=[0.1, 0.2, 0.3],
                 )
@@ -151,7 +151,7 @@ class MockWeaviateQuery:
                 MockWeaviateObject(
                     uuid="cluster-uuid-1",
                     properties={
-                        "cluster_id": "cluster-1",
+                        "cluster_id": "1",
                         "label_id": "algebra-basics",
                     },
                     vector=[0.1, 0.2, 0.3],
@@ -165,12 +165,20 @@ class MockWeaviateQuery:
         self._should_fail_fetch = should_fail
 
 
+class MockDeleteResult:
+    """Mock delete operation result."""
+    
+    def __init__(self, successful_count: int):
+        self.successful = successful_count
+
+
 class MockWeaviateData:
     """Mock collection data operations."""
 
     def __init__(self):
         self._should_fail_insert = False
         self._should_fail_update = False
+        self._should_fail_delete = False
 
     def insert(self, properties=None, vector=None):
         """Mock insert operation."""
@@ -184,6 +192,13 @@ class MockWeaviateData:
             raise Exception("Mock update error")
         return True
 
+    def delete_many(self, where=None):
+        """Mock delete_many operation."""
+        if self._should_fail_delete:
+            raise Exception("Mock delete error")
+        # Return mock result with successful count
+        return MockDeleteResult(2)
+
     def set_fail_insert(self, should_fail: bool):
         """Set whether insert operations should fail."""
         self._should_fail_insert = should_fail
@@ -191,6 +206,10 @@ class MockWeaviateData:
     def set_fail_update(self, should_fail: bool):
         """Set whether update operations should fail."""
         self._should_fail_update = should_fail
+
+    def set_fail_delete(self, should_fail: bool):
+        """Set whether delete operations should fail."""
+        self._should_fail_delete = should_fail
 
 
 class MockWeaviateConfig:
@@ -226,20 +245,20 @@ class MockWeaviateCollection:
                 MockWeaviateObject(
                     uuid="exercise-uuid-1",
                     properties={
-                        "exercise_id": "ex-1",
+                        "exercise_id": "1",
                         "description": "Solve linear equations",
-                        "competency_ids": ["comp-1", "comp-2"],
-                        "course_id": "course-1",
+                        "competency_ids": ["1", "2"],
+                        "course_id": "1",
                     },
                     vector=[0.1, 0.2, 0.3],
                 ),
                 MockWeaviateObject(
                     uuid="exercise-uuid-2",
                     properties={
-                        "exercise_id": "ex-2",
+                        "exercise_id": "2",
                         "description": "Calculus derivatives",
-                        "competency_ids": ["comp-3"],
-                        "course_id": "course-1",
+                        "competency_ids": ["3"],
+                        "course_id": "1",
                     },
                     vector=[0.4, 0.5, 0.6],
                 ),
@@ -249,24 +268,24 @@ class MockWeaviateCollection:
                 MockWeaviateObject(
                     uuid="competency-uuid-1",
                     properties={
-                        "competency_id": "comp-1",
+                        "competency_id": "1",
                         "title": "Algebra",
                         "description": "Basic algebra concepts",
-                        "cluster_id": "cluster-1",
+                        "cluster_id": "1",
                         "cluster_similarity_score": 0.85,
-                        "course_id": "course-1",
+                        "course_id": "1",
                     },
                     vector=[0.1, 0.2, 0.3],
                 ),
                 MockWeaviateObject(
                     uuid="competency-uuid-2",
                     properties={
-                        "competency_id": "comp-2",
+                        "competency_id": "2",
                         "title": "Calculus",
                         "description": "Basic calculus concepts",
-                        "cluster_id": "cluster-2",
+                        "cluster_id": "2",
                         "cluster_similarity_score": 0.92,
-                        "course_id": "course-1",
+                        "course_id": "1",
                     },
                     vector=[0.4, 0.5, 0.6],
                 ),
@@ -276,11 +295,21 @@ class MockWeaviateCollection:
                 MockWeaviateObject(
                     uuid="cluster-uuid-1",
                     properties={
-                        "cluster_id": "cluster-1",
+                        "cluster_id": "1",
                         "label_id": "algebra-basics",
+                        "course_id": "1",
                     },
                     vector=[0.1, 0.2, 0.3],
-                )
+                ),
+                MockWeaviateObject(
+                    uuid="cluster-uuid-2",
+                    properties={
+                        "cluster_id": "2",
+                        "label_id": "calculus-basics",
+                        "course_id": "1",
+                    },
+                    vector=[0.4, 0.5, 0.6],
+                ),
             ]
         return []
 
@@ -442,10 +471,11 @@ def weaviate_test_data(mock_weaviate_client):
         MockWeaviateObject(
             uuid="comp-1",
             properties={
-                "competency_id": "comp-1",
+                "competency_id": "1",
                 "title": "Algebra",
                 "description": "Basic algebra concepts",
-                "course_id": "course-1",
+                "course_id": "1",
+                "cluster_id": "cluster-1",
             },
         )
     )
@@ -453,11 +483,38 @@ def weaviate_test_data(mock_weaviate_client):
         MockWeaviateObject(
             uuid="comp-2",
             properties={
-                "competency_id": "comp-2",
+                "competency_id": "2",
                 "title": "Calculus",
                 "description": "Basic calculus concepts",
-                "course_id": "course-1",
+                "course_id": "1",
+                "cluster_id": "cluster-2",
             },
+        )
+    )
+    # Add test data to cluster collection
+    cluster_collection = mock_weaviate_client.collections.get(
+        CollectionNames.CLUSTERCENTER.value
+    )
+    cluster_collection.add_object(
+        MockWeaviateObject(
+            uuid="cluster-1",
+            properties={
+                "cluster_id": "cluster-1",
+                "course_id": "1",
+                "label_id": "cluster-1",
+            },
+            vector=[0.1, 0.2, 0.3],
+        )
+    )
+    cluster_collection.add_object(
+        MockWeaviateObject(
+            uuid="cluster-2",
+            properties={
+                "cluster_id": "cluster-2",
+                "course_id": "1",
+                "label_id": "cluster-2",
+            },
+            vector=[0.2, 0.2, 0.2],
         )
     )
 
@@ -469,9 +526,9 @@ def weaviate_test_data(mock_weaviate_client):
         MockWeaviateObject(
             uuid="ex-1",
             properties={
-                "exercise_id": "ex-1",
+                "exercise_id": "1",
                 "description": "Solve linear equations",
-                "course_id": "course-1",
+                "course_id": "1",
             },
         )
     )

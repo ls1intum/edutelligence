@@ -4,6 +4,7 @@ import asyncio
 from typing import List, Dict, Any
 from module_text_llm.basic_approach import BasicApproachConfig
 from module_text_llm.chain_of_thought_approach import ChainOfThoughtConfig
+
 from llm_core.models.providers.azure_model_config import AzureModelConfig
 
 
@@ -36,7 +37,6 @@ def real_config():
         ),
         type="basic",
     )
-
 
 @pytest.fixture
 def gpt4o_config():
