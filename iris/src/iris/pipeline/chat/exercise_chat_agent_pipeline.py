@@ -696,9 +696,9 @@ class ExerciseChatAgentPipeline(Pipeline):
                 # Only generate a title when this is the first user turn that produced a tutor reply
                 if out and len(dto.chat_history) == 1:
                     first_user_msg = dto.chat_history[0].contents[0].text_content
-                    session_title = self.title_pipeline(first_user_msg, out)
-                    if self.title_pipeline.tokens is not None:
-                        tokens = [self.title_pipeline.tokens]
+                    session_title = self.session_title_pipeline(first_user_msg, out)
+                    if self.session_title_pipeline.tokens is not None:
+                        tokens = [self.session_title_pipeline.tokens]
                     else:
                         tokens = []
                     self.callback.done(
