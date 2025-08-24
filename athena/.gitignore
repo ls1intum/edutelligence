@@ -17,3 +17,7 @@ test-results/*
 .coverage*
 **/.coverage*
 !.coveragerc
+
+# Test artifacts
+**/quality_drift_report.json
+tests/modules/text/module_text_llm/real/data/exercises/

@@ -100,11 +100,6 @@ def main():
     for exercise_file in exercise_files:
         print(f"\nProcessing {exercise_file.name}...")
         
-        # Skip exercise-7.json as requested
-        if exercise_file.name == "exercise-7.json":
-            print("  Skipping exercise-7.json (different structure)")
-            continue
-        
         # Sample the exercise
         sampled_data = sample_exercise(exercise_file)
         
