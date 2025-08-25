@@ -77,12 +77,14 @@ def get_default_module_config_from_app_factory(module_config_type: Type[C]):
 
 def get_dynamic_module_config_factory(module_config_type: Type[C]):
     """Prefer header override; otherwise default from app.state.module_config."""
+    from fastapi import Depends
+
     HeaderDep = get_header_module_config_factory(module_config_type)
     DefaultDep = get_default_module_config_from_app_factory(module_config_type)
 
     async def dep(
-        header_cfg: Optional[C] = HeaderDep(),  # type: ignore
-        default_cfg: C = DefaultDep(),  # type: ignore
+        header_cfg: Optional[C] = Depends(HeaderDep),  # type: ignore
+        default_cfg: C = Depends(DefaultDep),  # type: ignore
     ) -> C:
         return header_cfg or default_cfg
 

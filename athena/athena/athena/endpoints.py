@@ -412,7 +412,6 @@ def feedback_provider(
     ):
         config = header_cfg or default_cfg
 
-        # Retrieve existing metadata for the exercise, submission and feedback
         exercise.meta.update(get_stored_exercise_meta(exercise) or {})
         submission.meta.update(get_stored_submission_meta(submission) or {})
 
@@ -429,7 +428,6 @@ def feedback_provider(
         if "learner_profile" in inspect.signature(func).parameters:
             kwargs["learner_profile"] = learner_profile
 
-        # Call the actual provider
         if inspect.iscoroutinefunction(func):
             feedbacks = await func(exercise, submission, **kwargs)
         else:
@@ -501,9 +499,7 @@ def config_schema_provider(cls: Type[C]) -> Type[C]:
         if prop in props:
             prop_schema = props[prop]
 
-            # Handle anyOf structure (Union types like Union[str, object])
             if "anyOf" in prop_schema:
-                # Find the string type in anyOf and add enum there
                 for any_of_item in prop_schema["anyOf"]:
                     if any_of_item.get("type") == "string":
                         any_of_item["enum"] = values
@@ -511,7 +507,6 @@ def config_schema_provider(cls: Type[C]) -> Type[C]:
                             any_of_item["examples"] = [values[0]]
                         break
             else:
-                # Simple type, add enum directly
                 prop_schema["enum"] = values
                 if values:
                     prop_schema["examples"] = [values[0]]
@@ -525,7 +520,6 @@ def config_schema_provider(cls: Type[C]) -> Type[C]:
             _inject_enum(schema, "OpenAIModelConfig", "model_name", keys["openai"])
             _inject_enum(schema, "OllamaModelConfig", "model_name", keys["ollama"])
         except ImportError:
-            # llm_core not available, skip model enum injection
             pass
 
     @app.get("/config_schema")
@@ -534,7 +528,7 @@ def config_schema_provider(cls: Type[C]) -> Type[C]:
         _ensure_draft7(schema)
         defaults = _effective_defaults(request.app.state)
         _inject_defaults(schema, defaults)
-        _inject_model_enums(schema)  # <— the only new line that matters
+        _inject_model_enums(schema)
         return schema
 
     return cls
