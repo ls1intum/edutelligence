@@ -30,7 +30,7 @@ class HealthResponse(BaseModel):
     and whether all the modules are healthy (i.e. reachable).
     Additional information about the modules is also provided.
     """
-    status: Literal[str] = "ok"
+    status: Literal["ok"] = "ok"
     modules: dict = Field(
         examples=[[
             {
