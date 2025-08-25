@@ -1,9 +1,7 @@
-from dotenv import load_dotenv, find_dotenv
+from athena.runtime.module_app import create_module_app
+from .plugin import ModelingPlugin
 
-load_dotenv(find_dotenv(), override=False)
-from .app_factory import create_app
-
-app = create_app()
+app = create_module_app(ModelingPlugin())
 
 
 def main():

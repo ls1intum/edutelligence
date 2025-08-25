@@ -7,18 +7,27 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.engine import Engine
 
 from athena.base import Base
-from athena.env import DATABASE_URL  # or pull from app.state.settings if you prefer
+from athena.settings import Settings
 
 
-# global engine/sessionmaker – created lazily to match current code's expectations
 _engine: Engine | None = None
 _SessionLocal: sessionmaker | None = None
+
+
+def init_engine(url: str):
+    """Initialize the database engine with the given URL."""
+    global _engine, _SessionLocal
+    _engine = create_engine(url, future=True, pool_pre_ping=True)
+    _SessionLocal = sessionmaker(
+        bind=_engine, autoflush=False, autocommit=False, future=True
+    )
 
 
 def _ensure_engine():
     global _engine, _SessionLocal
     if _engine is None:
-        _engine = create_engine(DATABASE_URL, future=True, pool_pre_ping=True)
+        url = Settings().DATABASE_URL  # single source of truth
+        _engine = create_engine(url, future=True, pool_pre_ping=True)
         _SessionLocal = sessionmaker(
             bind=_engine, autoflush=False, autocommit=False, future=True
         )

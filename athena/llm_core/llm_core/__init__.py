@@ -1,1 +1,3 @@
-# Intentionally empty: environment is loaded once at the process entrypoint.
+from dotenv import load_dotenv, find_dotenv
+
+load_dotenv(find_dotenv(), override=False)

@@ -1,5 +1,6 @@
 from llm_core.models.providers.base_chat_model_config import BaseChatModelConfig
 from llm_core.catalog import ModelCatalog
+from llm_core.loaders.catalogs import get_ollama_catalog
 from typing import ClassVar, Literal, Union, Optional
 from pydantic import Field, PrivateAttr
 from langchain.base_language import BaseLanguageModel
@@ -25,27 +26,19 @@ class OllamaModelConfig(BaseChatModelConfig):
 
     def get_model(self, ollama_catalog: ModelCatalog = None) -> BaseLanguageModel:
         """Get the model using either the provided catalog or the instance catalog."""
-        catalog = ollama_catalog or self._catalog
-        if not catalog:
-            raise RuntimeError(
-                "No Ollama catalog available. Either pass ollama_catalog parameter "
-                "or initialize OllamaModelConfig with a catalog."
-            )
+        catalog = ollama_catalog or self._catalog or get_ollama_catalog()
 
-        # Handle both string keys and enum values
         key = (
             self.model_name.value
             if hasattr(self.model_name, "value")
             else str(self.model_name)
         )
         try:
-            # resolve provider to actual catalog instance
             tmpl = catalog.templates[key]
         except KeyError:
             known = ", ".join(sorted(catalog.templates)) or "(none discovered)"
             raise RuntimeError(
-                f"Ollama model '{key}' not found in catalog. "
-                f"Known keys: {known}. Make sure Ollama is running at the configured host."
+                f"Ollama model '{key}' not found in catalog. Known keys: {known}."
             )
         return self._template_get_model(tmpl)
 

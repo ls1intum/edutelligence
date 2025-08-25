@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 import requests
 from enum import Enum
 from types import MappingProxyType

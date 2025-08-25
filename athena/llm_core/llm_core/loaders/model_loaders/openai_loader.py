@@ -1,9 +1,7 @@
 from __future__ import annotations
-
 from enum import Enum
 from types import MappingProxyType
 from typing import Dict
-
 from openai import OpenAI
 from langchain.base_language import BaseLanguageModel
 from langchain_openai import ChatOpenAI

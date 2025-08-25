@@ -1,7 +1,7 @@
 import inspect
 from fastapi import Depends, BackgroundTasks, Body
 from pydantic import BaseModel, ValidationError
-from typing import TypeVar, Callable, List, Union, Any, Coroutine, Type, Optional
+from typing import TypeVar, Callable, List, Union, Any, Coroutine, Type, Optional, Dict
 from starlette.requests import Request
 
 from athena.app import app
@@ -30,8 +30,6 @@ E = TypeVar("E", bound=Exercise)
 S = TypeVar("S", bound=Submission)
 F = TypeVar("F", bound=Feedback)
 G = TypeVar("G", bound=bool)
-
-# Config type
 C = TypeVar("C", bound=BaseModel)
 
 module_responses = {
@@ -445,41 +443,98 @@ def feedback_provider(
 
 
 def config_schema_provider(cls: Type[C]) -> Type[C]:
-    """
-    Decorator for a class to provide an endpoint that returns the configuration class schema.
-    ...
-    """
     if not issubclass(cls, BaseModel):
-        raise TypeError("Decorated class must be a subclass of BaseModel")
-
-    # Try to initialize the class without parameters (default values will be used)
+        raise TypeError("Decorated class must subclass BaseModel")
     try:
         cls()
     except ValidationError as exc:
-        raise TypeError(
-            f"Cannot initialize {cls.__name__} without parameters, please provide default values for all parameters"
-        ) from exc
+        raise TypeError(f"{cls.__name__} needs defaults for all fields") from exc
+
+    def _model_schema() -> Dict[str, Any]:
+        try:
+            return cls.model_json_schema(by_alias=True)  # v2
+        except AttributeError:
+            return cls.schema(by_alias=True)  # v1
+
+    def _effective_defaults(app_state) -> Dict[str, Any]:
+        cfg = getattr(app_state, "module_config", None)
+        if cfg is not None:
+            return cfg.dict(by_alias=True)
+        try:
+            return cls().dict(by_alias=True)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Could not construct default config: {exc}",
+            )
+
+    def _inject_defaults(schema: Dict[str, Any], data: Any) -> None:
+        if data is None:
+            return
+        schema["default"] = data
+        t = schema.get("type")
+        if t == "object" and isinstance(data, dict):
+            for k, sub in (schema.get("properties") or {}).items():
+                if k in data:
+                    _inject_defaults(sub, data[k])
+        elif t == "array" and isinstance(data, list):
+            items = schema.get("items")
+            if isinstance(items, dict) and data:
+                _inject_defaults(items, data[0])
+
+    def _ensure_draft7(schema: Dict[str, Any]) -> None:
+        if "$defs" in schema and "definitions" not in schema:
+            schema["definitions"] = schema.pop("$defs")
+
+    def _defs(schema: Dict[str, Any]) -> Dict[str, Any]:
+        return schema.get("definitions") or schema.get("$defs") or {}
+
+    def _inject_enum(
+        schema: Dict[str, Any], def_name: str, prop: str, values: list[str]
+    ) -> None:
+        if not values:
+            return
+        d = _defs(schema).get(def_name)
+        if not d:
+            return
+        props = d.get("properties") or {}
+        if prop in props:
+            prop_schema = props[prop]
+
+            # Handle anyOf structure (Union types like Union[str, object])
+            if "anyOf" in prop_schema:
+                # Find the string type in anyOf and add enum there
+                for any_of_item in prop_schema["anyOf"]:
+                    if any_of_item.get("type") == "string":
+                        any_of_item["enum"] = values
+                        if values:
+                            any_of_item["examples"] = [values[0]]
+                        break
+            else:
+                # Simple type, add enum directly
+                prop_schema["enum"] = values
+                if values:
+                    prop_schema["examples"] = [values[0]]
+
+    def _inject_model_enums(schema: Dict[str, Any]) -> None:
+        try:
+            from llm_core.loaders.catalogs import discovered_model_keys
+
+            keys = discovered_model_keys()
+            _inject_enum(schema, "AzureModelConfig", "model_name", keys["azure"])
+            _inject_enum(schema, "OpenAIModelConfig", "model_name", keys["openai"])
+            _inject_enum(schema, "OllamaModelConfig", "model_name", keys["ollama"])
+        except ImportError:
+            # llm_core not available, skip model enum injection
+            pass
 
     @app.get("/config_schema")
-    async def wrapper(request: Request):
-        schema = cls.schema()
-        try:
-            ctx = request.app.state.ctx
-            catalogs = {
-                "OpenAIModelConfig": list(ctx.openai_catalog.templates.keys()),
-                "AzureModelConfig": list(ctx.azure_catalog.templates.keys()),
-                "OllamaModelConfig": list(ctx.ollama_catalog.templates.keys()),
-            }
-            defs = schema.get("definitions", {})
-            for def_name, keys in catalogs.items():
-                props = defs.get(def_name, {}).get("properties", {})
-                for field_name in ("model_name", "modelName"):
-                    if field_name in props and keys:
-                        props[field_name]["enum"] = keys
-        except Exception as exc:
-            from athena.logger import logger
-
-            logger.warning("Could not inject discovered model enums: %s", exc)
+    async def get_config_schema(request: Request):
+        schema = _model_schema()
+        _ensure_draft7(schema)
+        defaults = _effective_defaults(request.app.state)
+        _inject_defaults(schema, defaults)
+        _inject_model_enums(schema)  # <— the only new line that matters
         return schema
 
     return cls

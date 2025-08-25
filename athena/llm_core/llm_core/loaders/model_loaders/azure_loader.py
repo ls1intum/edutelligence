@@ -1,11 +1,9 @@
 from __future__ import annotations
 
+import requests
 from enum import Enum
 from types import MappingProxyType
 from typing import Dict, List, Tuple
-
-import requests
-
 from langchain.base_language import BaseLanguageModel
 from langchain_openai import AzureChatOpenAI
 
@@ -31,8 +29,6 @@ def _get_azure_openai_deployments(
     )
     models_resp.raise_for_status()
     models_data = models_resp.json()["data"]
-
-    print("Models data:", models_data)  # Debugging line
 
     deployments_resp = requests.get(
         f"{base_url}/deployments",

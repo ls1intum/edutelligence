@@ -1,5 +1,6 @@
 from llm_core.models.providers.base_chat_model_config import BaseChatModelConfig
 from llm_core.catalog import ModelCatalog
+from llm_core.loaders.catalogs import get_openai_catalog
 from typing import ClassVar, Literal, Union, Optional
 from pydantic import Field, PrivateAttr
 from langchain.base_language import BaseLanguageModel
@@ -27,14 +28,8 @@ class OpenAIModelConfig(BaseChatModelConfig):
 
     def get_model(self, openai_catalog: ModelCatalog = None) -> BaseLanguageModel:
         """Get the model using either the provided catalog or the instance catalog."""
-        catalog = openai_catalog or self._catalog
-        if not catalog:
-            raise RuntimeError(
-                "No OpenAI catalog available. Either pass openai_catalog parameter "
-                "or initialize OpenAIModelConfig with a catalog."
-            )
+        catalog = openai_catalog or self._catalog or get_openai_catalog()
 
-        # Handle both string keys and enum values
         key = (
             self.model_name.value
             if hasattr(self.model_name, "value")
@@ -45,8 +40,7 @@ class OpenAIModelConfig(BaseChatModelConfig):
         except KeyError:
             known = ", ".join(sorted(catalog.templates)) or "(none discovered)"
             raise RuntimeError(
-                f"OpenAI model '{key}' not found in catalog. "
-                f"Known keys: {known}. Make sure your OPENAI_API_KEY is set."
+                f"OpenAI model '{key}' not found in catalog. Known keys: {known}."
             )
         return self._template_get_model(tmpl)
 
