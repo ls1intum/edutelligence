@@ -53,11 +53,10 @@ async def suggest_competencies(
         validated_description = validate_non_empty_string(
             request.description, "description"
         )
-        validated_course_id = str(request.course_id)
 
         pipeline = PipelineWorkflows()
         competencies = pipeline.suggest_competencies_by_similarity(
-            validated_description, course_id=validated_course_id
+            validated_description, course_id=request.course_id
         )
 
         logger.info(f"Successfully suggested {len(competencies)} competencies")
@@ -91,7 +90,7 @@ async def save_competencies(request: SaveCompetencyRequest):
         )
 
         # Validate that at least one item is provided
-        if not request.competency and not request.exercise:
+        if not request.competencies and not request.exercise:
             raise ValueError("At least one competency or exercise must be provided")
 
         # Validate operation type
@@ -102,19 +101,18 @@ async def save_competencies(request: SaveCompetencyRequest):
         pipeline = PipelineWorkflows()
         saved_items = []
 
-        # Save competency if provided
-        if request.competency:
+        # Save competencies if provided
+        if request.competencies:
             try:
-                competency_name = safe_get_attribute(request.competency, "title")
-                logger.info(f"Saving competency: {competency_name}")
-                result = pipeline.save_competency(
-                    request.competency, validated_operation_type
+                logger.info(f"Saving {len(request.competencies)} competencies")
+                result = pipeline.save_competencies(
+                    request.competencies, validated_operation_type
                 )
-                saved_items.append({"type": "competency", "result": result})
-                logger.info("Competency saved successfully")
+                saved_items.append({"type": "competencies", "result": result})
+                logger.info("All competencies saved and reclustered successfully")
             except Exception as e:
-                logger.error(f"Failed to save competency: {e}")
-                raise Exception(f"Failed to save competency: {str(e)}")
+                logger.error(f"Failed to save competencies: {e}")
+                raise Exception(f"Failed to save competencies: {str(e)}")
 
         # Save exercise if provided
         if request.exercise:
@@ -153,54 +151,13 @@ async def suggest_competency_relations(course_id: int) -> CompetencyRelationSugg
     Currently generates random directed relations between competencies of the course.
     """
     try:
-        validated_course_id = str(course_id)
-        logger.info(f"Suggesting competency relations for course_id={validated_course_id}")
+        logger.info(f"Suggesting competency relations for course_id={course_id}")
 
-        client = get_weaviate_client()
-        objs = client.get_embeddings_by_property(
-            CollectionNames.COMPETENCY.value, "course_id", validated_course_id
-        )
+        pipeline = PipelineWorkflows()
+        relations = pipeline.suggest_competency_relations(course_id)
 
-        # Collect domain competency IDs; fallback to object UUID if property missing
-        comp_ids = []
-        for obj in objs:
-            props = obj.get("properties", {}) or {}
-            comp_id = props.get("competency_id") or obj.get("id")
-            if comp_id:
-                comp_ids.append(int(comp_id))
-
-        # Not enough competencies to form relations
-        if len(comp_ids) < 2:
-            logger.info("Not enough competencies to suggest relations")
-            return CompetencyRelationSuggestionResponse(relations=[])
-
-        # Randomly create a limited number of unique directed relations
-        max_possible = len(comp_ids) * (len(comp_ids) - 1)
-        target_count = min(10, max(1, max_possible // 5))  # cap and keep it small
-        relation_types = [RelationType.MATCH, RelationType.EXTEND, RelationType.REQUIRES]
-
-        seen_pairs = set()
-        relations = []
-        attempts = 0
-        max_attempts = max_possible * 2
-
-        while len(relations) < target_count and attempts < max_attempts:
-            attempts += 1
-            tail_id, head_id = random.sample(comp_ids, 2)
-            pair_key = (tail_id, head_id)
-            if pair_key in seen_pairs:
-                continue
-            seen_pairs.add(pair_key)
-            relations.append(
-                CompetencyRelation(
-                    tail_id=tail_id,
-                    head_id=head_id,
-                    relation_type=random.choice(relation_types),
-                )
-            )
-
-        logger.info(f"Suggested {len(relations)} competency relations")
-        return CompetencyRelationSuggestionResponse(relations=relations)
+        logger.info(f"Suggested {len(relations.relations)} competency relations")
+        return relations
 
     except HTTPException:
         # Re-raise HTTP exceptions

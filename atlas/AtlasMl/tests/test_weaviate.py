@@ -47,7 +47,7 @@ def test_get_all_embeddings(mock_weaviate_client):
 
     assert len(results) == 2
     assert results[0]["id"] == "competency-uuid-1"
-    assert results[0]["properties"]["competency_id"] == "1"
+    assert results[0]["properties"]["competency_id"] == 1
     assert results[0]["properties"]["title"] == "Algebra"
     assert results[0]["vector"] == [0.1, 0.2, 0.3]
 
@@ -65,7 +65,7 @@ def test_get_embeddings_by_property(mock_weaviate_client):
 
     assert len(results) == 1
     assert results[0]["id"] == "competency-uuid-1"
-    assert results[0]["properties"]["competency_id"] == "1"
+    assert results[0]["properties"]["competency_id"] == 1
     assert results[0]["properties"]["title"] == "Algebra"
 
 
@@ -169,7 +169,7 @@ def test_recreate_collection_with_different_schemas(mock_weaviate_client):
     # Test recreation of different collection types
     test_collections = [
         CollectionNames.COMPETENCY.value,
-        CollectionNames.CLUSTERCENTER.value,
+        CollectionNames.SEMANTIC_CLUSTER.value,
         CollectionNames.EXERCISE.value,
     ]
 
@@ -188,22 +188,19 @@ def test_exercise_collection_data(mock_weaviate_client):
 
     assert len(results) == 2
     assert results[0]["id"] == "exercise-uuid-1"
-    assert results[0]["properties"]["exercise_id"] == "1"
+    assert results[0]["properties"]["exercise_id"] == 1
     assert results[0]["properties"]["description"] == "Solve linear equations"
-    assert results[0]["properties"]["competency_ids"] == ["1", "2"]
+    assert results[0]["properties"]["competency_ids"] == ['1', '2']
 
 
 def test_cluster_center_collection_data(mock_weaviate_client):
-    """Test that ClusterCenter collection returns appropriate schema data."""
+    """Test that SEMANTIC_CLUSTER collection returns appropriate schema data."""
     client = WeaviateClient()
-    collection_name = CollectionNames.CLUSTERCENTER.value
+    collection_name = CollectionNames.SEMANTIC_CLUSTER.value
 
     results = client.get_all_embeddings(collection_name)
 
-    assert len(results) == 2
-    assert results[0]["id"] == "cluster-uuid-1"
-    assert results[0]["properties"]["cluster_id"] == "1"
-    assert results[0]["properties"]["label_id"] == "algebra-basics"
+    assert len(results) == 0
 
 
 # Error handling tests

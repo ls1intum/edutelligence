@@ -129,6 +129,7 @@ def test_initial_cluster_pipeline(workflows):
                         "competency_id": "K1",
                         "title": "n",
                         "description": "desc",
+                        "course_id": 1,
                     },
                 }
             ],
@@ -148,6 +149,9 @@ def test_initial_cluster_pipeline(workflows):
                 "properties": {
                     "competency_id": "K1",
                     "cluster_id": "K1",
+                    "title": "Test Competency K1",
+                    "description": "Test competency description",
+                    "course_id": 1,
                 }
             }
         ]

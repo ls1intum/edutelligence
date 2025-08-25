@@ -123,10 +123,11 @@ class MockWeaviateQuery:
                 MockWeaviateObject(
                     uuid="exercise-uuid-1",
                     properties={
-                        "exercise_id": "1",
+                        "exercise_id": 1,
+                        "title": "Linear Equations Exercise",
                         "description": "Solve linear equations",
                         "competency_ids": ["1", "2"],
-                        "course_id": "1",
+                        "course_id": 1,
                     },
                     vector=[0.1, 0.2, 0.3],
                 )
@@ -136,23 +137,24 @@ class MockWeaviateQuery:
                 MockWeaviateObject(
                     uuid="competency-uuid-1",
                     properties={
-                        "competency_id": "1",
+                        "competency_id": 1,
                         "title": "Algebra",
                         "description": "Basic algebra concepts",
                         "cluster_id": "1",
                         "cluster_similarity_score": 0.85,
-                        "course_id": "1",
+                        "course_id": 1,
                     },
                     vector=[0.1, 0.2, 0.3],
                 )
             ]
-        elif self.collection_name == "ClusterCenter":
+        elif self.collection_name == "SEMANTIC_CLUSTER":
             objects = [
                 MockWeaviateObject(
                     uuid="cluster-uuid-1",
                     properties={
                         "cluster_id": "1",
                         "label_id": "algebra-basics",
+                        "course_id": 1,
                     },
                     vector=[0.1, 0.2, 0.3],
                 )
@@ -237,6 +239,7 @@ class MockWeaviateCollection:
         self.data = MockWeaviateData()
         self.query = MockWeaviateQuery(name)
         self.config = MockWeaviateConfig()
+        self._dynamic_objects = []  # Track dynamically added objects
 
     def iterator(self, include_vector=False):
         """Mock iterator method that returns schema-appropriate data."""
@@ -245,20 +248,22 @@ class MockWeaviateCollection:
                 MockWeaviateObject(
                     uuid="exercise-uuid-1",
                     properties={
-                        "exercise_id": "1",
+                        "exercise_id": 1,
+                        "title": "Linear Equations Exercise",
                         "description": "Solve linear equations",
                         "competency_ids": ["1", "2"],
-                        "course_id": "1",
+                        "course_id": 1,
                     },
                     vector=[0.1, 0.2, 0.3],
                 ),
                 MockWeaviateObject(
                     uuid="exercise-uuid-2",
                     properties={
-                        "exercise_id": "2",
+                        "exercise_id": 2,
+                        "title": "Calculus Derivatives Exercise",
                         "description": "Calculus derivatives",
                         "competency_ids": ["3"],
-                        "course_id": "1",
+                        "course_id": 1,
                     },
                     vector=[0.4, 0.5, 0.6],
                 ),
@@ -268,36 +273,36 @@ class MockWeaviateCollection:
                 MockWeaviateObject(
                     uuid="competency-uuid-1",
                     properties={
-                        "competency_id": "1",
+                        "competency_id": 1,
                         "title": "Algebra",
                         "description": "Basic algebra concepts",
                         "cluster_id": "1",
                         "cluster_similarity_score": 0.85,
-                        "course_id": "1",
+                        "course_id": 1,
                     },
                     vector=[0.1, 0.2, 0.3],
                 ),
                 MockWeaviateObject(
                     uuid="competency-uuid-2",
                     properties={
-                        "competency_id": "2",
+                        "competency_id": 2,
                         "title": "Calculus",
                         "description": "Basic calculus concepts",
                         "cluster_id": "2",
                         "cluster_similarity_score": 0.92,
-                        "course_id": "1",
+                        "course_id": 1,
                     },
                     vector=[0.4, 0.5, 0.6],
                 ),
             ]
-        elif self.name == "ClusterCenter":
-            return [
+        elif self.name == "SEMANTIC_CLUSTER":
+            static_objects = [
                 MockWeaviateObject(
                     uuid="cluster-uuid-1",
                     properties={
                         "cluster_id": "1",
                         "label_id": "algebra-basics",
-                        "course_id": "1",
+                        "course_id": 1,
                     },
                     vector=[0.1, 0.2, 0.3],
                 ),
@@ -306,19 +311,29 @@ class MockWeaviateCollection:
                     properties={
                         "cluster_id": "2",
                         "label_id": "calculus-basics",
-                        "course_id": "1",
+                        "course_id": 1,
                     },
                     vector=[0.4, 0.5, 0.6],
                 ),
             ]
+            # Return dynamic objects if available, otherwise return static objects
+            return self._dynamic_objects if self._dynamic_objects else static_objects
         return []
+
+    def add_dynamic_object(self, obj):
+        """Add a dynamic object to this collection."""
+        self._dynamic_objects.append(obj)
+
+    def clear_dynamic_objects(self):
+        """Clear all dynamic objects."""
+        self._dynamic_objects = []
 
 
 class MockWeaviateCollections:
     """Mock Weaviate collections manager."""
 
     def __init__(self):
-        self._existing_collections = {"Exercise", "Competency", "ClusterCenter"}
+        self._existing_collections = {"Exercise", "Competency", "SEMANTIC_CLUSTER"}
         self._collection_instances = {}
 
     def get(self, name: str):
@@ -396,7 +411,11 @@ class MockWeaviateClient:
         """Mock add_embeddings method."""
         collection = self.collections.get(collection_name)
         if collection:
-            return collection.data.insert(properties, vector)
+            # Create a new object and add it to the collection's dynamic objects
+            uuid = f"dynamic-{collection_name}-{len(collection._dynamic_objects)}"
+            obj = MockWeaviateObject(uuid=uuid, properties=properties, vector=vector)
+            collection.add_dynamic_object(obj)
+            return uuid
         return "mock-uuid"
 
     def get_embeddings_by_property(
@@ -440,6 +459,15 @@ class MockWeaviateClient:
         # Do nothing - collections are already set up in MockWeaviateCollections
         pass
 
+    def delete_by_property(self, collection_name: str, property_name: str, property_value):
+        """Mock delete_by_property method."""
+        collection = self.collections.get(collection_name)
+        if collection:
+            # Clear dynamic objects that match the property
+            collection.clear_dynamic_objects()
+            return {"deleted_count": 1}
+        return {"deleted_count": 0}
+
 
 @pytest.fixture
 def mock_weaviate_client():
@@ -471,10 +499,10 @@ def weaviate_test_data(mock_weaviate_client):
         MockWeaviateObject(
             uuid="comp-1",
             properties={
-                "competency_id": "1",
+                "competency_id": 1,
                 "title": "Algebra",
                 "description": "Basic algebra concepts",
-                "course_id": "1",
+                "course_id": 1,
                 "cluster_id": "cluster-1",
             },
         )
@@ -483,24 +511,24 @@ def weaviate_test_data(mock_weaviate_client):
         MockWeaviateObject(
             uuid="comp-2",
             properties={
-                "competency_id": "2",
+                "competency_id": 2,
                 "title": "Calculus",
                 "description": "Basic calculus concepts",
-                "course_id": "1",
+                "course_id": 1,
                 "cluster_id": "cluster-2",
             },
         )
     )
     # Add test data to cluster collection
     cluster_collection = mock_weaviate_client.collections.get(
-        CollectionNames.CLUSTERCENTER.value
+        CollectionNames.SEMANTIC_CLUSTER.value
     )
     cluster_collection.add_object(
         MockWeaviateObject(
             uuid="cluster-1",
             properties={
                 "cluster_id": "cluster-1",
-                "course_id": "1",
+                "course_id": 1,
                 "label_id": "cluster-1",
             },
             vector=[0.1, 0.2, 0.3],
@@ -511,7 +539,7 @@ def weaviate_test_data(mock_weaviate_client):
             uuid="cluster-2",
             properties={
                 "cluster_id": "cluster-2",
-                "course_id": "1",
+                "course_id": 1,
                 "label_id": "cluster-2",
             },
             vector=[0.2, 0.2, 0.2],
@@ -526,9 +554,10 @@ def weaviate_test_data(mock_weaviate_client):
         MockWeaviateObject(
             uuid="ex-1",
             properties={
-                "exercise_id": "1",
+                "exercise_id": 1,
+                "title": "Linear Equations Exercise",
                 "description": "Solve linear equations",
-                "course_id": "1",
+                "course_id": 1,
             },
         )
     )

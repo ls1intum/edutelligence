@@ -17,6 +17,8 @@ scipy = "^1.15.2"
 apscheduler = "^3.10.4"
 openai = "==1.93.0"
 sentry-sdk = {extras = ["fastapi"], version = "^2.34.1"}
+markdown = "^3.8.2"
+bs4 = "^0.0.2"
 
 
 [tool.poetry.group.dev.dependencies]
