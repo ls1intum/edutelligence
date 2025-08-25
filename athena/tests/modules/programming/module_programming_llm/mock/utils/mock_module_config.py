@@ -45,7 +45,7 @@ class FileSummaryPrompt(BaseModel):
 
 class GradedBasicApproachConfig(BaseModel):
     max_input_tokens: int
-    model: Any
+    model: Any = None
     max_number_of_files: int
     split_problem_statement_by_file_prompt: SplitProblemStatementsWithSolutionByFilePrompt
     split_grading_instructions_by_file_prompt: SplitGradingInstructionsByFilePrompt
@@ -54,7 +54,7 @@ class GradedBasicApproachConfig(BaseModel):
 
 class NonGradedBasicApproachConfig(BaseModel):
     max_input_tokens: int
-    model: Any
+    model: Any = None
     max_number_of_files: int
     split_problem_statement_by_file_prompt: SplitProblemStatementsWithoutSolutionByFilePrompt
     generate_suggestions_by_file_prompt: NonGradedFeedbackGenerationPrompt

@@ -39,13 +39,13 @@ _Note: **{problem_statement}**, **{example_solution}**, or **{grading_instructio
 
 # Output Object
 class FeedbackModel(BaseModel):
-    title: str = Field(description="Very short title, i.e. feedback category or similar", example="Logic Error")
+    title: str = Field(description="Very short title, i.e. feedback category or similar", examples=["Logic Error"])
     description: str = Field(description="Feedback description")
-    line_start: Optional[int] = Field(description="Referenced line number start, or empty if unreferenced")
-    line_end: Optional[int] = Field(description="Referenced line number end, or empty if unreferenced")
+    line_start: Optional[int] = Field(None, description="Referenced line number start, or empty if unreferenced")
+    line_end: Optional[int] = Field(None, description="Referenced line number end, or empty if unreferenced")
     credits: float = Field(0.0, description="Number of points received/deducted")
     grading_instruction_id: Optional[int] = Field(
-        description="ID of the grading instruction that was used to generate this feedback, or empty if no grading instruction was used"
+        None, description="ID of the grading instruction that was used to generate this feedback, or empty if no grading instruction was used"
     )
 
 class AssessmentModel(BaseModel):

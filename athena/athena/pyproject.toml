@@ -16,7 +16,7 @@ psycopg2 = "^2.9.9"
 
 [tool.poetry.group.dev.dependencies]
 types-requests = "^2.31.0.8"
-pydantic = "1.10.17"
+pydantic = "^2.11.7"
 prospector = "^1.10.2"
 
 [build-system]

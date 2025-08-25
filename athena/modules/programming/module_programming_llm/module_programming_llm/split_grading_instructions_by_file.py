@@ -108,7 +108,7 @@ async def split_grading_instructions_by_file(
             "file_grading_instructions",
             {
                 "prompt": chat_prompt.format(**prompt_input),
-                "result": split_grading_instructions.dict()
+                "result": split_grading_instructions.model_dump()
                 if split_grading_instructions is not None
                 else None,
             },

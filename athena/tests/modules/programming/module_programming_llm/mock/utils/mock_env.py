@@ -1,7 +1,7 @@
 import os
 import sys
 from unittest.mock import Mock
-from pydantic import BaseModel, Field
+from pydantic import ConfigDict, BaseModel, Field
 from typing import Dict, Any, Optional, Callable
 from langchain.base_language import BaseLanguageModel
 from modules.programming.module_programming_llm.mock.utils.mock_llm import (
@@ -28,9 +28,7 @@ class MockModelConfigType(BaseModel):
             "presence_penalty": 0.0,
         }
     )
-
-    class Config:
-        arbitrary_types_allowed = True
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
 
 class MockDefaultModelConfig(MockModelConfigType):
@@ -56,9 +54,7 @@ class MockModelConfig(BaseModel):
 
     def to_dict(self) -> Dict[str, Any]:
         return {"model_name": self.model_name, **self.model_params}
-
-    class Config:
-        arbitrary_types_allowed = True
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
 
 # Mock llm_core models

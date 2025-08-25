@@ -1,5 +1,4 @@
 from pydantic import BaseModel, Field
-from typing import Any, Callable
 
 from athena.schemas import LearnerProfile
 from module_text_llm.approach_config import ApproachConfig
@@ -10,13 +9,6 @@ class MockPrompt(BaseModel):
 
     system_message: str = "Test system message"
     human_message: str = "Test human message"
-
-
-class MockModelConfig(BaseModel):
-    """Mock configuration for language model settings."""
-
-    model_name: str = "mock_model"
-    get_model: Callable[[], Any] = Field(default_factory=lambda: lambda: None)
 
 
 class MockApproachConfig(ApproachConfig):

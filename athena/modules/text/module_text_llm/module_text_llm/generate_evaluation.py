@@ -87,4 +87,4 @@ async def generate_evaluation(
         logger.warning("Evaluation failed. Skipping.")
         return {}
 
-    return { item.id: item.dict() for item in result.metrics }
+    return { item.id: item.model_dump() for item in result.metrics }
