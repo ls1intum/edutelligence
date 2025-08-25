@@ -326,7 +326,7 @@ def test_newTextPipeline_integration(workflows):
             mock_generate.assert_called_once()
             call_args = mock_generate.call_args
             embeddings_arg = call_args[0][0]  # First positional argument
-            descriptions_arg = call_args[1]  # Second positional argument
+            descriptions_arg = call_args[0][1]  # Second positional argument
 
             # Should be called with 3 embeddings and 3 descriptions
             assert len(embeddings_arg) == 3, "Should pass 3 embeddings"
@@ -399,14 +399,14 @@ def test_newTextPipeline_integration(workflows):
                 ["EXTENDS", "NONE"]
             ])
 
-            result = workflows.suggest_competency_relations(course_id="3")
+            result = workflows.suggest_competency_relations(course_id=3)
 
             # Should have 2 relations
             assert len(result.relations) == 2, f"Expected 2 relations, got {len(result.relations)}"
 
             # Verify the specific relations
             relation_types = [(r.tail_id, r.head_id, r.relation_type.value) for r in result.relations]
-            expected = [("30", "31", "REQUIRES"), ("31", "30", "EXTENDS")]
+            expected = [(30, 31, "REQUIRES"), (31, 30, "EXTENDS")]
 
             for expected_relation in expected:
                 assert expected_relation in relation_types, f"Missing expected relation: {expected_relation}"
@@ -438,7 +438,7 @@ def test_newTextPipeline_integration(workflows):
                 ["NONE", "NONE"]
             ])
 
-            result = workflows.suggest_competency_relations(course_id="4")
+            result = workflows.suggest_competency_relations(course_id=4x)
 
             # Should return empty relations (all NONE filtered out)
             assert len(result.relations) == 0, "All NONE relations should result in empty list"
@@ -469,7 +469,7 @@ def test_newTextPipeline_integration(workflows):
 
             mock_generate.return_value = matrix
 
-            result = workflows.suggest_competency_relations(course_id="5")
+            result = workflows.suggest_competency_relations(course_id=5)
 
             # Should have 5 non-NONE relations
             assert len(result.relations) == 5, f"Expected 5 relations, got {len(result.relations)}"

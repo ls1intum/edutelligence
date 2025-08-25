@@ -11,7 +11,7 @@ class OperationType(str, Enum):
 class Competency(BaseModel):
     id: int
     title: str
-    description: str
+    description: Optional[str] = None
     course_id: int
 
 
