@@ -97,7 +97,7 @@ class MockStructuredGradingCriterion:
             },
         ]
 
-    def json(self):
+    def model_dump_json(self):
         return json.dumps(self.criteria)
 
 
