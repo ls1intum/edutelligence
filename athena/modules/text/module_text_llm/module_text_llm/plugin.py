@@ -3,7 +3,7 @@ from athena.schemas.exercise_type import ExerciseType
 from llm_core.models.llm_config import LLMConfig
 
 from .config import Configuration
-from module_text_llm.basic_approach import BasicApproachConfig
+from module_text_llm.default_approach import DefaultApproachConfig
 
 
 class TextPlugin:
@@ -11,8 +11,8 @@ class TextPlugin:
     config_cls = Configuration
 
     def build_default_config(self, llm: LLMConfig) -> Configuration:
-        # Default to Basic approach; others can still be selected via config.
-        approach = BasicApproachConfig(model=llm.models.base_model_config)
+        # Default to Default approach; others can still be selected via config.
+        approach = DefaultApproachConfig(model=llm.models.base_model_config)
         return Configuration(approach=approach)
 
     def register_routes(self, app: FastAPI) -> None:
