@@ -296,16 +296,25 @@ def resource_behaviour(logos_key, headers, data, models):
     out = sm.get_result()
     if out is None:
         return {"error": f"No executable found for task {tid}"}, 500
-    # Get final model-ID
-    model_id = out.get_best_model_id()
-    if model_id is None:
-        return {"error": f"No executable found for task {tid}"}, 500
-    with DBManager() as db:
-        model = db.get_model(model_id)
-        provider = db.get_provider_to_model(model_id)
-        api_key = db.get_key_to_model_provider(model_id, provider["id"])
-    if api_key is None:
-        return {"error": f"No api_key found for task {tid} with model {model_id} and provider {provider["name"]}"}, 500
+    model_id = -1
+    while out.models:
+        # Get final model-ID
+        model_id = out.get_best_model_id()
+        if model_id is None:
+            logging.error(f"No executable found for task {tid}")
+            out.models = out.models[1:]
+            continue
+        with DBManager() as db:
+            model = db.get_model(model_id)
+            provider = db.get_provider_to_model(model_id)
+            api_key = db.get_key_to_model_provider(model_id, provider["id"])
+        if api_key is None:
+            logging.error(f"No api_key found for task {tid} with model {model_id} and provider {provider["name"]}")
+            out.models = out.models[1:]
+            continue
+        break
+    if not out.models:
+        return {"error": f"No model found for task {tid}"}, 500
     model_name = model["name"]
     logging.info(f"Forwarding to model {model_name} after classification")
     forward_url = merge_url(provider["base_url"], model["endpoint"])
