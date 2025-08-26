@@ -43,6 +43,7 @@ class PipelineWorkflows:
         embedding = generate_embeddings_openai(exercise.description)
         properties = {
             "exercise_id": exercise.id,
+            "title": exercise.title,
             "description": exercise.description,
             "competency_ids": [comp_id for comp_id in exercise.competencies] if exercise.competencies else [],
             "course_id": exercise.course_id,
@@ -381,7 +382,7 @@ class PipelineWorkflows:
             old_exercise,
     ):
         # If there are no competencies, then there is nothing to do
-        if updated_exercise.competencies == []: return
+        if not updated_exercise.competencies: return
 
         old_exercise_with_competencies = ExerciseWithCompetencies(
             id=old_exercise["properties"]["exercise_id"],
@@ -420,6 +421,7 @@ class PipelineWorkflows:
             is_new_exercise=False,
     ):
         """Helper function to update cluster centroids for a set of competencies."""
+        if not competency_ids: return
         for comp_id in competency_ids:
             # Get the competency and its cluster
             competency_data = self.weaviate_client.get_embeddings_by_property(
