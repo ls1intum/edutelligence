@@ -7,12 +7,8 @@ app = create_module_app(ProgrammingPlugin())
 def main():
     from athena.app import run_app
     from athena.settings import Settings
-    import os
 
-    settings = Settings(
-        PRODUCTION=os.getenv("PRODUCTION", "False").lower() in ("true", "1", "yes"),
-        SECRET=os.getenv("SECRET", "development-secret"),
-    )
+    settings = Settings()  # Let Pydantic load env + .env
     run_app(app, settings)
 
 

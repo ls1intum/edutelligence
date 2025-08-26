@@ -20,10 +20,17 @@ def bootstrap(settings: LLMSettings) -> ModelCatalog:
     """
     templates: Dict[str, BaseLanguageModel] = {}
 
-    if settings.OPENAI_API_KEY:
+    # Extract secret value for use
+    api_key = (
+        settings.OPENAI_API_KEY.get_secret_value() if settings.OPENAI_API_KEY else ""
+    )
+
+    print("Api key:", api_key, "Base URL:", settings.OPENAI_BASE_URL)
+
+    if api_key:
         try:
             client = OpenAI(
-                api_key=settings.OPENAI_API_KEY,
+                api_key=api_key,
                 base_url=(settings.OPENAI_BASE_URL or None),
             )
             # Filter to common chat/reasoning models; adjust if you want broader set
@@ -36,7 +43,7 @@ def bootstrap(settings: LLMSettings) -> ModelCatalog:
                 key = f"{OPENAI_PREFIX}{mid}"
                 templates[key] = ChatOpenAI(
                     model=mid,
-                    api_key=settings.OPENAI_API_KEY,
+                    api_key=api_key,
                     base_url=(settings.OPENAI_BASE_URL or None),
                 )
         except Exception as exc:

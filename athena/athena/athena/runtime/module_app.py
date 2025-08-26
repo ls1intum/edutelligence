@@ -3,7 +3,6 @@ from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from typing import Protocol, Type, Any
 
-import os
 import yaml
 from fastapi import FastAPI
 from sqlalchemy import create_engine
@@ -61,18 +60,14 @@ def _load_yaml(path: str) -> dict:
         with open(path, "r", encoding="utf-8") as f:
             return yaml.safe_load(f) or {}
     except FileNotFoundError:
-        # No llm_config.yml is acceptable; caller can handle missing models.
         return {}
 
 
 def _discover_llms(settings: Settings):
-    # Centralized discovery via llm_core loaders
-    # (works even if creds are missing; returns empty catalogs)
-    s = settings.llm if hasattr(settings, "llm") else settings
     return (
-        azure_bootstrap(s),  # azure_catalog
-        openai_bootstrap(s),  # openai_catalog
-        ollama_bootstrap(s),  # ollama_catalog
+        azure_bootstrap(settings.llm),  # azure_catalog
+        openai_bootstrap(settings.llm),  # openai_catalog
+        ollama_bootstrap(settings.llm),  # ollama_catalog
     )
 
 
@@ -83,16 +78,11 @@ def _ensure_tables(settings: Settings, exercise_type: ExerciseType) -> None:
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI, plugin: ModulePlugin):
-    # 1) settings
-    settings = getattr(app.state, "settings", None)
-    if settings is None:
-        settings = Settings(
-            PRODUCTION=os.getenv("PRODUCTION", "False").lower() in ("true", "1", "yes"),
-            SECRET=os.getenv("SECRET", "development-secret"),
-        )
-        app.state.settings = settings
+    # Use existing settings if already set by run_app; otherwise create once
+    settings = getattr(app.state, "settings", None) or Settings()
+    app.state.settings = settings
 
-    # 2) LLM discovery
+    # LLM discovery
     azure_catalog, openai_catalog, ollama_catalog = _discover_llms(settings)
 
     app.state.ctx = SimpleNamespace(
@@ -101,7 +91,7 @@ async def _lifespan(app: FastAPI, plugin: ModulePlugin):
         ollama_catalog=ollama_catalog,
     )
 
-    # 3) llm_config.yml -> LLMConfig; then build module default config
+    # llm_config.yml -> LLMConfig; then build module default config
     raw_llm = _load_yaml("llm_config.yml")
     factories = _build_factories(azure_catalog, openai_catalog, ollama_catalog)
     llm_config = get_llm_config(raw_config=raw_llm, factories=factories)
@@ -109,12 +99,13 @@ async def _lifespan(app: FastAPI, plugin: ModulePlugin):
     default_cfg = plugin.build_default_config(llm_config)  # module's Pydantic config
     app.state.module_config = default_cfg
 
-    # 4) DB tables for this module's exercise type
+    # DB tables for this module's exercise type
     from athena.database import init_engine
+
     init_engine(settings.DATABASE_URL)
     _ensure_tables(settings, plugin.exercise_type)
 
-    # 5) Optional warm start
+    # Warm start
     try:
         import asyncio
 

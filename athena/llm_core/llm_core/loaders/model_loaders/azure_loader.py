@@ -51,15 +51,25 @@ def _get_azure_openai_deployments(
 def bootstrap(settings: LLMSettings) -> ModelCatalog:
     templates: Dict[str, BaseLanguageModel] = {}
 
-    azure_ok = bool(settings.AZURE_OPENAI_API_KEY) and bool(
-        settings.AZURE_OPENAI_ENDPOINT
+    # Extract secret values for use
+    api_key = (
+        settings.AZURE_OPENAI_API_KEY.get_secret_value()
+        if settings.AZURE_OPENAI_API_KEY
+        else ""
+    )
+    print(
+        "Azure OpenAI configuration:",
+        api_key,
+        settings.AZURE_OPENAI_API_VERSION,
+        "Endpoint",
+        settings.AZURE_OPENAI_ENDPOINT,
     )
 
-    if azure_ok:
+    if api_key:
         try:
             _, deployments = _get_azure_openai_deployments(
                 endpoint=settings.AZURE_OPENAI_ENDPOINT,
-                api_key=settings.AZURE_OPENAI_API_KEY,
+                api_key=api_key,
                 api_version=settings.AZURE_OPENAI_API_VERSION,
             )
             for dep in deployments:
@@ -68,7 +78,7 @@ def bootstrap(settings: LLMSettings) -> ModelCatalog:
                     azure_deployment=dep,
                     azure_endpoint=settings.AZURE_OPENAI_ENDPOINT,
                     api_version=settings.AZURE_OPENAI_API_VERSION,
-                    openai_api_key=settings.AZURE_OPENAI_API_KEY,
+                    openai_api_key=api_key,
                 )
         except Exception as exc:
             logger.warning("Azure discovery failed: %s", exc, exc_info=False)

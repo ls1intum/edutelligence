@@ -7,17 +7,17 @@ from llm_core.loaders.model_loaders import azure_loader, openai_loader, ollama_l
 
 @lru_cache(maxsize=1)
 def get_azure_catalog() -> ModelCatalog:
-    return azure_loader.bootstrap(LLMSettings.from_env())
+    return azure_loader.bootstrap(LLMSettings())
 
 
 @lru_cache(maxsize=1)
 def get_openai_catalog() -> ModelCatalog:
-    return openai_loader.bootstrap(LLMSettings.from_env())
+    return openai_loader.bootstrap(LLMSettings())
 
 
 @lru_cache(maxsize=1)
 def get_ollama_catalog() -> ModelCatalog:
-    return ollama_loader.bootstrap(LLMSettings.from_env())
+    return ollama_loader.bootstrap(LLMSettings())
 
 
 def discovered_model_keys() -> Dict[str, List[str]]:

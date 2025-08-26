@@ -13,7 +13,7 @@ class OllamaModelConfig(BaseChatModelConfig):
     KW_REMAP: ClassVar[dict[str, str]] = {}
 
     provider: Literal["ollama"] = Field("ollama", const=True)
-    model_name: Union[str, object] = Field(
+    model_name: str = Field(
         ...,
         description="Ollama model key (string) or enum value.",
     )

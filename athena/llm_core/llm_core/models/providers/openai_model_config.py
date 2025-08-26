@@ -15,7 +15,7 @@ class OpenAIModelConfig(BaseChatModelConfig):
     }
 
     provider: Literal["openai"] = Field("openai", const=True)
-    model_name: Union[str, object] = Field(
+    model_name: str = Field(
         ...,
         description="OpenAI model key (string) or enum value.",
     )

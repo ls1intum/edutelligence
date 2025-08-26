@@ -27,7 +27,7 @@ def verify_inter_module_secret_key(
     secret: str | None,
     settings: Settings,
 ):
-    if secret != settings.SECRET:
+    if secret != settings.SECRET.get_secret_value():
         if settings.PRODUCTION:
             raise HTTPException(status_code=401, detail="Invalid API secret.")
         logger.warning("DEBUG MODE: Ignoring invalid API secret.")
