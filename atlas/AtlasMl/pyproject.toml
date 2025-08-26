@@ -16,6 +16,7 @@ matplotlib = "^3.10.1"
 scipy = "^1.15.2"
 apscheduler = "^3.10.4"
 openai = "==1.93.0"
+sentry-sdk = {extras = ["fastapi"], version = "^2.34.1"}
 
 
 [tool.poetry.group.dev.dependencies]
@@ -88,3 +89,7 @@ max-complexity = 10
 [tool.black]
 line-length = 88
 target-version = ["py312"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"

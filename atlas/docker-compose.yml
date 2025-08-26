@@ -1,21 +1,19 @@
-version: '3.8'
-
 services:
   weaviate:
     command:
       - --host
       - 0.0.0.0
       - --port
-      - '8080'
+      - '8085'
       - --scheme
       - http
     image: cr.weaviate.io/semitechnologies/weaviate:1.30.0
     ports:
-      - 8080:8080
+      - 8085:8085
       - 50051:50051
     volumes:
       - weaviate_data:/var/lib/weaviate
-    restart: on-failure:0
+    restart: on-failure
     environment:
       CLIP_INFERENCE_API: 'http://multi2vec-clip:8080'
       QUERY_DEFAULTS_LIMIT: 25
@@ -24,9 +22,50 @@ services:
       ENABLE_MODULES: 'multi2vec-clip'
       ENABLE_API_BASED_MODULES: 'true'
       CLUSTER_HOSTNAME: 'node1'
+    healthcheck:
+      test:
+        [
+          'CMD-SHELL',
+          'wget -qO- http://localhost:8085/v1/.well-known/ready >/dev/null 2>&1 || exit 1',
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 15s
   multi2vec-clip:
     image: cr.weaviate.io/semitechnologies/multi2vec-clip:sentence-transformers-clip-ViT-B-32-multilingual-v1
+    ports:
+      - 8081:8080
     environment:
       ENABLE_CUDA: '0'
+
+  atlasml:
+    build:
+      context: ./AtlasMl
+      dockerfile: Dockerfile
+    ports:
+      - 8000:8000
+    volumes:
+      - ./AtlasMl/atlasml:/atlasml/atlasml
+    environment:
+      - PYTHONPATH=/atlasml
+      - WEAVIATE_HOST=weaviate
+      - WEAVIATE_PORT=8085
+      - WEAVIATE_GRPC_PORT=50051
+      - OPENAI_API_KEY=
+      - OPENAI_API_URL=https://ase-se01.openai.azure.com
+      - ATLAS_API_KEYS=["test"]
+      - SENTRY_DSN=https://8fe7eac930933ea3c83ff7a66555de18@sentry.aet.cit.tum.de/6
+      - ENV=production
+    depends_on:
+      weaviate:
+        condition: service_healthy
+    networks:
+      - default
+
+networks:
+  default:
+    driver: bridge
+
 volumes:
   weaviate_data:

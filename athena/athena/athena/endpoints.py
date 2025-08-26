@@ -328,6 +328,9 @@ def feedback_provider(
         Callable[[E, S, G, C], Coroutine[Any, Any, List[F]]],
         Callable[[E, S, G, C, LearnerProfile], List[F]],
         Callable[[E, S, G, C, LearnerProfile], Coroutine[Any, Any, List[F]]],
+        # New variants that include latest_submission
+        Callable[[E, S, G, C, LearnerProfile, S], List[F]],
+        Callable[[E, S, G, C, LearnerProfile, S], Coroutine[Any, Any, List[F]]],
     ],
 ):
     """
@@ -335,39 +338,11 @@ def feedback_provider(
     The feedback provider is usually called whenever the tutor requests feedback for a submission in the LMS.
 
     This decorator can be used with several types of functions: synchronous or asynchronous, with or without a module config.
-
-    Examples:
-        Below are some examples of possible functions that you can decorate with this decorator:
-
-        Without using module config (both synchronous and asynchronous forms):
-        >>> @feedback_provider
-        ... def sync_suggest_feedback(exercise: Exercise, submission: Submission):
-        ...     # suggest feedback here and return it as a list
-
-        >>> @feedback_provider
-        ... async def async_suggest_feedback(exercise: Exercise, submission: Submission):
-        ...     # suggest feedback here and return it as a list
-
-        With using module config (both synchronous and asynchronous forms):
-        >>> @feedback_provider
-        ... def sync_suggest_feedback_with_config(exercise: Exercise, submission: Submission, module_config: Optional[dict]):
-        ...     # suggest feedback here using module_config and return it as a list
-
-        >>> @feedback_provider
-        ... async def async_suggest_feedback_with_config(exercise: Exercise, submission: Submission, module_config: Optional[dict]):
-        ...     # suggest feedback here using module_config and return it as a list
-
-        With learner profile (both synchronous and asynchronous forms):
-        >>> @feedback_provider
-        ... def sync_suggest_feedback_with_profile(exercise: Exercise, submission: Submission, module_config: Optional[dict], learner_profile: Optional[LearnerProfile]):
-        ...     # suggest feedback here using module_config and learner_profile and return it as a list
-
-        >>> @feedback_provider
-        ... async def async_suggest_feedback_with_profile(exercise: Exercise, submission: Submission, module_config: Optional[dict], learner_profile: Optional[LearnerProfile]):
-        ...     # suggest feedback here using module_config and learner_profile and return it as a list
     """
     exercise_type = inspect.signature(func).parameters["exercise"].annotation
     submission_type = inspect.signature(func).parameters["submission"].annotation
+
+    # Keep our HEAD behavior for module config (header/default), but allow it to be optional
     module_config_type = (
         inspect.signature(func).parameters["module_config"].annotation
         if "module_config" in inspect.signature(func).parameters
@@ -381,6 +356,11 @@ def feedback_provider(
     learner_profile_type = (
         inspect.signature(func).parameters["learner_profile"].annotation
         if "learner_profile" in inspect.signature(func).parameters
+        else None
+    )
+    latest_submission_type = (
+        inspect.signature(func).parameters["latest_submission"].annotation
+        if "latest_submission" in inspect.signature(func).parameters
         else None
     )
 
@@ -403,6 +383,9 @@ def feedback_provider(
         submission: submission_type,
         isGraded: is_graded_type = Body(True, alias="isGraded"),
         learner_profile: learner_profile_type = Body(None, alias="learnerProfile"),
+        latest_submission: latest_submission_type = Body(
+            None, alias="latestSubmission"
+        ),
         header_cfg: Optional[Any] = (
             Depends(HeaderConfigDep) if HeaderConfigDep else None
         ),
@@ -410,24 +393,36 @@ def feedback_provider(
             Depends(DefaultConfigDep) if DefaultConfigDep else None
         ),
     ):
+        # Resolve module config using our header/default precedence
         config = header_cfg or default_cfg
 
+        # Enrich metadata and persist
         exercise.meta.update(get_stored_exercise_meta(exercise) or {})
         submission.meta.update(get_stored_submission_meta(submission) or {})
+        if latest_submission is not None:
+            latest_submission.meta.update(
+                get_stored_submission_meta(latest_submission) or {}
+            )
 
         store_exercise(exercise)
         store_submissions([submission])
+        if latest_submission is not None:
+            store_submissions([latest_submission])
 
-        kwargs = {}
-        if "module_config" in inspect.signature(func).parameters:
+        # Build kwargs for the provider based on what it actually accepts
+        kwargs: Dict[str, Any] = {}
+        sig = inspect.signature(func).parameters
+
+        if "module_config" in sig:
             kwargs["module_config"] = config
-
-        if "is_graded" in inspect.signature(func).parameters:
+        if "is_graded" in sig:
             kwargs["is_graded"] = isGraded
-
-        if "learner_profile" in inspect.signature(func).parameters:
+        if "learner_profile" in sig:
             kwargs["learner_profile"] = learner_profile
+        if "latest_submission" in sig:
+            kwargs["latest_submission"] = latest_submission
 
+        # Call provider
         if inspect.iscoroutinefunction(func):
             feedbacks = await func(exercise, submission, **kwargs)
         else:

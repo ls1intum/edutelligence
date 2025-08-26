@@ -1,143 +1,210 @@
-import matplotlib.pyplot as plt
-import numpy as np
-from fastapi import APIRouter, Depends, Response, status
-from matplotlib.patches import Patch
-from scipy.spatial import ConvexHull
-from scipy.spatial.qhull import QhullError
+import logging
+import random
+from fastapi import APIRouter, HTTPException, Depends
 
-from atlasml.clients.weaviate import get_weaviate_client
-from atlasml.dependencies import TokenValidator
-from atlasml.ml.Clustering.HDBSCAN import apply_hdbscan
-from atlasml.ml.Clustering.TSNE import apply_tsne
-from atlasml.ml.VectorEmbeddings import FallbackModel
+from atlasml.ml.pipeline_workflows import PipelineWorkflows
 from atlasml.models.competency import (
-    Competency,
-    GenerateCompetencyRequest,
-    GenerateCompetencyRequestBatch,
-    GenerateEmbeddingsResponse,
     SaveCompetencyRequest,
     SuggestCompetencyRequest,
     SuggestCompetencyResponse,
+    CompetencyRelation,
+    CompetencyRelationSuggestionResponse,
+    RelationType,
 )
+from atlasml.utils import (
+    handle_pipeline_error,
+    validate_non_empty_string,
+    safe_get_attribute,
+)
+from atlasml.dependencies import TokenValidator
+from atlasml.clients.weaviate import get_weaviate_client, CollectionNames
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/competency", tags=["competency"])
-
-
-@router.post("/generate-embeddings", response_model=GenerateEmbeddingsResponse)
-async def generate_embeddings(request: GenerateCompetencyRequest):
-    print("GENERATING EMBEDDING FOR ==> ", request.id)
-    uuid, embeddings = FallbackModel.generate_embeddings(request.id, request.description)
-
-    print("EMBEDDING GENERATED WITH UUID ==> ", uuid)
-    print("EMBEDDING's VECTOR LENGTH ==> ", len(embeddings))
-
-    return GenerateEmbeddingsResponse(embeddings=[])
-
-
-@router.post("/generate-embeddings-batch", response_model=GenerateEmbeddingsResponse)
-async def generate_embeddings_batch(request: GenerateCompetencyRequestBatch):
-    response = []
-    for req in request.competencies:
-        print("GENERATING EMBEDDING FOR ==> ", req.id)
-        embeddings = FallbackModel.generate_embeddings(req.id, req.description)
-        response.append(embeddings)
-        print("EMBEDDING GENERATED")
-    print("EMBEDING ARE HERE ==> ", len(response))
-
-    return GenerateEmbeddingsResponse(embeddings=response)
-
-
-@router.get("/competency/{id}", response_model=Competency)
-async def get_competency(id: str):
-    weaviate_client = get_weaviate_client()
-    competency_embeddings = weaviate_client.get_all_embeddings()
-
-    print("COMPETENCY EMBEDDINGS LENGTH: ", len(competency_embeddings))
-    print("Generating Cluster Plot...")
-
-    vector_data = np.array(
-        [embedding["vector"]["default"] for embedding in competency_embeddings]
-    )
-    data_ids = np.array([embedding["id"] for embedding in competency_embeddings])
-
-    # Apply t-SNE with 2 components for 2D visualization
-    tsne_result = apply_tsne(vector_data, n_components=2, perplexity=5)
-
-    # Cluster the t-SNE result using HDBSCAN
-    labels = apply_hdbscan(
-        tsne_result, eps=0.01, min_samples=1, metric="cosine", min_cluster_size=4
-    )
-
-    # Build clusters dictionary: label -> { 'center': cluster center, 'data_ids': list of data ids }
-    clusters = {}
-    for cluster in np.unique(labels):
-        indices = np.where(labels == cluster)[0]
-        cluster_points = tsne_result[indices]
-        center_point = np.mean(cluster_points, axis=0)
-        cluster_data_ids = list(data_ids[indices])
-        clusters[cluster] = {"center": center_point, "data_ids": cluster_data_ids}
-
-    plt.figure()
-    cmap = plt.get_cmap("tab10")
-    unique_labels = np.unique(labels)
-    legend_handles = []
-
-    # Loop through each cluster and fill the convex hull area and mark the center
-    for idx, cluster in enumerate(unique_labels):
-        # Get indices and points for the current cluster
-        indices = np.where(labels == cluster)[0]
-        cluster_points = tsne_result[indices]
-
-        # Choose a color from the colormap (cycling if necessary)
-        color = cmap(idx % 10)
-
-        # If the cluster has enough points, compute and fill the convex hull area
-        if cluster_points.shape[0] >= 3:
-            try:
-                hull = ConvexHull(cluster_points, qhull_options="QJ")
-                hull_points = cluster_points[hull.vertices]
-                hull_points = np.concatenate([hull_points, hull_points[:1]], axis=0)
-                plt.fill(hull_points[:, 0], hull_points[:, 1], color=color, alpha=0.3)
-            except QhullError as e:
-                print(f"⚠️ Could not compute ConvexHull for cluster {cluster}: {e}")
-
-        # Plot the unique cluster center using the pre-computed clusters dictionary
-        center = clusters[cluster]["center"]
-        plt.scatter(center[0], center[1], color=color, marker="X", s=100)
-
-        # Append a legend entry for this cluster
-        legend_handles.append(Patch(color=color, label=f"Cluster {cluster}"))
-
-    plt.title("Cluster Centers and Background Areas")
-    plt.xlabel("Component 1")
-    plt.ylabel("Component 2")
-    plt.legend(handles=legend_handles)
-    plt.show()
 
 
 @router.post(
     "/suggest",
     response_model=SuggestCompetencyResponse,
-    dependencies=[Depends(TokenValidator())],
+    dependencies=[],
 )
-async def suggest_competencies(request: SuggestCompetencyRequest):
-    # TODO: @ArdaKaraman  call required pipeline with the input and return list of competencies
-    # TODO: For test purposes you can delete TokenValidator() from dependencies
-    return Response(
-        status_code=status.HTTP_200_OK,
-        content=b"[]",
-        media_type="application/json",
-    )
+async def suggest_competencies(
+    request: SuggestCompetencyRequest,
+) -> SuggestCompetencyResponse:
+    """
+    Suggest competencies based on similarity to the provided description.
+
+    Args:
+        request: Request containing description for competency suggestion
+
+    Returns:
+        SuggestCompetencyResponse with suggested competencies
+
+    Raises:
+        HTTPException: 400 for validation errors, 500 for server errors
+    """
+    try:
+        logger.info(
+            f"Suggesting competencies for description: {request.description[:100]}..."
+        )
+
+        # Validate input using utility function
+        validated_description = validate_non_empty_string(
+            request.description, "description"
+        )
+        validated_course_id = str(request.course_id)
+
+        pipeline = PipelineWorkflows()
+        competencies = pipeline.suggest_competencies_by_similarity(
+            validated_description, course_id=validated_course_id
+        )
+
+        logger.info(f"Successfully suggested {len(competencies)} competencies")
+        return SuggestCompetencyResponse(competencies=competencies)
+
+    except HTTPException:
+        # Re-raise HTTP exceptions
+        raise
+    except Exception as e:
+        # Use centralized error handling
+        raise handle_pipeline_error(e, "suggest_competencies")
 
 
-@router.post(
-    "/save", response_model=list[Competency], dependencies=[Depends(TokenValidator())]
-)
+@router.post("/save", dependencies=[])
 async def save_competencies(request: SaveCompetencyRequest):
-    # TODO: @ArdaKaraman call required pipeline with the input you do not need to return anything
-    # TODO: For test purposes you can delete TokenValidator() from dependencies
-    return Response(
-        status_code=status.HTTP_200_OK,
-        content=b"[]",
-        media_type="application/json",
-    )
+    """
+    Save competencies and/or exercises with the specified operation type.
+
+    Args:
+        request: Request containing competency/exercise data and operation type
+
+    Returns:
+        200 OK HTTP response on successful save
+
+    Raises:
+        HTTPException: 400 for validation errors, 500 for server errors
+    """
+    try:
+        logger.info(
+            f"Saving competencies with operation type: {request.operation_type}"
+        )
+
+        # Validate that at least one item is provided
+        if not request.competency and not request.exercise:
+            raise ValueError("At least one competency or exercise must be provided")
+
+        # Validate operation type
+        validated_operation_type = validate_non_empty_string(
+            request.operation_type, "operation_type"
+        )
+
+        pipeline = PipelineWorkflows()
+        saved_items = []
+
+        # Save competency if provided
+        if request.competency:
+            try:
+                competency_name = safe_get_attribute(request.competency, "title")
+                logger.info(f"Saving competency: {competency_name}")
+                result = pipeline.save_competency(
+                    request.competency, validated_operation_type
+                )
+                saved_items.append({"type": "competency", "result": result})
+                logger.info("Competency saved successfully")
+            except Exception as e:
+                logger.error(f"Failed to save competency: {e}")
+                raise Exception(f"Failed to save competency: {str(e)}")
+
+        # Save exercise if provided
+        if request.exercise:
+            try:
+                exercise_desc = safe_get_attribute(request.exercise, "description")
+                logger.info(f"Saving exercise: {exercise_desc}")
+                result = pipeline.save_exercise(
+                    request.exercise, validated_operation_type
+                )
+                saved_items.append({"type": "exercise", "result": result})
+                logger.info("Exercise saved successfully")
+            except Exception as e:
+                logger.error(f"Failed to save exercise: {e}")
+                raise Exception(f"Failed to save exercise: {str(e)}")
+
+        logger.info(f"Successfully saved {len(saved_items)} items")
+        # Return 200 OK response without body
+        return
+
+    except HTTPException:
+        # Re-raise HTTP exceptions
+        raise
+    except Exception as e:
+        # Use centralized error handling
+        raise handle_pipeline_error(e, "save_competencies")
+
+
+@router.get(
+    "/relations/suggest/{course_id}",
+    response_model=CompetencyRelationSuggestionResponse,
+    dependencies=[],
+)
+async def suggest_competency_relations(course_id: int) -> CompetencyRelationSuggestionResponse:
+    """
+    Suggest competency relations for a given course.
+    Currently generates random directed relations between competencies of the course.
+    """
+    try:
+        validated_course_id = str(course_id)
+        logger.info(f"Suggesting competency relations for course_id={validated_course_id}")
+
+        client = get_weaviate_client()
+        objs = client.get_embeddings_by_property(
+            CollectionNames.COMPETENCY.value, "course_id", validated_course_id
+        )
+
+        # Collect domain competency IDs; fallback to object UUID if property missing
+        comp_ids = []
+        for obj in objs:
+            props = obj.get("properties", {}) or {}
+            comp_id = props.get("competency_id") or obj.get("id")
+            if comp_id:
+                comp_ids.append(int(comp_id))
+
+        # Not enough competencies to form relations
+        if len(comp_ids) < 2:
+            logger.info("Not enough competencies to suggest relations")
+            return CompetencyRelationSuggestionResponse(relations=[])
+
+        # Randomly create a limited number of unique directed relations
+        max_possible = len(comp_ids) * (len(comp_ids) - 1)
+        target_count = min(10, max(1, max_possible // 5))  # cap and keep it small
+        relation_types = [RelationType.MATCH, RelationType.EXTEND, RelationType.REQUIRES]
+
+        seen_pairs = set()
+        relations = []
+        attempts = 0
+        max_attempts = max_possible * 2
+
+        while len(relations) < target_count and attempts < max_attempts:
+            attempts += 1
+            tail_id, head_id = random.sample(comp_ids, 2)
+            pair_key = (tail_id, head_id)
+            if pair_key in seen_pairs:
+                continue
+            seen_pairs.add(pair_key)
+            relations.append(
+                CompetencyRelation(
+                    tail_id=tail_id,
+                    head_id=head_id,
+                    relation_type=random.choice(relation_types),
+                )
+            )
+
+        logger.info(f"Suggested {len(relations)} competency relations")
+        return CompetencyRelationSuggestionResponse(relations=relations)
+
+    except HTTPException:
+        # Re-raise HTTP exceptions
+        raise
+    except Exception as e:
+        # Use centralized error handling
+        raise handle_pipeline_error(e, "suggest_competency_relations")
