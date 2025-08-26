@@ -4,7 +4,7 @@ from .schemas import ExerciseType
 
 
 class ModuleConfig(BaseSettings):
-    """Static module config loaded from module.conf."""
+    """Static module config loaded from module.conf"""
 
     name: str
     type: ExerciseType
@@ -20,7 +20,7 @@ class ModuleConfig(BaseSettings):
 
 
 class LLMSettings(BaseSettings):
-    """Central LLM settings — single source of truth for all model loaders."""
+    """Central LLM settings - single source of truth for all model loaders"""
 
     AZURE_OPENAI_API_KEY: SecretStr = Field("", env="AZURE_OPENAI_API_KEY")
     AZURE_OPENAI_ENDPOINT: str = Field("", env="AZURE_OPENAI_API_BASE")
@@ -42,8 +42,7 @@ class LLMSettings(BaseSettings):
 
 class Settings(BaseSettings):
     """
-    Unified application settings, loaded from environment variables and .env file.
-    Keep LLM settings centralized under `llm`.
+    Unified application settings, loaded from environment variables and .env file
     """
 
     PRODUCTION: bool = Field(False, env="PRODUCTION")

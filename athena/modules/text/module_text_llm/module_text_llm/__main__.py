@@ -8,7 +8,7 @@ def main():
     from athena.app import run_app
     from athena.settings import Settings
 
-    settings = Settings()  # Let Pydantic load env + .env
+    settings = Settings()
     run_app(app, settings)
 
 

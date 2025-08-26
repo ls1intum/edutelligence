@@ -35,7 +35,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 
 def create_app(lifespan: Callable[[Any], Any]) -> FastAPI:
     """
-    Applies the module-specific lifespan to the global app instance.
+    Applies the module-specific lifespan to the global app instance
     """
     app.router.lifespan_context = lifespan
     return app
@@ -43,9 +43,8 @@ def create_app(lifespan: Callable[[Any], Any]) -> FastAPI:
 
 def run_app(app_to_run: FastAPI, settings: "athena.settings.Settings"):
     """
-    Starts the Uvicorn server for the given app and settings.
+    Starts the Uvicorn server for the given app and settings
     """
-    # Expose settings to dependencies
     app_to_run.state.settings = settings
 
     LOGGING_CONFIG["formatters"]["default"][
