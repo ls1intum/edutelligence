@@ -8,7 +8,7 @@ from athena.schemas.submission import Submission
 
 class ProgrammingSubmission(Submission):
     """Submission on a programming exercise."""
-    repository_uri: str = Field(example="https://lms.example.com/assignments/1/submissions/1/download")
+    repository_uri: str = Field(examples=["https://lms.example.com/assignments/1/submissions/1/download"])
 
 
     def get_zip(self) -> ZipFile:

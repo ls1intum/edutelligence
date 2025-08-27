@@ -45,7 +45,7 @@ def get_dynamic_module_config_factory(module_config_type: Optional[Type[C]]):
                                     detail="Invalid module config received, could not parse JSON from X-Module-Config header.") from exc
             
             try:
-                return module_config_type.parse_obj(config_dict)
+                return module_config_type.model_validate(config_dict)
             except ValidationError as exc:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, 
                                     detail=f"Validation error for module config: {exc}") from exc
