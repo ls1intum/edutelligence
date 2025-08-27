@@ -9,9 +9,16 @@ from modules.programming.module_programming_llm.mock.utils.mock_module_config im
     NonGradedFeedbackGenerationPrompt,
     FileSummaryPrompt,
 )
-from modules.programming.module_programming_llm.mock.utils.mock_env import (
-    MockModelConfig,
-)
+
+# Define MockModelConfig locally to avoid importing from mock_env
+class MockModelConfig:
+    def __init__(self, model_name: str = "mock_model", **model_params):
+        self.model_name = model_name
+        self.model_params = model_params or {}
+    
+    def get_model(self):
+        from modules.programming.module_programming_llm.mock.utils.mock_llm import MockLanguageModel
+        return MockLanguageModel()
 
 
 def create_mock_graded_config(

@@ -57,20 +57,21 @@ class MockModelConfig(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
 
-# Mock llm_core models
-mock_llm_core = Mock()
-mock_llm_core.models = Mock()
-mock_llm_core.models.ModelConfigType = MockModelConfigType
-mock_llm_core.models.DefaultModelConfig = MockDefaultModelConfig
-mock_llm_core.models.get_model_configs = lambda: {
-    "mock_model": MockDefaultModelConfig()
-}
+# Create mock objects that can be used in fixtures instead of globally overwriting sys.modules
+def create_mock_llm_core():
+    """Create a mock llm_core object for use in fixtures."""
+    mock_llm_core = Mock()
+    mock_llm_core.models = Mock()
+    mock_llm_core.models.ModelConfigType = MockModelConfigType
+    mock_llm_core.models.DefaultModelConfig = MockDefaultModelConfig
+    mock_llm_core.models.get_model_configs = lambda: {
+        "mock_model": MockDefaultModelConfig()
+    }
+    return mock_llm_core
 
-# Mock model_config module
-mock_model_config = Mock()
-mock_model_config.ModelConfig = MockModelConfig
-sys.modules["llm_core.models.model_config"] = mock_model_config
 
-# Apply the mock to sys.modules
-sys.modules["llm_core"] = mock_llm_core
-sys.modules["llm_core.models"] = mock_llm_core.models
+def create_mock_model_config():
+    """Create a mock model_config object for use in fixtures."""
+    mock_model_config = Mock()
+    mock_model_config.ModelConfig = MockModelConfig
+    return mock_model_config
