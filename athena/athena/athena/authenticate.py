@@ -41,32 +41,18 @@ def authenticated(func: Callable) -> Callable:
     @wraps(func)
     async def wrapper(
         *args,
-        secret: str = Depends(api_key_auth_header),
-        lms_url: str = Depends(api_key_lms_url_header),
+        secret: str | None = Depends(api_key_auth_header),
+        lms_url: str | None = Depends(api_key_lms_url_header),
+        settings: Settings = Depends(get_settings),
         **kwargs
     ):
-        # Get request from kwargs (FastAPI will inject it)
-        request = kwargs.get("request")
-        if request:
-            settings = get_settings(request)
-        else:
-            # Fallback - create default settings
-            from athena.settings import Settings
-            import os
-
-            settings = Settings(
-                PRODUCTION=os.getenv("PRODUCTION", "False").lower()
-                in ("true", "1", "yes"),
-                SECRET=os.getenv("SECRET", "development-secret"),
-            )
-
         verify_inter_module_secret_key(secret, settings)
-        set_lms_url_context_var(lms_url)
+        set_lms_url_context_var(lms_url or "")
         if inspect.iscoroutinefunction(func):
             return await func(*args, **kwargs)
         return func(*args, **kwargs)
 
-    # Update the function signature
+    # Update the function signature to include all dependencies
     sig = inspect.signature(func)
     params = list(sig.parameters.values())
     params.extend(
@@ -80,6 +66,11 @@ def authenticated(func: Callable) -> Callable:
                 "lms_url",
                 inspect.Parameter.POSITIONAL_OR_KEYWORD,
                 default=Depends(api_key_lms_url_header),
+            ),
+            inspect.Parameter(
+                "settings",
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                default=Depends(get_settings),
             ),
         ]
     )
