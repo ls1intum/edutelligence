@@ -39,29 +39,29 @@ services:
     environment:
       ENABLE_CUDA: '0'
 
-  atlasml:
-    build:
-      context: ./AtlasMl
-      dockerfile: Dockerfile
-    ports:
-      - 8000:8000
-    volumes:
-      - ./AtlasMl/atlasml:/atlasml/atlasml
-    environment:
-      - PYTHONPATH=/atlasml
-      - WEAVIATE_HOST=weaviate
-      - WEAVIATE_PORT=8085
-      - WEAVIATE_GRPC_PORT=50051
-      - OPENAI_API_KEY=
-      - OPENAI_API_URL=https://ase-se01.openai.azure.com
-      - ATLAS_API_KEYS=["test"]
-      - SENTRY_DSN=https://8fe7eac930933ea3c83ff7a66555de18@sentry.aet.cit.tum.de/6
-      - ENV=production
-    depends_on:
-      weaviate:
-        condition: service_healthy
-    networks:
-      - default
+  # atlasml:
+  #   build:
+  #     context: ./AtlasMl
+  #     dockerfile: Dockerfile
+  #   ports:
+  #     - 8000:8000
+  #   volumes:
+  #     - ./AtlasMl/atlasml:/atlasml/atlasml
+  #   environment:
+  #     - PYTHONPATH=/atlasml
+  #     - WEAVIATE_HOST=weaviate
+  #     - WEAVIATE_PORT=8085
+  #     - WEAVIATE_GRPC_PORT=50051
+  #     - OPENAI_API_KEY=
+  #     - OPENAI_API_URL=https://ase-se01.openai.azure.com
+  #     - ATLAS_API_KEYS=["test"]
+  #     - SENTRY_DSN=https://8fe7eac930933ea3c83ff7a66555de18@sentry.aet.cit.tum.de/6
+  #     - ENV=production
+  #   depends_on:
+  #     weaviate:
+  #       condition: service_healthy
+  #   networks:
+  #     - default
 
 networks:
   default:
