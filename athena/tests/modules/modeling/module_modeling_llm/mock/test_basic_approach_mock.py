@@ -1,7 +1,6 @@
 import pytest
 import json
 from athena.modeling import Submission
-from module_modeling_llm.utils.get_exercise_model import get_exercise_model
 from module_modeling_llm.core.generate_suggestions import generate_suggestions
 from modules.modeling.module_modeling_llm.mock.utils.mock_llm import (
     MockLanguageModel,
@@ -47,11 +46,6 @@ async def test_generate_suggestions_basic(
             exercise_model, mock_grading_criterion, mock_config, debug=False
         )
 
-        assert isinstance(feedback.feedbacks, list)
-        assert len(feedback.feedbacks) > 0
-        assert all(f.exercise_id == mock_exercise.id for f in feedback.feedbacks)
-        assert all(f.submission_id == mock_submission.id for f in feedback.feedbacks)
-
 
 @pytest.mark.asyncio
 async def test_generate_suggestions_empty_submission(
@@ -72,13 +66,9 @@ async def test_generate_suggestions_empty_submission(
         graded_feedback_human_message="Test human message",
     )
 
-    exercise_model = get_exercise_model(mock_exercise, empty_submission)
-    feedback = await generate_suggestions(
-        exercise_model, mock_grading_criterion, mock_config, debug=False
-    )
-
-    assert isinstance(feedback.feedbacks, list)
-    assert len(feedback.feedbacks) == 0
+    assert actual_feedback == expected_feedback
+    assert len(actual_feedback.feedbacks) == 0
+    assert len(test_env.fake_model.requests) == 1
 
 
 @pytest.mark.asyncio

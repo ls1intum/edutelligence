@@ -11,10 +11,11 @@ class MockPrompt(BaseModel):
 
 class MockModelConfig(BaseModel):
     model_name: str = "azure_openai_gpt-4o-mini"
-    
+
     def get_model(self):
         # Return a mock model that doesn't raise an error
         from unittest.mock import Mock
+
         mock_model = Mock()
         mock_model.name = "mock-model"
         return mock_model

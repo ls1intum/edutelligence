@@ -1,10 +1,8 @@
-from llm_core.loaders.model_loaders.azure_loader import (
-    AzureModel,
-    azure_available_models,
-)
 from llm_core.models.providers.base_chat_model_config import BaseChatModelConfig
-from typing import ClassVar, Literal
-from pydantic import Field
+from llm_core.catalog import ModelCatalog
+from llm_core.loaders.catalogs import get_azure_catalog
+from typing import ClassVar, Literal, Optional
+from pydantic import Field, PrivateAttr, validator
 from langchain.base_language import BaseLanguageModel
 
 
@@ -12,17 +10,36 @@ class AzureModelConfig(BaseChatModelConfig):
     """Configuration for an Azure OpenAI chat completion deployment"""
 
     PROVIDER: ClassVar[str] = "azure"
-    ENUM: ClassVar[type] = AzureModel
     KW_REMAP: ClassVar[dict[str, str]] = {}
 
     provider: Literal["azure"] = Field("azure", const=True)
-    model_name: AzureModel = Field(
-        ...,
-        description="Azure model name",
+    model_name: str = Field(
+        ..., description="Key of Azure deployment prefixed with 'azure_openai_'."
     )
+    _catalog: Optional[ModelCatalog] = PrivateAttr(None)
 
-    def get_model(self) -> BaseLanguageModel:
-        tmpl = azure_available_models[self.model_name.value]
+    def __init__(self, catalog: ModelCatalog = None, **data):
+        """Initialize with optional catalog reference."""
+        super().__init__(**data)
+        self._catalog = catalog
+
+    @validator("model_name")
+    def _prefix_ok(cls, v: str) -> str:
+        if not v.startswith("azure_openai_"):
+            raise ValueError("Azure model_name must start with 'azure_openai_'.")
+        return v
+
+    def get_model(self, azure_catalog: ModelCatalog = None) -> BaseLanguageModel:
+        """Get the model using either the provided catalog or the instance catalog."""
+        catalog = azure_catalog or self._catalog or get_azure_catalog()
+        key = self.model_name
+        try:
+            tmpl = catalog.templates[key]
+        except KeyError:
+            known = ", ".join(sorted(catalog.templates)) or "(none discovered)"
+            raise RuntimeError(
+                f"Azure deployment '{key}' not discovered. Known keys: {known}."
+            )
         return self._template_get_model(tmpl)
 
     class Config:

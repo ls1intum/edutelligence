@@ -4,8 +4,10 @@ import asyncio
 from module_modeling_llm.config import BasicApproachConfig
 from llm_core.models.providers.azure_model_config import AzureModelConfig
 
+
 def pytest_configure(config):
     config.option.asyncio_mode = "strict"
+
 
 @pytest.fixture(scope="session")
 def event_loop():
@@ -15,13 +17,11 @@ def event_loop():
     yield loop
     loop.close()
 
+
 @pytest_asyncio.fixture
 async def real_config():
     config = BasicApproachConfig(
         max_input_tokens=5000,
-        model=AzureModelConfig(
-            model_name="azure_openai_gpt-4o",  
-            get_model=None  
-        )
+        model=AzureModelConfig(model_name="azure_openai_gpt-4o", get_model=None),
     )
     return config

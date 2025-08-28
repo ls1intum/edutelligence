@@ -1,7 +1,6 @@
 from abc import ABC
-from pathlib import Path
+from typing import Optional
 
-from llm_core.loaders.llm_config_loader import get_llm_config
 from pydantic import BaseModel, Field
 from llm_core.models import ModelConfigType
 
@@ -30,9 +29,6 @@ from module_programming_llm.prompts.summarize_submission_by_file import (
     system_message as summarize_submission_by_file_system_message,
     human_message as summarize_submission_by_file_human_message,
 )
-
-_CONFIG_PATH = Path(__file__).resolve().parent.parent / "llm_config.yml"
-llm_config = get_llm_config(str(_CONFIG_PATH))
 
 
 class SplitProblemStatementsBasePrompt(BaseModel):
@@ -140,10 +136,10 @@ class BasicApproachConfig(BaseModel):
     max_input_tokens: int = Field(
         default=3000, description="Maximum number of tokens in the input prompt."
     )
-    model: ModelConfigType = Field(
+    model: Optional[ModelConfigType] = Field(
+        default=None,
         title="Model",
         description="The model to use for the approach.",
-        default=llm_config.models.base_model_config,
     )
     max_number_of_files: int = Field(
         default=25,

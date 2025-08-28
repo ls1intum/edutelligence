@@ -1,8 +1,6 @@
 from __future__ import annotations
-
 from abc import ABC, abstractmethod
 from typing import ClassVar
-
 from pydantic import (
     BaseModel,
     Field,
@@ -21,12 +19,10 @@ from llm_core.models.usage_handler import UsageHandler
 class BaseChatModelConfig(ModelConfig, BaseModel, ABC):
     """Common configuration for any chat-completion model provider"""
 
-    # Provider‑specific parameters
     PROVIDER: ClassVar[str]
     ENUM: ClassVar[type]
     KW_REMAP: ClassVar[dict[str, str]] = {}
 
-    # Generation parameters
     max_tokens: PositiveInt = Field(
         4000,
         description=(
@@ -80,7 +76,6 @@ decreasing the model's likelihood to repeat the same line verbatim.
 """,
     )
 
-    # Capability flags
     _supports_system_messages: bool = PrivateAttr(True)
     _supports_function_calling: bool = PrivateAttr(True)
     _supports_structured_output: bool = PrivateAttr(True)
@@ -113,7 +108,6 @@ decreasing the model's likelihood to repeat the same line verbatim.
                 values[f"_{flag}"] = bool(caps[flag])
         return values
 
-    # Validators and helpers
     @validator("max_tokens")
     def _max_tokens_positive(cls, v):
         if v <= 0:
@@ -129,7 +123,6 @@ decreasing the model's likelihood to repeat the same line verbatim.
     def supports_structured_output(self) -> bool:
         return self._supports_structured_output
 
-    # Common LangChain‑instantiation helper
     def _template_get_model(self, tmpl: BaseLanguageModel) -> BaseLanguageModel:
         """Return a fresh LC model instance with our params merged in"""
         kwargs = tmpl.__dict__.copy()

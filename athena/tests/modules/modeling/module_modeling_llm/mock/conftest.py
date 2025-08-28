@@ -27,20 +27,21 @@ def _mock_llm_config(monkeypatch):
 
 class MockModelConfig:
     """Mock model configuration that doesn't raise errors."""
-    
+
     def get_model(self):
         # Return a mock model that doesn't raise an error
         from unittest.mock import Mock
+
         mock_model = Mock()
         mock_model.name = "mock-model"
         return mock_model
-    
+
     def supports_system_messages(self):
         return True
-    
+
     def supports_function_calling(self):
         return True
-    
+
     def supports_structured_output(self):
         return True
 
