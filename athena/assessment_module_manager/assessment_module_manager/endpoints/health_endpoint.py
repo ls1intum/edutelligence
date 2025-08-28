@@ -5,8 +5,8 @@ from fastapi import APIRouter, Depends
 from .modules_endpoint import get_modules
 from assessment_module_manager.logger import logger
 from assessment_module_manager.module import Module
-from ..dependencies import get_settings
-from ..settings import Settings
+from ..dependencies import get_registry
+from ..module_registry import ModuleRegistry
 
 router = APIRouter()
 
@@ -53,7 +53,7 @@ class HealthResponse(BaseModel):
 
 @router.get("/health")
 async def get_health(
-    settings: Settings = Depends(get_settings),
+    registry: ModuleRegistry = Depends(get_registry),
 ) -> HealthResponse:
     """
     Health endpoint to find out whether the Assessment Module Manager is healthy,
@@ -61,19 +61,16 @@ async def get_health(
 
     This endpoint is not authenticated.
     """
-    # IMPORTANT: settings is the real instance, not a dependency_injector.Provide sentinel
-    modules = {}
-    if hasattr(settings, "list_modules"):
-        modules = {
-            module.name: {
-                "url": module.url,
-                "type": module.type,
-                "healthy": await is_healthy(module),
-                "supportsEvaluation": module.supports_evaluation,
-                "supportsNonGradedFeedbackRequests": module.supports_non_graded_feedback_requests,
-                "supportsGradedFeedbackRequests": module.supports_graded_feedback_requests,
-            }
-            for module in settings.list_modules()
+    modules = {
+        module.name: {
+            "url": module.url,
+            "type": module.type,
+            "healthy": await is_healthy(module),
+            "supportsEvaluation": module.supports_evaluation,
+            "supportsNonGradedFeedbackRequests": module.supports_non_graded_feedback_requests,
+            "supportsGradedFeedbackRequests": module.supports_graded_feedback_requests,
         }
+        for module in registry.get_all_modules()
+    }
 
     return HealthResponse(modules=modules)

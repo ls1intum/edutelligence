@@ -6,19 +6,11 @@ from fastapi import HTTPException, Request, Depends
 from pydantic.generics import GenericModel
 
 from .module import Module
-from .list_modules import list_modules
+from ..module_registry import ModuleRegistry
 from athena import ExerciseType
 from assessment_module_manager.logger import logger
+from ..dependencies import get_registry, get_settings
 from ..settings import Settings
-
-
-def get_settings(request: Request) -> Settings:
-    settings = getattr(request.app.state, "settings", None)
-    if settings is None:
-        raise HTTPException(
-            status_code=500, detail="Settings not initialized on app.state."
-        )
-    return settings
 
 
 D = TypeVar("D")
@@ -36,14 +28,13 @@ class ModuleResponse(GenericModel, Generic[D, M]):
     meta: M
 
 
-async def find_module_by_name(module_name: str) -> Optional[Module]:
+async def find_module_by_name(
+    module_name: str, registry: ModuleRegistry
+) -> Optional[Module]:
     """
     Helper function to find a module by name.
     """
-    for module in list_modules():
-        if module.name == module_name:
-            return module
-    return None
+    return registry.find_module_by_name(module_name)
 
 
 # pylint: disable=too-many-positional-arguments

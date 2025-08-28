@@ -1,7 +1,7 @@
 import os
 import configparser
 from pathlib import Path
-from typing import cast
+from typing import List
 
 from pydantic import BaseSettings, AnyHttpUrl
 
@@ -20,12 +20,11 @@ class Settings(BaseSettings):
             values["production"] = os.environ.get("PRODUCTION", "0") == "1"
 
         super().__init__(**values)
-        self._initialize_secrets()
 
-    def _initialize_secrets(self):
-        """Initialize module and deployment secrets."""
+    def initialize_secrets(self, modules: List):
+        """Initialize module and deployment secrets"""
         self.module_secrets = {}
-        for module in self.list_modules():
+        for module in modules:
             secret = os.environ.get(f"{module.name.upper()}_SECRET")
             if secret is None and self.production:
                 raise ValueError(
@@ -51,7 +50,6 @@ class Settings(BaseSettings):
 
     def list_deployments(self) -> list:
         """Get a list of all LMS instances that Athena should support."""
-        # Import here to avoid circular import
         from .deployment.deployment import Deployment
 
         deployments_config = configparser.ConfigParser()
@@ -59,40 +57,6 @@ class Settings(BaseSettings):
         return [
             Deployment(name=deployment, url=deployments_config[deployment]["url"])
             for deployment in deployments_config.sections()
-        ]
-
-    def list_modules(self) -> list:
-        """Get a list of all Athena modules that are available."""
-        # Import here to avoid circular import
-        from .module.module import Module
-        from athena.schemas import ExerciseType
-
-        modules_config = configparser.ConfigParser()
-        modules_config.read(Path(__file__).parent.parent / "modules.ini")
-        return [
-            Module(
-                name=module,
-                url=cast(
-                    AnyHttpUrl,
-                    os.environ.get(
-                        f"{module.upper()}_URL", modules_config[module]["url"]
-                    ),
-                ),
-                type=ExerciseType(modules_config[module]["type"]),
-                supports_evaluation=modules_config[module].getboolean(
-                    "supports_evaluation"
-                )
-                or False,
-                supports_non_graded_feedback_requests=modules_config[module].getboolean(
-                    "supports_non_graded_feedback_requests"
-                )
-                or False,
-                supports_graded_feedback_requests=modules_config[module].getboolean(
-                    "supports_graded_feedback_requests"
-                )
-                or False,
-            )
-            for module in modules_config.sections()
         ]
 
     class Config:

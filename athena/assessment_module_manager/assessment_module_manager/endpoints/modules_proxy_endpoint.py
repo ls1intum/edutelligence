@@ -9,8 +9,9 @@ from assessment_module_manager.module import (
     find_module_by_name,
     request_to_module,
 )
-from ..dependencies import get_settings
+from ..dependencies import get_settings, get_registry
 from ..settings import Settings
+from ..module_registry import ModuleRegistry
 
 router = APIRouter()
 
@@ -43,6 +44,7 @@ async def proxy_to_module(
     request: Request,
     data: Optional[Dict[Any, Any]] = Body(None),
     settings: Settings = Depends(get_settings),
+    registry: ModuleRegistry = Depends(get_registry),
 ) -> JSONResponse:
     """
     This endpoint is called by the LMS to proxy requests to modules.
@@ -54,7 +56,7 @@ async def proxy_to_module(
             status_code=400, detail="GET request should not contain a body"
         )
 
-    module = await find_module_by_name(module_name)
+    module = await find_module_by_name(module_name, registry)
     if module is None:
         raise HTTPException(
             status_code=404,

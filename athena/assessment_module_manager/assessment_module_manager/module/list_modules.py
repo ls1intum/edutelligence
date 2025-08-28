@@ -1,10 +1,9 @@
 from typing import List
 
 from .module import Module
-from ..settings import Settings
+from ..module_registry import ModuleRegistry
 
 
-def list_modules() -> List[Module]:
+def list_modules(registry: ModuleRegistry) -> List[Module]:
     """Get a list of all Athena modules that are available."""
-    settings = Settings()
-    return settings.list_modules()
+    return registry.get_all_modules()
