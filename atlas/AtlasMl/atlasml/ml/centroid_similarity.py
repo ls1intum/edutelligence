@@ -30,7 +30,7 @@ def generate_competency_relationship(medoids_emb, descriptions):
     )
 
     def entail_prob(p, h):
-        logits = nli(f"{p}", candidate_labels=[f"{h}"])
+        logits = nli(f"{p}", candidate_labels=[f"{h}", "fake candidate"], multi_label=True)
         score = logits["scores"][0]
         return score
 
