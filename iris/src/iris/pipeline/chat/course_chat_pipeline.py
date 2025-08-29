@@ -84,6 +84,7 @@ from .interaction_suggestion_pipeline import (
     InteractionSuggestionPipeline,
 )
 from .lecture_chat_pipeline import LectureChatPipeline
+from .session_title_generation_pipeline import SessionTitleGenerationPipeline
 
 logger = logging.getLogger(__name__)
 
@@ -95,6 +96,7 @@ class CourseChatPipeline(Pipeline):
     llm_small: IrisLangchainChatModel
     pipeline: Runnable
     lecture_pipeline: LectureChatPipeline
+    session_title_pipeline: SessionTitleGenerationPipeline
     suggestion_pipeline: InteractionSuggestionPipeline
     citation_pipeline: CitationPipeline
     callback: CourseChatStatusCallback
@@ -131,6 +133,7 @@ class CourseChatPipeline(Pipeline):
         self.db = VectorDatabase()
         self.lecture_retriever = LectureRetrieval(self.db.client)
         self.faq_retriever = FaqRetrieval(self.db.client)
+        self.session_title_pipeline = SessionTitleGenerationPipeline()
         self.suggestion_pipeline = InteractionSuggestionPipeline(variant="course")
         self.citation_pipeline = CitationPipeline()
 
@@ -640,6 +643,30 @@ class CourseChatPipeline(Pipeline):
                 tokens=self.tokens,
                 accessed_memories=accessed_memory_storage,
             )
+            # Generate a session title if this is the first student message
+            try:
+                # Only generate a title when this is the first user turn that produced a tutor reply
+                if output and len(dto.chat_history) == 1:
+                    first_user_msg = dto.chat_history[0].contents[0].text_content
+                    session_title = self.session_title_pipeline(first_user_msg, output)
+                    if self.session_title_pipeline.tokens is not None:
+                        tokens = [self.session_title_pipeline.tokens]
+                    else:
+                        tokens = []
+                    self.callback.done(
+                        final_result=None,
+                        session_title=session_title,
+                        tokens=tokens,
+                    )
+                else:
+                    self.callback.skip("Skipping session title generation.")
+            except Exception as e:
+                logger.error(
+                    "An error occurred while running the session title generation pipeline",
+                    exc_info=e,
+                )
+                traceback.print_exc()
+                self.callback.error("Generating session title failed.")
 
             # Generate suggestions (this is currently skipped)
             # self._generate_suggestions(output, dto)
