@@ -1,3 +1,7 @@
+from typing import Optional
+
+from pydantic import Field
+
 from iris.domain.status.status_update_dto import StatusUpdateDTO
 
 
@@ -10,3 +14,4 @@ class LectureChatStatusUpdateDTO(StatusUpdateDTO):
 
     result: str
     """The result message or status of the lecture chat pipeline operation."""
+    session_title: Optional[str] = Field(alias="sessionTitle", default=None)
