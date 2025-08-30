@@ -18,7 +18,13 @@ from iris.pipeline.prompts.text_exercise_chat_prompts import (
     fmt_sentiment_analysis_prompt,
     fmt_system_prompt,
 )
-from iris.pipeline.shared.utils import filter_variants_by_available_models
+from iris.pipeline.session_title_generation_pipeline import (
+    SessionTitleGenerationPipeline,
+)
+from iris.pipeline.shared.utils import (
+    filter_variants_by_available_models,
+    generate_session_title,
+)
 from iris.web.status.status_update import TextExerciseChatCallback
 
 logger = logging.getLogger(__name__)
@@ -32,6 +38,7 @@ class TextExerciseChatPipeline(Pipeline):
     callback: TextExerciseChatCallback
     request_handler: ModelVersionRequestHandler
     variant: str
+    session_title_pipeline: SessionTitleGenerationPipeline
 
     def __init__(
         self,
@@ -48,6 +55,8 @@ class TextExerciseChatPipeline(Pipeline):
             model = "gpt-4.1-mini"
 
         self.request_handler = ModelVersionRequestHandler(version=model)
+        self.session_title_pipeline = SessionTitleGenerationPipeline()
+        self.tokens = []
 
     @classmethod
     def get_variants(cls, available_llms: List[LanguageModel]) -> List[FeatureDTO]:
@@ -92,7 +101,20 @@ class TextExerciseChatPipeline(Pipeline):
         self.callback.done("Responding")
 
         response = self.respond(dto, sentiments)
-        self.callback.done(final_result=response)
+        # Generate a session title if this is the first student message
+        if response and len(dto.conversation) == 1:
+            session_title = generate_session_title(
+                dto.conversation[0].contents[0].text_content,
+                response,
+                self.tokens,
+                self.session_title_pipeline,
+            )
+            if session_title is None:
+                self.callback.error("Generating session title failed.")
+        kwargs = {}
+        if session_title is not None:
+            kwargs["session_title"] = session_title
+        self.callback.done(final_result=response, tokens=self.tokens, **kwargs)
 
     def categorize_sentiments_by_relevance(
         self, dto: TextExerciseChatPipelineExecutionDTO
