@@ -78,6 +78,7 @@ from ..shared.citation_pipeline import CitationPipeline, InformationType
 from ..shared.utils import (
     filter_variants_by_available_models,
     format_custom_instructions,
+    generate_session_title,
     generate_structured_tools_from_functions,
 )
 from .interaction_suggestion_pipeline import (
@@ -635,38 +636,28 @@ class CourseChatPipeline(Pipeline):
             output = self._process_citations(
                 output, lecture_content_storage, faq_storage, dto
             )
-
+            session_title = None
+            # Generate a session title if this is the first student message
+            if output and len(dto.chat_history) == 1:
+                session_title = generate_session_title(
+                    dto.chat_history[0].contents[0].text_content,
+                    output,
+                    self.tokens,
+                    self.session_title_pipeline,
+                )
+                if session_title is None:
+                    self.callback.error("Generating session title failed.")
+            kwargs = {}
+            if session_title is not None:
+                kwargs["session_title"] = session_title
             # Complete main process
             self.callback.done(
                 "Response created",
                 final_result=output,
                 tokens=self.tokens,
                 accessed_memories=accessed_memory_storage,
+                **kwargs,
             )
-            # Generate a session title if this is the first student message
-            try:
-                # Only generate a title when this is the first user turn that produced a tutor reply
-                if output and len(dto.chat_history) == 1:
-                    first_user_msg = dto.chat_history[0].contents[0].text_content
-                    session_title = self.session_title_pipeline(first_user_msg, output)
-                    if self.session_title_pipeline.tokens is not None:
-                        tokens = [self.session_title_pipeline.tokens]
-                    else:
-                        tokens = []
-                    self.callback.done(
-                        final_result=None,
-                        session_title=session_title,
-                        tokens=tokens,
-                    )
-                else:
-                    self.callback.skip("Skipping session title generation.")
-            except Exception as e:
-                logger.error(
-                    "An error occurred while running the session title generation pipeline",
-                    exc_info=e,
-                )
-                traceback.print_exc()
-                self.callback.error("Generating session title failed.")
 
             # Generate suggestions (this is currently skipped)
             # self._generate_suggestions(output, dto)

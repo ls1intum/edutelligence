@@ -1,5 +1,4 @@
 import logging
-import traceback
 from typing import List
 
 from langchain_core.output_parsers import StrOutputParser
@@ -36,6 +35,7 @@ from ..shared.citation_pipeline import CitationPipeline
 from ..shared.utils import (
     filter_variants_by_available_models,
     format_custom_instructions,
+    generate_session_title,
 )
 from .session_title_generation_pipeline import SessionTitleGenerationPipeline
 
@@ -197,33 +197,61 @@ class LectureChatPipeline(Pipeline):
                 "Response from lecture chat pipeline: %s",
                 response_with_citation,
             )
+            session_title = None
+            # Generate a session title if this is the first student message
             if response_with_citation and len(dto.chat_history) == 1:
-                first_user_msg = dto.chat_history[0].contents[0].text_content
-                try:
-                    session_title = self.session_title_pipeline(
-                        first_user_msg, response_with_citation
-                    )
-                    if self.session_title_pipeline.tokens is not None:
-                        self.tokens.append(self.session_title_pipeline.tokens)
-                    self.callback.done(
-                        "Response created",
-                        final_result=response_with_citation,
-                        session_title=session_title,
-                        tokens=self.tokens,
-                    )
-                except Exception as e:
-                    logger.error(
-                        "An error occurred while running the session title generation pipeline",
-                        exc_info=e,
-                    )
-                    traceback.print_exc()
+                session_title = generate_session_title(
+                    dto.chat_history[0].contents[0].text_content,
+                    response_with_citation,
+                    self.tokens,
+                    self.session_title_pipeline,
+                )
+                if session_title is None:
                     self.callback.error("Generating session title failed.")
-            else:
+                kwargs = {}
+                if session_title is not None:
+                    kwargs["session_title"] = session_title
+                # Complete main process
                 self.callback.done(
                     "Response created",
                     final_result=response_with_citation,
                     tokens=self.tokens,
+                    **kwargs,
                 )
+                # first_user_msg = dto.chat_history[0].contents[0].text_content
+                # try:
+                #     session_title = self.session_title_pipeline(
+                #         first_user_msg,
+                #         response_with_citation
+                #     )
+                #     if self.session_title_pipeline.tokens is not None:
+                #         self.tokens.append(self.session_title_pipeline.tokens)
+                #     self.callback.done(
+                #         "Response created",
+                #         final_result=response_with_citation,
+                #         session_title=session_title,
+                #         tokens=self.tokens,
+                #     )
+                # except Exception as e:
+                #     logger.error(
+                #         "An error occurred while running the session title generation pipeline",
+                #         exc_info=e,
+                #     )
+                #     traceback.print_exc()
+                #     self.callback.error("Generating session title failed.")
+            # else:
+            #     self.callback.done(
+            #         "Response created",
+            #         final_result=response_with_citation,
+            #         tokens=self.tokens,
+            #     )
+            # Generate a session title if this is the first student message
+            # generate_session_title(
+            #     self.callback,
+            #     dto.chat_history,
+            #     response_with_citation,
+            #     self.session_title_pipeline,
+            # )
         except Exception as e:
             self.callback.error(
                 "Generating interaction suggestions failed.",

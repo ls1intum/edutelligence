@@ -1,10 +1,13 @@
 import logging
-from typing import Callable, List, Tuple
+import traceback
+from typing import Callable, List, Optional, Tuple
 
 from langchain_core.tools import StructuredTool
 
+from ...common.token_usage_dto import TokenUsageDTO
 from ...domain import FeatureDTO
 from ...llm.external.model import LanguageModel
+from ..chat.session_title_generation_pipeline import SessionTitleGenerationPipeline
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +32,26 @@ def generate_structured_tools_from_functions(
     :return: The list of structured tools
     """
     return [generate_structured_tool_from_function(tool) for tool in tools]
+
+
+def generate_session_title(
+    first_user_msg: str,
+    llm_response: Optional[str],
+    tokens: List[TokenUsageDTO],
+    session_title_pipeline: SessionTitleGenerationPipeline,
+) -> Optional[str]:
+    try:
+        session_title = session_title_pipeline(first_user_msg, llm_response)
+        if session_title_pipeline.tokens is not None:
+            tokens.append(session_title_pipeline.tokens)
+        return session_title
+    except Exception as e:
+        logger.error(
+            "An error occurred while running the session title generation pipeline",
+            exc_info=e,
+        )
+        traceback.print_exc()
+        return None
 
 
 def filter_variants_by_available_models(
