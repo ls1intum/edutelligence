@@ -16,6 +16,10 @@ from langchain_core.runnables import Runnable
 from langsmith import traceable
 from weaviate.collections.classes.filters import Filter
 
+from iris.pipeline.session_title_generation_pipeline import (
+    SessionTitleGenerationPipeline,
+)
+
 from ...common.message_converters import (
     convert_iris_message_to_langchain_human_message,
 )
@@ -60,7 +64,6 @@ from ..shared.utils import (
 )
 from .code_feedback_pipeline import CodeFeedbackPipeline
 from .interaction_suggestion_pipeline import InteractionSuggestionPipeline
-from .session_title_generation_pipeline import SessionTitleGenerationPipeline
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)

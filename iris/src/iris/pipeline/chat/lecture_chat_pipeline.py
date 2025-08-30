@@ -9,6 +9,10 @@ from langchain_core.prompts import (
 from langchain_core.runnables import Runnable
 from langsmith import traceable
 
+from iris.pipeline.session_title_generation_pipeline import (
+    SessionTitleGenerationPipeline,
+)
+
 from ...common.message_converters import (
     convert_iris_message_to_langchain_message,
 )
@@ -37,7 +41,6 @@ from ..shared.utils import (
     format_custom_instructions,
     generate_session_title,
 )
-from .session_title_generation_pipeline import SessionTitleGenerationPipeline
 
 logger = logging.getLogger(__name__)
 

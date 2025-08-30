@@ -15,6 +15,10 @@ from langchain_core.runnables import Runnable
 from langsmith import traceable
 from memiris.domain.memory import Memory
 
+from iris.pipeline.session_title_generation_pipeline import (
+    SessionTitleGenerationPipeline,
+)
+
 from ...common.mastery_utils import get_mastery
 from ...common.memiris_setup import MemirisWrapper, get_tenant_for_user
 from ...common.message_converters import (
@@ -85,7 +89,6 @@ from .interaction_suggestion_pipeline import (
     InteractionSuggestionPipeline,
 )
 from .lecture_chat_pipeline import LectureChatPipeline
-from .session_title_generation_pipeline import SessionTitleGenerationPipeline
 
 logger = logging.getLogger(__name__)
 

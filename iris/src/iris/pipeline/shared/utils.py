@@ -4,10 +4,13 @@ from typing import Callable, List, Optional, Tuple
 
 from langchain_core.tools import StructuredTool
 
+from iris.pipeline.session_title_generation_pipeline import (
+    SessionTitleGenerationPipeline,
+)
+
 from ...common.token_usage_dto import TokenUsageDTO
 from ...domain import FeatureDTO
 from ...llm.external.model import LanguageModel
-from ..chat.session_title_generation_pipeline import SessionTitleGenerationPipeline
 
 logger = logging.getLogger(__name__)
 
