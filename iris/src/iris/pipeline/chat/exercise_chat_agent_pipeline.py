@@ -509,7 +509,7 @@ class ExerciseChatAgentPipeline(Pipeline):
                 datetime.now(tz=pytz.UTC).strftime("%Y-%m-%d %H:%M:%S"),
             )
             # Determine the agent prompt based on the event.
-            # An event parameter might indicates that a
+            # An event parameter might indicate that a
             # specific event is triggered, such as a build failure or stalled progress.
             if self.event == "build_failed":
                 agent_prompt = tell_build_failed_system_prompt
