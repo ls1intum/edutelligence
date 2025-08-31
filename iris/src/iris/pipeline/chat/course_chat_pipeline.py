@@ -641,9 +641,13 @@ class CourseChatPipeline(Pipeline):
             )
             session_title = None
             # Generate a session title if this is the first student message
-            if output and len(dto.chat_history) == 1:
+            if output and len(dto.chat_history) <= 2:
+                first_user_message = dto.chat_history[0].contents[0].text_content
+                # If Iris sent the first message, user message will be second one
+                if len(dto.chat_history) == 2:
+                    first_user_message = dto.chat_history[1].contents[0].text_content
                 session_title = generate_session_title(
-                    dto.chat_history[0].contents[0].text_content,
+                    first_user_message,
                     output,
                     self.tokens,
                     self.session_title_pipeline,
