@@ -217,14 +217,9 @@ class QualityDriftAnalysisRunner:
             print("🔄 No baseline found. Generating new baseline feedbacks...")
             
             # Generate baseline using GPT-4o
-            config = DefaultApproachConfig(
-                max_input_tokens=5000,
-                model=AzureModelConfig(
-                    model_name="azure_openai_gpt-4o",
-                    get_model=lambda: None,
-                ),
-                type="basic",
-            )
+            # Use the baseline_config from conftest.py
+            from conftest import baseline_config
+            config = baseline_config()
             
             # Create Exercise object
             exercise = Exercise(
