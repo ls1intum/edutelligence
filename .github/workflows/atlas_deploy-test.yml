@@ -42,7 +42,7 @@ jobs:
     uses: ls1intum/.github/.github/workflows/deploy-docker-compose.yml@main
     with:
       environment: 'AtlasML - Test 1'
-      docker-compose-file: './atlas/docker/compose.atlas.yaml'
+      docker-compose-file: './atlas/compose.atlas.yaml'
       main-image-name: ls1intum/edutelligence/atlasml
       image-tag: ${{ inputs.image-tag }}
       deployment-base-path: '/opt/atlasml'
