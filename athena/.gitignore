@@ -21,3 +21,4 @@ test-results/*
 # Test artifacts
 **/quality_drift_report.json
 tests/modules/text/module_text_llm/real/data/exercises/
+tests/modules/text/module_modeling_llm/real/data/exercises/
