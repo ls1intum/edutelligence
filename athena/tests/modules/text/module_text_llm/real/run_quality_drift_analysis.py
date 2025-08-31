@@ -30,8 +30,8 @@ MAX_MEAN_CREDIT_DRIFT = 3.0
 from athena.text import Exercise, Submission
 from athena.schemas.exercise_type import ExerciseType
 from athena.schemas.text_submission import TextLanguageEnum
-from module_text_llm.basic_approach.generate_suggestions import generate_suggestions
-from module_text_llm.basic_approach import BasicApproachConfig
+from module_text_llm.default_approach.generate_suggestions import generate_suggestions
+from module_text_llm.default_approach import DefaultApproachConfig
 from llm_core.models.providers.azure_model_config import AzureModelConfig
 from conftest import get_model_configs
 
@@ -66,7 +66,7 @@ class QualityDriftAnalyzer:
                 })
             self.baseline_feedbacks[submission_id] = baseline_feedbacks
     
-    async def generate_test_feedbacks(self, config: BasicApproachConfig, exercise: Exercise, submission: Submission):
+    async def generate_test_feedbacks(self, config: DefaultApproachConfig, exercise: Exercise, submission: Submission):
         """Generate feedbacks using the test model."""
         feedbacks = await generate_suggestions(
             exercise=exercise,
@@ -74,6 +74,7 @@ class QualityDriftAnalyzer:
             config=config,
             debug=False,
             is_graded=True,
+            learner_profile=None,
         )
         
         test_feedbacks = []
@@ -216,7 +217,7 @@ class QualityDriftAnalysisRunner:
             print("🔄 No baseline found. Generating new baseline feedbacks...")
             
             # Generate baseline using GPT-4o
-            config = BasicApproachConfig(
+            config = DefaultApproachConfig(
                 max_input_tokens=5000,
                 model=AzureModelConfig(
                     model_name="azure_openai_gpt-4o",
@@ -269,6 +270,7 @@ class QualityDriftAnalysisRunner:
                     config=config,
                     debug=False,
                     is_graded=True,
+                    learner_profile=None,
                 )
                 
                 # Convert feedbacks to the format expected in the JSON
