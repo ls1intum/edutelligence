@@ -11,7 +11,7 @@ class OperationType(str, Enum):
 class Competency(BaseModel):
     id: int
     title: str
-    description: str
+    description: Optional[str] = None
     course_id: int
 
 
@@ -19,10 +19,10 @@ class ExerciseWithCompetencies(BaseModel):
     id: int
     title: str
     description: str
-    competencies: list[int]
+    competencies: Optional[list[int]] = None
     course_id: int
 
-class ClusterCenters(BaseModel):
+class SemanticCluster(BaseModel):
     cluster_id: str
     course_id: int
     vector_embedding: list[float]
@@ -54,7 +54,7 @@ class SuggestCompetencyResponse(BaseModel):
 
 
 class SaveCompetencyRequest(BaseModel):
-    competency: Optional[Competency] = None
+    competencies: Optional[list[Competency]] = None
     exercise: Optional[ExerciseWithCompetencies] = None
     operation_type: OperationType
 
