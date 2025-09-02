@@ -14,7 +14,7 @@ def setup_environment():
 
 @pytest.fixture(scope="session")
 def event_loop():
-    """Create an instance of the default event loop for each test case."""
+    """Create an instance of the default event loop for each test case"""
     loop = asyncio.get_event_loop_policy().new_event_loop()
     yield loop
     loop.close()
@@ -22,12 +22,11 @@ def event_loop():
 
 @pytest.fixture
 def real_config():
-    """Create a real configuration for testing with Azure OpenAI."""
+    """Create a real configuration for testing with Azure OpenAI"""
     return DefaultApproachConfig(
         max_input_tokens=5000,
         model=AzureModelConfig(
-            model_name="azure_openai_gpt-4o",
-            get_model=lambda: None,  # This will be set by the module
+            model_name="azure_openai_gpt-4o", get_model=lambda: None
         ),
         type="default",
     )
