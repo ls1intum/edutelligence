@@ -14,7 +14,7 @@ on:
 jobs:
   provision-env:
     runs-on: ubuntu-latest
-    environment: 'AtlasML - Test 1'
+    environment: 'Atlas - Test 1'
     steps:
       - name: Write .env to remote host
         uses: appleboy/ssh-action@v1.0.3
