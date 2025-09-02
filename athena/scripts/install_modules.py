@@ -19,6 +19,7 @@ def main():
     ]
 
     success = True
+    path_env = os.environ["PATH"]
 
     for module in modules:
         if os.path.isdir(module):
