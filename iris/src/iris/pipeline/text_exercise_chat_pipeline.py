@@ -102,6 +102,7 @@ class TextExerciseChatPipeline(Pipeline):
 
         response = self.respond(dto, sentiments)
         # Generate a session title if this is the first student message
+        session_title = None
         if response and len(dto.conversation) == 1:
             session_title = generate_session_title(
                 dto.conversation[0].contents[0].text_content,
