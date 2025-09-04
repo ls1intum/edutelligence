@@ -695,7 +695,6 @@ class ExerciseChatAgentPipeline(Pipeline):
                 )
                 traceback.print_exc()
                 self.callback.error("Error in refining response")
-            session_title = None
             # Generate a session title if this is the first student message
             if out and len(dto.chat_history) == 1:
                 session_title = generate_session_title(

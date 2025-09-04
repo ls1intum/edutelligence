@@ -200,8 +200,8 @@ class LectureChatPipeline(Pipeline):
                 "Response from lecture chat pipeline: %s",
                 response_with_citation,
             )
-            session_title = None
             # Generate a session title if this is the first student message
+            session_title = None
             if response_with_citation and len(dto.chat_history) == 1:
                 session_title = generate_session_title(
                     dto.chat_history[0].contents[0].text_content,
