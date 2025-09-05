@@ -8,7 +8,7 @@ def ensure_safe_path(root: Path, relative: Union[str, Path], ignore_git: bool = 
     directory and, optionally, does not traverse into .git internals.
 
     - Returns the resolved absolute Path if safe.
-    - Raises ValueError if the path escapes `root` or violates `forbid_git`.
+    - Raises ValueError if the path escapes `root` or violates `ignore_git`.
     """
     resolved_root = root.resolve()
     candidate = (resolved_root / Path(relative)).resolve()
