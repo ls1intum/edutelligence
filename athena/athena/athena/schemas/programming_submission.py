@@ -1,5 +1,7 @@
 from pydantic import Field
 from git.repo import Repo
+from pathlib import Path
+from athena.helpers.programming.path_utils import ensure_safe_path
 
 from athena.helpers.programming.code_repository import get_repository
 from athena.schemas.submission import Submission
@@ -20,6 +22,8 @@ class ProgrammingSubmission(Submission):
         Might be quite an expensive operation! If you need to fetch multiple files, consider using get_repository() instead.
         """
         repo = self.get_repository()
-        file_on_disk = (repo.working_tree_dir or ".") + "/" + file_path
-        with open(file_on_disk, "r", encoding="utf-8") as f:
-            return f.read()
+        root = Path(repo.working_tree_dir or ".").resolve()
+        target = ensure_safe_path(root, file_path, ignore_git=True)
+        if not target.is_file():
+            raise FileNotFoundError(f"File not found in repository: {file_path}")
+        return target.read_text(encoding="utf-8")

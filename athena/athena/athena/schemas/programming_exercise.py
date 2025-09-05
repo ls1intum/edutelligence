@@ -25,12 +25,12 @@ class ProgrammingExercise(Exercise):
 
     def get_solution_repository(self) -> Repo:
         """Return the solution repository as a Repo object."""
-        return get_repository(self.solution_repository_uri)
+        return get_repository(str(self.solution_repository_uri))
 
     def get_template_repository(self) -> Repo:
         """Return the template repository as a Repo object."""
-        return get_repository(self.template_repository_uri)
+        return get_repository(str(self.template_repository_uri))
 
     def get_tests_repository(self) -> Repo:
         """Return the tests repository as a Repo object."""
-        return get_repository(self.tests_repository_uri)
+        return get_repository(str(self.tests_repository_uri))

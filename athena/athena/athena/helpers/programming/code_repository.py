@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Optional, cast, Dict, Any
 
 from athena import contextvars
+from athena.helpers.programming.path_utils import ensure_safe_path
 
 import httpx
 from git.repo import Repo
@@ -27,7 +28,7 @@ def get_repository_files_map(url: str, authorization_secret: Optional[str] = Non
     { "<path>": "<content>" } and return it as a dict.
     """
     auth = _ensure_auth_secret(authorization_secret)
-    with httpx.Client() as client:
+    with httpx.Client(timeout=60) as client:
         response = client.get(url, headers={"Authorization": auth})
         response.raise_for_status()
         data = response.json()
@@ -37,10 +38,14 @@ def get_repository_files_map(url: str, authorization_secret: Optional[str] = Non
 
 
 def _write_files_to_directory(root: Path, files_map: Dict[str, str]) -> None:
+    root = root.resolve()
     for rel_path, content in files_map.items():
-        abs_path = root / rel_path
-        abs_path.parent.mkdir(parents=True, exist_ok=True)
-        abs_path.write_text(content, encoding="utf-8")
+        try:
+            candidate = ensure_safe_path(root, rel_path, ignore_git=True)
+        except ValueError:
+            continue # skip unsafe paths
+        candidate.parent.mkdir(parents=True, exist_ok=True)
+        candidate.write_text(content, encoding="utf-8")
 
 
 def get_repository(url: str, authorization_secret: Optional[str] = None) -> Repo:
