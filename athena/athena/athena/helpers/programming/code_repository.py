@@ -74,7 +74,10 @@ def get_repository(url: str, authorization_secret: Optional[str] = None) -> Repo
                 repo.git.add(all=True, force=True)
                 repo.git.commit('-m', 'Initial commit')
             # Atomic within the same filesystem
-            os.rename(tmp_dir, cache_dir_path)
+            try:
+                os.rename(tmp_dir, cache_dir_path)
+            except FileExistsError:
+                pass
         finally:
             shutil.rmtree(tmp_dir, ignore_errors=True)
 
