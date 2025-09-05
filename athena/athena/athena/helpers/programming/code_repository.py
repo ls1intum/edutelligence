@@ -1,4 +1,6 @@
 import hashlib
+import os
+import shutil
 import tempfile
 from pathlib import Path
 from typing import Optional, cast, Dict, Any
@@ -60,13 +62,20 @@ def get_repository(url: str, authorization_secret: Optional[str] = None) -> Repo
 
     if not cache_dir_path.exists():
         files_map = get_repository_files_map(url, authorization_secret)
-        _write_files_to_directory(cache_dir_path, files_map)
-        if not (cache_dir_path / ".git").exists():
-            repo = Repo.init(cache_dir_path, initial_branch='main')
-            # Config username and email to prevent Git errors
-            repo.config_writer().set_value("user", "name", "athena").release()
-            repo.config_writer().set_value("user", "email", "doesnotexist.athena@cit.tum.de").release()
-            repo.git.add(all=True, force=True)
-            repo.git.commit('-m', 'Initial commit')
+        # Build in a unique temp dir and atomically rename into place.
+        tmp_dir = Path(tempfile.mkdtemp(prefix=f"{dir_name}.tmp.", dir=str(cache_dir)))
+        try:
+            _write_files_to_directory(tmp_dir, files_map)
+            if not (tmp_dir / ".git").exists():
+                repo = Repo.init(tmp_dir, initial_branch='main')
+                # Config username and email to prevent Git errors
+                repo.config_writer().set_value("user", "name", "athena").release()
+                repo.config_writer().set_value("user", "email", "doesnotexist.athena@cit.tum.de").release()
+                repo.git.add(all=True, force=True)
+                repo.git.commit('-m', 'Initial commit')
+            # Atomic within the same filesystem
+            os.rename(tmp_dir, cache_dir_path)
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
 
     return Repo(cache_dir_path)
