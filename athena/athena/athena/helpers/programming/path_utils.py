@@ -15,10 +15,7 @@ def ensure_safe_path(root: Path, relative: Union[str, Path], ignore_git: bool = 
 
     try:
         candidate.relative_to(resolved_root)
-    except ValueError:
-        raise ValueError(f"Path escapes repository root: {relative!r}")
-
-    if ignore_git and ".git" in candidate.parts:
+    if ignore_git and any(part.lower() == ".git" for part in candidate.parts):
         raise ValueError(f"Path targets .git internals: {relative!r}")
 
     return candidate
