@@ -21,10 +21,10 @@ from iris.llm import (
     ModelVersionRequestHandler,
 )
 from iris.llm.langchain import IrisLangchainChatModel
-from iris.pipeline import Pipeline
 from iris.pipeline.prompts.transcription_ingestion_prompts import (
     transcription_summary_prompt,
 )
+from iris.pipeline.sub_pipeline import SubPipeline
 from iris.vector_database.database import batch_update_lock
 from iris.vector_database.lecture_transcription_schema import (
     LectureTranscriptionSchema,
@@ -35,7 +35,7 @@ from iris.web.status.ingestion_status_callback import IngestionStatusCallback
 CHUNK_SEPARATOR_CHAR = "\31"
 
 
-class TranscriptionIngestionPipeline(Pipeline):
+class TranscriptionIngestionPipeline(SubPipeline):
     """TranscriptionIngestionPipeline orchestrates the process of ingesting lecture transcription data.
 
     It deletes existing transcription data, chunks and summarizes the transcription,

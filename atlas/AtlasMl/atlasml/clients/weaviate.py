@@ -16,7 +16,7 @@ from atlasml.config import WeaviateSettings, get_settings
 class CollectionNames(str, Enum):
     EXERCISE = "Exercise"
     COMPETENCY = "Competency"
-    CLUSTERCENTER = "ClusterCenter"
+    SEMANTIC_CLUSTER = "SemanticCluster"
 
 
 COLLECTION_SCHEMAS = {
@@ -24,37 +24,38 @@ COLLECTION_SCHEMAS = {
         "properties": [
             {
                 "name": "exercise_id",
-                "data_type": DataType.TEXT,
+                "data_type": DataType.NUMBER,
                 "indexFilterable": True,
                 "indexNullState": True,
             },
             {"name": "description", "data_type": DataType.TEXT},
             {
                 "name": "competency_ids",
-                "data_type": DataType.TEXT_ARRAY,
+                "data_type": DataType.NUMBER_ARRAY,
                 "indexFilterable": True,
             },
-            {"name": "course_id", "data_type": DataType.TEXT, "indexFilterable": True},
+            {"name": "course_id", "data_type": DataType.NUMBER, "indexFilterable": True},
         ]
     },
     CollectionNames.COMPETENCY.value: {
         "properties": [
             {
                 "name": "competency_id",
-                "data_type": DataType.TEXT,
+                "data_type": DataType.NUMBER,
                 "indexFilterable": True,
             },
             {"name": "title", "data_type": DataType.TEXT},
             {"name": "description", "data_type": DataType.TEXT},
             {"name": "cluster_id", "data_type": DataType.TEXT, "indexFilterable": True},
             {"name": "cluster_similarity_score", "data_type": DataType.NUMBER},
-            {"name": "course_id", "data_type": DataType.TEXT, "indexFilterable": True},
+            {"name": "course_id", "data_type": DataType.NUMBER, "indexFilterable": True},
         ]
     },
-    CollectionNames.CLUSTERCENTER.value: {
+    CollectionNames.SEMANTIC_CLUSTER.value: {
         "properties": [
-            {"name": "cluster_id", "data_type": DataType.UUID, "indexFilterable": True},
+            {"name": "cluster_id", "data_type": DataType.TEXT, "indexFilterable": True},
             {"name": "label_id", "data_type": DataType.TEXT, "indexFilterable": True},
+            {"name": "course_id", "data_type": DataType.NUMBER, "indexFilterable": True},
         ]
     },
 }
@@ -312,7 +313,7 @@ class WeaviateClient:
             raise WeaviateOperationError(f"Unexpected error getting embeddings: {e}")
 
     def get_embeddings_by_property(
-        self, collection_name: str, property_name: str, property_value: str
+        self, collection_name: str, property_name: str, property_value: int | str
     ) -> List[Dict[str, Any]]:
         """
         Fetch objects and their vectors from the collection that match a property value.
@@ -534,6 +535,64 @@ class WeaviateClient:
         except Exception as e:
             logger.error(f"❌ Unexpected error updating property: {e}")
             raise WeaviateOperationError(f"Unexpected error updating property: {e}")
+
+    def delete_by_property(
+        self,
+        collection_name: str,
+        property_name: str,
+        property_value: str | int,
+    ) -> int:
+        """
+        Delete objects from the collection that match a property value.
+
+        Args:
+            collection_name: Name of the collection to delete from.
+            property_name: The property name to filter by (e.g., 'name', 'course_id').
+            property_value: The value of the property to match.
+
+        Returns:
+            Number of objects deleted.
+
+        Raises:
+            WeaviateOperationError: If the operation fails.
+            ValueError: If collection doesn't exist or parameters are invalid.
+        """
+        try:
+            logger.info(
+                f"--- DELETING BY PROPERTY FROM WEAVIATE "
+                f"COLLECTION '{collection_name}' ---"
+            )
+
+            if not property_name or not property_value:
+                raise ValueError("Property name and value must be provided")
+
+            self._check_if_collection_exists(collection_name)
+
+            collection = self.client.collections.get(collection_name)
+
+            result = collection.data.delete_many(
+                where=Filter.by_property(property_name).equal(property_value)
+            )
+
+            deleted_count = result.successful
+
+            logger.info(
+                f"--- DELETED {deleted_count} OBJECTS MATCHING "
+                f"{property_name}={property_value} ---"
+            )
+            return deleted_count
+
+        except ValueError:
+            # Re-raise validation errors
+            raise
+        except WeaviateQueryError as e:
+            logger.error(f"❌ Weaviate query error deleting by property: {e}")
+            raise WeaviateOperationError(f"Failed to delete by property: {e}")
+        except Exception as e:
+            logger.error(f"❌ Unexpected error deleting by property: {e}")
+            raise WeaviateOperationError(
+                f"Unexpected error deleting by property: {e}"
+            )
 
 
 class WeaviateClientSingleton:

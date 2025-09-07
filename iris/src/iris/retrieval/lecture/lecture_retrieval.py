@@ -34,7 +34,6 @@ from iris.llm.request_handler.model_version_request_handler import (
 from iris.llm.request_handler.rerank_request_handler import (
     RerankRequestHandler,
 )
-from iris.pipeline import Pipeline
 from iris.pipeline.prompts.lecture_retrieval_prompts import (
     lecture_retrieval_initial_prompt_lecture_pages_with_exercise_context,
     lecture_retrieval_initial_prompt_lecture_transcriptions_with_exercise_context,
@@ -45,6 +44,7 @@ from iris.pipeline.prompts.lecture_retrieval_prompts import (
     write_hypothetical_lecture_pages_answer_prompt,
     write_hypothetical_lecture_transcriptions_answer_prompt,
 )
+from iris.pipeline.sub_pipeline import SubPipeline
 from iris.retrieval.lecture.lecture_page_chunk_retrieval import (
     LecturePageChunkRetrieval,
 )
@@ -73,7 +73,7 @@ class QueryRewriteMode(Enum):
     LECTURE_TRANSCRIPTIONS = "lecture_transcriptions"
 
 
-class LectureRetrieval(Pipeline):
+class LectureRetrieval(SubPipeline):
     """LectureRetrieval retrieves lecture data from the vector database by processing lecture units, transcriptions,
      and page chunks.
 

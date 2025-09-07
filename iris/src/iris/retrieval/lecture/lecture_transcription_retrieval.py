@@ -18,7 +18,7 @@ from iris.llm.request_handler.model_version_request_handler import (
 from iris.llm.request_handler.rerank_request_handler import (
     RerankRequestHandler,
 )
-from iris.pipeline import Pipeline
+from iris.pipeline.sub_pipeline import SubPipeline
 from iris.vector_database.lecture_transcription_schema import (
     LectureTranscriptionSchema,
     init_lecture_transcription_schema,
@@ -29,7 +29,7 @@ from iris.vector_database.lecture_unit_schema import (
 )
 
 
-class LectureTranscriptionRetrieval(Pipeline):
+class LectureTranscriptionRetrieval(SubPipeline):
     """LectureTranscriptionRetrieval retrieves lecture transcription data from the database by applying search filters
     and processing the transcription segments."""
 

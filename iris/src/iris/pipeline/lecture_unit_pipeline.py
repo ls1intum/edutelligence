@@ -2,13 +2,13 @@ from weaviate.classes.query import Filter
 
 from iris.domain.lecture.lecture_unit_dto import LectureUnitDTO
 from iris.llm import ModelVersionRequestHandler
-from iris.pipeline import Pipeline
 from iris.pipeline.lecture_unit_segment_summary_pipeline import (
     LectureUnitSegmentSummaryPipeline,
 )
 from iris.pipeline.lecture_unit_summary_pipeline import (
     LectureUnitSummaryPipeline,
 )
+from iris.pipeline.sub_pipeline import SubPipeline
 from iris.vector_database.database import VectorDatabase, batch_update_lock
 from iris.vector_database.lecture_unit_schema import (
     LectureUnitSchema,
@@ -16,7 +16,7 @@ from iris.vector_database.lecture_unit_schema import (
 )
 
 
-class LectureUnitPipeline(Pipeline):
+class LectureUnitPipeline(SubPipeline):
     """LectureUnitPipeline processes lecture unit data by generating summaries and embeddings,
     then updating the vector database with the processed lecture unit information.
     """
