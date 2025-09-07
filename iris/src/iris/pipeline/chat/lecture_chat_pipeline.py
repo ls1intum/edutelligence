@@ -1,4 +1,5 @@
 import logging
+import traceback
 from typing import List
 
 from langchain_core.output_parsers import StrOutputParser
@@ -37,7 +38,6 @@ from ..pipeline import Pipeline
 from ..shared.citation_pipeline import CitationPipeline
 from ..shared.utils import (
     format_custom_instructions,
-    generate_session_title,
 )
 
 logger = logging.getLogger(__name__)
@@ -195,13 +195,19 @@ class LectureChatPipeline(Pipeline[LectureChatVariant]):
             # Generate a session title if this is the first student message
             session_title = None
             if response_with_citation and len(dto.chat_history) == 1:
-                session_title = generate_session_title(
-                    dto.chat_history[0].contents[0].text_content,
-                    response_with_citation,
-                    self.tokens,
-                    self.session_title_pipeline,
-                )
-                if session_title is None:
+                first_user_msg = dto.chat_history[0].contents[0].text_content
+                try:
+                    session_title = self.session_title_pipeline(
+                        first_user_msg, response_with_citation
+                    )
+                    if self.session_title_pipeline.tokens is not None:
+                        self.tokens.append(self.session_title_pipeline.tokens)
+                except Exception as e:
+                    logger.error(
+                        "An error occurred while running the session title generation pipeline",
+                        exc_info=e,
+                    )
+                    traceback.print_exc()
                     self.callback.error("Generating session title failed.")
             kwargs = {}
             if session_title is not None:
