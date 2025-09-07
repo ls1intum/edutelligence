@@ -1,5 +1,6 @@
 import logging
 import traceback
+from typing import Optional
 
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
@@ -40,7 +41,6 @@ class SessionTitleGenerationPipeline(SubPipeline):
         )
         # Create the pipeline
         self.pipeline = self.llm | StrOutputParser()
-        self.tokens = []
 
     def __repr__(self):
         return f"{self.__class__.__name__}(llm={self.llm})"
@@ -49,12 +49,14 @@ class SessionTitleGenerationPipeline(SubPipeline):
         return f"{self.__class__.__name__}(llm={self.llm})"
 
     @traceable(name="Session Title Generation Pipeline")
-    def __call__(self, first_user_msg: str, llm_response: str, **kwargs) -> str:
+    def __call__(
+        self, first_user_msg: str, llm_response: str, **kwargs
+    ) -> Optional[str]:
         prompt = ChatPromptTemplate.from_messages(
             [("system", session_title_generation_prompt())]
         )
         try:
-            logger.info("Running Tutor Suggestion Programming Exercise Pipeline")
+            logger.info("Running Session Title Generation Pipeline")
             session_title = (prompt | self.pipeline).invoke(
                 {"first_user_msg": first_user_msg, "llm_response": llm_response}
             )
