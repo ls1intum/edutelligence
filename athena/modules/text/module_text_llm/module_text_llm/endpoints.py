@@ -56,6 +56,7 @@ async def suggest_feedback(
     is_graded: bool,
     module_config: Configuration,
     learner_profile: Optional[LearnerProfile] = None,
+    latest_submission: Optional[Submission] = None,
 ) -> List[Feedback]:
     logger.info(
         "suggest_feedback: %s suggestions for submission %d of exercise %d were requested, approach=%s",
@@ -71,6 +72,7 @@ async def suggest_feedback(
         debug=module_config.debug,
         is_graded=is_graded,
         learner_profile=learner_profile,
+        latest_submission=latest_submission,
     )
 
 
