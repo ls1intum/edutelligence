@@ -28,7 +28,7 @@ jobs:
       release_tag: ${{ steps.compute-tag.outputs.release_tag }}
     steps:
       - name: Compute Tag
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         id: compute-tag
         with:
           result-encoding: string
