@@ -475,7 +475,7 @@ class CourseChatPipeline(
         ],
         output: str,
         dto: CourseChatPipelineExecutionDTO,
-    ) -> Optional[str]:
+    ) -> Optional[Any]:
         """
         Generate interaction suggestions based on the output.
 
