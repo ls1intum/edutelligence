@@ -253,6 +253,7 @@ class CourseChatStatusCallback(StatusCallback):
                 weight=10,
                 state=StageStateEnum.NOT_STARTED,
                 name="Extracting memories",
+                internal=True,
             ),
         ]
         status = CourseChatStatusUpdateDTO(stages=stages)
