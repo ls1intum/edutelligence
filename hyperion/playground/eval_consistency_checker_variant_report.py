@@ -12,7 +12,6 @@ correlation between input token size and F1 Value.
 
 import os
 import json
-from pathlib import Path
 import re
 
 from collections import defaultdict
@@ -344,7 +343,7 @@ def iterate_test_files(data_dir: str = "data") -> None:
                                 "f1": f1,
                                 "precision": precision,
                                 "recall": recall,
-                                #'iou': avg_iou,
+                                # 'iou': avg_iou,
                                 "tp": tp,
                                 "fp": fp,
                                 "fn": fn,
@@ -358,7 +357,7 @@ def iterate_test_files(data_dir: str = "data") -> None:
                             # print(f"TP: {tp}, FP: {fp}, FN: {fn}")
                             # print(f"Precision: {precision:.3f}, Recall: {recall:.3f}, F1: {f1:.3f}")
                             # if issues:
-                            #     print(f"      Issue categories: {[issue.get('category', 'unknown') for issue in issues]}")
+                            #     print(f"Issue categories: {[issue.get('category', 'unknown') for issue in issues]}")
                             total_analysed_files += 1
                         except Exception as e:
                             print(f"Error comparing with gold standard: {e}")
@@ -377,7 +376,7 @@ def iterate_test_files(data_dir: str = "data") -> None:
     with open(output_file, "w", encoding="utf-8") as file:
         json.dump(results_by_model, file, indent=2)
 
-    print(f"\n=== Summary ===")
+    print("\n=== Summary ===")
     print(f"Total result files processed: {total_analysed_files}")
 
 

@@ -11,7 +11,7 @@ import json
 import matplotlib.pyplot as plt
 import numpy as np
 from scipy.stats import pearsonr
-from typing import Dict, List, Any, Tuple
+from typing import Dict, List, Any
 import os
 
 
@@ -198,7 +198,8 @@ class ModelPerformancePlotter:
                         corr, p_value = pearsonr(tokens_exercise, f1_exercise)
                         if np.isnan(corr) or np.isnan(p_value):
                             print(
-                                f"{model_name:<25} | {exercise_short_name:<20} | {'Invalid':<11} | {'N/A':<8} | {len(tokens_exercise):<5}"
+                                f"{model_name:<25} | {exercise_short_name:<20} | "
+                                f"{'Invalid':<11} | {'N/A':<8} | {len(tokens_exercise):<5}"
                             )
                         else:
                             significance = ""
@@ -209,16 +210,19 @@ class ModelPerformancePlotter:
                             elif p_value < 0.05:
                                 significance = "*"
                         print(
-                            f"{model_name:<25} | {exercise_short_name:<20} | {corr:8.3f}{significance:<3} | {p_value:8.3f} | {len(tokens_exercise):<5}"
+                            f"{model_name:<25} | {exercise_short_name:<20} | "
+                            f"{corr:8.3f}{significance:<3} | {p_value:8.3f} | {len(tokens_exercise):<5}"
                         )
                     except Exception as e:
                         print(
-                            f"{model_name:<25} | {exercise_short_name:<20} | {'Error':<11} | {'N/A':<8} | {len(tokens_exercise):<5}"
+                            f"{model_name:<25} | {exercise_short_name:<20} | "
+                            f"{'Error':<11} | {'N/A':<8} | {len(tokens_exercise):<5}"
                             + f" (Error: {e})"
                         )
                 else:
                     print(
-                        f"{model_name:<25} | {exercise_short_name:<20} | {'N/A':<11} | {'N/A':<8} | {len(tokens_exercise):<5}"
+                        f"{model_name:<25} | {exercise_short_name:<20} | "
+                        f"{'N/A':<11} | {'N/A':<8} | {len(tokens_exercise):<5}"
                     )
 
             print("-" * 80)
@@ -449,7 +453,8 @@ class ModelPerformancePlotter:
             n_models, n_exercises, figsize=(4 * n_exercises, 3 * n_models)
         )  # 4 inches width per exercise, 3 inches height per model
 
-        # matplotlib returns different formats depending on grid size -> We need consistent 2D access: axes[row][col] for all cases
+        # matplotlib returns different formats depending on grid size ->
+        # We need consistent 2D access: axes[row][col] for all cases
         if n_models == 1 and n_exercises == 1:
             axes = [[axes]]
         elif n_models == 1:
@@ -538,7 +543,10 @@ class ModelPerformancePlotter:
                                     elif p_value < 0.05:
                                         significance = "*"
 
-                                title = f"{model_name}\n{exercise_short_name}\nr={corr:.3f}{significance}, (p={p_value:.3f})\nn={len(ex_tokens)}"
+                                title = (
+                                    f"{model_name}\n{exercise_short_name}\n"
+                                    f"r={corr:.3f}{significance}, (p={p_value:.3f})\nn={len(ex_tokens)}"
+                                )
                             except Exception:
                                 # Fallback to simple title if correlation fails
                                 title = f"{model_name}\n{exercise_short_name}\nn={len(ex_tokens)}"
@@ -572,7 +580,9 @@ class ModelPerformancePlotter:
                 self._format_subplot(axe)
 
         # Add overall title for the entire grid
-        # plt.suptitle('Dependency Graph: Prompt Input Tokens and Accuracy (F1 Value) \n(Grouped by Model and Subgrouped by Exercise)',
+        # plt.suptitle(
+        #     'Dependency Graph: Prompt Input Tokens and Accuracy (F1 Value) '
+        #     '\n(Grouped by Model and Subgrouped by Exercise)',
         #            fontsize=14, fontweight='bold')
         plt.tight_layout()
 
