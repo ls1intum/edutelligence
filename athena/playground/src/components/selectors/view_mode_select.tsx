@@ -22,7 +22,7 @@ export default function ViewModeSelect({
           Module Requests
         </button>
         <button
-          className={`p-2 rounded-r-md ${
+          className={`p-2 ${
             viewMode === "evaluation_mode"
               ? "bg-primary-500 text-white hover:bg-primary-600"
               : "bg-gray-200 text-gray-500 hover:bg-gray-300"
@@ -31,6 +31,16 @@ export default function ViewModeSelect({
         >
           Evaluation Mode
         </button>
+        <button
+          className={`p-2 rounded-r-md ${
+            viewMode === "comparative_evaluation_study"
+              ? "bg-primary-500 text-white hover:bg-primary-600"
+              : "bg-gray-200 text-gray-500 hover:bg-gray-300"
+          }`}
+          onClick={() => onChangeViewMode("comparative_evaluation_study")}
+        >
+          Comparative Evaluation Study
+        </button>
       </div>
       <p className="text-gray-500">
         {viewMode === "module_requests" ? (
@@ -38,10 +48,14 @@ export default function ViewModeSelect({
             <b>Module Requests</b> allows you to test different requests to see
             how the module responds.
           </>
-        ) : (
+        ) : viewMode === "evaluation_mode" ? (
           <>
             <b>Evaluation Mode</b> allows you to assess and compare the module&apos;s
             performance and gather feedback for improvement.
+          </>
+        ) : (
+          <>
+            <b>Comparative Evaluation Study</b> allows you to compare generated feedback across multiple metrics.
           </>
         )}
       </p>

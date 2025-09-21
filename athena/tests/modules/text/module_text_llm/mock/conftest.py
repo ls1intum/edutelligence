@@ -47,5 +47,5 @@ def mock_assessment_model():
 def mock_config():
     """Create a mock configuration for testing."""
     return MockApproachConfig(
-        max_input_tokens=5000, model=MockModelConfig(), type="basic"
+        max_input_tokens=5000, model=MockModelConfig(), type="default"
     )

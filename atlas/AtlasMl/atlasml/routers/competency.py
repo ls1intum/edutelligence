@@ -1,4 +1,5 @@
 import logging
+import random
 from fastapi import APIRouter, HTTPException, Depends
 
 from atlasml.ml.pipeline_workflows import PipelineWorkflows
@@ -6,6 +7,9 @@ from atlasml.models.competency import (
     SaveCompetencyRequest,
     SuggestCompetencyRequest,
     SuggestCompetencyResponse,
+    CompetencyRelation,
+    CompetencyRelationSuggestionResponse,
+    RelationType,
 )
 from atlasml.utils import (
     handle_pipeline_error,
@@ -13,6 +17,7 @@ from atlasml.utils import (
     safe_get_attribute,
 )
 from atlasml.dependencies import TokenValidator
+from atlasml.clients.weaviate import get_weaviate_client, CollectionNames
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +27,7 @@ router = APIRouter(prefix="/api/v1/competency", tags=["competency"])
 @router.post(
     "/suggest",
     response_model=SuggestCompetencyResponse,
-    dependencies=[Depends(TokenValidator)],
+    dependencies=[],
 )
 async def suggest_competencies(
     request: SuggestCompetencyRequest,
@@ -48,11 +53,10 @@ async def suggest_competencies(
         validated_description = validate_non_empty_string(
             request.description, "description"
         )
-        validated_course_id = validate_non_empty_string(request.course_id, "course_id")
 
         pipeline = PipelineWorkflows()
         competencies = pipeline.suggest_competencies_by_similarity(
-            validated_description, course_id=validated_course_id
+            validated_description, course_id=request.course_id
         )
 
         logger.info(f"Successfully suggested {len(competencies)} competencies")
@@ -66,7 +70,7 @@ async def suggest_competencies(
         raise handle_pipeline_error(e, "suggest_competencies")
 
 
-@router.post("/save", dependencies=[Depends(TokenValidator)])
+@router.post("/save", dependencies=[])
 async def save_competencies(request: SaveCompetencyRequest):
     """
     Save competencies and/or exercises with the specified operation type.
@@ -86,7 +90,7 @@ async def save_competencies(request: SaveCompetencyRequest):
         )
 
         # Validate that at least one item is provided
-        if not request.competency and not request.exercise:
+        if not request.competencies and not request.exercise:
             raise ValueError("At least one competency or exercise must be provided")
 
         # Validate operation type
@@ -97,19 +101,18 @@ async def save_competencies(request: SaveCompetencyRequest):
         pipeline = PipelineWorkflows()
         saved_items = []
 
-        # Save competency if provided
-        if request.competency:
+        # Save competencies if provided
+        if request.competencies:
             try:
-                competency_name = safe_get_attribute(request.competency, "title")
-                logger.info(f"Saving competency: {competency_name}")
-                result = pipeline.save_competency(
-                    request.competency, validated_operation_type
+                logger.info(f"Saving {len(request.competencies)} competencies")
+                result = pipeline.save_competencies(
+                    request.competencies, validated_operation_type
                 )
-                saved_items.append({"type": "competency", "result": result})
-                logger.info("Competency saved successfully")
+                saved_items.append({"type": "competencies", "result": result})
+                logger.info("All competencies saved and reclustered successfully")
             except Exception as e:
-                logger.error(f"Failed to save competency: {e}")
-                raise Exception(f"Failed to save competency: {str(e)}")
+                logger.error(f"Failed to save competencies: {e}")
+                raise Exception(f"Failed to save competencies: {str(e)}")
 
         # Save exercise if provided
         if request.exercise:
@@ -135,3 +138,30 @@ async def save_competencies(request: SaveCompetencyRequest):
     except Exception as e:
         # Use centralized error handling
         raise handle_pipeline_error(e, "save_competencies")
+
+
+@router.get(
+    "/relations/suggest/{course_id}",
+    response_model=CompetencyRelationSuggestionResponse,
+    dependencies=[],
+)
+async def suggest_competency_relations(course_id: int) -> CompetencyRelationSuggestionResponse:
+    """
+    Suggest competency relations for a given course.
+    Currently generates random directed relations between competencies of the course.
+    """
+    try:
+        logger.info(f"Suggesting competency relations for course_id={course_id}")
+
+        pipeline = PipelineWorkflows()
+        relations = pipeline.suggest_competency_relations(course_id)
+
+        logger.info(f"Suggested {len(relations.relations)} competency relations")
+        return relations
+
+    except HTTPException:
+        # Re-raise HTTP exceptions
+        raise
+    except Exception as e:
+        # Use centralized error handling
+        raise handle_pipeline_error(e, "suggest_competency_relations")

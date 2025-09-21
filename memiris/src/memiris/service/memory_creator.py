@@ -4,18 +4,18 @@ from jinja2 import Template
 from langfuse import observe
 from ollama import Message
 
+from memiris.dlo.learning_main_dlo import LearningDLO
+from memiris.dlo.memory_creation_dlo import MemoryCreationDLO
 from memiris.domain.learning import Learning
 from memiris.domain.memory import Memory
-from memiris.dto.learning_main_dto import LearningDto
-from memiris.dto.memory_creation_dto import MemoryCreationDto
 from memiris.repository.learning_repository import LearningRepository
 from memiris.repository.memory_repository import MemoryRepository
 from memiris.service.ollama_wrapper import OllamaService
 from memiris.service.vectorizer import Vectorizer
 from memiris.tool import learning_tools, memory_tools
 from memiris.util.jinja_util import create_template
-from memiris.util.learning_util import learning_to_dto
-from memiris.util.memory_util import creation_dto_to_memory
+from memiris.util.learning_util import learning_to_dlo
+from memiris.util.memory_util import creation_dlo_to_memory
 
 
 class MemoryCreator:
@@ -71,15 +71,15 @@ class MemoryCreator:
         """
         Create a memory from the given learnings using the LLM.
         """
-        learning_array_type_adapter = LearningDto.json_array_type()
+        learning_array_type_adapter = LearningDLO.json_array_type()
 
         learnings_string = str(
             learning_array_type_adapter.dump_json(
-                [learning_to_dto(learning) for learning in learnings]
+                [learning_to_dlo(learning) for learning in learnings]
             )
         )
 
-        memory_json_schema = MemoryCreationDto.json_array_schema()
+        memory_json_schema = MemoryCreationDLO.json_array_schema()
 
         messages: List[Union[Mapping[str, Any], Message]] = [
             # The system message will be set later based on the phase
@@ -180,18 +180,18 @@ class MemoryCreator:
         response = self.ollama_service.chat(
             model=self.response_llm,
             messages=messages,
-            response_format=MemoryCreationDto.json_array_type().json_schema(),
+            response_format=MemoryCreationDLO.json_array_type().json_schema(),
         )
 
         if response and response.message and response.message.content:
             try:
-                memory_dtos = MemoryCreationDto.json_array_type().validate_json(
+                memory_dlos = MemoryCreationDLO.json_array_type().validate_json(
                     response.message.content
                 )
 
                 needed_learnings = []
-                for memory_dto in memory_dtos:
-                    for learning_id in memory_dto.learnings:
+                for memory_dlo in memory_dlos:
+                    for learning_id in memory_dlo.learnings:
                         try:
                             learning = self.learning_repository.find(
                                 tenant, learning_id
@@ -202,8 +202,8 @@ class MemoryCreator:
                             print(f"Error finding learning with ID {learning_id}: {e}")
 
                 return [
-                    creation_dto_to_memory(memory_dto, needed_learnings)
-                    for memory_dto in memory_dtos
+                    creation_dlo_to_memory(memory_dlo, needed_learnings)
+                    for memory_dlo in memory_dlos
                 ]
             except Exception as e:
                 print(f"Error parsing response: {e}")

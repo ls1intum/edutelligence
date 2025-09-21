@@ -3,8 +3,8 @@ from uuid import uuid4
 
 import pytest
 
+from memiris.dlo.learning_creation_dlo import LearningCreationDLO
 from memiris.domain.learning import Learning
-from memiris.dto.learning_creation_dto import LearningCreationDto
 from memiris.service.learning_deduplication import LearningDeduplicator
 from memiris.service.ollama_wrapper import OllamaService, WrappedChatResponse
 
@@ -79,7 +79,7 @@ class TestLearningDeduplicator:
         """Test successful deduplication of learnings."""
         # Create mock response
         mock_message = MagicMock()
-        mock_message.content = LearningCreationDto.json_array_type().dump_json(
+        mock_message.content = LearningCreationDLO.json_array_type().dump_json(
             deduplicated_learnings
         )
 
@@ -173,7 +173,7 @@ class TestLearningDeduplicator:
         """Test deduplication with additional kwargs."""
         # Create mock response
         mock_message = MagicMock()
-        mock_message.content = LearningCreationDto.json_array_type().dump_json(
+        mock_message.content = LearningCreationDLO.json_array_type().dump_json(
             deduplicated_learnings
         )
 

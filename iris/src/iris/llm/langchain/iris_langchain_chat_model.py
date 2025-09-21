@@ -2,7 +2,6 @@ import logging
 from logging import Logger
 from typing import Any, Callable, Dict, List, Optional, Sequence, Type, Union
 
-from langchain_core.callbacks import CallbackManagerForLLMRun
 from langchain_core.language_models import LanguageModelInput
 from langchain_core.language_models.chat_models import (
     BaseChatModel,
@@ -50,7 +49,7 @@ class IrisLangchainChatModel(BaseChatModel):
     def bind_tools(
         self,
         tools: Sequence[Union[Dict[str, Any], Type[BaseModel], Callable, BaseTool]],
-        **kwargs: Any,
+        **_kwargs: Any,
     ) -> Runnable[LanguageModelInput, BaseMessage]:
         """Bind a sequence of tools to the request handler for function calling support.
 
@@ -78,8 +77,8 @@ class IrisLangchainChatModel(BaseChatModel):
         self,
         messages: List[BaseMessage],
         stop: Optional[List[str]] = None,
-        run_manager: Optional[CallbackManagerForLLMRun] = None,
-        **kwargs: Any,
+        run_manager=None,  # pylint: disable=unused-argument
+        **_kwargs: Any,
     ) -> ChatResult:
         iris_messages = [convert_langchain_message_to_iris_message(m) for m in messages]
         self.completion_args.stop = stop

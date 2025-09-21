@@ -9,22 +9,26 @@ class OperationType(str, Enum):
 
 
 class Competency(BaseModel):
-    id: str
+    id: int
     title: str
-    description: str
-    course_id: str
+    description: Optional[str] = None
+    course_id: int
 
 
 class ExerciseWithCompetencies(BaseModel):
-    id: str
+    id: int
     title: str
     description: str
-    competencies: list[str]
-    course_id: str
+    competencies: Optional[list[int]] = None
+    course_id: int
 
+class SemanticCluster(BaseModel):
+    cluster_id: str
+    course_id: int
+    vector_embedding: list[float]
 
 class GenerateCompetencyRequest(BaseModel):
-    id: str
+    id: int
     description: str
 
 
@@ -42,7 +46,7 @@ class GenerateEmbeddingsResponse(BaseModel):
 
 class SuggestCompetencyRequest(BaseModel):
     description: str
-    course_id: str
+    course_id: int
 
 
 class SuggestCompetencyResponse(BaseModel):
@@ -50,6 +54,20 @@ class SuggestCompetencyResponse(BaseModel):
 
 
 class SaveCompetencyRequest(BaseModel):
-    competency: Optional[Competency] = None
+    competencies: Optional[list[Competency]] = None
     exercise: Optional[ExerciseWithCompetencies] = None
     operation_type: OperationType
+
+class RelationType(str, Enum):
+    MATCH = "MATCHES"
+    EXTEND = "EXTENDS"
+    REQUIRES = "REQUIRES"
+
+class CompetencyRelation(BaseModel):
+    tail_id: int
+    head_id: int
+    relation_type: RelationType
+
+
+class CompetencyRelationSuggestionResponse(BaseModel):
+    relations: list[CompetencyRelation]

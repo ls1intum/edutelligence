@@ -1,13 +1,11 @@
 version: 1
-disable_existing_loggers: False
+disable_existing_loggers: True
 formatters:
   default:
-    "use_colors": null,
-    "()": uvicorn.logging.DefaultFormatter
+    "()": "logging.Formatter"
     format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
   access:
-    "use_colors": null,
-    "()": uvicorn.logging.AccessFormatter
+    "()": "logging.Formatter"
     format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 handlers:
   default:
@@ -33,6 +31,16 @@ loggers:
     level: INFO
     handlers:
       - access
+    propagate: no
+  httpcore:
+    level: INFO
+    handlers:
+      - default
+    propagate: no
+  httpcore.http11:
+    level: INFO
+    handlers:
+      - default
     propagate: no
 root:
   level: DEBUG

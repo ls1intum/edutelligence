@@ -12,18 +12,15 @@ from iris.common.pipeline_enum import PipelineEnum
 from iris.common.token_usage_dto import TokenUsageDTO
 
 from ...common.pyris_message import PyrisMessage
-from ...domain import FeatureDTO
 from ...domain.data.build_log_entry import BuildLogEntryDTO
 from ...domain.data.feedback_dto import FeedbackDTO
 from ...llm import (
     CompletionArguments,
     ModelVersionRequestHandler,
 )
-from ...llm.external.model import LanguageModel
 from ...llm.langchain import IrisLangchainChatModel
-from ...pipeline import Pipeline
 from ...web.status.status_update import StatusCallback
-from ..shared.utils import filter_variants_by_available_models
+from ..sub_pipeline import SubPipeline
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +37,7 @@ class FileSelectionDTO(BaseModel):
         )
 
 
-class CodeFeedbackPipeline(Pipeline):
+class CodeFeedbackPipeline(SubPipeline):
     """Code feedback pipeline that produces issues from student code."""
 
     llm: IrisLangchainChatModel
@@ -90,31 +87,6 @@ class CodeFeedbackPipeline(Pipeline):
         )
         # Create the pipeline
         self.pipeline = self.llm | self.output_parser
-
-    @classmethod
-    def get_variants(cls, available_llms: List[LanguageModel]) -> List[FeatureDTO]:
-        variant_specs = [
-            (
-                ["gpt-4.1-mini"],
-                FeatureDTO(
-                    id="default",
-                    name="Default",
-                    description="Uses a smaller model for faster and cost-efficient responses.",
-                ),
-            ),
-            (
-                ["gpt-4.1"],
-                FeatureDTO(
-                    id="advanced",
-                    name="Advanced",
-                    description="Uses a larger chat model, balancing speed and quality.",
-                ),
-            ),
-        ]
-
-        return filter_variants_by_available_models(
-            available_llms, variant_specs, pipeline_name="CodeFeedbackPipeline"
-        )
 
     @traceable(name="Code Feedback Pipeline")
     def __call__(

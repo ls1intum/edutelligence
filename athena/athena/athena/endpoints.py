@@ -275,8 +275,8 @@ def feedback_provider(func: Union[
     Callable[[E, S, G, C], Coroutine[Any, Any, List[F]]],
     Callable[[E, S, G, C, LearnerProfile], List[F]],
     Callable[[E, S, G, C, LearnerProfile], Coroutine[Any, Any, List[F]]],
-    Callable[[E, S, G, C, S], List[F]],
-    Callable[[E, S, G, C, S], Coroutine[Any, Any, List[F]]],
+    Callable[[E, S, G, C, LearnerProfile, S], List[F]],
+    Callable[[E, S, G, C, LearnerProfile, S], Coroutine[Any, Any, List[F]]],
 ]):
     """
     Provide feedback to the Assessment Module Manager.
@@ -316,12 +316,12 @@ def feedback_provider(func: Union[
 
         With previous submission (both synchronous and asynchronous forms):
         >>> @feedback_provider
-        ... def sync_suggest_feedback_with_config(exercise: Exercise, submission: Submission, module_config: Optional[dict], latest_submission: Optional[Submission]):
-        ...     # suggest feedback here using module_config and return it as a list
+        ... def sync_suggest_feedback_with_profile(exercise: Exercise, submission: Submission, module_config: Optional[dict], learner_profile: Optional[LearnerProfile], latest_submission: Optional[Submission]):
+        ...     # suggest feedback here using module_config and learner_profile and return it as a list
 
         >>> @feedback_provider
-        ... async def async_suggest_feedback_with_config(exercise: Exercise, submission: Submission, module_config: Optional[dict], latest_submission: Optional[Submission]):
-        ...     # suggest feedback here using module_config and return it as a list
+        ... async def async_suggest_feedback_with_profile(exercise: Exercise, submission: Submission, module_config: Optional[dict], learner_profile: Optional[LearnerProfile], latest_submission: Optional[Submission]):
+        ...     # suggest feedback here using module_config and learner_profile and return it as a list
     """
     exercise_type = inspect.signature(func).parameters["exercise"].annotation
     submission_type = inspect.signature(func).parameters["submission"].annotation

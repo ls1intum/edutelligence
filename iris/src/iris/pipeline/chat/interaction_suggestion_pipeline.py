@@ -1,7 +1,6 @@
 import logging
 import traceback
-from datetime import datetime
-from typing import List, Optional
+from typing import List
 
 from langchain_core.messages import AIMessage
 from langchain_core.output_parsers import JsonOutputParser
@@ -27,7 +26,6 @@ from ...llm import (
     ModelVersionRequestHandler,
 )
 from ...llm.langchain import IrisLangchainChatModel
-from ..pipeline import Pipeline
 from ..prompts.iris_interaction_suggestion_prompts import (
     course_chat_begin_prompt,
     course_chat_history_exists_prompt,
@@ -39,6 +37,7 @@ from ..prompts.iris_interaction_suggestion_prompts import (
     iris_default_suggestion_initial_system_prompt,
     iris_exercise_suggestion_initial_system_prompt,
 )
+from ..sub_pipeline import SubPipeline
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +46,7 @@ class Questions(BaseModel):
     questions: List[str] = Field(description="questions that students may ask")
 
 
-class InteractionSuggestionPipeline(Pipeline):
+class InteractionSuggestionPipeline(SubPipeline):
     """
     Interaction suggestion pipeline that suggests next chat interactions, either for exercises or courses.
     """
@@ -157,10 +156,3 @@ class InteractionSuggestionPipeline(Pipeline):
             )
             traceback.print_exc()
             return []
-
-
-def datetime_to_string(dt: Optional[datetime]) -> str:
-    if dt is None:
-        return "No date provided"
-    else:
-        return dt.strftime("%Y-%m-%d %H:%M:%S")
