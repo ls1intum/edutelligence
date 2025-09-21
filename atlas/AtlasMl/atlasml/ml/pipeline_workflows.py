@@ -37,7 +37,7 @@ class PipelineWorkflows:
         competency_data = self.weaviate_client.get_embeddings_by_property(CollectionNames.COMPETENCY.value, "competency_id", competency_id)
 
         if not exercise_data or not competency_data:
-            raise ValueError("No exercise or competency found for mapping")
+            raise ValueError("No exercise/competency found for mapping")
 
         exercise = ExerciseWithCompetencies(
             id=int(exercise_data[0]["properties"]["exercise_id"]),
