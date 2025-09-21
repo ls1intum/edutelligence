@@ -14,18 +14,15 @@ sentence-transformers = "^4.0.2"
 pydantic-settings = "^2.8.1"
 matplotlib = "^3.10.1"
 scipy = "^1.15.2"
-scikit-learn = "^1.5.0"
 apscheduler = "^3.10.4"
 openai = "==1.93.0"
-google-adk = "^1.10.0"
-deprecated = "^1.2.14"
 sentry-sdk = {extras = ["fastapi"], version = "^2.34.1"}
 markdown = "^3.8.2"
 bs4 = "^0.0.2"
 
 
 [tool.poetry.group.dev.dependencies]
-uvicorn = "^0.34.0"
+uvicorn = "^0.32.1"
 pytest = "^8.3.5"
 pytest-cov = "^6.0.0"
 ruff = "^0.3.0"

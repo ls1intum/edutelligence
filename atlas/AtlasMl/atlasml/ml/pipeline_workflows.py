@@ -66,12 +66,11 @@ class PipelineWorkflows:
             CollectionNames.EXERCISE.value, exercise_data[0]["id"], properties
         )
 
-        def map_competency_to_competency(
-                self,
-                source_competency_id: str,
-                target_competency_id: str
-        ):
-
+    def map_competency_to_competency(
+            self,
+            source_competency_id: str,
+            target_competency_id: str
+    ):
         source_competency_data = self.weaviate_client.get_embeddings_by_property(
             CollectionNames.COMPETENCY.value, "competency_id", source_competency_id
         )
