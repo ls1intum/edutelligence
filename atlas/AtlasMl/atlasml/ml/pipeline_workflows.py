@@ -81,19 +81,38 @@ class PipelineWorkflows:
         if not source_competency_data or not target_competency_data:
             raise ValueError("Source or target competency not found for mapping")
 
-        # Get existing related competencies or initialize empty list
-        source_related = source_competency_data[0]["properties"].get("related_competencies", [])
-        target_related = target_competency_data[0]["properties"].get("related_competencies", [])
+        # Convert competency IDs to integers
+        source_competency_id_int = int(source_competency_id)
+        target_competency_id_int = int(target_competency_id)
+
+        # Get existing related competencies and normalize to list of ints
+        source_related_raw = source_competency_data[0]["properties"].get("related_competencies", [])
+        target_related_raw = target_competency_data[0]["properties"].get("related_competencies", [])
+
+        # Convert to list of ints, filtering out non-convertible entries
+        source_related = []
+        for item in source_related_raw:
+            try:
+                source_related.append(int(item))
+            except (ValueError, TypeError):
+                continue
+
+        target_related = []
+        for item in target_related_raw:
+            try:
+                target_related.append(int(item))
+            except (ValueError, TypeError):
+                continue
 
         # Add bidirectional relationship if not already exists
-        if target_competency_id not in source_related:
-            source_related.append(target_competency_id)
-        if source_competency_id not in target_related:
-            target_related.append(source_competency_id)
+        if target_competency_id_int not in source_related:
+            source_related.append(target_competency_id_int)
+        if source_competency_id_int not in target_related:
+            target_related.append(source_competency_id_int)
 
         # Update source competency
         source_properties = {
-            "competency_id": source_competency_data[0]["properties"]["competency_id"],
+            "competency_id": int(source_competency_data[0]["properties"]["competency_id"]),
             "title": source_competency_data[0]["properties"]["title"],
             "description": source_competency_data[0]["properties"]["description"],
             "course_id": source_competency_data[0]["properties"]["course_id"],
@@ -111,7 +130,7 @@ class PipelineWorkflows:
 
         # Update target competency
         target_properties = {
-            "competency_id": target_competency_data[0]["properties"]["competency_id"],
+            "competency_id": int(target_competency_data[0]["properties"]["competency_id"]),
             "title": target_competency_data[0]["properties"]["title"],
             "description": target_competency_data[0]["properties"]["description"],
             "course_id": target_competency_data[0]["properties"]["course_id"],
