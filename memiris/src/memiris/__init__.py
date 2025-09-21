@@ -11,6 +11,9 @@ from memiris.api.memory_creation_pipeline import (
     MemoryCreationPipelineBuilder,
 )
 from memiris.api.memory_dto import MemoryDTO
+from memiris.api.learning_dto import LearningDTO
+from memiris.api.memory_connection_dto import MemoryConnectionDTO
+from memiris.api.memory_with_relations_dto import MemoryWithRelationsDTO
 from memiris.api.memory_service import MemoryService
 from memiris.api.memory_sleep_pipeline import (
     MemorySleepPipeline,
@@ -33,6 +36,9 @@ __all__ = [
     # Domain Models
     "Memory",
     "MemoryDTO",
+    "LearningDTO",
+    "MemoryConnectionDTO",
+    "MemoryWithRelationsDTO",
     "Learning",
     "MemoryConnection",
     # API services
