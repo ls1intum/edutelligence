@@ -169,7 +169,7 @@ async def suggest_competency_relations(course_id: int) -> CompetencyRelationSugg
         raise handle_pipeline_error(e, "suggest_competency_relations")
 
 
-@router.post("/map/competency-to-exercise", dependencies=[])
+@router.post("/map-competency-to-exercise",dependencies=[])
 async def map_new_competency_to_exercise(request: MapNewCompetencyToExerciseRequest):
     """
     Map a new competency to an existing exercise.
@@ -211,7 +211,7 @@ async def map_new_competency_to_exercise(request: MapNewCompetencyToExerciseRequ
         raise handle_pipeline_error(e, "map_new_competency_to_exercise")
 
 
-@router.post("/map/competency-to-competency", dependencies=[])
+@router.post("/map-competency-to-competency",dependencies=[])
 async def map_competency_to_competency(request: MapCompetencyToCompetencyRequest):
     """
     Map a competency to another competency (bidirectional relationship).
