@@ -1,5 +1,5 @@
 import type { Feedback } from "@/model/feedback";
-import type { FileTree } from "@/helpers/fetch_and_unzip";
+import type { FileTree } from "@/helpers/fetch_repository";
 
 import { useId, useState } from "react";
 import { FocusStyleManager } from "@blueprintjs/core";
