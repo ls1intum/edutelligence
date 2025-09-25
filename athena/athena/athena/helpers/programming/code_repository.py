@@ -15,6 +15,20 @@ cache_dir = Path(tempfile.mkdtemp())
 
 
 def _ensure_auth_secret(authorization_secret: Optional[str]) -> str:
+    """
+    Ensure that an authorization secret is available for repository API access.
+    
+    Args:
+        authorization_secret: Optional authorization secret. If None, attempts to
+            retrieve it from context variables.
+            
+    Returns:
+        The authorization secret to use for API requests.
+        
+    Raises:
+        ValueError: If no authorization secret is provided and none is available
+            in the context variables.
+    """
     if authorization_secret is None:
         if contextvars.repository_authorization_secret_context_var_empty():
             raise ValueError(
@@ -40,6 +54,17 @@ def get_repository_files_map(url: str, authorization_secret: Optional[str] = Non
 
 
 def _write_files_to_directory(root: Path, files_map: Dict[str, str]) -> None:
+    """
+    Write files from a map to a directory structure.
+    
+    Args:
+        root: The root directory to write files to.
+        files_map: Dictionary mapping relative file paths to their content.
+        
+    Note:
+        Unsafe paths (those that would escape the root directory or access .git
+        internals) are silently skipped.
+    """
     root = root.resolve()
     for rel_path, content in files_map.items():
         try:
