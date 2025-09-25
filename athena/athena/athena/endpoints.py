@@ -1,8 +1,8 @@
 import inspect
 from fastapi import Depends, BackgroundTasks, Body
-from pydantic import BaseModel, ValidationError
-from typing import TypeVar, Callable, List, Union, Any, Coroutine, Type, Optional, Dict
-from starlette.requests import Request
+from pydantic import ConfigDict, BaseModel, ValidationError
+from pydantic.alias_generators import to_camel
+from typing import TypeVar, Callable, List, Union, Any, Coroutine, Type, Optional
 
 from athena.app import app
 from athena.authenticate import authenticated
@@ -14,17 +14,8 @@ from athena.module_config import (
 )
 from athena.logger import logger
 from athena.schemas import Exercise, Submission, Feedback, LearnerProfile
-from athena.schemas.schema import to_camel
-from athena.storage import (
-    get_stored_submission_meta,
-    get_stored_exercise_meta,
-    get_stored_feedback_meta,
-    store_exercise,
-    store_feedback,
-    store_feedback_suggestions,
-    store_submissions,
-    get_stored_submissions,
-)
+from athena.storage import get_stored_submission_meta, get_stored_exercise_meta, get_stored_feedback_meta, \
+    store_exercise, store_feedback, store_feedback_suggestions, store_submissions, get_stored_submissions
 
 E = TypeVar("E", bound=Exercise)
 S = TypeVar("S", bound=Submission)
@@ -184,11 +175,8 @@ def submission_selector(
     class SubmissionSelectorRequest(BaseModel):
         exercise: exercise_type
         submission_ids: List[int]
-
-        class Config:
-            # Allow camelCase field names in the API (converted to snake_case)
-            alias_generator = to_camel
-            allow_population_by_field_name = True
+        module_config: module_config_type = Depends(get_dynamic_module_config_factory(module_config_type))
+        model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
 
     @app.post("/select_submission", responses=module_responses)
     @authenticated

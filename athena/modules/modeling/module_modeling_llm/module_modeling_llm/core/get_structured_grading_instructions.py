@@ -65,7 +65,7 @@ async def get_structured_grading_instructions(
     grading_instruction_result = await predict_and_parse(
         model=config.generate_grading_instructions,
         chat_prompt=chat_prompt,
-        prompt_input=prompt_inputs.dict(),
+        prompt_input=prompt_inputs.model_dump(),
         pydantic_object=StructuredGradingCriterion,
         tags=[
             f"exercise-{exercise_model.exercise_id}",
@@ -74,17 +74,10 @@ async def get_structured_grading_instructions(
     )
 
     if debug:
-        emit_meta(
-            "get_structured_grading_instructions",
-            {
-                "prompt": chat_prompt.format(**prompt_inputs.dict()),
-                "result": (
-                    grading_instruction_result.dict()
-                    if grading_instruction_result is not None
-                    else None
-                ),
-            },
-        )
+        emit_meta("get_structured_grading_instructions", {
+            "prompt": chat_prompt.format(**prompt_inputs.model_dump()),
+            "result": grading_instruction_result.model_dump() if grading_instruction_result is not None else None
+        })
 
     if not grading_instruction_result:
         raise ValueError(

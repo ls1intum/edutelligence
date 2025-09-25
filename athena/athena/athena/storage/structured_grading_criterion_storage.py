@@ -13,7 +13,7 @@ def get_structured_grading_criterion(exercise_id: int, current_hash: Optional[st
             DBStructuredGradingCriterion.exercise.has(lms_url=lms_url)
         ).first()
         if cache_entry is not None and (current_hash is None or cache_entry.instructions_hash == current_hash):  # type: ignore
-            return StructuredGradingCriterion.parse_obj(cache_entry.structured_grading_criterion)
+            return StructuredGradingCriterion.model_validate(cache_entry.structured_grading_criterion)
     return None
 
 def store_structured_grading_criterion(
@@ -24,7 +24,7 @@ def store_structured_grading_criterion(
             DBStructuredGradingCriterion(
                 exercise_id=exercise_id,
                 instructions_hash=hash,
-                structured_grading_criterion=structured_instructions.dict(),
+                structured_grading_criterion=structured_instructions.model_dump(),
             )
         )
         db.commit()

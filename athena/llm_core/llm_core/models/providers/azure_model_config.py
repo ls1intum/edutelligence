@@ -3,6 +3,8 @@ from llm_core.catalog import ModelCatalog
 from llm_core.loaders.catalogs import get_azure_catalog
 from typing import ClassVar, Literal, Optional
 from pydantic import Field, PrivateAttr, validator
+from typing import ClassVar, Literal
+from pydantic import ConfigDict, Field
 from langchain.base_language import BaseLanguageModel
 
 
@@ -12,9 +14,10 @@ class AzureModelConfig(BaseChatModelConfig):
     PROVIDER: ClassVar[str] = "azure"
     KW_REMAP: ClassVar[dict[str, str]] = {}
 
-    provider: Literal["azure"] = Field("azure", const=True)
-    model_name: str = Field(
-        ..., description="Key of Azure deployment prefixed with 'azure_openai_'."
+    provider: Literal["azure"] = "azure"
+    model_name: AzureModel = Field(
+        ...,
+        description="Azure model name",
     )
     _catalog: Optional[ModelCatalog] = PrivateAttr(None)
 
@@ -41,6 +44,4 @@ class AzureModelConfig(BaseChatModelConfig):
                 f"Azure deployment '{key}' not discovered. Known keys: {known}."
             )
         return self._template_get_model(tmpl)
-
-    class Config:
-        title = "Azure"
+    model_config = ConfigDict(title="Azure")

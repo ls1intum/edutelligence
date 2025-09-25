@@ -1,8 +1,8 @@
 from llm_core.models.providers.base_chat_model_config import BaseChatModelConfig
-from llm_core.catalog import ModelCatalog
-from llm_core.loaders.catalogs import get_ollama_catalog
-from typing import ClassVar, Literal, Union, Optional
-from pydantic import Field, PrivateAttr
+from typing import ClassVar, Literal
+from pydantic import Field
+from typing import ClassVar, Literal
+from pydantic import Field
 from langchain.base_language import BaseLanguageModel
 
 
@@ -12,8 +12,8 @@ class OllamaModelConfig(BaseChatModelConfig):
     PROVIDER: ClassVar[str] = "ollama"
     KW_REMAP: ClassVar[dict[str, str]] = {}
 
-    provider: Literal["ollama"] = Field("ollama", const=True)
-    model_name: str = Field(
+    provider: Literal["ollama"] = "ollama"
+    model_name: OllamaModel = Field(
         ...,
         description="Ollama model key (string) or enum value.",
     )
@@ -41,6 +41,4 @@ class OllamaModelConfig(BaseChatModelConfig):
                 f"Ollama model '{key}' not found in catalog. Known keys: {known}."
             )
         return self._template_get_model(tmpl)
-
-    class Config:
-        title = "Ollama"
+    model_config = ConfigDict(title="Ollama")

@@ -8,12 +8,12 @@ license = "MIT"
 [tool.poetry.dependencies]
 python = "3.11.*"
 # if you have local changes in the common Athena module, use the line below. Otherwise, please use a VCS stable version. Also, a version with tag = "" is possible.
-# athena = { path = "../athena", develop = true }
-athena = { git = "https://github.com/ls1intum/Athena.git", rev = "bbb2bb0", subdirectory = "athena"}
+athena = { path = "../../../athena", develop = true }
+# athena = { git = "https://github.com/ls1intum/Athena.git", rev = "bbb2bb0", subdirectory = "athena"}
 
 [tool.poetry.group.dev.dependencies]
 types-requests = "^2.31.0.8"
-pydantic = "1.10.17"
+pydantic = "^2.11.7"
 prospector = "^1.10.2"
 
 [tool.poetry.scripts]

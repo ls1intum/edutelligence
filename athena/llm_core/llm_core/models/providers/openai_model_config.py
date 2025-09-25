@@ -1,8 +1,10 @@
 from llm_core.models.providers.base_chat_model_config import BaseChatModelConfig
 from llm_core.catalog import ModelCatalog
 from llm_core.loaders.catalogs import get_openai_catalog
-from typing import ClassVar, Literal, Union, Optional
+from typing import ClassVar, Literal, Optional
 from pydantic import Field, PrivateAttr
+from typing import ClassVar, Literal
+from pydantic import ConfigDict, Field
 from langchain.base_language import BaseLanguageModel
 
 
@@ -14,8 +16,8 @@ class OpenAIModelConfig(BaseChatModelConfig):
         "max_tokens": "max_completion_tokens",
     }
 
-    provider: Literal["openai"] = Field("openai", const=True)
-    model_name: str = Field(
+    provider: Literal["openai"] = "openai"
+    model_name: OpenAIModel = Field(
         ...,
         description="OpenAI model key (string) or enum value.",
     )
@@ -43,6 +45,4 @@ class OpenAIModelConfig(BaseChatModelConfig):
                 f"OpenAI model '{key}' not found in catalog. Known keys: {known}."
             )
         return self._template_get_model(tmpl)
-
-    class Config:
-        title = "OpenAI"
+    model_config = ConfigDict(title="OpenAI")

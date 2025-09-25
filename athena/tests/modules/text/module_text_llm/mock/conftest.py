@@ -8,8 +8,6 @@ from llm_core.models.providers.openai_model_config import OpenAIModelConfig
 
 from athena.module_config import ModuleConfig
 from athena.schemas.exercise_type import ExerciseType
-from module_text_llm.default_approach import DefaultApproachConfig
-
 
 class FakeChatModel(FakeListChatModel):
     """A fake chat model for testing purposes"""

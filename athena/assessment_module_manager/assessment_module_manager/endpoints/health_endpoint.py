@@ -1,8 +1,8 @@
 import httpx
 from pydantic import BaseModel, Field
 from fastapi import APIRouter, Depends
+from typing import Literal
 
-from .modules_endpoint import get_modules
 from assessment_module_manager.logger import logger
 from assessment_module_manager.module import Module
 from ..dependencies import get_registry
@@ -13,8 +13,8 @@ router = APIRouter()
 
 async def is_healthy(module: Module) -> bool:
     try:
-        async with httpx.AsyncClient(base_url=module.url) as client:
-            response = await client.get("/")
+        async with httpx.AsyncClient(base_url=str(module.url)) as client:
+            response = await client.get('/')
         return response.status_code == 200 and response.json()["status"] == "ok"
     except httpx.ConnectError:
         logger.error("Server is not reachable: %s", module)
@@ -33,10 +33,9 @@ class HealthResponse(BaseModel):
     and whether all the modules are healthy (i.e. reachable).
     Additional information about the modules is also provided.
     """
-
-    status: str = Field(const=True, default="ok", example="ok")
+    status: Literal["ok"] = "ok"
     modules: dict = Field(
-        example=[
+        examples=[[
             {
                 "module_example": {
                     "url": "http://localhost:5001",
@@ -47,7 +46,7 @@ class HealthResponse(BaseModel):
                     "supportsGradedFeedbackRequests": True,
                 }
             }
-        ]
+        ]]
     )
 
 

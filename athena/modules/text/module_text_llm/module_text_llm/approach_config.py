@@ -1,5 +1,7 @@
 from pydantic import BaseModel, Field
 from typing import Optional
+from pydantic import ConfigDict, BaseModel, Field
+
 from llm_core.models import ModelConfigType
 
 
@@ -14,6 +16,4 @@ class ApproachConfig(BaseModel):
         description="The model to use for the approach.",
     )
     type: str = Field(..., description="The type of approach config")
-
-    class Config:
-        use_enum_values = True
+    model_config = ConfigDict(use_enum_values=True)

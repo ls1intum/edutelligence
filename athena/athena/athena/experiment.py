@@ -13,9 +13,9 @@ from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoin
 
 
 class ExperimentEnvironment(BaseModel):
-    experiment_id: Optional[str]
-    module_configuration_id: Optional[str]
-    run_id: Optional[str]
+    experiment_id: Optional[str] = None
+    module_configuration_id: Optional[str] = None
+    run_id: Optional[str] = None
 
 
 experiment_context: contextvars.ContextVar[ExperimentEnvironment] = contextvars.ContextVar("experiment")

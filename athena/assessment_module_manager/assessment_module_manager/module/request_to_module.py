@@ -2,22 +2,20 @@ import json
 from typing import TypeVar, Generic, Optional
 
 import httpx
-from fastapi import HTTPException, Request, Depends
-from pydantic.generics import GenericModel
+from fastapi import HTTPException
+from fastapi import HTTPException
+
+from assessment_module_manager.settings import Settings
 
 from .module import Module
 from ..module_registry import ModuleRegistry
 from athena import ExerciseType
 from assessment_module_manager.logger import logger
-from ..dependencies import get_registry, get_settings
-from ..settings import Settings
+from pydantic import BaseModel
 
-
-D = TypeVar("D")
-M = TypeVar("M")
-
-
-class ModuleResponse(GenericModel, Generic[D, M]):
+D = TypeVar('D')
+M = TypeVar('M')
+class ModuleResponse(BaseModel, Generic[D, M]):
     """
     A response from a module.
     """
@@ -66,7 +64,7 @@ async def request_to_module(
         # should be the same as the LMS key
 
     try:
-        async with httpx.AsyncClient(base_url=module.url, timeout=600) as client:
+        async with httpx.AsyncClient(base_url=str(module.url), timeout=600) as client:
             if method == "POST":
                 response = await client.post(path, json=data, headers=headers)
             elif method == "GET":
@@ -89,9 +87,4 @@ async def request_to_module(
             "Module %s returned non-JSON response: %s", module.name, response.text
         )
 
-    return ModuleResponse(
-        module_name=module.name,
-        status=response.status_code,
-        data=response_data,
-        meta=meta,
-    )
+    return ModuleResponse(module_name=module.name, status=response.status_code, data=response_data, meta=meta)

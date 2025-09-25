@@ -1,5 +1,4 @@
 from typing import List, Type, TypeAlias, Union
-from llm_core.loaders.model_loaders import azure_loader, ollama_loader, openai_loader
 
 from .model_config import ModelConfig
 from .providers.openai_model_config import OpenAIModelConfig
@@ -22,20 +21,6 @@ available_configs: List[Type[ModelConfig]] = [
 
 
 if not available_configs:
-
-    class _StubConfig(ModelConfig):
-        def get_model(self):
-            raise RuntimeError("Stub model used")
-
-        def supports_system_messages(self):
-            return True
-
-        def supports_function_calling(self):
-            return True
-
-        def supports_structured_output(self):
-            return True
-
     available_configs.append(_StubConfig)
 
 __all__ = [
