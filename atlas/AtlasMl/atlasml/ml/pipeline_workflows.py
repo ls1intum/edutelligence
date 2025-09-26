@@ -185,9 +185,9 @@ class PipelineWorkflows:
             self.save_competency_to_weaviate(competency)
 
     def save_competency(
-            self,
-            competency: Competency,
-            operation_type: OperationType = OperationType.UPDATE,
+        self,
+        competency: Competency,
+        operation_type: OperationType = OperationType.UPDATE,
     ):
         if operation_type == OperationType.DELETE:
             self.delete_competency(competency)
@@ -198,7 +198,7 @@ class PipelineWorkflows:
             logger.info(f"Existing competency: {existing_competency}")
             if existing_competency:
                 assert (
-                        len(existing_competency) == 1
+                    len(existing_competency) == 1
                 ), "Multiple competencies found for the same ID"  # TODO: Throw error
                 competency_to_update = existing_competency[0]
                 embedings = generate_embeddings_openai(competency.description if competency.description else competency.title)
@@ -220,9 +220,9 @@ class PipelineWorkflows:
             self.recluster_with_new_competencies(competency=competency, course_id=competency.course_id)
 
     def save_competencies(
-            self,
-            competencies: list[Competency],
-            operation_type: OperationType = OperationType.UPDATE,
+        self,
+        competencies: list[Competency],
+        operation_type: OperationType = OperationType.UPDATE,
     ):
         if not competencies:
             return
@@ -240,7 +240,7 @@ class PipelineWorkflows:
                 logger.info(f"Existing competency: {existing_competency}")
                 if existing_competency:
                     assert (
-                            len(existing_competency) == 1
+                        len(existing_competency) == 1
                     ), "Multiple competencies found for the same ID"  # TODO: Throw error
                     competency_to_update = existing_competency[0]
                     embedings = generate_embeddings_openai(competency.description if competency.description else competency.title)
@@ -269,7 +269,7 @@ class PipelineWorkflows:
         )
         if existing_competency:
             assert (
-                    len(existing_competency) == 1
+                len(existing_competency) == 1
             ), "Multiple competencies found for the same ID"
             competency_to_delete = existing_competency[0]
             self.weaviate_client.delete_by_id(
@@ -385,8 +385,8 @@ class PipelineWorkflows:
             # There are clusters which also mean that there are competencies
             cluster_centers = [
                 SemanticCluster(cluster_id=entry["properties"]["cluster_id"],
-                                course_id=entry["properties"]["course_id"],
-                                vector_embedding=entry["vector"]["default"])
+                               course_id=entry["properties"]["course_id"],
+                               vector_embedding=entry["vector"]["default"])
                 for entry in clusters
             ]
             similarities_with_indices: list[tuple[float, SemanticCluster]] =  [
@@ -416,7 +416,7 @@ class PipelineWorkflows:
             return topk_competencies
 
     def suggest_competencies_by_similarity(
-            self, exercise_description: str, course_id: int, top_k: int = 3
+        self, exercise_description: str, course_id: int, top_k: int = 3
     ) -> list[Competency]:
         """Suggest competencies based on embedding similarity without re-clustering.
 
@@ -437,9 +437,9 @@ class PipelineWorkflows:
         return top_competencies
 
     def save_exercise(
-            self,
-            exercise: ExerciseWithCompetencies,
-            operation_type: OperationType = OperationType.UPDATE,
+        self,
+        exercise: ExerciseWithCompetencies,
+        operation_type: OperationType = OperationType.UPDATE,
     ):
         if operation_type == OperationType.DELETE:
             self.delete_exercise(exercise)
@@ -449,7 +449,7 @@ class PipelineWorkflows:
             )
             if existing_exercise:
                 assert (
-                        len(existing_exercise) == 1
+                    len(existing_exercise) == 1
                 ), "Multiple exercises found for the same ID"  # TODO: Throw error
                 exercise_to_update = existing_exercise[0]
                 embeddings = generate_embeddings_openai(exercise.description)
@@ -477,7 +477,7 @@ class PipelineWorkflows:
         )
         if existing_exercise:
             assert (
-                    len(existing_exercise) == 1
+                len(existing_exercise) == 1
             ), "Multiple exercises found for the same ID"
             exercise_to_delete = existing_exercise[0]
             self.weaviate_client.delete_by_id(
@@ -608,7 +608,7 @@ class PipelineWorkflows:
         descriptions: list[str] = [i.description for i in competencies]
         embeddings = np.array(
             [competency["vector"]["default"]
-             for competency in course_competencies]
+            for competency in course_competencies]
         )
         relationship_matrix = generate_competency_relationship(embeddings, descriptions)
         competencyRelationSuggestionResponse = CompetencyRelationSuggestionResponse(relations=[])
@@ -625,7 +625,7 @@ class PipelineWorkflows:
 
 
     def suggest_competencies_if_no_clusters(
-            self, exercise_description: str, course_id: int, similarity_threshold: float = 0.5
+        self, exercise_description: str, course_id: int, similarity_threshold: float = 0.5
     ) -> list[tuple[Competency, float]]:
         """Suggest competencies based on embedding similarity without re-clustering.
 
