@@ -37,7 +37,6 @@ class PipelineWorkflows:
             "related_competencies": related_competencies,
         }
 
-        # Copy cluster properties if they exist
         if "cluster_id" in competency_data["properties"]:
             properties["cluster_id"] = competency_data["properties"]["cluster_id"]
         if "cluster_similarity_score" in competency_data["properties"]:
