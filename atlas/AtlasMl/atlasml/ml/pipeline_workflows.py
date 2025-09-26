@@ -76,7 +76,7 @@ class PipelineWorkflows:
         properties = {
             "exercise_id": str(exercise.id),
             "description": exercise.description,
-            "competency_ids": [str(comp_id) if isinstance(comp_id, int) else comp_id for comp_id in exercise.competencies],
+            "competency_ids": [str(comp_id) for comp_id in exercise.competencies],
             "course_id": str(exercise.course_id),
         }
         self.weaviate_client.update_property_by_id(
