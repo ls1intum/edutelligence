@@ -27,9 +27,9 @@ def receive_submissions(exercise: Exercise, submissions: List[Submission], modul
     logger.info("receive_submissions: Received %d submissions for exercise %d", len(submissions), exercise.id)
     for submission in submissions:
         logger.info("- Submission %d", submission.id)
-        zip_content = submission.get_zip()
-        # list the files in the zip
-        for file in zip_content.namelist():
+        repo = submission.get_repository()
+        # list the files in the repository
+        for file in repo.git.ls_files().splitlines():
             logger.info("  - %s", file)
     # Do something with the submissions
     logger.info("Doing stuff")
