@@ -1,3 +1,22 @@
+"""
+Configuration models and environment loading for AtlasML.
+
+This module defines strongly-typed settings using Pydantic `BaseModel`s and a
+loader that reads from environment variables. It also provides a proxy for
+convenient access within the application.
+
+Environment variables:
+- ATLAS_API_KEYS: Comma-separated list of API key tokens used for request auth
+- WEAVIATE_HOST: Weaviate host (e.g., "localhost")
+- WEAVIATE_PORT: Weaviate REST port (e.g., 8080)
+- WEAVIATE_GRPC_PORT: Weaviate gRPC port (e.g., 50051)
+- SENTRY_DSN: Optional Sentry DSN used only in production
+- ENV: Environment name (e.g., "dev", "production")
+
+Defaults are provided automatically in test environments or when explicitly
+requested via `get_settings(use_defaults=True)`.
+"""
+
 import os
 import logging
 from pydantic import BaseModel
@@ -6,16 +25,26 @@ logger = logging.getLogger(__name__)
 
 
 class APIKeyConfig(BaseModel):
+    """Single API key token definition used for header-based authentication."""
     token: str
 
 
 class WeaviateSettings(BaseModel):
+    """Connection parameters for the Weaviate vector database."""
     host: str
     port: int
     grpc_port: int
 
 
 class Settings(BaseModel):
+    """Top-level application settings used across AtlasML services.
+
+    Attributes:
+        api_keys: Allowed API keys for authenticating requests
+        weaviate: Weaviate connection settings
+        sentry_dsn: Optional Sentry DSN (used when `env` is production)
+        env: Current environment label (e.g., dev, production)
+    """
     api_keys: list[APIKeyConfig]
     weaviate: WeaviateSettings
     sentry_dsn: str | None = None
@@ -23,7 +52,11 @@ class Settings(BaseModel):
 
     @classmethod
     def _get_default_settings(cls):
-        """Get default settings for testing and development."""
+        """Construct safe defaults for development and tests.
+
+        The defaults are intentionally conservative, enabling a local Weaviate
+        connection on common ports and a single test API key.
+        """
         logger.warning(
             "Using default settings - ensure environment variables are set for production"
         )
@@ -37,7 +70,12 @@ class Settings(BaseModel):
 
     @classmethod
     def get_settings(cls, use_defaults: bool = False):
-        """Get the settings from environment variables with optional defaults."""
+        """Load settings from environment variables or provide defaults.
+
+        Args:
+            use_defaults: If True, bypass environment validation and return
+                default settings suitable for local development/tests.
+        """
         logger.info("Loading settings from environment variables")
 
         # Check if we should use defaults (for testing)
@@ -131,6 +169,7 @@ def reset_settings():
 
 # For backward compatibility, create a property-like access
 class SettingsProxy:
+    """Lazy proxy to access resolved settings without re-parsing env vars."""
     @property
     def api_keys(self):
         return get_settings().api_keys
