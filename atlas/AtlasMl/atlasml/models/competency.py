@@ -71,3 +71,13 @@ class CompetencyRelation(BaseModel):
 
 class CompetencyRelationSuggestionResponse(BaseModel):
     relations: list[CompetencyRelation]
+
+
+class MapNewCompetencyToExerciseRequest(BaseModel):
+    exercise_id: str
+    competency_id: str
+
+
+class MapCompetencyToCompetencyRequest(BaseModel):
+    source_competency_id: str
+    target_competency_id: str
