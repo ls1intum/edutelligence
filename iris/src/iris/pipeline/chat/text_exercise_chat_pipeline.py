@@ -1,11 +1,16 @@
 import logging
 import os
+import traceback
 from datetime import datetime
-from typing import Any, Callable, List
+from typing import Any, Callable, List, Optional
 
 import pytz
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from langsmith import traceable
+
+from iris.pipeline.session_title_generation_pipeline import (
+    SessionTitleGenerationPipeline,
+)
 
 from ...common.pyris_message import IrisMessageRole, PyrisMessage
 from ...domain.data.text_message_content_dto import TextMessageContentDTO
@@ -38,6 +43,7 @@ class TextExerciseChatPipeline(
     Uses an agent-based approach with tools for accessing course content, lectures, and FAQs.
     """
 
+    session_title_pipeline: SessionTitleGenerationPipeline
     citation_pipeline: CitationPipeline
     jinja_env: Environment
     system_prompt_template: Any
@@ -48,8 +54,9 @@ class TextExerciseChatPipeline(
         """
         super().__init__(implementation_id="text_exercise_chat_pipeline")
 
-        # Create the citation pipeline
+        # Initialize pipelines
         self.citation_pipeline = CitationPipeline()
+        self.session_title_pipeline = SessionTitleGenerationPipeline()
 
         # Setup Jinja2 template environment
         template_dir = os.path.join(
@@ -346,9 +353,19 @@ class TextExerciseChatPipeline(
             # Add citations if applicable
             result = self._add_citations(state, result)
 
+            # Generate title
+            session_title = self._generate_session_title(state, state.result, state.dto)
+
+            kwargs = {}
+            if session_title is not None:
+                kwargs["session_title"] = session_title
+
             # Update final callback with tokens
             state.callback.done(
-                "Response completed", final_result=result, tokens=state.tokens
+                "Response completed",
+                final_result=result,
+                tokens=state.tokens,
+                **kwargs,
             )
 
             return result
@@ -423,6 +440,43 @@ class TextExerciseChatPipeline(
         except Exception as e:
             logger.error("Error adding citations", exc_info=e)
             return result
+
+    def _generate_session_title(
+        self,
+        state: AgentPipelineExecutionState[
+            TextExerciseChatPipelineExecutionDTO, TextExerciseChatVariant
+        ],
+        output: str,
+        dto: TextExerciseChatPipelineExecutionDTO,
+    ) -> Optional[str]:
+        """
+        Generate session title from the first user prompt and the model output.
+
+        Args:
+            state: The current pipeline execution state
+            output: The agent's output
+            dto: The pipeline execution DTO
+
+        Returns:
+            The generated session title or None if not applicable
+        """
+        try:
+            if output and len(dto.conversation) == 1:
+                first_user_msg = dto.conversation[0].contents[0].text_content
+                session_title = self.session_title_pipeline(first_user_msg, output)
+                if self.session_title_pipeline.tokens is not None:
+                    self._track_tokens(state, self.session_title_pipeline.tokens)
+                if session_title is None:
+                    logger.error("Generating session title failed.")
+                return session_title
+            return None
+        except Exception as e:
+            logger.error(
+                "An error occurred while running the session title generation pipeline",
+                exc_info=e,
+            )
+            traceback.print_exc()
+            return None
 
     @traceable(name="Text Exercise Chat Pipeline")
     def __call__(
