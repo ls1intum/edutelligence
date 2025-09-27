@@ -87,6 +87,11 @@ def get_index_range_from_line_range(line_start: Optional[int], line_end: Optiona
         line_start, line_end = line_end, line_start
 
     sentence_spans = get_sentence_spans(content)
+    
+    # Handle empty content case
+    if not sentence_spans:
+        return None, None
+    
     line_start_index = min(max(int(line_start), 0), len(sentence_spans) - 1)
 
     line_end_index = min(max(int(line_end), 0), len(sentence_spans) - 1)

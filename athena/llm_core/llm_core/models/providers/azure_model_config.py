@@ -15,7 +15,7 @@ class AzureModelConfig(BaseChatModelConfig):
     ENUM: ClassVar[type] = AzureModel
     KW_REMAP: ClassVar[dict[str, str]] = {}
 
-    provider: Literal["azure"] = Field("azure", const=True)
+    provider: Literal["azure"] = Field("azure")
     model_name: AzureModel = Field(
         ...,
         description="Azure model name",
