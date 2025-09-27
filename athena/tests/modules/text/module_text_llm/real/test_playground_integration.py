@@ -7,7 +7,7 @@ from pathlib import Path
 from athena.text import Exercise, Submission, Feedback
 from athena.schemas.exercise_type import ExerciseType
 from athena.schemas.text_submission import TextLanguageEnum
-from module_text_llm.basic_approach.generate_suggestions import generate_suggestions
+from module_text_llm.default_approach.generate_suggestions import generate_suggestions
 
 
 
@@ -103,6 +103,7 @@ async def test_playground_exercise_4_patterns_question(real_config, playground_l
             config=real_config,
             debug=False,
             is_graded=True,
+            learner_profile=None,
         )
         
         results.append({
@@ -145,6 +146,7 @@ async def test_playground_exercise_7_solid_principles(real_config, playground_lo
             config=real_config,
             debug=False,
             is_graded=True,
+            learner_profile=None,
         )
         
         results.append({
@@ -188,6 +190,7 @@ async def test_playground_exercise_performance_comparison(real_config, playgroun
                 config=real_config,
                 debug=False,
                 is_graded=True,
+                learner_profile=None,
             )
             
             exercise_results.append({
@@ -247,6 +250,7 @@ async def test_playground_exercise_edge_cases(real_config, playground_loader):
             config=real_config,
             debug=False,
             is_graded=True,
+            learner_profile=None,
         )
         
         results.append({

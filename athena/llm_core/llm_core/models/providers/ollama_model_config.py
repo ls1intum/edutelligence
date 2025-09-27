@@ -15,7 +15,7 @@ class OllamaModelConfig(BaseChatModelConfig):
     ENUM: ClassVar[type] = OllamaModel
     KW_REMAP: ClassVar[dict[str, str]] = {}
 
-    provider: Literal["ollama"] = Field("ollama", const=True)
+    provider: Literal["ollama"] = Field("ollama")
     model_name: OllamaModel = Field(
         ...,
         description="Ollama model tag (enum value).",

@@ -17,7 +17,7 @@ class OpenAIModelConfig(BaseChatModelConfig):
         "max_tokens": "max_completion_tokens",
     }
 
-    provider: Literal["openai"] = Field("openai", const=True)
+    provider: Literal["openai"] = Field("openai")
     model_name: OpenAIModel = Field(
         ...,
         description="OpenAI model id (enum value).",

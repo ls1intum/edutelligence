@@ -1,4 +1,5 @@
 import httpx
+from typing import Literal
 from pydantic import BaseModel, Field
 
 from .modules_endpoint import get_modules
@@ -29,7 +30,7 @@ class HealthResponse(BaseModel):
     and whether all the modules are healthy (i.e. reachable).
     Additional information about the modules is also provided.
     """
-    status: str = Field(const=True, default="ok", example="ok")
+    status: Literal["ok"] = Field(default="ok", example="ok")
     modules: dict = Field(
         example=[
             {
