@@ -1,5 +1,5 @@
 import uuid
-from typing import Optional
+from typing import Optional, Any
 
 import numpy as np
 import uuid
@@ -27,7 +27,7 @@ class PipelineWorkflows:
         self.weaviate_client = weaviate_client
         self.weaviate_client._ensure_collections_exist()
 
-    def _build_competency_properties(self, competency_data: dict, related_competencies: list[int]) -> dict:
+    def _build_competency_properties(self, competency_data: dict[str, Any], related_competencies: list[int]) -> dict[str, Any]:
         """Build competency properties dictionary with optional cluster information."""
         properties = {
             "competency_id": int(competency_data["properties"]["competency_id"]),
@@ -47,8 +47,8 @@ class PipelineWorkflows:
 
     def map_new_competency_to_exercise(
             self,
-            exercise_id: str,
-            competency_id: str
+            exercise_id: int,
+            competency_id: int
     ):
         exercise_data = self.weaviate_client.get_embeddings_by_property(CollectionNames.EXERCISE.value, "exercise_id", exercise_id)
         competency_data = self.weaviate_client.get_embeddings_by_property(CollectionNames.COMPETENCY.value, "competency_id", competency_id)
@@ -74,10 +74,10 @@ class PipelineWorkflows:
             exercise.competencies.append(competency.id)
 
         properties = {
-            "exercise_id": str(exercise.id),
+            "exercise_id": exercise.id,
             "description": exercise.description,
-            "competency_ids": [str(comp_id) for comp_id in exercise.competencies],
-            "course_id": str(exercise.course_id),
+            "competency_ids": exercise.competencies,
+            "course_id": exercise.course_id,
         }
         self.weaviate_client.update_property_by_id(
             CollectionNames.EXERCISE.value, exercise_data[0]["id"], properties
