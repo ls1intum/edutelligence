@@ -3,16 +3,19 @@ from unittest.mock import Mock, patch
 from typing import Any, Dict
 import json
 
-# Mock OpenAI - this must be done before any other imports
-mock_openai = Mock()
-mock_openai.OpenAIModelConfig = Mock
-mock_openai.available_models = {'mock_model': Mock()}
-sys.modules['llm_core.models.openai'] = mock_openai
+# Create mock objects that can be used in fixtures instead of globally overwriting sys.modules
+def create_mock_openai_module():
+    """Create a mock OpenAI module for use in fixtures."""
+    mock_openai = Mock()
+    mock_openai.OpenAIModelConfig = Mock
+    mock_openai.available_models = {'mock_model': Mock()}
+    return mock_openai
 
-# Mock OpenAI client
-mock_openai_client = Mock()
-mock_openai_client.models.list.return_value = []
-sys.modules['openai'] = mock_openai_client
+def create_mock_openai_client():
+    """Create a mock OpenAI client for use in fixtures."""
+    mock_openai_client = Mock()
+    mock_openai_client.models.list.return_value = []
+    return mock_openai_client
 
 def get_tool_name_from_system_message(system_message: str) -> str:
     

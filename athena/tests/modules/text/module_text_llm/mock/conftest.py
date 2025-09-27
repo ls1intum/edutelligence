@@ -9,12 +9,12 @@ patch("athena.module_config.get_module_config", return_value=stub).start()
 from modules.modeling.module_modeling_llm.mock.utils.mock_llm_config import (
     mock_get_llm_config,
 )
-from modules.text.utils.mock_llm import (
+from modules.text.module_text_llm.mock.utils.mock_llm import (
     MockLanguageModel,
     MockStructuredMockLanguageModel,
     MockAssessmentModel,
 )
-from modules.text.utils.mock_config import MockApproachConfig, MockModelConfig
+from modules.text.module_text_llm.mock.utils.mock_config import MockApproachConfig
 
 
 @pytest.fixture(autouse=True)
@@ -47,5 +47,5 @@ def mock_assessment_model():
 def mock_config():
     """Create a mock configuration for testing."""
     return MockApproachConfig(
-        max_input_tokens=5000, model=MockModelConfig(), type="default"
+        max_input_tokens=5000, model={"provider": "stub"}, type="default"
     )

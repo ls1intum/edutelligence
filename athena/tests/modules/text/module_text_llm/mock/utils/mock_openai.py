@@ -1,6 +1,6 @@
 import sys
 from unittest.mock import Mock, patch
-from pydantic import BaseModel, Field
+from pydantic import ConfigDict, BaseModel, Field
 from typing import Any, Callable
 
 # Mock ConfigParser first
@@ -36,9 +36,7 @@ class MockOpenAIModelConfig(BaseModel):
     """Mock configuration for OpenAI model settings."""
     model_name: str = "mock_model"
     get_model: Callable[[], Any] = Field(default_factory=lambda: Mock())
-
-    class Config:
-        arbitrary_types_allowed = True
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
 
 mock_openai = Mock()
