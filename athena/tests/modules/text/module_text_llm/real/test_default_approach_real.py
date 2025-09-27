@@ -7,7 +7,7 @@ from athena.schemas.text_submission import TextLanguageEnum
 
 @pytest.mark.asyncio
 async def test_generate_suggestions_algorithm_explanation(real_config):
-    """Test feedback generation for explaining an algorithm."""
+    """Test feedback generation for explaining an algorithm"""
     exercise = Exercise(
         id=1,
         title="Algorithm Explanation Exercise",
@@ -76,7 +76,7 @@ async def test_generate_suggestions_algorithm_explanation(real_config):
 
 @pytest.mark.asyncio
 async def test_generate_suggestions_code_documentation(real_config):
-    """Test feedback generation for code documentation exercise."""
+    """Test feedback generation for code documentation exercise"""
     exercise = Exercise(
         id=2,
         title="Code Documentation Exercise",
@@ -129,7 +129,7 @@ async def test_generate_suggestions_code_documentation(real_config):
 
 @pytest.mark.asyncio
 async def test_generate_suggestions_design_pattern(real_config):
-    """Test feedback generation for explaining a design pattern."""
+    """Test feedback generation for explaining a design pattern"""
     exercise = Exercise(
         id=3,
         title="Design Pattern Explanation Exercise",
