@@ -74,10 +74,10 @@ class CompetencyRelationSuggestionResponse(BaseModel):
 
 
 class MapNewCompetencyToExerciseRequest(BaseModel):
-    exercise_id: str
-    competency_id: str
+    exercise_id: int
+    competency_id: int
 
 
 class MapCompetencyToCompetencyRequest(BaseModel):
-    source_competency_id: str
-    target_competency_id: str
+    source_competency_id: int
+    target_competency_id: int

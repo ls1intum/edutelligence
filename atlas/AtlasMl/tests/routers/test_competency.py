@@ -215,3 +215,65 @@ def test_suggest_competency_relations_special_characters(test_env, mock_weaviate
     assert response.status_code == 200
     response_data = response.json()
     assert "relations" in response_data
+
+
+def test_map_competency_to_exercise_valid_input(test_env, mock_weaviate_client):
+    """Test map_competency_to_exercise with valid input."""
+    request_data = {
+        "exercise_id": 1,
+        "competency_id": 2,
+    }
+
+    response = client.post(
+        "/api/v1/competency/map-competency-to-exercise",
+        json=request_data,
+    )
+
+    assert response.status_code == 200
+    assert response.text == "null"
+
+
+def test_map_competency_to_exercise_missing_fields(test_env, mock_weaviate_client):
+    """Test map_competency_to_exercise with missing required fields."""
+    request_data = {
+        "exercise_id": 1,
+        # Missing competency_id
+    }
+
+    response = client.post(
+        "/api/v1/competency/map-competency-to-exercise",
+        json=request_data,
+    )
+
+    assert response.status_code == 422
+
+
+def test_map_competency_to_competency_valid_input(test_env, mock_weaviate_client):
+    """Test map_competency_to_competency with valid input."""
+    request_data = {
+        "source_competency_id": 1,
+        "target_competency_id": 2,
+    }
+
+    response = client.post(
+        "/api/v1/competency/map-competency-to-competency",
+        json=request_data,
+    )
+
+    assert response.status_code == 200
+    assert response.text == "null"
+
+
+def test_map_competency_to_competency_missing_fields(test_env, mock_weaviate_client):
+    """Test map_competency_to_competency with missing required fields."""
+    request_data = {
+        "source_competency_id": 1,
+        # Missing target_competency_id
+    }
+
+    response = client.post(
+        "/api/v1/competency/map-competency-to-competency",
+        json=request_data,
+    )
+
+    assert response.status_code == 422
