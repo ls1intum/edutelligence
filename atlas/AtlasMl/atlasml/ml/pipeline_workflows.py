@@ -85,8 +85,8 @@ class PipelineWorkflows:
 
     def map_competency_to_competency(
             self,
-            source_competency_id: str,
-            target_competency_id: str
+            source_competency_id: int,
+            target_competency_id: int
     ):
         source_competency_data = self.weaviate_client.get_embeddings_by_property(
             CollectionNames.COMPETENCY.value, "competency_id", source_competency_id
@@ -97,10 +97,6 @@ class PipelineWorkflows:
 
         if not source_competency_data or not target_competency_data:
             raise ValueError("Source or target competency not found for mapping")
-
-        # Convert competency IDs to integers
-        source_competency_id_int = int(source_competency_id)
-        target_competency_id_int = int(target_competency_id)
 
         # Get existing related competencies and normalize to list of ints
         source_related_raw = source_competency_data[0]["properties"].get("related_competencies", [])
@@ -122,10 +118,10 @@ class PipelineWorkflows:
                 continue
 
         # Add bidirectional relationship if not already exists
-        if target_competency_id_int not in source_related:
-            source_related.append(target_competency_id_int)
-        if source_competency_id_int not in target_related:
-            target_related.append(source_competency_id_int)
+        if target_competency_id not in source_related:
+            source_related.append(target_competency_id)
+        if source_competency_id not in target_related:
+            target_related.append(source_competency_id)
 
         # Update source competency
         source_properties = self._build_competency_properties(source_competency_data[0], source_related)
