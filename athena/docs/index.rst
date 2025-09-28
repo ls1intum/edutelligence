@@ -68,6 +68,13 @@ Athena will use the information it is given and provide the automatic suggestion
     athena_package/helpers
 
 .. toctree::
+    :caption: Testing
+    :includehidden:
+    :maxdepth: 1
+
+    tests/index
+
+.. toctree::
     :caption: Administration of Deployments
     :includehidden:
     :maxdepth: 1
