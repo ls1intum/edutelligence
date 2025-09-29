@@ -1,5 +1,5 @@
 import uuid
-from typing import Optional, Any
+from typing import Optional
 
 import numpy as np
 import uuid
@@ -27,22 +27,6 @@ class PipelineWorkflows:
         self.weaviate_client = weaviate_client
         self.weaviate_client._ensure_collections_exist()
 
-    def _build_competency_properties(self, competency_data: dict[str, Any], related_competencies: list[int]) -> dict[str, Any]:
-        """Build competency properties dictionary with optional cluster information."""
-        properties = {
-            "competency_id": int(competency_data["properties"]["competency_id"]),
-            "title": competency_data["properties"]["title"],
-            "description": competency_data["properties"]["description"],
-            "course_id": competency_data["properties"]["course_id"],
-            "related_competencies": related_competencies,
-        }
-
-        if "cluster_id" in competency_data["properties"]:
-            properties["cluster_id"] = competency_data["properties"]["cluster_id"]
-        if "cluster_similarity_score" in competency_data["properties"]:
-            properties["cluster_similarity_score"] = competency_data["properties"]["cluster_similarity_score"]
-
-        return properties
 
 
     def map_new_competency_to_exercise(
@@ -124,13 +108,33 @@ class PipelineWorkflows:
             target_related.append(source_competency_id)
 
         # Update source competency
-        source_properties = self._build_competency_properties(source_competency_data[0], source_related)
+        source_properties = {
+            "competency_id": int(source_competency_data[0]["properties"]["competency_id"]),
+            "title": source_competency_data[0]["properties"]["title"],
+            "description": source_competency_data[0]["properties"]["description"],
+            "course_id": source_competency_data[0]["properties"]["course_id"],
+            "related_competencies": source_related,
+        }
+        if "cluster_id" in source_competency_data[0]["properties"]:
+            source_properties["cluster_id"] = source_competency_data[0]["properties"]["cluster_id"]
+        if "cluster_similarity_score" in source_competency_data[0]["properties"]:
+            source_properties["cluster_similarity_score"] = source_competency_data[0]["properties"]["cluster_similarity_score"]
         self.weaviate_client.update_property_by_id(
             CollectionNames.COMPETENCY.value, source_competency_data[0]["id"], source_properties
         )
 
         # Update target competency
-        target_properties = self._build_competency_properties(target_competency_data[0], target_related)
+        target_properties = {
+            "competency_id": int(target_competency_data[0]["properties"]["competency_id"]),
+            "title": target_competency_data[0]["properties"]["title"],
+            "description": target_competency_data[0]["properties"]["description"],
+            "course_id": target_competency_data[0]["properties"]["course_id"],
+            "related_competencies": target_related,
+        }
+        if "cluster_id" in target_competency_data[0]["properties"]:
+            target_properties["cluster_id"] = target_competency_data[0]["properties"]["cluster_id"]
+        if "cluster_similarity_score" in target_competency_data[0]["properties"]:
+            target_properties["cluster_similarity_score"] = target_competency_data[0]["properties"]["cluster_similarity_score"]
         self.weaviate_client.update_property_by_id(
             CollectionNames.COMPETENCY.value, target_competency_data[0]["id"], target_properties
         )

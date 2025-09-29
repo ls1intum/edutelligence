@@ -9,12 +9,9 @@ import numpy as np
 
 
 @pytest.fixture
-def workflows():
-    wf = PipelineWorkflows(weaviate_client=FakeWeaviateClient())
-    # Clear all collections before each test
-    for collection in wf.weaviate_client.collections:
-        wf.weaviate_client.delete_all_data_from_collection(collection)
-    return wf
+def workflows(mock_weaviate_client):
+    """Create PipelineWorkflows with mock weaviate client from conftest """
+    return PipelineWorkflows(weaviate_client=mock_weaviate_client)
 
 
 def test_initial_texts_integration(workflows):
@@ -642,49 +639,3 @@ def test_map_competency_to_competency_duplicate_mapping(workflows):
     assert comp2_related.count(1) == 1, "Should not have duplicate relations"
 
 
-class FakeWeaviateClient:
-    def __init__(self):
-        self.collections = {
-            "Exercise": [],
-            "Competency": [],
-            "SemanticCluster": [],
-        }
-
-    def _ensure_collections_exist(self):
-        # Dummy method to match real client interface
-        pass
-
-    def add_embeddings(self, collection, vector, properties):
-        obj_id = (
-            properties.get("text_id")
-            or properties.get("competency_id")
-            or properties.get("cluster_id")
-            or str(uuid.uuid4())
-        )
-        obj = {
-            "id": obj_id,
-            "vector": vector if isinstance(vector, dict) else {"default": vector},
-            "properties": properties.copy(),
-        }
-        self.collections[collection].append(obj)
-        return obj_id
-
-    def get_all_embeddings(self, collection):
-        return self.collections[collection][:]
-
-    def update_property_by_id(self, collection, obj_id, new_properties):
-        for obj in self.collections[collection]:
-            if obj["id"] == obj_id:
-                obj["properties"].update(new_properties)
-                return
-        raise KeyError(f"id: {obj_id} not found in {collection}")
-
-    def get_embeddings_by_property(self, collection, property_key, value):
-        return [
-            obj
-            for obj in self.collections[collection]
-            if obj["properties"].get(property_key) == value
-        ]
-
-    def delete_all_data_from_collection(self, collection):
-        self.collections[collection] = []
