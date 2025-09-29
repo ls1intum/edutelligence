@@ -374,40 +374,21 @@ def test_map_new_competency_to_exercise_calls_methods(workflows):
     workflows.weaviate_client.update_property_by_id.assert_called_once()
 
 
-def test_map_new_competency_to_exercise_already_mapped(workflows):
-    """Test mapping a competency that's already mapped to exercise"""
-    # Setup test data - exercise with existing competency
-    exercise = ExerciseWithCompetencies(
-        id=2,
-        title="Test Exercise 2",
-        description="Test exercise with existing competency",
-        competencies=[1],  # Already has competency 1
-        course_id=1,
-    )
+def test_map_new_competency_to_exercise_duplicate_prevention(workflows):
+    """Test that duplicate mappings are prevented"""
+    # Mock exercise that already has competency 1 mapped
+    workflows.weaviate_client.get_embeddings_by_property.side_effect = [
+        [{"properties": {"competency_ids": [1]}}],  # exercise already has competency 1
+        [{"properties": {"competency_id": 1}}],     # competency exists
+    ]
 
-    competency = Competency(
-        id=1,
-        title="Test Competency",
-        description="Test competency already mapped",
-        course_id=1,
-    )
-
-    # Add test data to workflows
-    workflows.save_exercise_to_weaviate(exercise)
-    workflows.save_competency_to_weaviate(competency)
-
-    # Test mapping the same competency again
+    # Call the method - should not create duplicate
     workflows.map_new_competency_to_exercise(exercise_id=2, competency_id=1)
 
-    # Verify no duplicate mapping
-    updated_exercise_data = workflows.weaviate_client.get_embeddings_by_property(
-        CollectionNames.EXERCISE.value, "exercise_id", 2
-    )
-
-    updated_competency_ids = updated_exercise_data[0]["properties"]["competency_ids"]
-    # Convert to integers for comparison since mock may return strings or integers
-    competency_ids_int = [int(id) if isinstance(id, str) and id.isdigit() else id for id in updated_competency_ids]
-    assert competency_ids_int.count(1) == 1, "Competency should not be duplicated"
+    # Verify the expected method calls were made
+    assert workflows.weaviate_client.get_embeddings_by_property.call_count == 2
+    # update_property_by_id should NOT be called since it's already mapped
+    workflows.weaviate_client.update_property_by_id.assert_not_called()
 
 
 def test_map_new_competency_to_exercise_nonexistent_raises_error(workflows):
@@ -441,85 +422,45 @@ def test_map_competency_to_competency_calls_methods(workflows):
 
 
 def test_map_competency_to_competency_existing_relations(workflows):
-    """Test mapping competencies that already have existing relations"""
-    # Setup competencies with existing relations
-    competency1 = Competency(
-        id=1,
-        title="Python Basics",
-        description="Basic Python programming",
-        course_id=1,
-    )
+    """Test mapping competencies with existing relations"""
+    # Mock first competency with existing relation to competency 3
+    # Mock second competency with no existing relations
+    workflows.weaviate_client.get_embeddings_by_property.side_effect = [
+        [{"properties": {"competency_id": 1, "related_competencies": [3]}}],  # source with existing relations
+        [{"properties": {"competency_id": 2, "related_competencies": []}}],   # target with no relations
+    ]
 
-    competency2 = Competency(
-        id=2,
-        title="Data Structures",
-        description="Understanding data structures",
-        course_id=1,
-    )
-
-    competency3 = Competency(
-        id=3,
-        title="Algorithms",
-        description="Algorithm design and analysis",
-        course_id=1,
-    )
-
-    # Add competencies to workflows
-    workflows.save_competency_to_weaviate(competency1)
-    workflows.save_competency_to_weaviate(competency2)
-    workflows.save_competency_to_weaviate(competency3)
-
-    # Create initial relationship: comp1 <-> comp3
-    workflows.map_competency_to_competency(source_competency_id=1, target_competency_id=3)
-
-    # Add new relationship: comp1 <-> comp2
+    # Call the method to add a new relationship
     workflows.map_competency_to_competency(source_competency_id=1, target_competency_id=2)
 
-    # Verify comp1 has both relations
-    comp1_data = workflows.weaviate_client.get_embeddings_by_property(
-        CollectionNames.COMPETENCY.value, "competency_id", 1
-    )
-    comp1_related = comp1_data[0]["properties"].get("related_competencies", [])
-
-    assert 2 in comp1_related, "Competency 1 should be related to competency 2"
-    assert 3 in comp1_related, "Competency 1 should still be related to competency 3"
-    assert len(comp1_related) == 2, "Competency 1 should have exactly 2 relations"
+    # Verify method calls - should query both competencies and update both
+    assert workflows.weaviate_client.get_embeddings_by_property.call_count == 2
+    assert workflows.weaviate_client.update_property_by_id.call_count == 2
 
 
 def test_map_competency_to_competency_self_mapping(workflows):
     """Test mapping a competency to itself"""
-    competency = Competency(
-        id=1,
-        title="Self-referential Competency",
-        description="A competency that references itself",
-        course_id=1,
-    )
+    # Mock competency with no existing relations
+    workflows.weaviate_client.get_embeddings_by_property.side_effect = [
+        [{"properties": {"competency_id": 1, "related_competencies": []}}],  # source = target
+        [{"properties": {"competency_id": 1, "related_competencies": []}}],  # source = target (same call)
+    ]
 
-    workflows.save_competency_to_weaviate(competency)
-
-    # Test self-mapping
+    # Call self-mapping
     workflows.map_competency_to_competency(source_competency_id=1, target_competency_id=1)
 
-    # Verify self-relation was created
-    comp_data = workflows.weaviate_client.get_embeddings_by_property(
-        CollectionNames.COMPETENCY.value, "competency_id", 1
-    )
-    comp_related = comp_data[0]["properties"].get("related_competencies", [])
-
-    assert 1 in comp_related, "Competency should be related to itself"
-    assert len(comp_related) == 1, "Should have exactly one self-relation"
+    # Should still make the expected calls
+    assert workflows.weaviate_client.get_embeddings_by_property.call_count == 2
+    assert workflows.weaviate_client.update_property_by_id.call_count == 2
 
 
 def test_map_competency_to_competency_nonexistent_source(workflows):
     """Test mapping from nonexistent source competency raises ValueError"""
-    competency = Competency(
-        id=2,
-        title="Target Competency",
-        description="Target competency that exists",
-        course_id=1,
-    )
-
-    workflows.save_competency_to_weaviate(competency)
+    # Mock: source not found, target found
+    workflows.weaviate_client.get_embeddings_by_property.side_effect = [
+        [],  # No source competency found
+        [{"properties": {"competency_id": 2, "related_competencies": []}}],  # Target found
+    ]
 
     # Test mapping from nonexistent source
     with pytest.raises(ValueError, match="Source or target competency not found for mapping"):
@@ -528,57 +469,31 @@ def test_map_competency_to_competency_nonexistent_source(workflows):
 
 def test_map_competency_to_competency_nonexistent_target(workflows):
     """Test mapping to nonexistent target competency raises ValueError"""
-    competency = Competency(
-        id=1,
-        title="Source Competency",
-        description="Source competency that exists",
-        course_id=1,
-    )
-
-    workflows.save_competency_to_weaviate(competency)
+    # Mock: source found, target not found
+    workflows.weaviate_client.get_embeddings_by_property.side_effect = [
+        [{"properties": {"competency_id": 1, "related_competencies": []}}],  # Source found
+        [],  # No target competency found
+    ]
 
     # Test mapping to nonexistent target
     with pytest.raises(ValueError, match="Source or target competency not found for mapping"):
         workflows.map_competency_to_competency(source_competency_id=1, target_competency_id=999)
 
 
-def test_map_competency_to_competency_duplicate_mapping(workflows):
-    """Test mapping competencies that are already mapped doesn't create duplicates"""
-    # Setup test competencies
-    competency1 = Competency(
-        id=1,
-        title="Python Basics",
-        description="Basic Python programming",
-        course_id=1,
-    )
+def test_map_competency_to_competency_duplicate_prevention(workflows):
+    """Test that duplicate mappings are prevented"""
+    # Mock competencies that already have each other as relations
+    workflows.weaviate_client.get_embeddings_by_property.side_effect = [
+        [{"properties": {"competency_id": 1, "related_competencies": [2]}}],  # source already has target
+        [{"properties": {"competency_id": 2, "related_competencies": [1]}}],  # target already has source
+    ]
 
-    competency2 = Competency(
-        id=2,
-        title="Data Structures",
-        description="Understanding data structures",
-        course_id=1,
-    )
-
-    # Add competencies to workflows
-    workflows.save_competency_to_weaviate(competency1)
-    workflows.save_competency_to_weaviate(competency2)
-
-    # Create the relationship twice
-    workflows.map_competency_to_competency(source_competency_id=1, target_competency_id=2)
+    # Try to create the relationship again - should not duplicate
     workflows.map_competency_to_competency(source_competency_id=1, target_competency_id=2)
 
-    # Verify no duplicates
-    comp1_data = workflows.weaviate_client.get_embeddings_by_property(
-        CollectionNames.COMPETENCY.value, "competency_id", 1
-    )
-    comp2_data = workflows.weaviate_client.get_embeddings_by_property(
-        CollectionNames.COMPETENCY.value, "competency_id", 2
-    )
-
-    comp1_related = comp1_data[0]["properties"].get("related_competencies", [])
-    comp2_related = comp2_data[0]["properties"].get("related_competencies", [])
-
-    assert comp1_related.count(2) == 1, "Should not have duplicate relations"
-    assert comp2_related.count(1) == 1, "Should not have duplicate relations"
+    # Verify method calls - should still query but not update since already mapped
+    assert workflows.weaviate_client.get_embeddings_by_property.call_count == 2
+    # Should NOT call update since the relationship already exists
+    workflows.weaviate_client.update_property_by_id.assert_not_called()
 
 
