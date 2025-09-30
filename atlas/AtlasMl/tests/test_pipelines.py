@@ -94,7 +94,7 @@ def test_newTextPipeline_integration(workflows):
                 "cluster_id": "fake-cluster-id",
                 "cluster_similarity_score": 0.9,
                 "course_id": "1"
-            },
+             },
         )
         titles = [
             "Lists",
@@ -356,10 +356,6 @@ def test_newTextPipeline_integration(workflows):
             assert relation_types == expected_types, f"Expected {expected_types}, got {relation_types}"
 
 
-# ============================================================================
-# New mapping tests
-# ============================================================================
-
 def test_map_new_competency_to_exercise_success(workflows):
     """Test successful mapping of competency to exercise"""
     # Add exercise
@@ -604,10 +600,10 @@ class FakeWeaviateClient:
 
     def add_embeddings(self, collection, vector, properties):
         obj_id = (
-                properties.get("text_id")
-                or properties.get("competency_id")
-                or properties.get("cluster_id")
-                or str(uuid.uuid4())
+            properties.get("text_id")
+            or properties.get("competency_id")
+            or properties.get("cluster_id")
+            or str(uuid.uuid4())
         )
         obj = {
             "id": obj_id,
