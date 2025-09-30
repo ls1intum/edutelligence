@@ -6,7 +6,7 @@ from atlasml.ml.pipeline_workflows import PipelineWorkflows
 from atlasml.models.competency import ExerciseWithCompetencies, Competency
 from unittest.mock import patch
 import numpy as np
-
+import copy
 
 @pytest.fixture
 def workflows():
@@ -625,7 +625,7 @@ class FakeWeaviateClient:
 
     def get_embeddings_by_property(self, collection, property_key, value):
         return [
-            obj
+            copy.deepcopy(obj)  # Return a copy, not the original
             for obj in self.collections[collection]
             if obj["properties"].get(property_key) == value
         ]
