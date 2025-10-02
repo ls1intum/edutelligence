@@ -170,12 +170,14 @@ class OllamaService:
         with self.langfuse_client.start_as_current_generation(
             name="ollama-chat", model=model, input=messages, model_parameters=options
         ) as generation:
+            think = "high" if model.startswith("gpt-oss") else None
             response = self.client.chat(
                 model,
                 messages=messages,
                 format=response_format,
                 keep_alive=keep_alive,
                 options=options,
+                think=think,  # type: ignore
                 **kwargs,
             )
             generation.update(
