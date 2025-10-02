@@ -57,7 +57,7 @@ class ClassificationManager:
         a weight describing how well the LLM is suited for the given prompt
         and a priority of the given policy.
         """
-        logging.debug(f"System1: {self.models}")
+        # logging.debug(f"System1: {self.models}")
         if allowed is None:
             allowed = list()
             current_models = list()
@@ -84,7 +84,7 @@ class ClassificationManager:
             adjusted_policy["threshold_quality"] = self.get_special_weight("weight_quality", maximum=False, allowed=allowed)
         logging.debug(f"Policy: {adjusted_policy['id']}")
         logging.debug(f"Models: {allowed}")
-        logging.debug(f"System2: {current_models}")
+        # logging.debug(f"System2: {current_models}")
         if classifier is None or classifier == "policy":
             filtered = PolicyClassifier(current_models).classify(prompt, adjusted_policy)
         else:
