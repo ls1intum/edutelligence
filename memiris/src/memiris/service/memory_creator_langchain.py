@@ -3,8 +3,6 @@ import re
 from typing import Any, Callable, List, Optional
 
 from jinja2 import Template
-
-# LangChain imports (required)
 from langchain.agents import AgentExecutor, create_tool_calling_agent
 from langchain.tools import StructuredTool
 from langchain_core.language_models import BaseChatModel
@@ -17,6 +15,7 @@ from memiris.domain.learning import Learning
 from memiris.domain.memory import Memory
 from memiris.repository.learning_repository import LearningRepository
 from memiris.repository.memory_repository import MemoryRepository
+from memiris.service.improved_langchain_agent import ImprovedLangchainAgent
 from memiris.service.vectorizer import Vectorizer
 from memiris.tool import learning_tools, memory_tools
 from memiris.util.jinja_util import create_template
@@ -24,7 +23,7 @@ from memiris.util.learning_util import learning_to_dlo
 from memiris.util.memory_util import creation_dlo_to_memory
 
 # Maximum number of agent reasoning/tool-use iterations
-MAX_AGENT_STEPS = 10
+MAX_AGENT_STEPS = 20
 
 logger = logging.getLogger(__name__)
 
@@ -145,7 +144,7 @@ class MemoryCreatorLangChain:
 
         agent = create_tool_calling_agent(self.llm, tools, prompt)
         agent_executor = AgentExecutor(
-            agent=agent,
+            agent=ImprovedLangchainAgent(runnable=agent),
             tools=tools,
             verbose=True,
             handle_parsing_errors=True,

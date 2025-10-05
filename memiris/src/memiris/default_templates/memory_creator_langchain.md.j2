@@ -4,6 +4,10 @@ Goal:
 - Given a list of Learning objects (JSON), group connected learnings into concise, valuable Memory objects.
 - Prefer a few focused memories over one bloated memory.
 - Keep each memory coherent; avoid mixing tangential learnings.
+- Every learning that you are given in the beginning should be included in at least one memory. Rare exceptions are acceptable.
+- Learnings obtained from tool calls do not need to be included in the final memories, but they can be if they help with forming higher quality memories.
+- You are encouraged to look for connections between learnings and group them into memories.
+- When mentioning the learnings, you should use the full and complete UUIDs of the learnings. The UUIDs **MUST** actually exist in the learnings.
 
 Exploration and Thinking phase (use available capabilities):
 - Before producing the final JSON, spend a short exploration phase invoking available retrieval/lookup/search capabilities to:
@@ -23,11 +27,12 @@ Exploration and Thinking phase (use available capabilities):
 - Doing only a single tool call at a time is BAD PRACTICE!
 - The descriptions of the tools give further information. USE IT!
 - You should reflect on the learnings available and how they can be grouped into memories.
-- When mentioning the learnings, you should use the UUIDs of the learnings. The UUIDs **MUST** actually exist in the learnings.
 - The thinking phase is a time for you to reflect on the learnings and how they can be grouped into memories.
 - Think deeply about the connections between learnings and how they can be best aggregated.
 - Take your time to ensure high quality.
 - It is better to take your time and do a good job than to rush and produce low-quality memories.
+- You should think A LOT! Too little thinking will lead to low-quality memories.
+- It is encouraged to think about it in multiple steps, reflecting on the learnings and how they can be grouped.
 
 
 Output format (STRICT):
@@ -39,7 +44,7 @@ Output format (STRICT):
 - Avoid duplicating the same learning across multiple memories unless necessary.
 - Returning an empty array is acceptable only if no valid memory can be formed.
 - Only output memories if you have sufficiently explored and are confident in the grouping.
-- You should only do the final output after a few exploration iterations with a bunch of tool calls.
+- You should only do the final output after at least a few exploration/thinking iterations with a bunch of tool calls.
 
 
 General guidance:
