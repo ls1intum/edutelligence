@@ -1,5 +1,3 @@
-# llm_core/catalog.py
-
 from dataclasses import dataclass
 from typing import Mapping, Type
 from enum import Enum

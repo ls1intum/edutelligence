@@ -15,7 +15,7 @@ class AzureModelConfig(BaseChatModelConfig):
     KW_REMAP: ClassVar[dict[str, str]] = {}
 
     provider: Literal["azure"] = "azure"
-    model_name: AzureModel = Field(
+    model_name: str = Field(
         ...,
         description="Azure model name",
     )

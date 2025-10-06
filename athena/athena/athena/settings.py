@@ -1,6 +1,8 @@
 import configparser
-from pydantic import BaseSettings, Field, SecretStr, root_validator
+from pydantic import Field, SecretStr
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from .schemas import ExerciseType
+from pydantic import model_validator
 
 
 class ModuleConfig(BaseSettings):
@@ -23,7 +25,7 @@ class LLMSettings(BaseSettings):
     """Central LLM settings - single source of truth for all model loaders"""
 
     AZURE_OPENAI_API_KEY: SecretStr = Field("", env="AZURE_OPENAI_API_KEY")
-    AZURE_OPENAI_ENDPOINT: str = Field("", env="AZURE_OPENAI_API_BASE")
+    AZURE_OPENAI_ENDPOINT: str = Field("", env="AZURE_OPENAI_ENDPOINT")
     AZURE_OPENAI_API_VERSION: str = Field(
         "2023-03-15-preview", env="AZURE_OPENAI_API_VERSION"
     )
@@ -35,10 +37,11 @@ class LLMSettings(BaseSettings):
     # Ollama
     OLLAMA_HOST: str = Field("http://localhost:11434", env="OLLAMA_HOST")
 
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
 
 class Settings(BaseSettings):
     """
@@ -55,23 +58,23 @@ class Settings(BaseSettings):
     # Centralized LLM settings (single source of truth)
     llm: LLMSettings = Field(default_factory=LLMSettings)
 
-    @root_validator
-    def _require_secret_in_prod(cls, values):
+    @model_validator(mode="after")
+    def _require_secret_in_prod(self):
         """Ensure a strong SECRET is set when running in production."""
-        if values.get("PRODUCTION"):
-            secret = values.get("SECRET")
-            if (
-                not isinstance(secret, SecretStr)
-                or not secret.get_secret_value()
-                or secret.get_secret_value() == "development-secret"
-            ):
+        if self.PRODUCTION:
+            # SECRET is a SecretStr; pull the actual value
+            secret_value = (
+                self.SECRET.get_secret_value()
+                if isinstance(self.SECRET, SecretStr) else str(self.SECRET or "")
+            )
+            if not secret_value or secret_value == "development-secret":
                 raise ValueError(
                     "SECRET must be set to a strong value when PRODUCTION=true"
                 )
-        return values
+        return self
 
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-        # Allow nested settings via env like: LLM__OPENAI_API_KEY=...
-        env_nested_delimiter = "__"
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )

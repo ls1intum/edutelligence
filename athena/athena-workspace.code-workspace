@@ -11,25 +11,25 @@
 		},
 		{
 			"path": "llm_core"
-		},
-		{
+		},	
+		{	
 			"path": "modules/programming/module_programming_llm"
-		},
-		{
+		},	
+		{	
 			"path": "modules/text/module_text_llm"
 		},
-		{
+		{	
       		"path": "modules/modeling/module_modeling_llm"
-		},
-		{
+		},	
+		{	
             "path": "playground"
-        },
-		{
+        },	
+		{	
 			"path": "tests"
-		}
-	],
-	"settings": {
+		}	
+	],	
+	"settings": {	
 		"python.linting.prospectorEnabled": true,
 		"python.linting.mypyEnabled": true
-	}
-}
+	}			
+}			

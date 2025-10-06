@@ -47,7 +47,7 @@ def get_header_module_config_factory(module_config_type: Type[C]):
                 detail="Invalid module config: could not parse JSON from X-Module-Config.",
             ) from exc
         try:
-            return module_config_type.parse_obj(data)
+            return module_config_type.model_validate(data)
         except ValidationError as exc:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,

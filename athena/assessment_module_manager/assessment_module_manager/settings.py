@@ -3,7 +3,7 @@ import configparser
 from pathlib import Path
 from typing import List
 
-from pydantic import BaseSettings, AnyHttpUrl
+from pydantic_settings import BaseSettings
 
 from .logger import logger
 

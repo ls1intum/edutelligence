@@ -1,9 +1,8 @@
 from llm_core.models.providers.base_chat_model_config import BaseChatModelConfig
-from typing import ClassVar, Literal
-from pydantic import Field
-from typing import ClassVar, Literal
-from pydantic import Field
+from pydantic import Field, PrivateAttr, ConfigDict
+from typing import ClassVar, Literal, Optional
 from langchain.base_language import BaseLanguageModel
+from llm_core.catalog import ModelCatalog
 
 
 class OllamaModelConfig(BaseChatModelConfig):
@@ -13,7 +12,7 @@ class OllamaModelConfig(BaseChatModelConfig):
     KW_REMAP: ClassVar[dict[str, str]] = {}
 
     provider: Literal["ollama"] = "ollama"
-    model_name: OllamaModel = Field(
+    model_name: str = Field(
         ...,
         description="Ollama model key (string) or enum value.",
     )

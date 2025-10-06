@@ -51,18 +51,13 @@ def _get_azure_openai_deployments(
 def bootstrap(settings: LLMSettings) -> ModelCatalog:
     templates: Dict[str, BaseLanguageModel] = {}
 
+    print("Bootstrapping Azure OpenAI catalog with settings:", settings)
+
     # Extract secret values for use
     api_key = (
         settings.AZURE_OPENAI_API_KEY.get_secret_value()
         if settings.AZURE_OPENAI_API_KEY
         else ""
-    )
-    print(
-        "Azure OpenAI configuration:",
-        api_key,
-        settings.AZURE_OPENAI_API_VERSION,
-        "Endpoint",
-        settings.AZURE_OPENAI_ENDPOINT,
     )
 
     if api_key:
