@@ -13,7 +13,7 @@ class Competency(Schema, ABC):
     description: str = Field("", description="The description of the competency.", example="Competency 1 description")
     taxonomy: CompetencyTaxonomy = Field(None, description="The taxonomy of the competency.")
 
-    meta: dict = Field({}, example={"internal_id": "5"})
+    meta: dict = Field(default_factory=dict, example={"internal_id": "5"})
 
     @validator('taxonomy', pre=True)
     def validate_taxonomy(cls, v):

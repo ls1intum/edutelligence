@@ -256,7 +256,7 @@ async def generate_suggestions(
     if competencies is None:
         logger.info("Competencies are not provided.")
     else:
-        logger.info(f"Competencies are provided: {competencies}")
+        logger.info("Competencies are provided: %s", competencies)
 
     # Setup learner profile with fallbacks
     learner_profile = _setup_learner_profile(learner_profile, config)
