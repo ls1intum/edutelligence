@@ -2,7 +2,8 @@ from abc import ABC, abstractmethod
 from typing import overload
 
 try:
-    from warnings import deprecated  # Python ≥ 3.13
+    # Python 3.13+
+    from warnings import deprecated  # type: ignore
 except ImportError:  # pragma: no cover
     from typing_extensions import deprecated
 from langfuse._client.observe import observe
