@@ -24,18 +24,31 @@ class ModuleConfig(BaseSettings):
 class LLMSettings(BaseSettings):
     """Central LLM settings - single source of truth for all model loaders"""
 
-    AZURE_OPENAI_API_KEY: SecretStr = Field("", env="AZURE_OPENAI_API_KEY")
-    AZURE_OPENAI_ENDPOINT: str = Field("", env="AZURE_OPENAI_ENDPOINT")
+    AZURE_OPENAI_API_KEY: SecretStr = Field(
+        validation_alias="AZURE_OPENAI_API_KEY"
+    )
+    AZURE_OPENAI_ENDPOINT: str = Field(
+        validation_alias="AZURE_OPENAI_ENDPOINT"
+    )
     AZURE_OPENAI_API_VERSION: str = Field(
-        "2023-03-15-preview", env="AZURE_OPENAI_API_VERSION"
+        default="2023-03-15-preview",
+        validation_alias="AZURE_OPENAI_API_VERSION",
     )
 
     # OpenAI
-    OPENAI_API_KEY: SecretStr = Field("", env="OPENAI_API_KEY")
-    OPENAI_BASE_URL: str = Field("https://api.openai.com/v1", env="OPENAI_BASE_URL")
+    OPENAI_API_KEY: SecretStr = Field(
+        validation_alias="OPENAI_API_KEY",
+    )
+    OPENAI_BASE_URL: str = Field(
+        default="https://api.openai.com/v1",
+        validation_alias="OPENAI_BASE_URL",
+    )
 
     # Ollama
-    OLLAMA_HOST: str = Field("http://localhost:11434", env="OLLAMA_HOST")
+    OLLAMA_HOST: str = Field(
+        default="http://localhost:11434",
+        validation_alias="OLLAMA_HOST",
+    )
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -48,9 +61,15 @@ class Settings(BaseSettings):
     Unified application settings, loaded from environment variables and .env file
     """
 
-    PRODUCTION: bool = Field(False, env="PRODUCTION")
-    SECRET: SecretStr = Field("development-secret", env="SECRET")
-    DATABASE_URL: str = Field("sqlite:///../data/data.sqlite", env="DATABASE_URL")
+    PRODUCTION: bool = Field(False, validation_alias="PRODUCTION")
+    SECRET: SecretStr = Field(
+        default=SecretStr("development-secret"),
+        validation_alias="SECRET",
+    )
+    DATABASE_URL: str = Field(
+        default="sqlite:///../data/data.sqlite",
+        validation_alias="DATABASE_URL",
+    )
 
     # Static module config from module.conf
     module: ModuleConfig = Field(default_factory=ModuleConfig.from_conf)
