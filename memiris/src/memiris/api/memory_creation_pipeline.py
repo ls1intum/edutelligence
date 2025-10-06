@@ -1,4 +1,6 @@
+from abc import ABC, abstractmethod
 from typing import overload
+from warnings import deprecated
 
 from langfuse._client.observe import observe
 from weaviate.client import WeaviateClient
@@ -15,7 +17,13 @@ from memiris.repository.weaviate.weaviate_memory_repository import (
 )
 from memiris.service.learning_deduplication import LearningDeduplicator
 from memiris.service.learning_extraction import LearningExtractor
-from memiris.service.memory_creator import MemoryCreator
+from memiris.service.memory_creator.memory_creator import MemoryCreator
+from memiris.service.memory_creator.memory_creator_langchain import (
+    MemoryCreatorLangChain,
+)
+from memiris.service.memory_creator.memory_creator_multi_model import (
+    MemoryCreatorMultiModel,
+)
 from memiris.service.ollama_wrapper import OllamaService
 from memiris.service.vectorizer import Vectorizer
 
@@ -86,7 +94,23 @@ class _MemoryCreationLearningDeduplicatorConfig:
         )
 
 
-class _MemoryCreationMemoryCreatorConfig:
+class _MemoryCreationMemoryCreatorConfig(ABC):
+    """
+    Abstract base configuration class for MemoryCreator in MemoryCreationPipeline.
+    This class holds the configuration for the MemoryCreator.
+    """
+
+    @abstractmethod
+    def convert(
+        self,
+        learning_repository: LearningRepository,
+        memory_repository: MemoryRepository,
+        vectorizer: Vectorizer,
+    ) -> MemoryCreator:
+        pass
+
+
+class _MemoryCreationMemoryCreatorMultiModelConfig(_MemoryCreationMemoryCreatorConfig):
     """
     Configuration class for MemoryCreator in MemoryCreationPipeline.
     This class holds the configuration for the MemoryCreator.
@@ -117,11 +141,11 @@ class _MemoryCreationMemoryCreatorConfig:
         learning_repository: LearningRepository,
         memory_repository: MemoryRepository,
         vectorizer: Vectorizer,
-    ) -> MemoryCreator:
+    ) -> MemoryCreatorMultiModel:
         """
         Convert the configuration to a MemoryCreator instance.
         """
-        return MemoryCreator(
+        return MemoryCreatorMultiModel(
             tool_llm=self.llm_tool,
             thinking_llm=self.llm_thinking,
             response_llm=self.llm_response,
@@ -129,6 +153,45 @@ class _MemoryCreationMemoryCreatorConfig:
             memory_repository=memory_repository,
             vectorizer=vectorizer,
             ollama_service=self.ollama_service,
+            template=self.template,
+        )
+
+
+class _MemoryCreationMemoryCreatorLangchainConfig(_MemoryCreationMemoryCreatorConfig):
+    """
+    Configuration class for MemoryCreator in MemoryCreationPipeline using LangChain.
+    This class holds the configuration for the MemoryCreator.
+    """
+
+    llm: str
+    template: str | None
+    ollama_service: OllamaService
+
+    def __init__(
+        self,
+        llm: str,
+        ollama_service: OllamaService,
+        template: str | None = None,
+    ):
+        self.llm = llm
+        self.ollama_service = ollama_service
+        self.template = template
+
+    def convert(
+        self,
+        learning_repository: LearningRepository,
+        memory_repository: MemoryRepository,
+        vectorizer: Vectorizer,
+    ) -> MemoryCreator:
+        """
+        Convert the configuration to a MemoryCreator instance.
+        """
+
+        return MemoryCreatorLangChain(
+            llm=self.ollama_service.langchain_client(self.llm),
+            learning_repository=learning_repository,
+            memory_repository=memory_repository,
+            vectorizer=vectorizer,
             template=self.template,
         )
 
@@ -188,17 +251,73 @@ class MemoryCreationPipelineBuilder:
         )
         return self
 
+    @deprecated("Use set_memory_creator_multi_model instead")
     def set_memory_creator(
         self,
         llm_tool: str = "mistral-small3.1:24b",
         llm_thinking: str = "qwen3:30b-a3b",
         llm_response: str = "gemma3:27b",
         template: str | None = None,
-    ) -> "MemoryCreationPipelineBuilder":
-        self._memory_creator_config = _MemoryCreationMemoryCreatorConfig(
+    ):
+        """
+        Deprecated: Set the MemoryCreator for the pipeline using a multi-model agent approach.
+        See set_memory_creator_multi_model for details.
+        """
+        self.set_memory_creator_multi_model(
             llm_tool=llm_tool,
             llm_thinking=llm_thinking,
             llm_response=llm_response,
+            template=template,
+        )
+
+    def set_memory_creator_multi_model(
+        self,
+        llm_tool: str = "mistral-small3.1:24b",
+        llm_thinking: str = "qwen3:30b-a3b",
+        llm_response: str = "gemma3:27b",
+        template: str | None = None,
+    ) -> "MemoryCreationPipelineBuilder":
+        """
+        Set the MemoryCreator for the pipeline using a multi-model agent approach.
+        Requires three different models: one for tool operations, one for thinking,
+        and one for generating the final JSON response.
+
+        Args:
+            llm_tool: An LLM with native tool-calling capabilities
+            llm_thinking: An LLM optimized for reasoning and planning
+            llm_response: An LLM optimized for generating JSON responses
+            template: Optional Jinja2 template string. If None, use the default file.
+
+        Returns:
+            MemoryCreationPipelineBuilder: The current instance of MemoryCreationPipelineBuilder for method chaining.
+        """
+        self._memory_creator_config = _MemoryCreationMemoryCreatorMultiModelConfig(
+            llm_tool=llm_tool,
+            llm_thinking=llm_thinking,
+            llm_response=llm_response,
+            ollama_service=self._ollama_service,
+            template=template,
+        )
+        return self
+
+    def _set_memory_creator_langchain(
+        self,
+        llm: str = "gpt-oss:120b",
+        template: str | None = None,
+    ) -> "MemoryCreationPipelineBuilder":
+        """
+        Set the MemoryCreator for the pipeline using a single LangChain agent approach.
+        Requires one model that supports tool-calling, reasoning and JSON generation.
+
+        Args:
+            llm: An LLM with native tool-calling, reasoning/planning and JSON generation capabilities
+            template: Optional Jinja2 template string. If None, use the default file.
+
+        Returns:
+            MemoryCreationPipelineBuilder: The current instance of MemoryCreationPipelineBuilder for method chaining.
+        """
+        self._memory_creator_config = _MemoryCreationMemoryCreatorLangchainConfig(
+            llm=llm,
             ollama_service=self._ollama_service,
             template=template,
         )
@@ -353,7 +472,7 @@ class MemoryCreationPipelineBuilder:
             self.add_learning_deduplicator()
         if not self._memory_creator_config:
             print("No MemoryCreator configured, using default.")
-            self.set_memory_creator()
+            self._set_memory_creator_langchain()
 
         return MemoryCreationPipeline(
             learning_extractors=[

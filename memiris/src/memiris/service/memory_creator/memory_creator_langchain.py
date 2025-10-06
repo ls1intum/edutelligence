@@ -16,6 +16,7 @@ from memiris.domain.memory import Memory
 from memiris.repository.learning_repository import LearningRepository
 from memiris.repository.memory_repository import MemoryRepository
 from memiris.service.improved_langchain_agent import ImprovedLangchainAgent
+from memiris.service.memory_creator.memory_creator import MemoryCreator
 from memiris.service.vectorizer import Vectorizer
 from memiris.tool import learning_tools, memory_tools
 from memiris.util.jinja_util import create_template
@@ -28,7 +29,7 @@ MAX_AGENT_STEPS = 20
 logger = logging.getLogger(__name__)
 
 
-class MemoryCreatorLangChain:
+class MemoryCreatorLangChain(MemoryCreator):
     """
     A class to create memories using a single LangChain agent with tool-calling.
 
