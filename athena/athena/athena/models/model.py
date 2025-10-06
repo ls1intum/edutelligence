@@ -2,6 +2,7 @@ import importlib
 
 from pydantic import BaseModel
 from sqlalchemy import Column, String, UniqueConstraint
+from athena.base import Base
 
 
 class Model:

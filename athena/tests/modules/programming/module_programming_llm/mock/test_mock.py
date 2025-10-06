@@ -1,17 +1,17 @@
 import pytest
 from typing import List, Optional, Dict
 from dataclasses import dataclass, field
-from modules.programming.module_programming_llm.mock.utils.mock_config import (
-    MockModelConfig,
-    create_mock_graded_config,
-    create_mock_non_graded_config,
-)
-
 import module_programming_llm
-from module_programming_llm.config import GradedBasicApproachConfig, NonGradedBasicApproachConfig
-from module_programming_llm.helpers import utils
-from module_programming_llm.prompts import generate_graded_suggestions_by_file as graded_prompts
-from module_programming_llm.prompts import generate_non_graded_suggestions_by_file as non_graded_prompts
+from module_programming_llm.config import (
+    GradedBasicApproachConfig,
+    NonGradedBasicApproachConfig,
+)
+from module_programming_llm.prompts import (
+    generate_graded_suggestions_by_file as graded_prompts,
+)
+from module_programming_llm.prompts import (
+    generate_non_graded_suggestions_by_file as non_graded_prompts,
+)
 
 
 @dataclass
@@ -31,7 +31,7 @@ class MockFeedback:
 async def mock_generate_graded_suggestions(
     exercise, submission, config
 ) -> List[MockFeedback]:
-    if not submission.files:
+    if "empty_submission" in submission.repository_uri:
         return []
 
     return [
@@ -53,9 +53,9 @@ async def mock_generate_graded_suggestions(
 async def mock_generate_non_graded_suggestions(
     exercise, submission, config
 ) -> List[MockFeedback]:
-
-    if not submission.files:
+    if "empty_submission" in submission.repository_uri:
         return []
+
     return [
         MockFeedback(
             exercise_id=exercise.id,
@@ -72,11 +72,11 @@ async def mock_generate_non_graded_suggestions(
 
 
 @pytest.mark.asyncio
-async def test_generate_graded_suggestions(mock_exercise, mock_submission):
-    model_config = MockModelConfig()
-    config = create_mock_graded_config(model_config)
+async def test_generate_graded_suggestions(
+    mock_exercise, mock_submission, mock_configuration
+):
     feedbacks = await mock_generate_graded_suggestions(
-        mock_exercise, mock_submission, config
+        mock_exercise, mock_submission, mock_configuration.graded_approach
     )
 
     assert feedbacks is not None, "Feedbacks should not be None"
@@ -92,11 +92,11 @@ async def test_generate_graded_suggestions(mock_exercise, mock_submission):
 
 
 @pytest.mark.asyncio
-async def test_generate_non_graded_suggestions(mock_exercise, mock_submission):
-    model_config = MockModelConfig()
-    config = create_mock_non_graded_config(model_config)
+async def test_generate_non_graded_suggestions(
+    mock_exercise, mock_submission, mock_configuration
+):
     feedbacks = await mock_generate_non_graded_suggestions(
-        mock_exercise, mock_submission, config
+        mock_exercise, mock_submission, mock_configuration.non_graded_approach
     )
 
     assert feedbacks is not None, "Feedbacks should not be None"
@@ -111,11 +111,9 @@ async def test_generate_non_graded_suggestions(mock_exercise, mock_submission):
 
 
 @pytest.mark.asyncio
-async def test_error_handling(mock_exercise, mock_empty_submission):
-    model_config = MockModelConfig()
-    config = create_mock_graded_config(model_config)
+async def test_error_handling(mock_exercise, mock_empty_submission, mock_configuration):
     feedbacks = await mock_generate_graded_suggestions(
-        mock_exercise, mock_empty_submission, config
+        mock_exercise, mock_empty_submission, mock_configuration.graded_approach
     )
 
     assert feedbacks is not None
@@ -126,15 +124,12 @@ async def test_error_handling(mock_exercise, mock_empty_submission):
 async def test_real_module_config_import():
 
     assert module_programming_llm is not None
-    
+
     assert GradedBasicApproachConfig is not None
     assert NonGradedBasicApproachConfig is not None
-    
-    assert hasattr(GradedBasicApproachConfig, '__init__')
-    assert hasattr(NonGradedBasicApproachConfig, '__init__')
-    
-    assert utils is not None
+
+    assert hasattr(GradedBasicApproachConfig, "__init__")
+    assert hasattr(NonGradedBasicApproachConfig, "__init__")
+
     assert graded_prompts is not None
     assert non_graded_prompts is not None
-    
-

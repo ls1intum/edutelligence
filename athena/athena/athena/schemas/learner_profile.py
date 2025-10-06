@@ -1,8 +1,7 @@
 from typing import Annotated
 
-from pydantic import BaseModel, Field
-
-from .schema import to_camel
+from pydantic import ConfigDict, BaseModel, Field
+from pydantic.alias_generators import to_camel
 
 
 class LearnerProfile(BaseModel):
@@ -22,9 +21,7 @@ class LearnerProfile(BaseModel):
         strict=True, ge=1, le=3,
         description="Preference for formal (1) vs friendly (3) feedback."
     )]
-    class Config:
-        alias_generator = to_camel
-        allow_population_by_field_name = True
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
 
     def _get_feedback_detail_prompt(self) -> str:
         if self.feedback_detail == 1:

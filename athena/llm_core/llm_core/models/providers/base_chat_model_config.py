@@ -1,32 +1,26 @@
 from __future__ import annotations
-
 from abc import ABC, abstractmethod
 from typing import ClassVar
-
 from pydantic import (
-    BaseModel,
+    model_validator, field_validator, BaseModel,
     Field,
     PositiveInt,
-    PrivateAttr,
-    root_validator,
-    validator,
-)
+    PrivateAttr)
 from langchain.base_language import BaseLanguageModel
 
 from llm_core.models.model_config import ModelConfig
 from llm_core.loaders.llm_capabilities_loader import get_model_capabilities
 from llm_core.models.usage_handler import UsageHandler
+from collections.abc import Mapping
 
 
 class BaseChatModelConfig(ModelConfig, BaseModel, ABC):
     """Common configuration for any chat-completion model provider"""
 
-    # Provider‑specific parameters
     PROVIDER: ClassVar[str]
     ENUM: ClassVar[type]
     KW_REMAP: ClassVar[dict[str, str]] = {}
 
-    # Generation parameters
     max_tokens: PositiveInt = Field(
         4000,
         description=(
@@ -80,27 +74,29 @@ decreasing the model's likelihood to repeat the same line verbatim.
 """,
     )
 
-    # Capability flags
     _supports_system_messages: bool = PrivateAttr(True)
     _supports_function_calling: bool = PrivateAttr(True)
     _supports_structured_output: bool = PrivateAttr(True)
 
-    _CAP_FIELDS = (
+    _CAP_FIELDS: ClassVar[tuple[str, ...]] = (
         "max_tokens",
         "temperature",
         "top_p",
         "presence_penalty",
         "frequency_penalty",
     )
-    _FLAG_FIELDS = (
+    _FLAG_FIELDS: ClassVar[tuple[str, ...]] = (
         "supports_system_messages",
         "supports_function_calling",
         "supports_structured_output",
     )
 
     # YAML capability merge
-    @root_validator(pre=True)
+    @model_validator(mode="before")
+    @classmethod
     def _merge_yaml_caps(cls, values):
+        if not isinstance(values, Mapping):
+            return values
         model_key = values.get("model_name")
         if not model_key:
             return values
@@ -114,7 +110,8 @@ decreasing the model's likelihood to repeat the same line verbatim.
         return values
 
     # Validators and helpers
-    @validator("max_tokens")
+    @field_validator("max_tokens")
+    @classmethod
     def _max_tokens_positive(cls, v):
         if v <= 0:
             raise ValueError("max_tokens must be positive")
@@ -129,7 +126,6 @@ decreasing the model's likelihood to repeat the same line verbatim.
     def supports_structured_output(self) -> bool:
         return self._supports_structured_output
 
-    # Common LangChain‑instantiation helper
     def _template_get_model(self, tmpl: BaseLanguageModel) -> BaseLanguageModel:
         """Return a fresh LC model instance with our params merged in"""
         kwargs = tmpl.__dict__.copy()

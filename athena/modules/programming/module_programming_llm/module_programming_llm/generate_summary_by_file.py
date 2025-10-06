@@ -2,7 +2,7 @@ import asyncio
 import os
 from typing import Optional, List, Dict
 
-from pydantic import BaseModel, Field
+from pydantic import ConfigDict, BaseModel, Field
 from langchain.prompts import ChatPromptTemplate
 
 from athena import emit_meta
@@ -25,18 +25,14 @@ from module_programming_llm.helpers.utils import (
 class FileDescription(BaseModel):
     file_name: str = Field(description="File name")
     description: str = Field(description="Summary relevant for this file")
-
-    class Config:
-        title = "FileDescription"
+    model_config = ConfigDict(title="FileDescription")
 
 
 class SolutionSummary(BaseModel):
     """Collection of summaries, accessible by file path"""
 
     items: Dict[str, str] = Field(description="File summaries indexed by file path")
-
-    class Config:
-        title = "SolutionSummary"
+    model_config = ConfigDict(title="SolutionSummary")
 
     def describe_solution_summary(self) -> str:
         descriptions = []
@@ -136,7 +132,7 @@ async def generate_summary_by_file(
                 "file_summary",
                 {
                     "prompt": chat_prompt.format(**prompt_input),
-                    "result": result.dict() if result is not None else None,
+                    "result": result.model_dump() if result is not None else None,
                     "file_path": prompt_input[
                         "file_path"
                     ],  # Include the file path for reference
