@@ -218,36 +218,73 @@ def resource_behaviour(logos_key, headers, data, models):
         policy = ProxyPolicy()
     if isinstance(policy, dict) and "error" in policy:
         return {"error": "Could not identify suitable policy."}, 500
-
-    select = ClassificationManager(list())
-    # Extract our prompt (needed for classification)
-    prompt = extract_prompt(data)
-    start = time.time()
-    mdls = select.classify(prompt, policy, allowed=models)
-    end = time.time()
-    if not mdls:
-        return {"error": "Could not identify suitable model."}, 500
-    logging.info(f"Model weights after classification: {[(i, j) for i, j, _, _ in mdls]}")
-    # Get IDs of classified models
-    classified = {i for i, _, _, _ in mdls}
-    classified = {
-        "classification_data": [
-            {
-                "latency_weight": model["classification_weight"].weights["policy"][0] if len(model["classification_weight"].weights["policy"]) > 0 else -1,
-                "accuracy_weight": model["classification_weight"].weights["policy"][1] if len(model["classification_weight"].weights["policy"]) > 1 else -1,
-                "quality_weight": model["classification_weight"].weights["policy"][2] if len(model["classification_weight"].weights["policy"]) > 2 else -1,
-                "token_weight": model["classification_weight"].weights["token"][0] if len(model["classification_weight"].weights["token"]) > 0 else -1,
-                "laura_weight": model["classification_weight"].weights["ai"][0] if len(model["classification_weight"].weights["ai"]) > 0 else -1,
-                "laura_factor": model["classification_weight"].LAURA_WEIGHT,
-                "token_factor": model["classification_weight"].TOKEN_WEIGHT,
-                "combined_weight": model["classification_weight"].get_weight(),
-                "model_id": model["id"],
+    # Get Model name (in case the application already defined which model to use)
+    mdl = extract_model(data)
+    tmp_mdls = list()
+    with DBManager() as db:
+        for model in db.get_all_models():
+            tpl = db.get_model(model)
+            model = {
+                "id": tpl["id"],
+                "name": tpl["name"],
+                "parallel": tpl["parallel"],
             }
-            for model in select.filtered
-            if model["id"] in classified
-        ],
-        "classification_time": end - start,
-    }
+            tmp_mdls.append(model)
+    found = False
+    for model in tmp_mdls:
+        if mdl == model["name"]:
+            found = (model["id"], 1024, policy["priority"], model["parallel"])
+            break
+    if not found:
+        select = ClassificationManager(list())
+        # Extract our prompt (needed for classification)
+        prompts = extract_prompt(data)
+        user_prompt, system_prompt = prompts["user"], prompts["system"]
+        start = time.time()
+        mdls = select.classify(user_prompt, policy, allowed=models, system=system_prompt)
+        end = time.time()
+        if not mdls:
+            return {"error": "Could not identify suitable model."}, 500
+        logging.info(f"Model weights after classification: {[(i, j) for i, j, _, _ in mdls]}")
+        # Get IDs of classified models
+        classified = {i for i, _, _, _ in mdls}
+        classified = {
+            "classification_data": [
+                {
+                    "latency_weight": model["classification_weight"].weights["policy"][0] if len(model["classification_weight"].weights["policy"]) > 0 else -1,
+                    "accuracy_weight": model["classification_weight"].weights["policy"][1] if len(model["classification_weight"].weights["policy"]) > 1 else -1,
+                    "quality_weight": model["classification_weight"].weights["policy"][2] if len(model["classification_weight"].weights["policy"]) > 2 else -1,
+                    "token_weight": model["classification_weight"].weights["token"][0] if len(model["classification_weight"].weights["token"]) > 0 else -1,
+                    "laura_weight": model["classification_weight"].weights["ai"][0] if len(model["classification_weight"].weights["ai"]) > 0 else -1,
+                    "laura_factor": model["classification_weight"].LAURA_WEIGHT,
+                    "token_factor": model["classification_weight"].TOKEN_WEIGHT,
+                    "combined_weight": model["classification_weight"].get_weight(),
+                    "model_id": model["id"],
+                }
+                for model in select.filtered
+                if model["id"] in classified
+            ],
+            "classification_time": end - start,
+        }
+    else:
+        logging.info(f"Skipping classification, using model {mdl}")
+        mdls = [found]
+        classified = {
+            "classification_data": [
+                {
+                    "latency_weight": -1,
+                    "accuracy_weight": -1,
+                    "quality_weight": -1,
+                    "token_weight": -1,
+                    "laura_weight": -1,
+                    "laura_factor": -1,
+                    "token_factor": -1,
+                    "combined_weight": -1,
+                    "model_id": found[0],
+                }
+            ],
+            "classification_time": 0,
+        }
     sm = SchedulingManager(FCFSScheduler())
     sm.run()
     tid = sm.add_request(data, mdls)
@@ -259,16 +296,25 @@ def resource_behaviour(logos_key, headers, data, models):
     out = sm.get_result()
     if out is None:
         return {"error": f"No executable found for task {tid}"}, 500
-    # Get final model-ID
-    model_id = out.get_best_model_id()
-    if model_id is None:
-        return {"error": f"No executable found for task {tid}"}, 500
-    with DBManager() as db:
-        model = db.get_model(model_id)
-        provider = db.get_provider_to_model(model_id)
-        api_key = db.get_key_to_model_provider(model_id, provider["id"])
-    if api_key is None:
-        return {"error": f"No api_key found for task {tid} with model {model_id} and provider {provider["name"]}"}, 500
+    model_id = -1
+    while out.models:
+        # Get final model-ID
+        model_id = out.get_best_model_id()
+        if model_id is None:
+            logging.error(f"No executable found for task {tid}")
+            out.models = out.models[1:]
+            continue
+        with DBManager() as db:
+            model = db.get_model(model_id)
+            provider = db.get_provider_to_model(model_id)
+            api_key = db.get_key_to_model_provider(model_id, provider["id"])
+        if api_key is None:
+            logging.error(f"No api_key found for task {tid} with model {model_id} and provider {provider["name"]}")
+            out.models = out.models[1:]
+            continue
+        break
+    if not out.models:
+        return {"error": f"No model found for task {tid}"}, 500
     model_name = model["name"]
     logging.info(f"Forwarding to model {model_name} after classification")
     forward_url = merge_url(provider["base_url"], model["endpoint"])
@@ -314,14 +360,35 @@ def request_setup(headers: dict, logos_key: str):
         return {"error": str(e)}, 401
 
 
-def extract_prompt(json_data: dict) -> str:
-    if "input_payload" in json_data:
-        if "messages" in json_data["input_payload"]:
-            if json_data["input_payload"]["messages"]:
-                if "content" in json_data["input_payload"]["messages"][0]:
-                    return json_data["input_payload"]["messages"][0]["content"]
-    elif "messages" in json_data:
-        if json_data["messages"]:
-            if "content" in json_data["messages"][0]:
-                return json_data["messages"][0]["content"]
+def extract_model(json_data: dict) -> str:
+    if "model" in json_data:
+        return json_data["model"]
+    # gRPC
+    elif "input_payload" in json_data and "model" in json_data["input_payload"]:
+        return json_data["input_payload"]["model"]
     return ""
+
+
+def extract_prompt(json_data: dict) -> dict:
+    messages = []
+    # gRPC
+    if "input_payload" in json_data and "messages" in json_data["input_payload"]:
+        messages = json_data["input_payload"]["messages"]
+    elif "messages" in json_data:
+        messages = json_data["messages"]
+
+    system_parts = []
+    user_parts = []
+
+    for msg in messages:
+        role = msg.get("role", "").lower()
+        content = msg.get("content", "")
+        if role == "system":
+            system_parts.append(content)
+        elif role == "user":
+            user_parts.append(content)
+
+    return {
+        "system": "\n".join(system_parts) if system_parts else "",
+        "user": "\n".join(user_parts) if user_parts else ""
+    }

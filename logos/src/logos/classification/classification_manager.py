@@ -50,7 +50,7 @@ class ClassificationManager:
             if model["description"] is not None:
                 self.laura.register_model(model["id"], model["description"])
 
-    def classify(self, prompt: str, policy: dict, allowed=None, classifier=None) -> List[Tuple[int, int, int, int]]:
+    def classify(self, prompt: str, policy: dict, allowed=None, classifier=None, system=None) -> List[Tuple[int, int, int, int]]:
         """
         Classify prompts and assign them to a model.
         Returns a sorted list with the best suited model-id at the front together with
@@ -61,6 +61,8 @@ class ClassificationManager:
             allowed = list()
         else:
             self.models = [model for model in self.models if model["id"] in allowed]
+        if system is None:
+            system = ""
         adjusted_policy = deepcopy(policy)
         if adjusted_policy["threshold_latency"] == 1024:
             adjusted_policy["threshold_latency"] = self.get_special_weight("weight_latency", allowed=allowed)
@@ -86,7 +88,8 @@ class ClassificationManager:
             filtered = [i for i in self.models]
         logging.debug(f"Policy-Classification: {[model['id'] for model in filtered]}")
         if classifier is None or classifier == "token":
-            filtered = TokenClassifier(filtered).classify(prompt, adjusted_policy)
+            # Provide the system prompt instead of the normal user input
+            filtered = TokenClassifier(filtered).classify(system, adjusted_policy)
         logging.debug(f"Token-Classification: {[model['id'] for model in filtered]}")
         self.laura.allowed = allowed
         if classifier is None or classifier == "laura":
