@@ -1,5 +1,5 @@
 import pytest
-from pydantic import Field
+from pydantic import ConfigDict, Field
 from unittest.mock import patch
 from typing import Any, Dict, List, Optional, Type
 from langchain_community.chat_models.fake import FakeListChatModel
@@ -29,9 +29,7 @@ class FakeModelConfig(OpenAIModelConfig):
         """Override to return our fake model"""
         return FakeChatModel()
 
-    class Config:
-        arbitrary_types_allowed = True
-
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
 @pytest.fixture
 def mock_sent_tokenize():

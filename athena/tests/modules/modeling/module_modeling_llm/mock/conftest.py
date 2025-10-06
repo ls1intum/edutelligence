@@ -1,6 +1,6 @@
 import pytest
 import json
-from pydantic import Field
+from pydantic import ConfigDict, Field
 from unittest.mock import patch
 from typing import Any, Dict, List, Optional, Type
 from athena.modeling import Exercise, Submission
@@ -32,8 +32,7 @@ class FakeModelConfig(OpenAIModelConfig):
         """Override to return our fake model"""
         return FakeChatModel()
 
-    class Config:
-        arbitrary_types_allowed = True
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
 
 stub = ModuleConfig(name="module_modeling_llm", type=ExerciseType.modeling, port=5001)

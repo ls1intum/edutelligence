@@ -1,5 +1,5 @@
 import pytest
-from pydantic import Field
+from pydantic import ConfigDict, Field
 from typing import Any, Dict, List, Optional, Type
 from unittest.mock import Mock, patch
 from athena.programming import Exercise, Submission
@@ -47,8 +47,7 @@ class FakeModelConfig(OpenAIModelConfig):
         """Override to return our fake model"""
         return FakeChatModel()
 
-    class Config:
-        arbitrary_types_allowed = True
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
 
 @pytest.fixture(autouse=True)
