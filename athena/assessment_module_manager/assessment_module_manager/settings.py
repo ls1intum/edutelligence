@@ -37,12 +37,11 @@ class Settings(BaseSettings):
         for deployment in self.list_deployments():
             secret = os.environ.get(f"LMS_{deployment.name.upper()}_SECRET")
             if secret is None and self.production:
-                logger.warning(
+                raise ValueError(
                     "Missing secret for LMS deployment %s. "
                     "Set the LMS_%s_SECRET environment variable to secure the communication "
-                    "between the LMS and the assessment module manager.",
-                    deployment.name,
-                    deployment.name.upper(),
+                    "between the LMS and the assessment module manager."
+                    % (deployment.name, deployment.name.upper())
                 )
             if secret is None and not self.production:
                 secret = "abcdef12345"  # noqa: This secret is only used for development setups for simplicity
