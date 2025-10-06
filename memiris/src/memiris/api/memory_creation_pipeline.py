@@ -1,7 +1,10 @@
 from abc import ABC, abstractmethod
 from typing import overload
 
-from deprecation import deprecated  # type: ignore
+try:
+    from warnings import deprecated  # Python ≥ 3.13
+except ImportError:  # pragma: no cover
+    from typing_extensions import deprecated
 from langfuse._client.observe import observe
 from weaviate.client import WeaviateClient
 
@@ -258,12 +261,12 @@ class MemoryCreationPipelineBuilder:
         llm_thinking: str = "qwen3:30b-a3b",
         llm_response: str = "gemma3:27b",
         template: str | None = None,
-    ):
+    ) -> "MemoryCreationPipelineBuilder":
         """
         Deprecated: Set the MemoryCreator for the pipeline using a multi-model agent approach.
         See set_memory_creator_multi_model for details.
         """
-        self.set_memory_creator_multi_model(
+        return self.set_memory_creator_multi_model(
             llm_tool=llm_tool,
             llm_thinking=llm_thinking,
             llm_response=llm_response,
