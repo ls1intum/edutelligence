@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from typing import overload
-from warnings import deprecated
 
+from deprecation import deprecated  # type: ignore
 from langfuse._client.observe import observe
 from weaviate.client import WeaviateClient
 
