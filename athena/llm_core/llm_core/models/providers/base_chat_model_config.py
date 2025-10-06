@@ -11,6 +11,7 @@ from langchain.base_language import BaseLanguageModel
 from llm_core.models.model_config import ModelConfig
 from llm_core.loaders.llm_capabilities_loader import get_model_capabilities
 from llm_core.models.usage_handler import UsageHandler
+from collections.abc import Mapping
 
 
 class BaseChatModelConfig(ModelConfig, BaseModel, ABC):
@@ -94,6 +95,8 @@ decreasing the model's likelihood to repeat the same line verbatim.
     @model_validator(mode="before")
     @classmethod
     def _merge_yaml_caps(cls, values):
+        if not isinstance(values, Mapping):
+            return values
         model_key = values.get("model_name")
         if not model_key:
             return values

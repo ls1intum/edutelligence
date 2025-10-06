@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Optional, Type
 from langchain_community.chat_models.fake import FakeListChatModel
 from langchain_core.pydantic_v1 import BaseModel
 from llm_core.models.providers.openai_model_config import OpenAIModelConfig
-
+from module_text_llm.default_approach import DefaultApproachConfig
 from athena.module_config import ModuleConfig
 from athena.schemas.exercise_type import ExerciseType
 

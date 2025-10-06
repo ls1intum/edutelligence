@@ -24,6 +24,7 @@ from module_programming_llm.prompts.summarize_submission_by_file import (
     system_message as summarize_system_message,
     human_message as summarize_human_message,
 )
+from llm_core.models import ModelConfigType
 
 
 class FakeChatModel(FakeListChatModel):

@@ -6,7 +6,6 @@ from module_text_llm.default_approach.generate_suggestions import generate_sugge
 from module_text_llm.default_approach.schemas import FeedbackType
 from athena.text import Exercise, Submission, Feedback
 from athena.schemas.exercise_type import ExerciseType
-from modules.text.module_text_llm.mock.utils.mock_llm import MockAssessmentModel, MockFeedbackModel
 from athena.schemas.text_submission import TextLanguageEnum
 
 
