@@ -15,4 +15,3 @@ class MemoryWithRelationsDTO(BaseModel):
     memory: MemoryDTO
     learnings: List[LearningDTO]
     connections: List[MemoryConnectionDTO]
-

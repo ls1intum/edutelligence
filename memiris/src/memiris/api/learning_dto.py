@@ -25,4 +25,3 @@ class LearningDTO(BaseModel):
             reference=learning.reference,
             memories=[str(mid) for mid in learning.memories],
         )
-

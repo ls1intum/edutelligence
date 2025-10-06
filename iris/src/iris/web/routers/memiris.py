@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, Response, status
-from memiris import Memory, MemoryWithRelationsDTO
+from memiris import MemoryWithRelationsDTO
 from memiris.api.memory_dto import MemoryDTO
 
 from iris.common.memiris_setup import MemirisWrapper, get_tenant_for_user
@@ -28,11 +28,11 @@ def list_memories(user_id: int) -> list[MemoryDTO]:
     Returns:
         list[Memory]: List of memories for the resolved tenant.
     """
-    if not VectorDatabase._client_instance:
+    if not VectorDatabase.static_client_instance:
         return []
     tenant = get_tenant_for_user(user_id)
     memories = MemirisWrapper(
-        VectorDatabase._client_instance, tenant
+        VectorDatabase.static_client_instance, tenant
     ).memory_service.get_all_memories(tenant)
     return [MemoryDTO.from_memory(memory) for memory in memories]
 
@@ -56,11 +56,11 @@ def delete_memory(user_id: int, memory_id: str) -> Response:
     Returns:
         Response: Empty response with HTTP 204 No Content.
     """
-    if not VectorDatabase._client_instance:
+    if not VectorDatabase.static_client_instance:
         return Response(status_code=status.HTTP_204_NO_CONTENT)
     tenant = get_tenant_for_user(user_id)
     MemirisWrapper(
-        VectorDatabase._client_instance, tenant
+        VectorDatabase.static_client_instance, tenant
     ).memory_service.delete_memory(tenant, memory_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
@@ -74,10 +74,10 @@ def get_memory_with_relations(user_id: int, memory_id: str) -> MemoryWithRelatio
     """
     Load a memory by its ID and return it with learnings and connections fully fetched.
     """
-    if not VectorDatabase._client_instance:
+    if not VectorDatabase.static_client_instance:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
     tenant = get_tenant_for_user(user_id)
-    wrapper = MemirisWrapper(VectorDatabase._client_instance, tenant)
+    wrapper = MemirisWrapper(VectorDatabase.static_client_instance, tenant)
     result = wrapper.get_memory_with_relations(memory_id)
     if result is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")

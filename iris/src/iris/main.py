@@ -10,9 +10,9 @@ import iris.sentry as sentry
 from iris.config import settings
 from iris.web.routers.health import router as health_router
 from iris.web.routers.ingestion_status import router as ingestion_status_router
+from iris.web.routers.memiris import router as memiris_router
 from iris.web.routers.pipelines import router as pipelines_router
 from iris.web.routers.webhooks import router as webhooks_router
-from iris.web.routers.memiris import router as memiris_router
 
 settings.set_env_vars()
 

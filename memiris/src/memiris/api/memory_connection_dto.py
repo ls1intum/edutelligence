@@ -32,4 +32,3 @@ class MemoryConnectionDTO(BaseModel):
             context=connection.context or {},
             weight=connection.weight,
         )
-

@@ -4,9 +4,10 @@ from typing import Callable, Sequence
 from uuid import UUID
 
 from memiris import (
-    LearningService,
     LearningDTO,
+    LearningService,
     Memory,
+    MemoryConnectionDTO,
     MemoryConnectionService,
     MemoryCreationPipeline,
     MemoryCreationPipelineBuilder,
@@ -335,15 +336,12 @@ class MemirisWrapper:
             else []
         )
         connected_memory_map: dict[UUID, Memory] = {
-            m.id: m for m in connected_memories if m.id is not None
+            memory.id: memory for memory in connected_memories if memory.id is not None
         }
 
         # Build DTOs
         memory_dto = MemoryDTO.from_memory(memory)
-        learning_dtos = [LearningDTO.from_learning(l) for l in learnings]
-
-        # Import here to avoid circular import in type checking
-        from memiris.api.memory_connection_dto import MemoryConnectionDTO as _MCDTO
+        learning_dtos = [LearningDTO.from_learning(learning) for learning in learnings]
 
         connection_dtos = []
         for conn in connections:
@@ -352,7 +350,7 @@ class MemirisWrapper:
                 for mid in conn.memories
                 if mid in connected_memory_map
             ]
-            connection_dtos.append(_MCDTO.from_connection(conn, cm))
+            connection_dtos.append(MemoryConnectionDTO.from_connection(conn, cm))
 
         return MemoryWithRelationsDTO(
             memory=memory_dto, learnings=learning_dtos, connections=connection_dtos

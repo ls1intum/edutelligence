@@ -4,21 +4,21 @@ MemIris: A Python package for long-term memory management in large language mode
 
 from importlib.metadata import PackageNotFoundError, version  # pragma: no cover
 
+from memiris.api.learning_dto import LearningDTO
 from memiris.api.learning_service import LearningService
+from memiris.api.memory_connection_dto import MemoryConnectionDTO
 from memiris.api.memory_connection_service import MemoryConnectionService
 from memiris.api.memory_creation_pipeline import (
     MemoryCreationPipeline,
     MemoryCreationPipelineBuilder,
 )
 from memiris.api.memory_dto import MemoryDTO
-from memiris.api.learning_dto import LearningDTO
-from memiris.api.memory_connection_dto import MemoryConnectionDTO
-from memiris.api.memory_with_relations_dto import MemoryWithRelationsDTO
 from memiris.api.memory_service import MemoryService
 from memiris.api.memory_sleep_pipeline import (
     MemorySleepPipeline,
     MemorySleepPipelineBuilder,
 )
+from memiris.api.memory_with_relations_dto import MemoryWithRelationsDTO
 from memiris.domain.learning import Learning
 from memiris.domain.memory import Memory
 from memiris.domain.memory_connection import MemoryConnection
