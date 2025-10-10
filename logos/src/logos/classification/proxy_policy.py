@@ -10,6 +10,6 @@ class ProxyPolicy(dict):
         self["threshold_privacy"] = "CLOUD_NOT_IN_EU_BY_US_PROVIDER"
         self["threshold_latency"] = 0
         self["threshold_accuracy"] = 0
-        self["threshold_cost"] = -1000
+        self["threshold_cost"] = -1024
         self["threshold_quality"] = 0
         self["priority"] = 0
