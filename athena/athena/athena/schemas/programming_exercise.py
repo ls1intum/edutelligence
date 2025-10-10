@@ -6,7 +6,6 @@ from git.repo import Repo
 from athena.helpers.programming.code_repository import get_repository_zip, get_repository
 from .exercise_type import ExerciseType
 from .exercise import Exercise
-from typing import Literal
 
 
 class ProgrammingExercise(Exercise):
