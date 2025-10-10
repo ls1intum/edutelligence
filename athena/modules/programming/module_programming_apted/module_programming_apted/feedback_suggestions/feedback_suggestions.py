@@ -16,7 +16,7 @@ APTED_THRESHOLD = 10  # TODO Needs to be adapted
 
 def make_feedback_suggestion_from(feedback: Feedback, submission: Submission,
                                   submission_method: MethodNode) -> Feedback:
-    suggestion = feedback.copy(deep=True)
+    suggestion = feedback.model_copy(deep=True)
     # add meta information for debugging
     suggestion.meta["original_feedback_id"] = feedback.id
     suggestion.meta["original_method_code"] = suggestion.meta["method_code"]

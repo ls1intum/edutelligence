@@ -1,6 +1,7 @@
 import httpx
 from typing import Literal
 from pydantic import BaseModel, Field
+from typing import Literal
 
 from .modules_endpoint import get_modules
 from assessment_module_manager.app import app
@@ -10,7 +11,7 @@ from assessment_module_manager.module import Module
 
 async def is_healthy(module: Module) -> bool:
     try:
-        async with httpx.AsyncClient(base_url=module.url) as client:
+        async with httpx.AsyncClient(base_url=str(module.url)) as client:
             response = await client.get('/')
         return response.status_code == 200 and response.json()["status"] == "ok"
     except httpx.ConnectError:
@@ -30,9 +31,9 @@ class HealthResponse(BaseModel):
     and whether all the modules are healthy (i.e. reachable).
     Additional information about the modules is also provided.
     """
-    status: Literal["ok"] = Field(default="ok", example="ok")
+    status: Literal["ok"] = "ok"
     modules: dict = Field(
-        example=[
+        examples=[[
             {
                 "module_example": {
                     "url": "http://localhost:5001",
@@ -43,7 +44,7 @@ class HealthResponse(BaseModel):
                     "supportsGradedFeedbackRequests": True
                 }
             }
-        ]
+        ]]
     )
 
 
