@@ -6,19 +6,23 @@ repos:
         alias: iris
         name: "pre-commit for iris"
         args: ["-p", "iris"]
+        additional_dependencies: ['click<8.3.0']
         files: "^iris/.*"
       - id: sub-pre-commit
         alias: athena
         name: "pre-commit for athena"
         args: [ "-p", "athena" ]
+        additional_dependencies: ['click<8.3.0']
         files: "^athena/.*"
       - id: sub-pre-commit
         alias: nebula
         name: "pre-commit for nebula"
         args: ["-p", "nebula"]
+        additional_dependencies: ['click<8.3.0']
         files: "^nebula/.*"
       - id: sub-pre-commit
         alias: memiris
         name: "pre-commit for memiris"
         args: ["-p", "memiris"]
+        additional_dependencies: ['click<8.3.0']
         files: "^memiris/.*"
