@@ -134,7 +134,7 @@ async def _generate_feedback(
         "grading_instructions": format_grading_instructions(exercise.grading_instructions, exercise.grading_criteria),
         "submission": add_sentence_numbers(submission.text),
         "feedback_preferences": learner_profile.get_prompt(),
-        "submission_analysis": submission_analysis.dict(),
+        "submission_analysis": submission_analysis.model_dump(),
         "writing_style": learner_profile.get_writing_style_prompt()
     }
 
@@ -187,7 +187,7 @@ async def _generate_feedback(
             "generate_suggestions",
             {
                 "prompt": second_chat_prompt.format(**second_prompt_input),
-                "result": result.dict() if result is not None else None
+                "result": result.model_dump() if result is not None else None
             }
         )
 
