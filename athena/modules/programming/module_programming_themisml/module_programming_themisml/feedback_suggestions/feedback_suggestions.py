@@ -13,7 +13,7 @@ SIMILARITY_SCORE_THRESHOLD = 0.95  # has to be really high - otherwise, there wo
 
 
 def make_feedback_suggestion_from(feedback: Feedback, submission: Submission, submission_method: MethodNode) -> Feedback:
-    suggestion = feedback.copy(deep=True)
+    suggestion = feedback.model_copy(deep=True)
     # add meta information for debugging
     suggestion.meta["original_feedback_id"] = feedback.id
     suggestion.meta["original_method_code"] = suggestion.meta["method_code"]
