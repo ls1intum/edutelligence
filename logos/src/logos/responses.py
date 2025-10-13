@@ -14,6 +14,7 @@ from starlette.requests import Request
 from logos.classification.classification_manager import ClassificationManager
 from logos.classification.proxy_policy import ProxyPolicy
 from logos.dbutils.dbmanager import DBManager
+from logos.model_string_parser import parse_model_string
 from logos.scheduling.scheduling_fcfs import FCFSScheduler
 from logos.scheduling.scheduling_manager import SchedulingManager
 
@@ -218,16 +219,29 @@ def proxy_behaviour(headers, providers, path):
 
 def resource_behaviour(logos_key, headers, data, models):
     # The interesting part: Classification and scheduling
-    # First, retrieve our used policy. If no one is given, use default ProxyPolicy
+    # Retrieve our used policy. If no one is given, use default ProxyPolicy
     if "policy" in headers:
         with DBManager() as db:
             policy = db.get_policy(logos_key, int(headers["policy"]))
     else:
         policy = ProxyPolicy()
-    if isinstance(policy, dict) and "error" in policy:
-        return {"error": "Could not identify suitable policy."}, 500
     # Get Model name (in case the application already defined which model to use)
     mdl = extract_model(data)
+    if mdl.startswith("logos-v"):
+        try:
+            model_string_dto = parse_model_string(mdl)
+            p = model_string_dto.policy
+            if not p["default"]:
+                for key in p:
+                    if key == "default":
+                        continue
+                    if key == "privacy":
+                        policy["threshold_privacy"] = p[key]
+                    # TODO: Add other policy settings
+        except Exception as e:
+            logging.warning("Could not parse model string: %s", e)
+    if isinstance(policy, dict) and "error" in policy:
+        return {"error": "Could not identify suitable policy."}, 500
     tmp_mdls = list()
     with DBManager() as db:
         for model in db.get_all_models():
