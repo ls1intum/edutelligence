@@ -15,7 +15,8 @@ const config: Config = {
   },
 
   // Set the production url of your site here
-  url: 'https://docs.atlas.ase.cit.tum.de',
+  // Support ReadTheDocs canonical URL if available
+  url: process.env.READTHEDOCS_CANONICAL_URL || 'https://docs.atlas.ase.cit.tum.de',
   // Set the /<baseUrl>/ pathname under which your site is served
   // For GitHub pages deployment, it is often '/<projectName>/'
   baseUrl: '/',
