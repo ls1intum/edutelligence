@@ -12,9 +12,9 @@ build:
     nodejs: "20"
   commands:
     # Install dependencies
-    - npm ci
+    - cd atlas/docs && npm ci
     # Build the Docusaurus site
-    - npm run build
+    - cd atlas/docs && npm run build
     # Copy built files to Read the Docs output directory
     - mkdir --parents $READTHEDOCS_OUTPUT/html/
-    - cp --recursive build/* $READTHEDOCS_OUTPUT/html/
+    - cp --recursive atlas/docs/build/* $READTHEDOCS_OUTPUT/html/
