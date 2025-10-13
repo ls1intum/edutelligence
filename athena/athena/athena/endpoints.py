@@ -1,7 +1,8 @@
 # type: ignore # too much weird behavior of mypy with decorators
 import inspect
 from fastapi import Depends, BackgroundTasks, Body
-from pydantic import BaseModel, ValidationError
+from pydantic import ConfigDict, BaseModel, ValidationError
+from pydantic.alias_generators import to_camel
 from typing import TypeVar, Callable, List, Union, Any, Coroutine, Type, Optional
 
 from athena.app import app
@@ -152,11 +153,7 @@ def submission_selector(func: Union[
         exercise: exercise_type
         submission_ids: List[int]
         module_config: module_config_type = Depends(get_dynamic_module_config_factory(module_config_type))
-
-        class Config:
-            # Allow camelCase field names in the API (converted to snake_case)
-            alias_generator = to_camel
-            allow_population_by_field_name = True
+        model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
 
     @app.post("/select_submission", responses=module_responses)
     @authenticated
@@ -427,7 +424,7 @@ def config_schema_provider(cls: Type[C]) -> Type[C]:
 
     @app.get("/config_schema")
     async def wrapper():
-        return cls.schema()
+        return cls.model_json_schema()
 
     return cls
 

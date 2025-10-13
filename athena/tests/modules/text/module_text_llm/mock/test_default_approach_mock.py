@@ -4,8 +4,7 @@ from module_text_llm.default_approach.generate_suggestions import generate_sugge
 from athena.text import Exercise, Submission, Feedback
 from athena.schemas.exercise_type import ExerciseType
 from modules.text.module_text_llm.mock.utils.mock_env import mock_sent_tokenize
-from modules.text.module_text_llm.mock.utils.mock_llm import MockAssessmentModel
-from modules.text.utils.mock_llm import MockFeedbackModel
+from modules.text.module_text_llm.mock.utils.mock_llm import MockAssessmentModel, MockFeedbackModel
 from athena.schemas.text_submission import TextLanguageEnum
 
 

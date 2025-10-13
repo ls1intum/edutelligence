@@ -10,6 +10,8 @@ from atlasml.models.competency import (
     CompetencyRelation,
     CompetencyRelationSuggestionResponse,
     RelationType,
+    MapNewCompetencyToExerciseRequest,
+    MapCompetencyToCompetencyRequest,
 )
 from atlasml.utils import (
     handle_pipeline_error,
@@ -165,3 +167,73 @@ async def suggest_competency_relations(course_id: int) -> CompetencyRelationSugg
     except Exception as e:
         # Use centralized error handling
         raise handle_pipeline_error(e, "suggest_competency_relations")
+
+
+@router.post("/map-competency-to-exercise",dependencies=[])
+async def map_new_competency_to_exercise(request: MapNewCompetencyToExerciseRequest):
+    """
+    Map a new competency to an existing exercise.
+
+    Args:
+        request: Request containing exercise_id and competency_id to map
+
+    Returns:
+        200 OK HTTP response on successful mapping
+
+    Raises:
+        HTTPException: 400 for validation errors, 500 for server errors
+    """
+    try:
+        logger.info(
+            f"Mapping competency {request.competency_id} to exercise {request.exercise_id}"
+        )
+
+        pipeline = PipelineWorkflows()
+        pipeline.map_new_competency_to_exercise(
+            request.exercise_id, request.competency_id
+        )
+
+        logger.info(
+            f"Successfully mapped competency {request.competency_id} to exercise {request.exercise_id}"
+        )
+        return
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise handle_pipeline_error(e, "map_new_competency_to_exercise")
+
+
+@router.post("/map-competency-to-competency",dependencies=[])
+async def map_competency_to_competency(request: MapCompetencyToCompetencyRequest):
+    """
+    Map a competency to another competency (bidirectional relationship).
+
+    Args:
+        request: Request containing source_competency_id and target_competency_id to map
+
+    Returns:
+        200 OK HTTP response on successful mapping
+
+    Raises:
+        HTTPException: 400 for validation errors, 500 for server errors
+    """
+    try:
+        logger.info(
+            f"Mapping competency {request.source_competency_id} to competency {request.target_competency_id}"
+        )
+
+        pipeline = PipelineWorkflows()
+        pipeline.map_competency_to_competency(
+            request.source_competency_id, request.target_competency_id
+        )
+
+        logger.info(
+            f"Successfully mapped competency {request.source_competency_id} to competency {request.target_competency_id}"
+        )
+        return
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise handle_pipeline_error(e, "map_competency_to_competency")
