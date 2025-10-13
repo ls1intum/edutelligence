@@ -162,8 +162,8 @@ The subsequent sections provide guidance on the naming conventions and outline t
 - After making revisions, re-request reviews through GitHub initially. If you receive no response, then follow up with a targeted message on Slack to the relevant reviewers.
 - Comment on "inline comments" (e.g. "Done").
 - Once all changes are made, ensure that the feature-specific maintainer reviews and approves the changes.
-- After maintainer approval, an "Artemis Maintainer" reviews and finalizes the approval process.
-
+- Once all changes are made, ensure that the feature-specific maintainer reviews and approves the changes.
+- After maintainer approval, an "Atlas Maintainer" reviews and finalizes the approval process.
 **For Reviewers:**
 
 - Respond to questions raised by the developer.
