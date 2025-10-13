@@ -123,7 +123,7 @@ The subsequent sections provide guidance on the naming conventions and outline t
 
 #### 2. Complete Implementation (For Developers Only)
 
-- Make sure all steps in the [Checklist](https://github.com/ls1intum/Atlas/blob/develop/.github/PULL_REQUEST_TEMPLATE.md) are completed.
+- Make sure all steps in the [Checklist](https://github.com/ls1intum/edutelligence/blob/main/.github/PULL_REQUEST_TEMPLATE.md) are completed.
 - Add or update the "Steps for Testing" in the description of your pull request.
 - Make sure that the changes in the pull request are only the ones necessary.
 - Make sure that the PR is up-to-date with develop.

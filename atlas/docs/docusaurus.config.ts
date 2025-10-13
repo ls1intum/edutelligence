@@ -23,7 +23,7 @@ const config: Config = {
   // GitHub pages deployment config.
   // If you aren't using GitHub pages, you don't need these.
   organizationName: 'ls1intum', // Usually your GitHub org/user name.
-  projectName: 'Atlas', // Usually your repo name.
+  projectName: 'edutelligence', // Usually your repo name.
 
   onBrokenLinks: 'throw',
 
@@ -44,7 +44,7 @@ const config: Config = {
           // Please change this to your repo.
           // Remove this to remove the "edit this page" links.
           editUrl:
-            'https://github.com/ls1intum/Atlas/tree/main/atlas/docs/',
+            'https://github.com/ls1intum/edutelligence/tree/main/atlas/docs/',
           routeBasePath: '/', // Serve docs at the site's root
         },
         blog: false, // Disable blog
@@ -87,7 +87,7 @@ const config: Config = {
           label: 'Admin Guide',
         },
         {
-          href: 'https://github.com/ls1intum/Atlas',
+          href: 'https://github.com/ls1intum/edutelligence',
           label: 'GitHub',
           position: 'right',
         },
@@ -118,7 +118,7 @@ const config: Config = {
           items: [
             {
               label: 'GitHub',
-              href: 'https://github.com/ls1intum/Atlas',
+              href: 'https://github.com/ls1intum/edutelligence',
             },
           ],
         },
