@@ -169,7 +169,7 @@ The subsequent sections provide guidance on the naming conventions and outline t
 - Respond to questions raised by the developer.
 - Mark conversations as resolved if the change is sufficient.
 - Feature-specific maintainers should verify changes within their scope and mark them as approved.
-- Artemis Maintainers conduct the final review before merging.
+- Atlas Maintainers conduct the final review before merging.
 
 :::note
 Repeat steps 3 & 4 until the pull request is approved by all designated reviewers. It's only ready to merge when it has approvals from at least four reviewers.
