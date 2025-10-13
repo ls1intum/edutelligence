@@ -39,7 +39,7 @@ def parse_model_string(model_str: str) -> ParserTransferDTO:
     if not model_str.startswith("logos-v"):
         raise SyntaxError("Logos model strings have to start with 'logos-v'")
 
-    rest = model_str.replace("logos-v", "", __count=1)
+    rest = model_str.replace("logos-v", "", count=1)
     params = rest.split("__")
     version = params[0]
 
@@ -51,7 +51,7 @@ def parse_model_string(model_str: str) -> ParserTransferDTO:
     try:
         for param in params[1:]:
             if "policy_" in param:
-                vals = param.replace("policy_", "", __count=1)
+                vals = param.replace("policy_", "", count=1)
                 # Get all "k=v"-Pairs
                 for kv in vals.split("_"):
                     k, v = kv.split("=", maxsplit=1)
