@@ -93,7 +93,7 @@ The subsequent sections provide guidance on the naming conventions and outline t
 
 ### Naming Conventions for GitHub Pull Requests {#pr_naming_conventions}
 
-1. The first term is a main feature of Artemis and should use code highlighting, e.g. `AtlasML`:
+1. The first term is a main feature of Atlas and should use code highlighting, e.g. `AtlasML`:
    1. Possible feature tags are: `AtlasML`.
    2. If the change is not visible to end users, or it is a pure development or test improvement, we use the term `Development`.
    3. Everything else belongs to the `General` category.
