@@ -3,7 +3,7 @@ import inspect
 from fastapi import Depends, BackgroundTasks, Body
 from pydantic import ConfigDict, BaseModel, ValidationError
 from pydantic.alias_generators import to_camel
-from typing import TypeVar, Callable, List, Union, Any, Coroutine, Type, Optional
+from typing import TypeVar, Callable, List, Union, Any, Coroutine, Type
 
 from athena.app import app
 from athena.authenticate import authenticated
@@ -11,7 +11,6 @@ from athena.metadata import with_meta
 from athena.module_config import get_dynamic_module_config_factory
 from athena.logger import logger
 from athena.schemas import Exercise, Submission, Feedback, LearnerProfile, Competency
-from athena.schemas.schema import to_camel
 from athena.storage import get_stored_submission_meta, get_stored_exercise_meta, get_stored_feedback_meta, \
     store_exercise, store_feedback, store_feedback_suggestions, store_submissions, get_stored_submissions
 
@@ -274,6 +273,8 @@ def feedback_provider(func: Union[
     Callable[[E, S, G, C, LearnerProfile], Coroutine[Any, Any, List[F]]],
     Callable[[E, S, G, C, LearnerProfile, S], List[F]],
     Callable[[E, S, G, C, LearnerProfile, S], Coroutine[Any, Any, List[F]]],
+    Callable[[E, S, G, C, LearnerProfile, S, List[Competency]], List[F]],
+    Callable[[E, S, G, C, LearnerProfile, S, List[Competency]], Coroutine[Any, Any, List[F]]],
 ]):
     """
     Provide feedback to the Assessment Module Manager.
