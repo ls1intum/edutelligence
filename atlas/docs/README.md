@@ -28,7 +28,7 @@ Creating a user manual for a service such as Atlas can be a bit of a juggling ac
 ## Documentation Hosting
 
 ### Primary: VM Deployment
-The Atlas documentation is automatically deployed to **https://docs.atlas.ase.cit.tum.de** via GitHub Actions when changes are pushed to the `main` branch. See [.github/workflows/atlas_docs.yml](../../.github/workflows/atlas_docs.yml) for the CI/CD configuration.
+The Atlas documentation is automatically deployed to **<https://docs.atlas.ase.cit.tum.de>** via GitHub Actions when changes are pushed to the `main` branch. See [.github/workflows/atlas_docs.yml](../../.github/workflows/atlas_docs.yml) for the CI/CD configuration.
 
 ### PR Previews: ReadTheDocs
 For developer convenience, [Read the Docs](https://readthedocs.org) automatically builds preview deployments for pull requests. This allows reviewers to see documentation changes without running the docs locally. The configuration is in [.readthedocs.yaml](.readthedocs.yaml).
