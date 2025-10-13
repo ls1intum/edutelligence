@@ -16,10 +16,15 @@ const config: Config = {
 
   // Set the production url of your site here
   // Support ReadTheDocs canonical URL if available
-  url: process.env.READTHEDOCS_CANONICAL_URL || 'https://docs.atlas.ase.cit.tum.de',
+  // Extract base URL without path (ReadTheDocs includes /en/version/ in the canonical URL)
+  url: process.env.READTHEDOCS_CANONICAL_URL
+    ? new URL(process.env.READTHEDOCS_CANONICAL_URL).origin
+    : 'https://docs.atlas.ase.cit.tum.de',
   // Set the /<baseUrl>/ pathname under which your site is served
-  // For GitHub pages deployment, it is often '/<projectName>/'
-  baseUrl: '/',
+  // For ReadTheDocs, extract the path from canonical URL
+  baseUrl: process.env.READTHEDOCS_CANONICAL_URL
+    ? new URL(process.env.READTHEDOCS_CANONICAL_URL).pathname
+    : '/',
 
   // GitHub pages deployment config.
   // If you aren't using GitHub pages, you don't need these.
