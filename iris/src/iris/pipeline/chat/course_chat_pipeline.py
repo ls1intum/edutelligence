@@ -525,29 +525,15 @@ class CourseChatPipeline(
         Returns:
             The generated session title or None if not applicable
         """
-        try:
-            # Generate only the 'first time'
-            # - course chat may start with an Iris greeting (len == 2 once the user sends the first msg)
-            # - or directly with the user's first message (len == 1)
-            if output and len(dto.chat_history) in (1, 2):
-                first_user_msg = (
-                    dto.chat_history[len(dto.chat_history) - 1].contents[0].text_content
-                )
-                session_title = self.session_title_pipeline(first_user_msg, output)
-
-                if self.session_title_pipeline.tokens is not None:
-                    self._track_tokens(state, self.session_title_pipeline.tokens)
-                if session_title is None:
-                    logger.error("Generating session title failed.")
-                return session_title
-            return None
-        except Exception as e:
-            logger.error(
-                "An error occurred while running the session title generation pipeline",
-                exc_info=e,
+        # Generate only the 'first time'
+        # - course chat may start with an Iris greeting (len == 2 once the user sends the first msg)
+        # - or directly with the user's first message (len == 1)
+        if len(dto.chat_history) in (1, 2):
+            first_user_msg = (
+                dto.chat_history[len(dto.chat_history) - 1].contents[0].text_content
             )
-            traceback.print_exc()
-            return None
+            return super()._create_session_title(state, output, first_user_msg)
+        return None
 
     @traceable(name="Course Chat Pipeline")
     def __call__(

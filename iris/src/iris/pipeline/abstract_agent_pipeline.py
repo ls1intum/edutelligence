@@ -1,4 +1,5 @@
 import logging
+import traceback
 from abc import ABC, abstractmethod
 from threading import Thread
 from typing import Any, Callable, Generic, List, Optional, TypeVar
@@ -287,6 +288,48 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
             if step.get("output") is not None:
                 final_output = step["output"]
         return final_output
+
+    def _create_session_title(
+        self,
+        state: AgentPipelineExecutionState[DTO, VARIANT],
+        output: str,
+        first_user_msg: str,
+    ) -> Optional[str]:
+        """
+        Generate session title from the first user prompt and the model output.
+
+        This is a common implementation used across different chat pipelines.
+
+        Args:
+            state: The current pipeline execution state
+            output: The agent's output
+            first_user_msg: The first user message text
+
+        Returns:
+            The generated session title or None if not applicable
+        """
+        if not hasattr(self, "session_title_pipeline"):
+            logger.warning(
+                "session_title_pipeline not available, skipping title generation"
+            )
+            return None
+
+        try:
+            if output:
+                session_title = self.session_title_pipeline(first_user_msg, output)
+                if self.session_title_pipeline.tokens is not None:
+                    self._track_tokens(state, self.session_title_pipeline.tokens)
+                if session_title is None:
+                    logger.error("Generating session title failed.")
+                return session_title
+            return None
+        except Exception as e:
+            logger.error(
+                "An error occurred while running the session title generation pipeline",
+                exc_info=e,
+            )
+            traceback.print_exc()
+            return None
 
     def __call__(self, dto: DTO, variant: VARIANT, callback: StatusCallback):
         """

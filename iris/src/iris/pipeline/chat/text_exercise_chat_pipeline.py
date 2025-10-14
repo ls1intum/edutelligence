@@ -1,6 +1,5 @@
 import logging
 import os
-import traceback
 from datetime import datetime
 from typing import Any, Callable, List, Optional
 
@@ -456,23 +455,10 @@ class TextExerciseChatPipeline(
         Returns:
             The generated session title or None if not applicable
         """
-        try:
-            if output and len(dto.conversation) == 1:
-                first_user_msg = dto.conversation[0].contents[0].text_content
-                session_title = self.session_title_pipeline(first_user_msg, output)
-                if self.session_title_pipeline.tokens is not None:
-                    self._track_tokens(state, self.session_title_pipeline.tokens)
-                if session_title is None:
-                    logger.error("Generating session title failed.")
-                return session_title
-            return None
-        except Exception as e:
-            logger.error(
-                "An error occurred while running the session title generation pipeline",
-                exc_info=e,
-            )
-            traceback.print_exc()
-            return None
+        if len(dto.conversation) == 1:
+            first_user_msg = dto.conversation[0].contents[0].text_content
+            return super()._create_session_title(state, output, first_user_msg)
+        return None
 
     @traceable(name="Text Exercise Chat Pipeline")
     def __call__(
