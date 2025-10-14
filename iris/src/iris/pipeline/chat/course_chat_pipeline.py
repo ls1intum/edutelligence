@@ -530,11 +530,9 @@ class CourseChatPipeline(
             # - course chat may start with an Iris greeting (len == 2 once the user sends the first msg)
             # - or directly with the user's first message (len == 1)
             if output and len(dto.chat_history) in (1, 2):
-                if len(dto.chat_history) == 1:
-                    first_user_msg = dto.chat_history[0].contents[0].text_content
-                else:
-                    first_user_msg = dto.chat_history[1].contents[0].text_content
-
+                first_user_msg = (
+                    dto.chat_history[len(dto.chat_history) - 1].contents[0].text_content
+                )
                 session_title = self.session_title_pipeline(first_user_msg, output)
 
                 if self.session_title_pipeline.tokens is not None:
