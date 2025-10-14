@@ -3,9 +3,10 @@ import traceback
 from threading import Thread
 from typing import List
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, status, Request
 from sentry_sdk import capture_exception
 
+from iris.cloud_context import isCloudEnabled
 from iris.dependencies import TokenValidator
 from iris.domain import (
     CompetencyExtractionPipelineExecutionDTO,
@@ -130,7 +131,6 @@ def run_course_chat_pipeline_worker(dto, variant_id, event):
         logger.error(traceback.format_exc())
         capture_exception(e)
         return
-
     try:
         pipeline(dto=dto, callback=callback, variant=variant)
     except Exception as e:
@@ -150,8 +150,11 @@ def run_course_chat_pipeline(
         description="Course Chat Pipeline Execution DTO"
     ),
 ):
+    with open("test.json", "w") as f:
+        f.write(str(dto.chat_history))
+    isCloudEnabled.set(dto.chat_history[-1].isCloudEnabled if dto.chat_history else False)
+    # print("Setting isCloudEnabled to %s", dto.chat_history[-1].isCloudEnabled)
     variant = validate_pipeline_variant(dto.settings, CourseChatPipeline)
-
     thread = Thread(target=run_course_chat_pipeline_worker, args=(dto, variant, event))
     thread.start()
 
@@ -215,6 +218,7 @@ def run_text_exercise_chat_pipeline(dto: TextExerciseChatPipelineExecutionDTO):
         dto.execution.settings, TextExerciseChatPipeline
     )
 
+    isCloudEnabled.set(dto.conversation[-1].isCloudEnabled if dto.conversation else False)
     thread = Thread(target=run_text_exercise_chat_pipeline_worker, args=(dto, variant))
     thread.start()
 
@@ -227,6 +231,7 @@ def run_text_exercise_chat_pipeline(dto: TextExerciseChatPipelineExecutionDTO):
 def run_lecture_chat_pipeline(dto: LectureChatPipelineExecutionDTO):
     variant = validate_pipeline_variant(dto.settings, LectureChatPipeline)
 
+    isCloudEnabled.set(dto.chat_history[-1].isCloudEnabled if dto.chat_history else False)
     thread = Thread(target=run_lecture_chat_pipeline_worker, args=(dto, variant))
     thread.start()
 

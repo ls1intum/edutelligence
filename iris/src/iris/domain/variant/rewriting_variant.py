@@ -1,4 +1,5 @@
 from .abstract_variant import AbstractVariant
+from ...cloud_context import isCloudEnabled, localModelString
 
 
 class RewritingVariant(AbstractVariant):
@@ -17,8 +18,8 @@ class RewritingVariant(AbstractVariant):
             name=name,
             description=description,
         )
-        self.rewriting_model = rewriting_model
-        self.consistency_model = consistency_model or rewriting_model
+        self.rewriting_model = rewriting_model if isCloudEnabled.get() else localModelString
+        self.consistency_model = (consistency_model or rewriting_model) if isCloudEnabled.get() else localModelString
 
     def required_models(self) -> set[str]:
         models = {self.rewriting_model}

@@ -3,6 +3,7 @@ from typing import Any, Callable, Dict, Literal, Optional, Sequence, Type, Union
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, ConfigDict
 
+from iris.cloud_context import isCloudEnabled, localModelString
 from iris.common.pyris_message import PyrisMessage
 from iris.llm.completion_arguments import CompletionArguments
 from iris.llm.external.model import (
@@ -80,6 +81,7 @@ class ModelVersionRequestHandler(RequestHandler):
 
     def _select_model(self, type_filter: type) -> LanguageModel:
         """Select the first model that matches the requested version"""
+        version = self.version if isCloudEnabled.get() else localModelString
         # Get all LLMs from the manager
         all_llms = self.llm_manager.entries
 
@@ -87,17 +89,16 @@ class ModelVersionRequestHandler(RequestHandler):
         matching_llms = [
             llm
             for llm in all_llms
-            if isinstance(llm, type_filter) and llm.model == self.version
+            if isinstance(llm, type_filter) and llm.model == version
         ]
 
         if not matching_llms:
             raise ValueError(
-                f"No {type_filter.__name__} found with model name {self.version}"
+                f"No {type_filter.__name__} found with model name {version}"
             )
 
         # Select the first matching LLM
         llm = matching_llms[0]
-
         # Print the selected model for the logs
         print(f"Selected {llm.description}")
         return llm

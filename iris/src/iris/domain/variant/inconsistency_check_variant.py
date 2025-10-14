@@ -1,4 +1,5 @@
 from .abstract_variant import AbstractVariant
+from ...cloud_context import isCloudEnabled, localModelString
 
 
 class InconsistencyCheckVariant(AbstractVariant):
@@ -16,7 +17,7 @@ class InconsistencyCheckVariant(AbstractVariant):
             name=name,
             description=description,
         )
-        self.solver_model = solver_model
+        self.solver_model = solver_model if isCloudEnabled.get() else localModelString
 
     def required_models(self) -> set[str]:
         return {self.solver_model}

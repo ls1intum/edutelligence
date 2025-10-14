@@ -10,6 +10,7 @@ from pydantic import BaseModel
 
 from iris.common.pipeline_enum import PipelineEnum
 from iris.common.token_usage_dto import TokenUsageDTO
+from ...cloud_context import isCloudEnabled, localModelString
 
 from ...common.pyris_message import PyrisMessage
 from ...domain.data.build_log_entry import BuildLogEntryDTO
