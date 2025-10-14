@@ -319,15 +319,11 @@ class ExerciseChatAgentPipeline(
             # Generate suggestions
             self._generate_suggestions(state, result)
 
-            kwargs = {}
-            if session_title is not None:
-                kwargs["session_title"] = session_title
-
             state.callback.done(
                 "Done!",
                 final_result=result,
                 tokens=state.tokens,
-                **kwargs,
+                session_title=session_title,
             )
 
             return result

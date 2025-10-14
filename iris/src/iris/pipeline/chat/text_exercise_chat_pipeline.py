@@ -356,16 +356,12 @@ class TextExerciseChatPipeline(
             # Generate title
             session_title = self._generate_session_title(state, state.result, state.dto)
 
-            kwargs = {}
-            if session_title is not None:
-                kwargs["session_title"] = session_title
-
             # Update final callback with tokens
             state.callback.done(
                 "Response completed",
                 final_result=result,
                 tokens=state.tokens,
-                **kwargs,
+                session_title=session_title,
             )
 
             return result

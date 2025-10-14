@@ -399,17 +399,13 @@ class CourseChatPipeline(
         # Generate suggestions
         suggestions = self._generate_suggestions(state, state.result, state.dto)
 
-        kwargs = {}
-        if session_title is not None:
-            kwargs["session_title"] = session_title
-
         state.callback.done(
             "Response created",
             final_result=state.result,
             tokens=state.tokens,
             accessed_memories=getattr(state, "accessed_memory_storage", []),
             suggestions=suggestions,
-            **kwargs,
+            session_title=session_title,
         )
 
         return state.result

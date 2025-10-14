@@ -209,15 +209,12 @@ class LectureChatPipeline(Pipeline[LectureChatVariant]):
                     )
                     traceback.print_exc()
                     self.callback.error("Generating session title failed.")
-            kwargs = {}
-            if session_title is not None:
-                kwargs["session_title"] = session_title
             # Complete main process
             self.callback.done(
                 "Response created",
                 final_result=response_with_citation,
                 tokens=self.tokens,
-                **kwargs,
+                session_title=session_title,
             )
         except Exception as e:
             self.callback.error(
