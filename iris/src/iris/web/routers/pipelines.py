@@ -114,6 +114,7 @@ def run_exercise_chat_pipeline(
 
 
 def run_course_chat_pipeline_worker(dto, variant_id, event):
+    isCloudEnabled.set(dto.chat_history[-1].isCloudEnabled if dto.chat_history else False)
     try:
         callback = CourseChatStatusCallback(
             run_id=dto.settings.authentication_token,
@@ -153,13 +154,14 @@ def run_course_chat_pipeline(
     with open("test.json", "w") as f:
         f.write(str(dto.chat_history))
     isCloudEnabled.set(dto.chat_history[-1].isCloudEnabled if dto.chat_history else False)
-    # print("Setting isCloudEnabled to %s", dto.chat_history[-1].isCloudEnabled)
+    print("Setting isCloudEnabled to %s/%s", dto.chat_history[-1].isCloudEnabled, isCloudEnabled.get())
     variant = validate_pipeline_variant(dto.settings, CourseChatPipeline)
     thread = Thread(target=run_course_chat_pipeline_worker, args=(dto, variant, event))
     thread.start()
 
 
 def run_text_exercise_chat_pipeline_worker(dto, variant_id):
+    isCloudEnabled.set(dto.chat_history[-1].isCloudEnabled if dto.chat_history else False)
     try:
         callback = TextExerciseChatCallback(
             run_id=dto.execution.settings.authentication_token,
@@ -187,6 +189,7 @@ def run_text_exercise_chat_pipeline_worker(dto, variant_id):
 
 
 def run_lecture_chat_pipeline_worker(dto, variant):
+    isCloudEnabled.set(dto.chat_history[-1].isCloudEnabled if dto.chat_history else False)
     try:
         callback = LectureChatCallback(
             run_id=dto.settings.authentication_token,

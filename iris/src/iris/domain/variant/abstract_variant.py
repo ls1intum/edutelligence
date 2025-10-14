@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
 
 from ..feature_dto import FeatureDTO
+from ...cloud_context import isCloudEnabled, localModelString
 
 
 class AbstractVariant(ABC):
@@ -41,7 +42,7 @@ class AbstractAgentVariant(AbstractVariant):
 
     def __init__(self, variant_id: str, name: str, description: str, agent_model: str):
         super().__init__(variant_id=variant_id, name=name, description=description)
-        self.agent_model = agent_model
+        self.agent_model = agent_model if isCloudEnabled.get() else localModelString
 
     def required_models(self) -> set[str]:
         return {self.agent_model}
