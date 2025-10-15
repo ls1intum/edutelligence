@@ -13,6 +13,3 @@ ApproachConfigUnion = Union[DefaultApproachConfig, DivideAndConquerConfig, SelfC
 class Configuration(BaseModel):
     debug: bool = Field(default=False, description="Enable debug mode.")
     approach: ApproachConfigUnion = Field(default_factory=DefaultApproachConfig)  # Default to DefaultApproach
-
-    class Config:
-        smart_union = True 
