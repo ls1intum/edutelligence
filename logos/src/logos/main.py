@@ -368,7 +368,7 @@ async def work(path:str, request: Request):
     # logos-API-check
     logos_key = headers["logos_key"] if "logos_key" in headers else (
         headers["Authorization"].replace("Bearer ", "") if "Authorization" in headers else (headers["authorization"].replace("Bearer ", "") if "authorization" in headers else ""))
-    logging.info("Headers: %s", headers)
+    # logging.info("Headers: %s", headers)
     with DBManager() as db:
         r, c = db.get_process_id(logos_key)
         if c != 200:
