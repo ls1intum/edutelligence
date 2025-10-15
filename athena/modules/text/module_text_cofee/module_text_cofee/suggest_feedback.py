@@ -58,7 +58,7 @@ def suggest_feedback_for_block(submission: Submission, block: DBTextBlock) -> Li
     # add new submission ID, link the feedback to the block and add meta information for debugging
     suggested_feedback: List[Feedback] = []
     for f in closest_block_feedback:
-        copy = f.copy(deep=True)
+        copy = f.model_copy(deep=True)
         copy.submission_id = submission.id
         copy.meta = {
             **copy.meta,

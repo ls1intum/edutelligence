@@ -6,7 +6,7 @@ from atlasml.ml.pipeline_workflows import PipelineWorkflows
 from atlasml.models.competency import ExerciseWithCompetencies, Competency
 from unittest.mock import patch
 import numpy as np
-
+import copy
 
 @pytest.fixture
 def workflows():
@@ -356,6 +356,236 @@ def test_newTextPipeline_integration(workflows):
             assert relation_types == expected_types, f"Expected {expected_types}, got {relation_types}"
 
 
+def test_map_new_competency_to_exercise_success(workflows):
+    """Test successful mapping of competency to exercise"""
+    # Add exercise
+    workflows.weaviate_client.add_embeddings(
+        CollectionNames.EXERCISE.value,
+        [0.1, 0.2, 0.3],
+        {
+            "exercise_id": 101,
+            "title": "Test Exercise",
+            "description": "Test Description",
+            "competency_ids": [],
+            "course_id": 1,
+        }
+    )
+
+    # Add competency
+    workflows.weaviate_client.add_embeddings(
+        CollectionNames.COMPETENCY.value,
+        [0.4, 0.5, 0.6],
+        {
+            "competency_id": 102,
+            "title": "Test Competency",
+            "description": "Test Competency Description",
+            "course_id": 1,
+        }
+    )
+
+    # Act
+    workflows.map_new_competency_to_exercise(exercise_id=101, competency_id=102)
+
+    # Assert
+    exercise_data = workflows.weaviate_client.get_embeddings_by_property(
+        CollectionNames.EXERCISE.value, "exercise_id", 101
+    )
+    assert len(exercise_data) == 1
+    assert 102 in exercise_data[0]["properties"]["competency_ids"]
+
+
+def test_map_new_competency_to_exercise_duplicate_prevention(workflows):
+    """Test that duplicate mappings don't create duplicate IDs"""
+    workflows.weaviate_client.add_embeddings(
+        CollectionNames.EXERCISE.value,
+        [0.1, 0.2, 0.3],
+        {
+            "exercise_id": 103,
+            "title": "Test Exercise",
+            "description": "Test Description",
+            "competency_ids": [104],
+            "course_id": 1,
+        }
+    )
+
+    workflows.weaviate_client.add_embeddings(
+        CollectionNames.COMPETENCY.value,
+        [0.4, 0.5, 0.6],
+        {
+            "competency_id": 104,
+            "title": "Test Competency",
+            "description": "Test Competency Description",
+            "course_id": 1,
+        }
+    )
+
+    workflows.map_new_competency_to_exercise(exercise_id=103, competency_id=104)
+
+    exercise_data = workflows.weaviate_client.get_embeddings_by_property(
+        CollectionNames.EXERCISE.value, "exercise_id", 103
+    )
+    # Should not have duplicates
+    assert exercise_data[0]["properties"]["competency_ids"].count(104) == 1
+
+
+def test_map_new_competency_to_exercise_nonexistent_raises_error(workflows):
+    """Test mapping to nonexistent exercise/competency raises ValueError"""
+    with pytest.raises(ValueError):
+        workflows.map_new_competency_to_exercise(exercise_id=999, competency_id=999)
+
+
+
+def test_map_competency_to_competency_bidirectional(workflows):
+    """Test bidirectional relationship creation"""
+    workflows.weaviate_client.add_embeddings(
+        CollectionNames.COMPETENCY.value,
+        [0.1, 0.2, 0.3],
+        {
+            "competency_id": 201,
+            "title": "Competency 201",
+            "description": "Description 201",
+            "course_id": 1,
+            "related_competencies": [],
+        }
+    )
+
+    workflows.weaviate_client.add_embeddings(
+        CollectionNames.COMPETENCY.value,
+        [0.4, 0.5, 0.6],
+        {
+            "competency_id": 202,
+            "title": "Competency 202",
+            "description": "Description 202",
+            "course_id": 1,
+            "related_competencies": [],
+        }
+    )
+
+    workflows.map_competency_to_competency(source_competency_id=201, target_competency_id=202)
+
+    source_data = workflows.weaviate_client.get_embeddings_by_property(
+        CollectionNames.COMPETENCY.value, "competency_id", 201
+    )
+    target_data = workflows.weaviate_client.get_embeddings_by_property(
+        CollectionNames.COMPETENCY.value, "competency_id", 202
+    )
+
+    assert 202 in source_data[0]["properties"]["related_competencies"]
+    assert 201 in target_data[0]["properties"]["related_competencies"]
+
+
+def test_map_competency_to_competency_preserves_existing(workflows):
+    """Test that existing relations are preserved"""
+    workflows.weaviate_client.add_embeddings(
+        CollectionNames.COMPETENCY.value,
+        [0.1, 0.2, 0.3],
+        {
+            "competency_id": 203,
+            "title": "Competency 203",
+            "description": "Description 203",
+            "course_id": 1,
+            "related_competencies": [205],
+        }
+    )
+
+    workflows.weaviate_client.add_embeddings(
+        CollectionNames.COMPETENCY.value,
+        [0.4, 0.5, 0.6],
+        {
+            "competency_id": 204,
+            "title": "Competency 204",
+            "description": "Description 204",
+            "course_id": 1,
+            "related_competencies": [],
+        }
+    )
+
+    workflows.map_competency_to_competency(source_competency_id=203, target_competency_id=204)
+
+    source_data = workflows.weaviate_client.get_embeddings_by_property(
+        CollectionNames.COMPETENCY.value, "competency_id", 203
+    )
+
+    relations = source_data[0]["properties"]["related_competencies"]
+    assert 205 in relations
+    assert 204 in relations
+
+
+def test_map_competency_to_competency_duplicate_prevention(workflows):
+    """Test that duplicate relationships don't create duplicate IDs"""
+    workflows.weaviate_client.add_embeddings(
+        CollectionNames.COMPETENCY.value,
+        [0.1, 0.2, 0.3],
+        {
+            "competency_id": 206,
+            "title": "Competency 206",
+            "description": "Description 206",
+            "course_id": 1,
+            "related_competencies": [207],
+        }
+    )
+
+    workflows.weaviate_client.add_embeddings(
+        CollectionNames.COMPETENCY.value,
+        [0.4, 0.5, 0.6],
+        {
+            "competency_id": 207,
+            "title": "Competency 207",
+            "description": "Description 207",
+            "course_id": 1,
+            "related_competencies": [206],
+        }
+    )
+
+    workflows.map_competency_to_competency(source_competency_id=206, target_competency_id=207)
+
+    source_data = workflows.weaviate_client.get_embeddings_by_property(
+        CollectionNames.COMPETENCY.value, "competency_id", 206
+    )
+    target_data = workflows.weaviate_client.get_embeddings_by_property(
+        CollectionNames.COMPETENCY.value, "competency_id", 207
+    )
+
+    # Should not have duplicates
+    assert source_data[0]["properties"]["related_competencies"].count(207) == 1
+    assert target_data[0]["properties"]["related_competencies"].count(206) == 1
+
+
+def test_map_competency_to_competency_nonexistent_source(workflows):
+    """Test mapping from nonexistent source raises ValueError"""
+    workflows.weaviate_client.add_embeddings(
+        CollectionNames.COMPETENCY.value,
+        [0.4, 0.5, 0.6],
+        {
+            "competency_id": 208,
+            "title": "Competency 208",
+            "description": "Description 208",
+            "course_id": 1,
+            "related_competencies": [],
+        }
+    )
+
+    with pytest.raises(ValueError):
+        workflows.map_competency_to_competency(source_competency_id=999, target_competency_id=208)
+
+
+def test_map_competency_to_competency_nonexistent_target(workflows):
+    """Test mapping to nonexistent target raises ValueError"""
+    workflows.weaviate_client.add_embeddings(
+        CollectionNames.COMPETENCY.value,
+        [0.1, 0.2, 0.3],
+        {
+            "competency_id": 209,
+            "title": "Competency 209",
+            "description": "Description 209",
+            "course_id": 1,
+            "related_competencies": [],
+        }
+    )
+
+    with pytest.raises(ValueError):
+        workflows.map_competency_to_competency(source_competency_id=209, target_competency_id=999)
+
 class FakeWeaviateClient:
     def __init__(self):
         self.collections = {
@@ -395,7 +625,7 @@ class FakeWeaviateClient:
 
     def get_embeddings_by_property(self, collection, property_key, value):
         return [
-            obj
+            copy.deepcopy(obj)  # Return a copy, not the original
             for obj in self.collections[collection]
             if obj["properties"].get(property_key) == value
         ]
