@@ -22,9 +22,10 @@ PRIVACY_VALUES = {"LOCAL", "CLOUD_IN_EU_BY_EU_PROVIDER", "CLOUD_IN_EU_BY_US_PROV
 
 
 class ParserTransferDTO:
-    policy: dict = dict()
-    version: str
-    extra: dict = dict()
+    def __init__(self):
+        self.policy: dict = dict()
+        self.version: str = ""
+        self.extra: dict = dict()
 
 
 def parse_model_string(model_str: str) -> ParserTransferDTO:
