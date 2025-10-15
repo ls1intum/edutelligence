@@ -3,7 +3,7 @@ import traceback
 from threading import Thread
 from typing import List
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query, status, Request
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 from sentry_sdk import capture_exception
 
 from iris.cloud_context import isCloudEnabled
@@ -114,30 +114,33 @@ def run_exercise_chat_pipeline(
 
 
 def run_course_chat_pipeline_worker(dto, variant_id, event):
-    isCloudEnabled.set(dto.chat_history[-1].isCloudEnabled if dto.chat_history else False)
+    token = isCloudEnabled.set(dto.chat_history[-1].isCloudEnabled if dto.chat_history else False)
     try:
-        callback = CourseChatStatusCallback(
-            run_id=dto.settings.authentication_token,
-            base_url=dto.settings.artemis_base_url,
-            initial_stages=dto.initial_stages,
-        )
-        for variant in CourseChatPipeline.get_variants():
-            if variant.id == variant_id:
-                break
-        else:
-            raise ValueError(f"Unknown variant: {variant_id}")
-        pipeline = CourseChatPipeline(event=event)
-    except Exception as e:
-        logger.error("Error preparing exercise chat pipeline: %s", e)
-        logger.error(traceback.format_exc())
-        capture_exception(e)
-        return
-    try:
-        pipeline(dto=dto, callback=callback, variant=variant)
-    except Exception as e:
-        logger.error("Error running exercise chat pipeline: %s", e)
-        logger.error(traceback.format_exc())
-        callback.error("Fatal error.", exception=e)
+        try:
+            callback = CourseChatStatusCallback(
+                run_id=dto.settings.authentication_token,
+                base_url=dto.settings.artemis_base_url,
+                initial_stages=dto.initial_stages,
+            )
+            for variant in CourseChatPipeline.get_variants():
+                if variant.id == variant_id:
+                    break
+            else:
+                raise ValueError(f"Unknown variant: {variant_id}")
+            pipeline = CourseChatPipeline(event=event)
+        except Exception as e:
+            logger.error("Error preparing exercise chat pipeline: %s", e)
+            logger.error(traceback.format_exc())
+            capture_exception(e)
+            return
+        try:
+            pipeline(dto=dto, callback=callback, variant=variant)
+        except Exception as e:
+            logger.error("Error running exercise chat pipeline: %s", e)
+            logger.error(traceback.format_exc())
+            callback.error("Fatal error.", exception=e)
+    finally:
+        isCloudEnabled.reset(token)
 
 
 @router.post(
@@ -151,64 +154,71 @@ def run_course_chat_pipeline(
         description="Course Chat Pipeline Execution DTO"
     ),
 ):
-    with open("test.json", "w") as f:
-        f.write(str(dto.chat_history))
-    isCloudEnabled.set(dto.chat_history[-1].isCloudEnabled if dto.chat_history else False)
+    token = isCloudEnabled.set(dto.chat_history[-1].isCloudEnabled if dto.chat_history else False)
     print("Setting isCloudEnabled to %s/%s", dto.chat_history[-1].isCloudEnabled, isCloudEnabled.get())
-    variant = validate_pipeline_variant(dto.settings, CourseChatPipeline)
-    thread = Thread(target=run_course_chat_pipeline_worker, args=(dto, variant, event))
-    thread.start()
+    try:
+        variant = validate_pipeline_variant(dto.settings, CourseChatPipeline)
+        thread = Thread(target=run_course_chat_pipeline_worker, args=(dto, variant, event))
+        thread.start()
+    finally:
+        isCloudEnabled.reset(token)
 
 
 def run_text_exercise_chat_pipeline_worker(dto, variant_id):
-    isCloudEnabled.set(dto.chat_history[-1].isCloudEnabled if dto.chat_history else False)
+    token = isCloudEnabled.set(dto.chat_history[-1].isCloudEnabled if dto.chat_history else False)
     try:
-        callback = TextExerciseChatCallback(
-            run_id=dto.execution.settings.authentication_token,
-            base_url=dto.execution.settings.artemis_base_url,
-            initial_stages=dto.execution.initial_stages,
-        )
-        for variant in TextExerciseChatPipeline.get_variants():
-            if variant.id == variant_id:
-                break
-        else:
-            raise ValueError(f"Unknown variant: {variant_id}")
-        pipeline = TextExerciseChatPipeline()
-    except Exception as e:
-        logger.error("Error preparing text exercise chat pipeline: %s", e)
-        logger.error(traceback.format_exc())
-        capture_exception(e)
-        return
+        try:
+            callback = TextExerciseChatCallback(
+                run_id=dto.execution.settings.authentication_token,
+                base_url=dto.execution.settings.artemis_base_url,
+                initial_stages=dto.execution.initial_stages,
+            )
+            for variant in TextExerciseChatPipeline.get_variants():
+                if variant.id == variant_id:
+                    break
+            else:
+                raise ValueError(f"Unknown variant: {variant_id}")
+            pipeline = TextExerciseChatPipeline()
+        except Exception as e:
+            logger.error("Error preparing text exercise chat pipeline: %s", e)
+            logger.error(traceback.format_exc())
+            capture_exception(e)
+            return
 
-    try:
-        pipeline(dto=dto, variant=variant, callback=callback)
-    except Exception as e:
-        logger.error("Error running text exercise chat pipeline: %s", e)
-        logger.error(traceback.format_exc())
-        callback.error("Fatal error.", exception=e)
+        try:
+            pipeline(dto=dto, variant=variant, callback=callback)
+        except Exception as e:
+            logger.error("Error running text exercise chat pipeline: %s", e)
+            logger.error(traceback.format_exc())
+            callback.error("Fatal error.", exception=e)
+    finally:
+        isCloudEnabled.reset(token)
 
 
 def run_lecture_chat_pipeline_worker(dto, variant):
-    isCloudEnabled.set(dto.chat_history[-1].isCloudEnabled if dto.chat_history else False)
+    token = isCloudEnabled.set(dto.chat_history[-1].isCloudEnabled if dto.chat_history else False)
     try:
-        callback = LectureChatCallback(
-            run_id=dto.settings.authentication_token,
-            base_url=dto.settings.artemis_base_url,
-            initial_stages=dto.initial_stages,
-        )
-        pipeline = LectureChatPipeline(callback=callback, dto=dto, variant=variant)
-    except Exception as e:
-        logger.error("Error preparing lecture chat pipeline: %s", e)
-        logger.error(traceback.format_exc())
-        capture_exception(e)
-        return
+        try:
+            callback = LectureChatCallback(
+                run_id=dto.settings.authentication_token,
+                base_url=dto.settings.artemis_base_url,
+                initial_stages=dto.initial_stages,
+            )
+            pipeline = LectureChatPipeline(callback=callback, dto=dto, variant=variant)
+        except Exception as e:
+            logger.error("Error preparing lecture chat pipeline: %s", e)
+            logger.error(traceback.format_exc())
+            capture_exception(e)
+            return
 
-    try:
-        pipeline(dto=dto)
-    except Exception as e:
-        logger.error("Error running lecture chat pipeline: %s", e)
-        logger.error(traceback.format_exc())
-        callback.error("Fatal error.", exception=e)
+        try:
+            pipeline(dto=dto)
+        except Exception as e:
+            logger.error("Error running lecture chat pipeline: %s", e)
+            logger.error(traceback.format_exc())
+            callback.error("Fatal error.", exception=e)
+    finally:
+        isCloudEnabled.reset(token)
 
 
 @router.post(
@@ -217,13 +227,16 @@ def run_lecture_chat_pipeline_worker(dto, variant):
     dependencies=[Depends(TokenValidator())],
 )
 def run_text_exercise_chat_pipeline(dto: TextExerciseChatPipelineExecutionDTO):
-    variant = validate_pipeline_variant(
-        dto.execution.settings, TextExerciseChatPipeline
-    )
+    token = isCloudEnabled.set(dto.conversation[-1].isCloudEnabled if dto.conversation else False)
 
-    isCloudEnabled.set(dto.conversation[-1].isCloudEnabled if dto.conversation else False)
-    thread = Thread(target=run_text_exercise_chat_pipeline_worker, args=(dto, variant))
-    thread.start()
+    try:
+        variant = validate_pipeline_variant(
+            dto.execution.settings, TextExerciseChatPipeline
+        )
+        thread = Thread(target=run_text_exercise_chat_pipeline_worker, args=(dto, variant))
+        thread.start()
+    finally:
+        isCloudEnabled.reset(token)
 
 
 @router.post(
@@ -232,11 +245,14 @@ def run_text_exercise_chat_pipeline(dto: TextExerciseChatPipelineExecutionDTO):
     dependencies=[Depends(TokenValidator())],
 )
 def run_lecture_chat_pipeline(dto: LectureChatPipelineExecutionDTO):
-    variant = validate_pipeline_variant(dto.settings, LectureChatPipeline)
+    token = isCloudEnabled.set(dto.chat_history[-1].isCloudEnabled if dto.chat_history else False)
 
-    isCloudEnabled.set(dto.chat_history[-1].isCloudEnabled if dto.chat_history else False)
-    thread = Thread(target=run_lecture_chat_pipeline_worker, args=(dto, variant))
-    thread.start()
+    try:
+        variant = validate_pipeline_variant(dto.settings, LectureChatPipeline)
+        thread = Thread(target=run_lecture_chat_pipeline_worker, args=(dto, variant))
+        thread.start()
+    finally:
+        isCloudEnabled.reset(token)
 
 
 def run_competency_extraction_pipeline_worker(
