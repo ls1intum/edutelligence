@@ -117,7 +117,7 @@ async def split_problem_statement_by_file(
             {
                 "prompt": chat_prompt.format(**prompt_input),
                 "result": (
-                    split_problem_statement.dict()
+                    split_problem_statement.model_dump()
                     if split_problem_statement is not None
                     else None
                 ),
