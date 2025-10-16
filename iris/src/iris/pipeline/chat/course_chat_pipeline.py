@@ -9,6 +9,10 @@ import pytz
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from langsmith import traceable
 
+from iris.pipeline.session_title_generation_pipeline import (
+    SessionTitleGenerationPipeline,
+)
+
 from ...common.mastery_utils import get_mastery
 from ...common.memiris_setup import get_tenant_for_user
 from ...domain import CourseChatPipelineExecutionDTO
@@ -53,6 +57,7 @@ class CourseChatPipeline(
     Course chat pipeline that answers course related questions from students.
     """
 
+    session_title_pipeline: SessionTitleGenerationPipeline
     suggestion_pipeline: InteractionSuggestionPipeline
     citation_pipeline: CitationPipeline
     lecture_retriever: Optional[LectureRetrieval]
@@ -78,6 +83,7 @@ class CourseChatPipeline(
         # Initialize retrievers and pipelines (db will be created in abstract pipeline)
         self.lecture_retriever = None
         self.faq_retriever = None
+        self.session_title_pipeline = SessionTitleGenerationPipeline()
         self.suggestion_pipeline = InteractionSuggestionPipeline(variant="course")
         self.citation_pipeline = CitationPipeline()
 
@@ -387,6 +393,9 @@ class CourseChatPipeline(
                 state.variant,
             )
 
+        # Generate title
+        session_title = self._generate_session_title(state, state.result, state.dto)
+
         # Generate suggestions
         suggestions = self._generate_suggestions(state, state.result, state.dto)
 
@@ -396,6 +405,7 @@ class CourseChatPipeline(
             tokens=state.tokens,
             accessed_memories=getattr(state, "accessed_memory_storage", []),
             suggestions=suggestions,
+            session_title=session_title,
         )
 
         return state.result
@@ -495,6 +505,35 @@ class CourseChatPipeline(
             )
             traceback.print_exc()
             return None
+
+    def _generate_session_title(
+        self,
+        state: AgentPipelineExecutionState[
+            CourseChatPipelineExecutionDTO, CourseChatVariant
+        ],
+        output: str,
+        dto: CourseChatPipelineExecutionDTO,
+    ) -> Optional[str]:
+        """
+        Generate session title from the first user prompt and the model output.
+
+        Args:
+            state: The current pipeline execution state
+            output: The agent's output
+            dto: The pipeline execution DTO
+
+        Returns:
+            The generated session title or None if not applicable
+        """
+        # Generate only the 'first time'
+        # - course chat may start with an Iris greeting (len == 2 once the user sends the first msg)
+        # - or directly with the user's first message (len == 1)
+        if len(dto.chat_history) in (1, 2):
+            first_user_msg = (
+                dto.chat_history[len(dto.chat_history) - 1].contents[0].text_content
+            )
+            return super()._create_session_title(state, output, first_user_msg)
+        return None
 
     @traceable(name="Course Chat Pipeline")
     def __call__(
