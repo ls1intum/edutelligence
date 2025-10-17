@@ -1,4 +1,5 @@
 from .abstract_variant import AbstractAgentVariant
+from ...cloud_context import localModelString, isCloudEnabled
 
 
 class CourseChatVariant(AbstractAgentVariant):
@@ -18,7 +19,7 @@ class CourseChatVariant(AbstractAgentVariant):
             description=description,
             agent_model=agent_model,
         )
-        self.citation_model = citation_model
+        self.citation_model = citation_model if isCloudEnabled.get() else localModelString
 
     def required_models(self) -> set[str]:
         return {self.agent_model, self.citation_model}

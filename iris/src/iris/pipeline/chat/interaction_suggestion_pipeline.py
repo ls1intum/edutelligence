@@ -16,6 +16,7 @@ from iris.common.token_usage_dto import TokenUsageDTO
 from iris.domain.chat.interaction_suggestion_dto import (
     InteractionSuggestionPipelineExecutionDTO,
 )
+from ...cloud_context import isCloudEnabled
 
 from ...common.message_converters import (
     convert_iris_message_to_langchain_message,
@@ -142,8 +143,11 @@ class InteractionSuggestionPipeline(SubPipeline):
                 prob_st_val = dto.problem_statement or "No problem statement provided."
                 prompt_val = self.prompt.format_messages(problem_statement=prob_st_val)
                 self.prompt = ChatPromptTemplate.from_messages(prompt_val)
-
-                response: dict = (self.prompt | self.pipeline).invoke({})
+                if isCloudEnabled.get():
+                    response: dict = (self.prompt | self.pipeline).invoke({})
+                else:
+                    self.tokens = TokenUsageDTO()
+                    return []
                 self.tokens = self.llm.tokens
                 self.tokens.pipeline = PipelineEnum.IRIS_INTERACTION_SUGGESTION
                 return response["questions"]

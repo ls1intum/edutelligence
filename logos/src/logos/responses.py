@@ -2,7 +2,7 @@ import datetime
 import json
 import logging
 import time
-from typing import Union
+from typing import Union, List, Dict, Any
 
 from fastapi.responses import StreamingResponse
 import httpx
@@ -14,6 +14,7 @@ from starlette.requests import Request
 from logos.classification.classification_manager import ClassificationManager
 from logos.classification.proxy_policy import ProxyPolicy
 from logos.dbutils.dbmanager import DBManager
+from logos.model_string_parser import parse_model_string
 from logos.scheduling.scheduling_fcfs import FCFSScheduler
 from logos.scheduling.scheduling_manager import SchedulingManager
 
@@ -47,7 +48,8 @@ def get_streaming_response(forward_url, proxy_headers, json_data, log_id, provid
                             try:
                                 blob = json.loads(payload)
                                 response = blob
-                                if "choices" in blob and blob["choices"] and "delta" in blob["choices"][0] and "content" in blob["choices"][0]["delta"]:
+                                if "choices" in blob and blob["choices"] and "delta" in blob["choices"][
+                                    0] and "content" in blob["choices"][0]["delta"]:
                                     content = blob["choices"][0]["delta"]["content"]
                                     if first_response is None:
                                         first_response = blob
@@ -76,7 +78,9 @@ def get_streaming_response(forward_url, proxy_headers, json_data, log_id, provid
                 for name in usage:
                     if "tokens_details" in name:
                         continue
-                    if name in {"approximate_total", "eval_count", "eval_duration", "load_duration", "prompt_eval_count", "prompt_eval_duration", "prompt_token/s", "response_token/s", "total_duration"} or "/s" in name:
+                    if name in {"approximate_total", "eval_count", "eval_duration", "load_duration",
+                                "prompt_eval_count", "prompt_eval_duration", "prompt_token/s", "response_token/s",
+                                "total_duration"} or "/s" in name:
                         continue
                     usage_tokens[name] = usage[name]
                 if "prompt_tokens_details" in usage:
@@ -98,7 +102,8 @@ def get_streaming_response(forward_url, proxy_headers, json_data, log_id, provid
     return StreamingResponse(streamer(), media_type="application/json")
 
 
-async def get_standard_response(forward_url, proxy_headers, json_data, log_id, provider_id, model_id, policy_id, classified):
+async def get_standard_response(forward_url, proxy_headers, json_data, log_id, provider_id, model_id, policy_id,
+                                classified):
     try:
         async with httpx.AsyncClient() as client:
             response: Response = await client.request(
@@ -118,7 +123,9 @@ async def get_standard_response(forward_url, proxy_headers, json_data, log_id, p
             for name in usage:
                 if "tokens_details" in name:
                     continue
-                if name in {"approximate_total", "eval_count", "eval_duration", "load_duration", "prompt_eval_count", "prompt_eval_duration", "prompt_token/s", "response_token/s", "total_duration"} or "/s" in name:
+                if name in {"approximate_total", "eval_count", "eval_duration", "load_duration", "prompt_eval_count",
+                            "prompt_eval_duration", "prompt_token/s", "response_token/s",
+                            "total_duration"} or "/s" in name:
                     continue
                 usage_tokens[name] = usage[name]
             if "prompt_tokens_details" in usage:
@@ -179,7 +186,8 @@ def proxy_behaviour(headers, providers, path):
             config = parse_provider_config("azure")
         elif "openwebui" in provider_info["name"].lower():
             config = parse_provider_config("openwebui")
-        elif "openai" in provider_info["name"].lower() and "Authorization" in headers and "sk-" in headers["Authorization"]:
+        elif "openai" in provider_info["name"].lower() and "Authorization" in headers and "sk-" in headers[
+            "Authorization"]:
             config = parse_provider_config("openai")
         else:
             continue
@@ -204,22 +212,36 @@ def proxy_behaviour(headers, providers, path):
             "Content-Type": "application/json"
         }
     if proxy_headers is None:
-        return {"error": "Could not identify suitable provider. Please check you header and registered provider names"}, 500
+        return {
+            "error": "Could not identify suitable provider. Please check you header and registered provider names"}, 500
     return proxy_headers, forward_url, int(provider_info["id"])
 
 
 def resource_behaviour(logos_key, headers, data, models):
     # The interesting part: Classification and scheduling
-    # First, retrieve our used policy. If no one is given, use default ProxyPolicy
+    # Retrieve our used policy. If no one is given, use default ProxyPolicy
     if "policy" in headers:
         with DBManager() as db:
             policy = db.get_policy(logos_key, int(headers["policy"]))
     else:
         policy = ProxyPolicy()
-    if isinstance(policy, dict) and "error" in policy:
-        return {"error": "Could not identify suitable policy."}, 500
     # Get Model name (in case the application already defined which model to use)
     mdl = extract_model(data)
+    if mdl.startswith("logos-v"):
+        try:
+            model_string_dto = parse_model_string(mdl)
+            p = model_string_dto.policy
+            if not p["default"]:
+                for key in p:
+                    if key == "default":
+                        continue
+                    if key == "privacy":
+                        policy["threshold_privacy"] = p[key]
+                    # TODO: Add other policy settings
+        except Exception as e:
+            logging.warning("Could not parse model string: %s", e)
+    if isinstance(policy, dict) and "error" in policy:
+        return {"error": "Could not identify suitable policy."}, 500
     tmp_mdls = list()
     with DBManager() as db:
         for model in db.get_all_models():
@@ -251,11 +273,16 @@ def resource_behaviour(logos_key, headers, data, models):
         classified = {
             "classification_data": [
                 {
-                    "latency_weight": model["classification_weight"].weights["policy"][0] if len(model["classification_weight"].weights["policy"]) > 0 else -1,
-                    "accuracy_weight": model["classification_weight"].weights["policy"][1] if len(model["classification_weight"].weights["policy"]) > 1 else -1,
-                    "quality_weight": model["classification_weight"].weights["policy"][2] if len(model["classification_weight"].weights["policy"]) > 2 else -1,
-                    "token_weight": model["classification_weight"].weights["token"][0] if len(model["classification_weight"].weights["token"]) > 0 else -1,
-                    "laura_weight": model["classification_weight"].weights["ai"][0] if len(model["classification_weight"].weights["ai"]) > 0 else -1,
+                    "latency_weight": model["classification_weight"].weights["policy"][0] if len(
+                        model["classification_weight"].weights["policy"]) > 0 else -1,
+                    "accuracy_weight": model["classification_weight"].weights["policy"][1] if len(
+                        model["classification_weight"].weights["policy"]) > 1 else -1,
+                    "quality_weight": model["classification_weight"].weights["policy"][2] if len(
+                        model["classification_weight"].weights["policy"]) > 2 else -1,
+                    "token_weight": model["classification_weight"].weights["token"][0] if len(
+                        model["classification_weight"].weights["token"]) > 0 else -1,
+                    "laura_weight": model["classification_weight"].weights["ai"][0] if len(
+                        model["classification_weight"].weights["ai"]) > 0 else -1,
                     "laura_factor": model["classification_weight"].LAURA_WEIGHT,
                     "token_factor": model["classification_weight"].TOKEN_WEIGHT,
                     "combined_weight": model["classification_weight"].get_weight(),
@@ -324,7 +351,8 @@ def resource_behaviour(logos_key, headers, data, models):
         auth_name: auth_format,
         "Content-Type": "application/json"
     }
-    return proxy_headers, forward_url, model_id, model_name, int(provider["id"]), provider["name"], policy["id"], classified
+    return proxy_headers, forward_url, model_id, model_name, int(provider["id"]), provider["name"], policy[
+        "id"], classified
 
 
 def merge_url(base_url, endpoint):
@@ -369,26 +397,50 @@ def extract_model(json_data: dict) -> str:
     return ""
 
 
-def extract_prompt(json_data: dict) -> dict:
-    messages = []
-    # gRPC
+def _extract_text_from_content(content: Union[str, List[Dict[str, Any]]]) -> str:
+    if isinstance(content, str):
+        return content
+
+    if isinstance(content, list):
+        parts: List[str] = []
+        for part in content:
+            if not isinstance(part, dict):
+                continue
+            if part.get("type") != "text":
+                continue
+            txt = part.get("text")
+            if isinstance(txt, str):
+                parts.append(txt)
+        return "\n".join(parts)
+    return ""
+
+
+def extract_prompt(json_data: Dict[str, Any]) -> Dict[str, str]:
+    messages: List[Dict[str, Any]] = []
     if "input_payload" in json_data and "messages" in json_data["input_payload"]:
         messages = json_data["input_payload"]["messages"]
     elif "messages" in json_data:
         messages = json_data["messages"]
 
-    system_parts = []
-    user_parts = []
+    last_by_role: Dict[str, Dict[str, Any]] = {}
 
     for msg in messages:
-        role = msg.get("role", "").lower()
-        content = msg.get("content", "")
-        if role == "system":
-            system_parts.append(content)
-        elif role == "user":
-            user_parts.append(content)
+        if not isinstance(msg, dict):
+            continue
 
-    return {
-        "system": "\n".join(system_parts) if system_parts else "",
-        "user": "\n".join(user_parts) if user_parts else ""
-    }
+        role = str(msg.get("role", "")).lower()
+        if role not in {"system", "user"}:
+            continue
+
+        last_by_role[role] = msg
+
+    system_text = ""
+    user_text = ""
+
+    if "system" in last_by_role:
+        system_text = _extract_text_from_content(last_by_role["system"].get("content", ""))
+
+    if "user" in last_by_role:
+        user_text = _extract_text_from_content(last_by_role["user"].get("content", ""))
+
+    return {"system": system_text, "user": user_text}

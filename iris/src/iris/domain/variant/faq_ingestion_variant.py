@@ -1,4 +1,5 @@
 from .abstract_variant import AbstractVariant
+from ...cloud_context import isCloudEnabled, localModelString
 
 
 class FaqIngestionVariant(AbstractVariant):
@@ -17,8 +18,8 @@ class FaqIngestionVariant(AbstractVariant):
             name=name,
             description=description,
         )
-        self.chat_model = chat_model
-        self.embedding_model = embedding_model
+        self.chat_model = chat_model if isCloudEnabled.get() else localModelString
+        self.embedding_model = embedding_model if isCloudEnabled.get() else localModelString
 
     def required_models(self) -> set[str]:
         return {self.chat_model, self.embedding_model}

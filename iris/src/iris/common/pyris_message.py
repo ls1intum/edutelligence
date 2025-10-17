@@ -26,6 +26,7 @@ class PyrisMessage(BaseModel):
     sent_at: datetime | None = Field(alias="sentAt", default=None)
     sender: IrisMessageRole
     contents: List[MessageContentDto] = Field(default=[])
+    isCloudEnabled: bool = Field(default=False)
 
     def __str__(self):
         return f"{self.sender.lower()}: {self.contents}"
