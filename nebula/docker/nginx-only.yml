@@ -28,7 +28,7 @@
 
 services:
   nginx:
-    image: huynhquangtoan/openresty-lua-resty-http:latest
+    image: openresty/openresty:1.21.4.1-0-alpine
     container_name: nebula-nginx-gateway
     ports:
       - "3007:3007" # Expose on port 3007 for local development
