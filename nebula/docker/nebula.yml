@@ -30,7 +30,7 @@ services:
       - nebula
 
   nginx:
-    image: openresty/openresty:1.21.4.1-0-alpine
+    image: openresty/openresty:1.21.4.1-0-jammy
     container_name: nginx-proxy
     ports:
       - "80:80"
@@ -41,6 +41,11 @@ services:
     restart: unless-stopped
     networks:
       - nebula
+    entrypoint: ["/bin/sh","-c",
+      "test -f /usr/local/openresty/site/lualib/resty/http.lua \
+        || opm get ledgetech/lua-resty-http; \
+       exec openresty -g 'daemon off;'"
+    ]
 
 networks:
   nebula:
