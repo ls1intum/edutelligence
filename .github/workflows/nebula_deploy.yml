@@ -1,7 +1,7 @@
 name: Deploy
 
 on:
-  workflow_call:
+  workflow_dispatch:
     inputs:
       branch_name:
         description: "Which branch to deploy"
@@ -18,9 +18,6 @@ on:
         description: "Username that triggered deployment (not required, shown if triggered via GitHub UI, logged if triggered via GitHub app)"
         required: false
         type: string
-    secrets:
-      DEPLOYMENT_GATEWAY_SSH_KEY:
-        required: true
 
 concurrency: ${{ github.event.inputs.environment_name }}
 
