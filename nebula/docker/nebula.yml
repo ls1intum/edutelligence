@@ -30,7 +30,7 @@ services:
       - nebula
 
   nginx:
-    image: huynhquangtoan/openresty-lua-resty-http:latest
+    image: openresty/openresty:1.21.4.1-0-alpine
     container_name: nginx-proxy
     ports:
       - "80:80"

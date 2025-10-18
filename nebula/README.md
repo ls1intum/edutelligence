@@ -31,7 +31,7 @@ This guide will help you get the Nebula services running locally for development
 
 - Python 3.12+
 - Poetry (Python package manager)
-- Docker Desktop (nginx uses `huynhquangtoan/openresty-lua-resty-http` image)
+- Docker Desktop (nginx uses `openresty/openresty` image)
 - FFmpeg (for transcription service)
 - Git
 
