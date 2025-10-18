@@ -164,7 +164,7 @@ jobs:
     if: always() && (needs.conditional-build.result == 'success' || needs.check-existing-build-for-pull-request.result == 'success' || needs.check-existing-build-for-branch.result == 'success')
 
     env:
-      DOCKER_TAG: ${{ inputs.docker-tag }}
+      DOCKER_TAG: ${{ needs.determine-build-context.outputs.tag }}
       BRANCH_NAME: ${{ inputs.branch_name }}
       DEPLOYMENT_USER: ${{ vars.DEPLOYMENT_USER }}
       DEPLOYMENT_HOST: ${{ vars.DEPLOYMENT_HOST }}
