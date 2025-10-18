@@ -30,10 +30,21 @@ services:
     extends:
       file: nebula.yml
       service: nginx
+    ports:
+      - "80:80"
+      - "443:443"
     restart: unless-stopped
     container_name: nginx-proxy
     volumes:
       - ${NEBULA_NGINX_CONFIG_FILE}:/usr/local/openresty/nginx/conf/nginx.conf:ro
+      - type: bind
+        source: ${NEBULA_NGINX_SSL_CERT_FILE}
+        target: "/etc/ssl/nebula.crt"
+        read_only: true
+      - type: bind
+        source: ${NEBULA_NGINX_SSL_KEY_FILE}
+        target: "/etc/ssl/nebula.key"
+        read_only: true
 
 networks:
   nebula:
