@@ -13,7 +13,7 @@ router = APIRouter()
 async def start_transcribe(req: TranscribeRequestDTO):
     if not req.videoUrl:
         raise HTTPException(status_code=400, detail="Missing videoUrl")
-    job_id = create_job()
+    job_id = await create_job()
     # Put the job into the FIFO queue and return immediately
     await enqueue_job(job_id, req)  # NEW
     logging.info("[Job %s] Accepted and queued", job_id)
@@ -22,7 +22,7 @@ async def start_transcribe(req: TranscribeRequestDTO):
 
 @router.get("/status/{job_id}", tags=["internal"])
 async def get_transcription_status(job_id: str):
-    return get_job_status(job_id)
+    return await get_job_status(job_id)
 
 
 @router.get("/test")

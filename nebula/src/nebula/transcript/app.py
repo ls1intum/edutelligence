@@ -1,4 +1,5 @@
 import logging
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
@@ -10,19 +11,19 @@ from nebula.transcript.routes.transcribe_routes import router as transcribe_rout
 logging.basicConfig(level=getattr(logging, Config.get_log_level()))
 Config.ensure_dirs()
 
-app = FastAPI(title="Nebula Transcription Service")
 
-
-@app.on_event("startup")
-async def _startup():
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     start_worker()
     logging.info("🔧 FIFO worker started")
+    try:
+        yield
+    finally:
+        await stop_worker()
+        logging.info("🛑 FIFO worker stopped")
 
 
-@app.on_event("shutdown")
-async def _shutdown():
-    await stop_worker()
-    logging.info("🛑 FIFO worker stopped")
+app = FastAPI(title="Nebula Transcription Service", lifespan=lifespan)
 
 
 app.include_router(health_router, prefix="/transcribe", tags=["Transcription"])

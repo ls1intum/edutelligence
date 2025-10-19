@@ -9,7 +9,7 @@ from typing import Tuple
 from nebula.transcript.align_utils import align_slides_with_segments
 from nebula.transcript.config import Config
 from nebula.transcript.dto import TranscribeRequestDTO, TranscriptionSegmentDTO
-from nebula.transcript.jobs import fail_job, save_job_result
+from nebula.transcript.jobs import cleanup_finished_jobs, fail_job, save_job_result
 from nebula.transcript.llm_utils import load_llm_config
 from nebula.transcript.slide_utils import ask_gpt_for_slide_number
 from nebula.transcript.video_utils import (
@@ -25,6 +25,7 @@ from nebula.transcript.whisper_utils import (
 # FIFO queue of (job_id, request)
 _job_queue: "asyncio.Queue[Tuple[str, TranscribeRequestDTO]]" = asyncio.Queue()
 _worker_task: asyncio.Task | None = None
+_cleanup_task: asyncio.Task | None = None
 
 
 async def enqueue_job(job_id: str, req: TranscribeRequestDTO) -> None:
@@ -113,7 +114,7 @@ async def _light_phase(
         )
 
         segments = [TranscriptionSegmentDTO(**s).model_dump() for s in aligned_segments]
-        save_job_result(
+        await save_job_result(
             job_id,
             {
                 "lectureUnitId": req.lectureUnitId,
@@ -125,7 +126,7 @@ async def _light_phase(
 
     except Exception as e:
         logging.error("[Job %s] Light phase failed: %s", job_id, e, exc_info=True)
-        fail_job(job_id, str(e))
+        await fail_job(job_id, str(e))
     finally:
         # Cleanup temp files and chunk dirs (same logic as your current cleanup)
         try:
@@ -151,11 +152,11 @@ async def _worker_loop():
         try:
             bundle = await _heavy_pipeline(job_id, req)
         except Exception as e:
-            fail_job(job_id, str(e))
+            await fail_job(job_id, str(e))
             _job_queue.task_done()
             continue
 
-        # Schedule light phase in parallel (don’t block the worker)
+        # Schedule light phase in parallel (don't block the worker)
         asyncio.create_task(
             _light_phase(
                 job_id,
@@ -169,15 +170,33 @@ async def _worker_loop():
         _job_queue.task_done()
 
 
+async def _cleanup_loop():
+    """Periodically clean up old finished jobs to prevent memory leaks."""
+    while True:
+        try:
+            await asyncio.sleep(3600)  # Run every hour
+            logging.debug("Running periodic job cleanup...")
+            await cleanup_finished_jobs(ttl_minutes=60)
+            logging.debug("Job cleanup completed")
+        except asyncio.CancelledError:
+            logging.info("Cleanup task cancelled")
+            break
+        except Exception as e:
+            logging.error("Error during job cleanup: %s", e, exc_info=True)
+
+
 def start_worker():
-    global _worker_task
+    global _worker_task, _cleanup_task
     if _worker_task is None or _worker_task.done():
         _worker_task = asyncio.create_task(_worker_loop())
         logging.info("FIFO worker started")
+    if _cleanup_task is None or _cleanup_task.done():
+        _cleanup_task = asyncio.create_task(_cleanup_loop())
+        logging.info("Periodic cleanup task started")
 
 
 async def stop_worker():
-    global _worker_task
+    global _worker_task, _cleanup_task
     if _worker_task:
         _worker_task.cancel()
         try:
@@ -185,3 +204,10 @@ async def stop_worker():
         except asyncio.CancelledError:
             pass
         _worker_task = None
+    if _cleanup_task:
+        _cleanup_task.cancel()
+        try:
+            await _cleanup_task
+        except asyncio.CancelledError:
+            pass
+        _cleanup_task = None
