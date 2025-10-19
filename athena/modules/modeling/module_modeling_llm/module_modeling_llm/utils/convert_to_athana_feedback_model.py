@@ -38,7 +38,7 @@ def convert_to_athana_feedback_model(
             submission_id=exercise_model.submission_id,
             title=feedback.title,
             description=feedback.description,
-            credits=feedback.credits,
+            credits=max(0.0, feedback.credits),
             structured_grading_instruction_id=grading_instruction_id,
             meta={},
             id=None,
