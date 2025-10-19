@@ -1,8 +1,8 @@
 from http.client import HTTPException
 import inspect
-from fastapi import Depends, BackgroundTasks, Body, Request
 from pydantic import ConfigDict, BaseModel, ValidationError
 from pydantic.alias_generators import to_camel
+from fastapi import Depends, BackgroundTasks, Body, Request
 from typing import Dict, TypeVar, Callable, List, Union, Any, Coroutine, Type, Optional
 
 from athena.app import app

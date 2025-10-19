@@ -5,6 +5,7 @@ from pydantic import ConfigDict, BaseModel
 from pydantic.alias_generators import to_camel
 
 from athena.base import Base
+from athena.database import Base
 
 
 class Schema(BaseModel, abc.ABC):

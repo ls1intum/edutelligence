@@ -3,7 +3,6 @@ from typing import TypeVar, Generic, Optional
 
 import httpx
 from fastapi import HTTPException
-from fastapi import HTTPException
 
 from assessment_module_manager.settings import Settings
 
