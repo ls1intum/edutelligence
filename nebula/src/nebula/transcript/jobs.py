@@ -1,17 +1,17 @@
-import threading
+import asyncio
 import time
 import uuid
 from typing import Any, Dict
 
 # Job state store
 JOB_RESULTS: Dict[str, Dict[str, Any]] = {}
-JOB_LOCK = threading.Lock()
+JOB_LOCK = asyncio.Lock()
 
 
-def create_job() -> str:
+async def create_job() -> str:
     """Create a new transcription job and return its ID."""
     job_id = str(uuid.uuid4())
-    with JOB_LOCK:
+    async with JOB_LOCK:
         JOB_RESULTS[job_id] = {
             "status": "processing",
             "timestamp": time.time(),  # for cleanup purposes
@@ -19,15 +19,15 @@ def create_job() -> str:
     return job_id
 
 
-def save_job_result(job_id: str, result: Dict[str, Any]):
+async def save_job_result(job_id: str, result: Dict[str, Any]):
     """Mark job as complete and save the result."""
-    with JOB_LOCK:
+    async with JOB_LOCK:
         JOB_RESULTS[job_id] = {"status": "done", "timestamp": time.time(), **result}
 
 
-def fail_job(job_id: str, error: str):
+async def fail_job(job_id: str, error: str):
     """Mark job as failed and store the error message."""
-    with JOB_LOCK:
+    async with JOB_LOCK:
         JOB_RESULTS[job_id] = {
             "status": "error",
             "error": error,
@@ -35,16 +35,16 @@ def fail_job(job_id: str, error: str):
         }
 
 
-def get_job_status(job_id: str) -> Dict[str, Any]:
+async def get_job_status(job_id: str) -> Dict[str, Any]:
     """Return the status/result of the job."""
-    with JOB_LOCK:
+    async with JOB_LOCK:
         return JOB_RESULTS.get(job_id, {"status": "not_found"})
 
 
-def cleanup_finished_jobs(ttl_minutes: int = 60):
+async def cleanup_finished_jobs(ttl_minutes: int = 60):
     """Remove jobs older than `ttl_minutes` (default: 60 minutes)."""
     now = time.time()
-    with JOB_LOCK:
+    async with JOB_LOCK:
         expired = [
             job_id
             for job_id, data in JOB_RESULTS.items()
