@@ -54,7 +54,7 @@ Important:
 <UML Diagram Format>
 The submission uses the following UML diagram format:
 {uml_diagram_format}
-- Note: Don't mention elements that have no name, by there artificial name: e.g. ##A or ##B, instead just say e.g. the task in ... is missing ...
+- Note: Don't mention elements that have no name, by their artificial name: e.g. ##A or ##B, instead just say e.g. the task in ... is missing ...
 """
 
 graded_feedback_human_message = """
