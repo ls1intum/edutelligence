@@ -21,6 +21,9 @@ def test_start_returns_immediately_and_enqueues(monkeypatch):
     async def fake_enqueue(job_id, req):
         calls.append(job_id)
 
+    async def fake_create_job():
+        return "test-job-id"
+
     # Neutralize real worker lifecycle inside TestClient (avoid event-loop issues)
     monkeypatch.setattr(app_mod, "start_worker", lambda: None, raising=False)
 
@@ -32,6 +35,7 @@ def test_start_returns_immediately_and_enqueues(monkeypatch):
     # Patch the endpoint's globals so its internal `await enqueue_job(...)` hits our fake
     start_route = _get_route("/transcribe/start", "POST")
     start_route.endpoint.__globals__["enqueue_job"] = fake_enqueue
+    start_route.endpoint.__globals__["create_job"] = fake_create_job
 
     with TestClient(app) as client:
         resp = client.post(
@@ -44,7 +48,7 @@ def test_start_returns_immediately_and_enqueues(monkeypatch):
 
 
 def test_status_endpoint(monkeypatch):
-    def fake_get_job_status(job_id: str):
+    async def fake_get_job_status(job_id: str):
         return {"status": "processing"}
 
     # Neutralize worker lifecycle

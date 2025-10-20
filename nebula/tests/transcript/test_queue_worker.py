@@ -30,7 +30,7 @@ async def test_fifo_heavy_phase_order(monkeypatch):
 
     async def fake_light_phase(job_id, req, transcription, video_path, audio_path, uid):
         # mark result and signal completion
-        save_job_result(
+        await save_job_result(
             job_id, {"lectureUnitId": 123, "language": "en", "segments": []}
         )
         done_events[job_id].set()
@@ -67,7 +67,7 @@ async def test_fifo_heavy_phase_order(monkeypatch):
 
     # final sanity: job store says done
     for jid in jobs:
-        assert get_job_status(jid).get("status") == "done"
+        assert (await get_job_status(jid)).get("status") == "done"
 
     await qw.stop_worker()
 
@@ -86,7 +86,7 @@ async def test_light_phase_failure_marks_job_error(monkeypatch):
 
     async def fake_light_phase(job_id, req, transcription, video_path, audio_path, uid):
         # mark error explicitly instead of raising into the event loop
-        fail_job(job_id, "boom")
+        await fail_job(job_id, "boom")
 
     monkeypatch.setattr(qw, "_heavy_pipeline", fake_heavy_pipeline, raising=True)
     monkeypatch.setattr(qw, "_light_phase", fake_light_phase, raising=True)
@@ -102,7 +102,7 @@ async def test_light_phase_failure_marks_job_error(monkeypatch):
     status = {}
     for _ in range(40):
         await asyncio.sleep(0.025)
-        status = get_job_status(jid)
+        status = await get_job_status(jid)
         if status.get("status") in ("error", "done"):
             break
 

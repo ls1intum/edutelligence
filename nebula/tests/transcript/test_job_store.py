@@ -11,14 +11,14 @@ from nebula.transcript.jobs import (
 )
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_create_and_get_status():
     job_id = await create_job()
     status = await get_job_status(job_id)
     assert status["status"] == "processing"
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_save_job_result_marks_done():
     job_id = await create_job()
     await save_job_result(
@@ -29,7 +29,7 @@ async def test_save_job_result_marks_done():
     assert status["result"]["segments"][0]["text"] == "Hi"
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_fail_job_marks_error():
     job_id = await create_job()
     await fail_job(job_id, "bad things")
@@ -38,7 +38,7 @@ async def test_fail_job_marks_error():
     assert status["error"] == "bad things"
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_cleanup_finished_jobs_removes_old_entries(monkeypatch):
     job_id1 = await create_job()
     await fail_job(job_id1, "x")
